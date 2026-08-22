@@ -4243,6 +4243,9 @@ try:
 
     # Continue Relay's stopped shell job directly. Shell `bg` bookkeeping varies across the
     # macOS runner shell, but Relay only observes the process-group SIGCONT.
+    os.write(master, b"jobs\n")
+    read_until("Stopped")
+    read_until("RELAY_SHELL> ")
     os.killpg(relay_group, signal.SIGCONT)
     time.sleep(0.1)
     assert os.tcgetpgrp(master) == pid, (os.tcgetpgrp(master), pid, buffer)
@@ -4264,6 +4267,9 @@ try:
     read_until("AGENT_DELAY_ARMED")
     read_until("\n")
     os.write(master, b"\x1a")
+    read_until("RELAY_SHELL> ")
+    os.write(master, b"jobs\n")
+    read_until("Stopped")
     read_until("RELAY_SHELL> ")
     os.killpg(relay_group, signal.SIGCONT)
     wait_until_path(delay_marker)
@@ -4918,8 +4924,12 @@ fn read_http_request(stream: &mut impl Read) -> String {
             let headers = String::from_utf8_lossy(&buffer[..header_end]);
             let content_length = headers
                 .lines()
-                .find_map(|line| line.strip_prefix("content-length: "))
-                .and_then(|value| value.trim().parse::<usize>().ok())
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
                 .unwrap_or(0);
             let expected = header_end + 4 + content_length;
             while buffer.len() < expected {
@@ -4930,6 +4940,31 @@ fn read_http_request(stream: &mut impl Read) -> String {
             return String::from_utf8(buffer).unwrap();
         }
     }
+}
+
+#[test]
+fn read_http_request_consumes_title_case_content_length_body_after_headers() {
+    struct ChunkedReader(std::collections::VecDeque<Vec<u8>>);
+
+    impl Read for ChunkedReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let Some(chunk) = self.0.pop_front() else {
+                return Ok(0);
+            };
+            buffer[..chunk.len()].copy_from_slice(&chunk);
+            Ok(chunk.len())
+        }
+    }
+
+    let request = read_http_request(&mut ChunkedReader(
+        [
+            b"POST /hooks/codex HTTP/1.1\r\nContent-Length: 2\r\n\r\n".to_vec(),
+            b"{}".to_vec(),
+        ]
+        .into(),
+    ));
+
+    assert!(request.ends_with("\r\n\r\n{}"));
 }
 
 fn find_header_end(buffer: &[u8]) -> Option<usize> {

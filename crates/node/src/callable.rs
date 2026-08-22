@@ -9,7 +9,7 @@
 //! handles serialization of arguments to/from JSON and manages cross-thread communication
 //! between the Rust async runtime and the Node.js event loop.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,14 +22,14 @@ use napi::threadsafe_function::{
 use napi::{Env, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn, LlmExecutionNextFn,
-    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
-    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity,
+    LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
+    LlmSanitizeRequestContext, LlmSanitizeRequestFn, LlmSanitizeResponseContext,
+    LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionNextFn,
+    ToolInterceptFn, ToolSanitizeFn,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
-use tokio_stream::StreamExt;
 
 use nemo_relay::api::event::{
     CategoryProfile, DataSchema, Event, EventCategory,
@@ -192,6 +192,40 @@ pub(crate) fn safe_middleware_callback(env: &Env, func: &JsFunction) -> napi::Re
       message = String(error?.message ?? error);
     } catch {}
     return { ok: false, error: message };
+  }
+})"#,
+    )?;
+    let func_unknown = unsafe { JsUnknown::from_raw_unchecked(env.raw(), func.raw()) };
+    let wrapper_unknown = factory.call(None, &[func_unknown])?;
+    Ok(unsafe { wrapper_unknown.cast::<JsFunction>() })
+}
+
+/// Wrap a conditional registration gate so throws and invalid return values
+/// cross N-API as a JSON-compatible error envelope.
+pub(crate) fn safe_conditional_gate_callback(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<JsFunction> {
+    let factory: JsFunction = env.run_script(
+        r#"((fn) => function __nemo_relay_conditional_gate_wrapper(...args) {
+  try {
+    const returned = fn(...args);
+    const value = returned === undefined ? null : returned;
+    if (value === null || typeof value === 'string') {
+      return { ok: true, value };
+    }
+    return { ok: false, error: 'conditional middleware guardrail must return a string or null' };
+  } catch (error) {
+    let message = 'JavaScript callback threw';
+    try {
+      message = String(error?.message ?? error);
+    } catch {}
+    let exceptionType = 'Error';
+    try {
+      const name = String(error?.name ?? '').trim();
+      if (name) exceptionType = name;
+    } catch {}
+    return { ok: false, error: message, exceptionType };
   }
 })"#,
     )?;
@@ -614,6 +648,41 @@ pub fn wrap_js_event_sanitize_promise_fn(func: Arc<PromiseAwareFn>) -> EventSani
                 data: fields.data,
                 category_profile,
                 metadata: fields.metadata,
+            })
+        })
+    })
+}
+
+/// Wrap a Promise-aware JavaScript event metadata injector.
+pub fn wrap_js_event_metadata_injector_promise_fn(
+    func: Arc<PromiseAwareFn>,
+) -> EventMetadataInjectorFn {
+    Arc::new(move |event: Arc<Event>| {
+        let func = func.clone();
+        Box::pin(async move {
+            let event_json = JsEvent::try_from_event(&event)
+                .map(JsEvent::into_json)
+                .map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JavaScript event metadata injector context: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
+            let publication =
+                nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
+            let value = if publication {
+                func.call_spread_for_publication(vec![event_json]).await
+            } else {
+                func.call(event_json).await
+            }
+            .inspect_err(|error| record_callback_error(error.to_string()))?;
+            serde_json::from_value::<BTreeMap<String, Json>>(value).map_err(|error| {
+                let error = FlowError::Internal(format!(
+                    "invalid JavaScript event metadata injector result: {error}"
+                ));
+                record_callback_error(error.to_string());
+                error
             })
         })
     })
@@ -1588,9 +1657,9 @@ pub fn wrap_js_llm_exec_intercept_fn(
 /// Wrap a JS function `(request, next) => result` for LLM stream execution intercept.
 ///
 /// The JS callback receives the `LlmRequest` serialized as a plain JSON object
-/// and a real `next(request)` function whose Promise resolves to an array of
-/// downstream JSON chunks. Returning an array preserves streaming semantics;
-/// returning any other JSON value produces a single-chunk stream.
+/// and a real `next(request)` function whose Promise resolves to a lazy
+/// async iterable. The callback can return it directly or wrap it with an async
+/// generator without materializing the downstream stream.
 pub fn wrap_js_llm_stream_exec_intercept_fn(
     func: Arc<PromiseAwareFn>,
 ) -> Arc<
@@ -1613,23 +1682,10 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
                         .map_err(|e| {
                             FlowError::Internal(format!("invalid LlmRequest from JS next: {e}"))
                         })?;
-                    let mut stream = next(next_request).await?;
-                    let mut chunks = Vec::new();
-                    while let Some(item) = stream.next().await {
-                        chunks.push(item?);
-                    }
-                    Ok(chunks)
+                    next(next_request).await
                 })
             });
-            Box::pin(async move {
-                let result = func.call_with_stream_next(req_json, next_stream).await?;
-                let chunks = match result {
-                    Json::Array(values) => values.into_iter().map(Ok).collect::<Vec<_>>(),
-                    value => vec![Ok(value)],
-                };
-                let stream = tokio_stream::iter(chunks);
-                Ok(LlmJsonStream::new(stream))
-            })
+            Box::pin(async move { func.call_with_stream_next(req_json, next_stream).await })
         },
     )
 }

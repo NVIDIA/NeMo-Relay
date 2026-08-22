@@ -28,7 +28,7 @@ The following table shows which API to use based on your integration need:
 
 Use manual lifecycle calls only when the surrounding code owns the real tool invocation and only exposes reliable start and finish hooks.
 If you are replaying events or bridging a framework clock, pass an explicit timestamp to the manual start, end, or mark helpers.
-Python accepts timezone-aware `datetime` values, Node.js accepts Unix microseconds since epoch, Rust accepts `DateTime<Utc>`, and Go accepts `time.Time`.
+Python accepts timezone-aware `datetime` values, Node.js accepts Unix microseconds since epoch, and Rust accepts `DateTime<Utc>`.
 Every manual tool end helper accepts the canonical `ToolExecutionResult`; wrap
 the business payload and add an optional opaque annotation when needed.
 
@@ -270,6 +270,124 @@ stream.close().await?;
 </Tab>
 
 </Tabs>
+
+## Temporarily Exclude a Global Registration
+
+The following examples discover a global subscriber, register a state-driven gate, and
+remove the gate in a guaranteed cleanup path. Use the same registration kind during
+discovery and gate registration.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay.runtime_registrations import (
+    RuntimeRegistrationKind,
+    deregister_conditional_middleware_guardrail,
+    list_runtime_registrations,
+    register_conditional_middleware_guardrail,
+)
+
+target = next(
+    (
+        registration
+        for registration in list_runtime_registrations(
+            {RuntimeRegistrationKind.SUBSCRIBER}
+        )
+        if registration.local_name == "opentelemetry"
+        and registration.owner.plugin_kind == "observability"
+    ),
+    None,
+)
+if target is None:
+    raise RuntimeError("OpenTelemetry subscriber was not found")
+
+paused = True
+register_conditional_middleware_guardrail(
+    "pause-opentelemetry",
+    {RuntimeRegistrationKind.SUBSCRIBER},
+    target.effective_name,
+    lambda _kinds, _name: "export paused" if paused else None,
+)
+try:
+    await run_application()
+finally:
+    deregister_conditional_middleware_guardrail("pause-opentelemetry")
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+import {
+  deregisterConditionalMiddlewareGuardrail,
+  listRuntimeRegistrations,
+  registerConditionalMiddlewareGuardrail,
+} from 'nemo-relay-node';
+
+const target = listRuntimeRegistrations(['subscriber']).find(
+  (registration) => registration.localName === 'opentelemetry'
+    && registration.owner.pluginKind === 'observability',
+);
+if (!target) throw new Error('OpenTelemetry subscriber was not found');
+
+let paused = true;
+registerConditionalMiddlewareGuardrail(
+  'pause-opentelemetry',
+  ['subscriber'],
+  target.effectiveName,
+  () => paused ? 'export paused' : null,
+);
+try {
+  await runApplication();
+} finally {
+  deregisterConditionalMiddlewareGuardrail('pause-opentelemetry');
+}
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use std::collections::BTreeSet;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use nemo_relay::api::registry::{
+    RuntimeRegistrationKind,
+    deregister_conditional_middleware_guardrail,
+    list_runtime_registrations,
+    register_conditional_middleware_guardrail,
+};
+
+let kinds = BTreeSet::from([RuntimeRegistrationKind::Subscriber]);
+let target = list_runtime_registrations(Some(&kinds))?
+    .into_iter()
+    .find(|registration| {
+        registration.local_name == "opentelemetry"
+            && registration.owner.plugin_kind.as_deref() == Some("observability")
+    })
+    .ok_or("OpenTelemetry subscriber was not found")?;
+
+let paused = Arc::new(AtomicBool::new(true));
+let callback_state = Arc::clone(&paused);
+register_conditional_middleware_guardrail(
+    "pause-opentelemetry",
+    kinds,
+    &target.effective_name,
+    Arc::new(move |_kinds, _name| {
+        callback_state
+            .load(Ordering::Acquire)
+            .then(|| "export paused".to_string())
+    }),
+)?;
+
+let application_result = run_application().await;
+deregister_conditional_middleware_guardrail("pause-opentelemetry")?;
+application_result?;
+```
+</Tab>
+</Tabs>
+
+Python and Node.js use `try` and `finally` for cleanup. Rust must preserve both the
+application result and deregistration result, as shown, or use an owning guard in the
+host application. A callback failure keeps the target eligible and adds a runtime
+diagnostic.
 
 ## Partial Middleware Calls
 

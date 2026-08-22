@@ -12,10 +12,13 @@ import (
 
 const (
 	adaptiveRuntimeClosedMessage    = "adaptive runtime is nil or shut down"
+	expectedCleanReportMsg          = "expected clean report, got %#v"
 	forcedAdaptiveMarshalFailure    = "forced adaptive JSON marshal failure"
+	marshalFailedMsg                = "marshal failed: %v"
 	newAdaptiveRuntimeFailedMsg     = "NewAdaptiveRuntime failed: %v"
 	responseCacheTestNamespace      = "go-harness"
 	testAgentID                     = "go-agent"
+	unmarshalFailedMsg              = "unmarshal failed: %v"
 	validateAdaptiveConfigFailedMsg = "ValidateAdaptiveConfig failed: %v"
 )
 
@@ -41,7 +44,7 @@ func TestValidateAdaptiveConfigAndOwnedRuntime(t *testing.T) {
 		t.Fatalf(validateAdaptiveConfigFailedMsg, err)
 	}
 	if len(report.Diagnostics) != 0 {
-		t.Fatalf("expected clean report, got %#v", report.Diagnostics)
+		t.Fatalf(expectedCleanReportMsg, report.Diagnostics)
 	}
 
 	runtime, err := NewAdaptiveRuntime(NewAdaptiveConfig())
@@ -203,11 +206,11 @@ func assertResponseCacheJSONSurface(t *testing.T, responseCache ResponseCacheCon
 	config.ResponseCache = &responseCache
 	payload, err := json.Marshal(config)
 	if err != nil {
-		t.Fatalf("marshal failed: %v", err)
+		t.Fatalf(marshalFailedMsg, err)
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(payload, &decoded); err != nil {
-		t.Fatalf("unmarshal failed: %v", err)
+		t.Fatalf(unmarshalFailedMsg, err)
 	}
 	section, ok := decoded["response_cache"].(map[string]any)
 	if !ok {
@@ -236,7 +239,7 @@ func assertResponseCacheValidation(t *testing.T, responseCache ResponseCacheConf
 		t.Fatalf(validateAdaptiveConfigFailedMsg, err)
 	}
 	if len(report.Diagnostics) != 0 {
-		t.Fatalf("expected clean report, got %#v", report.Diagnostics)
+		t.Fatalf(expectedCleanReportMsg, report.Diagnostics)
 	}
 
 	bad := NewResponseCacheConfig()
@@ -282,11 +285,11 @@ func TestResponseCacheToolsConfigReachesTypedSurface(t *testing.T) {
 
 	payload, err := json.Marshal(config)
 	if err != nil {
-		t.Fatalf("marshal failed: %v", err)
+		t.Fatalf(marshalFailedMsg, err)
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(payload, &decoded); err != nil {
-		t.Fatalf("unmarshal failed: %v", err)
+		t.Fatalf(unmarshalFailedMsg, err)
 	}
 	rcSection, ok := decoded["response_cache"].(map[string]any)
 	if !ok {
@@ -335,11 +338,11 @@ func marshalResponseCacheConfig(t *testing.T, responseCache ResponseCacheConfig)
 	t.Helper()
 	payload, err := json.Marshal(responseCache)
 	if err != nil {
-		t.Fatalf("marshal failed: %v", err)
+		t.Fatalf(marshalFailedMsg, err)
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(payload, &decoded); err != nil {
-		t.Fatalf("unmarshal failed: %v", err)
+		t.Fatalf(unmarshalFailedMsg, err)
 	}
 	return decoded
 }

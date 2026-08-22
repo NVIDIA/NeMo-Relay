@@ -6,6 +6,7 @@
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import cast
+from uuid import uuid4
 
 import pytest
 
@@ -19,6 +20,7 @@ from nemo_relay import (
     llm,
     plugin,
     scope,
+    subscribers,
     tools,
 )
 from nemo_relay import adaptive as adaptive_module
@@ -34,6 +36,7 @@ from nemo_relay.adaptive import (
     TelemetryConfig,
     ToolParallelismConfig,
 )
+from nemo_relay.runtime_registrations import RuntimeRegistrationKind
 
 
 class TestAdaptiveConfigHelpers:
@@ -416,3 +419,78 @@ class TestAdaptivePluginConfiguration:
             assert "python.list_kinds_plugin" in plugin.list_kinds()
         finally:
             plugin.deregister("python.list_kinds_plugin")
+
+
+async def test_plugin_context_conditional_gate_fails_open_and_clears():
+    suffix = uuid4().hex
+    kind = f"python.context_gate.{suffix}"
+    target = f"python-context-gate-target-{suffix}"
+    observed: list[str] = []
+    observed_kinds: list[set[RuntimeRegistrationKind]] = []
+
+    class GatePlugin(plugin.Plugin):
+        def validate(self, plugin_config: JsonObject) -> list[plugin.ConfigDiagnostic] | None:
+            return None
+
+        def register(self, plugin_config: JsonObject, context: plugin.PluginContext) -> None:
+            def fail(kinds: set[RuntimeRegistrationKind], _name: str) -> str | None:
+                observed_kinds.append(kinds)
+                raise RuntimeError("expected gate failure")
+
+            context.register_conditional_middleware_guardrail(
+                "failing-gate",
+                {RuntimeRegistrationKind.SUBSCRIBER},
+                target,
+                fail,
+            )
+
+    subscribers.register(target, lambda event: observed.append(event.name))
+    plugin.register(kind, GatePlugin())
+    try:
+        await plugin.initialize(plugin.PluginConfig(components=[plugin.ComponentSpec(kind=kind)]))
+        scope.event("python-context-gate-fail-open")
+        await subscribers.flush_async()
+        assert observed[-1] == "python-context-gate-fail-open"
+        assert observed_kinds[-1] == {RuntimeRegistrationKind.SUBSCRIBER}
+        assert all(type(kind) is RuntimeRegistrationKind for kind in observed_kinds[-1])
+        await plugin.clear_async()
+        scope.event("python-context-gate-cleared")
+        await subscribers.flush_async()
+        assert observed[-1] == "python-context-gate-cleared"
+    finally:
+        await plugin.clear_async()
+        plugin.deregister(kind)
+        subscribers.deregister(target)
+
+
+async def test_failed_plugin_activation_rolls_back_conditional_gate():
+    suffix = uuid4().hex
+    kind = f"python.context_gate_rollback.{suffix}"
+    target = f"python-context-gate-rollback-target-{suffix}"
+    observed: list[str] = []
+
+    class FailingPlugin(plugin.Plugin):
+        def validate(self, plugin_config: JsonObject) -> list[plugin.ConfigDiagnostic] | None:
+            return None
+
+        def register(self, plugin_config: JsonObject, context: plugin.PluginContext) -> None:
+            context.register_conditional_middleware_guardrail(
+                "rollback-gate",
+                {RuntimeRegistrationKind.SUBSCRIBER},
+                target,
+                lambda _kinds, _name: "activation in progress",
+            )
+            raise RuntimeError("expected activation failure")
+
+    subscribers.register(target, lambda event: observed.append(event.name))
+    plugin.register(kind, FailingPlugin())
+    try:
+        with pytest.raises(RuntimeError, match="expected activation failure"):
+            await plugin.initialize(plugin.PluginConfig(components=[plugin.ComponentSpec(kind=kind)]))
+        scope.event("python-context-gate-rolled-back")
+        await subscribers.flush_async()
+        assert observed[-1] == "python-context-gate-rolled-back"
+    finally:
+        await plugin.clear_async()
+        plugin.deregister(kind)
+        subscribers.deregister(target)

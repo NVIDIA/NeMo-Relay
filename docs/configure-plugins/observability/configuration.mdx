@@ -99,11 +99,15 @@ sanitizers still apply.
 
 ## Multi-Endpoint Lifecycle
 
-OpenTelemetry endpoint construction is transactional. If validation or
-construction fails for any endpoint, plugin activation fails before the
-fan-out subscriber is registered. A previous active plugin configuration is
-preserved when possible; the plugin host attempts to restore it if replacement
-fails after teardown begins.
+OpenTelemetry endpoint construction is isolated. An endpoint that cannot be
+constructed is skipped with an activation warning while valid endpoints
+activate and receive the event stream. Invalid batch settings also appear in
+the configuration report with their indexed `opentelemetry.endpoints[N]` field.
+Activation still fails when no trace, log, or metric endpoint can be registered.
+Structural configuration validation remains activation-blocking at the default
+policy. A previous active plugin configuration is preserved when possible, and
+the plugin host attempts to restore it if replacement fails after teardown
+begins.
 
 After activation, trace projections consume the event stream, while log and
 metric subscribers consume only their routed marks. A runtime delivery failure

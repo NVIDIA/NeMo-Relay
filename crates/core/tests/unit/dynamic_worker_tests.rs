@@ -44,6 +44,56 @@ use super::*;
 const ACTIVATION_ID: &str = "activation-test";
 const AUTH_TOKEN: &str = "auth-test";
 
+#[test]
+fn worker_runtime_rejects_gate_registration_after_cleanup() {
+    let state = WorkerHostRuntimeState::new(ACTIVATION_ID.into(), AUTH_TOKEN.into());
+    state.cleanup_conditional_middleware_guardrails();
+
+    let error = state
+        .register_owned_conditional_middleware_guardrail(
+            "late-gate".into(),
+            BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+            "target-subscriber".into(),
+            "disabled".into(),
+        )
+        .expect_err("gate registration after cleanup must fail");
+
+    assert!(matches!(error, FlowError::NotFound(_)));
+}
+
+#[test]
+fn worker_gate_cleanup_recovers_a_poisoned_ownership_lock() {
+    let state = WorkerHostRuntimeState::new(ACTIVATION_ID.into(), AUTH_TOKEN.into());
+    state
+        .conditional_middleware_guardrails
+        .lock()
+        .expect("gate ownership lock")
+        .insert(
+            "gate-handle".into(),
+            WorkerOwnedGate {
+                local_name: "owned-gate".into(),
+                qualified_name: "missing-global-gate".into(),
+            },
+        );
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = state
+            .conditional_middleware_guardrails
+            .lock()
+            .expect("gate ownership lock");
+        panic!("poison gate ownership lock");
+    }));
+
+    state.cleanup_conditional_middleware_guardrails();
+
+    assert!(
+        state
+            .conditional_middleware_guardrails
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_empty()
+    );
+}
+
 fn enable_operational_logs() {
     let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
@@ -478,6 +528,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 break_chain: false,
             }],
             error: None,
+            conditional_middleware_guardrails: Vec::new(),
         },
     )
     .expect_err("empty registration names should fail");
@@ -493,6 +544,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 break_chain: false,
             }],
             error: None,
+            conditional_middleware_guardrails: Vec::new(),
         },
     )
     .expect_err("unsupported registration surfaces should fail");
@@ -512,6 +564,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 break_chain: false,
             }],
             error: None,
+            conditional_middleware_guardrails: Vec::new(),
         },
     )
     .expect_err("unspecified registration surfaces should fail");
@@ -1825,14 +1878,20 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
         let state = context.read().unwrap();
         (
             state.collect_event_subscribers(&[]),
-            NemoRelayContextState::event_sanitize_entries(&state.mark_sanitize_guardrails, &[]),
+            NemoRelayContextState::event_sanitize_entries(
+                &state.mark_sanitize_guardrails,
+                &[],
+                crate::api::registry::RuntimeRegistrationKind::MarkSanitizeGuardrail,
+            ),
             NemoRelayContextState::event_sanitize_entries(
                 &state.scope_sanitize_start_guardrails,
                 &[],
+                crate::api::registry::RuntimeRegistrationKind::ScopeSanitizeStartGuardrail,
             ),
             NemoRelayContextState::event_sanitize_entries(
                 &state.scope_sanitize_end_guardrails,
                 &[],
+                crate::api::registry::RuntimeRegistrationKind::ScopeSanitizeEndGuardrail,
             ),
             state.tool_sanitize_request_entries(&[]),
             state.tool_sanitize_response_entries(&[]),
@@ -3007,6 +3066,7 @@ impl PluginWorker for FakePluginWorker {
         Ok(tonic::Response::new(RegisterResponse {
             registrations: Vec::new(),
             error: None,
+            conditional_middleware_guardrails: Vec::new(),
         }))
     }
 

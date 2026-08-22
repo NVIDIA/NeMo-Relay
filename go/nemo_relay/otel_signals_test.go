@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+const (
+	emitEventFailedMsg = "EmitEvent failed"
+	otelEndpoint       = "http://localhost:4318"
+)
+
 func TestEventSchemaSeverityAndMetricParity(t *testing.T) {
 	var (
 		events []Event
@@ -38,7 +43,7 @@ func TestEventSchemaSeverityAndMetricParity(t *testing.T) {
 			WithEventMetadata(json.RawMessage(`{"nemo_relay.log.severity":"debug"}`)),
 			WithEventSeverity(LogSeverityWarn),
 		)
-		requireNoError(t, err, "EmitEvent failed")
+		requireNoError(t, err, emitEventFailedMsg)
 
 		err = EmitMetric("go_metric", []MetricMeasurement{{
 			Name:      "example.tokens.saved",
@@ -159,7 +164,7 @@ func TestOpenTelemetrySignalConfigRejectsFractionalMillisecondDurations(t *testi
 			name: "log timeout",
 			normalize: func() error {
 				_, err := normalizeOpenTelemetryLogConfig(OpenTelemetryLogConfig{
-					Endpoint: "http://localhost:4318",
+					Endpoint: otelEndpoint,
 					Timeout:  time.Nanosecond,
 				})
 				return err
@@ -169,7 +174,7 @@ func TestOpenTelemetrySignalConfigRejectsFractionalMillisecondDurations(t *testi
 			name: "log scheduled delay",
 			normalize: func() error {
 				_, err := normalizeOpenTelemetryLogConfig(OpenTelemetryLogConfig{
-					Endpoint:       "http://localhost:4318",
+					Endpoint:       otelEndpoint,
 					ScheduledDelay: time.Millisecond + 500*time.Microsecond,
 				})
 				return err
@@ -179,7 +184,7 @@ func TestOpenTelemetrySignalConfigRejectsFractionalMillisecondDurations(t *testi
 			name: "metric timeout",
 			normalize: func() error {
 				_, err := normalizeOpenTelemetryMetricConfig(OpenTelemetryMetricConfig{
-					Endpoint: "http://localhost:4318",
+					Endpoint: otelEndpoint,
 					Timeout:  500 * time.Microsecond,
 				})
 				return err
@@ -189,7 +194,7 @@ func TestOpenTelemetrySignalConfigRejectsFractionalMillisecondDurations(t *testi
 			name: "metric export interval",
 			normalize: func() error {
 				_, err := normalizeOpenTelemetryMetricConfig(OpenTelemetryMetricConfig{
-					Endpoint:       "http://localhost:4318",
+					Endpoint:       otelEndpoint,
 					ExportInterval: 2*time.Millisecond + 500*time.Microsecond,
 				})
 				return err
@@ -199,7 +204,7 @@ func TestOpenTelemetrySignalConfigRejectsFractionalMillisecondDurations(t *testi
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if err := test.normalize(); err == nil {
+			if test.normalize() == nil {
 				t.Fatal("expected fractional-millisecond duration to fail")
 			}
 		})
@@ -241,7 +246,7 @@ func TestOpenTelemetrySubscribersExposeRuntimeDiagnostics(t *testing.T) {
 			"invalid_metric",
 			WithEventData(json.RawMessage(`{"measurements":[]}`)),
 			WithEventDataSchema(DataSchema{Name: "nemo.relay.metric_measurements", Version: "999"}),
-		), "EmitEvent failed")
+		), emitEventFailedMsg)
 	})
 	requireNoError(t, FlushSubscribers(), "FlushSubscribers failed")
 
@@ -279,7 +284,7 @@ func TestOpenTelemetryLogSubscriberLifecycleAndDerivation(t *testing.T) {
 	defer func() { _ = subscriber.Deregister(name) }()
 
 	runWithTestScopeStack(t, func() {
-		requireNoError(t, EmitEvent("go_exported_log", WithEventSeverity(LogSeverityError)), "EmitEvent failed")
+		requireNoError(t, EmitEvent("go_exported_log", WithEventSeverity(LogSeverityError)), emitEventFailedMsg)
 	})
 	requireNoError(t, subscriber.ForceFlush(), "log ForceFlush failed")
 

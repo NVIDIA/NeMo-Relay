@@ -52,7 +52,6 @@ const metricDeregistered: boolean = metricSubscriber.deregister('fixture-metric-
 metricSubscriber.forceFlush();
 metricSubscriber.shutdown();
 
-void logDiagnostics;
-void metricDiagnostics;
-void logDeregistered;
-void metricDeregistered;
+if (!logDiagnostics || !metricDiagnostics || !logDeregistered || !metricDeregistered) {
+  throw new Error('fixture observability operations failed');
+}

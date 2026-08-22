@@ -156,7 +156,11 @@ fn merge_helpers_preserve_global_and_scope_local_priority_order() {
         .unwrap();
 
     let local_guardrail_refs = [&local_guardrails];
-    let merged_guardrails = merge_guardrail_entries(&global_guardrails, &local_guardrail_refs);
+    let merged_guardrails = merge_guardrail_entries(
+        &global_guardrails,
+        &local_guardrail_refs,
+        crate::api::registry::RuntimeRegistrationKind::ToolSanitizeRequestGuardrail,
+    );
     assert_eq!(
         merged_guardrails
             .iter()
@@ -190,7 +194,11 @@ fn merge_helpers_preserve_global_and_scope_local_priority_order() {
         .unwrap();
 
     let local_intercept_refs = [&local_intercepts];
-    let merged_intercepts = merge_intercept_entries(&global_intercepts, &local_intercept_refs);
+    let merged_intercepts = merge_intercept_entries(
+        &global_intercepts,
+        &local_intercept_refs,
+        crate::api::registry::RuntimeRegistrationKind::ToolRequestIntercept,
+    );
     assert_eq!(
         merged_intercepts
             .iter()
@@ -217,7 +225,11 @@ fn merge_helpers_preserve_global_and_scope_local_priority_order() {
         })
         .unwrap();
 
-    let merged_exec = merge_execution_intercept_callables(&global_exec, &[&local_exec]);
+    let merged_exec = merge_execution_intercept_callables(
+        &global_exec,
+        &[&local_exec],
+        crate::api::registry::RuntimeRegistrationKind::ToolExecutionIntercept,
+    );
     assert_eq!(merged_exec, vec![("local", 1), ("global", 15)]);
 }
 

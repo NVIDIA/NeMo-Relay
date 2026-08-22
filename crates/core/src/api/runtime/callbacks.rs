@@ -8,7 +8,7 @@
 //! so the runtime can compose tool and LLM middleware consistently across
 //! bindings.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -18,12 +18,21 @@ use tokio_stream::Stream;
 
 use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use crate::api::registry::RuntimeRegistrationKind;
 use crate::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::Result;
 use crate::json::Json;
 pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
+
+/// Decide whether matching global runtime registrations remain eligible.
+///
+/// Relay invokes this callback with the gate's configured registration kinds
+/// and the target registration's effective name. Returning `None` enables the
+/// target. Returning a reason string disables it for the current snapshot.
+pub type ConditionalMiddlewareGuardrailFn =
+    Arc<dyn Fn(&BTreeSet<RuntimeRegistrationKind>, &str) -> Option<String> + Send + Sync>;
 
 /// Sanitize mutable observability fields on a fully constructed event.
 ///

@@ -1,0 +1,148 @@
+{
+  "$comment": "SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved. SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Rust gRPC Worker Documentation Plugin",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "tag": {
+      "description": "Non-empty label attached to plugin-created metadata and runtime events.",
+      "type": "string",
+      "minLength": 1,
+      "default": "documentation"
+    },
+    "observe": {
+      "description": "Controls the subscriber and all observability sanitizers.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "description": "Registers the subscriber and event, tool, and LLM observability sanitizers.",
+          "type": "boolean",
+          "default": true
+        },
+        "redact_keys": {
+          "description": "Object keys whose observability values are replaced recursively.",
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["secret"]
+        }
+      }
+    },
+    "requests": {
+      "description": "Controls blocking and real request rewriting.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "description": "Registers tool and model policy plus request-rewriting middleware.",
+          "type": "boolean",
+          "default": true
+        },
+        "mode": {
+          "description": "Blocks configured tool and model names in enforce mode; permits them in observe mode.",
+          "type": "string",
+          "enum": ["observe", "enforce"],
+          "default": "enforce"
+        },
+        "blocked_tools": {
+          "description": "Exact tool names rejected in enforce mode.",
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["dangerous_tool"]
+        },
+        "blocked_models": {
+          "description": "Exact model names rejected in enforce mode.",
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["restricted-model"]
+        },
+        "header_name": {
+          "description": "Header name added to the real LLM request.",
+          "type": "string",
+          "minLength": 1,
+          "default": "x-nemo-relay-plugin"
+        },
+        "header_value": {
+          "description": "Header value added to the real LLM request.",
+          "type": "string",
+          "minLength": 1,
+          "default": "documentation"
+        },
+        "priority": {
+          "description": "Priority for the tool and LLM request intercepts.",
+          "type": "integer",
+          "default": 20
+        },
+        "break_chain": {
+          "description": "Stops later request intercepts after this component rewrites a request.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "execution": {
+      "description": "Controls tool, unary LLM, and streaming continuation wrappers.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "description": "Registers tool, unary LLM, and streaming LLM execution intercepts.",
+          "type": "boolean",
+          "default": true
+        },
+        "priority": {
+          "description": "Priority for all three execution intercepts.",
+          "type": "integer",
+          "default": 30
+        },
+        "emit_pending_marks": {
+          "description": "Adds Relay-owned pending marks to tool execution and LLM request outcomes.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "runtime": {
+      "description": "Controls host marks, scopes, and isolated scope stacks.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "emit_marks": {
+          "description": "Emits a host-runtime mark during the tool request intercept.",
+          "type": "boolean",
+          "default": true
+        },
+        "emit_isolated_scope": {
+          "description": "Creates, binds, and drops an isolated scope stack during the tool request intercept.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "registration_control": {
+      "description": "Optionally suppresses a matching global runtime registration for this component's activation lifetime.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "kinds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["subscriber", "event_metadata_injector", "mark_sanitize_guardrail", "scope_sanitize_start_guardrail", "scope_sanitize_end_guardrail", "tool_sanitize_request_guardrail", "tool_sanitize_response_guardrail", "tool_conditional_execution_guardrail", "tool_request_intercept", "tool_execution_intercept", "llm_sanitize_request_guardrail", "llm_sanitize_response_guardrail", "llm_conditional_execution_guardrail", "llm_request_intercept", "llm_execution_intercept", "llm_stream_execution_intercept"] },
+          "default": ["subscriber"]
+        },
+        "registration_name": {
+          "type": "string",
+          "minLength": 1,
+          "default": "documentation-controlled-subscriber"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "default": "disabled by documentation plugin"
+        }
+      }
+    }
+  }
+}

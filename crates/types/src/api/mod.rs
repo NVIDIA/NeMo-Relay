@@ -7,6 +7,8 @@
 pub mod event;
 /// LLM DTOs and attributes.
 pub mod llm;
+/// Runtime-registration discovery DTOs.
+pub mod registry;
 /// Scope DTOs and attributes.
 pub mod scope;
 /// Tool DTOs and attributes.

@@ -44,6 +44,8 @@ binding consumes it through CGo.
 - **Exported `nemo_relay_*` symbols**: APIs for scopes, tool calls, LLM calls,
   middleware, subscribers, plugins, observability exporters, and scope stack
   isolation.
+- **Event metadata injection**: Register global, scope-local, or plugin-owned
+  callbacks that inspect an immutable event and propose flat metadata additions.
 - **Typed OpenTelemetry export**:
   `nemo_relay_otel_subscriber_create` constructs one `full`, `gen_ai`, or
   `openinference` trace subscriber. Independently managed log and metric
@@ -67,6 +69,55 @@ callback on a native thread and waits for it to return. Blocking I/O and other
 long-running callback work therefore occupy that thread and can reduce
 middleware throughput. The FFI does not expose completion-based middleware
 registration.
+
+## Event Metadata Injection
+
+An event metadata injector receives a borrowed `FfiEvent` and returns a
+heap-allocated JSON object containing proposed metadata additions. Relay frees
+the returned string, validates the object, and inserts only keys that are not
+already present. Return null after calling
+`nemo_relay_set_last_error_message` to reject that callback's additions while
+allowing the event to continue through sanitization and delivery.
+
+The following C example registers application-wide metadata injection:
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static char *inject_metadata(void *user_data, const FfiEvent *event) {
+    (void)user_data;
+    (void)event;
+    const char payload[] = "{\"application.region\":\"us-central\"}";
+    char *result = malloc(sizeof(payload));
+    if (result == NULL) {
+        nemo_relay_set_last_error_message("failed to allocate injector result");
+        return NULL;
+    }
+    memcpy(result, payload, sizeof(payload));
+    return result;
+}
+
+NemoRelayStatus status = nemo_relay_register_event_metadata_injector(
+    "application-metadata", 10, inject_metadata, NULL, NULL
+);
+if (status != NEMO_RELAY_STATUS_OK) {
+    fprintf(stderr, "registration failed: %s\n", nemo_relay_last_error());
+    return EXIT_FAILURE;
+}
+/* Emit scopes and marks while the callback is registered. */
+status = nemo_relay_deregister_event_metadata_injector("application-metadata");
+if (status != NEMO_RELAY_STATUS_OK) {
+    fprintf(stderr, "cleanup failed: %s\n", nemo_relay_last_error());
+    return EXIT_FAILURE;
+}
+```
+
+Use `nemo_relay_scope_register_event_metadata_injector` for an active scope or
+`nemo_relay_plugin_context_register_event_metadata_injector` during plugin
+registration. The corresponding deregistration functions remove future
+invocations; scope and plugin cleanup also remove their owned registrations.
 
 ## OTLP Logs and Metrics
 

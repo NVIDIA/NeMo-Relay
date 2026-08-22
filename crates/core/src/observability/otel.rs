@@ -145,7 +145,13 @@ pub enum OpenTelemetryError {
     ExporterBuild(String),
     /// The underlying tracer provider returned an error.
     #[error("OpenTelemetry tracer provider error: {0}")]
-    Provider(String),
+    TraceProvider(String),
+    /// The underlying logger provider returned an error.
+    #[error("OpenTelemetry log provider error: {0}")]
+    LogProvider(String),
+    /// The underlying meter provider returned an error.
+    #[error("OpenTelemetry metric provider error: {0}")]
+    MetricProvider(String),
     /// Attribute mapping configuration was invalid.
     #[error("invalid attribute mappings: {0}")]
     InvalidAttributeMappings(String),
@@ -693,7 +699,7 @@ impl OpenTelemetrySubscriber {
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
         let guard = self.inner.processor.lock().map_err(|_| {
-            OpenTelemetryError::Provider("the subscriber state lock was poisoned".to_string())
+            OpenTelemetryError::TraceProvider("the subscriber state lock was poisoned".to_string())
         })?;
         guard.force_flush()
     }
@@ -712,7 +718,7 @@ impl OpenTelemetrySubscriber {
 
     pub(crate) fn shutdown_provider(&self) -> Result<()> {
         let guard = self.inner.processor.lock().map_err(|_| {
-            OpenTelemetryError::Provider("the subscriber state lock was poisoned".to_string())
+            OpenTelemetryError::TraceProvider("the subscriber state lock was poisoned".to_string())
         })?;
         let result = guard.shutdown();
         if result.is_ok() {
@@ -895,13 +901,20 @@ fn build_tracer_provider(
 struct CountingSpanExporter<E> {
     inner: E,
     accepted_spans: Arc<AtomicU64>,
+    diagnostics: Arc<TraceDeliveryDiagnostics>,
 }
 
 impl<E: SpanExporter> SpanExporter for CountingSpanExporter<E> {
     async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
         self.accepted_spans
             .fetch_add(batch.len() as u64, Ordering::Relaxed);
-        self.inner.export(batch).await
+        let result = self.inner.export(batch).await;
+        if let Err(error) = &result {
+            self.diagnostics.record_export_failure(error);
+        } else {
+            self.diagnostics.record_export_success();
+        }
+        result
     }
 
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
@@ -918,12 +931,61 @@ impl<E: SpanExporter> SpanExporter for CountingSpanExporter<E> {
 }
 
 #[derive(Debug)]
+struct TraceDeliveryDiagnostics {
+    endpoint: String,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+    export_failures: AtomicU64,
+    unresolved_export_failure: AtomicBool,
+}
+
+impl TraceDeliveryDiagnostics {
+    fn new(endpoint: String, runtime_diagnostics: SignalRuntimeDiagnostics) -> Self {
+        Self {
+            endpoint,
+            runtime_diagnostics,
+            export_failures: AtomicU64::new(0),
+            unresolved_export_failure: AtomicBool::new(false),
+        }
+    }
+
+    fn record_export_failure(&self, error: &impl std::fmt::Display) {
+        self.export_failures.fetch_add(1, Ordering::Relaxed);
+        self.unresolved_export_failure
+            .store(true, Ordering::Relaxed);
+        self.runtime_diagnostics.record(
+            "otel.traces_export_failed",
+            format!(
+                "OpenTelemetry trace export to endpoint {} failed: {error}",
+                self.endpoint
+            ),
+            1,
+        );
+    }
+
+    fn record_export_success(&self) {
+        self.unresolved_export_failure
+            .store(false, Ordering::Relaxed);
+    }
+
+    fn unresolved_failure_summary(&self) -> Option<String> {
+        self.unresolved_export_failure
+            .load(Ordering::Relaxed)
+            .then(|| {
+                let failures = self.export_failures.load(Ordering::Relaxed);
+                format!(
+                    "otel.traces_export_failed ({failures}): export to endpoint {} has not recovered",
+                    self.endpoint
+                )
+            })
+    }
+}
+
+#[derive(Debug)]
 struct DiagnosticBatchSpanProcessor {
     inner: BatchSpanProcessor,
     completed_spans: AtomicU64,
     accepted_spans: Arc<AtomicU64>,
-    endpoint: String,
-    runtime_diagnostics: SignalRuntimeDiagnostics,
+    diagnostics: Arc<TraceDeliveryDiagnostics>,
     diagnostic_reported: AtomicBool,
 }
 
@@ -935,9 +997,11 @@ impl DiagnosticBatchSpanProcessor {
         batch_config: opentelemetry_sdk::trace::BatchConfig,
     ) -> Self {
         let accepted_spans = Arc::new(AtomicU64::new(0));
+        let diagnostics = Arc::new(TraceDeliveryDiagnostics::new(endpoint, runtime_diagnostics));
         let exporter = CountingSpanExporter {
             inner: exporter,
             accepted_spans: Arc::clone(&accepted_spans),
+            diagnostics: Arc::clone(&diagnostics),
         };
         Self {
             inner: BatchSpanProcessor::builder(exporter)
@@ -945,8 +1009,7 @@ impl DiagnosticBatchSpanProcessor {
                 .build(),
             completed_spans: AtomicU64::new(0),
             accepted_spans,
-            endpoint,
-            runtime_diagnostics,
+            diagnostics,
             diagnostic_reported: AtomicBool::new(false),
         }
     }
@@ -959,11 +1022,11 @@ impl DiagnosticBatchSpanProcessor {
         if dropped == 0 || self.diagnostic_reported.swap(true, Ordering::Relaxed) {
             return dropped;
         }
-        self.runtime_diagnostics.record(
+        self.diagnostics.runtime_diagnostics.record(
             "otel.spans_dropped",
             format!(
                 "OpenTelemetry dropped {dropped} spans before export to endpoint {} because the batch queue was full",
-                self.endpoint
+                self.diagnostics.endpoint
             ),
             dropped,
         );
@@ -982,16 +1045,33 @@ impl SpanProcessor for DiagnosticBatchSpanProcessor {
     }
 
     fn force_flush(&self) -> OTelSdkResult {
-        self.inner.force_flush()
+        let result = self.inner.force_flush();
+        if result.is_ok()
+            && let Some(summary) = self.diagnostics.unresolved_failure_summary()
+        {
+            return Err(OTelSdkError::InternalFailure(summary));
+        }
+        result
     }
 
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
         let result = self.inner.shutdown_with_timeout(timeout);
         if result.is_ok() {
             let dropped = self.record_dropped_spans();
-            if dropped > 0 && self.runtime_diagnostics.has_plugin_mirror() {
+            let export_failure = self.diagnostics.unresolved_failure_summary();
+            if (dropped > 0 || export_failure.is_some())
+                && self.diagnostics.runtime_diagnostics.has_plugin_mirror()
+            {
+                let mut diagnostics = Vec::new();
+                if dropped > 0 {
+                    diagnostics.push(format!("otel.spans_dropped ({dropped})"));
+                }
+                if let Some(export_failure) = export_failure {
+                    diagnostics.push(export_failure);
+                }
                 return Err(OTelSdkError::InternalFailure(format!(
-                    "{OTEL_RUNTIME_DELIVERY_FAILURE_MARKER}: otel.spans_dropped ({dropped})"
+                    "{OTEL_RUNTIME_DELIVERY_FAILURE_MARKER}: {}",
+                    diagnostics.join(", ")
                 )));
             }
         }
@@ -1194,13 +1274,13 @@ impl OtelEventProcessor {
     pub(super) fn force_flush(&self) -> Result<()> {
         self.provider
             .force_flush()
-            .map_err(|e| OpenTelemetryError::Provider(e.to_string()))
+            .map_err(|e| OpenTelemetryError::TraceProvider(e.to_string()))
     }
 
     fn shutdown(&self) -> Result<()> {
         self.provider
             .shutdown()
-            .map_err(|e| OpenTelemetryError::Provider(e.to_string()))
+            .map_err(|e| OpenTelemetryError::TraceProvider(e.to_string()))
     }
 
     fn process_start(&mut self, event: &Event) {
@@ -1485,16 +1565,19 @@ impl OtelEventProcessor {
         event: &Event,
         protected_keys: &HashSet<String>,
     ) {
-        let issues = promote_event_metadata_attributes(
+        let mut issues = promote_event_metadata_attributes(
             attributes,
             event,
             &self.promote_metadata_prefixes,
             protected_keys,
         );
 
+        issues.sort_by(|left, right| left.key.cmp(&right.key));
         for issue in issues {
+            let diagnostic_code =
+                format!("otel.metadata_promotion_value_unsupported.{}", issue.key);
             let diagnostic_count = self.runtime_diagnostics.record(
-                "otel.metadata_promotion_value_unsupported",
+                diagnostic_code,
                 format!(
                     "OpenTelemetry metadata attribute {:?} was not promoted: {}",
                     issue.key, issue.reason

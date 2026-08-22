@@ -3,7 +3,7 @@
 
 /// <reference lib="esnext.disposable" />
 
-import type { EventSanitizeFields, Json, ToolExecutionResult } from './index';
+import type { EventSanitizeFields, Json, RuntimeRegistrationKind, ToolExecutionResult } from './index';
 import type { LlmCodec, LlmResponseCodec } from './typed';
 
 /** Codec identity available while a managed LLM event is sanitized. */
@@ -204,13 +204,38 @@ export interface ToolExecutionInterceptOutcome {
   pendingMarks?: PendingMarkSpec[];
 }
 
+/** Scalar value accepted in event metadata additions. */
+export type EventMetadataScalar = string | number | boolean;
+
+/**
+ * Flat value accepted in event metadata additions. After JSON conversion,
+ * numeric arrays must contain only integer values or only floating-point values.
+ */
+export type EventMetadataValue = EventMetadataScalar | string[] | number[] | boolean[];
+
+/** Metadata additions returned by an event metadata injector. */
+export type EventMetadata = Record<string, EventMetadataValue>;
+
 /** Component-scoped registration context passed to plugin handlers. */
 export interface PluginContext {
+  /** Register an activation-owned eligibility gate for a global runtime registration. */
+  registerConditionalMiddlewareGuardrail(
+    name: string,
+    kinds: RuntimeRegistrationKind[],
+    registrationName: string,
+    guardrail: (kinds: RuntimeRegistrationKind[], registrationName: string) => string | null,
+  ): void;
   /**
    * Register an event subscriber for this component. Callback failures are isolated and reported
    * through the Node binding's callback-error channel; flushSubscribers waits for returned promises.
    */
   registerSubscriber(name: string, callback: (event: Json) => void | Promise<void>): void;
+  /** Register an event metadata injector for this component. */
+  registerEventMetadataInjector(
+    name: string,
+    priority: number,
+    callback: (event: Json) => EventMetadata | Promise<EventMetadata>,
+  ): void;
   /** Register a mark event sanitizer for this component. */
   registerMarkSanitizeGuardrail(
     name: string,
@@ -285,13 +310,16 @@ export interface PluginContext {
   /**
    * Register an LLM streaming execution intercept for this component.
    *
-   * The `next` callback resolves to all downstream chunks. Returning an array
-   * preserves those chunks; any other JSON value produces one chunk.
+   * The `next` callback resolves to a lazy stream. Return that stream to
+   * preserve incremental downstream delivery.
    */
   registerLlmStreamExecutionIntercept(
     name: string,
     priority: number,
-    callback: (request: Json, next: (request: Json) => Promise<Json[]>) => Json | Json[] | Promise<Json | Json[]>,
+    callback: (
+      request: Json,
+      next: (request: Json) => Promise<AsyncIterable<Json>>,
+    ) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>,
   ): void;
   /** Register a tool request intercept for this component. */
   registerToolRequestIntercept(

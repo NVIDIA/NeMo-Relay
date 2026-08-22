@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    NemoRelayEventSanitizeCb, NemoRelayFreeFn, NemoRelayStatus, c_char, c_str_to_string,
-    clear_last_error, core_registry_api, set_last_error, status_from_error, wrap_event_sanitize_fn,
+    NemoRelayEventMetadataInjectorCb, NemoRelayEventSanitizeCb, NemoRelayFreeFn, NemoRelayStatus,
+    c_char, c_str_to_string, clear_last_error, core_registry_api, set_last_error,
+    status_from_error, wrap_event_metadata_injector_fn, wrap_event_sanitize_fn,
 };
 
 #[derive(Clone, Copy)]
@@ -65,6 +66,108 @@ fn parse_scope_uuid(value: *const c_char) -> Result<uuid::Uuid, NemoRelayStatus>
         set_last_error(&format!("invalid scope UUID: {error}"));
         NemoRelayStatus::InvalidArg
     })
+}
+
+/// Register a global event metadata injector.
+///
+/// # Safety
+/// Pointers must remain valid for the documented call lifetime. The callback
+/// and user data remain owned by Relay until deregistration.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_register_event_metadata_injector(
+    name: *const c_char,
+    priority: i32,
+    cb: NemoRelayEventMetadataInjectorCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    clear_last_error();
+    let Some(cb) = cb else {
+        set_last_error("event metadata injector callback is null");
+        return NemoRelayStatus::NullPointer;
+    };
+    let callback = wrap_event_metadata_injector_fn(cb, user_data, free_fn);
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    core_registry_api::register_event_metadata_injector(&name, priority, callback)
+        .map(|()| NemoRelayStatus::Ok)
+        .unwrap_or_else(|error| status_from_error(&error))
+}
+
+/// Deregister a global event metadata injector.
+///
+/// # Safety
+/// `name` must be a valid C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_deregister_event_metadata_injector(
+    name: *const c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    core_registry_api::deregister_event_metadata_injector(&name)
+        .map(|_| NemoRelayStatus::Ok)
+        .unwrap_or_else(|error| status_from_error(&error))
+}
+
+/// Register an event metadata injector owned by an active scope.
+///
+/// # Safety
+/// Pointers must remain valid for the documented call lifetime. The callback
+/// and user data remain owned by Relay until deregistration or scope cleanup.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_scope_register_event_metadata_injector(
+    scope_uuid: *const c_char,
+    name: *const c_char,
+    priority: i32,
+    cb: NemoRelayEventMetadataInjectorCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    clear_last_error();
+    let Some(cb) = cb else {
+        set_last_error("event metadata injector callback is null");
+        return NemoRelayStatus::NullPointer;
+    };
+    let callback = wrap_event_metadata_injector_fn(cb, user_data, free_fn);
+    let uuid = match parse_scope_uuid(scope_uuid) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    core_registry_api::scope_register_event_metadata_injector(&uuid, &name, priority, callback)
+        .map(|()| NemoRelayStatus::Ok)
+        .unwrap_or_else(|error| status_from_error(&error))
+}
+
+/// Deregister an event metadata injector owned by an active scope.
+///
+/// # Safety
+/// String pointers must be valid C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_scope_deregister_event_metadata_injector(
+    scope_uuid: *const c_char,
+    name: *const c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    let uuid = match parse_scope_uuid(scope_uuid) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    core_registry_api::scope_deregister_event_metadata_injector(&uuid, &name)
+        .map(|_| NemoRelayStatus::Ok)
+        .unwrap_or_else(|error| status_from_error(&error))
 }
 
 unsafe fn register_scope(

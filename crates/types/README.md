@@ -18,7 +18,8 @@ SPDX-License-Identifier: Apache-2.0
 
 `nemo-relay-types` provides the shared serializable data model for NeMo Relay.
 Use it when a Rust integration, plugin SDK, or protocol implementation needs
-the same event, scope, tool, LLM, codec, and plugin-diagnostic types as Relay.
+the same event, scope, tool, LLM, runtime-registration, codec, and
+plugin-diagnostic types as Relay.
 
 This crate intentionally contains no runtime registries, dynamic loading,
 exporters, or process-global state. Applications normally depend on
@@ -36,7 +37,8 @@ authoring SDKs.
 
 ## What You Get
 
-- **`api` module**: Event, scope, tool, and LLM DTOs and attributes.
+- **`api` module**: Event, scope, tool, LLM, and runtime-registration DTOs and
+  attributes.
 - **`codec` module**: Normalized LLM request and response annotations.
 - **`plugin` module**: Structured plugin configuration diagnostics.
 - **Optional `schema` feature**: `schemars` implementations for supported

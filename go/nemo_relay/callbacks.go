@@ -48,6 +48,7 @@ typedef char* (*NemoRelayLlmConditionalCb)(void* user_data, const FfiLLMRequest*
 typedef char* (*NemoRelayLlmExecFn)(void* user_data, const char* native_json);
 typedef char* (*NemoRelayLlmSanitizeResponseCb)(void* user_data, const char* response_json, NemoRelayLlmSanitizeResponseContext context);
 typedef void (*NemoRelayEventSubscriberFn)(void* user_data, const FfiEvent* event);
+typedef char* (*NemoRelayEventMetadataInjectorFn)(void* user_data, const FfiEvent* event);
 typedef char* (*NemoRelayEventSanitizeFn)(void* user_data, const FfiEvent* event, const char* fields_json);
 typedef struct FfiPluginContext FfiPluginContext;
 
@@ -99,6 +100,9 @@ import (
 // Global closure registry: maps integer IDs to Go closures.
 // The ID is passed as void* user_data to C callbacks.
 // ---------------------------------------------------------------------------
+
+var errEventMetadataInjectorCallbackNil = errors.New("event metadata injector callback is nil")
+var errConditionalMiddlewareGuardrailCallbackNil = errors.New("conditional middleware guardrail callback is nil")
 
 var (
 	closureRegistryMu sync.Mutex
@@ -167,6 +171,10 @@ type ToolSanitizeFunc func(name string, args json.RawMessage) json.RawMessage
 // proceed. It returns nil to allow execution, or a non-nil pointer to an error
 // message string to reject the call.
 type ToolConditionalFunc func(name string, args json.RawMessage) *string
+
+// ConditionalMiddlewareGuardrailFunc decides whether one matching global
+// runtime registration remains eligible. A nil reason enables the target.
+type ConditionalMiddlewareGuardrailFunc func(kinds []RuntimeRegistrationKind, registrationName string) *string
 
 // ToolExecutionFunc is a callback that executes a tool call, receiving the
 // arguments as JSON and returning the canonical result or an error.
@@ -317,6 +325,16 @@ type FinalizerFunc func() string
 // implement [Event]. The Go binding snapshots FFI event fields before invoking
 // the callback, so it is safe to retain the event after the callback returns.
 type EventSubscriberFunc func(event Event)
+
+// EventMetadata contains flat metadata additions proposed by an injector.
+// Relay validates keys and values and never overwrites metadata already present
+// on the event.
+type EventMetadata map[string]any
+
+// EventMetadataInjectorFunc inspects an event and proposes metadata additions.
+// Return nil metadata with a nil error for a valid no-op. Returning an error
+// rejects this callback's additions without preventing event delivery.
+type EventMetadataInjectorFunc func(event Event) (EventMetadata, error)
 
 // EventSanitizeFields contains the observability fields an event sanitizer may replace.
 //
@@ -638,6 +656,21 @@ func goToolConditionalTrampoline(userData unsafe.Pointer, name *C.char, argsJSON
 	return C.CString(*result)
 }
 
+//export goConditionalMiddlewareGuardrailTrampoline
+func goConditionalMiddlewareGuardrailTrampoline(userData unsafe.Pointer, kindsJSON *C.char, registrationName *C.char) *C.char {
+	fn := lookupClosure(userData).(ConditionalMiddlewareGuardrailFunc)
+	var kinds []RuntimeRegistrationKind
+	if err := json.Unmarshal([]byte(C.GoString(kindsJSON)), &kinds); err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	reason := fn(kinds, C.GoString(registrationName))
+	if reason == nil {
+		return nil
+	}
+	return C.CString(*reason)
+}
+
 //export goToolExecTrampoline
 func goToolExecTrampoline(userData unsafe.Pointer, argsJSON *C.char) *C.char {
 	fn := lookupClosure(userData).(ToolExecutionFunc)
@@ -661,6 +694,25 @@ func goEventSubscriberTrampoline(userData unsafe.Pointer, event *C.FfiEvent) {
 	fn := lookupClosure(userData).(EventSubscriberFunc)
 	goEvent := newEvent(event)
 	fn(goEvent)
+}
+
+//export goEventMetadataInjectorTrampoline
+func goEventMetadataInjectorTrampoline(userData unsafe.Pointer, event *C.FfiEvent) *C.char {
+	fn := lookupClosure(userData).(EventMetadataInjectorFunc)
+	metadata, err := fn(newEvent(event))
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	if metadata == nil {
+		metadata = EventMetadata{}
+	}
+	result, err := json.Marshal(metadata)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	return C.CString(string(result))
 }
 
 //export goEventSanitizeTrampoline

@@ -342,6 +342,75 @@ describe('core plugins', () => {
   });
 });
 
+describe('plugin context conditional middleware guardrails', () => {
+  it('fails open and is removed during clear', async () => {
+    const suffix = `${process.pid}-${Date.now()}`;
+    const pluginKind = `node.context_gate.${suffix}`;
+    const target = `node-context-gate-target-${suffix}`;
+    const observed = [];
+    let guardrailCalls = 0;
+    lib.registerSubscriber(target, (event) => observed.push(event.name));
+    plugin.register(pluginKind, {
+      register(_config, context) {
+        context.registerConditionalMiddlewareGuardrail('failing-gate', ['subscriber'], target, () => {
+          guardrailCalls += 1;
+          throw new Error('expected gate failure');
+        });
+      },
+    });
+    try {
+      await plugin.initialize({ version: 1, components: [plugin.ComponentSpec(pluginKind)] });
+      lib.event('node-context-gate-fail-open', null, null);
+      await lib.flushSubscribers();
+      assert.equal(observed.at(-1), 'node-context-gate-fail-open');
+      assert.ok(guardrailCalls > 0);
+      plugin.clear();
+      const callsBeforeClear = guardrailCalls;
+      lib.event('node-context-gate-cleared', null, null);
+      await lib.flushSubscribers();
+      assert.equal(observed.at(-1), 'node-context-gate-cleared');
+      assert.equal(guardrailCalls, callsBeforeClear);
+    } finally {
+      plugin.clear();
+      plugin.deregister(pluginKind);
+      lib.deregisterSubscriber(target);
+    }
+  });
+
+  it('rolls back a gate when plugin registration throws', async () => {
+    const suffix = `${process.pid}-${Date.now()}`;
+    const pluginKind = `node.context_gate_rollback.${suffix}`;
+    const target = `node-context-gate-rollback-target-${suffix}`;
+    const observed = [];
+    let guardrailCalls = 0;
+    lib.registerSubscriber(target, (event) => observed.push(event.name));
+    plugin.register(pluginKind, {
+      register(_config, context) {
+        context.registerConditionalMiddlewareGuardrail('rollback-gate', ['subscriber'], target, () => {
+          guardrailCalls += 1;
+          return 'activation in progress';
+        });
+        throw new Error('expected activation failure');
+      },
+    });
+    try {
+      await assert.rejects(
+        () => plugin.initialize({ version: 1, components: [plugin.ComponentSpec(pluginKind)] }),
+        /expected activation failure/,
+      );
+      const callsAfterFailure = guardrailCalls;
+      lib.event('node-context-gate-rolled-back', null, null);
+      await lib.flushSubscribers();
+      assert.equal(observed.at(-1), 'node-context-gate-rolled-back');
+      assert.equal(guardrailCalls, callsAfterFailure);
+    } finally {
+      plugin.clear();
+      plugin.deregister(pluginKind);
+      lib.deregisterSubscriber(target);
+    }
+  });
+});
+
 describe('adaptive helpers', () => {
   it('builds a redis backend with the default key prefix', () => {
     assert.deepEqual(adaptive.redisBackend('redis://127.0.0.1:6379'), {

@@ -8,7 +8,7 @@
 // subset of their fields.
 #![allow(dead_code, unused_imports)]
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::ffi::c_void;
 use std::mem::{align_of, offset_of, size_of};
 use std::ptr::{self, NonNull};
@@ -39,14 +39,29 @@ use nemo_relay_plugin::{
     NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
     NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
     NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
-    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
-    NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
-    NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
-    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb,
-    NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime, ScopeType,
-    ToolExecutionInterceptOutcome, ToolExecutionResult, ToolNext,
+    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginRuntime,
+    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
+    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
+    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
+    NemoRelayNativeWithScopeStackCb, NemoRelayStatus, PendingMarkSpec, PluginContext,
+    PluginRuntime, ScopeType, ToolExecutionInterceptOutcome, ToolExecutionResult, ToolNext,
 };
 use serde_json::{Map, json};
+
+#[test]
+fn runtime_registration_dtos_reexport_shared_types() {
+    let identity = nemo_relay_plugin::RuntimeRegistrationIdentity {
+        kind: nemo_relay_plugin::RuntimeRegistrationKind::Subscriber,
+        local_name: "subscriber".into(),
+        effective_name: "subscriber".into(),
+        owner: nemo_relay_plugin::RuntimeRegistrationOwner {
+            kind: nemo_relay_plugin::RuntimeRegistrationOwnerKind::GlobalApi,
+            plugin_kind: None,
+            component_ordinal: None,
+        },
+    };
+    let _: nemo_relay_types::api::registry::RuntimeRegistrationIdentity = identity;
+}
 
 #[test]
 fn async_abi_discriminants_reject_unknown_values() {
@@ -421,6 +436,10 @@ static ASYNC_STREAM_REGISTRATION: Mutex<Option<RegisteredAsyncStream>> = Mutex::
 static ASYNC_PUSH_BACKPRESSURE: AtomicUsize = AtomicUsize::new(0);
 static ASYNC_COMPLETION_RETAINS: AtomicUsize = AtomicUsize::new(0);
 static ASYNC_TOOL_NEXT_RESULT: AtomicBool = AtomicBool::new(false);
+static UNAVAILABLE_RUNTIME_CONTEXT_CALLS: AtomicUsize = AtomicUsize::new(0);
+static UNAVAILABLE_RUNTIME_RETAINS: AtomicUsize = AtomicUsize::new(0);
+static UNAVAILABLE_RUNTIME_RELEASES: AtomicUsize = AtomicUsize::new(0);
+static UNAVAILABLE_CONTEXT_GATE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn native_abi_struct_sizes_are_self_describing() {
@@ -459,12 +478,19 @@ fn assert_native_abi_platform_layout() {
             0, 320, 328, 336, 344, 352, 360, 368, 376, 384, 392, 400, 408, 416, 424, 432
         ]
     );
-    assert_type_layout::<NemoRelayNativeHostApiV4>(8, 528);
+    assert_type_layout::<NemoRelayNativeHostApiV4>(8, 584);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, v3), 0);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2), 512);
     assert_eq!(
         offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics),
         520
+    );
+    assert_eq!(
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_context_register_conditional_middleware_guardrail
+        ),
+        576
     );
     assert_type_layout::<NemoRelayNativePluginV1>(8, 56);
     assert_eq!(plugin_offsets(), [0, 8, 16, 24, 32, 40, 48]);
@@ -489,12 +515,19 @@ fn assert_native_abi_platform_layout() {
             0, 160, 164, 168, 172, 176, 180, 184, 188, 192, 196, 200, 204, 208, 212
         ]
     );
-    assert_type_layout::<NemoRelayNativeHostApiV4>(4, 260);
+    assert_type_layout::<NemoRelayNativeHostApiV4>(4, 288);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, v3), 0);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2), 252);
     assert_eq!(
         offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics),
         256
+    );
+    assert_eq!(
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_context_register_conditional_middleware_guardrail
+        ),
+        284
     );
     assert_type_layout::<NemoRelayNativePluginV1>(4, 28);
     assert_eq!(plugin_offsets(), [0, 4, 8, 12, 16, 20, 24]);
@@ -512,23 +545,45 @@ fn native_abi_v4_extension_is_append_only() {
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 528);
-        assert_eq!(host_api_v4_offsets(), [0, 512, 520]);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 584);
+        assert_eq!(
+            host_api_v4_offsets(),
+            [0, 512, 520, 528, 536, 544, 552, 560, 568, 576]
+        );
     }
 
     #[cfg(target_pointer_width = "32")]
     {
         assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 260);
-        assert_eq!(host_api_v4_offsets(), [0, 252, 256]);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 288);
+        assert_eq!(
+            host_api_v4_offsets(),
+            [0, 252, 256, 260, 264, 268, 272, 276, 280, 284]
+        );
     }
 }
 
-fn host_api_v4_offsets() -> [usize; 3] {
+fn host_api_v4_offsets() -> [usize; 10] {
     [
         offset_of!(NemoRelayNativeHostApiV4, v3),
         offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2),
         offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics),
+        offset_of!(NemoRelayNativeHostApiV4, plugin_context_runtime),
+        offset_of!(NemoRelayNativeHostApiV4, plugin_runtime_retain),
+        offset_of!(NemoRelayNativeHostApiV4, plugin_runtime_release),
+        offset_of!(NemoRelayNativeHostApiV4, plugin_runtime_list_registrations),
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_runtime_register_conditional_middleware_guardrail
+        ),
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_runtime_deregister_conditional_middleware_guardrail
+        ),
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_context_register_conditional_middleware_guardrail
+        ),
     ]
 }
 
@@ -2122,6 +2177,174 @@ unsafe extern "C" fn capture_async_release_pull_stream(
     }
 }
 
+unsafe extern "C" fn unavailable_plugin_context_runtime(
+    _ctx: *mut NemoRelayNativePluginContext,
+    out: *mut *const NemoRelayNativePluginRuntime,
+) -> NemoRelayStatus {
+    UNAVAILABLE_RUNTIME_CONTEXT_CALLS.fetch_add(1, Ordering::SeqCst);
+    if !out.is_null() {
+        unsafe { *out = ptr::null() };
+    }
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn unavailable_plugin_runtime_retain(
+    _runtime: *const NemoRelayNativePluginRuntime,
+) -> NemoRelayStatus {
+    UNAVAILABLE_RUNTIME_RETAINS.fetch_add(1, Ordering::SeqCst);
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn unavailable_plugin_runtime_release(
+    _runtime: *const NemoRelayNativePluginRuntime,
+) {
+    UNAVAILABLE_RUNTIME_RELEASES.fetch_add(1, Ordering::SeqCst);
+}
+
+unsafe extern "C" fn unavailable_plugin_runtime_list_registrations(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    _kinds_json: *const NemoRelayNativeString,
+    _out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn unavailable_plugin_runtime_register_gate(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    _name: *const NemoRelayNativeString,
+    _kinds_json: *const NemoRelayNativeString,
+    _registration_name: *const NemoRelayNativeString,
+    _reason: *const NemoRelayNativeString,
+    _out_handle: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn unavailable_plugin_runtime_deregister_gate(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    _handle: *const NemoRelayNativeString,
+    _out_removed: *mut bool,
+) -> NemoRelayStatus {
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn unavailable_plugin_context_register_gate(
+    _ctx: *mut NemoRelayNativePluginContext,
+    _name: *const NemoRelayNativeString,
+    _kinds_json: *const NemoRelayNativeString,
+    _registration_name: *const NemoRelayNativeString,
+    _reason: *const NemoRelayNativeString,
+) -> NemoRelayStatus {
+    UNAVAILABLE_CONTEXT_GATE_CALLS.fetch_add(1, Ordering::SeqCst);
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn capture_plugin_context_runtime(
+    _ctx: *mut NemoRelayNativePluginContext,
+    out: *mut *const NemoRelayNativePluginRuntime,
+) -> NemoRelayStatus {
+    if out.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out = NonNull::<NemoRelayNativePluginRuntime>::dangling().as_ptr() };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_plugin_runtime_retain(
+    _runtime: *const NemoRelayNativePluginRuntime,
+) -> NemoRelayStatus {
+    UNAVAILABLE_RUNTIME_RETAINS.fetch_add(1, Ordering::SeqCst);
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_plugin_runtime_release(_runtime: *const NemoRelayNativePluginRuntime) {
+    UNAVAILABLE_RUNTIME_RELEASES.fetch_add(1, Ordering::SeqCst);
+}
+
+unsafe extern "C" fn capture_plugin_runtime_list_registrations(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    kinds_json: *const NemoRelayNativeString,
+    out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    if out_json.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    let kinds = read_host_string(&test_host(), kinds_json).unwrap();
+    RUNTIME_CALLS.lock().unwrap().push(format!("list:{kinds}"));
+    unsafe {
+        *out_json = json_host_string(
+            &test_host(),
+            json!([{
+                "kind": "subscriber",
+                "local_name": "target",
+                "effective_name": "plugin::0::target",
+                "owner": {
+                    "kind": "plugin",
+                    "plugin_kind": "example",
+                    "component_ordinal": 0
+                }
+            }]),
+        )
+    };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_plugin_runtime_register_gate(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    name: *const NemoRelayNativeString,
+    kinds_json: *const NemoRelayNativeString,
+    registration_name: *const NemoRelayNativeString,
+    reason: *const NemoRelayNativeString,
+    out_handle: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    if out_handle.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    let host = test_host();
+    let values = [name, kinds_json, registration_name, reason]
+        .map(|value| read_host_string(&host, value).unwrap());
+    RUNTIME_CALLS.lock().unwrap().push(format!(
+        "register:{}:{}:{}:{}",
+        values[0], values[1], values[2], values[3]
+    ));
+    unsafe { *out_handle = host_string(&host, "gate-handle") };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_plugin_runtime_deregister_gate(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    handle: *const NemoRelayNativeString,
+    out_removed: *mut bool,
+) -> NemoRelayStatus {
+    if out_removed.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    let handle = read_host_string(&test_host(), handle).unwrap();
+    RUNTIME_CALLS
+        .lock()
+        .unwrap()
+        .push(format!("deregister:{handle}"));
+    unsafe { *out_removed = true };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_plugin_context_register_gate(
+    _ctx: *mut NemoRelayNativePluginContext,
+    name: *const NemoRelayNativeString,
+    kinds_json: *const NemoRelayNativeString,
+    registration_name: *const NemoRelayNativeString,
+    reason: *const NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let host = test_host();
+    let values = [name, kinds_json, registration_name, reason]
+        .map(|value| read_host_string(&host, value).unwrap());
+    RUNTIME_CALLS.lock().unwrap().push(format!(
+        "initial:{}:{}:{}:{}",
+        values[0], values[1], values[2], values[3]
+    ));
+    NemoRelayStatus::Ok
+}
+
 fn test_host_v4() -> NemoRelayNativeHostApiV4 {
     let mut v1 = test_host();
     v1.abi_version = 4;
@@ -2156,6 +2379,16 @@ fn test_host_v4() -> NemoRelayNativeHostApiV4 {
         async_stream_is_backpressured: capture_async_stream_backpressured,
         emit_mark_v2: capture_emit_mark_v2,
         get_runtime_diagnostics: capture_runtime_diagnostics,
+        plugin_context_runtime: unavailable_plugin_context_runtime,
+        plugin_runtime_retain: unavailable_plugin_runtime_retain,
+        plugin_runtime_release: unavailable_plugin_runtime_release,
+        plugin_runtime_list_registrations: unavailable_plugin_runtime_list_registrations,
+        plugin_runtime_register_conditional_middleware_guardrail:
+            unavailable_plugin_runtime_register_gate,
+        plugin_runtime_deregister_conditional_middleware_guardrail:
+            unavailable_plugin_runtime_deregister_gate,
+        plugin_context_register_conditional_middleware_guardrail:
+            unavailable_plugin_context_register_gate,
     }
 }
 
@@ -2217,6 +2450,10 @@ fn begin_test() -> MutexGuard<'static, ()> {
 
 fn reset_state() {
     ASYNC_COMPLETION_RETAINS.store(0, Ordering::SeqCst);
+    UNAVAILABLE_RUNTIME_CONTEXT_CALLS.store(0, Ordering::SeqCst);
+    UNAVAILABLE_RUNTIME_RETAINS.store(0, Ordering::SeqCst);
+    UNAVAILABLE_RUNTIME_RELEASES.store(0, Ordering::SeqCst);
+    UNAVAILABLE_CONTEXT_GATE_CALLS.store(0, Ordering::SeqCst);
     for registration in ASYNC_REGISTRATIONS.lock().unwrap().drain(..) {
         unsafe { registration.free() };
     }
@@ -2698,6 +2935,114 @@ fn plugin_runtime_rejects_malformed_runtime_diagnostics_json() {
         error.contains("invalid runtime diagnostics result"),
         "{error}"
     );
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn plugin_context_handles_an_unavailable_runtime_capability() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let mut context = test_context(&host.v3.v1);
+    let runtime = context.runtime();
+    let kinds = BTreeSet::from([nemo_relay_plugin::RuntimeRegistrationKind::Subscriber]);
+
+    assert_eq!(UNAVAILABLE_RUNTIME_CONTEXT_CALLS.load(Ordering::SeqCst), 1);
+    assert!(
+        expect_string_err(runtime.list_runtime_registrations(None))
+            .contains("host does not support activation-owned runtime gate control")
+    );
+    assert!(
+        expect_string_err(runtime.register_conditional_middleware_guardrail(
+            "timer-gate",
+            &kinds,
+            "target-subscriber",
+            "timer active",
+        ))
+        .contains("host does not support activation-owned runtime gate control")
+    );
+
+    let cloned = runtime.clone();
+    drop(cloned);
+    drop(runtime);
+    assert_eq!(UNAVAILABLE_RUNTIME_RETAINS.load(Ordering::SeqCst), 0);
+    assert_eq!(UNAVAILABLE_RUNTIME_RELEASES.load(Ordering::SeqCst), 0);
+
+    let error = context
+        .register_conditional_middleware_guardrail(
+            "startup-gate",
+            &kinds,
+            "target-subscriber",
+            "disabled",
+        )
+        .unwrap_err();
+    assert!(error.contains("NotFound"), "{error}");
+    assert_eq!(UNAVAILABLE_CONTEXT_GATE_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn plugin_runtime_registration_controls_cover_success_and_lifecycle() {
+    let _guard = begin_test();
+    let mut host = test_host_v4();
+    host.plugin_context_runtime = capture_plugin_context_runtime;
+    host.plugin_runtime_retain = capture_plugin_runtime_retain;
+    host.plugin_runtime_release = capture_plugin_runtime_release;
+    host.plugin_runtime_list_registrations = capture_plugin_runtime_list_registrations;
+    host.plugin_runtime_register_conditional_middleware_guardrail =
+        capture_plugin_runtime_register_gate;
+    host.plugin_runtime_deregister_conditional_middleware_guardrail =
+        capture_plugin_runtime_deregister_gate;
+    host.plugin_context_register_conditional_middleware_guardrail =
+        capture_plugin_context_register_gate;
+    let mut context = test_context(&host.v3.v1);
+    let runtime = context.runtime();
+    let kinds = BTreeSet::from([nemo_relay_plugin::RuntimeRegistrationKind::Subscriber]);
+
+    let registrations = runtime
+        .list_runtime_registrations(Some(&kinds))
+        .expect("runtime registrations should decode");
+    assert_eq!(registrations[0].effective_name, "plugin::0::target");
+    let handle = runtime
+        .register_conditional_middleware_guardrail(
+            "timer-gate",
+            &kinds,
+            "plugin::0::target",
+            "timer active",
+        )
+        .expect("dynamic gate should register");
+    assert!(
+        runtime
+            .deregister_conditional_middleware_guardrail(&handle)
+            .unwrap()
+    );
+    context
+        .register_conditional_middleware_guardrail(
+            "startup-gate",
+            &kinds,
+            "plugin::0::target",
+            "startup disabled",
+        )
+        .expect("initial gate should register");
+
+    let clone = runtime.clone();
+    drop(clone);
+    drop(runtime);
+    assert_eq!(UNAVAILABLE_RUNTIME_RETAINS.load(Ordering::SeqCst), 1);
+    assert_eq!(UNAVAILABLE_RUNTIME_RELEASES.load(Ordering::SeqCst), 2);
+    let calls = RUNTIME_CALLS.lock().unwrap();
+    assert!(calls.iter().any(|call| call.starts_with("list:")));
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.starts_with("register:timer-gate:"))
+    );
+    assert!(calls.iter().any(|call| call == "deregister:gate-handle"));
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.starts_with("initial:startup-gate:"))
+    );
+    drop(calls);
     assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
 }
 

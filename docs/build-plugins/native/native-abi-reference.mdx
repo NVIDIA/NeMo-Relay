@@ -1,0 +1,201 @@
+---
+title: "Native ABI Reference"
+description: "Reference native host-table versions, ownership, callbacks, codecs, streams, and cancellation."
+position: 26
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use the typed `nemo-relay-plugin` SDK for normal authoring. This page records the raw
+contract needed to audit compatibility or implement an escape hatch; unsafe `*_raw`
+functions are intentionally not tutorial examples.
+
+## Entry and Version Negotiation
+
+The exported symbol receives a pointer to the v1 prefix of the host table and fills a
+v1 plugin descriptor. The implementation must inspect `abi_version` and `struct_size`
+before casting a longer table.
+
+```rust
+extern "C" fn nemo_relay_register_plugin(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus
+```
+
+The current host negotiates ABI v4, then a separately frozen v3 table, then the frozen
+legacy v2 table. ABI v4 extends the complete v3 prefix with completion-scoped
+[codecs](/about-nemo-relay/concepts/codecs) and
+pull-based downstream LLM streams, plus an activation-owned runtime capability for
+registration discovery and dynamic conditional middleware guardrail control. These table
+versions are independent of authored
+`compat.native_api = "1"`.
+
+The following table enumerates the operations introduced at each table level. The exact
+function signatures and field order are defined by the public
+[`nemo-relay-plugin` declarations](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/plugin/src/lib.rs).
+
+| Table Level | Operations |
+|---|---|
+| Frozen v1/v2 prefix | Version and struct-size negotiation; host version; string allocation, access, and release; thread-local error reporting; callback-scoped LLM request decode and encode plus response decode; subscriber, five tool, six LLM, and three event-sanitizer registrations; current scope, scope push and pop, mark emission, isolated stack creation and release, thread-stack set, capture, and restore, captured-binding release, active-stack inspection, and scoped binding. |
+| Frozen v3 extension | Completion resolve, reject, cancellation inspection, and release; one-shot completion-coupled continuation invocation; continuation release; generic async middleware registration; bounded output-stream push, finish, reject, cancellation inspection, and release; downstream stream invocation; stream-middleware registration; and repeated or concurrent unary continuation invocation with independent result callbacks. |
+| Current v4 extension | Completion-scoped LLM request decode and encode plus response decode; pull-based downstream LLM stream open, pull, cancel, and release; completion retain for typed codec facades; output-stream backpressure inspection; extended mark emission; runtime diagnostics; activation-owned runtime capability creation, retain, and release; global runtime-registration discovery; owned conditional middleware guardrail registration and deregistration; and activation-time host-resident gate declaration. |
+
+The prefix and descriptor layout are explicit. A plugin fills the descriptor with its
+stable kind, component multiplicity, opaque state, callbacks, and destructor. The host
+table is immutable after negotiation.
+
+```rust
+#[repr(C)]
+pub struct NemoRelayNativeHostApiV1 {
+    pub abi_version: u32,
+    pub struct_size: usize,
+    pub relay_version: *const c_char,
+    pub string_new: unsafe extern "C" fn(
+        data: *const u8,
+        len: usize,
+        out: *mut *mut NemoRelayNativeString,
+    ) -> NemoRelayStatus,
+    pub string_data: unsafe extern "C" fn(
+        value: *const NemoRelayNativeString,
+    ) -> *const u8,
+    pub string_len: unsafe extern "C" fn(
+        value: *const NemoRelayNativeString,
+    ) -> usize,
+    pub string_free: unsafe extern "C" fn(
+        value: *mut NemoRelayNativeString,
+    ),
+    // Registration, runtime, codec, and error operations follow in this table.
+}
+
+#[repr(C)]
+pub struct NemoRelayNativePluginV1 {
+    pub struct_size: usize,
+    pub plugin_kind: *mut NemoRelayNativeString,
+    pub allows_multiple_components: bool,
+    pub user_data: *mut c_void,
+    pub validate: Option<NemoRelayNativePluginValidateFn>,
+    pub register: Option<NemoRelayNativePluginRegisterFn>,
+    pub drop: NemoRelayNativePluginDropFn,
+}
+```
+
+The shortened host-table declaration shows the mandatory prefix, not a replacement
+definition that a raw plugin can copy. A raw implementation must compile against the
+complete public declarations in `nemo-relay-plugin` so field offsets match exactly.
+
+## Values and Ownership
+
+Text and JSON cross the boundary as host-owned `NemoRelayNativeString` handles. ABI
+structs otherwise contain scalars, opaque handles, callback pointers, and plugin-owned
+`user_data`. Rust trait objects, futures, `serde_json::Value`, allocator-owned strings,
+and unwinding must never cross the boundary. Release host strings with the matching host
+operation and retain plugin state until the host releases the registration and every
+callback-owned reference derived from it.
+
+A successful `plugin_context_runtime` call returns one owned runtime-capability
+reference. Each successful `plugin_runtime_retain` call creates another owned reference,
+and the plugin must pass every owned reference to `plugin_runtime_release` exactly once.
+Activation teardown makes runtime operations unavailable, but it does not release
+references retained by plugin code; those references must still be released.
+
+```rust
+#[repr(i32)]
+pub enum NemoRelayStatus {
+    Ok = 0,
+    AlreadyExists = 1,
+    NotFound = 2,
+    ScopeStackEmpty = 3,
+    GuardrailRejected = 4,
+    Internal = 5,
+    NullPointer = 6,
+    InvalidJson = 7,
+    InvalidUtf8 = 8,
+    InvalidArg = 9,
+    StreamEnd = 10,
+    Backpressured = 11,
+}
+
+#[repr(C)]
+pub struct NemoRelayNativeString {
+    _private: [u8; 0],
+    _marker: PhantomData<(*mut u8, PhantomPinned)>,
+}
+```
+
+`Ok` means the output pointers required by that operation were populated according to
+its contract. `Backpressured` is retryable only for the bounded stream operation that
+returned it. Other errors should be propagated with the host's thread-local error
+message set when additional context is available.
+
+The table exposes registrations for subscriber; mark, scope-start, and scope-end
+sanitizers; five tool surfaces; and six LLM surfaces. Runtime operations cover current
+scope, mark emission, scope push and pop, isolated stack creation and drop, stack capture
+or binding, and restoration.
+
+## Async Completions and Continuations
+
+`PluginContext::register_async_middleware_raw` registers non-stream middleware that can
+settle later. Return `Complete` only after resolving or rejecting the completion inside
+the callback. Return `Pending` only after retaining it. A retained completion must settle
+exactly once and then be released. Release every async `next` reference after its last
+use.
+
+`async_next_invoke_result` supports repeated or concurrent unary continuation calls with
+independent result callbacks. The older completion-coupled `async_next_invoke` is
+one-shot because the continuation result settles the middleware completion. Settle the
+owner only after every started continuation call has finished. When the owner settles or
+is cancelled, the host rejects new continuation calls and cancels unfinished ones.
+
+For a tool continuation, the result callback receives canonical
+`nemo.relay.ToolExecutionResult@1` JSON with required `result` and optional opaque
+`annotation`. A raw tool-execution middleware completion returns
+`nemo.relay.ToolExecutionInterceptOutcome@2`: the same result and annotation fields plus
+optional `pending_marks`. Pending marks belong to the intercept outcome only. Release
+each host-owned result string with the matching host-table operation after decoding it.
+
+The host can poll a callback on different Tokio workers, and separate invocations can
+run concurrently. Plugin code must synchronize `user_data` and opaque handles. Do not
+race final release with settlement, cancellation inspection, stream operations, codec
+operations, or `next` invocation.
+
+## Streaming
+
+The generic v3 completion API rejects the LLM stream intercept kind. Register it through
+`plugin_context_register_async_stream_middleware` and invoke downstream streams through
+`async_next_invoke_stream`. Each repeated or concurrent invocation needs independent
+callback state.
+
+The output queue is bounded. `async_stream_push_json` and `async_stream_reject` never
+block a callback thread. `Backpressured` means the same logical chunk or rejection must
+be retried after the consumer advances. `InvalidArg` means the stream is closed or
+cancelled and the operation must not be retried. `async_stream_is_backpressured` is only
+a point-in-time observation; it does not replace checking the result of a push.
+
+A downstream terminal callback reports failure or consumer cancellation with a non-null
+error and reports clean completion with `done = true`. Reclaim its `user_data` in that
+terminal callback. If a chunk callback returns false, reclaim state before returning
+because the host does not call it again.
+
+## Codec Handles
+
+LLM sanitizer contexts report codec kind `None`, `BuiltIn`, `Runtime`, or `Opaque`, an
+optional codec ID, and a borrowed callback-lifetime handle. Built-in IDs are
+`openai_chat`, `openai_responses`, `anthropic_messages`, `oci_genai`, and
+`gemini_generate_content`. Runtime and opaque codecs can still have a usable handle.
+
+Request handles support decode to an annotated request and encode of normalized changes
+onto the original envelope. Response handles support decode to an annotated response.
+A successful null sanitizer result omits the observability payload and annotation; an
+error also omits them and records the callback failure. Neither outcome changes the real
+request or application response. Never retain a raw handle or resolved typed facade
+after the sanitizer callback ends.
+
+## Unload Ordering
+
+Relay keeps the library loaded while any owned registration or callback can reference
+plugin code. Shutdown stops new invocations, cooperatively cancels unfinished async work,
+waits for completion and stream references to be released, deregisters component-owned
+surfaces, runs component cleanup, and only then unloads the shared library. A plugin that
+retains a completion, continuation, stream, codec, or runtime handle indefinitely can
+therefore delay safe unload.

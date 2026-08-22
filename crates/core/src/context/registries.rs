@@ -9,7 +9,10 @@
 
 use std::collections::HashMap;
 
-use crate::api::registry::{EventMetadataInjector, ExecutionIntercept, Guardrail, Intercept};
+use crate::api::registry::{
+    EventMetadataInjector, ExecutionIntercept, Guardrail, Intercept, RuntimeRegistrationKind,
+    runtime_registration_is_enabled,
+};
 use crate::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
@@ -94,7 +97,9 @@ pub(crate) fn merge_event_metadata_injector_entries<'a>(
     scope_locals: &'a [&'a SortedRegistry<EventMetadataInjector>],
 ) -> Vec<&'a EventMetadataInjector> {
     let mut all = Vec::new();
-    all.extend(global.sorted_values());
+    all.extend(global.sorted_values().into_iter().filter(|entry| {
+        runtime_registration_is_enabled(RuntimeRegistrationKind::EventMetadataInjector, &entry.name)
+    }));
     for registry in scope_locals {
         all.extend(registry.sorted_values());
     }
@@ -127,9 +132,15 @@ impl Default for ScopeLocalRegistries {
 pub(crate) fn merge_guardrail_entries<'a, F>(
     global: &'a SortedRegistry<Guardrail<F>>,
     scope_locals: &'a [&'a SortedRegistry<Guardrail<F>>],
+    kind: RuntimeRegistrationKind,
 ) -> Vec<&'a Guardrail<F>> {
     let mut all = Vec::new();
-    all.extend(global.sorted_values());
+    all.extend(
+        global
+            .sorted_values()
+            .into_iter()
+            .filter(|entry| runtime_registration_is_enabled(kind, &entry.name)),
+    );
     for registry in scope_locals {
         all.extend(registry.sorted_values());
     }
@@ -148,9 +159,15 @@ pub(crate) fn merge_guardrail_entries<'a, F>(
 pub(crate) fn merge_intercept_entries<'a, F>(
     global: &'a SortedRegistry<Intercept<F>>,
     scope_locals: &'a [&'a SortedRegistry<Intercept<F>>],
+    kind: RuntimeRegistrationKind,
 ) -> Vec<&'a Intercept<F>> {
     let mut all = Vec::new();
-    all.extend(global.sorted_values());
+    all.extend(
+        global
+            .sorted_values()
+            .into_iter()
+            .filter(|entry| runtime_registration_is_enabled(kind, &entry.name)),
+    );
     for registry in scope_locals {
         all.extend(registry.sorted_values());
     }
@@ -172,10 +189,13 @@ pub(crate) fn merge_intercept_entries<'a, F>(
 pub(crate) fn merge_execution_intercept_callables<F: Clone>(
     global: &SortedRegistry<ExecutionIntercept<F>>,
     scope_locals: &[&SortedRegistry<ExecutionIntercept<F>>],
+    kind: RuntimeRegistrationKind,
 ) -> Vec<(F, i32)> {
     let mut all = Vec::new();
     for entry in global.sorted_values() {
-        all.push((entry.payload.clone(), entry.priority));
+        if runtime_registration_is_enabled(kind, &entry.name) {
+            all.push((entry.payload.clone(), entry.priority));
+        }
     }
     for registry in scope_locals {
         for entry in registry.sorted_values() {

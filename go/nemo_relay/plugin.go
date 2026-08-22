@@ -19,6 +19,7 @@ typedef void (*NemoRelayFreeFn)(void* user_data);
 typedef char* (*NemoRelayPluginValidateCb)(void* user_data, const char* plugin_config_json);
 typedef int32_t (*NemoRelayPluginRegisterCb)(void* user_data, const char* plugin_config_json, FfiPluginContext* ctx);
 typedef void (*NemoRelayEventSubscriberFn)(void* user_data, const void* event);
+typedef char* (*NemoRelayEventMetadataInjectorFn)(void* user_data, const void* event);
 typedef char* (*NemoRelayEventSanitizeFn)(void* user_data, const void* event, const char* fields_json);
 typedef char* (*NemoRelayToolSanitizeFn)(void* user_data, const char* name, const char* args_json);
 typedef char* (*NemoRelayToolConditionalFn)(void* user_data, const char* name, const char* args_json);
@@ -44,6 +45,7 @@ extern int32_t nemo_relay_deregister_plugin(const char* plugin_kind);
 extern void nemo_relay_string_free(char* ptr);
 
 extern int32_t nemo_relay_plugin_context_register_subscriber(FfiPluginContext* ctx, const char* name, NemoRelayEventSubscriberFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_plugin_context_register_event_metadata_injector(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayEventMetadataInjectorFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_plugin_context_register_mark_sanitize_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_plugin_context_register_scope_sanitize_start_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_plugin_context_register_scope_sanitize_end_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
@@ -62,6 +64,7 @@ extern int32_t nemo_relay_plugin_context_register_tool_execution_intercept(FfiPl
 extern char* goPluginValidateTrampoline(void*, const char*);
 extern int32_t goPluginRegisterTrampoline(void*, const char*, FfiPluginContext*);
 extern void goEventSubscriberTrampoline(void*, const void*);
+extern char* goEventMetadataInjectorTrampoline(void*, const void*);
 extern char* goEventSanitizeTrampoline(void*, const void*, const char*);
 extern void goFreeTrampoline(void*);
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
@@ -578,6 +581,29 @@ func (ctx *PluginContext) RegisterSubscriber(name string, fn EventSubscriberFunc
 		ctx.ptr,
 		cName,
 		(C.NemoRelayEventSubscriberFn)(C.goEventSubscriberTrampoline),
+		userData,
+		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+	))
+}
+
+// RegisterEventMetadataInjector registers an event metadata injector for this
+// component. Relay qualifies its name and removes it when plugin configuration
+// is cleared or registration rolls back.
+func (ctx *PluginContext) RegisterEventMetadataInjector(name string, priority int32, fn EventMetadataInjectorFunc) error {
+	if ctx == nil || ctx.ptr == nil {
+		return errors.New(errPluginContextClosed)
+	}
+	if fn == nil {
+		return errEventMetadataInjectorCallbackNil
+	}
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	userData := registerClosure(fn)
+	return checkStatus(C.nemo_relay_plugin_context_register_event_metadata_injector(
+		ctx.ptr,
+		cName,
+		C.int32_t(priority),
+		(C.NemoRelayEventMetadataInjectorFn)(C.goEventMetadataInjectorTrampoline),
 		userData,
 		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
 	))

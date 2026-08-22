@@ -45,6 +45,11 @@ typedef struct NemoRelayLlmSanitizeResponseContext { uint32_t codec_kind; const 
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 
+typedef char* (*NemoRelayConditionalMiddlewareGuardrailFn)(void* user_data, const char* kinds_json, const char* registration_name);
+extern int32_t nemo_relay_register_conditional_middleware_guardrail(const char* name, const char* kinds_json, const char* registration_name, NemoRelayConditionalMiddlewareGuardrailFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_deregister_conditional_middleware_guardrail(const char* name, _Bool* out_removed);
+extern int32_t nemo_relay_list_runtime_registrations(const char* kinds_json, char** out_json);
+
 // Core API
 extern int32_t nemo_relay_initialize_default_logging(void);
 extern int32_t nemo_relay_shutdown_default_logging(void);
@@ -176,10 +181,13 @@ extern int32_t nemo_relay_deregister_llm_stream_execution_intercept(const char* 
 
 // Subscribers
 typedef void (*NemoRelayEventSubscriberFn)(void* user_data, const FfiEvent* event);
+typedef char* (*NemoRelayEventMetadataInjectorFn)(void* user_data, const FfiEvent* event);
 typedef char* (*NemoRelayEventSanitizeFn)(void* user_data, const FfiEvent* event, const char* fields_json);
 extern int32_t nemo_relay_register_subscriber(const char* name, NemoRelayEventSubscriberFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_subscriber(const char* name);
 extern int32_t nemo_relay_flush_subscribers(void);
+extern int32_t nemo_relay_register_event_metadata_injector(const char* name, int32_t priority, NemoRelayEventMetadataInjectorFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_deregister_event_metadata_injector(const char* name);
 extern int32_t nemo_relay_register_mark_sanitize_guardrail(const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_mark_sanitize_guardrail(const char* name);
 extern int32_t nemo_relay_register_scope_sanitize_start_guardrail(const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
@@ -188,6 +196,8 @@ extern int32_t nemo_relay_register_scope_sanitize_end_guardrail(const char* name
 extern int32_t nemo_relay_deregister_scope_sanitize_end_guardrail(const char* name);
 
 // Scope-local tool guardrails
+extern int32_t nemo_relay_scope_register_event_metadata_injector(const char* scope_uuid, const char* name, int32_t priority, NemoRelayEventMetadataInjectorFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_deregister_event_metadata_injector(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_mark_sanitize_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_mark_sanitize_guardrail(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_scope_sanitize_start_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
@@ -296,8 +306,10 @@ extern void nemo_relay_otel_metric_subscriber_free(void*);
 
 // Go trampoline forward declarations (defined via //export in callbacks.go)
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
+extern char* goEventMetadataInjectorTrampoline(void*, const FfiEvent*);
 extern char* goEventSanitizeTrampoline(void*, const FfiEvent*, const char*);
 extern char* goToolConditionalTrampoline(void*, const char*, const char*);
+extern char* goConditionalMiddlewareGuardrailTrampoline(void*, const char*, const char*);
 extern char* goToolExecTrampoline(void*, const char*);
 extern void goEventSubscriberTrampoline(void*, const FfiEvent*);
 extern void goFreeTrampoline(void*);
@@ -433,6 +445,112 @@ func cLogSeverity(severity LogSeverity) (*C.int32_t, error) {
 	ptr := (*C.int32_t)(C.malloc(C.size_t(unsafe.Sizeof(value))))
 	*ptr = value
 	return ptr, nil
+}
+
+// RuntimeRegistrationKind identifies a global runtime registration surface.
+type RuntimeRegistrationKind string
+
+const (
+	RuntimeRegistrationSubscriber                        RuntimeRegistrationKind = "subscriber"
+	RuntimeRegistrationEventMetadataInjector             RuntimeRegistrationKind = "event_metadata_injector"
+	RuntimeRegistrationMarkSanitizeGuardrail             RuntimeRegistrationKind = "mark_sanitize_guardrail"
+	RuntimeRegistrationScopeSanitizeStartGuardrail       RuntimeRegistrationKind = "scope_sanitize_start_guardrail"
+	RuntimeRegistrationScopeSanitizeEndGuardrail         RuntimeRegistrationKind = "scope_sanitize_end_guardrail"
+	RuntimeRegistrationToolSanitizeRequestGuardrail      RuntimeRegistrationKind = "tool_sanitize_request_guardrail"
+	RuntimeRegistrationToolSanitizeResponseGuardrail     RuntimeRegistrationKind = "tool_sanitize_response_guardrail"
+	RuntimeRegistrationToolConditionalExecutionGuardrail RuntimeRegistrationKind = "tool_conditional_execution_guardrail"
+	RuntimeRegistrationToolRequestIntercept              RuntimeRegistrationKind = "tool_request_intercept"
+	RuntimeRegistrationToolExecutionIntercept            RuntimeRegistrationKind = "tool_execution_intercept"
+	RuntimeRegistrationLlmSanitizeRequestGuardrail       RuntimeRegistrationKind = "llm_sanitize_request_guardrail"
+	RuntimeRegistrationLlmSanitizeResponseGuardrail      RuntimeRegistrationKind = "llm_sanitize_response_guardrail"
+	RuntimeRegistrationLlmConditionalExecutionGuardrail  RuntimeRegistrationKind = "llm_conditional_execution_guardrail"
+	RuntimeRegistrationLlmRequestIntercept               RuntimeRegistrationKind = "llm_request_intercept"
+	RuntimeRegistrationLlmExecutionIntercept             RuntimeRegistrationKind = "llm_execution_intercept"
+	RuntimeRegistrationLlmStreamExecutionIntercept       RuntimeRegistrationKind = "llm_stream_execution_intercept"
+)
+
+// RuntimeRegistrationOwnerKind identifies the component category that installed a registration.
+type RuntimeRegistrationOwnerKind string
+
+const (
+	RuntimeRegistrationOwnerCore      RuntimeRegistrationOwnerKind = "core"
+	RuntimeRegistrationOwnerGlobalAPI RuntimeRegistrationOwnerKind = "global_api"
+	RuntimeRegistrationOwnerPlugin    RuntimeRegistrationOwnerKind = "plugin"
+)
+
+// RuntimeRegistrationOwner describes the component that installed a registration.
+type RuntimeRegistrationOwner struct {
+	Kind             RuntimeRegistrationOwnerKind `json:"kind"`
+	PluginKind       *string                      `json:"plugin_kind"`
+	ComponentOrdinal *uint32                      `json:"component_ordinal"`
+}
+
+// RuntimeRegistrationIdentity is the structured identity of one global registration.
+type RuntimeRegistrationIdentity struct {
+	Kind          RuntimeRegistrationKind  `json:"kind"`
+	LocalName     string                   `json:"local_name"`
+	EffectiveName string                   `json:"effective_name"`
+	Owner         RuntimeRegistrationOwner `json:"owner"`
+}
+
+// RegisterConditionalMiddlewareGuardrail registers a global eligibility gate.
+func RegisterConditionalMiddlewareGuardrail(name string, kinds []RuntimeRegistrationKind, registrationName string, fn ConditionalMiddlewareGuardrailFunc) error {
+	if fn == nil {
+		return errConditionalMiddlewareGuardrailCallbackNil
+	}
+	kindsJSON, err := json.Marshal(kinds)
+	if err != nil {
+		return err
+	}
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	cKinds := C.CString(string(kindsJSON))
+	cRegistrationName := C.CString(registrationName)
+	defer C.free(unsafe.Pointer(cName))
+	defer C.free(unsafe.Pointer(cKinds))
+	defer C.free(unsafe.Pointer(cRegistrationName))
+	return checkStatus(C.nemo_relay_register_conditional_middleware_guardrail(
+		cName,
+		cKinds,
+		cRegistrationName,
+		C.NemoRelayConditionalMiddlewareGuardrailFn(C.goConditionalMiddlewareGuardrailTrampoline),
+		id,
+		C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// DeregisterConditionalMiddlewareGuardrail removes a gate and reports whether it existed.
+func DeregisterConditionalMiddlewareGuardrail(name string) (bool, error) {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	var removed C.bool
+	if err := checkStatus(C.nemo_relay_deregister_conditional_middleware_guardrail(cName, &removed)); err != nil {
+		return false, err
+	}
+	return bool(removed), nil
+}
+
+// ListRuntimeRegistrations returns global registrations, optionally filtered by kind.
+func ListRuntimeRegistrations(kinds []RuntimeRegistrationKind) ([]RuntimeRegistrationIdentity, error) {
+	var cKinds *C.char
+	if kinds != nil {
+		payload, err := json.Marshal(kinds)
+		if err != nil {
+			return nil, err
+		}
+		cKinds = C.CString(string(payload))
+		defer C.free(unsafe.Pointer(cKinds))
+	}
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_list_runtime_registrations(cKinds, &out)); err != nil {
+		return nil, err
+	}
+	defer C.nemo_relay_string_free(out)
+	var registrations []RuntimeRegistrationIdentity
+	if err := json.Unmarshal([]byte(C.GoString(out)), &registrations); err != nil {
+		return nil, err
+	}
+	return registrations, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1426,6 +1544,32 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 // Guardrail/Intercept registration (Tool)
 // ---------------------------------------------------------------------------
 
+// RegisterEventMetadataInjector registers a global event metadata injector.
+// Injectors run in ascending priority order and may only add metadata keys that
+// are not already present on the event.
+func RegisterEventMetadataInjector(name string, priority int32, fn EventMetadataInjectorFunc) error {
+	if fn == nil {
+		return errEventMetadataInjectorCallbackNil
+	}
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_register_event_metadata_injector(
+		cName,
+		C.int32_t(priority),
+		C.NemoRelayEventMetadataInjectorFn(C.goEventMetadataInjectorTrampoline),
+		id,
+		C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// DeregisterEventMetadataInjector removes a global event metadata injector.
+func DeregisterEventMetadataInjector(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_deregister_event_metadata_injector(cName))
+}
+
 func registerEventSanitizer(name string, priority int32, fn EventSanitizeFunc, kind int) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
@@ -2290,6 +2434,8 @@ type OpenTelemetryRuntimeDiagnostic struct {
 	Count   uint64 `json:"count"`
 }
 
+const openTelemetryEndpointRequiredMessage = "endpoint is required"
+
 func decodeOpenTelemetryRuntimeDiagnostics(out *C.char) ([]OpenTelemetryRuntimeDiagnostic, error) {
 	defer C.nemo_relay_string_free(out)
 	var diagnostics []OpenTelemetryRuntimeDiagnostic
@@ -2307,7 +2453,7 @@ func normalizeOpenTelemetryConfig(config OpenTelemetryConfig) (OpenTelemetryConf
 		return config, fmt.Errorf("type is required")
 	}
 	if config.Endpoint == "" {
-		return config, fmt.Errorf("endpoint is required")
+		return config, fmt.Errorf(openTelemetryEndpointRequiredMessage)
 	}
 	if config.ServiceName == "" {
 		config.ServiceName = "unknown_service"
@@ -2574,33 +2720,35 @@ type openTelemetrySignalCStrings struct {
 	instrumentationScope *C.char
 }
 
-func newOpenTelemetrySignalCStrings(
-	transport OpenTelemetryTransport,
-	endpoint string,
-	headers map[string]string,
-	resourceAttributes map[string]string,
-	serviceName string,
-	serviceNamespace string,
-	serviceVersion string,
-	instrumentationScope string,
-) (openTelemetrySignalCStrings, error) {
-	encodedHeaders, err := jsonMarshal(headers)
+type openTelemetrySignalConfig struct {
+	transport            OpenTelemetryTransport
+	endpoint             string
+	headers              map[string]string
+	resourceAttributes   map[string]string
+	serviceName          string
+	serviceNamespace     string
+	serviceVersion       string
+	instrumentationScope string
+}
+
+func newOpenTelemetrySignalCStrings(config openTelemetrySignalConfig) (openTelemetrySignalCStrings, error) {
+	encodedHeaders, err := jsonMarshal(config.headers)
 	if err != nil {
 		return openTelemetrySignalCStrings{}, err
 	}
-	encodedResources, err := jsonMarshal(resourceAttributes)
+	encodedResources, err := jsonMarshal(config.resourceAttributes)
 	if err != nil {
 		return openTelemetrySignalCStrings{}, err
 	}
 	return openTelemetrySignalCStrings{
-		transport:            C.CString(string(transport)),
-		endpoint:             C.CString(endpoint),
+		transport:            C.CString(string(config.transport)),
+		endpoint:             C.CString(config.endpoint),
 		headers:              C.CString(string(encodedHeaders)),
 		resourceAttributes:   C.CString(string(encodedResources)),
-		serviceName:          C.CString(serviceName),
-		serviceNamespace:     optionalCString(serviceNamespace),
-		serviceVersion:       optionalCString(serviceVersion),
-		instrumentationScope: C.CString(instrumentationScope),
+		serviceName:          C.CString(config.serviceName),
+		serviceNamespace:     optionalCString(config.serviceNamespace),
+		serviceVersion:       optionalCString(config.serviceVersion),
+		instrumentationScope: C.CString(config.instrumentationScope),
 	}, nil
 }
 
@@ -2627,7 +2775,7 @@ func normalizeOpenTelemetryLogConfig(config OpenTelemetryLogConfig) (OpenTelemet
 		config.Transport = OpenTelemetryTransportHTTPBinary
 	}
 	if config.Endpoint == "" {
-		return config, fmt.Errorf("endpoint is required")
+		return config, fmt.Errorf(openTelemetryEndpointRequiredMessage)
 	}
 	if config.ServiceName == "" {
 		config.ServiceName = "unknown_service"
@@ -2674,11 +2822,10 @@ func NewOpenTelemetryLogSubscriber(config OpenTelemetryLogConfig) (*OpenTelemetr
 	if err != nil {
 		return nil, err
 	}
-	common, err := newOpenTelemetrySignalCStrings(
+	common, err := newOpenTelemetrySignalCStrings(openTelemetrySignalConfig{
 		config.Transport, config.Endpoint, config.Headers, config.ResourceAttributes,
-		config.ServiceName, config.ServiceNamespace, config.ServiceVersion,
-		config.InstrumentationScope,
-	)
+		config.ServiceName, config.ServiceNamespace, config.ServiceVersion, config.InstrumentationScope,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -2754,7 +2901,7 @@ func normalizeOpenTelemetryMetricConfig(config OpenTelemetryMetricConfig) (OpenT
 		config.Transport = OpenTelemetryTransportHTTPBinary
 	}
 	if config.Endpoint == "" {
-		return config, fmt.Errorf("endpoint is required")
+		return config, fmt.Errorf(openTelemetryEndpointRequiredMessage)
 	}
 	if config.ServiceName == "" {
 		config.ServiceName = "unknown_service"
@@ -2801,11 +2948,10 @@ func NewOpenTelemetryMetricSubscriber(config OpenTelemetryMetricConfig) (*OpenTe
 	if err != nil {
 		return nil, err
 	}
-	common, err := newOpenTelemetrySignalCStrings(
+	common, err := newOpenTelemetrySignalCStrings(openTelemetrySignalConfig{
 		config.Transport, config.Endpoint, config.Headers, config.ResourceAttributes,
-		config.ServiceName, config.ServiceNamespace, config.ServiceVersion,
-		config.InstrumentationScope,
-	)
+		config.ServiceName, config.ServiceNamespace, config.ServiceVersion, config.InstrumentationScope,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -2879,6 +3025,40 @@ func (s *OpenTelemetryMetricSubscriber) Close() {
 // ---------------------------------------------------------------------------
 // Scope-local guardrail/intercept registration (Tool)
 // ---------------------------------------------------------------------------
+
+// ScopeRegisterEventMetadataInjector registers an event metadata injector
+// owned by an active scope.
+func ScopeRegisterEventMetadataInjector(scopeUUID, name string, priority int32, fn EventMetadataInjectorFunc) error {
+	if fn == nil {
+		return errEventMetadataInjectorCallbackNil
+	}
+	id := registerClosure(fn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_scope_register_event_metadata_injector(
+		cScopeUUID,
+		cName,
+		C.int32_t(priority),
+		C.NemoRelayEventMetadataInjectorFn(C.goEventMetadataInjectorTrampoline),
+		id,
+		C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// ScopeDeregisterEventMetadataInjector removes an event metadata injector
+// owned by an active scope.
+func ScopeDeregisterEventMetadataInjector(scopeUUID, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_scope_deregister_event_metadata_injector(
+		cScopeUUID,
+		cName,
+	))
+}
 
 func registerScopeEventSanitizer(scopeUUID, name string, priority int32, fn EventSanitizeFunc, kind int) error {
 	id := registerClosure(fn)

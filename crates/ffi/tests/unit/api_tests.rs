@@ -804,6 +804,9 @@ fn ffi_sanitizer_codec_entrypoints_contain_codec_panics() {
 
 #[path = "api/core_tests.rs"]
 mod core_tests;
+#[path = "../support/ffi_coverage.rs"]
+mod ffi_coverage_support;
+
 #[path = "api/coverage_sweeps_tests.rs"]
 mod coverage_sweeps_tests;
 #[path = "api/execution_tests.rs"]
