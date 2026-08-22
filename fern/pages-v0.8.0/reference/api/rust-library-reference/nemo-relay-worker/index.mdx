@@ -21,6 +21,7 @@ Cancellation is cooperative. Dropping an async callback future releases its Rust
 
 - [AnnotatedLlmRequest](/reference/api/rust-library-reference/nemo-relay-worker/struct-annotatedllmrequest): Structured view of an LLM request, produced by a Codec from opaque [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmrequest) content.
 - [AnnotatedLlmResponse](/reference/api/rust-library-reference/nemo-relay-worker/struct-annotatedllmresponse): Structured view of an LLM response, produced by a response codec from raw JSON API output.
+- [ConditionalMiddlewareGuardrailHandle](/reference/api/rust-library-reference/nemo-relay-worker/struct-conditionalmiddlewareguardrailhandle): Opaque activation-owned key for removing a worker-created gate.
 - [ConfigDiagnostic](/reference/api/rust-library-reference/nemo-relay-worker/struct-configdiagnostic): Structured validation diagnostic for plugin validation.
 - [DataSchema](/reference/api/rust-library-reference/nemo-relay-worker/struct-dataschema): Identifier for the schema that describes an event's opaque `data` payload.
 - [EmitMarkOptions](/reference/api/rust-library-reference/nemo-relay-worker/struct-emitmarkoptions): Optional fields supported by the additive `grpc-v1` mark-emission request.
@@ -45,6 +46,8 @@ Cancellation is cooperative. Dropping an async callback future releases its Rust
 - [PluginRuntime](/reference/api/rust-library-reference/nemo-relay-worker/struct-pluginruntime): Cloneable handle for calling the Relay host runtime from worker callbacks.
 - [RuntimeDiagnostic](/reference/api/rust-library-reference/nemo-relay-worker/struct-runtimediagnostic): One bounded runtime diagnostic reported by the Relay host.
 - [RuntimeDiagnostics](/reference/api/rust-library-reference/nemo-relay-worker/struct-runtimediagnostics): Bounded snapshot of active host runtime diagnostics.
+- [RuntimeRegistrationIdentity](/reference/api/rust-library-reference/nemo-relay-worker/struct-runtimeregistrationidentity): Structured identity for a global gateable runtime registration.
+- [RuntimeRegistrationOwner](/reference/api/rust-library-reference/nemo-relay-worker/struct-runtimeregistrationowner): Discovery metadata describing the owner of a runtime registration.
 - [ToolExecutionInterceptOutcome](/reference/api/rust-library-reference/nemo-relay-worker/struct-toolexecutioninterceptoutcome): Canonical result returned by a tool execution intercept.
 - [ToolExecutionResult](/reference/api/rust-library-reference/nemo-relay-worker/struct-toolexecutionresult): Canonical application-visible result of tool execution.
 - [ToolNext](/reference/api/rust-library-reference/nemo-relay-worker/struct-toolnext): Continuation handle for tool execution intercepts.
@@ -63,6 +66,8 @@ Cancellation is cooperative. Dropping an async callback future releases its Rust
 - [LogSeverity](/reference/api/rust-library-reference/nemo-relay-worker/enum-logseverity): Severity attached to a mark that may be projected as an OpenTelemetry log.
 - [MetricKind](/reference/api/rust-library-reference/nemo-relay-worker/enum-metrickind): OpenTelemetry instrument kind represented by a metric measurement mark.
 - [MetricValueType](/reference/api/rust-library-reference/nemo-relay-worker/enum-metricvaluetype): Numeric representation used by a metric measurement.
+- [RuntimeRegistrationKind](/reference/api/rust-library-reference/nemo-relay-worker/enum-runtimeregistrationkind): A global runtime registration surface that can be selected by a conditional middleware guardrail.
+- [RuntimeRegistrationOwnerKind](/reference/api/rust-library-reference/nemo-relay-worker/enum-runtimeregistrationownerkind): The owner category reported for a global runtime registration.
 - [ScopeType](/reference/api/rust-library-reference/nemo-relay-worker/enum-scopetype): Semantic category attached to a scope lifecycle span.
 - [WorkerSdkError](/reference/api/rust-library-reference/nemo-relay-worker/enum-workersdkerror): Error returned by worker SDK callbacks and runtime helpers.
 

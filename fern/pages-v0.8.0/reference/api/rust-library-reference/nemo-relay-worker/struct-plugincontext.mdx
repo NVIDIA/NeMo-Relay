@@ -2,7 +2,7 @@
 title: "Struct Plugin Context"
 sidebar-title: "PluginContext"
 description: "Registration context passed to `WorkerPlugin::register`."
-position: 23
+position: 24
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -38,6 +38,12 @@ Creates an empty worker registration context with a host runtime handle.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn runtime(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-pluginruntime\">PluginRuntime</a>&gt;"}} /></pre>
 
 Returns the host runtime handle for event and scope operations.
+
+#### `register_conditional_middleware_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_conditional_middleware_guardrail(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    kinds: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/collections/btree/set/struct.BTreeSet.html\">BTreeSet</a>&lt;<a href=\"enum-runtimeregistrationkind\">RuntimeRegistrationKind</a>&gt;,\n    registration_name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    reason: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n)"}} /></pre>
+
+Declares a host-resident gate installed with this component activation.
 
 #### `register_subscriber`
 

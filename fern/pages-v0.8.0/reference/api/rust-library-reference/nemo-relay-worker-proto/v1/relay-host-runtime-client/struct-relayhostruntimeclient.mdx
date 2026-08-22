@@ -120,6 +120,18 @@ Default: `usize::MAX`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn decode_llm_codec_response(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-llmcodecdecoderesponse\">LlmCodecDecodeResponse</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Response&lt;<a href=\"../struct-jsonresult\">JsonResult</a>&gt;, Status&gt;"}} /></pre>
 
+#### `list_runtime_registrations`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn list_runtime_registrations(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-listruntimeregistrationsrequest\">ListRuntimeRegistrationsRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Response&lt;<a href=\"../struct-listruntimeregistrationsresponse\">ListRuntimeRegistrationsResponse</a>&gt;, Status&gt;"}} /></pre>
+
+#### `register_conditional_middleware_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn register_conditional_middleware_guardrail(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-registerconditionalmiddlewareguardrailrequest\">RegisterConditionalMiddlewareGuardrailRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Response&lt;<a href=\"../struct-registerconditionalmiddlewareguardrailresponse\">RegisterConditionalMiddlewareGuardrailResponse</a>&gt;, Status&gt;"}} /></pre>
+
+#### `deregister_conditional_middleware_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn deregister_conditional_middleware_guardrail(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-deregisterconditionalmiddlewareguardrailrequest\">DeregisterConditionalMiddlewareGuardrailRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Response&lt;<a href=\"../struct-deregisterconditionalmiddlewareguardrailresponse\">DeregisterConditionalMiddlewareGuardrailResponse</a>&gt;, Status&gt;"}} /></pre>
+
 ## Trait Implementations
 
 ### `impl<T: Clone> Clone for RelayHostRuntimeClient<T>`

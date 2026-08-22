@@ -32,12 +32,6 @@ callbacks observe earlier middleware output. Event payload transformations,
 event metadata injectors, and event sanitizer chains run on the queued
 publication path and do not delay managed execution.
 
-The experimental raw C FFI and Go binding retain synchronous middleware
-callbacks. Relay invokes each callback on a native thread and waits for it to
-return, so blocking I/O or other long-running work occupies that thread and can
-reduce middleware throughput. There is no completion-based C or Go middleware
-registration API.
-
 Synchronous standalone Python calls cannot drive an awaitable callback. Call
 the same standalone helper from a running event loop and await the returned
 value instead.
@@ -107,6 +101,15 @@ unit of work.
 Plugins can install middleware during initialization. This is the reusable,
 configuration-driven path for shipping middleware bundles without hand-registering
 everything in application code.
+
+## Control Global Registration Eligibility
+
+A conditional middleware guardrail can temporarily exclude an existing global
+subscriber, metadata injector, guardrail, or intercept from future runtime snapshots
+without changing its ownership or registration. Discover the target's effective name,
+choose activation-owned or dynamic lifecycle management, and understand ordering,
+fail-open behavior, and snapshot timing in
+[Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails).
 
 ## Middleware Families
 

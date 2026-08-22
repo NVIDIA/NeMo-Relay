@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 `PluginContext` is the component-scoped bridge between validated configuration and the
 Relay runtime. It qualifies each registration name, applies priority and chain controls,
-tracks ownership for rollback, and exposes the same 16 registration surfaces to
+tracks ownership for rollback, and exposes the same 17 registration surfaces to
 language-binding, native typed, and worker plugins.
 
 ## Registration Surface
@@ -20,6 +20,7 @@ language-binding, native typed, and worker plugins.
 | Events | Mark sanitizer | Return replacement `data`, `category_profile`, and `metadata` fields for the emitted mark event. |
 | Events | Scope-start sanitizer | Return replacement observability fields for the emitted scope-start event. |
 | Events | Scope-end sanitizer | Return replacement observability fields for the emitted scope-end event. |
+| Runtime control | Conditional middleware guardrail | Make a matching global registration ineligible for future snapshots. Language bindings use a callback; native and worker SDKs install a host-resident constant reason. |
 | Tool | Request sanitizer | Sanitize the request recorded in start events without changing the request passed to real execution. |
 | Tool | Response sanitizer | Sanitize the result recorded in end events without changing the application result. |
 | Tool | Conditional guardrail | Allow or block real execution from the tool name and request. |
@@ -37,6 +38,29 @@ arguments given to a tool or model and do not change the value returned to the
 application. Request and execution intercepts are different: they participate in the
 real call path. Use a sanitizer for redaction and an intercept for policy or routing that
 must affect execution.
+
+Conditional middleware guardrails are also lifecycle-owned. `PluginContext` qualifies
+their local gate names and removes them during failed activation or component teardown.
+Their target must be a discovered effective global registration name. Refer to
+[Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
+for discovery, snapshot timing, and dynamic runtime controls.
+
+The registration method differs by SDK, as shown in the following table:
+
+| SDK | Method | Gate Decision |
+|---|---|---|
+| Python language binding | `register_conditional_middleware_guardrail` | Callback returns a reason or `None`. |
+| Node.js language binding | `registerConditionalMiddlewareGuardrail` | Callback returns a reason or `null`. |
+| Rust language binding | `register_conditional_middleware_guardrail` | Callback returns an optional reason. |
+| Rust native plugin | `register_conditional_middleware_guardrail` | Host-resident constant reason. |
+| Python worker | `register_conditional_middleware_guardrail` | Host-resident constant reason. |
+| Rust worker | `register_conditional_middleware_guardrail` | Host-resident constant reason. |
+
+Each method accepts a component-local gate name, a nonempty set of registration kinds,
+the target's effective global name, and the callback or constant reason. Context methods
+do not return a deregistration handle because Relay owns cleanup. Runtime-level native
+and worker methods return an activation-owned handle for explicit dynamic
+deregistration.
 
 ## Names, Priority, and `break_chain`
 

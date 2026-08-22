@@ -16,6 +16,27 @@ needs, asserts one behavior, and cleans up its registrations. You can therefore 
 test by name without relying on test order or on another example having prepared files,
 configuration, or process state.
 
+## Shared Registration-Control Configuration
+
+All three hosts include the same disabled-by-default configuration group:
+
+```json
+{
+  "registration_control": {
+    "enabled": false,
+    "kinds": ["subscriber"],
+    "registration_name": "documentation-controlled-subscriber",
+    "reason": "disabled by documentation plugin"
+  }
+}
+```
+
+The atomic tests confirm that the default is valid, each required value has a
+field-specific diagnostic, enabling the group registers the expected gate, and clearing
+the plugin restores the target for future snapshots. The host must replace the example
+target with an effective name discovered in the current activation before enabling the
+group against application middleware.
+
 ## Python Host
 
 Run and inspect the Python host as follows:

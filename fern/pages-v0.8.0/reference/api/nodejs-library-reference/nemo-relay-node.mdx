@@ -26,6 +26,31 @@ export interface PropagationContext {
 }
 ```
 
+### `RuntimeRegistrationOwner`
+
+Discovery metadata describing the owner of a runtime registration.
+
+```ts
+export interface RuntimeRegistrationOwner {
+  kind: RuntimeRegistrationOwnerKind
+  pluginKind?: string
+  componentOrdinal?: number
+}
+```
+
+### `RuntimeRegistrationIdentity`
+
+Structured identity for one global gateable runtime registration.
+
+```ts
+export interface RuntimeRegistrationIdentity {
+  kind: RuntimeRegistrationKind
+  localName: string
+  effectiveName: string
+  owner: RuntimeRegistrationOwner
+}
+```
+
 ### `AtofExporterConfig`
 
 One tagged sink configuration for `AtofExporter`.
@@ -633,6 +658,43 @@ export declare class OCIGenAIChatCodec {
 
 ## Enums
 
+### `RuntimeRegistrationKind`
+
+A global runtime registration surface that a conditional middleware guardrail can select.
+
+```ts
+export const enum RuntimeRegistrationKind {
+  Subscriber = 'subscriber',
+  EventMetadataInjector = 'event_metadata_injector',
+  MarkSanitizeGuardrail = 'mark_sanitize_guardrail',
+  ScopeSanitizeStartGuardrail = 'scope_sanitize_start_guardrail',
+  ScopeSanitizeEndGuardrail = 'scope_sanitize_end_guardrail',
+  ToolSanitizeRequestGuardrail = 'tool_sanitize_request_guardrail',
+  ToolSanitizeResponseGuardrail = 'tool_sanitize_response_guardrail',
+  ToolConditionalExecutionGuardrail = 'tool_conditional_execution_guardrail',
+  ToolRequestIntercept = 'tool_request_intercept',
+  ToolExecutionIntercept = 'tool_execution_intercept',
+  LlmSanitizeRequestGuardrail = 'llm_sanitize_request_guardrail',
+  LlmSanitizeResponseGuardrail = 'llm_sanitize_response_guardrail',
+  LlmConditionalExecutionGuardrail = 'llm_conditional_execution_guardrail',
+  LlmRequestIntercept = 'llm_request_intercept',
+  LlmExecutionIntercept = 'llm_execution_intercept',
+  LlmStreamExecutionIntercept = 'llm_stream_execution_intercept'
+}
+```
+
+### `RuntimeRegistrationOwnerKind`
+
+The owner category reported for a global runtime registration.
+
+```ts
+export const enum RuntimeRegistrationOwnerKind {
+  Core = 'core',
+  GlobalApi = 'global_api',
+  Plugin = 'plugin'
+}
+```
+
 ### `ScopeType`
 
 The type of an execution scope in the agent runtime hierarchy.
@@ -1029,6 +1091,30 @@ Deregister a global event metadata injector by name.
 export declare function deregisterEventMetadataInjector(name: string): boolean
 ```
 
+### `registerConditionalMiddlewareGuardrail`
+
+Register a global eligibility gate for runtime registrations matching kind and name.
+
+```ts
+export declare function registerConditionalMiddlewareGuardrail(name: string, kinds: Array<RuntimeRegistrationKind>, registrationName: string, guardrail: (kinds: RuntimeRegistrationKind[], registrationName: string) => string | null): void
+```
+
+### `deregisterConditionalMiddlewareGuardrail`
+
+Deregister a global runtime-registration eligibility gate by name.
+
+```ts
+export declare function deregisterConditionalMiddlewareGuardrail(name: string): boolean
+```
+
+### `listRuntimeRegistrations`
+
+List global gateable runtime registrations.
+
+```ts
+export declare function listRuntimeRegistrations(kinds?: Array<RuntimeRegistrationKind> | undefined | null): Array<RuntimeRegistrationIdentity>
+```
+
 ### `registerMarkSanitizeGuardrail`
 
 Register an event sanitize guardrail.
@@ -1281,10 +1367,10 @@ export declare function deregisterLlmExecutionIntercept(name: string): boolean
 
 Register a streaming LLM execution intercept following the middleware chain pattern.
 
-The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to an array of downstream JSON chunks. Skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after the returned interceptor stream settles. A downstream stream returned successfully by `next` keeps its normal lifetime.
+The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to a lazy `AsyncIterable`. Return it directly or wrap it `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after the returned interceptor stream settles. A downstream stream returned successfully by `next` keeps its normal lifetime.
 
 ```ts
-export declare function registerLlmStreamExecutionIntercept(name: string, priority: number, callable: (request: Json, next: (request: Json) => Promise<Json[]>) => Json | Json[] | Promise<Json | Json[]>): void
+export declare function registerLlmStreamExecutionIntercept(name: string, priority: number, callable: (request: Json, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>): void
 ```
 
 ### `deregisterLlmStreamExecutionIntercept`
@@ -1599,10 +1685,10 @@ export declare function scopeDeregisterLlmExecutionIntercept(scopeUuid: string, 
 
 Register a scope-local streaming LLM execution intercept following the middleware chain pattern.
 
-The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to an array of downstream JSON chunks. Skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after the returned interceptor stream settles. A downstream stream returned successfully by `next` keeps its normal lifetime.
+The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to a lazy `AsyncIterable`. Return it directly or wrap it `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after the returned interceptor stream settles. A downstream stream returned successfully by `next` keeps its normal lifetime.
 
 ```ts
-export declare function scopeRegisterLlmStreamExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (request: Json, next: (request: Json) => Promise<Json[]>) => Json | Json[] | Promise<Json | Json[]>): void
+export declare function scopeRegisterLlmStreamExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (request: Json, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>): void
 ```
 
 ### `scopeDeregisterLlmStreamExecutionIntercept`

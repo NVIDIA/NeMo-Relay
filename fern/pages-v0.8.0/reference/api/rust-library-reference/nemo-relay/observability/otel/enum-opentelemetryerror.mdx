@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum OpenTelemetryError &#123;\n    InvalidGrpcHeader &#123;\n        key: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    InvalidHeader &#123;\n        key: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    GlobalHeaderEnvironmentUnsupported &#123;\n        variable: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    &#125;,\n    ExporterBuild(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    Provider(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    InvalidAttributeMappings(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    InvalidMetadataPromotionPrefixes(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    Core(<a href=\"../../error/enum-flowerror\">FlowError</a>),\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum OpenTelemetryError &#123;\n    InvalidGrpcHeader &#123;\n        key: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    InvalidHeader &#123;\n        key: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    GlobalHeaderEnvironmentUnsupported &#123;\n        variable: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    &#125;,\n    ExporterBuild(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    TraceProvider(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    LogProvider(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    MetricProvider(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    InvalidAttributeMappings(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    InvalidMetadataPromotionPrefixes(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    Core(<a href=\"../../error/enum-flowerror\">FlowError</a>),\n&#125;"}} /></pre>
 
 Errors produced while configuring or operating the OpenTelemetry subscriber.
 
@@ -65,11 +65,23 @@ Environment variable that was set.
 
 Failed to build the OTLP exporter.
 
-### `Provider(String)`
+### `TraceProvider(String)`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Provider(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "TraceProvider(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>)"}} /></pre>
 
 The underlying tracer provider returned an error.
+
+### `LogProvider(String)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "LogProvider(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+
+The underlying logger provider returned an error.
+
+### `MetricProvider(String)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "MetricProvider(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+
+The underlying meter provider returned an error.
 
 ### `InvalidAttributeMappings(String)`
 

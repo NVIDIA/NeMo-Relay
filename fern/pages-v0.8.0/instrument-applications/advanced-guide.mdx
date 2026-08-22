@@ -36,6 +36,32 @@ Use this table to match the behavior you need with the correct middleware family
 
 Use the narrowest middleware type that matches the behavior. For example, do not use a request intercept when you only need to hide a secret from exported events.
 
+## Control a Global Registration
+
+Use a conditional middleware guardrail when an operational policy must temporarily
+exclude existing global middleware or a subscriber. Discover the target from the active
+runtime, and match its registration kind and effective name. Do not persist or construct
+the effective name.
+
+The gate affects future middleware and event-publication snapshots. It does not change
+an in-flight chain, a queued event, the target's ownership, or a same-named scope-local
+registration. Every matching gate must allow the target. If a gate callback fails, Relay
+fails open and keeps the target eligible.
+
+Choose one of the following lifecycle patterns:
+
+- Register a global gate when application code owns the timer, health check, or
+  operational control. Remove the gate in a guaranteed cleanup path.
+- Register an activation-owned gate when a plugin component owns the control for its
+  complete active lifetime. Relay removes the gate during rollback or teardown.
+
+Gate callbacks must read already-available state. They must not make reentrant Relay
+calls that produce middleware, flush subscribers, wait for exporters, or clear plugins.
+Refer to
+[Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
+for the complete semantic model and [Code Examples](/instrument-applications/code-examples)
+for binding-specific registration and cleanup.
+
 ## Add a Tool Policy
 
 This example adds three behaviors around a `search` tool:

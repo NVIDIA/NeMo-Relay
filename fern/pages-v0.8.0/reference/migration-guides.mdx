@@ -19,6 +19,42 @@ Rust code that constructs `ResponseCacheConfig` with an exhaustive struct
 literal must add `tools: None`. Prefer `..ResponseCacheConfig::default()` when
 the literal should remain compatible with new optional cache surfaces.
 
+### Stream Node.js LLM Execution Intercepts Lazily
+
+<Warning title="Breaking Change">
+NeMo Relay 0.8 changes Node.js LLM streaming execution intercepts from buffered
+JSON values to lazy async iterables. `next(request)` now resolves to an
+`AsyncIterable<Json>`, and the intercept callback must return an async iterable
+or a promise of one. Scalar and array return values are rejected.
+</Warning>
+
+This change applies to global, scope-local, and plugin-owned registrations made
+with `registerLlmStreamExecutionIntercept`,
+`scopeRegisterLlmStreamExecutionIntercept`, and
+`PluginContext.registerLlmStreamExecutionIntercept`.
+
+Replace array transforms such as this pre-0.8 callback:
+
+```js
+async (request, next) =>
+  (await next(request)).map((chunk) => ({ ...chunk, intercepted: true }));
+```
+
+Use an async generator to transform downstream chunks incrementally:
+
+```js
+async function* transformStream(request, next) {
+  for await (const chunk of await next(request)) {
+    yield { ...chunk, intercepted: true };
+  }
+}
+```
+
+Return `next(request)` directly when the intercept only forwards the stream. To
+short-circuit the downstream chain, return an async generator that yields the
+replacement chunks. Do not collect the iterable into an array unless the
+application intentionally needs to buffer the complete response.
+
 ### Move Hermes Agent to Its Native Relay Integration
 
 NeMo Relay 0.8 removes Hermes Agent from the Relay CLI. The `nemo-relay hermes`

@@ -41,6 +41,14 @@ def register_subscriber(name: str, callback: Callable[[Event], None]) -> None
 
 Register an infallible event subscriber for this component.
 
+##### `register_conditional_middleware_guardrail`
+
+```python
+def register_conditional_middleware_guardrail(name: str, kinds: set[RuntimeRegistrationKind], registration_name: str, guardrail: ConditionalMiddlewareGuardrail) -> None
+```
+
+Register an activation-owned gate for a global runtime registration.
+
 ##### `register_event_metadata_injector`
 
 ```python
