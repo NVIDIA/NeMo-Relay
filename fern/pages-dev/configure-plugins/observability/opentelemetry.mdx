@@ -303,6 +303,15 @@ processor export timeout; use the endpoint's `timeout_millis` to bound each
 OTLP request.
 
 <Warning>
+**Known limitation: OTLP partial success is not reported.** A collector can
+return a successful OTLP response while rejecting individual spans, log
+records, or metric data points. With the vendored OpenTelemetry exporter,
+Relay treats that response as successful: it does not add a runtime diagnostic,
+and `force_flush()` and `shutdown()` can succeed. Monitor collector-side logs
+and rejection metrics when investigating missing telemetry.
+</Warning>
+
+<Warning>
 A full queue drops completed spans instead of applying backpressure to
 application work. Bursts can therefore drop spans that finish late, including
 an enclosing root span, and leave an incomplete trace in the backend.
