@@ -454,9 +454,10 @@ Mark attributes use `nemo_relay.response_cache.*`: `backend`, `surface`,
 `key_hash` (the `sha256:…` fingerprint), `ttl_ms`, and `age_ms` as applicable;
 `saved_tokens` and `saved_cost_usd` appear on LLM hits when they can be
 derived, while `saved_invocations` appears on tool hits. Tool marks use
-`surface = "tool"`; unclassified, uncacheable tools pass through without a
-cache mark. A `reason` appears on bypasses and store-error misses (for example
-`sampled`, `stateful_store`, `store_error`, or `stream_no_codec`). Cache marks
+`surface = "tool"`; unclassified, uncacheable tools emit a `bypass` mark with
+`reason = "uncacheable"` before the callback runs live. A `reason` appears on
+bypasses and store-error misses (for example `uncacheable`, `sampled`,
+`stateful_store`, `store_error`, or `stream_no_codec`). Cache marks
 never include prompts, answers, or credentials, but treat `key_hash` as
 sensitive telemetry: a hash can still reveal information when an observer can
 guess the keyed input.
