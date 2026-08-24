@@ -137,6 +137,11 @@ for destination paths and explicit-file alternatives.
 
 ## Known Issues in 0.8
 
+- OTLP collectors can return a successful response while rejecting individual
+  spans, log records, or metric data points. Relay 0.8 does not report these
+  partial successes in runtime diagnostics, and flush or shutdown can still
+  succeed. Monitor collector-side rejection metrics and logs; see
+  [OpenTelemetry](/configure-plugins/observability/opentelemetry#trace-batch-processor-configuration).
 - Go and the raw C FFI remain experimental and source-first. Generated API
   pages focus on Rust, Python, and Node.js.
 - Local coding-agent observability depends on host hooks and provider traffic
