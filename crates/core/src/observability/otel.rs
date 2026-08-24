@@ -445,10 +445,10 @@ impl Default for OpenTelemetrySubscriberOptions {
 }
 
 struct Inner {
-    // Keep `processor` before `_runtime`: the processor owns the
-    // `SdkTracerProvider` and must be dropped before `ExporterRuntime` joins
-    // and tears down its Tokio runtime. Do not reorder these fields.
-    processor: Arc<Mutex<OtelEventProcessor>>,
+    // Keep `provider` before `_runtime`: the provider must be dropped before
+    // `ExporterRuntime` joins and tears down its Tokio runtime. Do not reorder
+    // these fields.
+    provider: SdkTracerProvider,
     runtime_diagnostics: SignalRuntimeDiagnostics,
     subscriber: EventSubscriberFn,
     _runtime: Option<ExporterRuntime>,
@@ -628,7 +628,7 @@ impl OpenTelemetrySubscriber {
             .unwrap_or_else(|| SignalRuntimeDiagnostics::new(None));
         let processor = Arc::new(Mutex::new(
             OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
-                provider,
+                provider.clone(),
                 instrumentation_scope,
                 otel_type,
                 mark_projection,
@@ -650,7 +650,7 @@ impl OpenTelemetrySubscriber {
 
         Self {
             inner: Arc::new(Inner {
-                processor,
+                provider,
                 runtime_diagnostics,
                 subscriber,
                 _runtime: runtime,
@@ -698,10 +698,10 @@ impl OpenTelemetrySubscriber {
     /// Flushes finished spans through the underlying tracer provider.
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
-        let guard = self.inner.processor.lock().map_err(|_| {
-            OpenTelemetryError::TraceProvider("the subscriber state lock was poisoned".to_string())
-        })?;
-        guard.force_flush()
+        self.inner
+            .provider
+            .force_flush()
+            .map_err(|error| OpenTelemetryError::TraceProvider(error.to_string()))
     }
 
     /// Shuts down the underlying tracer provider.
@@ -717,10 +717,11 @@ impl OpenTelemetrySubscriber {
     }
 
     pub(crate) fn shutdown_provider(&self) -> Result<()> {
-        let guard = self.inner.processor.lock().map_err(|_| {
-            OpenTelemetryError::TraceProvider("the subscriber state lock was poisoned".to_string())
-        })?;
-        let result = guard.shutdown();
+        let result = self
+            .inner
+            .provider
+            .shutdown()
+            .map_err(|error| OpenTelemetryError::TraceProvider(error.to_string()));
         if result.is_ok() {
             log::info!(
                 target: "nemo_relay.observability",
@@ -1118,6 +1119,7 @@ pub(super) struct OtelEventProcessor {
     pub(super) active_spans: HashMap<Uuid, ActiveSpan>,
     pub(super) completed_span_contexts: HashMap<Uuid, SpanContext>,
     pub(super) completed_span_order: VecDeque<Uuid>,
+    #[cfg(test)]
     provider: SdkTracerProvider,
     tracer: SdkTracer,
     otel_type: OpenTelemetryType,
@@ -1251,6 +1253,7 @@ impl OtelEventProcessor {
             active_spans: HashMap::new(),
             completed_span_contexts: HashMap::new(),
             completed_span_order: VecDeque::new(),
+            #[cfg(test)]
             provider,
             tracer,
             otel_type,
@@ -1271,15 +1274,10 @@ impl OtelEventProcessor {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn force_flush(&self) -> Result<()> {
         self.provider
             .force_flush()
-            .map_err(|e| OpenTelemetryError::TraceProvider(e.to_string()))
-    }
-
-    fn shutdown(&self) -> Result<()> {
-        self.provider
-            .shutdown()
             .map_err(|e| OpenTelemetryError::TraceProvider(e.to_string()))
     }
 

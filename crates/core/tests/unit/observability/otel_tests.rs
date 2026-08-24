@@ -129,6 +129,92 @@ impl SpanExporter for BlockingSpanExporter {
     }
 }
 
+#[test]
+fn slow_trace_flush_does_not_block_other_subscribers_or_lifecycle_barriers() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_global();
+
+    let exporter = BlockingSpanExporter::default();
+    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
+        exporter.clone(),
+        "https://collector.example/v1/traces".to_string(),
+        SignalRuntimeDiagnostics::new(None),
+        BatchConfigBuilder::default()
+            .with_max_queue_size(1)
+            .with_max_export_batch_size(1)
+            .with_scheduled_delay(Duration::from_secs(60))
+            .build(),
+    );
+    let provider = SdkTracerProvider::builder()
+        .with_span_processor(processor)
+        .build();
+    let trace_subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "trace");
+    let trace_name = format!("slow-trace-{}", Uuid::now_v7().simple());
+    trace_subscriber.register(&trace_name).unwrap();
+
+    let (healthy_tx, healthy_rx) = mpsc::channel();
+    let healthy_name = format!("healthy-{}", Uuid::now_v7().simple());
+    crate::api::subscriber::register_subscriber(
+        &healthy_name,
+        Arc::new(move |event| {
+            if event.name() == "healthy-event" {
+                healthy_tx.send(()).unwrap();
+            }
+        }),
+    )
+    .unwrap();
+
+    let trace_callback = trace_subscriber.subscriber();
+    let trace_uuid = Uuid::now_v7();
+    trace_callback(&make_start_event(
+        trace_uuid,
+        None,
+        "slow-trace",
+        ScopeType::Agent,
+        None,
+    ));
+    trace_callback(&make_end_event(
+        trace_uuid,
+        None,
+        "slow-trace",
+        ScopeType::Agent,
+        None,
+    ));
+
+    let flush_trace = trace_subscriber.clone();
+    let trace_flush = thread::spawn(move || flush_trace.force_flush());
+    exporter.wait_until_export_starts();
+
+    crate::api::scope::event(
+        crate::api::scope::EmitMarkEventParams::builder()
+            .name("healthy-event")
+            .build(),
+    )
+    .unwrap();
+
+    let (barrier_tx, barrier_rx) = mpsc::channel();
+    let barrier = thread::spawn(move || {
+        barrier_tx
+            .send(crate::api::subscriber::flush_subscribers())
+            .unwrap();
+    });
+
+    healthy_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("a slow trace flush must not delay another subscriber");
+    barrier_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("a slow trace flush must not delay the subscriber lifecycle barrier")
+        .unwrap();
+
+    exporter.release();
+    trace_flush.join().unwrap().unwrap();
+    barrier.join().unwrap();
+    trace_subscriber.deregister(&trace_name).unwrap();
+    crate::api::subscriber::deregister_subscriber(&healthy_name).unwrap();
+    trace_subscriber.shutdown().unwrap();
+}
+
 #[derive(Clone, Debug, Default)]
 struct FailingThenRecoveringSpanExporter {
     attempts: Arc<AtomicUsize>,
