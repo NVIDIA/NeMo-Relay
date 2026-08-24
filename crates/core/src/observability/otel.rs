@@ -196,6 +196,33 @@ pub fn resolve_http_trace_endpoint(endpoint: &str) -> Cow<'_, str> {
     Cow::Owned(parsed.into())
 }
 
+/// Returns an endpoint identity that is safe to include in delivery failures.
+///
+/// Delivery errors can be written to stderr, so never include an endpoint's
+/// userinfo, path, query, or fragment. HTTP(S) origins remain sufficient to
+/// distinguish independently configured collectors without exposing a token
+/// embedded in a URL.
+fn trace_endpoint_log_identity(endpoint: &str) -> String {
+    let Ok(endpoint) = reqwest::Url::parse(endpoint) else {
+        return "an invalid OTLP endpoint".to_string();
+    };
+    if !matches!(endpoint.scheme(), "http" | "https") {
+        return "an invalid OTLP endpoint".to_string();
+    }
+    let Some(host) = endpoint.host_str() else {
+        return "an invalid OTLP endpoint".to_string();
+    };
+    let host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    let port = endpoint
+        .port_or_known_default()
+        .expect("HTTP(S) URLs always have a known default port");
+    format!("{}://{host}:{port}", endpoint.scheme())
+}
+
 /// Configuration for the OpenTelemetry subscriber.
 #[derive(Debug, Clone)]
 pub struct OpenTelemetryConfig {
@@ -910,12 +937,19 @@ impl<E: SpanExporter> SpanExporter for CountingSpanExporter<E> {
         self.accepted_spans
             .fetch_add(batch.len() as u64, Ordering::Relaxed);
         let result = self.inner.export(batch).await;
-        if let Err(error) = &result {
-            self.diagnostics.record_export_failure(error);
-        } else {
-            self.diagnostics.record_export_success();
+        match result {
+            Ok(()) => {
+                self.diagnostics.record_export_success();
+                Ok(())
+            }
+            Err(_) => {
+                self.diagnostics.record_export_failure();
+                Err(OTelSdkError::InternalFailure(format!(
+                    "OpenTelemetry trace export to {} failed",
+                    self.diagnostics.endpoint
+                )))
+            }
         }
-        result
     }
 
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
@@ -942,21 +976,21 @@ struct TraceDeliveryDiagnostics {
 impl TraceDeliveryDiagnostics {
     fn new(endpoint: String, runtime_diagnostics: SignalRuntimeDiagnostics) -> Self {
         Self {
-            endpoint,
+            endpoint: trace_endpoint_log_identity(&endpoint),
             runtime_diagnostics,
             export_failures: AtomicU64::new(0),
             unresolved_export_failure: AtomicBool::new(false),
         }
     }
 
-    fn record_export_failure(&self, error: &impl std::fmt::Display) {
+    fn record_export_failure(&self) {
         self.export_failures.fetch_add(1, Ordering::Relaxed);
         self.unresolved_export_failure
             .store(true, Ordering::Relaxed);
         self.runtime_diagnostics.record(
             "otel.traces_export_failed",
             format!(
-                "OpenTelemetry trace export to endpoint {} failed: {error}",
+                "OpenTelemetry trace export to endpoint {} failed",
                 self.endpoint
             ),
             1,

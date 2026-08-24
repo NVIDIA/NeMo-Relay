@@ -842,7 +842,9 @@ class TestOpenTelemetryTypes:
                 diagnostic = subscriber.runtime_diagnostics().get("otel.traces_export_failed")
                 assert diagnostic is not None
                 assert diagnostic.count == 1
-                assert collector.endpoint in diagnostic.message
+                endpoint_origin = f"http://127.0.0.1:{collector.server.server_port}"
+                assert endpoint_origin in diagnostic.message
+                assert collector.endpoint not in diagnostic.message
 
                 with pytest.raises(RuntimeError, match=r"otel\.traces_export_failed \(1\)"):
                     subscriber.force_flush()
