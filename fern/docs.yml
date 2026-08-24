@@ -119,20 +119,22 @@ redirects:
 # Build plugin guides
 - source: /nemo/relay/build-plugins/basic-guide
   destination: /nemo/relay/build-plugins/language-binding/about
+# The replacement plugin-authoring guides are not yet published to stable.
+# Keep legacy public routes on the last stable guide set until that release.
 - source: /nemo/relay/build-plugins/dynamic-plugins/about
-  destination: /nemo/relay/build-plugins/package-discoverable-plugins
+  destination: /nemo/relay/v0.7.3/build-plugins/dynamic-plugins/about
 - source: /nemo/relay/build-plugins/dynamic-plugins/native-dynamic/about
-  destination: /nemo/relay/build-plugins/native/about
+  destination: /nemo/relay/v0.7.3/build-plugins/dynamic-plugins/native-dynamic/about
 - source: /nemo/relay/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example
-  destination: /nemo/relay/build-plugins/native/build-and-package
+  destination: /nemo/relay/v0.7.3/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example
 - source: /nemo/relay/build-plugins/dynamic-plugins/grpc-worker/about
-  destination: /nemo/relay/build-plugins/workers/about
+  destination: /nemo/relay/v0.7.3/build-plugins/dynamic-plugins/grpc-worker/about
 - source: /nemo/relay/build-plugins/dynamic-plugins/grpc-worker/python/about
-  destination: /nemo/relay/build-plugins/workers/python
+  destination: /nemo/relay/v0.7.3/build-plugins/dynamic-plugins/grpc-worker/python/about
 - source: /nemo/relay/build-plugins/dynamic-plugins/grpc-worker/rust/about
-  destination: /nemo/relay/build-plugins/workers/rust
+  destination: /nemo/relay/v0.7.3/build-plugins/dynamic-plugins/grpc-worker/rust/about
 - source: /nemo/relay/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol
-  destination: /nemo/relay/build-plugins/workers/grpc-v1-protocol
+  destination: /nemo/relay/v0.7.3/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol
 
 # CLI guides
 - source: /nemo/relay/nemo-relay-cli/cursor
