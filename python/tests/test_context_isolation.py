@@ -8,6 +8,7 @@ import contextvars
 import uuid
 
 import pytest
+from async_helpers import resolve_async_result
 
 import nemo_relay
 from nemo_relay._native import capture_thread_scope_stack, restore_thread_scope_stack
@@ -242,8 +243,8 @@ def test_concurrent_tool_lifecycle_uses_owning_task_stack(subscribed_events):
                 )
 
                 await asyncio.sleep(0)
-                args = await nemo_relay.tools.request_intercepts("task-tool", {"owner": owner})
-                await nemo_relay.tools.conditional_execution("task-tool", args)
+                args = await resolve_async_result(nemo_relay.tools.request_intercepts("task-tool", {"owner": owner}))
+                await resolve_async_result(nemo_relay.tools.conditional_execution("task-tool", args))
 
                 manual_handle = nemo_relay.tools.call(f"manual-tool-{owner}", args)
                 await asyncio.sleep(0)
@@ -301,9 +302,9 @@ def test_concurrent_llm_lifecycle_uses_owning_task_stack(subscribed_events):
 
                 request = nemo_relay.LLMRequest({}, {"messages": [], "owner": owner})
                 await asyncio.sleep(0)
-                intercepted = await nemo_relay.llm.request_intercepts("task-llm", request)
+                intercepted = await resolve_async_result(nemo_relay.llm.request_intercepts("task-llm", request))
                 assert intercepted.request.content["intercepted_by"] == owner
-                await nemo_relay.llm.conditional_execution(request)
+                await resolve_async_result(nemo_relay.llm.conditional_execution(request))
 
                 manual_handle = nemo_relay.llm.call(f"manual-llm-{owner}", request)
                 await asyncio.sleep(0)

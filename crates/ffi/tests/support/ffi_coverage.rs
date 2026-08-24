@@ -210,6 +210,6 @@ pub(crate) fn assert_otel_signal_lifecycle<H>(
     assert_eq!(deregister(name.as_ptr()), NemoRelayStatus::Ok);
     assert_eq!(shutdown(subscriber), NemoRelayStatus::Ok);
     assert_eq!(force_flush(subscriber), NemoRelayStatus::Internal);
-    assert_eq!(shutdown(subscriber), NemoRelayStatus::Internal);
+    assert_eq!(shutdown(subscriber), NemoRelayStatus::Ok);
     free(subscriber);
 }

@@ -204,6 +204,9 @@ def flush() -> None:
     Raises:
         RuntimeError: If called while an ``asyncio`` event loop is running on
             the current thread.
+
+    Returns:
+        None: All eligible queued work has completed before this returns.
     """
     if _publication_callback_active():
         return None
@@ -225,6 +228,10 @@ async def flush_async() -> None:
     thread coalesces concurrent barriers and waits for the native dispatcher
     without blocking the Python event loop. Managed tool, LLM, and guardrail
     work registered before the flush is included through its terminal event.
+
+    Returns:
+        None: All eligible queued work has completed when the awaitable
+        resolves.
     """
     if _publication_callback_active():
         return None

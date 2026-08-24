@@ -641,7 +641,11 @@ class TestScopeLocalLlmWrappers:
             assert scope_local.deregister_llm_conditional_execution(handle, "sl_llm_cond_cov") is True
 
             scope_local.register_llm_request(
-                handle, "sl_llm_int_cov", 1, False, lambda name, req, annotated: (req, annotated)
+                handle,
+                "sl_llm_int_cov",
+                1,
+                False,
+                lambda name, req, annotated: LLMRequestInterceptOutcome(req, annotated),
             )
             assert scope_local.deregister_llm_request(handle, "sl_llm_int_cov") is True
 

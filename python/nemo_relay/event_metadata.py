@@ -24,12 +24,27 @@ def register_injector(name: str, priority: int, injector: EventMetadataInjectorC
 
     The registration applies to every subsequently published canonical Relay
     event until it is deregistered. Lower numeric priorities run first.
+
+    Args:
+        name: Unique registration name for the injector.
+        priority: Injector execution order; lower values run first.
+        injector: Callback that returns metadata additions for each event.
+
+    Returns:
+        None: The injector is registered for future published events.
     """
     _register_event_metadata_injector(name, priority, injector)
 
 
 def deregister_injector(name: str) -> bool:
-    """Remove a global event metadata injector by registration name."""
+    """Remove a global event metadata injector by registration name.
+
+    Args:
+        name: Registration name previously passed to ``register_injector``.
+
+    Returns:
+        bool: ``True`` if an injector was removed; otherwise ``False``.
+    """
     return _deregister_event_metadata_injector(name)
 
 
