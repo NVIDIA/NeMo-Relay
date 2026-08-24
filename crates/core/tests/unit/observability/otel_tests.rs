@@ -4608,6 +4608,20 @@ fn trace_export_failures_are_diagnosed_until_a_later_export_recovers() {
 }
 
 #[test]
+fn trace_endpoint_log_identity_redacts_and_validates_urls() {
+    for (endpoint, expected) in [
+        ("not a URL", "an invalid OTLP endpoint"),
+        ("ftp://collector.example/secret", "an invalid OTLP endpoint"),
+        (
+            "https://[::1]:4318/private?access_token=url-secret",
+            "https://[::1]:4318",
+        ),
+    ] {
+        assert_eq!(trace_endpoint_log_identity(endpoint), expected);
+    }
+}
+
+#[test]
 fn trace_export_failures_use_a_safe_endpoint_identity() {
     let endpoint = "https://user:password@collector.example:4318/private-path?access_token=url-secret#fragment-secret";
     let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);

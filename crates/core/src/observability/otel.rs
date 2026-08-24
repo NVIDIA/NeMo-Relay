@@ -212,7 +212,7 @@ fn trace_endpoint_log_identity(endpoint: &str) -> String {
     let Some(host) = endpoint.host_str() else {
         return "an invalid OTLP endpoint".to_string();
     };
-    let host = if host.contains(':') {
+    let host = if host.contains(':') && !host.starts_with('[') {
         format!("[{host}]")
     } else {
         host.to_string()
