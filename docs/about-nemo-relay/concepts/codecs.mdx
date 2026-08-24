@@ -115,6 +115,20 @@ A provider-native component can only be encoded by the provider API named
 in its `provider` field. Provider mismatches and portable edits that the target
 API cannot represent fail before the provider callback.
 
+### Gemini Function-Call Correlation
+
+For Gemini `generateContent`, the codec maps a provider `functionCall.id` to
+the normalized tool-call ID and echoes that same value in the matching
+`functionResponse.id`. This preserves Gemini's call-to-result correlation for
+parallel function calls.
+
+Older Gemini payloads can omit `functionCall.id`. In that case, the codec uses
+the function name as a compatibility fallback only when it is unique within the
+content item. Payloads with duplicate effective IDs, including two id-less
+calls to the same function, fail decoding because their function responses
+cannot be correlated safely. Use the exact Gemini function-call ID whenever the
+provider supplies one.
+
 ### Preservation Is Not Semantic Support
 
 Provider APIs can add fields or change semantics before Relay's built-in codecs
