@@ -487,6 +487,43 @@ fn test_gemini_response_function_call_extraction_validates_shape_and_id_fallback
 }
 
 #[test]
+fn test_gemini_function_call_decoders_reject_duplicate_effective_ids() {
+    let duplicate_idless_calls = [
+        json!({"functionCall": {"name": "search", "args": {"q": "dogs"}}}),
+        json!({"functionCall": {"name": "search", "args": {"q": "cats"}}}),
+    ];
+    assert!(extract_parts_tool_calls(&duplicate_idless_calls).is_err());
+    assert!(
+        gemini_function_call_messages(
+            None,
+            &[&duplicate_idless_calls[0], &duplicate_idless_calls[1]]
+        )
+        .is_err()
+    );
+
+    let duplicate_explicit_calls = [
+        json!({"functionCall": {"id": "call_1", "name": "search", "args": {"q": "dogs"}}}),
+        json!({"functionCall": {"id": "call_1", "name": "search", "args": {"q": "cats"}}}),
+    ];
+    assert!(extract_parts_tool_calls(&duplicate_explicit_calls).is_err());
+
+    let duplicate_idless_responses = [
+        json!({"functionResponse": {"name": "search", "response": {"result": "dogs"}}}),
+        json!({"functionResponse": {"name": "search", "response": {"result": "cats"}}}),
+    ];
+    assert!(
+        gemini_function_response_messages(
+            &duplicate_idless_responses,
+            &[
+                &duplicate_idless_responses[0],
+                &duplicate_idless_responses[1]
+            ],
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn test_gemini_provider_native_part_validation_and_tool_payload_conversion() {
     let valid = json!({
         "type": "provider_native",

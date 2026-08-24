@@ -75,7 +75,18 @@ def register_conditional_middleware_guardrail(
     registration_name: str,
     guardrail: ConditionalMiddlewareGuardrail,
 ) -> None:
-    """Register a global gate for registrations matching kind and effective name."""
+    """Register a global gate for registrations matching kind and effective name.
+
+    Args:
+        name: Unique name for this gate registration.
+        kinds: Registration kinds to which this gate applies.
+        registration_name: Effective registration name to match.
+        guardrail: Callback returning a rejection message or ``None`` to allow
+            the registration.
+
+    Returns:
+        None: The gate is registered for subsequent matching registrations.
+    """
 
     def wrapped(received_kinds: set[str], effective_name: str) -> str | None:
         return guardrail({RuntimeRegistrationKind(kind) for kind in received_kinds}, effective_name)
@@ -84,14 +95,30 @@ def register_conditional_middleware_guardrail(
 
 
 def deregister_conditional_middleware_guardrail(name: str) -> bool:
-    """Remove a named global registration gate."""
+    """Remove a named global registration gate.
+
+    Args:
+        name: Gate name previously passed to
+            ``register_conditional_middleware_guardrail``.
+
+    Returns:
+        bool: ``True`` if a gate was removed; otherwise ``False``.
+    """
     return _native_deregister(name)
 
 
 def list_runtime_registrations(
     kinds: Iterable[RuntimeRegistrationKind] | None = None,
 ) -> list[RuntimeRegistrationIdentity]:
-    """List a deterministic snapshot of global gateable registrations."""
+    """List a deterministic snapshot of global gateable registrations.
+
+    Args:
+        kinds: Optional registration kinds to include. When omitted, includes
+            every gateable global registration.
+
+    Returns:
+        list[RuntimeRegistrationIdentity]: Ordered registration identities.
+    """
     selected = None if kinds is None else {kind.value for kind in kinds}
     registrations = _native_list(selected)
     return [

@@ -1771,7 +1771,7 @@ fn test_ffi_otel_projection_validation_from_integration_binary() {
         );
         assert_status!(
             nemo_relay_otel_subscriber_shutdown(subscriber),
-            NemoRelayStatus::Internal
+            NemoRelayStatus::Ok
         );
         nemo_relay_otel_subscriber_free(subscriber);
     }

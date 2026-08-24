@@ -139,6 +139,16 @@ omit = [
 # which aren't installed by default.
 allowed-unresolved-imports = ["deepagents.**", "grpc", "langchain.**", "langchain_*.**", "langgraph.**", "nemo_relay._native", "pytest"]
 
+[[tool.ty.overrides]]
+include = ["python/tests/**"]
+
+[tool.ty.overrides.rules]
+# Managed execution may return any valid JSON subtype after intercepts run.
+# Tests that exercise a known object result assert its runtime shape directly.
+invalid-argument-type = "ignore"
+not-subscriptable = "ignore"
+unsupported-operator = "ignore"
+
 [tool.ruff]
 line-length = 120
 target-version = "py311"

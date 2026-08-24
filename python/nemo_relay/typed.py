@@ -48,7 +48,7 @@ import weakref
 from typing import AsyncIterator, Awaitable, Callable, Generic, Protocol, TypeVar, cast, overload
 
 from nemo_relay import Json, llm, tools
-from nemo_relay._native import LLMRequest, LlmStream, ScopeHandle, ToolExecutionResult
+from nemo_relay._native import LLMAttributes, LLMRequest, LlmStream, ScopeHandle, ToolAttributes, ToolExecutionResult
 from nemo_relay.codecs import LlmCodec, LlmResponseCodec
 
 T = TypeVar("T")
@@ -472,7 +472,7 @@ async def tool_execute(
     result_codec: Codec[TResult],
     *,
     handle: ScopeHandle | None = None,
-    attributes: int | None = None,
+    attributes: ToolAttributes | None = None,
     data: Json | None = None,
     metadata: Json | None = None,
     tool_call_id: str | None = None,
@@ -488,7 +488,7 @@ async def tool_execute(
     result_codec: Codec[TResult],
     *,
     handle: ScopeHandle | None = None,
-    attributes: int | None = None,
+    attributes: ToolAttributes | None = None,
     data: Json | None = None,
     metadata: Json | None = None,
     tool_call_id: str | None = None,
@@ -503,7 +503,7 @@ async def tool_execute(
     result_codec: Codec[TResult],
     *,
     handle: ScopeHandle | None = None,
-    attributes: int | None = None,
+    attributes: ToolAttributes | None = None,
     data: Json | None = None,
     metadata: Json | None = None,
     tool_call_id: str | None = None,
@@ -592,7 +592,7 @@ async def llm_execute(
     response_json_codec: Codec[TResponse],
     *,
     handle: ScopeHandle | None = None,
-    attributes: int | None = None,
+    attributes: LLMAttributes | None = None,
     data: Json | None = None,
     metadata: Json | None = None,
     model_name: str | None = None,
@@ -609,7 +609,7 @@ async def llm_execute(
     response_json_codec: Codec[TResponse],
     *,
     handle: ScopeHandle | None = None,
-    attributes: int | None = None,
+    attributes: LLMAttributes | None = None,
     data: Json | None = None,
     metadata: Json | None = None,
     model_name: str | None = None,
@@ -625,7 +625,7 @@ async def llm_execute(
     response_json_codec: Codec[TResponse],
     *,
     handle: ScopeHandle | None = None,
-    attributes: int | None = None,
+    attributes: LLMAttributes | None = None,
     data: Json | None = None,
     metadata: Json | None = None,
     model_name: str | None = None,
@@ -716,7 +716,7 @@ async def llm_stream_execute(
     response_json_codec: Codec[TResponse],
     *,
     handle: ScopeHandle | None = None,
-    attributes: int | None = None,
+    attributes: LLMAttributes | None = None,
     data: Json | None = None,
     metadata: Json | None = None,
     model_name: str | None = None,

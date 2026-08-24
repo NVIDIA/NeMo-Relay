@@ -2871,11 +2871,7 @@ pub fn tool_call_execute_async(
         let pa_fn = pa_fn.clone();
         Box::pin(async move {
             let result = pa_fn.call(args).await?;
-            serde_json::from_value(result).map_err(|error| {
-                FlowError::Internal(format!(
-                    "tool execution callback must return ToolExecutionResult: {error}"
-                ))
-            })
+            callable::parse_tool_execution_result(result)
         })
     });
 

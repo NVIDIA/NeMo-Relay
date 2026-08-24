@@ -634,6 +634,10 @@ async def clear_async() -> None:
 
     Native teardown runs outside the Python event-loop thread so queued event
     sanitizers can finish before their plugin-owned registrations are removed.
+
+    Returns:
+        None: The active configuration has been cleared when the awaitable
+        resolves.
     """
     await _clear_plugin_configuration_async()
 

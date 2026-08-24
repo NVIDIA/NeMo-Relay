@@ -24,6 +24,9 @@ use nemo_relay::api::runtime::{
 };
 use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 
+pub(crate) const TOOL_EXECUTION_INTERCEPT_RESULT_ERROR: &str =
+    "ToolExecutionInterceptOutcome result must be the downstream payload, not ToolExecutionResult";
+
 /// Structured identity of the codec active during LLM sanitization.
 #[pyclass(name = "LlmCodecIdentity", frozen)]
 pub struct PyLlmCodecIdentity {
@@ -1237,6 +1240,11 @@ impl PyToolExecutionInterceptOutcome {
         pending_marks: Vec<PyPendingMarkSpec>,
         annotation: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
+        if result.is_instance_of::<PyToolExecutionResult>() {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                TOOL_EXECUTION_INTERCEPT_RESULT_ERROR,
+            ));
+        }
         Ok(Self {
             inner: ToolExecutionInterceptOutcome {
                 result: py_to_json(result)?,

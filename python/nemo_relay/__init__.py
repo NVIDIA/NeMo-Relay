@@ -83,7 +83,7 @@ import contextvars
 import typing
 from collections.abc import Callable as AbcCallable
 from contextlib import contextmanager
-from typing import AsyncIterator, Awaitable, Callable, Literal, Optional, TypeAlias, TypedDict
+from typing import AsyncIterator, Awaitable, Callable, Iterator, Literal, Optional, TypeAlias, TypedDict
 
 # Native bitflag classes exported at the top level for user code.
 # Native LLM request and normalized codec view types.
@@ -464,7 +464,12 @@ def create_scope_stack() -> ScopeStack:
 
 
 def capture_propagation_context() -> PropagationContext:
-    """Capture the current Relay causal parent for application-managed transport."""
+    """Capture the current Relay causal parent for application-managed transport.
+
+    Returns:
+        PropagationContext: Context carrying the current parent and root scope
+        identities for propagation to another execution boundary.
+    """
     get_scope_stack()
     if parent_uuid := _propagation_parent_var.get():
         return PropagationContext(parent_uuid, _propagation_root_var.get())
@@ -472,7 +477,16 @@ def capture_propagation_context() -> PropagationContext:
 
 
 def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationContext:
-    """Capture the current parent with an optional stable application session root."""
+    """Capture the current parent with an optional stable application session root.
+
+    Args:
+        root_uuid: Root identity to include in the propagated context. Pass
+            ``None`` to use Relay's current root identity.
+
+    Returns:
+        PropagationContext: Context carrying the current parent and selected
+        root identities.
+    """
     get_scope_stack()
     if parent_uuid := _propagation_parent_var.get():
         return PropagationContext(parent_uuid, root_uuid)
@@ -480,7 +494,11 @@ def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationC
 
 
 def capture_traceparent() -> str:
-    """Capture the current Relay context as a W3C ``traceparent`` value."""
+    """Capture the current Relay context as a W3C ``traceparent`` value.
+
+    Returns:
+        str: Encoded W3C traceparent value for the current Relay context.
+    """
     get_scope_stack()
     parent_uuid = _propagation_parent_var.get()
     if parent_uuid:
@@ -489,7 +507,16 @@ def capture_traceparent() -> str:
 
 
 def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeStack:
-    """Create an isolated stack seeded from a received propagation context."""
+    """Create an isolated stack seeded from a received propagation context.
+
+    Args:
+        context: Parent and root context received from another execution
+            boundary.
+
+    Returns:
+        ScopeStack: New isolated stack whose root retains the propagated
+        causal relationship.
+    """
     return _create_scope_stack_from_propagation(context)
 
 
@@ -538,8 +565,19 @@ def fork_asyncio_context() -> contextvars.Context:
 
 
 @contextmanager
-def use_scope_stack(stack: ScopeStack):
-    """Temporarily install ``stack`` in the current Python context."""
+def use_scope_stack(stack: ScopeStack) -> Iterator[ScopeStack]:
+    """Temporarily install ``stack`` in the current Python context.
+
+    Args:
+        stack: Scope stack to make current for the body of the ``with`` block.
+
+    Yields:
+        ScopeStack: The installed scope stack.
+
+    Returns:
+        Iterator[ScopeStack]: Context-manager iterator that restores the prior
+        context after the block exits.
+    """
     current_stack = _scope_stack_var.get(None)
     if current_stack is not None:
         _sync_thread_scope_stack(current_stack)

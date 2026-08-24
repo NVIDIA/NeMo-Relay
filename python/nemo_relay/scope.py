@@ -256,6 +256,10 @@ def scope(
         ScopeHandle: Handle for the scope that remains active inside the
         ``with`` block.
 
+    Returns:
+        Iterator[ScopeHandle]: Context-manager iterator that closes the scope
+        when the ``with`` block exits.
+
     Notes:
         The scope is always popped when the ``with`` block exits, even if the
         body raises an exception. Timestamp arguments must be timezone-aware

@@ -1873,7 +1873,7 @@ def llm_call_end(
 def llm_call_execute(
     name: str,
     request: LLMRequest,
-    func: Callable[[LLMRequest], Awaitable[_Json]],
+    func: Callable[[LLMRequest], _Json | Awaitable[_Json]],
     **kwargs: object,
 ) -> Awaitable[_Json]:
     """Execute a non-streaming LLM call through native middleware.
@@ -1902,7 +1902,7 @@ def llm_stream_call_execute(
     collector: Callable[[_Json], None],
     finalizer: Callable[[], _Json],
     **kwargs: object,
-) -> LlmStream:
+) -> Awaitable[LlmStream]:
     """Execute a streaming LLM call through native middleware.
 
     Args:
