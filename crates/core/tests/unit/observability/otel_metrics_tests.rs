@@ -331,6 +331,34 @@ fn metric_delivery_state_survives_exporter_error_wrapping() {
 }
 
 #[test]
+fn metric_export_failure_logging_is_independent_of_diagnostic_capacity() {
+    let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
+    for index in 0..32 {
+        runtime_diagnostics.record(
+            format!("test.diagnostic.{index}"),
+            "diagnostic capacity filler".to_string(),
+            1,
+        );
+    }
+    let diagnostics = MetricDeliveryDiagnostics::new(
+        "https://collector.example/v1/metrics".to_string(),
+        runtime_diagnostics.clone(),
+    );
+
+    assert_eq!(
+        diagnostics.record_export_failure(&"collector unavailable"),
+        1
+    );
+    assert!(should_relog_runtime_diagnostic(1));
+    assert!(
+        runtime_diagnostics
+            .snapshot()
+            .get("otel.metrics_export_failed")
+            .is_none()
+    );
+}
+
+#[test]
 fn valid_envelope_records_counter_gauge_and_negative_histogram() {
     let (mut processor, exporter, provider) = processor();
     let mut counter = measurement(
