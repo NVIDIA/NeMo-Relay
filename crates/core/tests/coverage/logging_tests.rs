@@ -18,7 +18,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
-static LOGGING_TEST_LOCK: Mutex<()> = Mutex::new(());
 const FOREIGN_LOGGER_CHILD_ENV: &str = "NEMO_RELAY_TEST_FOREIGN_LOGGER_CHILD";
 
 struct ForeignLogger;
@@ -89,9 +88,7 @@ impl SpanExporter for BlockingSpanExporter {
 }
 
 fn lock_logging_tests() -> MutexGuard<'static, ()> {
-    LOGGING_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
+    super::lock_test_logging()
 }
 
 struct LoggingEnvScope {

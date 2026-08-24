@@ -5,8 +5,13 @@
 //!
 //! Implements [`LlmCodec`] (request decode/encode) and [`LlmResponseCodec`]
 //! (response decode) for the Gemini generateContent API format.
+//!
+//! Gemini function-call IDs are normalized as tool-call IDs and echoed in
+//! `functionResponse.id`. For legacy responses that omit an ID, the codec uses
+//! the function name only when it is unambiguous; duplicate effective IDs are
+//! rejected because their function responses cannot be correlated safely.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
 
@@ -231,6 +236,20 @@ fn parse_optional_id(obj: &serde_json::Map<String, Json>, context: &str) -> Resu
     }
 }
 
+/// Reject an ID that would make function-call correlation ambiguous in one Gemini content item.
+fn ensure_unique_gemini_function_id(
+    seen_ids: &mut HashSet<String>,
+    id: &str,
+    part_kind: &str,
+) -> Result<()> {
+    if seen_ids.insert(id.to_string()) {
+        return Ok(());
+    }
+    Err(FlowError::InvalidArgument(format!(
+        "Gemini {part_kind} parts have duplicate effective id '{id}'; distinct ids are required to correlate function responses"
+    )))
+}
+
 fn is_gemini_part_data_key(key: &str) -> bool {
     matches!(
         key,
@@ -417,6 +436,7 @@ fn extract_parts_message_content(parts: &[Json]) -> Result<Option<MessageContent
 /// parts are skipped; callers must validate text+functionCall conflicts separately.
 fn extract_parts_tool_calls(parts: &[Json]) -> Result<Option<Vec<ResponseToolCall>>> {
     let mut calls: Vec<ResponseToolCall> = Vec::new();
+    let mut seen_ids = HashSet::new();
     for p in parts {
         let Some(fc) = p.get("functionCall") else {
             continue;
@@ -446,6 +466,7 @@ fn extract_parts_tool_calls(parts: &[Json]) -> Result<Option<Vec<ResponseToolCal
 
         let id =
             parse_optional_id(fc_obj, "response functionCall")?.unwrap_or_else(|| name.clone());
+        ensure_unique_gemini_function_id(&mut seen_ids, &id, "functionCall")?;
 
         let arguments = match fc_obj.get("args") {
             None => Json::Object(Default::default()),
@@ -728,6 +749,7 @@ fn gemini_function_response_messages(parts: &[Json], responses: &[&Json]) -> Res
             "Gemini contents item must not mix functionResponse with visible/native parts".into(),
         ));
     }
+    let mut seen_ids = HashSet::new();
     responses
         .iter()
         .map(|part| {
@@ -741,6 +763,7 @@ fn gemini_function_response_messages(parts: &[Json], responses: &[&Json]) -> Res
                 .unwrap()
                 .to_string();
             let id = parse_optional_id(response, "functionResponse")?.unwrap_or(name);
+            ensure_unique_gemini_function_id(&mut seen_ids, &id, "functionResponse")?;
             Ok(Message::Tool {
                 content: gemini_function_response_to_message_content(
                     part.get("functionResponse").unwrap(),
@@ -755,12 +778,14 @@ fn gemini_function_call_messages(
     content: Option<MessageContent>,
     calls: &[&Json],
 ) -> Result<Vec<Message>> {
+    let mut seen_ids = HashSet::new();
     let tool_calls = calls
         .iter()
         .map(|part| {
             let call = part.get("functionCall").and_then(Json::as_object).unwrap();
             let name = call.get("name").and_then(Json::as_str).unwrap().to_string();
             let id = parse_optional_id(call, "functionCall")?.unwrap_or_else(|| name.clone());
+            ensure_unique_gemini_function_id(&mut seen_ids, &id, "functionCall")?;
             let args = call
                 .get("args")
                 .cloned()

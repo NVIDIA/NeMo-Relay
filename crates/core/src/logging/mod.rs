@@ -35,9 +35,18 @@ pub(crate) use format::format_event_for_test;
 static LOGGER_LIFECYCLE_LOCK: Mutex<()> = Mutex::new(());
 static DEFAULT_LOGGING_RUNTIME: Mutex<Option<LoggingRuntime>> = Mutex::new(None);
 static ACTIVE_RELAY_LOGGER: Mutex<Option<Weak<Logger>>> = Mutex::new(None);
+#[cfg(test)]
+static TEST_LOGGING_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock_logger_lifecycle() -> MutexGuard<'static, ()> {
     LOGGER_LIFECYCLE_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+#[cfg(test)]
+pub(crate) fn lock_test_logging() -> MutexGuard<'static, ()> {
+    TEST_LOGGING_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner())
 }

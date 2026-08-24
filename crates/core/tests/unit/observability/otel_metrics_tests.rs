@@ -7,6 +7,9 @@ use super::*;
 use crate::api::event::{
     BaseEvent, DataSchema, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MarkEvent,
 };
+use crate::logging::{
+    FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
+};
 use crate::observability::otel_logs::{OpenTelemetryLogConfig, OpenTelemetryLogSubscriber};
 use opentelemetry_proto::tonic::collector::logs::v1::logs_service_server::{
     LogsService, LogsServiceServer,
@@ -20,7 +23,7 @@ use opentelemetry_proto::tonic::collector::metrics::v1::metrics_service_server::
 use opentelemetry_proto::tonic::collector::metrics::v1::{
     ExportMetricsServiceRequest, ExportMetricsServiceResponse,
 };
-use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
+use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader};
 use prost::Message;
 use serde_json::json;
@@ -86,6 +89,29 @@ fn processor() -> (
         exporter,
         provider,
     )
+}
+
+#[derive(Debug)]
+struct FailingMetricExporter;
+
+impl PushMetricExporter for FailingMetricExporter {
+    async fn export(&self, _metrics: &ResourceMetrics) -> OTelSdkResult {
+        Err(opentelemetry_sdk::error::OTelSdkError::InternalFailure(
+            "collector unavailable".to_string(),
+        ))
+    }
+
+    fn force_flush(&self) -> OTelSdkResult {
+        Ok(())
+    }
+
+    fn shutdown_with_timeout(&self, _timeout: Duration) -> OTelSdkResult {
+        Ok(())
+    }
+
+    fn temporality(&self) -> Temporality {
+        Temporality::Cumulative
+    }
 }
 
 #[test]
@@ -327,6 +353,66 @@ fn metric_delivery_state_survives_exporter_error_wrapping() {
     assert_eq!(
         diagnostics.failure_summary().as_deref(),
         Some("otel.metrics_export_failed (2)")
+    );
+}
+
+#[test]
+fn metric_export_failure_logging_is_independent_of_diagnostic_capacity() {
+    let _logging_lock = crate::logging::lock_test_logging();
+    let temporary_directory = tempfile::tempdir().unwrap();
+    let log_path = temporary_directory.path().join("metric-export.log.jsonl");
+    let runtime = init_logging(&LoggingConfig {
+        level: LogLevel::Error,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: log_path.clone(),
+            level: LogLevel::Error,
+            format: LogFormat::Jsonl,
+            ..FileLogSinkConfig::default()
+        })],
+        ..LoggingConfig::default()
+    })
+    .unwrap();
+    let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
+    for index in 0..32 {
+        runtime_diagnostics.record(
+            format!("test.diagnostic.{index}"),
+            "diagnostic capacity filler".to_string(),
+            1,
+        );
+    }
+    let exporter = DiagnosticMetricExporter {
+        inner: FailingMetricExporter,
+        diagnostics: Arc::new(MetricDeliveryDiagnostics::new(
+            "https://collector.example/v1/metrics".to_string(),
+            runtime_diagnostics.clone(),
+        )),
+    };
+
+    let result = futures::executor::block_on(exporter.export(&ResourceMetrics::default()));
+    assert!(result.is_err());
+    runtime.logger.flush();
+    let mut contents = String::new();
+    for _ in 0..50 {
+        contents = std::fs::read_to_string(&log_path).unwrap_or_default();
+        if contents.contains("otel_metrics_export_failed") {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    runtime.shutdown();
+
+    let record: serde_json::Value = contents
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .find(|record: &serde_json::Value| record["event"] == "otel_metrics_export_failed")
+        .expect("metric export failure error record");
+    assert_eq!(record["level"], "error");
+    assert_eq!(record["target"], "nemo_relay.observability");
+    assert!(
+        runtime_diagnostics
+            .snapshot()
+            .get("otel.metrics_export_failed")
+            .is_none()
     );
 }
 

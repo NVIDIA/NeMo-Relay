@@ -480,23 +480,34 @@ impl MetricDeliveryDiagnostics {
         let failures = self.export_failures.load(Ordering::Relaxed);
         (failures > 0).then(|| format!("otel.metrics_export_failed ({failures})"))
     }
+
+    fn record_export_failure(&self, error: &impl std::fmt::Display) -> u64 {
+        let failure_count = self.export_failures.fetch_add(1, Ordering::Relaxed) + 1;
+        self.runtime_diagnostics.record(
+            "otel.metrics_export_failed",
+            format!(
+                "OpenTelemetry metric export to endpoint {} failed: {error}",
+                self.endpoint
+            ),
+            1,
+        );
+        failure_count
+    }
 }
 
 impl<E: PushMetricExporter> PushMetricExporter for DiagnosticMetricExporter<E> {
     async fn export(&self, metrics: &ResourceMetrics) -> OTelSdkResult {
         let result = self.inner.export(metrics).await;
         if let Err(error) = &result {
-            self.diagnostics
-                .export_failures
-                .fetch_add(1, Ordering::Relaxed);
-            self.diagnostics.runtime_diagnostics.record(
-                "otel.metrics_export_failed",
-                format!(
-                    "OpenTelemetry metric export to endpoint {} failed: {error}",
-                    self.diagnostics.endpoint
-                ),
-                1,
-            );
+            let failure_count = self.diagnostics.record_export_failure(error);
+            if should_relog_runtime_diagnostic(failure_count) {
+                log::error!(
+                    target: "nemo_relay.observability",
+                    event = "otel_metrics_export_failed",
+                    endpoint = self.diagnostics.endpoint.as_str();
+                    "OpenTelemetry metric export failed: {error}"
+                );
+            }
         }
         result
     }
