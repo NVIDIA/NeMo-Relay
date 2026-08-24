@@ -3466,7 +3466,7 @@ fn completed_span_context_ttl_expires_out_of_order_completed_contexts() {
 }
 
 #[test]
-fn process_start_removes_completed_span_order_entry() {
+fn process_start_removes_completed_span_expiry_index_entry() {
     let (provider, _exporter) = make_provider();
     let mut processor = crate::observability::otel::OtelEventProcessor::new_openinference(
         provider,
@@ -3491,9 +3491,9 @@ fn process_start_removes_completed_span_order_entry() {
     assert!(processor.completed_span_contexts.contains_key(&tool_uuid));
     assert_eq!(
         processor
-            .completed_span_order
-            .iter()
-            .filter(|uuid| **uuid == tool_uuid)
+            .completed_span_expiry_index
+            .values()
+            .filter(|uuids| uuids.contains(&tool_uuid))
             .count(),
         1
     );
@@ -3506,7 +3506,12 @@ fn process_start_removes_completed_span_order_entry() {
         None,
     ));
     assert!(!processor.completed_span_contexts.contains_key(&tool_uuid));
-    assert!(!processor.completed_span_order.contains(&tool_uuid));
+    assert!(
+        processor
+            .completed_span_expiry_index
+            .values()
+            .all(|uuids| !uuids.contains(&tool_uuid))
+    );
 
     processor.process(&make_end_event(
         tool_uuid,
@@ -3518,9 +3523,9 @@ fn process_start_removes_completed_span_order_entry() {
     assert!(processor.completed_span_contexts.contains_key(&tool_uuid));
     assert_eq!(
         processor
-            .completed_span_order
-            .iter()
-            .filter(|uuid| **uuid == tool_uuid)
+            .completed_span_expiry_index
+            .values()
+            .filter(|uuids| uuids.contains(&tool_uuid))
             .count(),
         1
     );

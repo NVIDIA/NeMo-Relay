@@ -17,7 +17,7 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -1160,7 +1160,7 @@ pub(super) struct ActiveSpan {
 pub(super) struct OtelEventProcessor {
     pub(super) active_spans: HashMap<Uuid, ActiveSpan>,
     pub(super) completed_span_contexts: HashMap<Uuid, CompletedSpanContext>,
-    pub(super) completed_span_order: VecDeque<Uuid>,
+    pub(super) completed_span_expiry_index: BTreeMap<DateTime<Utc>, HashSet<Uuid>>,
     #[cfg(test)]
     provider: SdkTracerProvider,
     tracer: SdkTracer,
@@ -1327,7 +1327,7 @@ impl OtelEventProcessor {
         Self {
             active_spans: HashMap::new(),
             completed_span_contexts: HashMap::new(),
-            completed_span_order: VecDeque::new(),
+            completed_span_expiry_index: BTreeMap::new(),
             #[cfg(test)]
             provider,
             tracer,
@@ -1728,9 +1728,22 @@ impl OtelEventProcessor {
     }
 
     fn remove_completed_span_context(&mut self, uuid: Uuid) {
-        self.completed_span_contexts.remove(&uuid);
-        self.completed_span_order
-            .retain(|completed_uuid| *completed_uuid != uuid);
+        if let Some(context) = self.completed_span_contexts.remove(&uuid) {
+            self.remove_completed_span_expiry_index_entry(uuid, context.closed_at);
+        }
+    }
+
+    fn remove_completed_span_expiry_index_entry(&mut self, uuid: Uuid, closed_at: DateTime<Utc>) {
+        let remove_bucket = self
+            .completed_span_expiry_index
+            .get_mut(&closed_at)
+            .is_some_and(|uuids| {
+                uuids.remove(&uuid);
+                uuids.is_empty()
+            });
+        if remove_bucket {
+            self.completed_span_expiry_index.remove(&closed_at);
+        }
     }
 
     fn record_completed_span_context(
@@ -1739,39 +1752,42 @@ impl OtelEventProcessor {
         closed_at: DateTime<Utc>,
         span_context: SpanContext,
     ) {
-        if self
-            .completed_span_contexts
-            .insert(
-                uuid,
-                CompletedSpanContext {
-                    closed_at,
-                    span_context,
-                },
-            )
-            .is_none()
-        {
-            self.completed_span_order.push_back(uuid);
+        if let Some(previous) = self.completed_span_contexts.insert(
+            uuid,
+            CompletedSpanContext {
+                closed_at,
+                span_context,
+            },
+        ) {
+            self.remove_completed_span_expiry_index_entry(uuid, previous.closed_at);
         }
+        self.completed_span_expiry_index
+            .entry(closed_at)
+            .or_default()
+            .insert(uuid);
     }
 
     fn expire_completed_span_contexts(&mut self, event_timestamp: DateTime<Utc>) {
-        let expired_uuids = self
-            .completed_span_contexts
-            .iter()
-            .filter_map(|(uuid, context)| {
-                event_timestamp
-                    .signed_duration_since(context.closed_at)
-                    .to_std()
-                    .is_ok_and(|age| age > self.completed_span_context_ttl)
-                    .then_some(*uuid)
-            })
-            .collect::<Vec<_>>();
-        let expired_count = u64::try_from(expired_uuids.len()).unwrap_or(u64::MAX);
-        for uuid in expired_uuids {
-            self.completed_span_contexts.remove(&uuid);
+        let mut expired_count = 0_u64;
+        while let Some((closed_at, _)) = self.completed_span_expiry_index.first_key_value() {
+            let closed_at = closed_at.to_owned();
+            let expired = event_timestamp
+                .signed_duration_since(closed_at)
+                .to_std()
+                .is_ok_and(|age| age > self.completed_span_context_ttl);
+            if !expired {
+                break;
+            }
+            let uuids = self
+                .completed_span_expiry_index
+                .remove(&closed_at)
+                .expect("expiry index entry must exist after lookup");
+            for uuid in uuids {
+                if self.completed_span_contexts.remove(&uuid).is_some() {
+                    expired_count = expired_count.saturating_add(1);
+                }
+            }
         }
-        self.completed_span_order
-            .retain(|uuid| self.completed_span_contexts.contains_key(uuid));
         if expired_count == 0 {
             return;
         }
