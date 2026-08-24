@@ -24,6 +24,10 @@ use crate::codec::response::{
 };
 use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
+use crate::observability::otel_logs::{OpenTelemetryLogConfig, OpenTelemetryLogSubscriber};
+use crate::observability::otel_metrics::{
+    OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber,
+};
 use crate::observability::{relay_span_id, relay_trace_id};
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry_sdk::trace::{BatchConfigBuilder, InMemorySpanExporterBuilder};
@@ -72,6 +76,77 @@ fn provider_errors_identify_their_telemetry_signal() {
     ] {
         assert_eq!(error.to_string(), expected);
     }
+}
+
+#[test]
+fn shutdown_is_idempotent_for_all_otlp_subscribers() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+
+    let trace = OpenTelemetrySubscriber::from_tracer_provider(
+        SdkTracerProvider::builder().build(),
+        "shutdown-idempotency-test",
+    );
+    trace.shutdown().unwrap();
+    trace.shutdown().unwrap();
+
+    let logs = OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new(
+        "http://127.0.0.1:4318/v1/logs",
+    ))
+    .unwrap();
+    logs.shutdown().unwrap();
+    logs.shutdown().unwrap();
+    assert!(logs.force_flush().is_err());
+
+    let metrics = OpenTelemetryMetricSubscriber::new(OpenTelemetryMetricConfig::new(
+        "http://127.0.0.1:4318/v1/metrics",
+    ))
+    .unwrap();
+    metrics.shutdown().unwrap();
+    metrics.shutdown().unwrap();
+    assert!(metrics.force_flush().is_err());
+}
+
+#[test]
+fn shutdown_normalization_preserves_provider_failures() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+
+    assert!(normalize_shutdown_result(Err(OTelSdkError::AlreadyShutdown)).is_ok());
+
+    let error = normalize_shutdown_result(Err(OTelSdkError::InternalFailure(
+        "collector unavailable".to_string(),
+    )))
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        OTelSdkError::InternalFailure(message) if message == "collector unavailable"
+    ));
+
+    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
+        AlwaysFailingSpanExporter,
+        "https://collector.example/v1/traces".to_string(),
+        SignalRuntimeDiagnostics::new(Some("opentelemetry.traces[0].endpoint".to_string())),
+        BatchConfigBuilder::default()
+            .with_max_export_batch_size(1)
+            .build(),
+    );
+    let provider = SdkTracerProvider::builder()
+        .with_span_processor(processor)
+        .build();
+    provider
+        .tracer("first-shutdown-failure-test")
+        .start("export-fails")
+        .end();
+    provider.force_flush().unwrap_err();
+    let subscriber =
+        OpenTelemetrySubscriber::from_tracer_provider(provider, "first-shutdown-failure-test");
+
+    let error = subscriber.shutdown().unwrap_err();
+    assert!(matches!(
+        error,
+        OpenTelemetryError::TraceProvider(message)
+            if message.contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER)
+    ));
+    subscriber.shutdown().unwrap();
 }
 
 struct RestoreThreadScopeStackGuard(ThreadScopeStackBinding);
@@ -229,6 +304,17 @@ impl SpanExporter for FailingThenRecoveringSpanExporter {
         } else {
             Ok(())
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct AlwaysFailingSpanExporter;
+
+impl SpanExporter for AlwaysFailingSpanExporter {
+    async fn export(&self, _batch: Vec<SpanData>) -> OTelSdkResult {
+        Err(OTelSdkError::InternalFailure(
+            "collector unavailable".to_string(),
+        ))
     }
 }
 

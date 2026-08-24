@@ -113,6 +113,13 @@ fn with_relay_ids<T>(uuid: Uuid, build: impl FnOnce() -> T) -> T {
 /// Result type for the OpenTelemetry subscriber crate.
 pub type Result<T> = std::result::Result<T, OpenTelemetryError>;
 
+pub(super) fn normalize_shutdown_result(result: OTelSdkResult) -> OTelSdkResult {
+    match result {
+        Err(OTelSdkError::AlreadyShutdown) => Ok(()),
+        result => result,
+    }
+}
+
 /// Errors produced while configuring or operating the OpenTelemetry subscriber.
 #[derive(Debug, thiserror::Error)]
 pub enum OpenTelemetryError {
@@ -717,12 +724,8 @@ impl OpenTelemetrySubscriber {
     }
 
     pub(crate) fn shutdown_provider(&self) -> Result<()> {
-        let result = self
-            .inner
-            .provider
-            .shutdown()
-            .map_err(|error| OpenTelemetryError::TraceProvider(error.to_string()));
-        if result.is_ok() {
+        let provider_result = self.inner.provider.shutdown();
+        if provider_result.is_ok() {
             log::info!(
                 target: "nemo_relay.observability",
                 event = "exporter_shutdown",
@@ -730,7 +733,8 @@ impl OpenTelemetrySubscriber {
                 "OpenTelemetry exporter shut down"
             );
         }
-        result
+        normalize_shutdown_result(provider_result)
+            .map_err(|error| OpenTelemetryError::TraceProvider(error.to_string()))
     }
 }
 
