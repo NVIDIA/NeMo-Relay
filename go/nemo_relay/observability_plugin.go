@@ -65,24 +65,25 @@ type ObservabilityOpenTelemetryMetricConfig struct {
 
 // ObservabilityOpenTelemetryEndpointConfig configures one typed OTLP destination.
 type ObservabilityOpenTelemetryEndpointConfig struct {
-	Type                    OpenTelemetryType      `json:"type"`
-	Endpoint                string                 `json:"endpoint"`
-	MarkProjection          string                 `json:"mark_projection,omitempty"`
-	MarkExcludeNames        []string               `json:"mark_exclude_names,omitempty"`
-	AttributeMappings       []OtlpAttributeMapping `json:"attribute_mappings,omitempty"`
-	PromoteMetadataPrefixes []string               `json:"promote_metadata_prefixes,omitempty"`
-	Transport               string                 `json:"transport,omitempty"`
-	Headers                 map[string]string      `json:"headers,omitempty"`
-	HeaderEnv               map[string]string      `json:"header_env,omitempty"`
-	ResourceAttributes      map[string]string      `json:"resource_attributes,omitempty"`
-	ServiceName             string                 `json:"service_name,omitempty"`
-	ServiceNamespace        string                 `json:"service_namespace,omitempty"`
-	ServiceVersion          string                 `json:"service_version,omitempty"`
-	InstrumentationScope    string                 `json:"instrumentation_scope,omitempty"`
-	TimeoutMillis           uint64                 `json:"timeout_millis,omitempty"`
-	MaxQueueSize            *uint64                `json:"max_queue_size,omitempty"`
-	MaxExportBatchSize      *uint64                `json:"max_export_batch_size,omitempty"`
-	ScheduledDelayMillis    *uint64                `json:"scheduled_delay_millis,omitempty"`
+	Type                          OpenTelemetryType      `json:"type"`
+	Endpoint                      string                 `json:"endpoint"`
+	MarkProjection                string                 `json:"mark_projection,omitempty"`
+	MarkExcludeNames              []string               `json:"mark_exclude_names,omitempty"`
+	AttributeMappings             []OtlpAttributeMapping `json:"attribute_mappings,omitempty"`
+	PromoteMetadataPrefixes       []string               `json:"promote_metadata_prefixes,omitempty"`
+	Transport                     string                 `json:"transport,omitempty"`
+	Headers                       map[string]string      `json:"headers,omitempty"`
+	HeaderEnv                     map[string]string      `json:"header_env,omitempty"`
+	ResourceAttributes            map[string]string      `json:"resource_attributes,omitempty"`
+	ServiceName                   string                 `json:"service_name,omitempty"`
+	ServiceNamespace              string                 `json:"service_namespace,omitempty"`
+	ServiceVersion                string                 `json:"service_version,omitempty"`
+	InstrumentationScope          string                 `json:"instrumentation_scope,omitempty"`
+	TimeoutMillis                 uint64                 `json:"timeout_millis,omitempty"`
+	MaxQueueSize                  *uint64                `json:"max_queue_size,omitempty"`
+	MaxExportBatchSize            *uint64                `json:"max_export_batch_size,omitempty"`
+	ScheduledDelayMillis          *uint64                `json:"scheduled_delay_millis,omitempty"`
+	CompletedSpanContextTTLMillis *uint64                `json:"completed_span_context_ttl_millis,omitempty"`
 }
 
 // ObservabilityAtofConfig configures filesystem-backed raw ATOF JSONL export.

@@ -363,6 +363,9 @@ pub struct OpenTelemetryEndpointConfig {
     /// Maximum delay before exporting a non-full batch, in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scheduled_delay_millis: Option<u64>,
+    /// How long completed scopes retain trace context for late marks, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_span_context_ttl_millis: Option<u64>,
 }
 
 /// Multi-sink ATOF JSONL exporter config.
@@ -755,6 +758,12 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
                 otel_editor_field("max_export_batch_size", EditorFieldKind::Integer, &[], true),
                 otel_editor_field(
                     "scheduled_delay_millis",
+                    EditorFieldKind::Integer,
+                    &[],
+                    true,
+                ),
+                otel_editor_field(
+                    "completed_span_context_ttl_millis",
                     EditorFieldKind::Integer,
                     &[],
                     true,
@@ -3162,6 +3171,11 @@ fn build_otel_config(
     if let Some(scheduled_delay_millis) = section.scheduled_delay_millis {
         config = config.with_scheduled_delay(Duration::from_millis(scheduled_delay_millis));
     }
+    if let Some(completed_span_context_ttl_millis) = section.completed_span_context_ttl_millis {
+        config = config.with_completed_span_context_ttl(Duration::from_millis(
+            completed_span_context_ttl_millis,
+        ));
+    }
     if let Some(namespace) = section.service_namespace {
         config = config.with_service_namespace(namespace);
     }
@@ -3195,6 +3209,11 @@ fn validate_otel_batch_config(
     if section.scheduled_delay_millis == Some(0) {
         return Err(PluginError::InvalidConfig(format!(
             "OpenTelemetry endpoints[{index}].scheduled_delay_millis must be greater than 0"
+        )));
+    }
+    if section.completed_span_context_ttl_millis == Some(0) {
+        return Err(PluginError::InvalidConfig(format!(
+            "OpenTelemetry endpoints[{index}].completed_span_context_ttl_millis must be greater than 0"
         )));
     }
     if matches!(
@@ -3532,6 +3551,7 @@ fn validate_opentelemetry_endpoint_fields(
         "max_queue_size",
         "max_export_batch_size",
         "scheduled_delay_millis",
+        "completed_span_context_ttl_millis",
     ];
     const REMOVED: &[&str] = &["semantic_selector", "capture_content"];
     let Some(endpoints) = opentelemetry
@@ -4041,6 +4061,10 @@ fn validate_opentelemetry_batch_config(
         (
             "scheduled_delay_millis",
             endpoint.scheduled_delay_millis == Some(0),
+        ),
+        (
+            "completed_span_context_ttl_millis",
+            endpoint.completed_span_context_ttl_millis == Some(0),
         ),
     ] {
         if is_zero {

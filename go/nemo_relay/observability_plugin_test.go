@@ -81,9 +81,11 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	maxQueueSize := uint64(4096)
 	maxExportBatchSize := uint64(256)
 	scheduledDelayMillis := uint64(750)
+	completedSpanContextTTLMillis := uint64(60000)
 	otel.Endpoints[0].MaxQueueSize = &maxQueueSize
 	otel.Endpoints[0].MaxExportBatchSize = &maxExportBatchSize
 	otel.Endpoints[0].ScheduledDelayMillis = &scheduledDelayMillis
+	otel.Endpoints[0].CompletedSpanContextTTLMillis = &completedSpanContextTTLMillis
 	logs := NewObservabilityOpenTelemetryLogConfig()
 	logs.Enabled = true
 	metrics := NewObservabilityOpenTelemetryMetricConfig()
@@ -171,7 +173,8 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 	}
 	if otelEndpoints[0].(map[string]any)["max_queue_size"] != float64(4096) ||
 		otelEndpoints[0].(map[string]any)["max_export_batch_size"] != float64(256) ||
-		otelEndpoints[0].(map[string]any)["scheduled_delay_millis"] != float64(750) {
+		otelEndpoints[0].(map[string]any)["scheduled_delay_millis"] != float64(750) ||
+		otelEndpoints[0].(map[string]any)["completed_span_context_ttl_millis"] != float64(60000) {
 		t.Fatalf("expected OpenTelemetry batch settings in serialized config: %#v", wrapped.Config)
 	}
 	otelConfig := wrapped.Config["opentelemetry"].(map[string]any)
@@ -240,11 +243,12 @@ func TestObservabilityOpenTelemetryEndpointPreservesExplicitZeroBatchSettings(t 
 	config.MaxQueueSize = &zero
 	config.MaxExportBatchSize = &zero
 	config.ScheduledDelayMillis = &zero
+	config.CompletedSpanContextTTLMillis = &zero
 	payload, err := json.Marshal(config)
 	if err != nil {
 		t.Fatalf("marshal OpenTelemetry endpoint config: %v", err)
 	}
-	for _, field := range []string{"max_queue_size", "max_export_batch_size", "scheduled_delay_millis"} {
+	for _, field := range []string{"max_queue_size", "max_export_batch_size", "scheduled_delay_millis", "completed_span_context_ttl_millis"} {
 		if !strings.Contains(string(payload), `"`+field+`":0`) {
 			t.Fatalf("expected explicit zero %s in serialized config: %s", field, payload)
 		}

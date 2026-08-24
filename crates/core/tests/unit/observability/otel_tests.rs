@@ -1483,6 +1483,7 @@ fn mapped_aliases_are_typed_and_cannot_replace_projected_span_fields() {
                 crate::observability::OtlpAttributeMapping::new("missing.source", "ignored.alias"),
             ],
             promote_metadata_prefixes: Vec::new(),
+            completed_span_context_ttl: DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
         },
     )
     .unwrap();

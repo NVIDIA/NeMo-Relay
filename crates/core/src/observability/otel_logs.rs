@@ -30,10 +30,7 @@ use crate::observability::{relay_span_id, relay_trace_id};
 use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
 
 use super::OpenTelemetryRuntimeDiagnostics;
-use super::otel::{
-    COMPLETED_SPAN_CONTEXT_LIMIT, OpenTelemetryError, OtlpTransport, Result,
-    normalize_shutdown_result,
-};
+use super::otel::{OpenTelemetryError, OtlpTransport, Result, normalize_shutdown_result};
 use super::otel_signal::{
     MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics, build_grpc_metadata,
     build_in_owned_runtime, classify_metric_mark, reject_signal_header_environment,
@@ -44,6 +41,7 @@ use super::otel_signal::{
 const DEFAULT_MAX_QUEUE_SIZE: usize = 2_048;
 const DEFAULT_MAX_EXPORT_BATCH_SIZE: usize = 512;
 const DEFAULT_SCHEDULED_DELAY: Duration = Duration::from_secs(1);
+const COMPLETED_SPAN_CONTEXT_LIMIT: usize = 4096;
 
 /// Configuration for an OTLP log subscriber.
 #[derive(Debug, Clone)]

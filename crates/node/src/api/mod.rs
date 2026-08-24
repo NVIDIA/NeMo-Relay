@@ -275,12 +275,17 @@ fn build_otel_config(
         .instrumentation_scope
         .unwrap_or_else(|| "opentelemetry".to_string());
     let timeout_millis = options.timeout_millis.unwrap_or(3_000);
+    let completed_span_context_ttl_millis =
+        options.completed_span_context_ttl_millis.unwrap_or(60_000);
 
     let mut config = nemo_relay::observability::otel::OpenTelemetryConfig::new(otel_type, endpoint)
         .with_transport(transport)
         .with_service_name(service_name)
         .with_instrumentation_scope(instrumentation_scope)
-        .with_timeout(std::time::Duration::from_millis(timeout_millis.into()));
+        .with_timeout(std::time::Duration::from_millis(timeout_millis.into()))
+        .with_completed_span_context_ttl(std::time::Duration::from_millis(
+            completed_span_context_ttl_millis.into(),
+        ));
 
     if let Some(namespace) = options.service_namespace {
         config = config.with_service_namespace(namespace);
@@ -5107,6 +5112,8 @@ pub struct OpenTelemetryConfig {
     pub instrumentation_scope: Option<String>,
     /// Export timeout in milliseconds. Defaults to `3000`.
     pub timeout_millis: Option<u32>,
+    /// Completed scope lineage retention in milliseconds. Defaults to `60000`.
+    pub completed_span_context_ttl_millis: Option<u32>,
     /// Mark projection for full and OpenInference exporters. Defaults to `"inherit"`.
     #[napi(ts_type = "\"inherit\" | \"event\" | \"tool\"")]
     pub mark_projection: Option<String>,

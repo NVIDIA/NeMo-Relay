@@ -85,6 +85,7 @@ export interface OpenTelemetryEndpointConfig {
   max_queue_size?: number;
   max_export_batch_size?: number;
   scheduled_delay_millis?: number;
+  completed_span_context_ttl_millis?: number;
 }
 
 export interface OpenTelemetrySignalEndpointConfig {

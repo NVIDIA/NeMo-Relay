@@ -1776,6 +1776,32 @@ NemoRelayStatus nemo_relay_otel_subscriber_create_with_projection_options(const 
  *
  * `promote_metadata_prefixes_json` is a JSON array of literal metadata prefixes,
  * such as `["nv."]`. Pass null to disable metadata promotion.
+ * `completed_span_context_ttl_millis` must be greater than zero.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_subscriber_create_with_projection_options_v3(const char *otel_type,
+                                                                             const char *transport,
+                                                                             const char *endpoint,
+                                                                             const char *headers_json,
+                                                                             const char *resource_attributes_json,
+                                                                             const char *service_name,
+                                                                             const char *service_namespace,
+                                                                             const char *service_version,
+                                                                             const char *instrumentation_scope,
+                                                                             uint64_t timeout_millis,
+                                                                             const char *mark_projection,
+                                                                             const char *mark_exclude_names_json,
+                                                                             const char *attribute_mappings_json,
+                                                                             const char *promote_metadata_prefixes_json,
+                                                                             uint64_t completed_span_context_ttl_millis,
+                                                                             struct FfiOpenTelemetrySubscriber **out);
+
+/**
+ * Creates one typed OpenTelemetry exporter subscriber with projection, metadata, and lineage controls.
+ *
+ * This compatibility entrypoint preserves the 60-second completed-context retention default.
  *
  * # Safety
  * Any non-null C strings must be valid and `out` must be non-null.

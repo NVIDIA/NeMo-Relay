@@ -111,6 +111,7 @@ class TestObservabilityConfigHelpers:
         assert endpoint.max_queue_size is None
         assert endpoint.max_export_batch_size is None
         assert endpoint.scheduled_delay_millis is None
+        assert endpoint.completed_span_context_ttl_millis is None
 
     def test_defaults_and_component_wrapper(self):
         assert AtofConfig().to_dict() == {"enabled": False}
@@ -131,6 +132,7 @@ class TestObservabilityConfigHelpers:
             max_queue_size=4096,
             max_export_batch_size=256,
             scheduled_delay_millis=750,
+            completed_span_context_ttl_millis=60_000,
         ).to_dict() == {
             "type": "gen_ai",
             "endpoint": "http://localhost:4318/v1/traces",
@@ -145,6 +147,7 @@ class TestObservabilityConfigHelpers:
             "max_queue_size": 4096,
             "max_export_batch_size": 256,
             "scheduled_delay_millis": 750,
+            "completed_span_context_ttl_millis": 60_000,
             "headers": {},
             "header_env": {"authorization": "OTEL_AUTHORIZATION"},
             "resource_attributes": {},

@@ -706,6 +706,7 @@ class TestOpenTelemetryTypes:
         assert config.transport == "http_binary"
         assert config.endpoint == "http://localhost:4318/v1/traces"
         assert config.service_name == "unknown_service"
+        assert config.completed_span_context_ttl_millis == 60_000
         assert config.instrumentation_scope == "opentelemetry"
         assert config.timeout_millis == 3000
         assert config.headers == {}
@@ -788,6 +789,11 @@ class TestOpenTelemetryTypes:
         blank_endpoint = OpenTelemetryConfig("full", " \t")
         with pytest.raises(ValueError, match="endpoint is required and must be nonblank"):
             OpenTelemetrySubscriber(blank_endpoint)
+
+        zero_ttl = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
+        zero_ttl.completed_span_context_ttl_millis = 0
+        with pytest.raises(RuntimeError, match="completed_span_context_ttl must be greater than 0"):
+            OpenTelemetrySubscriber(zero_ttl)
 
     def test_subscriber_exports_scope_and_mark_events_end_to_end(self):
         with _OtelCollector() as collector:

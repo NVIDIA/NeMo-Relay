@@ -833,6 +833,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
             max_queue_size: None,
             max_export_batch_size: None,
             scheduled_delay_millis: None,
+            completed_span_context_ttl_millis: None,
             headers: HashMap::new(),
             header_env: HashMap::new(),
             resource_attributes: HashMap::new(),
@@ -1021,6 +1022,7 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
             max_queue_size: None,
             max_export_batch_size: None,
             scheduled_delay_millis: None,
+            completed_span_context_ttl_millis: None,
             headers: HashMap::new(),
             header_env: HashMap::from([("authorization".to_string(), variable.to_string())]),
             resource_attributes: HashMap::new(),
@@ -1049,6 +1051,7 @@ fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
         max_queue_size: None,
         max_export_batch_size: None,
         scheduled_delay_millis: None,
+        completed_span_context_ttl_millis: None,
         headers: HashMap::new(),
         header_env: HashMap::new(),
         resource_attributes: HashMap::new(),
@@ -1057,6 +1060,26 @@ fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
         attribute_mappings: Vec::new(),
         promote_metadata_prefixes: Vec::new(),
     }
+}
+
+#[test]
+fn trace_endpoint_completed_context_ttl_is_applied_and_must_be_positive() {
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.completed_span_context_ttl_millis = Some(750);
+    let config = build_otel_config(0, endpoint).unwrap();
+    assert_eq!(
+        config.completed_span_context_ttl(),
+        Duration::from_millis(750)
+    );
+
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.completed_span_context_ttl_millis = Some(0);
+    assert!(
+        build_otel_config(0, endpoint)
+            .unwrap_err()
+            .to_string()
+            .contains("completed_span_context_ttl_millis must be greater than 0")
+    );
 }
 
 fn test_signal_endpoint() -> OpenTelemetrySignalEndpointConfig {

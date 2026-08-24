@@ -232,6 +232,7 @@ class OpenTelemetryEndpointConfig:
     max_queue_size: int | None = None
     max_export_batch_size: int | None = None
     scheduled_delay_millis: int | None = None
+    completed_span_context_ttl_millis: int | None = None
     promote_metadata_prefixes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> JsonObject:
@@ -253,6 +254,7 @@ class OpenTelemetryEndpointConfig:
                 "max_queue_size": self.max_queue_size,
                 "max_export_batch_size": self.max_export_batch_size,
                 "scheduled_delay_millis": self.scheduled_delay_millis,
+                "completed_span_context_ttl_millis": self.completed_span_context_ttl_millis,
                 "headers": self.headers,
                 "header_env": self.header_env,
                 "resource_attributes": self.resource_attributes,

@@ -283,6 +283,7 @@ extern void nemo_relay_atof_exporter_free(void*);
 extern int32_t nemo_relay_otel_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, void**);
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v2(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, void**);
+extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v3(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, uint64_t, void**);
 extern int32_t nemo_relay_otel_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_subscriber_force_flush(const void*);
@@ -2397,6 +2398,7 @@ type OpenTelemetryConfig struct {
 	ServiceVersion          string
 	InstrumentationScope    string
 	Timeout                 time.Duration
+	CompletedSpanContextTTL *time.Duration
 	MarkProjection          MarkProjection
 	MarkExcludeNames        []string
 	AttributeMappings       []OtlpAttributeMapping
@@ -2405,6 +2407,7 @@ type OpenTelemetryConfig struct {
 
 // NewOpenTelemetryConfig returns a typed config for the required endpoint.
 func NewOpenTelemetryConfig(otelType OpenTelemetryType, endpoint string) OpenTelemetryConfig {
+	completedSpanContextTTL := 60 * time.Second
 	return OpenTelemetryConfig{
 		Type:                    otelType,
 		Transport:               OpenTelemetryTransportHTTPBinary,
@@ -2414,6 +2417,7 @@ func NewOpenTelemetryConfig(otelType OpenTelemetryType, endpoint string) OpenTel
 		ServiceName:             "unknown_service",
 		InstrumentationScope:    "opentelemetry",
 		Timeout:                 3 * time.Second,
+		CompletedSpanContextTTL: &completedSpanContextTTL,
 		MarkProjection:          MarkProjectionInherit,
 		MarkExcludeNames:        []string{"llm.chunk"},
 		AttributeMappings:       []OtlpAttributeMapping{},
@@ -2463,6 +2467,16 @@ func normalizeOpenTelemetryConfig(config OpenTelemetryConfig) (OpenTelemetryConf
 	}
 	if config.Timeout == 0 {
 		config.Timeout = 3 * time.Second
+	}
+	if config.CompletedSpanContextTTL == nil {
+		completedSpanContextTTL := 60 * time.Second
+		config.CompletedSpanContextTTL = &completedSpanContextTTL
+	}
+	if *config.CompletedSpanContextTTL <= 0 {
+		return config, fmt.Errorf("completed span context TTL must be greater than 0")
+	}
+	if err := requireWholeMillisecondDuration("completed span context TTL", *config.CompletedSpanContextTTL); err != nil {
+		return config, err
 	}
 	if config.Headers == nil {
 		config.Headers = map[string]string{}
@@ -2554,7 +2568,7 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	defer C.free(unsafe.Pointer(cPromoteMetadataPrefixesJSON))
 
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_subscriber_create_with_projection_options_v2(
+	status := C.nemo_relay_otel_subscriber_create_with_projection_options_v3(
 		cType,
 		cTransport,
 		cEndpoint,
@@ -2569,6 +2583,7 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 		cMarkExcludeNamesJSON,
 		cAttributeMappingsJSON,
 		cPromoteMetadataPrefixesJSON,
+		C.uint64_t(*config.CompletedSpanContextTTL/time.Millisecond),
 		&ptr,
 	)
 	if err := checkStatus(status); err != nil {

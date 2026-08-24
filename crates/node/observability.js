@@ -68,6 +68,7 @@ function openTelemetryEndpoint(config) {
     service_name: 'unknown_service',
     instrumentation_scope: 'opentelemetry',
     timeout_millis: 3000,
+    completed_span_context_ttl_millis: 60000,
     headers: {},
     header_env: {},
     resource_attributes: {},
