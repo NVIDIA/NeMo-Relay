@@ -1994,14 +1994,55 @@ async fn unclassified_tool_calls_emit_uncacheable_bypasses_and_run_live() {
 
     let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
     let sink = Arc::clone(&captured);
+    let (bypass_tx, bypass_rx) = tokio::sync::mpsc::unbounded_channel();
+    let bypass_rx = Arc::new(Mutex::new(bypass_rx));
     register_subscriber(
         "response_cache_unclassified_tool_capture",
-        Arc::new(move |event: &Event| sink.lock().unwrap().push(event.clone())),
+        Arc::new(move |event: &Event| {
+            if event.name() == "response_cache"
+                && event
+                    .data()
+                    .and_then(|data| data.get("status"))
+                    .and_then(Json::as_str)
+                    == Some("bypass")
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("nemo_relay.response_cache.reason"))
+                    .and_then(Json::as_str)
+                    == Some("uncacheable")
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("nemo_relay.response_cache.surface"))
+                    .and_then(Json::as_str)
+                    == Some("tool")
+            {
+                let _ = bypass_tx.send(());
+            }
+            sink.lock().unwrap().push(event.clone());
+        }),
     )
     .unwrap();
 
     let calls = Arc::new(AtomicUsize::new(0));
-    let tool = counting_tool(Arc::clone(&calls), json!({"written": "pizza"}));
+    let tool: ToolExecutionNextFn = {
+        let calls = Arc::clone(&calls);
+        let bypass_rx = Arc::clone(&bypass_rx);
+        Arc::new(move |_args: Json| {
+            let calls = Arc::clone(&calls);
+            let bypass_rx = Arc::clone(&bypass_rx);
+            Box::pin(async move {
+                let mut bypass_rx = bypass_rx.lock().await;
+                let bypass_seen =
+                    tokio::time::timeout(Duration::from_secs(1), bypass_rx.recv()).await;
+                assert!(
+                    matches!(bypass_seen, Ok(Some(()))),
+                    "the matching bypass mark must be queued before the live callback starts"
+                );
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({"written": "pizza"}).into())
+            })
+        })
+    };
 
     tool_call("write_order", &tool, json!({"item": "pizza"})).await;
     tool_call("write_order", &tool, json!({"item": "pizza"})).await;
