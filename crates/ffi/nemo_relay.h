@@ -1892,6 +1892,33 @@ NemoRelayStatus nemo_relay_otel_log_subscriber_create(const char *transport,
                                                       struct FfiOpenTelemetryLogSubscriber **out);
 
 /**
+ * Creates an independently managed OpenTelemetry log subscriber with
+ * completed-scope lineage retention configured in milliseconds.
+ *
+ * Unlike `nemo_relay_otel_log_subscriber_create`, this version requires a
+ * positive `completed_span_context_ttl_millis`. The original constructor keeps
+ * its 60-second default for ABI compatibility.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_log_subscriber_create_v2(const char *transport,
+                                                         const char *endpoint,
+                                                         const char *headers_json,
+                                                         const char *resource_attributes_json,
+                                                         const char *service_name,
+                                                         const char *service_namespace,
+                                                         const char *service_version,
+                                                         const char *instrumentation_scope,
+                                                         uint64_t timeout_millis,
+                                                         const char *minimum_severity,
+                                                         uint64_t max_queue_size,
+                                                         uint64_t max_export_batch_size,
+                                                         uint64_t scheduled_delay_millis,
+                                                         uint64_t completed_span_context_ttl_millis,
+                                                         struct FfiOpenTelemetryLogSubscriber **out);
+
+/**
  * Registers an OpenTelemetry log subscriber globally.
  *
  * # Safety

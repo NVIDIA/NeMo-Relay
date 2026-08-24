@@ -97,6 +97,7 @@ describe('observability plugin helpers', () => {
       max_queue_size: 2048,
       max_export_batch_size: 512,
       scheduled_delay_millis: 1000,
+      completed_span_context_ttl_millis: 60000,
     });
     assert.deepEqual(observability.openTelemetryMetricConfig(), {
       enabled: false,

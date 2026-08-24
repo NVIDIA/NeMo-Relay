@@ -44,12 +44,13 @@ type ObservabilityOpenTelemetrySignalEndpointConfig struct {
 // ObservabilityOpenTelemetryLogConfig configures the plugin's OTLP log pipeline.
 // A nil Endpoints pointer derives log destinations from the trace endpoint list.
 type ObservabilityOpenTelemetryLogConfig struct {
-	Enabled              bool                                              `json:"enabled,omitempty"`
-	Endpoints            *[]ObservabilityOpenTelemetrySignalEndpointConfig `json:"endpoints,omitempty"`
-	MinimumSeverity      LogSeverity                                       `json:"minimum_severity,omitempty"`
-	MaxQueueSize         uint64                                            `json:"max_queue_size,omitempty"`
-	MaxExportBatchSize   uint64                                            `json:"max_export_batch_size,omitempty"`
-	ScheduledDelayMillis uint64                                            `json:"scheduled_delay_millis,omitempty"`
+	Enabled                       bool                                              `json:"enabled,omitempty"`
+	Endpoints                     *[]ObservabilityOpenTelemetrySignalEndpointConfig `json:"endpoints,omitempty"`
+	MinimumSeverity               LogSeverity                                       `json:"minimum_severity,omitempty"`
+	MaxQueueSize                  uint64                                            `json:"max_queue_size,omitempty"`
+	MaxExportBatchSize            uint64                                            `json:"max_export_batch_size,omitempty"`
+	ScheduledDelayMillis          uint64                                            `json:"scheduled_delay_millis,omitempty"`
+	CompletedSpanContextTTLMillis uint64                                            `json:"completed_span_context_ttl_millis,omitempty"`
 }
 
 // ObservabilityOpenTelemetryMetricConfig configures the plugin's OTLP metric pipeline.
@@ -311,10 +312,11 @@ func ObservabilityOpenTelemetrySignalEndpoints(endpoints ...ObservabilityOpenTel
 // NewObservabilityOpenTelemetryLogConfig returns disabled log settings with native defaults.
 func NewObservabilityOpenTelemetryLogConfig() ObservabilityOpenTelemetryLogConfig {
 	return ObservabilityOpenTelemetryLogConfig{
-		MinimumSeverity:      LogSeverityInfo,
-		MaxQueueSize:         2048,
-		MaxExportBatchSize:   512,
-		ScheduledDelayMillis: 1000,
+		MinimumSeverity:               LogSeverityInfo,
+		MaxQueueSize:                  2048,
+		MaxExportBatchSize:            512,
+		ScheduledDelayMillis:          1000,
+		CompletedSpanContextTTLMillis: 60000,
 	}
 }
 

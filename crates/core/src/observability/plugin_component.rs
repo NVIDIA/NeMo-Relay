@@ -248,6 +248,13 @@ pub struct OpenTelemetryLogSectionConfig {
     /// Maximum delay before exporting a non-full log batch.
     #[serde(default = "default_otel_log_scheduled_delay_millis")]
     pub scheduled_delay_millis: u64,
+    /// Positive duration for retaining completed scope context for late logs.
+    #[serde(default = "default_completed_span_context_ttl_millis")]
+    pub completed_span_context_ttl_millis: u64,
+}
+
+fn default_completed_span_context_ttl_millis() -> u64 {
+    60_000
 }
 
 impl Default for OpenTelemetryLogSectionConfig {
@@ -259,6 +266,7 @@ impl Default for OpenTelemetryLogSectionConfig {
             max_queue_size: default_otel_log_max_queue_size(),
             max_export_batch_size: default_otel_log_max_export_batch_size(),
             scheduled_delay_millis: default_otel_log_scheduled_delay_millis(),
+            completed_span_context_ttl_millis: default_completed_span_context_ttl_millis(),
         }
     }
 }
@@ -676,6 +684,7 @@ crate::editor_config! {
         max_queue_size => { label: "max_queue_size", kind: Integer },
         max_export_batch_size => { label: "max_export_batch_size", kind: Integer },
         scheduled_delay_millis => { label: "scheduled_delay_millis", kind: Integer },
+        completed_span_context_ttl_millis => { label: "completed_span_context_ttl_millis", kind: Integer },
     }
 }
 
@@ -2001,10 +2010,11 @@ fn build_opentelemetry_log_subscribers(
     if section.max_queue_size == 0
         || section.max_export_batch_size == 0
         || section.scheduled_delay_millis == 0
+        || section.completed_span_context_ttl_millis == 0
         || section.max_export_batch_size > section.max_queue_size
     {
         return Err(PluginError::InvalidConfig(
-            "OpenTelemetry logs batch settings must be positive and max_export_batch_size must not exceed max_queue_size".to_string(),
+            "OpenTelemetry logs batch settings and completed_span_context_ttl_millis must be positive and max_export_batch_size must not exceed max_queue_size".to_string(),
         ));
     }
     let mut subscribers = Vec::with_capacity(endpoints.len());
@@ -2109,7 +2119,10 @@ fn build_log_config(
         .with_minimum_severity(minimum_severity)
         .with_max_queue_size(section.max_queue_size)
         .with_max_export_batch_size(section.max_export_batch_size)
-        .with_scheduled_delay(Duration::from_millis(section.scheduled_delay_millis));
+        .with_scheduled_delay(Duration::from_millis(section.scheduled_delay_millis))
+        .with_completed_span_context_ttl(Duration::from_millis(
+            section.completed_span_context_ttl_millis,
+        ));
     config = apply_signal_common(config, &endpoint, headers);
     Ok(config)
 }

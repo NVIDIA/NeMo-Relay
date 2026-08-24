@@ -4154,6 +4154,7 @@ fn plugin_validation_reports_each_signal_specific_invalid_value() {
         max_queue_size: 0,
         max_export_batch_size: 1,
         scheduled_delay_millis: 0,
+        completed_span_context_ttl_millis: 0,
     };
     let metrics = OpenTelemetryMetricSectionConfig {
         enabled: true,

@@ -305,6 +305,7 @@ class OpenTelemetryLogSectionConfig:
     max_queue_size: int = 2048
     max_export_batch_size: int = 512
     scheduled_delay_millis: int = 1000
+    completed_span_context_ttl_millis: int = 60000
 
     def to_dict(self) -> JsonObject:
         """Serialize this log section to the canonical plugin shape."""

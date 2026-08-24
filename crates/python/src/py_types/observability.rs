@@ -782,6 +782,8 @@ pub struct PyOpenTelemetryLogConfig {
     pub(crate) max_export_batch_size: usize,
     #[pyo3(get, set)]
     pub(crate) scheduled_delay_millis: u64,
+    #[pyo3(get, set)]
+    pub(crate) completed_span_context_ttl_millis: u64,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) resource_attributes: HashMap<String, String>,
 }
@@ -801,7 +803,10 @@ impl PyOpenTelemetryLogConfig {
         .with_minimum_severity(self.minimum_severity.into())
         .with_max_queue_size(self.max_queue_size)
         .with_max_export_batch_size(self.max_export_batch_size)
-        .with_scheduled_delay(Duration::from_millis(self.scheduled_delay_millis));
+        .with_scheduled_delay(Duration::from_millis(self.scheduled_delay_millis))
+        .with_completed_span_context_ttl(Duration::from_millis(
+            self.completed_span_context_ttl_millis,
+        ));
         if let Some(namespace) = &self.service_namespace {
             config = config.with_service_namespace(namespace.clone());
         }
@@ -834,6 +839,7 @@ impl PyOpenTelemetryLogConfig {
             max_queue_size: 2_048,
             max_export_batch_size: 512,
             scheduled_delay_millis: 1_000,
+            completed_span_context_ttl_millis: 60_000,
             headers: HashMap::new(),
             resource_attributes: HashMap::new(),
         }

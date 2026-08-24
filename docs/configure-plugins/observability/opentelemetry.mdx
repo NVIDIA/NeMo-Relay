@@ -105,6 +105,7 @@ authorization = "OTEL_AUTHORIZATION"
 
 [components.config.opentelemetry.logs]
 enabled = true
+completed_span_context_ttl_millis = 60000
 minimum_severity = "info"
 
 [components.config.opentelemetry.metrics]
@@ -280,11 +281,11 @@ emitting an event before the scope closes, or create a new active scope for
 later work. Increasing the TTL retains more completed contexts: memory grows
 with the completed-scope rate, TTL, and number of configured trace endpoints.
 
-This TTL applies only to trace endpoints. OTLP logs preserve parent context from
-a separate bounded cache of at most 4,096 completed scopes, and metrics do not
-retain completed-scope parent context. Do not rely on a closed scope handle for
-long-running log follow-up work; emit the mark before closing the scope or use
-an active/new scope instead.
+OTLP logs use the same TTL-based completed-scope lineage behavior. Configure
+`opentelemetry.logs.completed_span_context_ttl_millis` independently when log
+export is enabled. Metrics do not retain completed-scope parent context. Do not
+rely on a closed scope handle for long-running follow-up work; emit the mark
+before closing the scope or use an active/new scope instead.
 
 If an endpoint's explicit batch settings are invalid, Relay skips that endpoint
 and records an `observability.invalid_otel_endpoint` configuration warning with
@@ -501,6 +502,7 @@ The `logs` section applies these processing settings to every log endpoint:
 | `max_queue_size` | `2048` | Maximum queued log records. |
 | `max_export_batch_size` | `512` | Maximum records in one batch; must not exceed the queue size. |
 | `scheduled_delay_millis` | `1000` | Maximum delay before exporting a partial batch. |
+| `completed_span_context_ttl_millis` | `60000` | Positive duration for retaining completed scope parent context for late logs. Contexts exactly at the TTL boundary remain linked. |
 
 Relay maps the event timestamp to the log timestamp and post-sanitization
 processing time to the observed timestamp. Sanitized `data` becomes the

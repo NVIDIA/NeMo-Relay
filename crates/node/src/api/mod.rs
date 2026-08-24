@@ -341,6 +341,29 @@ fn build_otel_log_config(
             "endpoint must be a nonblank string",
         ));
     }
+    let completed_span_context_ttl_millis = options
+        .completed_span_context_ttl_millis
+        .map(|ttl| {
+            let (negative, value, lossless) = ttl.get_u64();
+            if negative || !lossless {
+                return Err(napi::Error::from_reason(
+                    "completedSpanContextTtlMillis must be a nonnegative u64 BigInt",
+                ));
+            }
+            if value == 0 {
+                return Err(napi::Error::from_reason(
+                    "completedSpanContextTtlMillis must be greater than 0",
+                ));
+            }
+            Ok(value)
+        })
+        .transpose()?
+        .unwrap_or_else(|| {
+            u64::try_from(
+                nemo_relay::observability::otel::DEFAULT_COMPLETED_SPAN_CONTEXT_TTL.as_millis(),
+            )
+            .expect("the default completed span context TTL fits in u64 milliseconds")
+        });
     let mut config = nemo_relay::observability::otel_logs::OpenTelemetryLogConfig::new(endpoint)
         .with_transport(parse_otel_transport(options.transport)?)
         .with_service_name(
@@ -360,6 +383,9 @@ fn build_otel_log_config(
         .with_max_export_batch_size(options.max_export_batch_size.unwrap_or(512) as usize)
         .with_scheduled_delay(std::time::Duration::from_millis(
             options.scheduled_delay_millis.unwrap_or(1_000).into(),
+        ))
+        .with_completed_span_context_ttl(std::time::Duration::from_millis(
+            completed_span_context_ttl_millis,
         ));
     if let Some(severity) = options.minimum_severity {
         config = config.with_minimum_severity(severity.into());
@@ -5230,6 +5256,8 @@ pub struct OpenTelemetryLogConfig {
     pub max_export_batch_size: Option<u32>,
     /// Maximum delay before a partial batch is exported. Defaults to `1000`.
     pub scheduled_delay_millis: Option<u32>,
+    /// Completed scope lineage retention in milliseconds as a `bigint`. Defaults to `60000`.
+    pub completed_span_context_ttl_millis: Option<BigInt>,
 }
 
 /// Subscriber that exports severity-tagged marks through OTLP logs.

@@ -116,6 +116,7 @@ function openTelemetryLogConfig(config = {}) {
     max_queue_size: 2048,
     max_export_batch_size: 512,
     scheduled_delay_millis: 1000,
+    completed_span_context_ttl_millis: DEFAULT_COMPLETED_SPAN_CONTEXT_TTL_MILLIS,
     ...config,
   };
 }

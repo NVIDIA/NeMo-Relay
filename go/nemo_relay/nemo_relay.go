@@ -291,6 +291,7 @@ extern int32_t nemo_relay_otel_subscriber_runtime_diagnostics_json(const void*, 
 extern int32_t nemo_relay_otel_subscriber_shutdown(const void*);
 extern void nemo_relay_otel_subscriber_free(void*);
 extern int32_t nemo_relay_otel_log_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, uint64_t, uint64_t, uint64_t, void**);
+extern int32_t nemo_relay_otel_log_subscriber_create_v2(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, uint64_t, uint64_t, uint64_t, uint64_t, void**);
 extern int32_t nemo_relay_otel_log_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_log_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_log_subscriber_force_flush(const void*);
@@ -2639,35 +2640,37 @@ func (s *OpenTelemetrySubscriber) Close() {
 
 // OpenTelemetryLogConfig configures an independent OTLP log subscriber.
 type OpenTelemetryLogConfig struct {
-	Transport            OpenTelemetryTransport
-	Endpoint             string
-	Headers              map[string]string
-	ResourceAttributes   map[string]string
-	ServiceName          string
-	ServiceNamespace     string
-	ServiceVersion       string
-	InstrumentationScope string
-	Timeout              time.Duration
-	MinimumSeverity      LogSeverity
-	MaxQueueSize         uint64
-	MaxExportBatchSize   uint64
-	ScheduledDelay       time.Duration
+	Transport               OpenTelemetryTransport
+	Endpoint                string
+	Headers                 map[string]string
+	ResourceAttributes      map[string]string
+	ServiceName             string
+	ServiceNamespace        string
+	ServiceVersion          string
+	InstrumentationScope    string
+	Timeout                 time.Duration
+	MinimumSeverity         LogSeverity
+	MaxQueueSize            uint64
+	MaxExportBatchSize      uint64
+	ScheduledDelay          time.Duration
+	CompletedSpanContextTTL time.Duration
 }
 
 // NewOpenTelemetryLogConfig returns log settings initialized with native defaults.
 func NewOpenTelemetryLogConfig(endpoint string) OpenTelemetryLogConfig {
 	return OpenTelemetryLogConfig{
-		Transport:            OpenTelemetryTransportHTTPBinary,
-		Endpoint:             endpoint,
-		Headers:              map[string]string{},
-		ResourceAttributes:   map[string]string{},
-		ServiceName:          "unknown_service",
-		InstrumentationScope: "opentelemetry",
-		Timeout:              3 * time.Second,
-		MinimumSeverity:      LogSeverityInfo,
-		MaxQueueSize:         2048,
-		MaxExportBatchSize:   512,
-		ScheduledDelay:       time.Second,
+		Transport:               OpenTelemetryTransportHTTPBinary,
+		Endpoint:                endpoint,
+		Headers:                 map[string]string{},
+		ResourceAttributes:      map[string]string{},
+		ServiceName:             "unknown_service",
+		InstrumentationScope:    "opentelemetry",
+		Timeout:                 3 * time.Second,
+		MinimumSeverity:         LogSeverityInfo,
+		MaxQueueSize:            2048,
+		MaxExportBatchSize:      512,
+		ScheduledDelay:          time.Second,
+		CompletedSpanContextTTL: 60 * time.Second,
 	}
 }
 
@@ -2801,13 +2804,16 @@ func normalizeOpenTelemetryLogConfig(config OpenTelemetryLogConfig) (OpenTelemet
 	if config.Timeout == 0 {
 		config.Timeout = 3 * time.Second
 	}
-	if config.Timeout < 0 || config.ScheduledDelay < 0 {
+	if config.Timeout < 0 || config.ScheduledDelay < 0 || config.CompletedSpanContextTTL < 0 {
 		return config, fmt.Errorf("durations must not be negative")
 	}
 	if err := requireWholeMillisecondDuration("timeout", config.Timeout); err != nil {
 		return config, err
 	}
 	if err := requireWholeMillisecondDuration("scheduled delay", config.ScheduledDelay); err != nil {
+		return config, err
+	}
+	if err := requireWholeMillisecondDuration("completed span context TTL", config.CompletedSpanContextTTL); err != nil {
 		return config, err
 	}
 	if config.MinimumSeverity == "" {
@@ -2821,6 +2827,9 @@ func normalizeOpenTelemetryLogConfig(config OpenTelemetryLogConfig) (OpenTelemet
 	}
 	if config.ScheduledDelay == 0 {
 		config.ScheduledDelay = time.Second
+	}
+	if config.CompletedSpanContextTTL == 0 {
+		config.CompletedSpanContextTTL = 60 * time.Second
 	}
 	if config.Headers == nil {
 		config.Headers = map[string]string{}
@@ -2848,7 +2857,7 @@ func NewOpenTelemetryLogSubscriber(config OpenTelemetryLogConfig) (*OpenTelemetr
 	cSeverity := C.CString(string(config.MinimumSeverity))
 	defer C.free(unsafe.Pointer(cSeverity))
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_log_subscriber_create(
+	status := C.nemo_relay_otel_log_subscriber_create_v2(
 		common.transport,
 		common.endpoint,
 		common.headers,
@@ -2862,6 +2871,7 @@ func NewOpenTelemetryLogSubscriber(config OpenTelemetryLogConfig) (*OpenTelemetr
 		C.uint64_t(config.MaxQueueSize),
 		C.uint64_t(config.MaxExportBatchSize),
 		C.uint64_t(config.ScheduledDelay/time.Millisecond),
+		C.uint64_t(config.CompletedSpanContextTTL/time.Millisecond),
 		&ptr,
 	)
 	if err := checkStatus(status); err != nil {

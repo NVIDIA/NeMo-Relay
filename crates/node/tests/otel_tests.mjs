@@ -264,6 +264,10 @@ describe('OpenTelemetry log and metric subscribers', () => {
       /max_queue_size must be greater than 0/,
     );
     assert.throws(
+      () => new OpenTelemetryLogSubscriber({ endpoint: 'http://localhost:4318', completedSpanContextTtlMillis: 0n }),
+      /completedSpanContextTtlMillis must be greater than 0/i,
+    );
+    assert.throws(
       () =>
         new OpenTelemetryMetricSubscriber({
           endpoint: 'http://localhost:4318/v1/metrics',
