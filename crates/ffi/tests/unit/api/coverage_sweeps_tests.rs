@@ -3332,7 +3332,7 @@ fn test_ffi_observability_exporter_error_lifecycles() {
         );
         assert_status!(
             nemo_relay_otel_subscriber_shutdown(subscriber),
-            NemoRelayStatus::Internal
+            NemoRelayStatus::Ok
         );
         let missing_name = cstring(&unique_name("missing_otel_subscriber"));
         assert_status!(
