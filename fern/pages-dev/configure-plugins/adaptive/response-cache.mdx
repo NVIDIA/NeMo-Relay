@@ -450,16 +450,22 @@ Every cache decision emits a `response_cache` mark with
 | `miss` | No entry was served; the call ran live. After an ordinary lookup miss, Relay attempts to store a cacheable result. |
 | `bypass` | The request is not cacheable, or the `bypass_rate` sampler chose to run live. |
 
-Mark attributes use `nemo_relay.response_cache.*`: `backend`, `surface`,
-`key_hash` (the `sha256:…` fingerprint), `ttl_ms`, and `age_ms` as applicable;
-`saved_tokens` and `saved_cost_usd` appear on LLM hits when they can be
-derived, while `saved_invocations` appears on tool hits. Tool marks use
-`surface = "tool"`; unclassified, uncacheable tools pass through without a
-cache mark. A `reason` appears on bypasses and store-error misses (for example
-`sampled`, `stateful_store`, `store_error`, or `stream_no_codec`). Cache marks
-never include prompts, answers, or credentials, but treat `key_hash` as
-sensitive telemetry: a hash can still reveal information when an observer can
-guess the keyed input.
+Cache mark attributes use `nemo_relay.response_cache.*`. They can include
+`backend`, `surface`, `key_hash`, `ttl_ms`, and `age_ms`. LLM hit marks can also
+include `saved_tokens` and `saved_cost_usd`. Tool hit marks can include
+`saved_invocations`.
+
+Tool marks use `surface = "tool"`. Unclassified tools that use the default
+policy and explicitly uncacheable tools emit a `bypass` mark with
+`reason = "uncacheable"` before Relay runs the tool.
+
+Other bypass reasons include `sampled`, `stateful_store`, and
+`stream_no_codec`. A failed cache-store operation produces a `miss` with
+`reason = "store_error"`.
+
+Cache marks do not contain prompts, answers, or credentials. Treat `key_hash`
+as sensitive because an observer might identify an input by guessing and
+hashing it.
 
 `nemo-relay doctor` reports the cache state: `not configured` when the section
 is absent, `configured but disabled (adaptive plugin disabled)` when the
