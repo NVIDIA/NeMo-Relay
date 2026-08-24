@@ -11,6 +11,7 @@ import {
   MetricValueType,
   OpenTelemetryLogSubscriber,
   OpenTelemetryMetricSubscriber,
+  OpenTelemetrySubscriber,
 } from '../index.js';
 
 const dataSchema: DataSchema = { name: 'example.fixture', version: '1' };
@@ -22,6 +23,11 @@ const logSubscriber = new OpenTelemetryLogSubscriber({
 const metricSubscriber = new OpenTelemetryMetricSubscriber({
   endpoint: 'http://localhost:4318/v1/metrics',
   temporality: MetricTemporality.Delta,
+});
+const traceSubscriber = new OpenTelemetrySubscriber({
+  type: 'full',
+  endpoint: 'http://localhost:4318/v1/traces',
+  completedSpanContextTtlMillis: 4_294_967_296n,
 });
 
 event('fixture.log', null, { ready: true }, null, null, dataSchema, LogSeverity.Info);
@@ -51,6 +57,7 @@ metricSubscriber.register('fixture-metric-subscriber');
 const metricDeregistered: boolean = metricSubscriber.deregister('fixture-metric-subscriber');
 metricSubscriber.forceFlush();
 metricSubscriber.shutdown();
+traceSubscriber.shutdown();
 
 if (!logDiagnostics || !metricDiagnostics || !logDeregistered || !metricDeregistered) {
   throw new Error('fixture observability operations failed');

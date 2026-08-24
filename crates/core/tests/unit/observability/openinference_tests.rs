@@ -3380,6 +3380,92 @@ fn completed_span_context_ttl_expires_after_the_boundary_and_reports_diagnostics
 }
 
 #[test]
+fn completed_span_context_ttl_expires_out_of_order_completed_contexts() {
+    let (provider, exporter) = make_provider();
+    let runtime_diagnostics =
+        crate::observability::otel_signal::SignalRuntimeDiagnostics::new(None);
+    let mut processor = crate::observability::otel::OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+        provider,
+        "test-scope".to_string(),
+        crate::observability::OpenTelemetryType::OpenInference,
+        crate::observability::MarkProjection::default(),
+        crate::observability::default_mark_exclude_names(),
+        Vec::new(),
+        Vec::new(),
+        runtime_diagnostics.clone(),
+    );
+    let older_uuid = Uuid::now_v7();
+    let newer_uuid = Uuid::now_v7();
+    let closed_at = chrono::Utc::now();
+    let scope_event = |uuid, name, scope_category, timestamp| {
+        Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .uuid(uuid)
+                .name(name)
+                .timestamp(timestamp)
+                .build(),
+            scope_category,
+            Vec::new(),
+            EventCategory::from(ScopeType::Tool),
+            None,
+        ))
+    };
+
+    processor.process(&scope_event(
+        older_uuid,
+        "older",
+        ScopeCategory::Start,
+        closed_at,
+    ));
+    processor.process(&scope_event(
+        newer_uuid,
+        "newer",
+        ScopeCategory::Start,
+        closed_at,
+    ));
+    processor.process(&scope_event(
+        newer_uuid,
+        "newer",
+        ScopeCategory::End,
+        closed_at + chrono::Duration::seconds(30),
+    ));
+    processor.process(&scope_event(
+        older_uuid,
+        "older",
+        ScopeCategory::End,
+        closed_at,
+    ));
+    processor.process(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(older_uuid)
+            .name("after-older-ttl")
+            .timestamp(closed_at + chrono::Duration::seconds(61))
+            .build(),
+        None,
+        None,
+    )));
+    processor.force_flush().unwrap();
+
+    assert!(!processor.completed_span_contexts.contains_key(&older_uuid));
+    assert!(processor.completed_span_contexts.contains_key(&newer_uuid));
+    let spans = exporter.get_finished_spans().unwrap();
+    let older_span = finished_span_named(&spans, "older");
+    let late_mark = finished_span_named(&spans, "mark:after-older-ttl");
+    assert_ne!(
+        late_mark.span_context.trace_id(),
+        older_span.span_context.trace_id()
+    );
+    assert_ne!(late_mark.parent_span_id, older_span.span_context.span_id());
+    assert_eq!(
+        runtime_diagnostics
+            .snapshot()
+            .get("otel.completed_span_context_expired")
+            .map(|diagnostic| diagnostic.count),
+        Some(1)
+    );
+}
+
+#[test]
 fn process_start_removes_completed_span_order_entry() {
     let (provider, _exporter) = make_provider();
     let mut processor = crate::observability::otel::OtelEventProcessor::new_openinference(

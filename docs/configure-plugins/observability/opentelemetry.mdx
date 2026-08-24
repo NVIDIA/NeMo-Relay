@@ -140,7 +140,7 @@ not stop application work or delivery to the other exporters.
 | `max_queue_size` | Environment or `2048` | Maximum completed spans buffered before this endpoint drops new spans. |
 | `max_export_batch_size` | Environment or `512` | Maximum spans exported in one batch; capped at the effective queue size. |
 | `scheduled_delay_millis` | Environment or `5000` ms | Maximum delay before this endpoint exports a non-full batch. A full batch exports sooner. |
-| `completed_span_context_ttl_millis` | `60000` | How long completed scopes retain their trace context for late marks. |
+| `completed_span_context_ttl_millis` | `60000` | Positive duration for retaining completed scopes' trace context for late marks. |
 | `headers` | `{}` | String-to-string exporter headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
 | `resource_attributes` | `{}` | String-to-string resource attributes. |

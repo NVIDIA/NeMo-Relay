@@ -1755,23 +1755,23 @@ impl OtelEventProcessor {
     }
 
     fn expire_completed_span_contexts(&mut self, event_timestamp: DateTime<Utc>) {
-        let mut expired_count = 0_u64;
-        while let Some(uuid) = self.completed_span_order.front().copied() {
-            let Some(context) = self.completed_span_contexts.get(&uuid) else {
-                self.completed_span_order.pop_front();
-                continue;
-            };
-            let age = event_timestamp.signed_duration_since(context.closed_at);
-            let expired = age
-                .to_std()
-                .is_ok_and(|age| age > self.completed_span_context_ttl);
-            if !expired {
-                break;
-            }
-            self.completed_span_order.pop_front();
+        let expired_uuids = self
+            .completed_span_contexts
+            .iter()
+            .filter_map(|(uuid, context)| {
+                event_timestamp
+                    .signed_duration_since(context.closed_at)
+                    .to_std()
+                    .is_ok_and(|age| age > self.completed_span_context_ttl)
+                    .then_some(*uuid)
+            })
+            .collect::<Vec<_>>();
+        let expired_count = u64::try_from(expired_uuids.len()).unwrap_or(u64::MAX);
+        for uuid in expired_uuids {
             self.completed_span_contexts.remove(&uuid);
-            expired_count = expired_count.saturating_add(1);
         }
+        self.completed_span_order
+            .retain(|uuid| self.completed_span_contexts.contains_key(uuid));
         if expired_count == 0 {
             return;
         }
