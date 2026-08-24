@@ -27,7 +27,9 @@ use tokio_stream::{Stream, StreamExt};
 
 use crate::config::ResponseCacheConfig;
 use crate::response_cache::key::{KeyOutcome, build_cache_key};
-use crate::response_cache::mark::{CacheMark, emit_cache_mark, savings_from};
+use crate::response_cache::mark::{
+    CacheMark, CacheMarkStatus, CacheReason, emit_cache_mark, savings_from,
+};
 use crate::response_cache::replay::{replay_aggregate, replay_is_lossy};
 use crate::response_cache::store::{CacheEntry, CacheStore, now_unix_ms};
 
@@ -160,7 +162,7 @@ async fn run_cache(
     let key = match build_cache_key(&provider, &request, &config) {
         KeyOutcome::Key(key) => key,
         KeyOutcome::Bypass(reason) => {
-            emit_cache_mark(CacheMark::new("bypass", backend).reason(reason));
+            emit_cache_mark(CacheMark::new(CacheMarkStatus::Bypass, backend).reason(reason));
             return next(request).await;
         }
     };
@@ -170,8 +172,8 @@ async fn run_cache(
     // Sampled bypass: re-run live to catch drift, refreshing the stored answer.
     if should_bypass(config.bypass_rate) {
         emit_cache_mark(
-            CacheMark::new("bypass", backend)
-                .reason("sampled")
+            CacheMark::new(CacheMarkStatus::Bypass, backend)
+                .reason(CacheReason::Sampled)
                 .key_hash(&key),
         );
         let response = next(request).await?;
@@ -184,7 +186,7 @@ async fn run_cache(
             let age_ms = now_unix_ms().saturating_sub(entry.created_unix_ms);
             let (saved_tokens, saved_cost) = savings_from(&entry);
             emit_cache_mark(
-                CacheMark::new("hit", backend)
+                CacheMark::new(CacheMarkStatus::Hit, backend)
                     .key_hash(&key)
                     .age_ms(age_ms)
                     .ttl_ms(config.ttl().as_millis() as u64)
@@ -196,7 +198,7 @@ async fn run_cache(
         }
         Ok(None) => {
             emit_cache_mark(
-                CacheMark::new("miss", backend)
+                CacheMark::new(CacheMarkStatus::Miss, backend)
                     .key_hash(&key)
                     .ttl_ms(config.ttl().as_millis() as u64),
             );
@@ -207,8 +209,8 @@ async fn run_cache(
         Err(_) => {
             // Cache read failed: fail open as a live call and do not store.
             emit_cache_mark(
-                CacheMark::new("miss", backend)
-                    .reason("store_error")
+                CacheMark::new(CacheMarkStatus::Miss, backend)
+                    .reason(CacheReason::StoreError)
                     .key_hash(&key),
             );
             next(request).await
@@ -241,7 +243,9 @@ async fn run_cache_stream(
     let surface = match detect_request_surface_with_hint(&request.content, Some(&provider)) {
         Some(surface) => surface,
         None => {
-            emit_cache_mark(CacheMark::new("bypass", backend).reason("stream_no_codec"));
+            emit_cache_mark(
+                CacheMark::new(CacheMarkStatus::Bypass, backend).reason(CacheReason::StreamNoCodec),
+            );
             return next(request).await;
         }
     };
@@ -251,7 +255,7 @@ async fn run_cache_stream(
     let key = match build_cache_key(&provider, &request, &config) {
         KeyOutcome::Key(key) => key,
         KeyOutcome::Bypass(reason) => {
-            emit_cache_mark(CacheMark::new("bypass", backend).reason(reason));
+            emit_cache_mark(CacheMark::new(CacheMarkStatus::Bypass, backend).reason(reason));
             return next(request).await;
         }
     };
@@ -261,8 +265,8 @@ async fn run_cache_stream(
     // Sampled bypass: run live (and re-aggregate to refresh the stored answer).
     if should_bypass(config.bypass_rate) {
         emit_cache_mark(
-            CacheMark::new("bypass", backend)
-                .reason("sampled")
+            CacheMark::new(CacheMarkStatus::Bypass, backend)
+                .reason(CacheReason::Sampled)
                 .key_hash(&key),
         );
         let live = next(request).await?;
@@ -277,8 +281,8 @@ async fn run_cache_stream(
             // serves buffered callers, so run live without disturbing it.
             if replay_is_lossy(&entry.response) {
                 emit_cache_mark(
-                    CacheMark::new("miss", backend)
-                        .reason("replay_lossy")
+                    CacheMark::new(CacheMarkStatus::Miss, backend)
+                        .reason(CacheReason::ReplayLossy)
                         .key_hash(&key),
                 );
                 return next(request).await;
@@ -286,7 +290,7 @@ async fn run_cache_stream(
             let age_ms = now_unix_ms().saturating_sub(entry.created_unix_ms);
             let (saved_tokens, saved_cost) = savings_from(&entry);
             emit_cache_mark(
-                CacheMark::new("hit", backend)
+                CacheMark::new(CacheMarkStatus::Hit, backend)
                     .key_hash(&key)
                     .age_ms(age_ms)
                     .ttl_ms(config.ttl().as_millis() as u64)
@@ -297,7 +301,7 @@ async fn run_cache_stream(
         }
         Ok(None) => {
             emit_cache_mark(
-                CacheMark::new("miss", backend)
+                CacheMark::new(CacheMarkStatus::Miss, backend)
                     .key_hash(&key)
                     .ttl_ms(config.ttl().as_millis() as u64),
             );
@@ -309,8 +313,8 @@ async fn run_cache_stream(
         Err(_) => {
             // Cache read failed: fail open as a live stream and do not store.
             emit_cache_mark(
-                CacheMark::new("miss", backend)
-                    .reason("store_error")
+                CacheMark::new(CacheMarkStatus::Miss, backend)
+                    .reason(CacheReason::StoreError)
                     .key_hash(&key),
             );
             next(request).await

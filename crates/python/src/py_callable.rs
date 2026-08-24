@@ -20,6 +20,7 @@
 
 #![allow(clippy::type_complexity)]
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -29,12 +30,12 @@ use nemo_relay::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, PublicationContext, capture_nested_publication_buffer, publication_context,
 };
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
-    LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
-    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, LlmStreamInner,
-    MiddlewareContinuationContext, ScopeStackHandle, ToolConditionalFn, ToolExecutionNextFn,
-    ToolInterceptFn, ToolSanitizeFn, capture_propagation_context, capture_traceparent,
-    current_scope_stack,
+    EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmConditionalFn,
+    LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext,
+    LlmSanitizeRequestFn, LlmSanitizeResponseContext, LlmSanitizeResponseFn,
+    LlmStreamExecutionNextFn, LlmStreamInner, MiddlewareContinuationContext, ScopeStackHandle,
+    ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    capture_propagation_context, capture_traceparent, current_scope_stack,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::exceptions::PyRuntimeError;
@@ -56,7 +57,7 @@ use crate::convert::{json_to_py, py_to_json};
 use crate::py_types::{
     PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyLLMRequest, PyLLMRequestInterceptOutcome,
     PyLlmSanitizeRequestContext, PyLlmSanitizeResponseContext, PyScopeStack,
-    PyToolExecutionInterceptOutcome, PyToolExecutionResult,
+    PyToolExecutionInterceptOutcome, PyToolExecutionResult, TOOL_EXECUTION_INTERCEPT_RESULT_ERROR,
 };
 
 type PyValueFuture = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
@@ -72,6 +73,29 @@ fn python_callback_error(error: PyErr) -> FlowError {
     FlowError::CallbackException {
         message: error.to_string(),
         exception_type,
+    }
+}
+
+fn tool_execution_callback_result_error(error: impl std::fmt::Display) -> FlowError {
+    FlowError::InvalidArgument(format!(
+        "tool execution callback must return ToolExecutionResult; return ToolExecutionResult(payload), not a raw dict: {error}"
+    ))
+}
+
+fn tool_execution_intercept_outcome_error(error: impl std::fmt::Display) -> FlowError {
+    FlowError::InvalidArgument(format!(
+        "tool execution intercept must return ToolExecutionInterceptOutcome; after await next(args), return ToolExecutionInterceptOutcome(result=downstream.result, annotation=downstream.annotation): {error}"
+    ))
+}
+
+fn tool_execution_intercept_callback_error(error: PyErr) -> FlowError {
+    if error
+        .to_string()
+        .contains(TOOL_EXECUTION_INTERCEPT_RESULT_ERROR)
+    {
+        tool_execution_intercept_outcome_error(error)
+    } else {
+        python_callback_error(error)
     }
 }
 
@@ -536,6 +560,17 @@ async fn resolve_py_object_or_future(
     }
 }
 
+async fn resolve_py_tool_execution_intercept_outcome(
+    outcome: FlowResult<Result<Py<PyAny>, PyValueFuture>>,
+) -> FlowResult<Py<PyAny>> {
+    match outcome? {
+        Ok(value) => Ok(value),
+        Err(future) => future
+            .await
+            .map_err(tool_execution_intercept_callback_error),
+    }
+}
+
 fn next_async_iter_coro(async_iter: &Arc<Py<PyAny>>) -> FlowResult<Option<Py<PyAny>>> {
     Python::attach(|py| {
         py.import("nemo_relay._event_sanitizer_context")
@@ -996,11 +1031,7 @@ pub fn wrap_py_tool_exec_fn(
             Python::attach(|py| {
                 result
                     .extract::<PyToolExecutionResult>(py)
-                    .map_err(|error| {
-                        FlowError::Internal(format!(
-                            "tool execution callback must return ToolExecutionResult: {error}"
-                        ))
-                    })?
+                    .map_err(tool_execution_callback_result_error)?
                     .to_inner(py)
                     .map_err(|error| FlowError::Internal(error.to_string()))
             })
@@ -1152,7 +1183,7 @@ pub fn wrap_py_tool_exec_intercept_fn(
         let name = name.to_string();
         let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         Box::pin(async move {
-            let result = resolve_py_object_or_future(Python::attach(|py| {
+            let result = resolve_py_tool_execution_intercept_outcome(Python::attach(|py| {
                 let (invocation_context, task_locals) = copy_middleware_invocation(py, task_locals)
                     .map_err(|error| FlowError::Internal(error.to_string()))?;
                 let py_args =
@@ -1174,7 +1205,7 @@ pub fn wrap_py_tool_exec_intercept_fn(
                     }
                     None => callback.bind(py).call1((&name, py_args, py_next)),
                 }
-                .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
+                .map_err(tool_execution_intercept_callback_error)?;
                 split_py_object_or_future_with_locals(
                     py,
                     result.unbind(),
@@ -1187,11 +1218,7 @@ pub fn wrap_py_tool_exec_intercept_fn(
                 result
                     .extract::<PyToolExecutionInterceptOutcome>(py)
                     .map(|value| value.inner)
-                    .map_err(|e| {
-                        FlowError::Internal(format!(
-                            "tool execution intercept must return ToolExecutionInterceptOutcome: {e}"
-                        ))
-                    })
+                    .map_err(tool_execution_intercept_outcome_error)
             })
         })
     })
@@ -1927,6 +1954,109 @@ pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
     })
 }
 
+fn call_event_metadata_injector(
+    py: Python<'_>,
+    invoke: &Bound<'_, PyAny>,
+    callback: &Py<PyAny>,
+    invocation_context: Option<&Bound<'_, PyAny>>,
+    loop_affine: bool,
+    py_event: Py<PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let result = match (invocation_context, loop_affine) {
+        (Some(context), false) => {
+            context.call_method1("run", (invoke, callback.bind(py), py_event))
+        }
+        (None, false) => invoke.call1((callback.bind(py), py_event)),
+        (Some(context), true) => context.call_method1("run", (callback.bind(py), py_event)),
+        (None, true) => callback.bind(py).call1((py_event,)),
+    }?;
+    Ok(result.unbind())
+}
+
+fn start_py_event_metadata_injector(
+    py: Python<'_>,
+    py_fn: &Py<PyAny>,
+    event: &Event,
+    publication_context: Option<&PythonPublicationContext>,
+    task_locals: Option<TaskLocals>,
+    publication_buffer: Option<PublicationBuffer>,
+) -> FlowResult<std::result::Result<Py<PyAny>, PyValueFuture>> {
+    let (invocation_context, task_locals) = prepare_event_sanitizer_invocation(
+        py,
+        publication_context,
+        task_locals,
+        publication_buffer,
+    )?;
+    let py_event =
+        py_event_object(py, event).map_err(|error| FlowError::Internal(error.to_string()))?;
+    let invoke = py
+        .import("nemo_relay._event_sanitizer_context")
+        .and_then(|module| module.getattr("invoke"))
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    let loop_affine = task_locals.is_some();
+    let callback = loop_affine_callback(py, py_fn.bind(py), task_locals.as_ref(), true)
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    let result = call_event_metadata_injector(
+        py,
+        &invoke,
+        &callback,
+        invocation_context.as_ref(),
+        loop_affine,
+        py_event,
+    )
+    .map_err(python_callback_error)?;
+    split_py_object_or_future_with_locals(
+        py,
+        result,
+        task_locals.as_ref(),
+        invocation_context.as_ref(),
+    )
+}
+
+/// Wrap a Python callable ``(Event) -> dict[str, Json]``.
+pub fn wrap_py_event_metadata_injector_fn(py_fn: Py<PyAny>) -> EventMetadataInjectorFn {
+    let py_fn = Arc::new(py_fn);
+    let task_locals = capture_python_task_locals();
+    Arc::new(move |event: Arc<Event>| {
+        let py_fn = py_fn.clone();
+        let task_locals = task_locals_with_running_loop(task_locals.as_ref());
+        let publication_context = publication_context::<PythonPublicationContext>();
+        let publication_buffer = capture_nested_publication_buffer();
+        Box::pin(async move {
+            let result = Python::attach(|py| {
+                start_py_event_metadata_injector(
+                    py,
+                    py_fn.as_ref(),
+                    event.as_ref(),
+                    publication_context.as_deref(),
+                    task_locals,
+                    publication_buffer,
+                )
+            });
+            let result = resolve_py_object_or_future(result)
+                .await
+                .and_then(|result| {
+                    Python::attach(|py| {
+                        py_to_json(result.bind(py))
+                            .map_err(|error| FlowError::Internal(error.to_string()))
+                            .and_then(|value| {
+                                serde_json::from_value::<BTreeMap<String, Json>>(value).map_err(
+                                    |error| {
+                                        FlowError::Internal(format!(
+                                            "invalid event metadata injector result: {error}"
+                                        ))
+                                    },
+                                )
+                            })
+                    })
+                });
+            if let Err(error) = &result {
+                eprintln!("nemo_relay: Python event metadata injector failed: {error}");
+            }
+            result
+        })
+    })
+}
 // ---------------------------------------------------------------------------
 // LLM Codec wrapper
 // ---------------------------------------------------------------------------

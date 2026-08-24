@@ -11,6 +11,7 @@ The main entry points are:
 - ``nemo_relay.tools`` for tool lifecycle management
 - ``nemo_relay.llm`` for non-streaming and streaming LLM lifecycle management
 - ``nemo_relay.guardrails`` and ``nemo_relay.intercepts`` for global middleware
+- ``nemo_relay.event_metadata`` for global event metadata injection
 - ``nemo_relay.scope_local`` for middleware scoped to a specific ``ScopeHandle``
 - ``nemo_relay.typed`` for codec-based typed wrappers
 - ``nemo_relay.plugin`` for global plugin configuration and custom plugin registration
@@ -82,7 +83,7 @@ import contextvars
 import typing
 from collections.abc import Callable as AbcCallable
 from contextlib import contextmanager
-from typing import AsyncIterator, Awaitable, Callable, Literal, Optional, TypeAlias, TypedDict
+from typing import AsyncIterator, Awaitable, Callable, Iterator, Literal, Optional, TypeAlias, TypedDict
 
 # Native bitflag classes exported at the top level for user code.
 # Native LLM request and normalized codec view types.
@@ -107,8 +108,19 @@ from nemo_relay._native import (
     LlmSanitizeRequestContext,
     LlmSanitizeResponseCodec,
     LlmSanitizeResponseContext,
+    LogSeverity,
     MarkEvent,
+    MetricKind,
+    MetricMeasurement,
+    MetricTemporality,
+    MetricValueType,
     OpenTelemetryConfig,
+    OpenTelemetryLogConfig,
+    OpenTelemetryLogSubscriber,
+    OpenTelemetryMetricConfig,
+    OpenTelemetryMetricSubscriber,
+    OpenTelemetryRuntimeDiagnostic,
+    OpenTelemetryRuntimeDiagnostics,
     OpenTelemetrySubscriber,
     PendingMarkSpec,
     PropagationContext,
@@ -162,6 +174,13 @@ Json: TypeAlias = JsonValue
 UnsupportedBehavior: TypeAlias = Literal["ignore", "warn", "error"]
 
 
+class DataSchema(TypedDict):
+    """Schema identifier attached to an event's opaque data payload."""
+
+    name: str
+    version: str
+
+
 class EventSanitizeFields(TypedDict):
     """Observability fields returned by mark and scope event sanitizers."""
 
@@ -181,6 +200,17 @@ ToolSanitizeGuardrail: TypeAlias = Callable[[str, Json], Json | Awaitable[Json]]
 EventSanitizeGuardrail: TypeAlias = Callable[
     ["Event", EventSanitizeFields], EventSanitizeFields | Awaitable[EventSanitizeFields]
 ]
+#: Primitive values accepted from event metadata injectors.
+EventMetadataScalar: TypeAlias = str | int | float | bool
+#: Flat event metadata value accepted from an injector. Lists must be empty or
+#: contain values of one primitive type; Relay validates this at runtime.
+EventMetadataValue: TypeAlias = EventMetadataScalar | list[str] | list[int] | list[float] | list[bool]
+#: Flat metadata additions returned by an event metadata injector.
+EventMetadata: TypeAlias = dict[str, EventMetadataValue]
+#: Additive middleware callback that inspects an immutable event and returns
+#: proposed metadata additions. Both synchronous and asynchronous callbacks are
+#: supported.
+EventMetadataInjectorCallback: TypeAlias = Callable[["Event"], EventMetadata | Awaitable[EventMetadata]]
 #: Guardrail callback that can block tool execution by returning a rejection
 #: message. Returning ``None`` allows execution to continue.
 ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str] | Awaitable[Optional[str]]]
@@ -238,6 +268,7 @@ LlmStreamExecutionIntercept: TypeAlias = Callable[
 from nemo_relay import (  # noqa: E402
     adaptive,
     codecs,
+    event_metadata,
     guardrails,
     intercepts,
     llm,
@@ -245,6 +276,7 @@ from nemo_relay import (  # noqa: E402
     observability,
     pii_redaction,
     plugin,
+    runtime_registrations,
     scope,
     scope_local,
     subscribers,
@@ -432,7 +464,12 @@ def create_scope_stack() -> ScopeStack:
 
 
 def capture_propagation_context() -> PropagationContext:
-    """Capture the current Relay causal parent for application-managed transport."""
+    """Capture the current Relay causal parent for application-managed transport.
+
+    Returns:
+        PropagationContext: Context carrying the current parent and root scope
+        identities for propagation to another execution boundary.
+    """
     get_scope_stack()
     if parent_uuid := _propagation_parent_var.get():
         return PropagationContext(parent_uuid, _propagation_root_var.get())
@@ -440,7 +477,16 @@ def capture_propagation_context() -> PropagationContext:
 
 
 def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationContext:
-    """Capture the current parent with an optional stable application session root."""
+    """Capture the current parent with an optional stable application session root.
+
+    Args:
+        root_uuid: Root identity to include in the propagated context. Pass
+            ``None`` to use Relay's current root identity.
+
+    Returns:
+        PropagationContext: Context carrying the current parent and selected
+        root identities.
+    """
     get_scope_stack()
     if parent_uuid := _propagation_parent_var.get():
         return PropagationContext(parent_uuid, root_uuid)
@@ -448,7 +494,11 @@ def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationC
 
 
 def capture_traceparent() -> str:
-    """Capture the current Relay context as a W3C ``traceparent`` value."""
+    """Capture the current Relay context as a W3C ``traceparent`` value.
+
+    Returns:
+        str: Encoded W3C traceparent value for the current Relay context.
+    """
     get_scope_stack()
     parent_uuid = _propagation_parent_var.get()
     if parent_uuid:
@@ -457,7 +507,16 @@ def capture_traceparent() -> str:
 
 
 def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeStack:
-    """Create an isolated stack seeded from a received propagation context."""
+    """Create an isolated stack seeded from a received propagation context.
+
+    Args:
+        context: Parent and root context received from another execution
+            boundary.
+
+    Returns:
+        ScopeStack: New isolated stack whose root retains the propagated
+        causal relationship.
+    """
     return _create_scope_stack_from_propagation(context)
 
 
@@ -506,8 +565,19 @@ def fork_asyncio_context() -> contextvars.Context:
 
 
 @contextmanager
-def use_scope_stack(stack: ScopeStack):
-    """Temporarily install ``stack`` in the current Python context."""
+def use_scope_stack(stack: ScopeStack) -> Iterator[ScopeStack]:
+    """Temporarily install ``stack`` in the current Python context.
+
+    Args:
+        stack: Scope stack to make current for the body of the ``with`` block.
+
+    Yields:
+        ScopeStack: The installed scope stack.
+
+    Returns:
+        Iterator[ScopeStack]: Context-manager iterator that restores the prior
+        context after the block exits.
+    """
     current_stack = _scope_stack_var.get(None)
     if current_stack is not None:
         _sync_thread_scope_stack(current_stack)
@@ -583,12 +653,14 @@ __all__ = [
     "tools",
     "llm",
     "guardrails",
+    "event_metadata",
     "intercepts",
     "subscribers",
     "scope_local",
     "codecs",
     "typed",
     "plugin",
+    "runtime_registrations",
     "adaptive",
     "observability",
     "pii_redaction",
@@ -611,6 +683,12 @@ __all__ = [
     "ScopeAttributes",
     "ToolAttributes",
     "LLMAttributes",
+    "LogSeverity",
+    "MetricKind",
+    "MetricValueType",
+    "MetricMeasurement",
+    "MetricTemporality",
+    "DataSchema",
     "ScopeType",
     "ScopeEvent",
     "MarkEvent",
@@ -632,6 +710,12 @@ __all__ = [
     "AtofExporter",
     "OpenTelemetryConfig",
     "OpenTelemetrySubscriber",
+    "OpenTelemetryRuntimeDiagnostic",
+    "OpenTelemetryRuntimeDiagnostics",
+    "OpenTelemetryLogConfig",
+    "OpenTelemetryLogSubscriber",
+    "OpenTelemetryMetricConfig",
+    "OpenTelemetryMetricSubscriber",
     "JsonPrimitive",
     "JsonValue",
     "JsonObject",
@@ -639,6 +723,10 @@ __all__ = [
     "UnsupportedBehavior",
     "EventSanitizeFields",
     "EventSanitizeGuardrail",
+    "EventMetadataScalar",
+    "EventMetadataValue",
+    "EventMetadata",
+    "EventMetadataInjectorCallback",
     "ToolSanitizeGuardrail",
     "ToolConditionalExecutionGuardrail",
     "LlmSanitizeRequestGuardrail",

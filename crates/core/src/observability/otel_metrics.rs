@@ -33,7 +33,7 @@ use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 
 use super::OpenTelemetryRuntimeDiagnostics;
-use super::otel::{OpenTelemetryError, OtlpTransport, Result};
+use super::otel::{OpenTelemetryError, OtlpTransport, Result, normalize_shutdown_result};
 use super::otel_signal::{
     MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics, build_grpc_metadata,
     build_in_owned_runtime, classify_metric_mark, reject_signal_header_environment,
@@ -369,7 +369,7 @@ impl OpenTelemetryMetricSubscriber {
         self.inner
             .provider
             .force_flush()
-            .map_err(|error| OpenTelemetryError::Provider(error.to_string()))
+            .map_err(|error| OpenTelemetryError::MetricProvider(error.to_string()))
     }
 
     /// Shut down the meter provider, including its final collection.
@@ -377,19 +377,14 @@ impl OpenTelemetryMetricSubscriber {
     /// Deregister this subscriber before calling shutdown.
     pub fn shutdown(&self) -> Result<()> {
         let barrier = flush_subscribers().map_err(OpenTelemetryError::Core);
-        let provider = self
-            .inner
-            .provider
-            .shutdown()
-            .map_err(|error| OpenTelemetryError::Provider(error.to_string()));
+        let provider = normalize_shutdown_result(self.inner.provider.shutdown())
+            .map_err(|error| OpenTelemetryError::MetricProvider(error.to_string()));
         barrier.and(provider)
     }
 
     pub(crate) fn shutdown_provider(&self) -> Result<()> {
-        self.inner
-            .provider
-            .shutdown()
-            .map_err(|error| OpenTelemetryError::Provider(error.to_string()))
+        normalize_shutdown_result(self.inner.provider.shutdown())
+            .map_err(|error| OpenTelemetryError::MetricProvider(error.to_string()))
     }
 
     pub(crate) fn delivery_failure_summary(&self) -> Option<String> {

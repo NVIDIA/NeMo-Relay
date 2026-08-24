@@ -10,6 +10,7 @@
 
 #![allow(clippy::await_holding_lock)]
 
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -32,20 +33,23 @@ use nemo_relay::api::llm::{
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::optimization::record_llm_optimization_contribution;
 use nemo_relay::api::registry::{
-    deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
-    deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
-    deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
-    deregister_mark_sanitize_guardrail, deregister_scope_sanitize_end_guardrail,
-    deregister_scope_sanitize_start_guardrail, deregister_tool_conditional_execution_guardrail,
-    deregister_tool_execution_intercept, deregister_tool_request_intercept,
-    deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
-    register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
-    register_llm_request_intercept, register_llm_sanitize_request_guardrail,
-    register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
-    register_mark_sanitize_guardrail, register_scope_sanitize_end_guardrail,
-    register_scope_sanitize_start_guardrail, register_tool_conditional_execution_guardrail,
-    register_tool_execution_intercept, register_tool_request_intercept,
-    register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
+    RuntimeRegistrationKind, RuntimeRegistrationOwnerKind,
+    deregister_conditional_middleware_guardrail, deregister_llm_conditional_execution_guardrail,
+    deregister_llm_execution_intercept, deregister_llm_request_intercept,
+    deregister_llm_sanitize_request_guardrail, deregister_llm_sanitize_response_guardrail,
+    deregister_llm_stream_execution_intercept, deregister_mark_sanitize_guardrail,
+    deregister_scope_sanitize_end_guardrail, deregister_scope_sanitize_start_guardrail,
+    deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
+    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
+    deregister_tool_sanitize_response_guardrail, list_runtime_registrations,
+    register_conditional_middleware_guardrail, register_llm_conditional_execution_guardrail,
+    register_llm_execution_intercept, register_llm_request_intercept,
+    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
+    register_llm_stream_execution_intercept, register_mark_sanitize_guardrail,
+    register_scope_sanitize_end_guardrail, register_scope_sanitize_start_guardrail,
+    register_tool_conditional_execution_guardrail, register_tool_execution_intercept,
+    register_tool_request_intercept, register_tool_sanitize_request_guardrail,
+    register_tool_sanitize_response_guardrail, scope_deregister_tool_request_intercept,
     scope_register_llm_conditional_execution_guardrail, scope_register_llm_execution_intercept,
     scope_register_llm_request_intercept, scope_register_llm_sanitize_request_guardrail,
     scope_register_llm_sanitize_response_guardrail, scope_register_llm_stream_execution_intercept,
@@ -169,6 +173,25 @@ fn setup_isolated_scope(name: &str) -> ScopeHandle {
 fn captured_events_snapshot(events: &Arc<Mutex<Vec<Event>>>) -> Vec<Event> {
     flush_subscribers().unwrap();
     events.lock().unwrap().clone()
+}
+
+fn assert_tool_lifecycle_correlation(
+    events: &[Event],
+    name: &str,
+    expected_tool_call_id: Option<&str>,
+) {
+    let lifecycle = events
+        .iter()
+        .filter(|event| event.name() == name && event.scope_type() == Some(ScopeType::Tool))
+        .collect::<Vec<_>>();
+    assert_eq!(lifecycle.len(), 2, "expected one managed Start/End pair");
+    let start = lifecycle[0];
+    let end = lifecycle[1];
+    assert_eq!(start.scope_category(), Some(ScopeCategory::Start));
+    assert_eq!(end.scope_category(), Some(ScopeCategory::End));
+    assert_eq!(start.uuid(), end.uuid());
+    assert_eq!(start.tool_call_id(), expected_tool_call_id);
+    assert_eq!(end.tool_call_id(), expected_tool_call_id);
 }
 
 fn assert_middleware_callback_locks_are_free() {
@@ -522,6 +545,87 @@ async fn test_no_break_chain_runs_all_intercepts() {
 // =========================================================================
 // Execution Intercepts (Middleware Chain) Tests
 // =========================================================================
+
+#[tokio::test]
+async fn managed_tool_call_id_correlates_success_and_absent_lifecycles() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "managed_tool_call_id_success_observer",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let result = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("managed-correlated-tool")
+            .args(json!({"value": 42}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args.into()) })))
+            .tool_call_id("call-managed-42")
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.result, json!({"value": 42}));
+
+    tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("managed-uncorrelated-tool")
+            .args(json!({}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args.into()) })))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let captured = captured_events_snapshot(&events);
+    assert_tool_lifecycle_correlation(
+        &captured,
+        "managed-correlated-tool",
+        Some("call-managed-42"),
+    );
+    assert_tool_lifecycle_correlation(&captured, "managed-uncorrelated-tool", None);
+
+    deregister_subscriber("managed_tool_call_id_success_observer").unwrap();
+}
+
+#[tokio::test]
+async fn managed_tool_call_id_correlates_callback_error_lifecycle() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "managed_tool_call_id_error_observer",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let error = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("managed-error-tool")
+            .args(json!({}))
+            .func(Arc::new(|_args| {
+                Box::pin(async { Err(FlowError::Internal("callback failed".into())) })
+            }))
+            .tool_call_id("call-managed-error")
+            .build(),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error, FlowError::Internal(message) if message == "callback failed"));
+
+    let captured = captured_events_snapshot(&events);
+    assert_tool_lifecycle_correlation(&captured, "managed-error-tool", Some("call-managed-error"));
+
+    deregister_subscriber("managed_tool_call_id_error_observer").unwrap();
+}
 
 /// Register an execution intercept that calls next().
 /// Verify the original callable is invoked.
@@ -1237,6 +1341,123 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
     rollback_registrations(&mut registrations);
     deregister_mark_sanitize_guardrail("tool_pending_mark_sanitizer").unwrap();
     deregister_subscriber("tool_outcome_mark_observer").unwrap();
+}
+
+#[tokio::test]
+async fn managed_tool_call_id_projects_to_atif_and_otel() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let agent = setup_isolated_scope("managed-tool-exporter-correlation");
+
+    let atif = AtifExporter::new(
+        "managed-tool-exporter-correlation".to_string(),
+        AtifAgentInfo {
+            name: "test-agent".to_string(),
+            version: "1.0.0".to_string(),
+            model_name: None,
+            tool_definitions: None,
+            extra: None,
+        },
+    );
+    register_subscriber("managed_tool_exporter_atif", atif.subscriber()).unwrap();
+
+    let otel_exporter = InMemorySpanExporterBuilder::new().build();
+    let otel_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(otel_exporter.clone())
+        .build();
+    let otel =
+        OpenTelemetrySubscriber::from_tracer_provider(otel_provider, "managed-tool-exporter-otel");
+    register_subscriber("managed_tool_exporter_otel", otel.subscriber()).unwrap();
+
+    let tool_call_id = "call-managed-exporter-42";
+    llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("model-call")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "weather in NYC"}],
+                }),
+            })
+            .func(Arc::new(move |_| {
+                Box::pin(async move {
+                    Ok(json!({
+                        "model": "test-model",
+                        "choices": [{
+                            "message": {
+                                "role": "assistant",
+                                "content": null,
+                                "tool_calls": [{
+                                    "id": tool_call_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": "{\\\"city\\\":\\\"NYC\\\"}",
+                                    },
+                                }],
+                            },
+                        }],
+                    }))
+                })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("get_weather")
+            .args(json!({"city": "NYC"}))
+            .tool_call_id(tool_call_id)
+            .func(Arc::new(|args| {
+                Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&agent.uuid)
+            .build(),
+    )
+    .unwrap();
+    flush_subscribers().unwrap();
+
+    let trajectory = atif.export().unwrap();
+    let agent_step = trajectory
+        .steps
+        .iter()
+        .find(|step| step.source == "agent")
+        .expect("managed LLM event must create an agent step");
+    assert_eq!(
+        agent_step.tool_calls.as_ref().unwrap()[0].tool_call_id,
+        tool_call_id
+    );
+    assert_eq!(
+        agent_step.observation.as_ref().unwrap().results[0]
+            .source_call_id
+            .as_deref(),
+        Some(tool_call_id)
+    );
+
+    otel.force_flush().unwrap();
+    let tool_span = otel_exporter
+        .get_finished_spans()
+        .unwrap()
+        .into_iter()
+        .find(|span| span.name.as_ref() == "get_weather")
+        .expect("managed tool span must be exported");
+    assert!(tool_span.attributes.iter().any(|attribute| {
+        attribute.key.as_str() == "nemo_relay.tool_call_id"
+            && attribute.value.to_string() == tool_call_id
+    }));
+
+    deregister_subscriber("managed_tool_exporter_atif").unwrap();
+    deregister_subscriber("managed_tool_exporter_otel").unwrap();
 }
 
 #[tokio::test]
@@ -2376,6 +2597,7 @@ async fn dropping_pending_tool_execution_closes_the_managed_lifecycle() {
             .name("cancelled-tool")
             .args(json!({}))
             .func(Arc::new(|args| Box::pin(async move { Ok(args.into()) })))
+            .tool_call_id("call-managed-cancelled")
             .build(),
     ));
     tokio::select! {
@@ -2385,6 +2607,9 @@ async fn dropping_pending_tool_execution_closes_the_managed_lifecycle() {
 
     assert_flush_waits_for_pending_completion(|| drop(execution));
 
+    let captured = captured_events_snapshot(&events);
+    assert_tool_lifecycle_correlation(&captured, "cancelled-tool", Some("call-managed-cancelled"));
+
     let lifecycle = events
         .lock()
         .unwrap()
@@ -2393,8 +2618,8 @@ async fn dropping_pending_tool_execution_closes_the_managed_lifecycle() {
         .filter_map(Event::scope_category)
         .collect::<Vec<_>>();
     assert_eq!(lifecycle, [ScopeCategory::Start, ScopeCategory::End]);
-    let events = events.lock().unwrap();
-    let cancelled_end = events
+    let event_log = events.lock().unwrap();
+    let cancelled_end = event_log
         .iter()
         .find(|event| {
             event.name() == "cancelled-tool" && event.scope_category() == Some(ScopeCategory::End)
@@ -2406,7 +2631,7 @@ async fn dropping_pending_tool_execution_closes_the_managed_lifecycle() {
             .as_ref()
             .is_none_or(|value| value.is_null())
     }));
-    drop(events);
+    drop(event_log);
 
     deregister_tool_execution_intercept("pending_tool_execution").unwrap();
     deregister_subscriber("cancelled_tool_lifecycle").unwrap();
@@ -2714,6 +2939,14 @@ async fn test_conditional_guardrail_rejects() {
     reset_global();
     setup_isolated_thread();
 
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "managed_tool_call_id_rejection_observer",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
     register_tool_conditional_execution_guardrail(
         "rejector",
         1,
@@ -2728,6 +2961,7 @@ async fn test_conditional_guardrail_rejects() {
             .name("tool")
             .args(json!({}))
             .func(func)
+            .tool_call_id("call-managed-rejected")
             .build(),
     )
     .await;
@@ -2740,8 +2974,16 @@ async fn test_conditional_guardrail_rejects() {
         other => panic!("Expected GuardrailRejected, got: {:?}", other),
     }
 
+    let captured = captured_events_snapshot(&events);
+    assert!(
+        captured
+            .iter()
+            .all(|event| { event.name() != "tool" || event.scope_type() != Some(ScopeType::Tool) })
+    );
+
     // Cleanup
     deregister_tool_conditional_execution_guardrail("rejector").unwrap();
+    deregister_subscriber("managed_tool_call_id_rejection_observer").unwrap();
 }
 
 /// Register a conditional guardrail that allows (returns None). Execution proceeds.
@@ -6259,4 +6501,299 @@ async fn test_empty_request_intercept_chain() {
         .await
         .unwrap();
     assert_eq!(result["key"], "val");
+}
+
+#[tokio::test]
+async fn test_conditional_middleware_guardrail_toggles_only_global_target() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_tool_request_intercept(
+        "conditional_target",
+        1,
+        false,
+        Arc::new(|_name, mut args| {
+            args["global"] = json!(true);
+            ready(args)
+        }),
+    )
+    .unwrap();
+
+    let scope = push_scope(
+        nemo_relay::api::scope::PushScopeParams::builder()
+            .name("conditional-local-scope")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    scope_register_tool_request_intercept(
+        &scope.uuid,
+        "conditional_target",
+        2,
+        false,
+        Arc::new(|_name, mut args| {
+            args["local"] = json!(true);
+            ready(args)
+        }),
+    )
+    .unwrap();
+
+    let kinds = BTreeSet::from([RuntimeRegistrationKind::ToolRequestIntercept]);
+    let paused = Arc::new(AtomicBool::new(true));
+    let captured_paused = Arc::clone(&paused);
+    register_conditional_middleware_guardrail(
+        "conditional_gate",
+        kinds.clone(),
+        "conditional_target",
+        Arc::new(move |received_kinds, received_name| {
+            assert_eq!(received_kinds, &kinds);
+            assert_eq!(received_name, "conditional_target");
+            captured_paused
+                .load(Ordering::Acquire)
+                .then(|| "temporarily disabled".to_string())
+        }),
+    )
+    .unwrap();
+
+    let disabled = tool_request_intercepts("tool", json!({})).await.unwrap();
+    assert_eq!(disabled, json!({"local": true}));
+
+    paused.store(false, Ordering::Release);
+    let enabled_by_shared_state = tool_request_intercepts("tool", json!({})).await.unwrap();
+    assert_eq!(
+        enabled_by_shared_state,
+        json!({"global": true, "local": true})
+    );
+
+    paused.store(true, Ordering::Release);
+    assert!(deregister_conditional_middleware_guardrail("conditional_gate").unwrap());
+    let enabled = tool_request_intercepts("tool", json!({})).await.unwrap();
+    assert_eq!(enabled, json!({"global": true, "local": true}));
+
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&scope.uuid)
+            .build(),
+    )
+    .unwrap();
+    deregister_tool_request_intercept("conditional_target").unwrap();
+}
+
+#[tokio::test]
+async fn test_conditional_middleware_guardrail_callback_runs_without_global_runtime_lock() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_tool_request_intercept(
+        "self_deregistering_target",
+        0,
+        false,
+        Arc::new(|_name, mut args| {
+            args["intercepted"] = json!(true);
+            ready(args)
+        }),
+    )
+    .unwrap();
+    register_conditional_middleware_guardrail(
+        "self_deregistering_gate",
+        BTreeSet::from([RuntimeRegistrationKind::ToolRequestIntercept]),
+        "self_deregistering_target",
+        Arc::new(|_, _| {
+            assert!(deregister_tool_request_intercept("self_deregistering_target").unwrap());
+            None
+        }),
+    )
+    .unwrap();
+
+    let current_snapshot = tool_request_intercepts("tool", json!({})).await.unwrap();
+    assert_eq!(current_snapshot, json!({"intercepted": true}));
+    let next_snapshot = tool_request_intercepts("tool", json!({})).await.unwrap();
+    assert_eq!(next_snapshot, json!({}));
+
+    assert!(deregister_conditional_middleware_guardrail("self_deregistering_gate").unwrap());
+}
+
+#[tokio::test]
+async fn test_conditional_middleware_guardrail_callback_runs_without_scope_stack_lock() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_tool_request_intercept(
+        "scope_mutating_target",
+        0,
+        false,
+        Arc::new(|_name, mut args| {
+            args["global"] = json!(true);
+            ready(args)
+        }),
+    )
+    .unwrap();
+    let scope = push_scope(
+        nemo_relay::api::scope::PushScopeParams::builder()
+            .name("scope-mutating-gate")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    scope_register_tool_request_intercept(
+        &scope.uuid,
+        "scope_owned_target",
+        1,
+        false,
+        Arc::new(|_name, mut args| {
+            args["local"] = json!(true);
+            ready(args)
+        }),
+    )
+    .unwrap();
+    let scope_uuid = scope.uuid;
+    register_conditional_middleware_guardrail(
+        "scope_mutating_gate",
+        BTreeSet::from([RuntimeRegistrationKind::ToolRequestIntercept]),
+        "scope_mutating_target",
+        Arc::new(move |_, _| {
+            let _ =
+                scope_deregister_tool_request_intercept(&scope_uuid, "scope_owned_target").unwrap();
+            None
+        }),
+    )
+    .unwrap();
+
+    let current_snapshot = tool_request_intercepts("tool", json!({})).await.unwrap();
+    assert_eq!(current_snapshot, json!({"global": true, "local": true}));
+    let next_snapshot = tool_request_intercepts("tool", json!({})).await.unwrap();
+    assert_eq!(next_snapshot, json!({"global": true}));
+
+    assert!(deregister_conditional_middleware_guardrail("scope_mutating_gate").unwrap());
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&scope.uuid)
+            .build(),
+    )
+    .unwrap();
+    deregister_tool_request_intercept("scope_mutating_target").unwrap();
+}
+
+#[tokio::test]
+async fn test_conditional_middleware_guardrails_are_ordered_and_fail_open() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_tool_request_intercept(
+        "ordered_target",
+        0,
+        false,
+        Arc::new(|_name, mut args| {
+            args["intercepted"] = json!(true);
+            ready(args)
+        }),
+    )
+    .unwrap();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    for (gate_name, decision) in [
+        ("a_panics", None),
+        ("b_enables", None),
+        ("c_disables", Some("disabled")),
+        ("d_not_reached", Some("also disabled")),
+    ] {
+        let calls = Arc::clone(&calls);
+        register_conditional_middleware_guardrail(
+            gate_name,
+            BTreeSet::from([RuntimeRegistrationKind::ToolRequestIntercept]),
+            "ordered_target",
+            Arc::new(move |_, _| {
+                calls.lock().unwrap().push(gate_name);
+                assert_ne!(gate_name, "a_panics", "expected fail-open panic");
+                decision.map(str::to_string)
+            }),
+        )
+        .unwrap();
+    }
+
+    assert_eq!(
+        tool_request_intercepts("tool", json!({})).await.unwrap(),
+        json!({})
+    );
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec!["a_panics", "b_enables", "c_disables"]
+    );
+
+    for gate_name in ["a_panics", "b_enables", "c_disables", "d_not_reached"] {
+        assert!(deregister_conditional_middleware_guardrail(gate_name).unwrap());
+    }
+    assert!(deregister_tool_request_intercept("ordered_target").unwrap());
+}
+
+#[tokio::test]
+async fn test_runtime_registration_discovery_and_cross_owner_subscriber_gate() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let mut context =
+        PluginRegistrationContext::with_namespace("__nemo_relay_plugin__observability__");
+    let deliveries = Arc::new(AtomicU32::new(0));
+    let captured_deliveries = Arc::clone(&deliveries);
+    context
+        .register_subscriber(
+            "opentelemetry",
+            Arc::new(move |_| {
+                captured_deliveries.fetch_add(1, Ordering::AcqRel);
+            }),
+        )
+        .unwrap();
+
+    let kinds = BTreeSet::from([RuntimeRegistrationKind::Subscriber]);
+    let registrations = list_runtime_registrations(Some(&kinds)).unwrap();
+    let registration = registrations
+        .iter()
+        .find(|registration| registration.local_name == "opentelemetry")
+        .unwrap();
+    assert_eq!(registration.kind, RuntimeRegistrationKind::Subscriber);
+    assert_eq!(
+        registration.effective_name,
+        "__nemo_relay_plugin__observability__opentelemetry"
+    );
+    assert_eq!(
+        registration.owner.kind,
+        RuntimeRegistrationOwnerKind::Plugin
+    );
+    assert_eq!(
+        registration.owner.plugin_kind.as_deref(),
+        Some("observability")
+    );
+
+    register_conditional_middleware_guardrail(
+        "external_observability_gate",
+        kinds,
+        &registration.effective_name,
+        Arc::new(|_, _| Some("paused by another owner".into())),
+    )
+    .unwrap();
+    event(
+        EmitMarkEventParams::builder()
+            .name("cross-owner-gated")
+            .build(),
+    )
+    .unwrap();
+    flush_subscribers().unwrap();
+    assert_eq!(deliveries.load(Ordering::Acquire), 0);
+
+    assert!(deregister_conditional_middleware_guardrail("external_observability_gate").unwrap());
+    event(
+        EmitMarkEventParams::builder()
+            .name("cross-owner-enabled")
+            .build(),
+    )
+    .unwrap();
+    flush_subscribers().unwrap();
+    assert_eq!(deliveries.load(Ordering::Acquire), 1);
+
+    let mut registrations = context.into_registrations();
+    rollback_registrations(&mut registrations);
 }

@@ -13,6 +13,48 @@ intervening release in sequence.
 
 ## Upgrade to NeMo Relay 0.8
 
+### Update Exhaustive Cache Configuration Literals
+
+Rust code that constructs `ResponseCacheConfig` with an exhaustive struct
+literal must add `tools: None`. Prefer `..ResponseCacheConfig::default()` when
+the literal should remain compatible with new optional cache surfaces.
+
+### Stream Node.js LLM Execution Intercepts Lazily
+
+<Warning title="Breaking Change">
+NeMo Relay 0.8 changes Node.js LLM streaming execution intercepts from buffered
+JSON values to lazy async iterables. `next(request)` now resolves to an
+`AsyncIterable<Json>`, and the intercept callback must return an async iterable
+or a promise of one. Scalar and array return values are rejected.
+</Warning>
+
+This change applies to global, scope-local, and plugin-owned registrations made
+with `registerLlmStreamExecutionIntercept`,
+`scopeRegisterLlmStreamExecutionIntercept`, and
+`PluginContext.registerLlmStreamExecutionIntercept`.
+
+Replace array transforms such as this pre-0.8 callback:
+
+```js
+async (request, next) =>
+  (await next(request)).map((chunk) => ({ ...chunk, intercepted: true }));
+```
+
+Use an async generator to transform downstream chunks incrementally:
+
+```js
+async function* transformStream(request, next) {
+  for await (const chunk of await next(request)) {
+    yield { ...chunk, intercepted: true };
+  }
+}
+```
+
+Return `next(request)` directly when the intercept only forwards the stream. To
+short-circuit the downstream chain, return an async generator that yields the
+replacement chunks. Do not collect the iterable into an array unless the
+application intentionally needs to buffer the complete response.
+
 ### Move Hermes Agent to Its Native Relay Integration
 
 NeMo Relay 0.8 removes Hermes Agent from the Relay CLI. The `nemo-relay hermes`
@@ -29,6 +71,34 @@ starting.
 NeMo Relay is built into Hermes Agent. Do not install Relay separately or
 enable an observability plugin. Hermes Agent understands NeMo Relay plugin
 configurations.
+
+### Migrate to the Switchyard-Owned Dynamic Plugin
+
+Support for the Switchyard integration now shifts to the
+[Switchyard project](https://github.com/NVIDIA-NeMo/Switchyard). Switchyard
+0.3.0 will provide the dynamic plugin, release artifacts, and configuration
+documentation.
+
+NeMo Relay >=0.8.0 no longer ships the experimental `nemo-relay-switchyard`
+crate, the CLI `switchyard` feature, or the service-backed `switchyard`
+component. Configurations that contain `[[components]]` entries with
+`kind = "switchyard"` are rejected with migration guidance.
+
+To migrate an existing configuration:
+
+1. Remove the CLI `switchyard` Cargo feature and any dependency on
+   `nemo-relay-switchyard`.
+2. Remove the legacy `[[components]]` entry with `kind = "switchyard"`.
+3. Remove Decision API settings and ATOF HTTP sinks used only by the former
+   service integration. Keep any ATOF sink that another Relay consumer uses.
+4. Install and configure the Switchyard-owned dynamic plugin by following the
+   documentation published with Switchyard 0.3.0.
+
+Do not copy service-era component fields into a dynamic-plugin entry. The
+Switchyard release documentation is the source of truth for supported
+algorithms, target configuration, and migration details. For Relay's manifest,
+trust, policy, and activation model, refer to
+[Configure Discoverable Plugins](/configure-plugins/discoverable-plugins).
 
 ### Return Canonical Tool Execution Results
 
@@ -182,11 +252,14 @@ relay = ">=0.8.0,<1.0"
 native_api = "1"
 ```
 
-Relay 0.8 prefers native ABI v4 and falls back to frozen v3 and v2 tables. ABI
-v4 adds completion-scoped codec operations and pull-based downstream LLM
-streams. `native_api = "1"` uses the canonical `ToolExecutionResult` contract
-without changing the ABI v4 table layout. Rebuild all native plugin artifacts;
-support for frozen table layouts does not preserve the pre-0.8 JSON semantics.
+Relay 0.8's current native ABI is v4, with fallback to frozen v3 and v2 tables
+for old binaries. ABI v4 includes typed asynchronous middleware operations such
+as completion-scoped codecs and pull-based downstream LLM streams, then appends
+`emit_mark_v2` for typed data-schema and log-severity options. This does not
+change the manifest `native_api` value. `native_api = "1"` uses the canonical
+`ToolExecutionResult` contract without changing the ABI v4 table layout. Rebuild
+all native plugin artifacts; support for frozen table layouts does not preserve
+the pre-0.8 JSON semantics.
 
 ### Move Project Configuration to a Supported Location
 

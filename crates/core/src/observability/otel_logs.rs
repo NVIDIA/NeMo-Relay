@@ -30,7 +30,10 @@ use crate::observability::{relay_span_id, relay_trace_id};
 use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
 
 use super::OpenTelemetryRuntimeDiagnostics;
-use super::otel::{COMPLETED_SPAN_CONTEXT_LIMIT, OpenTelemetryError, OtlpTransport, Result};
+use super::otel::{
+    COMPLETED_SPAN_CONTEXT_LIMIT, OpenTelemetryError, OtlpTransport, Result,
+    normalize_shutdown_result,
+};
 use super::otel_signal::{
     MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics, build_grpc_metadata,
     build_in_owned_runtime, classify_metric_mark, reject_signal_header_environment,
@@ -304,7 +307,7 @@ impl OpenTelemetryLogSubscriber {
         self.inner
             .provider
             .force_flush()
-            .map_err(|error| OpenTelemetryError::Provider(error.to_string()))
+            .map_err(|error| OpenTelemetryError::LogProvider(error.to_string()))
     }
 
     /// Shut down the OTLP logger provider.
@@ -312,19 +315,14 @@ impl OpenTelemetryLogSubscriber {
     /// Deregister this subscriber before calling shutdown.
     pub fn shutdown(&self) -> Result<()> {
         let barrier = flush_subscribers().map_err(OpenTelemetryError::Core);
-        let provider = self
-            .inner
-            .provider
-            .shutdown()
-            .map_err(|error| OpenTelemetryError::Provider(error.to_string()));
+        let provider = normalize_shutdown_result(self.inner.provider.shutdown())
+            .map_err(|error| OpenTelemetryError::LogProvider(error.to_string()));
         barrier.and(provider)
     }
 
     pub(crate) fn shutdown_provider(&self) -> Result<()> {
-        self.inner
-            .provider
-            .shutdown()
-            .map_err(|error| OpenTelemetryError::Provider(error.to_string()))
+        normalize_shutdown_result(self.inner.provider.shutdown())
+            .map_err(|error| OpenTelemetryError::LogProvider(error.to_string()))
     }
 
     pub(crate) fn delivery_failure_summary(&self) -> Option<String> {
@@ -502,10 +500,12 @@ impl LogProcessor for DiagnosticBatchLogProcessor {
 
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
         let result = self.inner.shutdown_with_timeout(timeout);
-        if result.is_ok() && self.diagnostics.runtime_diagnostics.has_plugin_mirror() {
+        if result.is_ok() {
             let dropped = self.diagnostics.record_queue_drops();
             let export_failures = self.diagnostics.export_failures.load(Ordering::Relaxed);
-            if dropped > 0 || export_failures > 0 {
+            if (dropped > 0 || export_failures > 0)
+                && self.diagnostics.runtime_diagnostics.has_plugin_mirror()
+            {
                 return Err(opentelemetry_sdk::error::OTelSdkError::InternalFailure(
                     format!(
                         "{OTEL_RUNTIME_DELIVERY_FAILURE_MARKER}: otel.logs_dropped ({dropped}), otel.logs_export_failed ({export_failures})"

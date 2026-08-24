@@ -138,7 +138,7 @@ the rest of the documentation can use them consistently.
 : A dynamic plugin is a discoverable plugin package that the operator registers
   from a `relay-plugin.toml` manifest. Dynamic plugins are either native shared
   libraries or local gRPC workers. Refer to [Discoverable
-  Plugins](/build-plugins/dynamic-plugins/about).
+  Plugins](/build-plugins/package-discoverable-plugins).
 
 ## E
 
@@ -207,7 +207,7 @@ the rest of the documentation can use them consistently.
   and installs proxy callbacks through the stable `grpc-v1` protocol. It can
   use a Python, Rust, or command runtime. The process boundary isolates crashes
   and dependencies, but it is not a security sandbox. Refer to [gRPC Worker
-  Plugin Concepts](/build-plugins/dynamic-plugins/grpc-worker/about).
+  Plugins](/build-plugins/workers/about).
 
 **Guardrail**
 : A guardrail is middleware that either blocks execution or rewrites the data
@@ -308,9 +308,9 @@ the rest of the documentation can use them consistently.
 
 **Model Pricing**
 : Model pricing is the built-in `pricing` plugin component that loads catalog
-  sources and annotates managed LLM responses with cost estimates when model and
-  token data are available. The component resolves configured sources through a
-  pricing resolver chain.
+  sources and annotates managed or manually observed LLM responses with cost
+  estimates when model and token data are available. The component resolves
+  configured sources through a pricing resolver chain.
 
 ## N
 
@@ -318,7 +318,7 @@ the rest of the documentation can use them consistently.
 : A native dynamic plugin is a Rust shared library loaded into the Relay
   process through the native plugin ABI. It must be rebuilt for the host ABI
   and compatible Relay version, and it is not sandboxed. Refer to [Native
-  Dynamic Plugins](/build-plugins/dynamic-plugins/native-dynamic/about).
+  Dynamic Plugins](/build-plugins/native/about).
 
 **NeMo Guardrails**
 : NeMo Guardrails is the deprecated built-in `nemo_guardrails` plugin component

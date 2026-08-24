@@ -3,7 +3,9 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
@@ -39,6 +41,30 @@ describe('Type constants', () => {
     assert.equal(ScopeType.Evaluator, 8);
     assert.equal(ScopeType.Custom, 9);
     assert.equal(ScopeType.Unknown, 10);
+  });
+
+  it('type-checks the public API fixtures', () => {
+    execFileSync(
+      process.execPath,
+      [
+        fileURLToPath(new URL('../../../node_modules/typescript/bin/tsc', import.meta.url)),
+        '--noEmit',
+        '--skipLibCheck',
+        '--strict',
+        '--target',
+        'ES2022',
+        '--module',
+        'NodeNext',
+        '--moduleResolution',
+        'NodeNext',
+        'tests/public_observability_api_fixture.ts',
+        'tests/public_event_metadata_api_fixture.ts',
+      ],
+      {
+        cwd: fileURLToPath(new URL('..', import.meta.url)),
+        stdio: 'pipe',
+      },
+    );
   });
 });
 

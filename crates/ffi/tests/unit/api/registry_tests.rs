@@ -17,7 +17,7 @@ fn start_otlp_http_collector() -> (String, Receiver<Vec<u8>>, JoinHandle<()>) {
     listener.set_nonblocking(true).unwrap();
     let (sender, receiver) = mpsc::channel();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let mut last_request = None;
         while Instant::now() < deadline {
             match listener.accept() {
@@ -124,6 +124,321 @@ unsafe extern "C" fn invalid_event_sanitize_cb(
     _fields_json: *const c_char,
 ) -> *mut c_char {
     CString::new("not-json").unwrap().into_raw()
+}
+
+unsafe extern "C" fn event_metadata_injector_cb(
+    _user_data: *mut libc::c_void,
+    event: *const FfiEvent,
+) -> *mut c_char {
+    let name = unsafe { take_string(nemo_relay_event_name(event)) }.unwrap_or_default();
+    CString::new(
+        json!({
+            "ffi.injected": name,
+            "ffi.integers": [1, 2],
+            "ffi.doubles": [1.25, 2.5],
+            "ffi.numbers": [1, 2.5],
+        })
+        .to_string(),
+    )
+    .unwrap()
+    .into_raw()
+}
+
+unsafe extern "C" fn event_metadata_local_injector_cb(
+    _user_data: *mut libc::c_void,
+    _event: *const FfiEvent,
+) -> *mut c_char {
+    CString::new(json!({"ffi.local": true}).to_string())
+        .unwrap()
+        .into_raw()
+}
+
+unsafe extern "C" fn event_metadata_injector_fail_cb(
+    _user_data: *mut libc::c_void,
+    _event: *const FfiEvent,
+) -> *mut c_char {
+    crate::error::set_last_error("event metadata injector callback failed");
+    ptr::null_mut()
+}
+
+unsafe extern "C" fn event_metadata_injector_invalid_cb(
+    _user_data: *mut libc::c_void,
+    _event: *const FfiEvent,
+) -> *mut c_char {
+    CString::new("[]").unwrap().into_raw()
+}
+
+unsafe extern "C" fn event_metadata_injector_mixed_values_cb(
+    _user_data: *mut libc::c_void,
+    _event: *const FfiEvent,
+) -> *mut c_char {
+    CString::new(
+        json!({
+            "ffi.invalid.mixed_values": [1, "two"],
+            "ffi.invalid.sentinel": "must-be-omitted",
+        })
+        .to_string(),
+    )
+    .unwrap()
+    .into_raw()
+}
+
+#[test]
+fn test_ffi_event_metadata_injector_registries_and_failure_paths() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+    reset_globals();
+
+    unsafe {
+        let stack = fresh_scope_stack();
+        let subscriber_name = cstring(&unique_name("ffi_event_metadata_subscriber"));
+        assert_status!(
+            nemo_relay_register_subscriber(
+                subscriber_name.as_ptr(),
+                subscriber_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let global_name = cstring(&unique_name("ffi_event_metadata_global"));
+        let failure_name = cstring(&unique_name("ffi_event_metadata_failure"));
+        let invalid_name = cstring(&unique_name("ffi_event_metadata_invalid"));
+        let mixed_values_name = cstring(&unique_name("ffi_event_metadata_mixed_values"));
+        assert_status!(
+            nemo_relay_register_event_metadata_injector(
+                global_name.as_ptr(),
+                10,
+                Some(event_metadata_injector_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_register_event_metadata_injector(
+                failure_name.as_ptr(),
+                20,
+                Some(event_metadata_injector_fail_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_register_event_metadata_injector(
+                invalid_name.as_ptr(),
+                30,
+                Some(event_metadata_injector_invalid_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_register_event_metadata_injector(
+                mixed_values_name.as_ptr(),
+                40,
+                Some(event_metadata_injector_mixed_values_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let scope_name = cstring("ffi-event-metadata-scope");
+        let mut scope = ptr::null_mut();
+        assert_status!(
+            nemo_relay_push_scope(
+                scope_name.as_ptr(),
+                NemoRelayScopeType::Custom,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut scope,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let scope_uuid = cstring(&take_string(nemo_relay_scope_handle_uuid(scope)).unwrap());
+        let local_name = cstring(&unique_name("ffi_event_metadata_local"));
+        assert_status!(
+            nemo_relay_scope_register_event_metadata_injector(
+                scope_uuid.as_ptr(),
+                local_name.as_ptr(),
+                5,
+                Some(event_metadata_local_injector_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let mark_name = cstring("ffi-event-metadata-mark");
+        assert_status!(
+            nemo_relay_event(mark_name.as_ptr(), scope, ptr::null(), ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
+
+        for name in [
+            &global_name,
+            &failure_name,
+            &invalid_name,
+            &mixed_values_name,
+        ] {
+            assert_status!(
+                nemo_relay_deregister_event_metadata_injector(name.as_ptr()),
+                NemoRelayStatus::Ok
+            );
+        }
+
+        let cleanup_name = cstring("ffi-event-metadata-cleanup");
+        assert_status!(
+            nemo_relay_event(cleanup_name.as_ptr(), ptr::null(), ptr::null(), ptr::null(),),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+
+        let events = lock_unpoisoned(event_log());
+        let scope_start = events
+            .iter()
+            .find(|event| {
+                event["name"] == "ffi-event-metadata-scope"
+                    && event["json"]["scope_category"] == "start"
+            })
+            .expect("scope start should be delivered");
+        let mark = events
+            .iter()
+            .find(|event| event["name"] == "ffi-event-metadata-mark")
+            .expect("mark should be delivered");
+        let scope_end = events
+            .iter()
+            .find(|event| {
+                event["name"] == "ffi-event-metadata-scope"
+                    && event["json"]["scope_category"] == "end"
+            })
+            .expect("scope end should be delivered");
+        let cleanup = events
+            .iter()
+            .find(|event| event["name"] == "ffi-event-metadata-cleanup")
+            .expect("cleanup mark should be delivered");
+        assert_eq!(
+            scope_start["metadata"]["ffi.injected"],
+            json!("ffi-event-metadata-scope")
+        );
+        assert!(scope_start["metadata"].get("ffi.local").is_none());
+        assert_eq!(
+            mark["metadata"]["ffi.injected"],
+            json!("ffi-event-metadata-mark")
+        );
+        assert_eq!(mark["metadata"]["ffi.integers"], json!([1, 2]));
+        assert_eq!(mark["metadata"]["ffi.doubles"], json!([1.25, 2.5]));
+        assert_eq!(mark["metadata"]["ffi.numbers"], json!([1, 2.5]));
+        assert!(mark["metadata"].get("ffi.invalid.mixed_values").is_none());
+        assert!(mark["metadata"].get("ffi.invalid.sentinel").is_none());
+        assert_eq!(mark["metadata"]["ffi.local"], json!(true));
+        assert_eq!(
+            scope_end["metadata"]["ffi.injected"],
+            json!("ffi-event-metadata-scope")
+        );
+        assert_eq!(scope_end["metadata"]["ffi.local"], json!(true));
+        assert!(cleanup["metadata"].is_null());
+        drop(events);
+
+        assert_status!(
+            nemo_relay_deregister_subscriber(subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn test_ffi_event_metadata_injector_rejects_null_callbacks() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+    reset_globals();
+
+    unsafe {
+        let stack = fresh_scope_stack();
+        let global_name = cstring(&unique_name("ffi_event_metadata_null_global"));
+        assert_status!(
+            nemo_relay_register_event_metadata_injector(
+                global_name.as_ptr(),
+                10,
+                None,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_register_event_metadata_injector(
+                global_name.as_ptr(),
+                10,
+                Some(event_metadata_injector_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_deregister_event_metadata_injector(global_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+
+        let scope_name = cstring("ffi-event-metadata-null-scope");
+        let mut scope = ptr::null_mut();
+        assert_status!(
+            nemo_relay_push_scope(
+                scope_name.as_ptr(),
+                NemoRelayScopeType::Custom,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut scope,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let scope_uuid = cstring(&take_string(nemo_relay_scope_handle_uuid(scope)).unwrap());
+        let local_name = cstring(&unique_name("ffi_event_metadata_null_local"));
+        assert_status!(
+            nemo_relay_scope_register_event_metadata_injector(
+                scope_uuid.as_ptr(),
+                local_name.as_ptr(),
+                10,
+                None,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_scope_register_event_metadata_injector(
+                scope_uuid.as_ptr(),
+                local_name.as_ptr(),
+                10,
+                Some(event_metadata_local_injector_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
+        nemo_relay_scope_stack_free(stack);
+    }
 }
 
 #[test]
@@ -693,6 +1008,517 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
             NemoRelayStatus::Ok
         );
         nemo_relay_otel_subscriber_free(subscriber);
+    }
+}
+
+#[test]
+fn test_ffi_open_telemetry_log_and_metric_subscriber_construction() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let endpoint = cstring("http://localhost:4318/v1/traces");
+        let invalid = cstring("invalid");
+        let mut log_subscriber: *mut types::FfiOpenTelemetryLogSubscriber = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_log_subscriber_create(
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                0,
+                0,
+                ptr::null_mut(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_create(
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                invalid.as_ptr(),
+                0,
+                0,
+                0,
+                &mut log_subscriber,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_create(
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                0,
+                0,
+                &mut log_subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert!(!log_subscriber.is_null());
+        let unused_name = cstring("unused");
+        let mut unused_json = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_log_subscriber_register(ptr::null(), unused_name.as_ptr()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_force_flush(ptr::null()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_runtime_diagnostics_json(ptr::null(), &mut unused_json),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_runtime_diagnostics_json(
+                log_subscriber,
+                ptr::null_mut()
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_shutdown(ptr::null()),
+            NemoRelayStatus::NullPointer
+        );
+        types::nemo_relay_otel_log_subscriber_free(log_subscriber);
+
+        let mut metric_subscriber: *mut types::FfiOpenTelemetryMetricSubscriber = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_create(
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                0,
+                ptr::null(),
+                0,
+                0,
+                ptr::null_mut(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_create(
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                0,
+                invalid.as_ptr(),
+                0,
+                0,
+                &mut metric_subscriber,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_create(
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                0,
+                ptr::null(),
+                0,
+                0,
+                &mut metric_subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert!(!metric_subscriber.is_null());
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_register(ptr::null(), unused_name.as_ptr()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_force_flush(ptr::null()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(
+                ptr::null(),
+                &mut unused_json
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(
+                metric_subscriber,
+                ptr::null_mut()
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_shutdown(ptr::null()),
+            NemoRelayStatus::NullPointer
+        );
+        types::nemo_relay_otel_metric_subscriber_free(metric_subscriber);
+    }
+}
+
+#[test]
+fn test_ffi_open_telemetry_log_and_metric_subscribers_export_signals() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let (log_endpoint, log_requests, log_collector) = start_otlp_http_collector();
+        let (metric_endpoint, metric_requests, metric_collector) = start_otlp_http_collector();
+        let log_endpoint = cstring(&log_endpoint);
+        let metric_endpoint = cstring(&metric_endpoint);
+        let mut log_subscriber: *mut types::FfiOpenTelemetryLogSubscriber = ptr::null_mut();
+        let mut metric_subscriber: *mut types::FfiOpenTelemetryMetricSubscriber = ptr::null_mut();
+
+        assert_status!(
+            nemo_relay_otel_log_subscriber_create(
+                ptr::null(),
+                log_endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                0,
+                0,
+                &mut log_subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_create(
+                ptr::null(),
+                metric_endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                0,
+                ptr::null(),
+                0,
+                0,
+                &mut metric_subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let log_subscriber_name = cstring(&unique_name("ffi_otel_log_signal"));
+        let metric_subscriber_name = cstring(&unique_name("ffi_otel_metric_signal"));
+        assert_status!(
+            nemo_relay_otel_log_subscriber_register(log_subscriber, log_subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_register(
+                metric_subscriber,
+                metric_subscriber_name.as_ptr(),
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let stack = fresh_scope_stack();
+        let log_name = cstring("ffi_exported_log");
+        let severity = types::NEMO_RELAY_LOG_SEVERITY_ERROR;
+        assert_status!(
+            api::nemo_relay_event_v2(
+                log_name.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::from_ref(&severity),
+                ptr::null(),
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let metric_mark_name = cstring("ffi_exported_metric");
+        let instrument_name = cstring("example.ffi.requests");
+        let measurement = types::NemoRelayMetricMeasurement {
+            name: instrument_name.as_ptr(),
+            kind: types::NEMO_RELAY_METRIC_KIND_COUNTER,
+            value_type: types::NEMO_RELAY_METRIC_VALUE_TYPE_U64,
+            u64_value: 1,
+            i64_value: 0,
+            f64_value: 0.0,
+            unit: ptr::null(),
+            description: ptr::null(),
+            attributes_json: ptr::null(),
+            boundaries: ptr::null(),
+            boundaries_len: 0,
+        };
+        assert_status!(
+            api::nemo_relay_metric(
+                metric_mark_name.as_ptr(),
+                ptr::null(),
+                ptr::from_ref(&measurement),
+                1,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        assert_status!(
+            nemo_relay_otel_log_subscriber_force_flush(log_subscriber),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_force_flush(metric_subscriber),
+            NemoRelayStatus::Ok
+        );
+
+        let log_body = log_requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            log_body
+                .windows(b"ffi_exported_log".len())
+                .any(|value| value == b"ffi_exported_log")
+        );
+        let metric_body = metric_requests
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert!(
+            metric_body
+                .windows(b"example.ffi.requests".len())
+                .any(|value| value == b"example.ffi.requests")
+        );
+
+        assert_status!(
+            nemo_relay_otel_log_subscriber_deregister(log_subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_deregister(metric_subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_shutdown(log_subscriber),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_shutdown(metric_subscriber),
+            NemoRelayStatus::Ok
+        );
+        types::nemo_relay_otel_log_subscriber_free(log_subscriber);
+        types::nemo_relay_otel_metric_subscriber_free(metric_subscriber);
+        nemo_relay_scope_stack_free(stack);
+        log_collector.join().unwrap();
+        metric_collector.join().unwrap();
+    }
+}
+
+#[test]
+fn test_ffi_open_telemetry_subscribers_return_runtime_diagnostics() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let endpoint = cstring("http://127.0.0.1:4318/v1/traces");
+        let mut trace_subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
+        let mut log_subscriber: *mut types::FfiOpenTelemetryLogSubscriber = ptr::null_mut();
+        let mut metric_subscriber: *mut types::FfiOpenTelemetryMetricSubscriber = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_subscriber_create(
+                c"full".as_ptr(),
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                &mut trace_subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_create(
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                0,
+                0,
+                &mut log_subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_create(
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                0,
+                ptr::null(),
+                0,
+                0,
+                &mut metric_subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let trace_name = cstring(&unique_name("ffi_otel_trace_diagnostics"));
+        let log_name = cstring(&unique_name("ffi_otel_log_diagnostics"));
+        let metric_name = cstring(&unique_name("ffi_otel_metric_diagnostics"));
+        assert_status!(
+            nemo_relay_otel_subscriber_register(trace_subscriber, trace_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_register(log_subscriber, log_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_register(metric_subscriber, metric_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+
+        let stack = fresh_scope_stack();
+        let event_name = cstring("invalid_metric");
+        let data = cstring(r#"{"measurements":[]}"#);
+        let data_schema = cstring(r#"{"name":"nemo.relay.metric_measurements","version":"999"}"#);
+        assert_status!(
+            api::nemo_relay_event_v2(
+                event_name.as_ptr(),
+                ptr::null(),
+                data.as_ptr(),
+                data_schema.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+
+        let mut trace_diagnostics = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_subscriber_runtime_diagnostics_json(
+                trace_subscriber,
+                &mut trace_diagnostics,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let mut log_diagnostics = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_log_subscriber_runtime_diagnostics_json(
+                log_subscriber,
+                &mut log_diagnostics,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let mut metric_diagnostics = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(
+                metric_subscriber,
+                &mut metric_diagnostics,
+            ),
+            NemoRelayStatus::Ok
+        );
+        for diagnostics in [trace_diagnostics, log_diagnostics, metric_diagnostics] {
+            let entries = returned_json(diagnostics);
+            let diagnostic = entries
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["code"] == "otel.metric_mark_invalid")
+                .unwrap();
+            assert_eq!(diagnostic["count"], 1);
+            assert!(
+                diagnostic["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("unsupported metric schema version")
+            );
+        }
+
+        assert_status!(
+            nemo_relay_otel_subscriber_deregister(trace_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_deregister(log_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_deregister(metric_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_subscriber_shutdown(trace_subscriber),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_shutdown(log_subscriber),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_shutdown(metric_subscriber),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_otel_subscriber_free(trace_subscriber);
+        types::nemo_relay_otel_log_subscriber_free(log_subscriber);
+        types::nemo_relay_otel_metric_subscriber_free(metric_subscriber);
+        nemo_relay_scope_stack_free(stack);
     }
 }
 
@@ -2368,4 +3194,105 @@ fn assert_llm_execution_events(events: &[Json]) {
 fn assert_atif_trajectory(trajectory: &Json) {
     assert_eq!(trajectory["schema_version"], json!("ATIF-v1.7"));
     assert!(trajectory["steps"].as_array().unwrap().len() >= 4);
+}
+
+#[derive(Default)]
+struct RuntimeRegistrationGateCapture {
+    kinds_json: Vec<u8>,
+    registration_name: Vec<u8>,
+}
+
+unsafe extern "C" fn runtime_registration_gate_cb(
+    user_data: *mut libc::c_void,
+    kinds_json: *const c_char,
+    registration_name: *const c_char,
+) -> *mut c_char {
+    let capture = unsafe { &mut *user_data.cast::<RuntimeRegistrationGateCapture>() };
+    capture.kinds_json = unsafe { CStr::from_ptr(kinds_json) }.to_bytes().to_vec();
+    capture.registration_name = unsafe { CStr::from_ptr(registration_name) }
+        .to_bytes()
+        .to_vec();
+    c"timer active".to_owned().into_raw()
+}
+
+#[test]
+fn conditional_middleware_guardrail_ffi_toggles_existing_registration() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    let target_name = cstring("ffi-runtime-target");
+    let gate_name = cstring("ffi-runtime-gate");
+    let kinds = cstring(r#"["tool_request_intercept"]"#);
+    let tool_name = cstring("tool");
+    let args = cstring("{}");
+    let mut gate_capture = RuntimeRegistrationGateCapture::default();
+
+    unsafe {
+        assert_status!(
+            nemo_relay_register_tool_request_intercept(
+                target_name.as_ptr(),
+                0,
+                false,
+                tool_request_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let mut registrations = ptr::null_mut();
+        assert_status!(
+            nemo_relay_list_runtime_registrations(kinds.as_ptr(), &mut registrations),
+            NemoRelayStatus::Ok
+        );
+        let registrations = returned_json(registrations);
+        assert!(
+            registrations
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|registration| { registration["local_name"] == json!("ffi-runtime-target") })
+        );
+
+        assert_status!(
+            nemo_relay_register_conditional_middleware_guardrail(
+                gate_name.as_ptr(),
+                kinds.as_ptr(),
+                target_name.as_ptr(),
+                Some(runtime_registration_gate_cb),
+                (&mut gate_capture as *mut RuntimeRegistrationGateCapture).cast(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let mut disabled = ptr::null_mut();
+        assert_status!(
+            nemo_relay_tool_request_intercepts(tool_name.as_ptr(), args.as_ptr(), &mut disabled),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(returned_json(disabled), json!({}));
+        assert_eq!(gate_capture.kinds_json, br#"["tool_request_intercept"]"#);
+        assert_eq!(gate_capture.registration_name, b"ffi-runtime-target");
+
+        let mut removed = false;
+        assert_status!(
+            nemo_relay_deregister_conditional_middleware_guardrail(
+                gate_name.as_ptr(),
+                &mut removed,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert!(removed);
+
+        let mut enabled = ptr::null_mut();
+        assert_status!(
+            nemo_relay_tool_request_intercepts(tool_name.as_ptr(), args.as_ptr(), &mut enabled),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(returned_json(enabled), json!({"intercepted": true}));
+
+        assert_status!(
+            nemo_relay_deregister_tool_request_intercept(target_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+    }
 }

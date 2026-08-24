@@ -33,9 +33,10 @@ use super::{
     apply_attribute_mappings, attribute_mapping_aliases, attribute_mapping_inputs,
     default_mark_exclude_names, effective_mark_projection, estimate_cost_for_response_or_model,
     estimate_cost_for_response_or_requested_model, manual, model_name_for_llm_event,
-    push_serialized_top_level_attributes, push_session_identity_attributes,
-    push_tool_result_annotation_attribute, push_top_level_json_attributes, relay_span_id,
-    relay_trace_id, validate_attribute_mappings,
+    promote_event_metadata_attributes, push_serialized_top_level_attributes,
+    push_session_identity_attributes, push_tool_result_annotation_attribute,
+    push_top_level_json_attributes, relay_span_id, relay_trace_id, validate_attribute_mappings,
+    validate_metadata_promotion_prefixes,
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
@@ -112,6 +113,13 @@ fn with_relay_ids<T>(uuid: Uuid, build: impl FnOnce() -> T) -> T {
 /// Result type for the OpenTelemetry subscriber crate.
 pub type Result<T> = std::result::Result<T, OpenTelemetryError>;
 
+pub(super) fn normalize_shutdown_result(result: OTelSdkResult) -> OTelSdkResult {
+    match result {
+        Err(OTelSdkError::AlreadyShutdown) => Ok(()),
+        result => result,
+    }
+}
+
 /// Errors produced while configuring or operating the OpenTelemetry subscriber.
 #[derive(Debug, thiserror::Error)]
 pub enum OpenTelemetryError {
@@ -144,10 +152,19 @@ pub enum OpenTelemetryError {
     ExporterBuild(String),
     /// The underlying tracer provider returned an error.
     #[error("OpenTelemetry tracer provider error: {0}")]
-    Provider(String),
+    TraceProvider(String),
+    /// The underlying logger provider returned an error.
+    #[error("OpenTelemetry log provider error: {0}")]
+    LogProvider(String),
+    /// The underlying meter provider returned an error.
+    #[error("OpenTelemetry metric provider error: {0}")]
+    MetricProvider(String),
     /// Attribute mapping configuration was invalid.
     #[error("invalid attribute mappings: {0}")]
     InvalidAttributeMappings(String),
+    /// Metadata promotion prefix configuration was invalid.
+    #[error("invalid metadata promotion prefixes: {0}")]
+    InvalidMetadataPromotionPrefixes(String),
     /// Registration errors from the core runtime.
     #[error(transparent)]
     Core(#[from] FlowError),
@@ -200,6 +217,7 @@ pub struct OpenTelemetryConfig {
     mark_projection: MarkProjection,
     mark_exclude_names: Vec<String>,
     attribute_mappings: Vec<OtlpAttributeMapping>,
+    promote_metadata_prefixes: Vec<String>,
     timeout: Duration,
     transport: OtlpTransport,
     max_queue_size: Option<usize>,
@@ -221,6 +239,7 @@ impl OpenTelemetryConfig {
             mark_projection: MarkProjection::default(),
             mark_exclude_names: default_mark_exclude_names(),
             attribute_mappings: Vec::new(),
+            promote_metadata_prefixes: Vec::new(),
             timeout: Duration::from_secs(3),
             transport: OtlpTransport::HttpBinary,
             max_queue_size: None,
@@ -383,6 +402,16 @@ impl OpenTelemetryConfig {
         self.attribute_mappings = mappings.into_iter().collect();
         self
     }
+
+    /// Selects literal Event metadata prefixes copied to OTLP attributes.
+    pub fn with_promote_metadata_prefixes<I, S>(mut self, prefixes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.promote_metadata_prefixes = prefixes.into_iter().map(Into::into).collect();
+        self
+    }
 }
 
 #[cfg(test)]
@@ -407,6 +436,8 @@ pub struct OpenTelemetrySubscriberOptions {
     pub mark_exclude_names: Vec<String>,
     /// Typed OTLP attributes copied to alias keys.
     pub attribute_mappings: Vec<OtlpAttributeMapping>,
+    /// Literal Event metadata prefixes copied to OTLP attributes.
+    pub promote_metadata_prefixes: Vec<String>,
 }
 
 impl Default for OpenTelemetrySubscriberOptions {
@@ -415,15 +446,16 @@ impl Default for OpenTelemetrySubscriberOptions {
             mark_projection: MarkProjection::default(),
             mark_exclude_names: default_mark_exclude_names(),
             attribute_mappings: Vec::new(),
+            promote_metadata_prefixes: Vec::new(),
         }
     }
 }
 
 struct Inner {
-    // Keep `processor` before `_runtime`: the processor owns the
-    // `SdkTracerProvider` and must be dropped before `ExporterRuntime` joins
-    // and tears down its Tokio runtime. Do not reorder these fields.
-    processor: Arc<Mutex<OtelEventProcessor>>,
+    // Keep `provider` before `_runtime`: the provider must be dropped before
+    // `ExporterRuntime` joins and tears down its Tokio runtime. Do not reorder
+    // these fields.
+    provider: SdkTracerProvider,
     runtime_diagnostics: SignalRuntimeDiagnostics,
     subscriber: EventSubscriberFn,
     _runtime: Option<ExporterRuntime>,
@@ -471,6 +503,8 @@ impl OpenTelemetrySubscriber {
         }
         validate_attribute_mappings(&config.attribute_mappings)
             .map_err(OpenTelemetryError::InvalidAttributeMappings)?;
+        validate_metadata_promotion_prefixes(&config.promote_metadata_prefixes)
+            .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
         reject_global_header_environment()?;
         validate_headers(&config.headers)?;
         let runtime_diagnostics = SignalRuntimeDiagnostics::new(diagnostic_field);
@@ -483,6 +517,7 @@ impl OpenTelemetrySubscriber {
             config.mark_projection,
             config.mark_exclude_names,
             config.attribute_mappings,
+            config.promote_metadata_prefixes,
             Some(runtime),
         ))
     }
@@ -512,6 +547,7 @@ impl OpenTelemetrySubscriber {
             otel_type,
             MarkProjection::default(),
             default_mark_exclude_names(),
+            Vec::new(),
             Vec::new(),
             None,
         )
@@ -545,6 +581,8 @@ impl OpenTelemetrySubscriber {
     ) -> Result<Self> {
         validate_attribute_mappings(&options.attribute_mappings)
             .map_err(OpenTelemetryError::InvalidAttributeMappings)?;
+        validate_metadata_promotion_prefixes(&options.promote_metadata_prefixes)
+            .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
         Ok(Self::from_tracer_provider_with_scope_and_type(
             provider,
             instrumentation_scope.into(),
@@ -552,6 +590,7 @@ impl OpenTelemetrySubscriber {
             options.mark_projection,
             options.mark_exclude_names,
             options.attribute_mappings,
+            options.promote_metadata_prefixes,
             None,
         ))
     }
@@ -565,6 +604,8 @@ impl OpenTelemetrySubscriber {
     ) -> Result<Self> {
         validate_attribute_mappings(&options.attribute_mappings)
             .map_err(OpenTelemetryError::InvalidAttributeMappings)?;
+        validate_metadata_promotion_prefixes(&options.promote_metadata_prefixes)
+            .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
         Ok(Self::from_tracer_provider_with_scope_and_type(
             provider,
             instrumentation_scope.into(),
@@ -572,10 +613,12 @@ impl OpenTelemetrySubscriber {
             options.mark_projection,
             options.mark_exclude_names,
             options.attribute_mappings,
+            options.promote_metadata_prefixes,
             None,
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn from_tracer_provider_with_scope_and_type(
         provider: SdkTracerProvider,
         instrumentation_scope: String,
@@ -583,6 +626,7 @@ impl OpenTelemetrySubscriber {
         mark_projection: MarkProjection,
         mark_exclude_names: Vec<String>,
         attribute_mappings: Vec<OtlpAttributeMapping>,
+        promote_metadata_prefixes: Vec<String>,
         runtime: Option<ExporterRuntime>,
     ) -> Self {
         let runtime_diagnostics = runtime
@@ -591,12 +635,13 @@ impl OpenTelemetrySubscriber {
             .unwrap_or_else(|| SignalRuntimeDiagnostics::new(None));
         let processor = Arc::new(Mutex::new(
             OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
-                provider,
+                provider.clone(),
                 instrumentation_scope,
                 otel_type,
                 mark_projection,
                 mark_exclude_names,
                 attribute_mappings,
+                promote_metadata_prefixes,
                 runtime_diagnostics.clone(),
             ),
         ));
@@ -612,7 +657,7 @@ impl OpenTelemetrySubscriber {
 
         Self {
             inner: Arc::new(Inner {
-                processor,
+                provider,
                 runtime_diagnostics,
                 subscriber,
                 _runtime: runtime,
@@ -660,10 +705,10 @@ impl OpenTelemetrySubscriber {
     /// Flushes finished spans through the underlying tracer provider.
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
-        let guard = self.inner.processor.lock().map_err(|_| {
-            OpenTelemetryError::Provider("the subscriber state lock was poisoned".to_string())
-        })?;
-        guard.force_flush()
+        self.inner
+            .provider
+            .force_flush()
+            .map_err(|error| OpenTelemetryError::TraceProvider(error.to_string()))
     }
 
     /// Shuts down the underlying tracer provider.
@@ -679,11 +724,8 @@ impl OpenTelemetrySubscriber {
     }
 
     pub(crate) fn shutdown_provider(&self) -> Result<()> {
-        let guard = self.inner.processor.lock().map_err(|_| {
-            OpenTelemetryError::Provider("the subscriber state lock was poisoned".to_string())
-        })?;
-        let result = guard.shutdown();
-        if result.is_ok() {
+        let provider_result = self.inner.provider.shutdown();
+        if provider_result.is_ok() {
             log::info!(
                 target: "nemo_relay.observability",
                 event = "exporter_shutdown",
@@ -691,7 +733,8 @@ impl OpenTelemetrySubscriber {
                 "OpenTelemetry exporter shut down"
             );
         }
-        result
+        normalize_shutdown_result(provider_result)
+            .map_err(|error| OpenTelemetryError::TraceProvider(error.to_string()))
     }
 }
 
@@ -863,13 +906,20 @@ fn build_tracer_provider(
 struct CountingSpanExporter<E> {
     inner: E,
     accepted_spans: Arc<AtomicU64>,
+    diagnostics: Arc<TraceDeliveryDiagnostics>,
 }
 
 impl<E: SpanExporter> SpanExporter for CountingSpanExporter<E> {
     async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
         self.accepted_spans
             .fetch_add(batch.len() as u64, Ordering::Relaxed);
-        self.inner.export(batch).await
+        let result = self.inner.export(batch).await;
+        if let Err(error) = &result {
+            self.diagnostics.record_export_failure(error);
+        } else {
+            self.diagnostics.record_export_success();
+        }
+        result
     }
 
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
@@ -886,12 +936,61 @@ impl<E: SpanExporter> SpanExporter for CountingSpanExporter<E> {
 }
 
 #[derive(Debug)]
+struct TraceDeliveryDiagnostics {
+    endpoint: String,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+    export_failures: AtomicU64,
+    unresolved_export_failure: AtomicBool,
+}
+
+impl TraceDeliveryDiagnostics {
+    fn new(endpoint: String, runtime_diagnostics: SignalRuntimeDiagnostics) -> Self {
+        Self {
+            endpoint,
+            runtime_diagnostics,
+            export_failures: AtomicU64::new(0),
+            unresolved_export_failure: AtomicBool::new(false),
+        }
+    }
+
+    fn record_export_failure(&self, error: &impl std::fmt::Display) {
+        self.export_failures.fetch_add(1, Ordering::Relaxed);
+        self.unresolved_export_failure
+            .store(true, Ordering::Relaxed);
+        self.runtime_diagnostics.record(
+            "otel.traces_export_failed",
+            format!(
+                "OpenTelemetry trace export to endpoint {} failed: {error}",
+                self.endpoint
+            ),
+            1,
+        );
+    }
+
+    fn record_export_success(&self) {
+        self.unresolved_export_failure
+            .store(false, Ordering::Relaxed);
+    }
+
+    fn unresolved_failure_summary(&self) -> Option<String> {
+        self.unresolved_export_failure
+            .load(Ordering::Relaxed)
+            .then(|| {
+                let failures = self.export_failures.load(Ordering::Relaxed);
+                format!(
+                    "otel.traces_export_failed ({failures}): export to endpoint {} has not recovered",
+                    self.endpoint
+                )
+            })
+    }
+}
+
+#[derive(Debug)]
 struct DiagnosticBatchSpanProcessor {
     inner: BatchSpanProcessor,
     completed_spans: AtomicU64,
     accepted_spans: Arc<AtomicU64>,
-    endpoint: String,
-    runtime_diagnostics: SignalRuntimeDiagnostics,
+    diagnostics: Arc<TraceDeliveryDiagnostics>,
     diagnostic_reported: AtomicBool,
 }
 
@@ -903,9 +1002,11 @@ impl DiagnosticBatchSpanProcessor {
         batch_config: opentelemetry_sdk::trace::BatchConfig,
     ) -> Self {
         let accepted_spans = Arc::new(AtomicU64::new(0));
+        let diagnostics = Arc::new(TraceDeliveryDiagnostics::new(endpoint, runtime_diagnostics));
         let exporter = CountingSpanExporter {
             inner: exporter,
             accepted_spans: Arc::clone(&accepted_spans),
+            diagnostics: Arc::clone(&diagnostics),
         };
         Self {
             inner: BatchSpanProcessor::builder(exporter)
@@ -913,8 +1014,7 @@ impl DiagnosticBatchSpanProcessor {
                 .build(),
             completed_spans: AtomicU64::new(0),
             accepted_spans,
-            endpoint,
-            runtime_diagnostics,
+            diagnostics,
             diagnostic_reported: AtomicBool::new(false),
         }
     }
@@ -927,11 +1027,11 @@ impl DiagnosticBatchSpanProcessor {
         if dropped == 0 || self.diagnostic_reported.swap(true, Ordering::Relaxed) {
             return dropped;
         }
-        self.runtime_diagnostics.record(
+        self.diagnostics.runtime_diagnostics.record(
             "otel.spans_dropped",
             format!(
                 "OpenTelemetry dropped {dropped} spans before export to endpoint {} because the batch queue was full",
-                self.endpoint
+                self.diagnostics.endpoint
             ),
             dropped,
         );
@@ -950,16 +1050,33 @@ impl SpanProcessor for DiagnosticBatchSpanProcessor {
     }
 
     fn force_flush(&self) -> OTelSdkResult {
-        self.inner.force_flush()
+        let result = self.inner.force_flush();
+        if result.is_ok()
+            && let Some(summary) = self.diagnostics.unresolved_failure_summary()
+        {
+            return Err(OTelSdkError::InternalFailure(summary));
+        }
+        result
     }
 
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
         let result = self.inner.shutdown_with_timeout(timeout);
         if result.is_ok() {
             let dropped = self.record_dropped_spans();
-            if dropped > 0 && self.runtime_diagnostics.has_plugin_mirror() {
+            let export_failure = self.diagnostics.unresolved_failure_summary();
+            if (dropped > 0 || export_failure.is_some())
+                && self.diagnostics.runtime_diagnostics.has_plugin_mirror()
+            {
+                let mut diagnostics = Vec::new();
+                if dropped > 0 {
+                    diagnostics.push(format!("otel.spans_dropped ({dropped})"));
+                }
+                if let Some(export_failure) = export_failure {
+                    diagnostics.push(export_failure);
+                }
                 return Err(OTelSdkError::InternalFailure(format!(
-                    "{OTEL_RUNTIME_DELIVERY_FAILURE_MARKER}: otel.spans_dropped ({dropped})"
+                    "{OTEL_RUNTIME_DELIVERY_FAILURE_MARKER}: {}",
+                    diagnostics.join(", ")
                 )));
             }
         }
@@ -996,6 +1113,8 @@ pub(super) struct ActiveSpan {
     span_context: SpanContext,
     start_model_name: Option<String>,
     projected_attributes: Vec<KeyValue>,
+    projection_attribute_keys: HashSet<String>,
+    start_promoted_metadata: Vec<KeyValue>,
     descendant_error_type: Option<String>,
     descendant_exception_type: Option<String>,
 }
@@ -1004,12 +1123,14 @@ pub(super) struct OtelEventProcessor {
     pub(super) active_spans: HashMap<Uuid, ActiveSpan>,
     pub(super) completed_span_contexts: HashMap<Uuid, SpanContext>,
     pub(super) completed_span_order: VecDeque<Uuid>,
+    #[cfg(test)]
     provider: SdkTracerProvider,
     tracer: SdkTracer,
     otel_type: OpenTelemetryType,
     mark_projection: MarkProjection,
     mark_exclude_names: Vec<String>,
     attribute_mappings: Vec<OtlpAttributeMapping>,
+    promote_metadata_prefixes: Vec<String>,
     invalid_metric_count: u64,
     runtime_diagnostics: SignalRuntimeDiagnostics,
 }
@@ -1115,10 +1236,12 @@ impl OtelEventProcessor {
             mark_projection,
             mark_exclude_names,
             attribute_mappings,
+            Vec::new(),
             SignalRuntimeDiagnostics::new(None),
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
         provider: SdkTracerProvider,
         instrumentation_scope: String,
@@ -1126,6 +1249,7 @@ impl OtelEventProcessor {
         mark_projection: MarkProjection,
         mark_exclude_names: Vec<String>,
         attribute_mappings: Vec<OtlpAttributeMapping>,
+        promote_metadata_prefixes: Vec<String>,
         runtime_diagnostics: SignalRuntimeDiagnostics,
     ) -> Self {
         let tracer = provider.tracer(instrumentation_scope);
@@ -1133,12 +1257,14 @@ impl OtelEventProcessor {
             active_spans: HashMap::new(),
             completed_span_contexts: HashMap::new(),
             completed_span_order: VecDeque::new(),
+            #[cfg(test)]
             provider,
             tracer,
             otel_type,
             mark_projection,
             mark_exclude_names,
             attribute_mappings,
+            promote_metadata_prefixes,
             invalid_metric_count: 0,
             runtime_diagnostics,
         }
@@ -1152,16 +1278,11 @@ impl OtelEventProcessor {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn force_flush(&self) -> Result<()> {
         self.provider
             .force_flush()
-            .map_err(|e| OpenTelemetryError::Provider(e.to_string()))
-    }
-
-    fn shutdown(&self) -> Result<()> {
-        self.provider
-            .shutdown()
-            .map_err(|e| OpenTelemetryError::Provider(e.to_string()))
+            .map_err(|e| OpenTelemetryError::TraceProvider(e.to_string()))
     }
 
     fn process_start(&mut self, event: &Event) {
@@ -1200,11 +1321,30 @@ impl OtelEventProcessor {
         if self.otel_type != OpenTelemetryType::GenAi && is_trace_root {
             push_session_identity_attributes(&mut attributes, event);
         }
+        // Snapshot keys claimed by the projection so promoted metadata cannot
+        // replace them when the span completes.
+        let mut projection_attribute_keys = attributes
+            .iter()
+            .map(|attribute| attribute.key.as_str().to_string())
+            .collect::<HashSet<_>>();
+        if self.otel_type != OpenTelemetryType::GenAi {
+            projection_attribute_keys.extend(
+                self.attribute_mappings
+                    .iter()
+                    .map(|mapping| mapping.alias.clone()),
+            );
+        }
         let projected_attributes = if self.otel_type == OpenTelemetryType::GenAi {
             Vec::new()
         } else {
             attribute_mapping_inputs(&attributes, &self.attribute_mappings)
         };
+        let mut start_promoted_metadata = Vec::new();
+        self.promote_metadata(
+            &mut start_promoted_metadata,
+            event,
+            &projection_attribute_keys,
+        );
         span.set_attributes(attributes);
         let span_context = local_parent_span_context(span.span_context());
         self.active_spans.insert(
@@ -1214,6 +1354,8 @@ impl OtelEventProcessor {
                 span_context,
                 start_model_name,
                 projected_attributes,
+                projection_attribute_keys,
+                start_promoted_metadata,
                 descendant_error_type: None,
                 descendant_exception_type: None,
             },
@@ -1282,6 +1424,26 @@ impl OtelEventProcessor {
                 &self.attribute_mappings,
             ));
         }
+        // Scope-end key presence is authoritative even when the final value
+        // cannot be represented as an OTLP attribute. Do not restore a stale
+        // promoted value retained from scope start.
+        active_span.projection_attribute_keys.extend(
+            attributes
+                .iter()
+                .map(|attribute| attribute.key.as_str().to_string()),
+        );
+        let end_metadata = event.metadata().and_then(crate::json::Json::as_object);
+        active_span.start_promoted_metadata.retain(|attribute| {
+            let key = attribute.key.as_str();
+            !active_span.projection_attribute_keys.contains(key)
+                && !end_metadata.is_some_and(|metadata| metadata.contains_key(key))
+        });
+        attributes.extend(active_span.start_promoted_metadata);
+        self.promote_metadata(
+            &mut attributes,
+            event,
+            &active_span.projection_attribute_keys,
+        );
         if is_error && let Some(parent_span) = self.find_parent_span_mut(event) {
             if parent_span.descendant_error_type.is_none() {
                 parent_span.descendant_error_type = error_type;
@@ -1339,6 +1501,7 @@ impl OtelEventProcessor {
 
         if self.find_parent_span(event).is_some() {
             apply_attribute_mappings(&mut attributes, &self.attribute_mappings);
+            self.promote_metadata(&mut attributes, event, &HashSet::new());
             let parent_span = self
                 .find_parent_span_mut(event)
                 .expect("parent span was present during mark projection");
@@ -1361,6 +1524,7 @@ impl OtelEventProcessor {
             attributes.push(KeyValue::new("nemo_relay.mark.orphan", true));
         }
         apply_attribute_mappings(&mut attributes, &self.attribute_mappings);
+        self.promote_metadata(&mut attributes, event, &HashSet::new());
         span.set_attributes(attributes);
         span.end_with_timestamp(timestamp);
     }
@@ -1382,6 +1546,7 @@ impl OtelEventProcessor {
             attributes.push(KeyValue::new("nemo_relay.mark.orphan", true));
         }
         apply_attribute_mappings(&mut attributes, &self.attribute_mappings);
+        self.promote_metadata(&mut attributes, event, &HashSet::new());
 
         let mut span = with_relay_ids(event.uuid(), || {
             self.tracer
@@ -1394,6 +1559,44 @@ impl OtelEventProcessor {
         span.end_with_timestamp(timestamp);
     }
 
+    // Report unsupported metadata by key without exposing its value or
+    // interrupting Event export.
+    fn promote_metadata(
+        &self,
+        attributes: &mut Vec<KeyValue>,
+        event: &Event,
+        protected_keys: &HashSet<String>,
+    ) {
+        let mut issues = promote_event_metadata_attributes(
+            attributes,
+            event,
+            &self.promote_metadata_prefixes,
+            protected_keys,
+        );
+
+        issues.sort_by(|left, right| left.key.cmp(&right.key));
+        for issue in issues {
+            let diagnostic_code =
+                format!("otel.metadata_promotion_value_unsupported.{}", issue.key);
+            let diagnostic_count = self.runtime_diagnostics.record(
+                diagnostic_code,
+                format!(
+                    "OpenTelemetry metadata attribute {:?} was not promoted: {}",
+                    issue.key, issue.reason
+                ),
+                1,
+            );
+            if should_relog_runtime_diagnostic(diagnostic_count) {
+                log::warn!(
+                    target: "nemo_relay.observability",
+                    event = "otel_metadata_promotion_value_unsupported",
+                    metadata_key = issue.key.as_str();
+                    "OpenTelemetry metadata attribute was not promoted: {}",
+                    issue.reason
+                );
+            }
+        }
+    }
     fn mark_attributes(&self, event: &Event) -> Vec<KeyValue> {
         match self.otel_type {
             OpenTelemetryType::Full => mark_attributes(event),

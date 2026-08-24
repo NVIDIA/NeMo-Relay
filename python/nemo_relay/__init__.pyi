@@ -27,6 +27,7 @@ from typing import Literal, Optional, TypeAlias, TypedDict
 
 from nemo_relay import adaptive as adaptive
 from nemo_relay import codecs as codecs
+from nemo_relay import event_metadata as event_metadata
 from nemo_relay import guardrails as guardrails
 from nemo_relay import intercepts as intercepts
 from nemo_relay import llm as llm
@@ -88,10 +89,43 @@ from nemo_relay._native import (
     LlmSanitizeResponseContext as LlmSanitizeResponseContext,
 )
 from nemo_relay._native import (
+    LogSeverity as LogSeverity,
+)
+from nemo_relay._native import (
     MarkEvent as MarkEvent,
 )
 from nemo_relay._native import (
+    MetricKind as MetricKind,
+)
+from nemo_relay._native import (
+    MetricMeasurement as MetricMeasurement,
+)
+from nemo_relay._native import (
+    MetricTemporality as MetricTemporality,
+)
+from nemo_relay._native import (
+    MetricValueType as MetricValueType,
+)
+from nemo_relay._native import (
     OpenTelemetryConfig as OpenTelemetryConfig,
+)
+from nemo_relay._native import (
+    OpenTelemetryLogConfig as OpenTelemetryLogConfig,
+)
+from nemo_relay._native import (
+    OpenTelemetryLogSubscriber as OpenTelemetryLogSubscriber,
+)
+from nemo_relay._native import (
+    OpenTelemetryMetricConfig as OpenTelemetryMetricConfig,
+)
+from nemo_relay._native import (
+    OpenTelemetryMetricSubscriber as OpenTelemetryMetricSubscriber,
+)
+from nemo_relay._native import (
+    OpenTelemetryRuntimeDiagnostic as OpenTelemetryRuntimeDiagnostic,
+)
+from nemo_relay._native import (
+    OpenTelemetryRuntimeDiagnostics as OpenTelemetryRuntimeDiagnostics,
 )
 from nemo_relay._native import (
     OpenTelemetrySubscriber as OpenTelemetrySubscriber,
@@ -157,6 +191,12 @@ Json: TypeAlias = JsonValue
 UnsupportedBehavior: TypeAlias = Literal["ignore", "warn", "error"]
 """Policy used by config helpers when unknown fields or values are encountered."""
 
+class DataSchema(TypedDict):
+    """Schema identifier attached to an event's opaque data payload."""
+
+    name: str
+    version: str
+
 class EventSanitizeFields(TypedDict):
     """Observability fields returned by mark and scope event sanitizers."""
 
@@ -193,6 +233,14 @@ Exceptional flow:
     Exceptions fail closed, clear the mutable observability fields, and stop
     the remaining sanitizer chain.
 """
+EventMetadataScalar: TypeAlias = str | int | float | bool
+EventMetadataValue: TypeAlias = EventMetadataScalar | list[str] | list[int] | list[float] | list[bool]
+EventMetadata: TypeAlias = dict[str, EventMetadataValue]
+EventMetadataInjectorCallback: TypeAlias = Callable[
+    [Event],
+    EventMetadata | Awaitable[EventMetadata],
+]
+"""Additive middleware callback that returns flat event metadata additions."""
 ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str] | Awaitable[Optional[str]]]
 """Guardrail callback that can block tool execution.
 

@@ -21,10 +21,15 @@ use std::sync::{Arc, Mutex};
 
 pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::{
-    CategoryProfile, DataSchema, Event, EventCategory, EventSanitizeFields, PendingMarkSpec,
-    ScopeCategory,
+    CategoryProfile, DataSchema, Event, EventCategory, EventSanitizeFields, LogSeverity,
+    METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope, MetricKind,
+    MetricMeasurement, MetricValueType, PendingMarkSpec, ScopeCategory,
 };
 pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
+pub use nemo_relay_types::api::registry::{
+    RuntimeRegistrationIdentity, RuntimeRegistrationKind, RuntimeRegistrationOwner,
+    RuntimeRegistrationOwnerKind,
+};
 pub use nemo_relay_types::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
 pub use nemo_relay_types::api::tool::{
     TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA, TOOL_EXECUTION_RESULT_SCHEMA, ToolAttributes,
@@ -45,14 +50,14 @@ use serde_json::Map;
 
 /// Native plugin ABI version supported by this crate.
 ///
-/// Version 4 adds completion-scoped codecs and pull-based LLM streams. Hosts
-/// retain frozen version-3 and version-2 tables for Relay 0.8-built plugins
-/// that target those layouts.
+/// Version 4 adds completion-scoped codecs, pull-based LLM streams, extended
+/// mark emission, runtime diagnostics, and activation-owned runtime-registration
+/// discovery and dynamic conditional middleware guardrail control. Hosts retain
+/// frozen version-3 and version-2 tables for already-built plugins that target
+/// those layouts.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 4;
 /// ABI version that introduced completion-based asynchronous middleware.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE: u32 = 3;
-/// ABI version that introduced typed async middleware capabilities.
-pub const NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC: u32 = 4;
 
 /// Legacy native plugin ABI accepted by Relay hosts for compatibility.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY: u32 = 2;
@@ -283,6 +288,13 @@ impl<'a> LlmSanitizeResponseContext<'a> {
 /// Opaque plugin registration context borrowed from the host during registration.
 #[repr(C)]
 pub struct NemoRelayNativePluginContext {
+    _private: [u8; 0],
+    _marker: PhantomData<(*mut u8, PhantomPinned)>,
+}
+
+/// Opaque activation-owned runtime capability used by native plugins.
+#[repr(C)]
+pub struct NemoRelayNativePluginRuntime {
     _private: [u8; 0],
     _marker: PhantomData<(*mut u8, PhantomPinned)>,
 }
@@ -827,6 +839,8 @@ pub enum NemoRelayNativeAsyncMiddlewareKind {
     ScopeSanitizeStart = 12,
     /// Scope-end event sanitizer.
     ScopeSanitizeEnd = 13,
+    /// Event metadata injector.
+    EventMetadataInjector = 14,
 }
 
 impl TryFrom<u32> for NemoRelayNativeAsyncMiddlewareKind {
@@ -848,6 +862,7 @@ impl TryFrom<u32> for NemoRelayNativeAsyncMiddlewareKind {
             11 => Ok(Self::MarkSanitize),
             12 => Ok(Self::ScopeSanitizeStart),
             13 => Ok(Self::ScopeSanitizeEnd),
+            14 => Ok(Self::EventMetadataInjector),
             _ => Err(()),
         }
     }
@@ -1124,7 +1139,23 @@ pub struct NemoRelayNativeHostApiV3 {
     ) -> NemoRelayStatus,
 }
 
-/// ABI-v4 host extension for typed asynchronous native middleware.
+/// Extended native mark-emission function introduced in ABI v4.
+pub type NemoRelayNativeEmitMarkV2Fn = unsafe extern "C" fn(
+    name: *const NemoRelayNativeString,
+    parent: *const NemoRelayNativeScopeHandle,
+    data_json: *const NemoRelayNativeString,
+    metadata_json: *const NemoRelayNativeString,
+    data_schema_json: *const NemoRelayNativeString,
+    severity: *const NemoRelayNativeString,
+    timestamp_unix_micros: *const i64,
+) -> NemoRelayStatus;
+
+/// Reads the active host runtime-diagnostics snapshot as canonical JSON.
+pub type NemoRelayNativeGetRuntimeDiagnosticsFn =
+    unsafe extern "C" fn(out_json: *mut *mut NemoRelayNativeString) -> NemoRelayStatus;
+
+/// ABI-v4 host extension for typed asynchronous middleware, mark options,
+/// diagnostics, and activation-owned dynamic gate control.
 ///
 /// The complete ABI-v3 table is the prefix, preserving layout compatibility.
 #[repr(C)]
@@ -1180,10 +1211,63 @@ pub struct NemoRelayNativeHostApiV4 {
     /// rejection operation to decide whether that operation must be retried.
     pub async_stream_is_backpressured:
         unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> bool,
+    /// Emits a mark with optional data-schema and telemetry-severity fields.
+    pub emit_mark_v2: NemoRelayNativeEmitMarkV2Fn,
+    /// Returns a bounded snapshot of active host runtime diagnostics.
+    pub get_runtime_diagnostics: NemoRelayNativeGetRuntimeDiagnosticsFn,
+    /// Creates an activation-owned runtime capability from a registration context.
+    ///
+    /// On success, `out` receives one owned reference. Every owned reference must
+    /// be released exactly once with `plugin_runtime_release`.
+    pub plugin_context_runtime: unsafe extern "C" fn(
+        ctx: *mut NemoRelayNativePluginContext,
+        out: *mut *const NemoRelayNativePluginRuntime,
+    ) -> NemoRelayStatus,
+    /// Retains a runtime capability for a cloned SDK handle.
+    ///
+    /// A successful call creates one additional owned reference.
+    pub plugin_runtime_retain:
+        unsafe extern "C" fn(runtime: *const NemoRelayNativePluginRuntime) -> NemoRelayStatus,
+    /// Releases one owned runtime capability reference.
+    pub plugin_runtime_release: unsafe extern "C" fn(runtime: *const NemoRelayNativePluginRuntime),
+    /// Lists global runtime registrations as JSON.
+    pub plugin_runtime_list_registrations: unsafe extern "C" fn(
+        runtime: *const NemoRelayNativePluginRuntime,
+        kinds_json: *const NemoRelayNativeString,
+        out_json: *mut *mut NemoRelayNativeString,
+    ) -> NemoRelayStatus,
+    /// Registers an activation-owned host-resident gate and returns its handle.
+    pub plugin_runtime_register_conditional_middleware_guardrail:
+        unsafe extern "C" fn(
+            runtime: *const NemoRelayNativePluginRuntime,
+            name: *const NemoRelayNativeString,
+            kinds_json: *const NemoRelayNativeString,
+            registration_name: *const NemoRelayNativeString,
+            reason: *const NemoRelayNativeString,
+            out_handle: *mut *mut NemoRelayNativeString,
+        ) -> NemoRelayStatus,
+    /// Deregisters an activation-owned gate by opaque handle.
+    pub plugin_runtime_deregister_conditional_middleware_guardrail:
+        unsafe extern "C" fn(
+            runtime: *const NemoRelayNativePluginRuntime,
+            handle: *const NemoRelayNativeString,
+            out_removed: *mut bool,
+        ) -> NemoRelayStatus,
+    /// Declares a host-resident gate during component registration.
+    pub plugin_context_register_conditional_middleware_guardrail:
+        unsafe extern "C" fn(
+            ctx: *mut NemoRelayNativePluginContext,
+            name: *const NemoRelayNativeString,
+            kinds_json: *const NemoRelayNativeString,
+            registration_name: *const NemoRelayNativeString,
+            reason: *const NemoRelayNativeString,
+        ) -> NemoRelayStatus,
 }
 
 unsafe impl Send for NemoRelayNativeHostApiV3 {}
 unsafe impl Sync for NemoRelayNativeHostApiV3 {}
+// SAFETY: the v4 host table is immutable after construction. Its function
+// pointers and inherited host metadata may be invoked from any plugin thread.
 unsafe impl Send for NemoRelayNativeHostApiV4 {}
 unsafe impl Sync for NemoRelayNativeHostApiV4 {}
 
@@ -1234,19 +1318,204 @@ pub type NemoRelayNativePluginEntry = unsafe extern "C" fn(
 /// Result type used by the Rust native plugin SDK.
 pub type Result<T> = std::result::Result<T, String>;
 
+/// One bounded runtime diagnostic reported by the Relay host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct RuntimeDiagnostic {
+    /// Stable identifier for the diagnostic condition.
+    pub code: String,
+    /// Most recently recorded message for this condition.
+    pub message: String,
+    /// Total number of occurrences recorded for this condition.
+    pub count: u64,
+}
+
+/// Bounded snapshot of active host runtime diagnostics.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct RuntimeDiagnostics {
+    entries: Vec<RuntimeDiagnostic>,
+}
+
+/// Opaque activation-owned handle for a native plugin's dynamic gate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConditionalMiddlewareGuardrailHandle(String);
+
+impl RuntimeDiagnostics {
+    /// Return diagnostics in stable code order.
+    pub fn entries(&self) -> &[RuntimeDiagnostic] {
+        &self.entries
+    }
+
+    /// Return a diagnostic by its stable code.
+    pub fn get(&self, code: &str) -> Option<&RuntimeDiagnostic> {
+        self.entries
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+    }
+}
+
 /// Synchronous JSON chunk stream used by native LLM stream intercept helpers.
 pub type LlmJsonStream = Box<dyn Iterator<Item = Result<Json>> + Send>;
 
 /// Cloneable high-level runtime handle for host APIs available to native plugins.
-#[derive(Clone)]
 pub struct PluginRuntime {
     host: NemoRelayNativeHostApiV1,
+    emit_mark_v2: Option<NemoRelayNativeEmitMarkV2Fn>,
+    get_runtime_diagnostics: Option<NemoRelayNativeGetRuntimeDiagnosticsFn>,
+    v4: Option<NemoRelayNativeHostApiV4>,
+    capability: *const NemoRelayNativePluginRuntime,
+}
+
+// SAFETY: PluginRuntime holds an immutable host table and a retained,
+// thread-safe host capability. Clone and Drop use the host's atomic reference
+// management operations.
+unsafe impl Send for PluginRuntime {}
+unsafe impl Sync for PluginRuntime {}
+
+impl Clone for PluginRuntime {
+    fn clone(&self) -> Self {
+        let mut capability = self.capability;
+        if let (Some(v4), false) = (self.v4, self.capability.is_null())
+            && unsafe { (v4.plugin_runtime_retain)(self.capability) } != NemoRelayStatus::Ok
+        {
+            capability = ptr::null();
+        }
+        Self {
+            host: self.host,
+            emit_mark_v2: self.emit_mark_v2,
+            get_runtime_diagnostics: self.get_runtime_diagnostics,
+            v4: self.v4,
+            capability,
+        }
+    }
+}
+
+impl Drop for PluginRuntime {
+    fn drop(&mut self) {
+        if let (Some(v4), false) = (self.v4, self.capability.is_null()) {
+            unsafe { (v4.plugin_runtime_release)(self.capability) };
+        }
+    }
 }
 
 impl PluginRuntime {
     /// Creates a runtime handle from the host ABI table.
     pub fn new(host: &NemoRelayNativeHostApiV1) -> Self {
-        Self { host: *host }
+        let v4 = (host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION
+            && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV4>())
+        .then(|| unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV4) });
+        Self {
+            host: *host,
+            emit_mark_v2: v4.map(|host| host.emit_mark_v2),
+            get_runtime_diagnostics: v4.map(|host| host.get_runtime_diagnostics),
+            v4,
+            capability: ptr::null(),
+        }
+    }
+
+    fn from_context(
+        host: &NemoRelayNativeHostApiV1,
+        ctx: *mut NemoRelayNativePluginContext,
+    ) -> Self {
+        let mut runtime = Self::new(host);
+        let Some(v4) = runtime.v4 else {
+            return runtime;
+        };
+        let mut capability = ptr::null();
+        if unsafe { (v4.plugin_context_runtime)(ctx, &mut capability) } == NemoRelayStatus::Ok {
+            runtime.capability = capability;
+        }
+        runtime
+    }
+
+    /// Lists global gateable runtime registrations.
+    pub fn list_runtime_registrations(
+        &self,
+        kinds: Option<&std::collections::BTreeSet<RuntimeRegistrationKind>>,
+    ) -> Result<Vec<RuntimeRegistrationIdentity>> {
+        let v4 = self.runtime_v4()?;
+        let kinds = match kinds {
+            Some(kinds) => Some(
+                HostString::from_json(&self.host, kinds)
+                    .ok_or_else(|| "failed to serialize runtime registration kinds".to_string())?,
+            ),
+            None => None,
+        };
+        let mut out = ptr::null_mut();
+        let status = unsafe {
+            (v4.plugin_runtime_list_registrations)(
+                self.capability,
+                kinds.as_ref().map_or(ptr::null(), HostString::as_ptr),
+                &mut out,
+            )
+        };
+        status_result(&self.host, status, "list runtime registrations")?;
+        take_host_json(&self.host, out)
+    }
+
+    /// Registers an activation-owned host-resident eligibility gate.
+    pub fn register_conditional_middleware_guardrail(
+        &self,
+        name: &str,
+        kinds: &std::collections::BTreeSet<RuntimeRegistrationKind>,
+        registration_name: &str,
+        reason: &str,
+    ) -> Result<ConditionalMiddlewareGuardrailHandle> {
+        let v4 = self.runtime_v4()?;
+        let name = HostString::new(&self.host, name)
+            .ok_or_else(|| "failed to allocate gate name".to_string())?;
+        let kinds = HostString::from_json(&self.host, kinds)
+            .ok_or_else(|| "failed to serialize runtime registration kinds".to_string())?;
+        let registration_name = HostString::new(&self.host, registration_name)
+            .ok_or_else(|| "failed to allocate target name".to_string())?;
+        let reason = HostString::new(&self.host, reason)
+            .ok_or_else(|| "failed to allocate gate reason".to_string())?;
+        let mut out = ptr::null_mut();
+        let status = unsafe {
+            (v4.plugin_runtime_register_conditional_middleware_guardrail)(
+                self.capability,
+                name.as_ptr(),
+                kinds.as_ptr(),
+                registration_name.as_ptr(),
+                reason.as_ptr(),
+                &mut out,
+            )
+        };
+        status_result(
+            &self.host,
+            status,
+            "register conditional middleware guardrail",
+        )?;
+        take_host_string(&self.host, out).map(ConditionalMiddlewareGuardrailHandle)
+    }
+
+    /// Deregisters an activation-owned eligibility gate.
+    pub fn deregister_conditional_middleware_guardrail(
+        &self,
+        handle: &ConditionalMiddlewareGuardrailHandle,
+    ) -> Result<bool> {
+        let v4 = self.runtime_v4()?;
+        let handle = HostString::new(&self.host, &handle.0)
+            .ok_or_else(|| "failed to allocate gate handle".to_string())?;
+        let mut removed = false;
+        let status = unsafe {
+            (v4.plugin_runtime_deregister_conditional_middleware_guardrail)(
+                self.capability,
+                handle.as_ptr(),
+                &mut removed,
+            )
+        };
+        status_result(
+            &self.host,
+            status,
+            "deregister conditional middleware guardrail",
+        )?;
+        Ok(removed)
+    }
+
+    fn runtime_v4(&self) -> Result<NemoRelayNativeHostApiV4> {
+        self.v4
+            .filter(|_| !self.capability.is_null())
+            .ok_or_else(|| "host does not support activation-owned runtime gate control".into())
     }
 
     /// Returns the underlying host ABI table.
@@ -1305,6 +1574,66 @@ impl PluginRuntime {
         metadata: Option<&Json>,
     ) -> Result<()> {
         emit_mark(&self.host, name, data, metadata)
+    }
+
+    /// Emits a mark event with an optional data schema and telemetry severity.
+    ///
+    /// Hosts without the ABI-v4 mark extension accept this call only when both
+    /// new options are absent, in which case the legacy function is used.
+    pub fn emit_mark_with_options(
+        &self,
+        name: &str,
+        data: Option<&Json>,
+        metadata: Option<&Json>,
+        data_schema: Option<&DataSchema>,
+        severity: Option<LogSeverity>,
+    ) -> Result<()> {
+        match self.emit_mark_v2 {
+            Some(emit_mark_v2) => emit_mark_v2_call(
+                &self.host,
+                emit_mark_v2,
+                name,
+                data,
+                metadata,
+                data_schema,
+                severity,
+            ),
+            None if data_schema.is_none() && severity.is_none() => {
+                emit_mark(&self.host, name, data, metadata)
+            }
+            None => Err("mark data_schema and severity require native host ABI v4".into()),
+        }
+    }
+
+    /// Emits a validated Relay metric-measurement mark under the current scope.
+    pub fn emit_metric(
+        &self,
+        name: &str,
+        measurements: Vec<MetricMeasurement>,
+        metadata: Option<&Json>,
+    ) -> Result<()> {
+        let envelope = MetricEnvelope { measurements };
+        envelope.validate().map_err(|err| err.to_string())?;
+        let data = serde_json::to_value(envelope)
+            .map_err(|err| format!("failed to serialize metric mark: {err}"))?;
+        let data_schema = DataSchema::builder()
+            .name(METRIC_DATA_SCHEMA_NAME)
+            .version(METRIC_DATA_SCHEMA_VERSION)
+            .build();
+        self.emit_mark_with_options(name, Some(&data), metadata, Some(&data_schema), None)
+    }
+
+    /// Return a bounded snapshot of active host runtime diagnostics.
+    pub fn runtime_diagnostics(&self) -> Result<RuntimeDiagnostics> {
+        let Some(get_runtime_diagnostics) = self.get_runtime_diagnostics else {
+            return Err(
+                "runtime diagnostics require the native host ABI v4 diagnostics extension".into(),
+            );
+        };
+        native_json_call(&self.host, "runtime diagnostics", |out| {
+            let status = unsafe { get_runtime_diagnostics(out) };
+            codec_status(&self.host, status)
+        })
     }
 
     /// Creates a new independent scope stack.
@@ -1780,6 +2109,65 @@ pub fn emit_mark(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // Mirrors the append-only native ABI function.
+fn emit_mark_v2_call(
+    host: &NemoRelayNativeHostApiV1,
+    emit_mark_v2: NemoRelayNativeEmitMarkV2Fn,
+    name: &str,
+    data: Option<&Json>,
+    metadata: Option<&Json>,
+    data_schema: Option<&DataSchema>,
+    severity: Option<LogSeverity>,
+) -> Result<()> {
+    let name =
+        HostString::new(host, name).ok_or_else(|| "failed to allocate mark name".to_string())?;
+    let data = OptionalHostJson::new(host, data)?;
+    let metadata = OptionalHostJson::new(host, metadata)?;
+    let data_schema = data_schema
+        .map(|value| {
+            HostString::from_json(host, value)
+                .ok_or_else(|| "failed to serialize mark data schema".to_string())
+        })
+        .transpose()?;
+    let severity = severity
+        .map(|value| {
+            serde_json::to_value(value)
+                .map_err(|err| format!("failed to serialize mark severity: {err}"))
+                .and_then(|value| {
+                    value
+                        .as_str()
+                        .ok_or_else(|| "mark severity did not serialize as a string".to_string())
+                        .and_then(|value| {
+                            HostString::new(host, value)
+                                .ok_or_else(|| "failed to allocate mark severity".to_string())
+                        })
+                })
+        })
+        .transpose()?;
+    let status = unsafe {
+        emit_mark_v2(
+            name.as_ptr(),
+            ptr::null(),
+            data.as_ptr(),
+            metadata.as_ptr(),
+            data_schema
+                .as_ref()
+                .map(HostString::as_ptr)
+                .unwrap_or(ptr::null()),
+            severity
+                .as_ref()
+                .map(HostString::as_ptr)
+                .unwrap_or(ptr::null()),
+            ptr::null(),
+        )
+    };
+    if status == NemoRelayStatus::Ok {
+        Ok(())
+    } else {
+        Err(format!("emit_mark_v2 failed: {status:?}"))
+    }
+}
+
 /// Creates a new independent scope stack.
 pub fn create_scope_stack(host: &NemoRelayNativeHostApiV1) -> Result<ScopeStack<'_>> {
     let mut out = ptr::null_mut();
@@ -1901,7 +2289,45 @@ impl<'a> PluginContext<'a> {
 
     /// Returns a cloneable high-level runtime handle.
     pub fn runtime(&self) -> PluginRuntime {
-        PluginRuntime::new(self.host)
+        PluginRuntime::from_context(self.host, self.raw)
+    }
+
+    /// Declares a host-resident conditional middleware guardrail for activation.
+    pub fn register_conditional_middleware_guardrail(
+        &mut self,
+        name: &str,
+        kinds: &std::collections::BTreeSet<RuntimeRegistrationKind>,
+        registration_name: &str,
+        reason: &str,
+    ) -> Result<()> {
+        if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION
+            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV4>()
+        {
+            return Err("host does not support conditional middleware guardrails".into());
+        }
+        let v4 = unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV4) };
+        let name = HostString::new(self.host, name)
+            .ok_or_else(|| "failed to allocate gate name".to_string())?;
+        let kinds = HostString::from_json(self.host, kinds)
+            .ok_or_else(|| "failed to serialize runtime registration kinds".to_string())?;
+        let registration_name = HostString::new(self.host, registration_name)
+            .ok_or_else(|| "failed to allocate target name".to_string())?;
+        let reason = HostString::new(self.host, reason)
+            .ok_or_else(|| "failed to allocate gate reason".to_string())?;
+        let status = unsafe {
+            (v4.plugin_context_register_conditional_middleware_guardrail)(
+                self.raw,
+                name.as_ptr(),
+                kinds.as_ptr(),
+                registration_name.as_ptr(),
+                reason.as_ptr(),
+            )
+        };
+        status_result(
+            self.host,
+            status,
+            "register conditional middleware guardrail",
+        )
     }
 
     /// Registers a typed event subscriber callback.
@@ -2391,6 +2817,18 @@ fn status_error(host: &NemoRelayNativeHostApiV1, status: NemoRelayStatus, label:
     format!("{label} failed: {status:?}")
 }
 
+fn status_result(
+    host: &NemoRelayNativeHostApiV1,
+    status: NemoRelayStatus,
+    label: &str,
+) -> Result<()> {
+    if status == NemoRelayStatus::Ok {
+        Ok(())
+    } else {
+        Err(status_error(host, status, label))
+    }
+}
+
 fn callback_panic(host: &NemoRelayNativeHostApiV1, label: &str) -> NemoRelayStatus {
     set_last_error(host, &format!("{label} panicked"));
     NemoRelayStatus::Internal
@@ -2474,15 +2912,23 @@ fn native_codec_call<T: DeserializeOwned>(
     host: &NemoRelayNativeHostApiV1,
     call: impl FnOnce(*mut *mut NemoRelayNativeString) -> Result<()>,
 ) -> Result<T> {
+    native_json_call(host, "LLM codec operation", call)
+}
+
+fn native_json_call<T: DeserializeOwned>(
+    host: &NemoRelayNativeHostApiV1,
+    operation: &str,
+    call: impl FnOnce(*mut *mut NemoRelayNativeString) -> Result<()>,
+) -> Result<T> {
     let mut out = ptr::null_mut();
     call(&mut out)?;
     if out.is_null() {
-        return Err("LLM codec operation returned null".into());
+        return Err(format!("{operation} returned null"));
     }
     let out = HostString { host, ptr: out };
     let text = read_host_string(host, out.as_ptr())
-        .map_err(|_| "LLM codec operation returned invalid UTF-8".to_string())?;
-    serde_json::from_str(&text).map_err(|error| format!("invalid LLM codec result: {error}"))
+        .map_err(|_| format!("{operation} returned invalid UTF-8"))?;
+    serde_json::from_str(&text).map_err(|error| format!("invalid {operation} result: {error}"))
 }
 
 struct OptionalHostJson<'a>(Option<HostString<'a>>);
@@ -2513,7 +2959,7 @@ enum OwnedHostApi {
 
 impl OwnedHostApi {
     unsafe fn copy_from(host: &NemoRelayNativeHostApiV1) -> Self {
-        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC
+        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION
             && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV4>()
         {
             Self::V4(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV4) })
@@ -2658,6 +3104,7 @@ fn read_json_value<T: DeserializeOwned>(
     })
 }
 
+#[derive(Debug)]
 enum HostStringReadError {
     Null,
     InvalidUtf8,
@@ -2701,6 +3148,26 @@ fn read_host_string(
     std::str::from_utf8(bytes)
         .map(str::to_owned)
         .map_err(|_| HostStringReadError::InvalidUtf8)
+}
+
+fn take_host_string(
+    host: &NemoRelayNativeHostApiV1,
+    value: *mut NemoRelayNativeString,
+) -> Result<String> {
+    let result = read_host_string(host, value)
+        .map_err(|error| format!("host returned an invalid string: {error:?}"));
+    if !value.is_null() {
+        unsafe { (host.string_free)(value) };
+    }
+    result
+}
+
+fn take_host_json<T: DeserializeOwned>(
+    host: &NemoRelayNativeHostApiV1,
+    value: *mut NemoRelayNativeString,
+) -> Result<T> {
+    let text = take_host_string(host, value)?;
+    serde_json::from_str(&text).map_err(|error| format!("host returned invalid JSON: {error}"))
 }
 
 fn write_json<T: Serialize>(
@@ -2791,7 +3258,9 @@ where
     P: NativePlugin,
     F: FnOnce() -> P,
 {
-    if host_ref.abi_version != NEMO_RELAY_NATIVE_ABI_VERSION {
+    let supported_abi = (NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY..=NEMO_RELAY_NATIVE_ABI_VERSION)
+        .contains(&host_ref.abi_version);
+    if !supported_abi {
         return NemoRelayStatus::InvalidArg;
     }
     if host_ref.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV1>() {

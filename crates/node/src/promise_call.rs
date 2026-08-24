@@ -15,6 +15,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll};
 
 use napi::bindgen_prelude::ToNapiValue;
 use napi::threadsafe_function::{ThreadSafeCallContext, ThreadsafeFunction};
@@ -25,13 +26,14 @@ use nemo_relay::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_task_nested_publication_buffer,
 };
 use nemo_relay::api::runtime::{
-    MiddlewareContinuationContext, ScopeStackHandle, capture_propagation_context,
+    LlmStreamInner, MiddlewareContinuationContext, ScopeStackHandle, capture_propagation_context,
     current_scope_stack,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
 
 use crate::callback_factory;
 use crate::types::ScopeStack;
+use tokio_stream::Stream;
 
 tokio::task_local! {
     static PUBLICATION_CALLBACK_CONTEXT_ID: Option<String>;
@@ -57,8 +59,14 @@ fn publication_callback_context_id() -> Option<String> {
 
 pub type JsonNextFn =
     Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync>;
-pub type JsonStreamNextFn =
-    Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Vec<Json>>> + Send>> + Send + Sync>;
+pub type JsonStreamNextFn = Arc<
+    dyn Fn(
+            Json,
+        ) -> Pin<
+            Box<dyn Future<Output = FlowResult<nemo_relay::api::runtime::LlmJsonStream>> + Send>,
+        > + Send
+        + Sync,
+>;
 
 #[derive(Clone)]
 enum NextFn {
@@ -92,6 +100,7 @@ struct CallArgs {
     scope_stack: Option<ScopeStackHandle>,
     propagation_parent_uuid: String,
     publication_buffer: Option<PublicationBuffer>,
+    stream_result: bool,
     continuation_context: Option<MiddlewareContinuationContext>,
     cancellation: CallCancellation,
     completion: CallCompletion,
@@ -118,21 +127,86 @@ impl CallMode {
     };
 }
 
+enum CallCompletionSender {
+    Json(tokio::sync::oneshot::Sender<FlowResult<Json>>),
+    Stream(Arc<StreamCompletion>),
+}
+
+struct StreamCompletion {
+    ready: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<()>>>>,
+    chunks: std::sync::Mutex<Option<tokio::sync::mpsc::Sender<FlowResult<Json>>>>,
+    terminal_error: std::sync::Mutex<Option<FlowError>>,
+    closed: tokio::sync::watch::Sender<Option<FlowResult<()>>>,
+}
+
+impl StreamCompletion {
+    fn finish(&self, result: FlowResult<()>) {
+        self.chunks.lock().unwrap().take();
+        self.closed.send_replace(Some(result));
+    }
+}
+
 #[derive(Clone)]
 struct CallCompletion {
-    sender: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<Json>>>>>,
+    sender: Arc<std::sync::Mutex<Option<CallCompletionSender>>>,
 }
 
 impl CallCompletion {
-    fn new(sender: tokio::sync::oneshot::Sender<FlowResult<Json>>) -> Self {
+    fn json(sender: tokio::sync::oneshot::Sender<FlowResult<Json>>) -> Self {
         Self {
-            sender: Arc::new(std::sync::Mutex::new(Some(sender))),
+            sender: Arc::new(std::sync::Mutex::new(Some(CallCompletionSender::Json(
+                sender,
+            )))),
         }
     }
 
-    fn send(&self, value: FlowResult<Json>) {
-        if let Some(sender) = self.sender.lock().unwrap().take() {
+    fn stream(
+        ready: tokio::sync::oneshot::Sender<FlowResult<()>>,
+        chunks: tokio::sync::mpsc::Sender<FlowResult<Json>>,
+    ) -> (
+        Self,
+        Arc<StreamCompletion>,
+        tokio::sync::watch::Receiver<Option<FlowResult<()>>>,
+    ) {
+        let (closed, closed_rx) = tokio::sync::watch::channel(None);
+        let stream = Arc::new(StreamCompletion {
+            ready: std::sync::Mutex::new(Some(ready)),
+            chunks: std::sync::Mutex::new(Some(chunks)),
+            terminal_error: std::sync::Mutex::new(None),
+            closed,
+        });
+        (
+            Self {
+                sender: Arc::new(std::sync::Mutex::new(Some(CallCompletionSender::Stream(
+                    stream.clone(),
+                )))),
+            },
+            stream,
+            closed_rx,
+        )
+    }
+
+    fn send_json(&self, value: FlowResult<Json>) {
+        if let Some(CallCompletionSender::Json(sender)) = self.sender.lock().unwrap().take() {
             let _ = sender.send(value);
+        }
+    }
+
+    fn send_error(&self, error: FlowError) {
+        if let Some(sender) = self.sender.lock().unwrap().take() {
+            match sender {
+                CallCompletionSender::Json(sender) => {
+                    let _ = sender.send(Err(error));
+                }
+                CallCompletionSender::Stream(sender) => {
+                    if let Some(ready) = sender.ready.lock().unwrap().take() {
+                        let _ = ready.send(Err(error.clone()));
+                    } else {
+                        *sender.terminal_error.lock().unwrap() = Some(error.clone());
+                    }
+                    sender.finish(Err(error));
+                }
+            }
         }
     }
 }
@@ -193,6 +267,54 @@ impl Drop for CallCancellationGuard {
         if let Some(cancellation) = self.0.take() {
             cancellation.cancel();
         }
+    }
+}
+
+struct JsCallbackStream {
+    receiver: tokio_stream::wrappers::ReceiverStream<FlowResult<Json>>,
+    completion: Arc<StreamCompletion>,
+    closed: tokio::sync::watch::Receiver<Option<FlowResult<()>>>,
+    cancellation: CallCancellation,
+}
+
+impl Stream for JsCallbackStream {
+    type Item = FlowResult<Json>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match Pin::new(&mut self.receiver).poll_next(cx) {
+            Poll::Ready(None) => Poll::Ready(
+                self.completion
+                    .terminal_error
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .map(Err),
+            ),
+            poll => poll,
+        }
+    }
+}
+
+impl LlmStreamInner for JsCallbackStream {
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
+        let this = self.get_mut();
+        this.cancellation.cancel();
+        this.receiver.close();
+        let mut closed = this.closed.clone();
+        Box::pin(async move {
+            while closed.borrow().is_none() {
+                closed.changed().await.map_err(|_| {
+                    FlowError::Internal("JavaScript stream cleanup ended early".into())
+                })?;
+            }
+            closed.borrow().clone().expect("close state checked above")
+        })
+    }
+}
+
+impl Drop for JsCallbackStream {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
     }
 }
 
@@ -288,7 +410,7 @@ fn build_next_unknown(
                 let publication_context_id = publication_context_id.clone();
                 ctx.env.execute_tokio_future(
                     async move {
-                        with_publication_callback_context(
+                        let stream = with_publication_callback_context(
                             publication_context_id,
                             None,
                             async move {
@@ -301,7 +423,8 @@ fn build_next_unknown(
                                     .await
                             },
                         )
-                        .await
+                        .await?;
+                        Ok(crate::api::llm_stream_from_rust_stream(stream))
                     },
                     |_env, value| Ok(value),
                 )
@@ -315,15 +438,34 @@ fn build_next_unknown(
 fn build_completion_unknowns(
     env: &Env,
     completion: CallCompletion,
-) -> napi::Result<(JsUnknown, JsUnknown)> {
-    let resolve_completion = completion.clone();
-    let resolve = env.create_function_from_closure("__nemo_relay_resolve", move |ctx| {
-        let value = ctx.get::<Json>(0).map_err(|error| {
-            FlowError::Internal(format!(
-                "JavaScript callback result could not be converted to JSON: {error}"
-            ))
+) -> napi::Result<(JsUnknown, JsUnknown, JsUnknown, JsUnknown)> {
+    let stream_completion = completion
+        .sender
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|sender| match sender {
+            CallCompletionSender::Stream(stream) => Some(stream.clone()),
+            CallCompletionSender::Json(_) => None,
         });
-        resolve_completion.send(value);
+    let resolve_completion = completion.clone();
+    let resolve_stream = stream_completion.clone();
+    let resolve = env.create_function_from_closure("__nemo_relay_resolve", move |ctx| {
+        if let Some(stream) = &resolve_stream {
+            if let Some(ready) = stream.ready.lock().unwrap().take() {
+                let _ = ready.send(Ok(()));
+            }
+            return ctx.env.get_undefined();
+        }
+        let sender = resolve_completion.sender.lock().unwrap().take();
+        if let Some(CallCompletionSender::Json(sender)) = sender {
+            let value = ctx.get::<Json>(0).map_err(|error| {
+                FlowError::Internal(format!(
+                    "JavaScript callback result could not be converted to JSON: {error}"
+                ))
+            });
+            let _ = sender.send(value);
+        }
         ctx.env.get_undefined()
     })?;
 
@@ -335,16 +477,44 @@ fn build_completion_unknowns(
             .get::<String>(0)
             .unwrap_or_else(|_| "unknown error".to_string());
         let exception_type = ctx.get::<String>(1).unwrap_or_else(|_| "Error".to_string());
-        completion.send(Err(FlowError::CallbackException {
+        completion.send_error(FlowError::CallbackException {
             message,
             exception_type,
-        }));
+        });
+        ctx.env.get_undefined()
+    })?;
+
+    let push_stream = stream_completion.clone();
+    let push = env.create_function_from_closure("__nemo_relay_stream_push", move |ctx| {
+        let chunk = ctx.get::<Json>(0).map_err(|error| {
+            napi::Error::from_reason(format!("stream chunk is not JSON-compatible: {error}"))
+        })?;
+        let chunks = push_stream
+            .as_ref()
+            .and_then(|stream| stream.chunks.lock().unwrap().as_ref().cloned());
+        ctx.env.execute_tokio_future(
+            async move {
+                if let Some(chunks) = chunks {
+                    let _ = chunks.send(Ok(chunk)).await;
+                }
+                Ok(())
+            },
+            |_env, ()| Ok(()),
+        )
+    })?;
+
+    let end = env.create_function_from_closure("__nemo_relay_stream_end", move |ctx| {
+        if let Some(stream) = &stream_completion {
+            stream.finish(Ok(()));
+        }
         ctx.env.get_undefined()
     })?;
 
     Ok((
         function_to_unknown(env, &resolve),
         function_to_unknown(env, &reject),
+        function_to_unknown(env, &push),
+        function_to_unknown(env, &end),
     ))
 }
 
@@ -437,10 +607,16 @@ impl PromiseAwareFn {
                         &ctx.env,
                         Json::String(ctx.value.propagation_parent_uuid),
                     )?;
-                    let (resolve, reject) =
+                    let (resolve, reject, stream_push, stream_end) =
                         build_completion_unknowns(&ctx.env, ctx.value.completion)?;
                     let register_abort =
                         build_abort_registration_unknown(&ctx.env, ctx.value.cancellation)?;
+                    let stream_result = unsafe {
+                        JsUnknown::from_raw_unchecked(
+                            ctx.env.raw(),
+                            ctx.env.get_boolean(ctx.value.stream_result)?.raw(),
+                        )
+                    };
                     Ok(vec![
                         arg0,
                         spread,
@@ -452,12 +628,15 @@ impl PromiseAwareFn {
                         scope_stack,
                         propagation_parent_uuid,
                         register_abort,
+                        stream_result,
+                        stream_push,
+                        stream_end,
                     ])
                 })();
                 if let Err(error) = &result {
-                    completion.send(Err(FlowError::Internal(format!(
+                    completion.send_error(FlowError::Internal(format!(
                         "failed to build JavaScript middleware callback arguments: {error}"
-                    ))));
+                    )));
                 }
                 result
             })?;
@@ -538,18 +717,58 @@ impl PromiseAwareFn {
     }
 
     /// Call the JS function with a middleware-style `next(arg)` callback that
-    /// resolves to an array of downstream stream chunks.
+    /// resolves to a lazy downstream stream.
     pub async fn call_with_stream_next(
         &self,
         args: Json,
         next: JsonStreamNextFn,
-    ) -> FlowResult<Json> {
-        self.call_inner(
-            PrimaryArg::Json(args),
-            CallMode::DIRECT,
-            Some(NextFn::Stream(next)),
-        )
-        .await
+    ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
+        let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+        let (chunk_sender, chunk_receiver) =
+            tokio::sync::mpsc::channel(crate::api::LLM_STREAM_BRIDGE_CAPACITY);
+        let (completion, stream_completion, closed) =
+            CallCompletion::stream(ready_sender, chunk_sender);
+        let cancellation = CallCancellation::default();
+        let mut cancellation_guard = CallCancellationGuard::new(cancellation.clone());
+        let continuation_context = MiddlewareContinuationContext::capture();
+        let propagation_parent_uuid = capture_propagation_context()?.parent_uuid.to_string();
+        let tsfn = self
+            .tsfn
+            .lock()
+            .unwrap()
+            .as_ref()
+            .cloned()
+            .ok_or_else(closed_tsfn_error)?;
+        let status = tsfn.call(
+            Ok(CallArgs {
+                arg0: PrimaryArg::Json(args),
+                spread: false,
+                next: Some(NextFn::Stream(next)),
+                publication: false,
+                publication_context_id: publication_callback_context_id(),
+                scope_stack: Some(current_scope_stack()),
+                propagation_parent_uuid,
+                publication_buffer: capture_nested_publication_buffer(),
+                stream_result: true,
+                continuation_context: Some(continuation_context),
+                cancellation: cancellation.clone(),
+                completion,
+            }),
+            napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
+        );
+        queue_status_result(status)?;
+        ready_receiver
+            .await
+            .map_err(|e| FlowError::Internal(e.to_string()))??;
+        cancellation_guard.disarm();
+        Ok(nemo_relay::api::runtime::LlmJsonStream::from_closeable(
+            JsCallbackStream {
+                receiver: tokio_stream::wrappers::ReceiverStream::new(chunk_receiver),
+                completion: stream_completion,
+                closed,
+                cancellation,
+            },
+        ))
     }
 
     /// Release the underlying threadsafe function so it does not outlive its registration.
@@ -592,9 +811,10 @@ impl PromiseAwareFn {
                 scope_stack: Some(current_scope_stack()),
                 propagation_parent_uuid,
                 publication_buffer: capture_nested_publication_buffer(),
+                stream_result: false,
                 continuation_context,
                 cancellation,
-                completion: CallCompletion::new(sender),
+                completion: CallCompletion::json(sender),
             }),
             napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
         );

@@ -485,7 +485,6 @@ local_dependencies = (
     "nemo-relay-plugin",
     "nemo-relay-adaptive",
     "nemo-relay-pii-redaction",
-    "nemo-relay-switchyard",
     "nemo-relay-ffi",
     "nemo-relay-cli",
 )
@@ -779,7 +778,6 @@ published_cargo_packages() {
         nemo-relay \
         nemo-relay-adaptive \
         nemo-relay-pii-redaction \
-        nemo-relay-switchyard \
         nemo-relay-ffi \
         nemo-relay-cli
 }
@@ -1071,6 +1069,18 @@ check-python-worker-proto:
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
     tool_next = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["ToolNext"]
     assert tool_next.output_type.full_name == "nemo.relay.worker.v1.ToolExecutionResultResponse"
+    runtime_diagnostics = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["GetRuntimeDiagnostics"]
+    assert runtime_diagnostics.input_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsRequest"
+    assert runtime_diagnostics.output_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsResponse"
+    runtime_diagnostic = pb.RuntimeDiagnostic.DESCRIPTOR.fields_by_name
+    assert runtime_diagnostic["code"].number == 1
+    assert runtime_diagnostic["message"].number == 2
+    assert runtime_diagnostic["count"].number == 3
+    runtime_diagnostics_response = pb.GetRuntimeDiagnosticsResponse.DESCRIPTOR.fields_by_name
+    assert runtime_diagnostics_response["entries"].number == 1
+    emit_mark = pb.EmitMarkRequest.DESCRIPTOR.fields_by_name
+    assert emit_mark["data_schema"].number == 7
+    assert emit_mark["severity"].number == 8
     tool_result = pb.ToolExecutionResult.DESCRIPTOR.fields_by_name
     assert tool_result["result"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
     assert tool_result["annotation"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
@@ -1265,6 +1275,9 @@ test-rust:
         cargo test --workspace --exclude nemo-relay-ffi
         cargo test -p nemo-relay-ffi -- --test-threads=1
     fi
+    cargo test --manifest-path examples/rust-native-plugin/Cargo.toml
+    cargo test --manifest-path examples/rust-grpc-worker-plugin/Cargo.toml
+    cargo test --manifest-path examples/language-binding-plugin/rust/Cargo.toml
 
 # --set [output_dir=<path>] [ci=true|false]
 test-python:
@@ -1312,6 +1325,7 @@ test-python:
     prepare_test_plugin_fixtures
     pytest_cmd+=(--durations=25)
     "$python_executable" -m "${pytest_cmd[@]}" --ignore=python/tests/integrations
+    (cd examples/language-binding-plugin/python && uv run --locked --group test --reinstall-package nemo-relay pytest)
     if is_true "{{ ci }}" && [[ -n "$rust_coverage_out" ]]; then
         cargo llvm-cov report \
             -p nemo-relay-python \
@@ -1344,6 +1358,8 @@ test-python-plugin:
         --cov=nemo_relay_plugin \
         --cov-report term-missing \
         --cov-fail-under=95
+    (cd examples/python-grpc-worker-plugin && uv run --locked --group test --reinstall-package nemo-relay-plugin pytest)
+    (cd examples/language-binding-plugin/python && uv run --locked --group test --reinstall-package nemo-relay pytest)
     just test-python-plugin-e2e
 
 test-python-plugin-e2e:
@@ -1435,7 +1451,7 @@ test-python-langchain:
     {{ bash_helpers }}
     pytest_cmd=(pytest)
     cd "$NEMO_RELAY_REPO_ROOT"
-    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langgraph --extra deepagents
+    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langchain-nvidia --extra langgraph --extra deepagents
     activate_project_venv
     export_uv_python_runtime
     python_executable="$(project_python_executable)"
@@ -1495,7 +1511,10 @@ test-go:
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact go-coverage.xml)"
         junit_out="$(prepare_artifact go-junit.xml)"
-        go_test_cmd+=(-coverprofile=coverage.out)
+        # Include the root binding package when shorthand-package tests exercise
+        # its delegated implementation so those calls are represented once the
+        # per-package profiles are merged.
+        go_test_cmd+=(-coverprofile=coverage.out -coverpkg=./...)
         if [[ "$is_windows" == true ]]; then
             go_ldflags+=(-w)
         fi
@@ -1556,6 +1575,16 @@ test-node:
     else
         npm test --workspace=nemo-relay-node
     fi
+    npm test --workspace=nemo-relay-node-language-binding-plugin-example
+
+# run each checked plugin authoring example from its own project directory
+test-plugin-examples:
+    (cd examples/rust-native-plugin && cargo test)
+    (cd examples/rust-grpc-worker-plugin && cargo test)
+    (cd examples/language-binding-plugin/rust && cargo test)
+    (cd examples/python-grpc-worker-plugin && uv run --locked --group test --reinstall-package nemo-relay-plugin pytest)
+    (cd examples/language-binding-plugin/python && uv run --locked --group test --reinstall-package nemo-relay pytest)
+    npm test --workspace=nemo-relay-node-language-binding-plugin-example
 
 # --set [ci=true|false]
 test-openclaw:
@@ -1667,11 +1696,6 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 ;;
-            nemo-relay-switchyard)
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
-                ;;
             nemo-relay-ffi|nemo-relay-cli)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
@@ -1718,11 +1742,13 @@ package-node:
         echo "Non-release build: appending commit hash to version"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
+        set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
     else
         package_version="{{ ref_name }}"
         echo "Using explicit version {{ ref_name }}"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
+        set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
     fi
     build_args=(build --)
     if [[ -n "$node_target" ]]; then
@@ -1799,12 +1825,14 @@ package-openclaw:
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_version integrations/openclaw/package.json package-lock.json "$package_version" integrations/openclaw
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
+        set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
     else
         package_version="{{ ref_name }}"
         echo "Using explicit version {{ ref_name }}"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_version integrations/openclaw/package.json package-lock.json "$package_version" integrations/openclaw
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
+        set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
     fi
     npm install --workspace=nemo-relay-node --workspace=nemo-relay-openclaw --ignore-scripts
     if is_true "{{ ci }}"; then

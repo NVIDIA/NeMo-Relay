@@ -202,6 +202,10 @@ pub unsafe extern "C" fn nemo_relay_tool_call_end(
 /// Start/End pair) and `GuardrailRejected` is returned. Blocks the calling
 /// thread until completion.
 ///
+/// This legacy entry point does not accept an external tool call ID. Use
+/// `nemo_relay_tool_call_execute_v2` to record one on the managed Start and End
+/// events.
+///
 /// # Parameters
 /// - `name`: Null-terminated tool name.
 /// - `args_json`: Tool arguments as a JSON C string.
@@ -228,6 +232,64 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute(
     attributes: u32,
     data_json: *const c_char,
     metadata_json: *const c_char,
+    out: *mut *mut c_char,
+) -> NemoRelayStatus {
+    unsafe {
+        nemo_relay_tool_call_execute_v2(
+            name,
+            args_json,
+            func,
+            func_user_data,
+            func_free,
+            parent,
+            attributes,
+            data_json,
+            metadata_json,
+            std::ptr::null(),
+            out,
+        )
+    }
+}
+
+/// Execute a tool call end-to-end with an optional external tool call ID.
+///
+/// This runs conditional-execution guardrails (on raw args), then request
+/// intercepts, sanitize-request guardrails, execution intercepts, the callback,
+/// and sanitize-response guardrails. On rejection, only a standalone Mark event
+/// is emitted (no Start/End pair) and `GuardrailRejected` is returned. Blocks
+/// the calling thread until completion.
+///
+/// # Parameters
+/// - `name`: Null-terminated tool name.
+/// - `args_json`: Tool arguments as a JSON C string.
+/// - `func`: C callback that performs the actual tool execution.
+/// - `func_user_data`: Opaque pointer passed to `func`.
+/// - `func_free`: Optional destructor for `func_user_data`.
+/// - `parent`: Optional parent scope handle, or null.
+/// - `attributes`: Bitfield of tool attributes.
+/// - `data_json`: Optional JSON data, or null.
+/// - `metadata_json`: Optional JSON metadata, or null.
+/// - `tool_call_id`: Optional null-terminated external correlation ID recorded
+///   on both managed lifecycle events, or null.
+/// - `out`: On success, receives the result as a JSON C string. Caller must free
+///   with `nemo_relay_string_free`.
+///
+/// # Safety
+/// `name`, `args_json`, and `out` must be valid, non-null pointers. Optional
+/// pointer arguments may be null; when non-null, they must be valid for reads
+/// for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_tool_call_execute_v2(
+    name: *const c_char,
+    args_json: *const c_char,
+    func: NemoRelayToolExecCb,
+    func_user_data: *mut libc::c_void,
+    func_free: NemoRelayFreeFn,
+    parent: *const FfiScopeHandle,
+    attributes: u32,
+    data_json: *const c_char,
+    metadata_json: *const c_char,
+    tool_call_id: *const c_char,
     out: *mut *mut c_char,
 ) -> NemoRelayStatus {
     clear_last_error();
@@ -257,6 +319,14 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute(
         Some(m) => m,
         None => return NemoRelayStatus::InvalidJson,
     };
+    let tool_call_id = if tool_call_id.is_null() {
+        None
+    } else {
+        match c_str_to_string(tool_call_id) {
+            Ok(id) => Some(id),
+            Err(status) => return status,
+        }
+    };
 
     let exec_fn = wrap_tool_exec_fn(func, func_user_data, func_free);
     let default_fn: ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
@@ -272,6 +342,7 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute(
                 .attributes(attrs)
                 .data_opt(data)
                 .metadata_opt(metadata)
+                .tool_call_id_opt(tool_call_id)
                 .build(),
         )
         .await

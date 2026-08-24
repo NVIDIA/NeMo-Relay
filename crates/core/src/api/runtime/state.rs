@@ -9,7 +9,7 @@
 //! the resolved callback chains that the higher-level API layer executes.
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
@@ -21,12 +21,15 @@ use futures_util::{FutureExt, Stream};
 
 use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, EventSanitizeFields, MarkEvent,
-    ScopeCategory, ScopeEvent, llm_attributes_to_strings, scope_attributes_to_strings,
-    tool_attributes_to_strings,
+    ScopeCategory, ScopeEvent, is_valid_event_metadata_attribute_key, llm_attributes_to_strings,
+    scope_attributes_to_strings, tool_attributes_to_strings,
 };
 use crate::api::llm::{CreateLlmHandleParams, EndLlmHandleParams};
 use crate::api::llm::{LlmHandle, LlmRequest};
-use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
+use crate::api::registry::{
+    EventMetadataInjector, ExecutionIntercept, Guardrail, Intercept, RuntimeRegistrationKind,
+    runtime_registration_is_enabled,
+};
 use crate::api::runtime::ScopeStackHandle;
 use crate::api::runtime::callbacks::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
@@ -49,7 +52,8 @@ use crate::api::tool::{
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::AnnotatedLlmResponse;
 use crate::context::registries::{
-    merge_execution_intercept_callables, merge_guardrail_entries, merge_intercept_entries,
+    merge_event_metadata_injector_entries, merge_execution_intercept_callables,
+    merge_guardrail_entries, merge_intercept_entries,
 };
 use crate::error::FlowError;
 use crate::json::{Json, merge_json};
@@ -212,6 +216,8 @@ impl Drop for GuardrailScopeCompletion<'_> {
 /// process. It contains global middleware registries, lifecycle subscribers,
 /// and arbitrary extension slots used by bindings or integrations.
 pub struct NemoRelayContextState {
+    /// Global Event metadata injectors applied before Event sanitizers.
+    pub(crate) event_metadata_injectors: SortedRegistry<EventMetadataInjector>,
     /// Global mark event field sanitizers.
     pub(crate) mark_sanitize_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,
     /// Global scope-start event field sanitizers.
@@ -257,6 +263,7 @@ impl NemoRelayContextState {
     /// extensions.
     pub fn new() -> Self {
         Self {
+            event_metadata_injectors: SortedRegistry::new(),
             mark_sanitize_guardrails: SortedRegistry::new(),
             scope_sanitize_start_guardrails: SortedRegistry::new(),
             scope_sanitize_end_guardrails: SortedRegistry::new(),
@@ -275,6 +282,79 @@ impl NemoRelayContextState {
             observability_full_payloads_enabled: false,
             extensions: HashMap::new(),
         }
+    }
+
+    /// Clone the requested registration-bearing portions of runtime state.
+    ///
+    /// Eligibility callbacks must run without holding the process-global
+    /// runtime-state lock. Callers use this snapshot to release that lock
+    /// before resolving conditional middleware guardrails. Unrequested
+    /// registries and runtime extensions are intentionally excluded.
+    pub(crate) fn registry_snapshot(&self, kinds: &[RuntimeRegistrationKind]) -> Self {
+        let mut snapshot = Self::new();
+        snapshot.observability_full_payloads_enabled = self.observability_full_payloads_enabled;
+        for kind in kinds {
+            match kind {
+                RuntimeRegistrationKind::Subscriber => {
+                    snapshot.event_subscribers = self.event_subscribers.clone();
+                }
+                RuntimeRegistrationKind::EventMetadataInjector => {
+                    snapshot.event_metadata_injectors = self.event_metadata_injectors.clone();
+                }
+                RuntimeRegistrationKind::MarkSanitizeGuardrail => {
+                    snapshot.mark_sanitize_guardrails = self.mark_sanitize_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ScopeSanitizeStartGuardrail => {
+                    snapshot.scope_sanitize_start_guardrails =
+                        self.scope_sanitize_start_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ScopeSanitizeEndGuardrail => {
+                    snapshot.scope_sanitize_end_guardrails =
+                        self.scope_sanitize_end_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ToolSanitizeRequestGuardrail => {
+                    snapshot.tool_sanitize_request_guardrails =
+                        self.tool_sanitize_request_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ToolSanitizeResponseGuardrail => {
+                    snapshot.tool_sanitize_response_guardrails =
+                        self.tool_sanitize_response_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ToolConditionalExecutionGuardrail => {
+                    snapshot.tool_conditional_execution_guardrails =
+                        self.tool_conditional_execution_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ToolRequestIntercept => {
+                    snapshot.tool_request_intercepts = self.tool_request_intercepts.clone();
+                }
+                RuntimeRegistrationKind::ToolExecutionIntercept => {
+                    snapshot.tool_execution_intercepts = self.tool_execution_intercepts.clone();
+                }
+                RuntimeRegistrationKind::LlmSanitizeRequestGuardrail => {
+                    snapshot.llm_sanitize_request_guardrails =
+                        self.llm_sanitize_request_guardrails.clone();
+                }
+                RuntimeRegistrationKind::LlmSanitizeResponseGuardrail => {
+                    snapshot.llm_sanitize_response_guardrails =
+                        self.llm_sanitize_response_guardrails.clone();
+                }
+                RuntimeRegistrationKind::LlmConditionalExecutionGuardrail => {
+                    snapshot.llm_conditional_execution_guardrails =
+                        self.llm_conditional_execution_guardrails.clone();
+                }
+                RuntimeRegistrationKind::LlmRequestIntercept => {
+                    snapshot.llm_request_intercepts = self.llm_request_intercepts.clone();
+                }
+                RuntimeRegistrationKind::LlmExecutionIntercept => {
+                    snapshot.llm_execution_intercepts = self.llm_execution_intercepts.clone();
+                }
+                RuntimeRegistrationKind::LlmStreamExecutionIntercept => {
+                    snapshot.llm_stream_execution_intercepts =
+                        self.llm_stream_execution_intercepts.clone();
+                }
+            }
+        }
+        snapshot
     }
 
     /// Store an arbitrary runtime extension under `key`.
@@ -344,7 +424,14 @@ impl NemoRelayContextState {
     ) -> Vec<EventSubscriberFn> {
         let mut subscribers =
             Vec::with_capacity(self.event_subscribers.len() + scope_local_subscribers.len());
-        subscribers.extend(self.event_subscribers.values().cloned());
+        subscribers.extend(
+            self.event_subscribers
+                .iter()
+                .filter(|(name, _)| {
+                    runtime_registration_is_enabled(RuntimeRegistrationKind::Subscriber, name)
+                })
+                .map(|(_, callback)| callback.clone()),
+        );
         subscribers.extend(scope_local_subscribers.iter().cloned());
         subscribers
     }
@@ -792,13 +879,102 @@ impl NemoRelayContextState {
     pub(crate) fn event_sanitize_entries(
         global: &SortedRegistry<Guardrail<EventSanitizeFn>>,
         scope_locals: &[&SortedRegistry<Guardrail<EventSanitizeFn>>],
+        kind: RuntimeRegistrationKind,
     ) -> Vec<Guardrail<EventSanitizeFn>> {
-        merge_guardrail_entries(global, scope_locals)
+        merge_guardrail_entries(global, scope_locals, kind)
             .into_iter()
             .cloned()
             .collect()
     }
 
+    /// Snapshot Event metadata injector entries in deterministic priority order.
+    pub(crate) fn event_metadata_injector_entries(
+        global: &SortedRegistry<EventMetadataInjector>,
+        scope_locals: &[&SortedRegistry<EventMetadataInjector>],
+    ) -> Vec<EventMetadataInjector> {
+        merge_event_metadata_injector_entries(global, scope_locals)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Apply insert-only metadata additions from an injector snapshot.
+    pub(crate) async fn event_metadata_injection_snapshot_chain(
+        mut event: Event,
+        entries: &[EventMetadataInjector],
+    ) -> Event {
+        for entry in entries {
+            let callback = Arc::clone(&entry.payload);
+            let context = Arc::new(event);
+            let callback_context = Arc::clone(&context);
+            let outcome = AssertUnwindSafe(async move { callback(callback_context).await })
+                .catch_unwind()
+                .await;
+            event = Arc::try_unwrap(context).unwrap_or_else(|context| (*context).clone());
+
+            let attributes = match outcome {
+                Ok(Ok(attributes)) => attributes,
+                Ok(Err(error)) => {
+                    log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "event_metadata_injector_failed",
+                        injector = entry.name.as_str(),
+                        event_name = event.name();
+                        "Event metadata injector failed; omitting its attributes: {error}"
+                    );
+                    continue;
+                }
+                Err(_) => {
+                    log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "event_metadata_injector_panicked",
+                        injector = entry.name.as_str(),
+                        event_name = event.name();
+                        "Event metadata injector panicked; omitting its attributes"
+                    );
+                    continue;
+                }
+            };
+
+            if let Err(error) = validate_event_metadata_attributes(&attributes) {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_metadata_injector_invalid_output",
+                    injector = entry.name.as_str(),
+                    event_name = event.name();
+                    "Event metadata injector returned invalid attributes; omitting them: {error}"
+                );
+                continue;
+            }
+
+            if attributes.is_empty() {
+                continue;
+            }
+
+            let mut fields = event.sanitize_fields();
+            let mut metadata = match fields.metadata.take() {
+                None => serde_json::Map::new(),
+                Some(Json::Object(metadata)) => metadata,
+                Some(metadata) => {
+                    fields.metadata = Some(metadata);
+                    log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "event_metadata_injector_non_object_metadata",
+                        injector = entry.name.as_str(),
+                        event_name = event.name();
+                        "Event metadata is not an object; omitting injected attributes"
+                    );
+                    continue;
+                }
+            };
+            for (key, value) in attributes {
+                metadata.entry(key).or_insert(value);
+            }
+            fields.metadata = Some(Json::Object(metadata));
+            event.apply_sanitize_fields(fields);
+        }
+        event
+    }
     /// Apply an event sanitizer snapshot to the mutable observability fields.
     pub(crate) async fn event_sanitize_snapshot_chain(
         mut event: Event,
@@ -855,10 +1031,14 @@ impl NemoRelayContextState {
         &self,
         scope_locals: &[&SortedRegistry<Guardrail<ToolSanitizeFn>>],
     ) -> Vec<Guardrail<ToolSanitizeFn>> {
-        merge_guardrail_entries(&self.tool_sanitize_request_guardrails, scope_locals)
-            .into_iter()
-            .cloned()
-            .collect()
+        merge_guardrail_entries(
+            &self.tool_sanitize_request_guardrails,
+            scope_locals,
+            RuntimeRegistrationKind::ToolSanitizeRequestGuardrail,
+        )
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     /// Run a snapshot of tool request sanitizers in priority order.
@@ -919,10 +1099,14 @@ impl NemoRelayContextState {
         &self,
         scope_locals: &[&SortedRegistry<Guardrail<ToolSanitizeFn>>],
     ) -> Vec<Guardrail<ToolSanitizeFn>> {
-        merge_guardrail_entries(&self.tool_sanitize_response_guardrails, scope_locals)
-            .into_iter()
-            .cloned()
-            .collect()
+        merge_guardrail_entries(
+            &self.tool_sanitize_response_guardrails,
+            scope_locals,
+            RuntimeRegistrationKind::ToolSanitizeResponseGuardrail,
+        )
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     /// Run a snapshot of tool response sanitizers in priority order.
@@ -984,10 +1168,14 @@ impl NemoRelayContextState {
         &self,
         scope_locals: &[&SortedRegistry<Guardrail<ToolConditionalFn>>],
     ) -> Vec<Guardrail<ToolConditionalFn>> {
-        merge_guardrail_entries(&self.tool_conditional_execution_guardrails, scope_locals)
-            .into_iter()
-            .cloned()
-            .collect()
+        merge_guardrail_entries(
+            &self.tool_conditional_execution_guardrails,
+            scope_locals,
+            RuntimeRegistrationKind::ToolConditionalExecutionGuardrail,
+        )
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     /// Evaluate a snapshot of tool conditional-execution guardrails in priority order.
@@ -1088,10 +1276,14 @@ impl NemoRelayContextState {
         &self,
         scope_locals: &[&SortedRegistry<Intercept<ToolInterceptFn>>],
     ) -> Vec<Intercept<ToolInterceptFn>> {
-        merge_intercept_entries(&self.tool_request_intercepts, scope_locals)
-            .into_iter()
-            .cloned()
-            .collect()
+        merge_intercept_entries(
+            &self.tool_request_intercepts,
+            scope_locals,
+            RuntimeRegistrationKind::ToolRequestIntercept,
+        )
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     /// Run a snapshot of tool request intercepts in priority order.
@@ -1155,8 +1347,11 @@ impl NemoRelayContextState {
         default_fn: ToolExecutionNextFn,
         scope_locals: &[&SortedRegistry<ExecutionIntercept<ToolExecutionFn>>],
     ) -> ToolExecutionOutcomeNextFn {
-        let matching =
-            merge_execution_intercept_callables(&self.tool_execution_intercepts, scope_locals);
+        let matching = merge_execution_intercept_callables(
+            &self.tool_execution_intercepts,
+            scope_locals,
+            RuntimeRegistrationKind::ToolExecutionIntercept,
+        );
         let mut next: ToolExecutionOutcomeNextFn = Arc::new(move |args| {
             let default_fn = default_fn.clone();
             Box::pin(async move {
@@ -1233,10 +1428,14 @@ impl NemoRelayContextState {
         &self,
         scope_locals: &[&SortedRegistry<Guardrail<LlmSanitizeRequestFn>>],
     ) -> Vec<Guardrail<LlmSanitizeRequestFn>> {
-        merge_guardrail_entries(&self.llm_sanitize_request_guardrails, scope_locals)
-            .into_iter()
-            .cloned()
-            .collect()
+        merge_guardrail_entries(
+            &self.llm_sanitize_request_guardrails,
+            scope_locals,
+            RuntimeRegistrationKind::LlmSanitizeRequestGuardrail,
+        )
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     /// Run a snapshot of LLM request sanitizers in priority order.
@@ -1301,10 +1500,14 @@ impl NemoRelayContextState {
         &self,
         scope_locals: &[&SortedRegistry<Guardrail<LlmSanitizeResponseFn>>],
     ) -> Vec<Guardrail<LlmSanitizeResponseFn>> {
-        merge_guardrail_entries(&self.llm_sanitize_response_guardrails, scope_locals)
-            .into_iter()
-            .cloned()
-            .collect()
+        merge_guardrail_entries(
+            &self.llm_sanitize_response_guardrails,
+            scope_locals,
+            RuntimeRegistrationKind::LlmSanitizeResponseGuardrail,
+        )
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     /// Run a snapshot of LLM response sanitizers in priority order.
@@ -1369,10 +1572,14 @@ impl NemoRelayContextState {
         &self,
         scope_locals: &[&SortedRegistry<Guardrail<LlmConditionalFn>>],
     ) -> Vec<Guardrail<LlmConditionalFn>> {
-        merge_guardrail_entries(&self.llm_conditional_execution_guardrails, scope_locals)
-            .into_iter()
-            .cloned()
-            .collect()
+        merge_guardrail_entries(
+            &self.llm_conditional_execution_guardrails,
+            scope_locals,
+            RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
+        )
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     /// Evaluate a snapshot of LLM conditional-execution guardrails in priority order.
@@ -1468,10 +1675,14 @@ impl NemoRelayContextState {
         &self,
         scope_locals: &[&SortedRegistry<Intercept<LlmRequestInterceptFn>>],
     ) -> Vec<Intercept<LlmRequestInterceptFn>> {
-        merge_intercept_entries(&self.llm_request_intercepts, scope_locals)
-            .into_iter()
-            .cloned()
-            .collect()
+        merge_intercept_entries(
+            &self.llm_request_intercepts,
+            scope_locals,
+            RuntimeRegistrationKind::LlmRequestIntercept,
+        )
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     /// Run a snapshot of LLM request intercepts in priority order.
@@ -1595,8 +1806,11 @@ impl NemoRelayContextState {
         default_fn: LlmExecutionNextFn,
         scope_locals: &[&SortedRegistry<ExecutionIntercept<LlmExecutionFn>>],
     ) -> LlmExecutionNextFn {
-        let matching =
-            merge_execution_intercept_callables(&self.llm_execution_intercepts, scope_locals);
+        let matching = merge_execution_intercept_callables(
+            &self.llm_execution_intercepts,
+            scope_locals,
+            RuntimeRegistrationKind::LlmExecutionIntercept,
+        );
         let mut next = default_fn;
         let name = name.to_string();
         for (callable, _) in matching.into_iter().rev() {
@@ -1646,6 +1860,7 @@ impl NemoRelayContextState {
         let matching = merge_execution_intercept_callables(
             &self.llm_stream_execution_intercepts,
             scope_locals,
+            RuntimeRegistrationKind::LlmStreamExecutionIntercept,
         );
         let mut next = default_fn;
         let name = name.to_string();
@@ -1674,6 +1889,67 @@ impl NemoRelayContextState {
             });
         }
         next
+    }
+}
+
+fn validate_event_metadata_attributes(attributes: &BTreeMap<String, Json>) -> Result<(), String> {
+    for (key, value) in attributes {
+        if !is_valid_event_metadata_attribute_key(key) {
+            return Err(format!(
+                "attribute key `{key}` must contain letter, number, underscore, or hyphen segments separated by single dots"
+            ));
+        }
+        if !is_otel_compatible_attribute_value(value) {
+            return Err(format!(
+                "attribute `{key}` must be a primitive or homogeneous primitive list"
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OtelAttributePrimitiveKind {
+    Boolean,
+    Number,
+    String,
+}
+
+fn otel_compatible_attribute_number_kind(
+    value: &serde_json::Number,
+) -> Option<OtelAttributePrimitiveKind> {
+    if let Some(value) = value.as_u64() {
+        return i64::try_from(value)
+            .is_ok()
+            .then_some(OtelAttributePrimitiveKind::Number);
+    }
+    value.as_f64().map(|_| OtelAttributePrimitiveKind::Number)
+}
+
+fn is_otel_compatible_attribute_number(value: &serde_json::Number) -> bool {
+    otel_compatible_attribute_number_kind(value).is_some()
+}
+
+fn is_otel_compatible_attribute_value(value: &Json) -> bool {
+    fn primitive_kind(value: &Json) -> Option<OtelAttributePrimitiveKind> {
+        match value {
+            Json::Bool(_) => Some(OtelAttributePrimitiveKind::Boolean),
+            Json::Number(value) => otel_compatible_attribute_number_kind(value),
+            Json::String(_) => Some(OtelAttributePrimitiveKind::String),
+            _ => None,
+        }
+    }
+
+    match value {
+        Json::Bool(_) | Json::String(_) => true,
+        Json::Number(value) => is_otel_compatible_attribute_number(value),
+        Json::Array(values) => match values.first().and_then(primitive_kind) {
+            None => values.is_empty(),
+            Some(kind) => values
+                .iter()
+                .all(|value| primitive_kind(value) == Some(kind)),
+        },
+        Json::Null | Json::Object(_) => false,
     }
 }
 

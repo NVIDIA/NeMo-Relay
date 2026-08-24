@@ -9,6 +9,8 @@
 //! response-cache-specific backend config and the key-strategy constant next to
 //! the key/store code that consumes them.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
@@ -61,5 +63,130 @@ nemo_relay::editor_config! {
     impl BackendConfig {
         kind => { label: "kind", kind: Enum, values: ["in_memory", "redis"] },
         config => { label: "config", kind: Json },
+    }
+}
+
+/// Opt-in tool-result cache configuration.
+///
+/// Cache only tools that are read-only and stable for their TTL.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolCacheConfig {
+    /// Master switch; off by default.
+    pub enabled: bool,
+    /// Tool execution-intercept priority. Lower values run earlier and outermost.
+    pub priority: i32,
+    /// Whether conventional in-band tool error results may be stored.
+    pub cache_errors: bool,
+    /// Policy for unclassified tools; not cacheable by default.
+    pub default: ToolClass,
+    /// Named tool classes.
+    pub classes: BTreeMap<String, ToolClass>,
+    /// Per-tool refinements keyed by exact name, `prefix*`, `*suffix`, or `*contains*`.
+    pub overrides: BTreeMap<String, ToolOverride>,
+}
+
+impl Default for ToolCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            priority: 100,
+            cache_errors: false,
+            default: ToolClass::default(),
+            classes: BTreeMap::new(),
+            overrides: BTreeMap::new(),
+        }
+    }
+}
+
+nemo_relay::editor_config! {
+    impl ToolCacheConfig {
+        enabled => { label: "enabled", kind: Boolean },
+        priority => { label: "priority", kind: Integer },
+        cache_errors => { label: "cache_errors", kind: Boolean },
+        default => {
+            label: "default",
+            kind: Section,
+            nested: ToolClass,
+            default: ToolClass,
+        },
+        classes => { label: "classes", kind: Json },
+        overrides => { label: "overrides", kind: Json },
+    }
+}
+
+/// Policy shared by a class of tools.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolClass {
+    /// Whether class members may be served from cache.
+    pub cacheable: bool,
+    /// TTL in seconds; inherits the response-cache TTL when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_seconds: Option<u64>,
+    /// Live-rerun probability; inherits the response-cache rate when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bypass_rate: Option<f64>,
+    /// Version string folded into cache keys for members of this class.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_version: Option<String>,
+    /// Top-level argument keys dropped before keying.
+    pub arg_skip: Vec<String>,
+    /// Exact tool names, `prefix*`, `*suffix`, or `*contains*` patterns in this class.
+    pub members: Vec<String>,
+}
+
+/// Per-tool refinement applied after class resolution.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolOverride {
+    /// Overrides the class cacheability.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cacheable: Option<bool>,
+    /// Overrides the class TTL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_seconds: Option<u64>,
+    /// Overrides the class bypass rate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bypass_rate: Option<f64>,
+    /// Version string folded into the cache key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_version: Option<String>,
+    /// Replaces the class argument skip list when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arg_skip: Option<Vec<String>>,
+}
+
+nemo_relay::editor_config! {
+    impl ToolClass {
+        cacheable => { label: "cacheable", kind: Boolean },
+        ttl_seconds => { label: "ttl_seconds", kind: Integer, optional: true },
+        bypass_rate => { label: "bypass_rate", kind: Float, optional: true },
+        tool_version => { label: "tool_version", kind: String, optional: true },
+        arg_skip => {
+            label: "arg_skip",
+            kind: List,
+            list: &nemo_relay::config_editor::STRING_LIST_ITEM,
+        },
+        members => {
+            label: "members",
+            kind: List,
+            list: &nemo_relay::config_editor::STRING_LIST_ITEM,
+        },
+    }
+}
+
+nemo_relay::editor_config! {
+    impl ToolOverride {
+        cacheable => { label: "cacheable", kind: Boolean, optional: true },
+        ttl_seconds => { label: "ttl_seconds", kind: Integer, optional: true },
+        bypass_rate => { label: "bypass_rate", kind: Float, optional: true },
+        tool_version => { label: "tool_version", kind: String, optional: true },
+        arg_skip => {
+            label: "arg_skip",
+            kind: List,
+            optional: true,
+            list: &nemo_relay::config_editor::STRING_LIST_ITEM,
+        },
     }
 }

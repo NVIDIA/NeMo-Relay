@@ -94,7 +94,9 @@ when you need to capture Deep Agents skill or subagent marks.
 The integration works correctly when:
 
 - The Deep Agents run completes and prints a final response.
-- The `deepagents-request` scope contains the top-level agent execution.
+- The `deepagents-request` scope contains a semantic `main-agent` Agent scope.
+- In-process delegated agents appear as nested Agent scopes with names derived
+  from callback metadata. Unnamed top-level runs use the `DeepAgent` fallback.
 - Skill, subagent, and human-in-the-loop marks appear when those features are exercised.
 
 ## Observability
@@ -106,7 +108,9 @@ human-in-the-loop lifecycle events.
 It captures:
 
 - LangChain model and tool calls through NeMo Relay managed execution.
-- LangGraph run scopes through callbacks.
+- Semantic orchestrator and in-process subagent Agent scopes through the
+  Deep Agents callback handler. Internal LangGraph node runs do not create
+  additional Agent scopes in this specialized handler.
 - Human-in-the-loop interrupt and resume marks.
 - Configured skills and subagent summaries at agent-run start.
 - Automatic `skill.load` marks when a Deep Agents tool requests a complete
@@ -114,8 +118,14 @@ It captures:
 - In-process dictionary-style subagents with the same NeMo Relay middleware, so
   their model and tool calls are captured when Deep Agents invokes them.
 
-Remote graphs or processes still need NeMo Relay instrumentation in that graph
-or process to capture their internal model and tool calls.
+The automatically configured `general-purpose` subagent is identified from
+Deep Agents callback metadata and appears as a nested Agent scope when invoked.
+Deep Agents does not inherit arbitrary parent middleware into that generated
+subagent, so its internal model and tool calls are not managed by Relay.
+Precompiled local subagent runnables can expose a semantic run boundary through
+the callback, but their internal model and tool calls require separate Relay
+instrumentation. Remote graphs or processes likewise need Relay instrumentation
+inside that graph or process to capture their internal calls.
 
 Refer to [Observability](/configure-plugins/observability/about)
 for details on exporting NeMo Relay observability data to third-party systems.

@@ -49,6 +49,9 @@ func TestClosedPluginContextRejectsEveryRegistrationSurface(t *testing.T) {
 		call func() error
 	}{
 		{name: "subscriber", call: func() error { return ctx.RegisterSubscriber("closed_subscriber", nil) }},
+		{name: "event metadata injector", call: func() error {
+			return ctx.RegisterEventMetadataInjector("closed_event_metadata", 0, nil)
+		}},
 		{name: "mark sanitizer", call: func() error { return ctx.RegisterMarkSanitizeGuardrail("closed_mark", 0, nil) }},
 		{name: "scope-start sanitizer", call: func() error { return ctx.RegisterScopeSanitizeStartGuardrail("closed_scope_start", 0, nil) }},
 		{name: "scope-end sanitizer", call: func() error { return ctx.RegisterScopeSanitizeEndGuardrail("closed_scope_end", 0, nil) }},

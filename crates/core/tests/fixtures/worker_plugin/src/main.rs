@@ -1,12 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use nemo_relay_worker::{
-    ConfigDiagnostic, DiagnosticLevel, EventSanitizeFields, Json, LlmRequest, PendingMarkSpec,
+    ConfigDiagnostic, DiagnosticLevel, EventSanitizeFields, Json, LlmRequest,
+    METRIC_DATA_SCHEMA_NAME, MetricKind, MetricMeasurement, MetricValueType, PendingMarkSpec,
 };
 use nemo_relay_worker::{
-    JsonStream, LlmNext, LlmStreamNext, PluginContext, ScopeType, ToolExecutionInterceptOutcome,
-    ToolNext, WorkerPlugin, WorkerSdkError, serve_plugin,
+    JsonStream, LlmNext, LlmStreamNext, PluginContext, RuntimeRegistrationKind, ScopeType,
+    ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError, serve_plugin,
 };
 use serde_json::json;
 
@@ -58,6 +61,37 @@ impl WorkerPlugin for FixtureWorkerPlugin {
             return Ok(());
         }
 
+        let event_metadata_injector_error = fixture_flag(config, "event_metadata_injector_error");
+        let exit_in_event_metadata_injector =
+            fixture_flag(config, "exit_in_event_metadata_injector");
+        ctx.register_event_metadata_injector(
+            "fixture_event_metadata_injector",
+            0,
+            move |event| async move {
+                if exit_in_event_metadata_injector {
+                    std::process::exit(44);
+                }
+                if event_metadata_injector_error {
+                    return Err(WorkerSdkError::Callback(
+                        "fixture Event metadata injector error requested".into(),
+                    ));
+                }
+                let mut additions = BTreeMap::new();
+                if event
+                    .name()
+                    .starts_with("external-plugin-event-metadata-injection")
+                {
+                    additions.insert(
+                        "external.injector.transport".into(),
+                        json!("rust_grpc_worker"),
+                    );
+                }
+                Ok(additions)
+            },
+        );
+        if fixture_flag(config, "event_metadata_injector_only") {
+            return Ok(());
+        }
         let runtime = ctx
             .runtime()
             .ok_or_else(|| WorkerSdkError::Callback("runtime handle missing".into()))?;
@@ -67,9 +101,16 @@ impl WorkerPlugin for FixtureWorkerPlugin {
         ctx.register_mark_sanitize_guardrail(
             "fixture_mark_sanitize_data",
             1,
-            |_, mut fields| async move {
-                fields.data = Some(json!({"worker_plugin_mark_data": true}));
-                Ok(fields)
+            |event, mut fields| {
+                let is_metric = event
+                    .data_schema()
+                    .is_some_and(|schema| schema.name == METRIC_DATA_SCHEMA_NAME);
+                async move {
+                    if !is_metric {
+                        fields.data = Some(json!({"worker_plugin_mark_data": true}));
+                    }
+                    Ok(fields)
+                }
             },
         );
         let nested_publication_runtime = runtime.clone();
@@ -101,12 +142,19 @@ impl WorkerPlugin for FixtureWorkerPlugin {
             |_, fields| async move { Ok(mark_event_fields(fields, "worker_plugin_scope_end")) },
         );
         register_fixture_subscriber(ctx, runtime.clone());
+        ctx.register_conditional_middleware_guardrail(
+            "fixture_initial_gate",
+            BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+            "missing-worker-target",
+            "fixture initial gate",
+        );
         register_fixture_tool_hooks(
             ctx,
             runtime,
             fixture_flag(config, "block_tool"),
             fixture_flag(config, "tool_request_error"),
             fixture_flag(config, "exit_in_tool_request"),
+            fixture_flag(config, "emit_tokenomics_metric"),
         );
         register_fixture_llm_hooks(
             ctx,
@@ -153,6 +201,7 @@ fn register_fixture_tool_hooks(
     block_tool: bool,
     tool_request_error: bool,
     exit_in_tool_request: bool,
+    emit_tokenomics_metric: bool,
 ) {
     ctx.register_tool_sanitize_request_guardrail(
         "fixture_tool_sanitize_request",
@@ -188,7 +237,26 @@ fn register_fixture_tool_hooks(
                     "fixture tool request error requested".into(),
                 ));
             }
-            emit_runtime_events(runtime).await?;
+            if emit_tokenomics_metric {
+                runtime
+                    .emit_metric(
+                        "tokenomics.measurements",
+                        vec![MetricMeasurement {
+                            name: "example.tokens.saved".into(),
+                            kind: MetricKind::Counter,
+                            value_type: MetricValueType::U64,
+                            value: json!(42),
+                            unit: Some("{token}".into()),
+                            description: Some("Tokens avoided".into()),
+                            attributes: Some(json!({"model": "example-model"})),
+                            boundaries: None,
+                        }],
+                        None,
+                    )
+                    .await?;
+            } else {
+                emit_runtime_events(runtime).await?;
+            }
             Ok(mark_json(args, "worker_plugin"))
         }
     });
@@ -201,12 +269,13 @@ fn register_fixture_tool_hooks(
                 .await?;
             let mut result = result;
             result.result = mark_json(result.result, "worker_plugin_tool_execution");
-            Ok(ToolExecutionInterceptOutcome::from(result)
-            .with_pending_mark(
-                PendingMarkSpec::builder()
-                    .name("fixture.worker.tool_execution.mark")
-                    .build(),
-            ))
+            Ok(
+                ToolExecutionInterceptOutcome::from(result).with_pending_mark(
+                    PendingMarkSpec::builder()
+                        .name("fixture.worker.tool_execution.mark")
+                        .build(),
+                ),
+            )
         },
     );
 }

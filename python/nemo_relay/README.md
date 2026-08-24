@@ -47,9 +47,16 @@ The Python package provides the following capabilities:
 - **Middleware APIs**: Guardrails and intercepts for tool and LLM requests,
   responses, and execution, plus mark and scope event sanitizers for `data`,
   `category_profile`, and `metadata`.
-- **Subscribers and exporters**: `OpenTelemetrySubscriber` accepts one required
-  `full`, `gen_ai`, or `openinference` endpoint configuration. The
-  `nemo_relay.observability` helpers configure plugin-owned endpoint fan-out.
+- **Subscribers and exporters**: `OpenTelemetrySubscriber` exports traces;
+  `OpenTelemetryLogSubscriber` and `OpenTelemetryMetricSubscriber` export
+  severity-tagged marks and typed metric measurements. Bare OTLP/HTTP origins
+  resolve to `/v1/traces`, `/v1/logs`, or `/v1/metrics` for the selected signal.
+  Each direct OTLP subscriber exposes `runtime_diagnostics()` for bounded
+  exporter and event-processing failure summaries.
+  Trace export failures use `otel.traces_export_failed`; after a trace export
+  fails, `force_flush()` continues to return an error until a later trace batch
+  exports successfully.
+  The `nemo_relay.observability` helpers configure plugin-owned endpoint fan-out.
 - **Plugin and typed helpers**: Public modules for plugins, codecs, typed
   wrappers, adaptive runtime behavior, and observability plugin configuration.
 - **Shared Rust runtime semantics**: Python behavior aligned with the Rust
@@ -149,6 +156,92 @@ with nemo_relay.scope.scope("demo-agent", nemo_relay.ScopeType.Agent) as handle:
 
 nemo_relay.subscribers.flush()
 nemo_relay.subscribers.deregister("printer")
+```
+
+Use `nemo_relay.scope.event(..., severity=nemo_relay.LogSeverity.Info)` for a
+mark intended for log export. Use `nemo_relay.scope.metric()` with
+`nemo_relay.MetricMeasurement` objects for metrics; Relay validates the complete
+measurement group before publishing it.
+
+## OTLP Logs and Metrics
+
+For plugin-managed export, configure version 4 and enable `logs` and `metrics`.
+Omitting their endpoint lists derives `/v1/logs` and `/v1/metrics` from the
+trace endpoint:
+
+```python
+from nemo_relay.observability import (
+    ComponentSpec,
+    ObservabilityConfig,
+    OpenTelemetryEndpointConfig,
+    OpenTelemetryLogSectionConfig,
+    OpenTelemetryMetricSectionConfig,
+    OpenTelemetrySectionConfig,
+)
+
+component = ComponentSpec(
+    ObservabilityConfig(
+        opentelemetry=OpenTelemetrySectionConfig(
+            enabled=True,
+            endpoints=[
+                OpenTelemetryEndpointConfig(
+                    type="gen_ai", endpoint="http://localhost:4318/v1/traces"
+                )
+            ],
+            logs=OpenTelemetryLogSectionConfig(enabled=True),
+            metrics=OpenTelemetryMetricSectionConfig(enabled=True),
+        )
+    )
+)
+```
+
+Emit a typed log mark and an atomically validated metric group with the public
+scope helpers:
+
+```python
+from nemo_relay import DataSchema, LogSeverity, MetricKind, MetricMeasurement, MetricValueType
+from nemo_relay import scope
+
+scope.event(
+    "cache-nearly-full",
+    data={"entries": 900},
+    data_schema=DataSchema("example.cache", "1"),
+    severity=LogSeverity.Warn,
+)
+scope.metric(
+    "cache-entries",
+    [MetricMeasurement("example.cache.entries", MetricKind.Gauge, MetricValueType.U64, 900)],
+)
+```
+
+Direct log and metric subscribers are independently managed. Register each
+before emitting marks, then deregister, force-flush, and shut it down during
+graceful teardown. Their `runtime_diagnostics()` snapshots contain bounded
+`code`, `message`, and `count` entries:
+
+```python
+from nemo_relay import (
+    OpenTelemetryLogConfig,
+    OpenTelemetryLogSubscriber,
+    OpenTelemetryMetricConfig,
+    OpenTelemetryMetricSubscriber,
+)
+
+# Equivalent explicit OTLP/HTTP paths are /v1/logs and /v1/metrics, respectively.
+logs = OpenTelemetryLogSubscriber(OpenTelemetryLogConfig("http://localhost:4318"))
+metrics = OpenTelemetryMetricSubscriber(OpenTelemetryMetricConfig("http://localhost:4318"))
+logs.register("otlp-logs")
+metrics.register("otlp-metrics")
+try:
+    for diagnostic in logs.runtime_diagnostics().entries:
+        print(diagnostic.code, diagnostic.message)
+finally:
+    logs.deregister("otlp-logs")
+    logs.force_flush()
+    logs.shutdown()
+    metrics.deregister("otlp-metrics")
+    metrics.force_flush()
+    metrics.shutdown()
 ```
 
 Native subscriber delivery is asynchronous, so call

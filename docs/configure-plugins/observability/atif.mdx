@@ -28,7 +28,7 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 3
+version = 4
 
 [components.config.atif]
 enabled = true
@@ -357,20 +357,20 @@ const observability = require("nemo-relay-node/observability");
 
 void (async () => {
   await plugin.initialize({
-  version: 1,
-  components: [
-    observability.ComponentSpec({
-  version: 3,
-      atif: observability.atifConfig({
-        enabled: true,
-        agent_name: "Planner",
-        agent_version: "1.0.0",
-        model_name: "unknown",
-        output_directory: "logs",
-        filename_template: "trajectory-{session_id}.json",
+    version: 1,
+    components: [
+      observability.ComponentSpec({
+        version: 4,
+        atif: observability.atifConfig({
+          enabled: true,
+          agent_name: "Planner",
+          agent_version: "1.0.0",
+          model_name: "unknown",
+          output_directory: "logs",
+          filename_template: "trajectory-{session_id}.json",
+        }),
       }),
-    }),
-  ],
+    ],
   });
 
   try {

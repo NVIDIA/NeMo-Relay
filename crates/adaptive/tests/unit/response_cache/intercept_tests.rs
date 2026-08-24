@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use nemo_relay::api::runtime::LlmJsonStream;
 use serde_json::json;
 use tokio::sync::{oneshot, watch};
 use tokio_stream::StreamExt;
@@ -53,6 +54,66 @@ fn chat_stream_fidelity_gate_rejects_every_uncollected_non_null_shape() {
     }
 }
 
+#[test]
+fn malformed_stream_shapes_are_not_aggregated() {
+    for malformed in [
+        json!(null),
+        json!({"choices": {}}),
+        json!({"choices": [null]}),
+        json!({"choices": [{"index": "first"}]}),
+        json!({"choices": [{"finish_reason": 1}]}),
+        json!({"choices": [{"unsupported": true}]}),
+        json!({"choices": [{"delta": "not-an-object"}]}),
+        json!({"choices": [{"delta": {"tool_calls": [null]}}]}),
+        json!({"choices": [{"delta": {"tool_calls": [{"id": 1}]}}]}),
+        json!({"choices": [{"delta": {"tool_calls": [{"unsupported": true}]}}]}),
+        json!({"choices": [{"delta": {"tool_calls": [{"function": "not-an-object"}]}}]}),
+    ] {
+        assert!(
+            chunk_has_uncollected_response_fields(&malformed),
+            "malformed stream chunk must not be cached: {malformed}"
+        );
+    }
+
+    assert!(!chunk_has_uncollected_response_fields(&json!({
+        "type": "message_delta"
+    })));
+    assert!(!chunk_has_uncollected_response_fields(&json!({
+        "choices": null
+    })));
+    assert!(
+        !chunk_has_uncollected_response_fields(&json!({
+            "choices": [{"delta": {"tool_calls": [{"id": null}]}}]
+        })),
+        "null tool-call metadata is harmless when no uncollectable fields are present"
+    );
+}
+
+#[test]
+fn replay_and_error_guards_reject_unfaithful_or_failed_responses() {
+    assert!(aggregate_replay_lossy(&json!({
+        "choices": [{
+            "message": {"role": "assistant", "content": null, "tool_calls": []}
+        }]
+    })));
+    assert!(chunk_is_inband_error(&json!({"type": "response.failed"})));
+    assert!(chunk_is_inband_error(
+        &json!({"error": {"message": "upstream failed"}})
+    ));
+    assert!(!chunk_is_inband_error(&json!({"error": null})));
+    assert!(!is_error_response(&json!("not-an-object")));
+}
+
+#[test]
+fn sampled_bypass_uses_a_unit_interval_rng() {
+    assert_eq!(rng_seed() & 1, 1, "xorshift state must never be zero");
+
+    RNG_STATE.with(|state| state.set(1));
+    let expected = next_unit_f64() < 0.5;
+    RNG_STATE.with(|state| state.set(1));
+    assert_eq!(should_bypass(0.5), expected);
+}
+
 #[tokio::test]
 async fn write_behind_returns_eof_before_cache_commit_completes() {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
@@ -77,6 +138,10 @@ async fn write_behind_returns_eof_before_cache_commit_completes() {
             .await
             .expect("write-behind cache publication must not delay stream completion")
             .is_none()
+    );
+    assert!(
+        stream.next().await.is_none(),
+        "finished streams stay finished"
     );
     release
         .send(())
@@ -172,4 +237,29 @@ fn assert_error_response_and_bypass_detection() {
     assert!(should_bypass(1.0));
     let unit = next_unit_f64();
     assert!((0.0..1.0).contains(&unit), "{unit}");
+}
+
+#[tokio::test]
+async fn stream_close_reports_when_the_cleanup_task_ends_early() {
+    let (cancel, _) = watch::channel(false);
+    let (closed_tx, closed) = watch::channel(None::<FlowResult<()>>);
+    drop(closed_tx);
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    drop(tx);
+    let mut stream = LlmJsonStream::from_closeable(ResponseCacheReceiver {
+        receiver: ReceiverStream::new(rx),
+        cancel,
+        closed,
+        finished: false,
+    });
+
+    let error = stream
+        .close()
+        .await
+        .expect_err("an unavailable cleanup result must be reported");
+    assert!(
+        error
+            .to_string()
+            .contains("response-cache stream cleanup task ended early")
+    );
 }

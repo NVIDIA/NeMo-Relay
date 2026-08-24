@@ -1329,6 +1329,316 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
 }
 
 #[test]
+fn test_ffi_metric_discriminators_reject_zero_initialized_measurements() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let metric_name = cstring("ffi_metric");
+        let instrument_name = cstring("example.tokens.saved");
+        assert_eq!(types::NEMO_RELAY_METRIC_KIND_UNSPECIFIED, 0);
+        assert_eq!(types::NEMO_RELAY_METRIC_KIND_COUNTER, 1);
+        assert_eq!(types::NEMO_RELAY_METRIC_KIND_UP_DOWN_COUNTER, 2);
+        assert_eq!(types::NEMO_RELAY_METRIC_KIND_GAUGE, 3);
+        assert_eq!(types::NEMO_RELAY_METRIC_KIND_HISTOGRAM, 4);
+        assert_eq!(types::NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED, 0);
+        assert_eq!(types::NEMO_RELAY_METRIC_VALUE_TYPE_U64, 1);
+        assert_eq!(types::NEMO_RELAY_METRIC_VALUE_TYPE_I64, 2);
+        assert_eq!(types::NEMO_RELAY_METRIC_VALUE_TYPE_F64, 3);
+        let zero_initialized: types::NemoRelayMetricMeasurement = std::mem::zeroed();
+        let unspecified_kind = types::NemoRelayMetricMeasurement {
+            name: instrument_name.as_ptr(),
+            f64_value: 12.5,
+            ..zero_initialized
+        };
+        assert_status!(
+            api::nemo_relay_metric(
+                metric_name.as_ptr(),
+                ptr::null(),
+                ptr::from_ref(&unspecified_kind),
+                1,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert!(
+            read_last_error()
+                .unwrap()
+                .contains("measurements[0].kind is unspecified")
+        );
+        let unspecified_value_type = types::NemoRelayMetricMeasurement {
+            kind: types::NEMO_RELAY_METRIC_KIND_COUNTER,
+            u64_value: 42,
+            ..unspecified_kind
+        };
+        assert_status!(
+            api::nemo_relay_metric(
+                metric_name.as_ptr(),
+                ptr::null(),
+                ptr::from_ref(&unspecified_value_type),
+                1,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert!(
+            read_last_error()
+                .unwrap()
+                .contains("measurements[0].value_type is unspecified")
+        );
+    }
+}
+
+#[test]
+fn test_ffi_event_v2_and_metric_mark_contracts() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let stack = fresh_scope_stack();
+        let subscriber_name = cstring(&unique_name("ffi_metric_api"));
+        assert_status!(
+            nemo_relay_register_subscriber(
+                subscriber_name.as_ptr(),
+                subscriber_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let log_name = cstring("ffi_structured_log");
+        let data = cstring(r#"{"message":"hello"}"#);
+        let schema = cstring(r#"{"name":"example.log","version":"1"}"#);
+        let metadata = cstring(r#"{"nemo_relay.log.severity":"debug"}"#);
+        let warning = types::NEMO_RELAY_LOG_SEVERITY_WARN;
+        assert_status!(
+            api::nemo_relay_event_v2(
+                log_name.as_ptr(),
+                ptr::null(),
+                data.as_ptr(),
+                schema.as_ptr(),
+                metadata.as_ptr(),
+                ptr::from_ref(&warning),
+                ptr::null(),
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let metric_name = cstring("ffi_metric");
+        let instrument_name = cstring("example.tokens.saved");
+        let unit = cstring("{token}");
+        let measurement = types::NemoRelayMetricMeasurement {
+            name: instrument_name.as_ptr(),
+            kind: types::NEMO_RELAY_METRIC_KIND_COUNTER,
+            value_type: types::NEMO_RELAY_METRIC_VALUE_TYPE_U64,
+            u64_value: 42,
+            i64_value: 0,
+            f64_value: 0.0,
+            unit: unit.as_ptr(),
+            description: ptr::null(),
+            attributes_json: ptr::null(),
+            boundaries: ptr::null(),
+            boundaries_len: 0,
+        };
+        assert_status!(
+            api::nemo_relay_metric(
+                metric_name.as_ptr(),
+                ptr::null(),
+                ptr::from_ref(&measurement),
+                1,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let histogram_name = cstring("example.request.duration");
+        let explicit_empty_boundary_sentinel = 0.0;
+        let explicit_empty_boundaries = types::NemoRelayMetricMeasurement {
+            name: histogram_name.as_ptr(),
+            kind: types::NEMO_RELAY_METRIC_KIND_HISTOGRAM,
+            boundaries: ptr::from_ref(&explicit_empty_boundary_sentinel),
+            ..measurement
+        };
+        let explicit_empty_metric_name = cstring("ffi_metric_empty_boundaries");
+        assert_status!(
+            api::nemo_relay_metric(
+                explicit_empty_metric_name.as_ptr(),
+                ptr::null(),
+                ptr::from_ref(&explicit_empty_boundaries),
+                1,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let missing_boundaries = types::NemoRelayMetricMeasurement {
+            boundaries: ptr::null(),
+            boundaries_len: 1,
+            ..explicit_empty_boundaries
+        };
+        assert_status!(
+            api::nemo_relay_metric(
+                metric_name.as_ptr(),
+                ptr::null(),
+                ptr::from_ref(&missing_boundaries),
+                1,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        let empty_measurements = cstring("[]");
+        assert_status!(
+            api::nemo_relay_metric_json(
+                metric_name.as_ptr(),
+                ptr::null(),
+                empty_measurements.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        let invalid_metadata = cstring("[]");
+        let info = types::NEMO_RELAY_LOG_SEVERITY_INFO;
+        assert_status!(
+            api::nemo_relay_event_v2(
+                log_name.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                invalid_metadata.as_ptr(),
+                ptr::from_ref(&info),
+                ptr::null(),
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+
+        let invalid_severity: types::NemoRelayLogSeverity = i32::MAX;
+        assert_status!(
+            api::nemo_relay_event_v2(
+                log_name.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::from_ref(&invalid_severity),
+                ptr::null(),
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert!(
+            read_last_error()
+                .unwrap()
+                .contains("severity has invalid value 2147483647")
+        );
+
+        let invalid_kind = types::NemoRelayMetricMeasurement {
+            kind: i32::MAX,
+            ..measurement
+        };
+        assert_status!(
+            api::nemo_relay_metric(
+                metric_name.as_ptr(),
+                ptr::null(),
+                ptr::from_ref(&invalid_kind),
+                1,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert!(
+            read_last_error()
+                .unwrap()
+                .contains("measurements[0].kind has invalid value 2147483647")
+        );
+
+        let invalid_value_type = types::NemoRelayMetricMeasurement {
+            value_type: i32::MIN,
+            ..measurement
+        };
+        assert_status!(
+            api::nemo_relay_metric(
+                metric_name.as_ptr(),
+                ptr::null(),
+                ptr::from_ref(&invalid_value_type),
+                1,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert!(
+            read_last_error()
+                .unwrap()
+                .contains("measurements[0].value_type has invalid value -2147483648")
+        );
+
+        let non_finite = types::NemoRelayMetricMeasurement {
+            value_type: types::NEMO_RELAY_METRIC_VALUE_TYPE_F64,
+            f64_value: f64::NAN,
+            ..measurement
+        };
+        assert_status!(
+            api::nemo_relay_metric(
+                metric_name.as_ptr(),
+                ptr::null(),
+                [measurement, non_finite].as_ptr(),
+                2,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert!(
+            read_last_error()
+                .unwrap()
+                .contains("measurements[1].f64_value must be finite")
+        );
+
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+        let events = lock_unpoisoned(event_log()).clone();
+        let log = events
+            .iter()
+            .find(|event| event["name"] == json!("ffi_structured_log"))
+            .expect("structured log mark");
+        assert_eq!(
+            log["json"]["data_schema"],
+            json!({"name": "example.log", "version": "1"})
+        );
+        assert_eq!(log["metadata"]["nemo_relay.log.severity"], "warn");
+        let metric = events
+            .iter()
+            .find(|event| event["name"] == json!("ffi_metric"))
+            .expect("metric mark");
+        assert_eq!(
+            metric["json"]["data_schema"],
+            json!({"name": "nemo.relay.metric_measurements", "version": "1"})
+        );
+        assert_eq!(metric["data"]["measurements"][0]["boundaries"], Json::Null);
+        let explicit_empty_metric = events
+            .iter()
+            .find(|event| event["name"] == json!("ffi_metric_empty_boundaries"))
+            .expect("metric mark with explicit empty boundaries");
+        assert_eq!(
+            explicit_empty_metric["data"]["measurements"][0]["boundaries"],
+            json!([])
+        );
+
+        assert_status!(
+            nemo_relay_deregister_subscriber(subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
 fn test_ffi_additional_null_and_invalid_json_paths() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();

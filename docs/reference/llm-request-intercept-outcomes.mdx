@@ -22,8 +22,9 @@ A canonical outcome serialization looks like this:
 `request` is required. `annotated_request` defaults to `null` when omitted on
 input, and `pending_marks` defaults to an empty list. Canonical serialization
 includes all three fields. A pending mark only contains `name`, optional
-`category` and `category_profile`, and optional `data` and `metadata`. Relay
-owns event UUIDs, parent UUIDs, and timestamps.
+`category` and `category_profile`, and optional `data`, `data_schema`,
+`metadata`, and typed log `severity`. Relay owns event UUIDs, parent UUIDs, and
+timestamps.
 
 ## Request Authority
 
@@ -89,15 +90,13 @@ flowchart TD
 The following callbacks return the same logical outcome in their native type
 or object shape:
 
-- Python callbacks return `LLMRequestInterceptOutcome`.
-- Rust callbacks return `LlmRequestInterceptOutcome`.
-- Node.js callbacks return `{ request, annotated?, pendingMarks? }`.
-  JavaScript pending-mark DTOs use `categoryProfile`; canonical JSON retains
-  `pending_marks` and `category_profile`.
-- Public C callbacks return one owned canonical outcome JSON string, and native
-  ABI v2 callbacks return one host-owned outcome JSON string.
-- Rust and Python `grpc-v1` worker SDKs return their canonical outcome in a
-  `JsonEnvelope` with schema `nemo.relay.LlmRequestInterceptOutcome@2`.
+| Surface | LLM request-intercept outcome |
+| --- | --- |
+| Python | `LLMRequestInterceptOutcome` |
+| Rust | `LlmRequestInterceptOutcome` |
+| Node.js | `{ request, annotated?, pendingMarks? }`; JavaScript pending-mark DTOs use `categoryProfile`, while canonical JSON retains `pending_marks` and `category_profile` |
+| Public C and native ABI v2 | One owned or host-owned canonical outcome JSON string, respectively |
+| Rust and Python `grpc-v1` workers | A `JsonEnvelope` with schema `nemo.relay.LlmRequestInterceptOutcome@2` |
 
 The standalone request-intercept helper returns the complete outcome but does
 not emit its pending marks because it does not own an LLM lifecycle.
@@ -150,7 +149,7 @@ edited annotation. Header edits continue to use `request.headers`. An attempt
 to change the raw body while its request codec is active returns an explicit
 error before the provider callback.
 
-## Related Topics
-
-- [Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
-- [gRPC Worker Protocol Overview](/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol)
+Tool execution intercepts have a smaller result-and-marks contract, documented
+in [Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes).
+Worker authors can trace both envelopes through the [grpc-v1 protocol
+reference](/build-plugins/workers/grpc-v1-protocol).

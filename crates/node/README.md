@@ -48,9 +48,11 @@ The Node.js package provides the following capabilities:
 - **Middleware APIs**: Guardrails and intercepts for tool and LLM boundaries,
   plus mark and scope event sanitizers for `data`, `categoryProfile`, and
   `metadata`.
-- **Observability exporters**: `OpenTelemetrySubscriber` accepts one required
-  `full`, `gen_ai`, or `openinference` endpoint configuration. The
-  `nemo-relay-node/observability` helper configures plugin-owned endpoint
+- **Observability exporters**: `OpenTelemetrySubscriber` exports traces;
+  `OpenTelemetryLogSubscriber` and `OpenTelemetryMetricSubscriber` export
+  severity-tagged marks and typed metric measurements. Bare OTLP/HTTP origins
+  resolve to `/v1/traces`, `/v1/logs`, or `/v1/metrics` for the selected signal.
+  The `nemo-relay-node/observability` helper configures plugin-owned endpoint
   fan-out.
 - **Additional entry points**: `nemo-relay-node/typed`,
   `nemo-relay-node/plugin`, `nemo-relay-node/adaptive`, and
@@ -111,6 +113,87 @@ const execution = await toolCallExecuteAsync('lookup', { query: 'relay' }, async
 }));
 
 console.log(execution.result.answer);
+```
+
+The core mark contract uses positional optional arguments. Pass `null` for
+`dataSchema` before supplying the final `severity` argument:
+
+```js
+const { LogSeverity } = require('nemo-relay-node');
+
+event('initialized', handle, { binding: 'node' }, null, null, null, LogSeverity.Info);
+```
+
+Call `metric()` with `MetricMeasurement` objects for metrics; Relay validates
+the complete measurement group before publishing it.
+
+## OTLP Logs and Metrics
+
+For plugin-managed export, the `nemo-relay-node/observability` helpers create a
+version-4 component. Enabling logs and metrics without signal endpoints derives
+`/v1/logs` and `/v1/metrics` from the trace endpoint:
+
+```js
+const observability = require('nemo-relay-node/observability');
+
+const component = observability.ComponentSpec({
+  version: 4,
+  opentelemetry: observability.openTelemetryConfig({
+    enabled: true,
+    endpoints: [observability.openTelemetryEndpoint({
+      type: 'gen_ai', endpoint: 'http://localhost:4318/v1/traces',
+    })],
+    logs: observability.openTelemetryLogConfig({ enabled: true }),
+    metrics: observability.openTelemetryMetricConfig({ enabled: true }),
+  }),
+});
+```
+
+Use the final `dataSchema` and `severity` arguments for a typed log mark, and
+use `metric()` for an atomically validated metric group:
+
+```js
+const {
+  event, metric, LogSeverity, MetricKind, MetricValueType,
+} = require('nemo-relay-node');
+
+event(
+  'cache-nearly-full', null, { entries: 900 }, null, null,
+  { name: 'example.cache', version: '1' }, LogSeverity.Warn,
+);
+metric('cache-entries', [{
+  name: 'example.cache.entries', kind: MetricKind.Gauge,
+  valueType: MetricValueType.U64, value: 900,
+}]);
+```
+
+Direct log and metric subscribers are independently managed. Register each
+before emitting marks, then deregister, force-flush, and shut it down during
+graceful teardown. `runtimeDiagnostics()` returns bounded `code`, `message`,
+and `count` entries:
+
+```js
+const {
+  OpenTelemetryLogSubscriber, OpenTelemetryMetricSubscriber,
+} = require('nemo-relay-node');
+
+// Equivalent explicit OTLP/HTTP paths are /v1/logs and /v1/metrics, respectively.
+const logs = new OpenTelemetryLogSubscriber({ endpoint: 'http://localhost:4318' });
+const metrics = new OpenTelemetryMetricSubscriber({ endpoint: 'http://localhost:4318' });
+logs.register('otlp-logs');
+metrics.register('otlp-metrics');
+try {
+  for (const diagnostic of logs.runtimeDiagnostics()) {
+    console.error(diagnostic.code, diagnostic.message);
+  }
+} finally {
+  logs.deregister('otlp-logs');
+  logs.forceFlush();
+  logs.shutdown();
+  metrics.deregister('otlp-metrics');
+  metrics.forceFlush();
+  metrics.shutdown();
+}
 ```
 
 Native subscriber delivery is asynchronous. Awaiting `flushSubscribers()` drains

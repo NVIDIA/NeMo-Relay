@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, AsyncIterator, Callable, Literal, Protocol, Self, TypedDict, cast
 
 from nemo_relay import (
+    EventMetadataInjectorCallback,
     EventSanitizeGuardrail,
     Json,
     JsonObject,
@@ -65,6 +66,7 @@ from nemo_relay._native import (
 from nemo_relay._native import (
     validate_plugin_config as _validate_plugin_config,
 )
+from nemo_relay.runtime_registrations import ConditionalMiddlewareGuardrail, RuntimeRegistrationKind
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -115,6 +117,22 @@ class PluginContext(Protocol):
 
     def register_subscriber(self, name: str, callback: Callable[[Event], None]) -> None:
         """Register an infallible event subscriber for this component."""
+        ...
+
+    def register_conditional_middleware_guardrail(
+        self,
+        name: str,
+        kinds: set[RuntimeRegistrationKind],
+        registration_name: str,
+        guardrail: ConditionalMiddlewareGuardrail,
+    ) -> None:
+        """Register an activation-owned gate for a global runtime registration."""
+        ...
+
+    def register_event_metadata_injector(
+        self, name: str, priority: int, callback: EventMetadataInjectorCallback
+    ) -> None:
+        """Register an event metadata injector for this component."""
         ...
 
     def register_mark_sanitize_guardrail(self, name: str, priority: int, callback: EventSanitizeGuardrail) -> None:
@@ -616,6 +634,10 @@ async def clear_async() -> None:
 
     Native teardown runs outside the Python event-loop thread so queued event
     sanitizers can finish before their plugin-owned registrations are removed.
+
+    Returns:
+        None: The active configuration has been cleared when the awaitable
+        resolves.
     """
     await _clear_plugin_configuration_async()
 

@@ -9,7 +9,10 @@
 
 use std::collections::HashMap;
 
-use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
+use crate::api::registry::{
+    EventMetadataInjector, ExecutionIntercept, Guardrail, Intercept, RuntimeRegistrationKind,
+    runtime_registration_is_enabled,
+};
 use crate::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
@@ -25,6 +28,8 @@ use crate::registry::SortedRegistry;
 /// tool or LLM call executed inside that scope.
 #[derive(Clone)]
 pub(crate) struct ScopeLocalRegistries {
+    /// Event metadata injectors applied before Event sanitizers.
+    pub(crate) event_metadata_injectors: SortedRegistry<EventMetadataInjector>,
     /// Mark event field sanitizers.
     pub(crate) mark_sanitize_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,
     /// Scope-start event field sanitizers.
@@ -66,6 +71,7 @@ impl ScopeLocalRegistries {
     /// intercepts, or subscribers.
     pub(crate) fn new() -> Self {
         Self {
+            event_metadata_injectors: SortedRegistry::new(),
             mark_sanitize_guardrails: SortedRegistry::new(),
             scope_sanitize_start_guardrails: SortedRegistry::new(),
             scope_sanitize_end_guardrails: SortedRegistry::new(),
@@ -83,6 +89,26 @@ impl ScopeLocalRegistries {
             event_subscribers: HashMap::new(),
         }
     }
+}
+
+/// Merge global and scope-local Event metadata injectors by ascending priority.
+pub(crate) fn merge_event_metadata_injector_entries<'a>(
+    global: &'a SortedRegistry<EventMetadataInjector>,
+    scope_locals: &'a [&'a SortedRegistry<EventMetadataInjector>],
+) -> Vec<&'a EventMetadataInjector> {
+    let mut all = Vec::new();
+    all.extend(global.sorted_values().into_iter().filter(|entry| {
+        runtime_registration_is_enabled(RuntimeRegistrationKind::EventMetadataInjector, &entry.name)
+    }));
+    for registry in scope_locals {
+        all.extend(registry.sorted_values());
+    }
+    all.sort_by(|left, right| {
+        left.priority
+            .cmp(&right.priority)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    all
 }
 
 impl Default for ScopeLocalRegistries {
@@ -106,9 +132,15 @@ impl Default for ScopeLocalRegistries {
 pub(crate) fn merge_guardrail_entries<'a, F>(
     global: &'a SortedRegistry<Guardrail<F>>,
     scope_locals: &'a [&'a SortedRegistry<Guardrail<F>>],
+    kind: RuntimeRegistrationKind,
 ) -> Vec<&'a Guardrail<F>> {
     let mut all = Vec::new();
-    all.extend(global.sorted_values());
+    all.extend(
+        global
+            .sorted_values()
+            .into_iter()
+            .filter(|entry| runtime_registration_is_enabled(kind, &entry.name)),
+    );
     for registry in scope_locals {
         all.extend(registry.sorted_values());
     }
@@ -127,9 +159,15 @@ pub(crate) fn merge_guardrail_entries<'a, F>(
 pub(crate) fn merge_intercept_entries<'a, F>(
     global: &'a SortedRegistry<Intercept<F>>,
     scope_locals: &'a [&'a SortedRegistry<Intercept<F>>],
+    kind: RuntimeRegistrationKind,
 ) -> Vec<&'a Intercept<F>> {
     let mut all = Vec::new();
-    all.extend(global.sorted_values());
+    all.extend(
+        global
+            .sorted_values()
+            .into_iter()
+            .filter(|entry| runtime_registration_is_enabled(kind, &entry.name)),
+    );
     for registry in scope_locals {
         all.extend(registry.sorted_values());
     }
@@ -151,10 +189,13 @@ pub(crate) fn merge_intercept_entries<'a, F>(
 pub(crate) fn merge_execution_intercept_callables<F: Clone>(
     global: &SortedRegistry<ExecutionIntercept<F>>,
     scope_locals: &[&SortedRegistry<ExecutionIntercept<F>>],
+    kind: RuntimeRegistrationKind,
 ) -> Vec<(F, i32)> {
     let mut all = Vec::new();
     for entry in global.sorted_values() {
-        all.push((entry.payload.clone(), entry.priority));
+        if runtime_registration_is_enabled(kind, &entry.name) {
+            all.push((entry.payload.clone(), entry.priority));
+        }
     }
     for registry in scope_locals {
         for entry in registry.sorted_values() {

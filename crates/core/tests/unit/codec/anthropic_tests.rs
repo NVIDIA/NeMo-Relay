@@ -1637,3 +1637,41 @@ fn anthropic_helpers_cover_invalid_and_provider_native_values() {
 
     assert!(AnthropicMessagesStreamingCodec::default().finalizer()().is_object());
 }
+
+#[test]
+fn anthropic_streaming_codec_ignores_incomplete_lifecycle_frames() {
+    // A disconnected SSE stream can leave any lifecycle event only partially
+    // populated. The collector must keep the valid usage snapshot while
+    // ignoring frames that cannot identify a message or content block.
+    let codec = AnthropicMessagesStreamingCodec::default();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    for frame in [
+        json!({"type": "message_start"}),
+        json!({"type": "content_block_start"}),
+        json!({"type": "content_block_start", "index": 0}),
+        json!({"type": "content_block_start", "index": 0, "content_block": []}),
+        json!({"type": "content_block_delta"}),
+        json!({"type": "content_block_delta", "index": 0}),
+        json!({
+            "type": "content_block_delta",
+            "index": 5,
+            "delta": {"type": "text_delta", "text": "orphaned"}
+        }),
+        json!({
+            "type": "message_delta",
+            "usage": {"input_tokens": 3, "output_tokens": 0}
+        }),
+    ] {
+        collector(frame).unwrap();
+    }
+
+    assert_eq!(
+        finalizer(),
+        json!({
+            "content": [],
+            "usage": {"input_tokens": 3, "output_tokens": 0},
+        })
+    );
+}

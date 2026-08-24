@@ -14,12 +14,14 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use crate::callable::{
-    NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn, NemoRelayCollectorCb, NemoRelayEventSanitizeCb,
-    NemoRelayEventSubscriberCb, NemoRelayFinalizerCb, NemoRelayFreeFn, NemoRelayLlmConditionalCb,
-    NemoRelayLlmExecCb, NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestInterceptCb,
-    NemoRelayLlmSanitizeRequestCb, NemoRelayLlmSanitizeResponseCb, NemoRelayPluginRegisterCb,
-    NemoRelayPluginValidateCb, NemoRelayToolConditionalCb, NemoRelayToolExecCb,
-    NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, wrap_codec_fn, wrap_collector_fn,
+    NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn, NemoRelayCollectorCb,
+    NemoRelayConditionalMiddlewareGuardrailCb, NemoRelayEventMetadataInjectorCb,
+    NemoRelayEventSanitizeCb, NemoRelayEventSubscriberCb, NemoRelayFinalizerCb, NemoRelayFreeFn,
+    NemoRelayLlmConditionalCb, NemoRelayLlmExecCb, NemoRelayLlmExecInterceptCb,
+    NemoRelayLlmRequestInterceptCb, NemoRelayLlmSanitizeRequestCb, NemoRelayLlmSanitizeResponseCb,
+    NemoRelayPluginRegisterCb, NemoRelayPluginValidateCb, NemoRelayToolConditionalCb,
+    NemoRelayToolExecCb, NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, wrap_codec_fn,
+    wrap_collector_fn, wrap_conditional_middleware_guardrail_fn, wrap_event_metadata_injector_fn,
     wrap_event_sanitize_fn, wrap_event_subscriber, wrap_finalizer_fn, wrap_llm_conditional_fn,
     wrap_llm_exec_fn, wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn,
     wrap_llm_sanitize_request_fn, wrap_llm_sanitize_response_fn, wrap_llm_stream_exec_fn,
@@ -34,12 +36,16 @@ use crate::error::{
     NemoRelayStatus, clear_last_error, last_error_message, set_last_error, status_from_error,
     status_from_plugin_error,
 };
-pub use crate::types::nemo_relay_otel_subscriber_free;
 use crate::types::{
     FfiAtifExporter, FfiAtofExporter, FfiCodecHandle, FfiLLMHandle, FfiLLMRequest,
-    FfiLlmSanitizeRequestCodec, FfiLlmSanitizeResponseCodec, FfiOpenTelemetrySubscriber,
-    FfiPluginActivation, FfiPluginContext, FfiScopeHandle, FfiScopeStack,
-    FfiThreadScopeStackBinding, FfiToolHandle, NemoRelayScopeType,
+    FfiLlmSanitizeRequestCodec, FfiLlmSanitizeResponseCodec, FfiOpenTelemetryLogSubscriber,
+    FfiOpenTelemetryMetricSubscriber, FfiOpenTelemetrySubscriber, FfiPluginActivation,
+    FfiPluginContext, FfiScopeHandle, FfiScopeStack, FfiThreadScopeStackBinding, FfiToolHandle,
+    NemoRelayLogSeverity, NemoRelayMetricMeasurement, NemoRelayScopeType,
+};
+pub use crate::types::{
+    nemo_relay_otel_log_subscriber_free, nemo_relay_otel_metric_subscriber_free,
+    nemo_relay_otel_subscriber_free,
 };
 use libc::c_char;
 use nemo_relay::api::llm as core_llm_api;
@@ -71,6 +77,7 @@ mod llm;
 mod llm_registry;
 mod observability;
 mod plugin;
+mod runtime_registry;
 mod scope;
 mod scope_registry;
 mod scope_stack;
@@ -83,6 +90,7 @@ pub use llm::*;
 pub use llm_registry::*;
 pub use observability::*;
 pub use plugin::*;
+pub use runtime_registry::*;
 pub use scope::*;
 pub use scope_registry::*;
 pub use scope_stack::*;

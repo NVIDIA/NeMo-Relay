@@ -68,6 +68,8 @@ use self::target::PluginTarget;
 use self::trust::{EvaluatedDynamicPluginTrust, evaluate_dynamic_plugin_trust};
 
 const VALIDATION_MESSAGE: &str = "validated by CLI";
+const ACTIVATION_SNAPSHOT_DIR_ENV: &str = "NEMO_RELAY_PLUGIN_SNAPSHOT_DIR";
+const ACTIVATION_SNAPSHOT_DIRECTORY_PREFIX: &str = "nrs";
 
 #[cfg(test)]
 pub(crate) fn attest_test_python_environment(
@@ -544,12 +546,31 @@ pub(crate) struct DynamicPluginActivationSnapshot {
 }
 
 impl DynamicPluginActivationSnapshot {
+    #[cfg(test)]
     fn create(
         manifest_ref: &str,
         expected_plugin_id: &str,
         expected_kind: DynamicPluginKind,
         environment_ref: Option<&str>,
         host_policy: &crate::plugins::policy::DynamicPluginHostPolicy,
+    ) -> Result<Arc<Self>, CliError> {
+        Self::create_with_snapshot_source_directories(
+            manifest_ref,
+            expected_plugin_id,
+            expected_kind,
+            environment_ref,
+            host_policy,
+            &[],
+        )
+    }
+
+    fn create_with_snapshot_source_directories(
+        manifest_ref: &str,
+        expected_plugin_id: &str,
+        expected_kind: DynamicPluginKind,
+        environment_ref: Option<&str>,
+        host_policy: &crate::plugins::policy::DynamicPluginHostPolicy,
+        snapshot_source_directories: &[PathBuf],
     ) -> Result<Arc<Self>, CliError> {
         let (mut manifest, original_manifest_ref, manifest_bytes) =
             load_bounded_dynamic_plugin_manifest_bytes(manifest_ref)?;
@@ -563,13 +584,16 @@ impl DynamicPluginActivationSnapshot {
         validate_python_entrypoint_artifact(&manifest, &original_manifest_ref)
             .map_err(CliError::Config)?;
 
-        let root = std::env::temp_dir().join(format!(
-            "nemo-relay-plugin-snapshot-{}",
-            uuid::Uuid::now_v7().simple()
-        ));
+        let root = activation_snapshot_root()?;
         fs::create_dir(&root).map_err(|error| {
             CliError::Config(format!(
                 "failed to create dynamic plugin activation snapshot {}: {error}",
+                root.display()
+            ))
+        })?;
+        let root = fs::canonicalize(&root).map_err(|error| {
+            CliError::Config(format!(
+                "failed to normalize dynamic plugin activation snapshot {}: {error}",
                 root.display()
             ))
         })?;
@@ -603,6 +627,22 @@ impl DynamicPluginActivationSnapshot {
                 ))
             })?
             .to_path_buf();
+        let canonical_manifest_directory =
+            fs::canonicalize(&manifest_directory).map_err(|error| {
+                CliError::Config(format!(
+                    "failed to normalize dynamic plugin manifest directory {}: {error}",
+                    manifest_directory.display()
+                ))
+            })?;
+        if std::iter::once(&canonical_manifest_directory)
+            .chain(snapshot_source_directories)
+            .any(|directory| root.starts_with(directory))
+        {
+            return Err(CliError::Config(format!(
+                "dynamic plugin activation snapshot {} must not be inside an active plugin directory",
+                root.display()
+            )));
+        }
         let runtime_root = root.join("runtime");
         let mut budget = SnapshotBudget::default();
         let mut copied_files = HashMap::new();
@@ -799,6 +839,23 @@ impl DynamicPluginActivationSnapshot {
     pub(crate) fn identity_file(&self, logical_path: &Path) -> Option<&Path> {
         self.identity_files.get(logical_path).map(PathBuf::as_path)
     }
+}
+
+fn activation_snapshot_root() -> Result<PathBuf, CliError> {
+    let parent = std::env::var_os(ACTIVATION_SNAPSHOT_DIR_ENV)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    fs::create_dir_all(&parent).map_err(|error| {
+        CliError::Config(format!(
+            "failed to create dynamic plugin activation snapshot parent {}: {error}",
+            parent.display()
+        ))
+    })?;
+    Ok(parent.join(format!(
+        "{ACTIVATION_SNAPSHOT_DIRECTORY_PREFIX}-{}",
+        uuid::Uuid::now_v7().simple()
+    )))
 }
 
 fn snapshot_python_environment(
@@ -1007,6 +1064,13 @@ fn copy_snapshot_directory_contents(
             source.display()
         ))
     })?;
+    if destination.starts_with(&canonical) {
+        return Err(CliError::Config(format!(
+            "dynamic plugin activation snapshot directory {} must not be inside a directory copied into the activation snapshot {}",
+            destination.display(),
+            canonical.display()
+        )));
+    }
     if ancestors.contains(&canonical) {
         return Err(CliError::Config(format!(
             "dynamic plugin runtime closure contains a directory symlink cycle at {}",
@@ -1804,6 +1868,41 @@ fn active_dynamic_plugin_components_from_scopes(
     create_activation_snapshots: bool,
 ) -> Result<Vec<ActiveDynamicPluginComponent>, CliError> {
     let host_config_by_id = host_config_by_id(resolved);
+    let snapshot_source_directories = if create_activation_snapshots {
+        resolved
+            .dynamic_plugins
+            .iter()
+            .filter_map(|resolved_plugin| {
+                scopes
+                    .iter()
+                    .find(|scope| scope.plugins_toml_path == resolved_plugin.source)
+                    .and_then(|scope| scope.registry.get(&resolved_plugin.plugin_id))
+            })
+            .filter(|record| !record.is_tombstoned() && record.spec.enabled)
+            .filter_map(|record| match record.metadata.kind {
+                DynamicPluginKind::RustDynamic => Some(manifest_ref_from_record(record)),
+                DynamicPluginKind::Worker => record.source.manifest_ref.clone().map(Ok),
+            })
+            .map(|manifest_ref| {
+                let manifest_ref = manifest_ref?;
+                let manifest_path = Path::new(&manifest_ref);
+                let manifest_directory = manifest_path.parent().ok_or_else(|| {
+                    CliError::Config(format!(
+                        "dynamic plugin manifest {} has no parent directory",
+                        manifest_path.display()
+                    ))
+                })?;
+                fs::canonicalize(manifest_directory).map_err(|error| {
+                    CliError::Config(format!(
+                        "failed to normalize dynamic plugin manifest directory {}: {error}",
+                        manifest_directory.display()
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
     let mut components = Vec::new();
 
     for resolved_plugin in &resolved.dynamic_plugins {
@@ -1834,12 +1933,13 @@ fn active_dynamic_plugin_components_from_scopes(
             manifest_ref
                 .as_deref()
                 .map(|manifest_ref| {
-                    DynamicPluginActivationSnapshot::create(
+                    DynamicPluginActivationSnapshot::create_with_snapshot_source_directories(
                         manifest_ref,
                         &record.metadata.id,
                         record.metadata.kind,
                         record.source.environment_ref.as_deref(),
                         &resolved.dynamic_plugin_policy,
+                        &snapshot_source_directories,
                     )
                 })
                 .transpose()?

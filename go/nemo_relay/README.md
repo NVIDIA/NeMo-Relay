@@ -51,11 +51,21 @@ The Go package provides the following capabilities:
 - **Middleware APIs**: Guardrails and intercepts for request rewriting,
   blocking, sanitization, and execution wrapping, including mark and scope
   event sanitizers at global, scope-local, and plugin-context levels.
+- **Event metadata injection**: Global, scope-local, and plugin-context
+  callbacks can inspect immutable events and propose flat metadata additions.
 - **Event subscribers**: Runtime lifecycle callbacks for observability and
   diagnostics.
-- **Typed OpenTelemetry export**: `NewOpenTelemetryConfig` and
-  `NewOpenTelemetrySubscriber` construct one independently managed `full`,
-  `gen_ai`, or `openinference` endpoint exporter.
+- **Typed OpenTelemetry export**: `NewOpenTelemetryConfig` returns configuration
+  for a `full`, `gen_ai`, or `openinference` trace subscriber.
+  `NewOpenTelemetrySubscriber` constructs the independently managed trace
+  subscriber. `NewOpenTelemetryLogSubscriber` and
+  `NewOpenTelemetryMetricSubscriber` construct independent log and metric
+  subscribers.
+- **Structured marks and metrics**: `EmitEvent` accepts data-schema and
+  severity options, and `EmitMetric` validates a complete metric-measurement
+  group before emission.
+- **Observability configuration version 4**: `NewObservabilityConfig` and its
+  OTLP helpers configure trace, log, and metric plugin-managed exporters.
 - **Convenience subpackages**: Short imports for scopes, tools, LLM calls,
   guardrails, intercepts, subscribers, plugins, and adaptive helpers.
 - **Local source-first workflow**: Build the FFI library locally, then test or
@@ -65,6 +75,144 @@ Go middleware callbacks are synchronous. Relay waits for each callback on a
 native thread, so blocking I/O and other long-running callback work occupy that
 thread and can reduce middleware throughput. The Go binding does not provide
 completion-based middleware registration.
+
+## Event Metadata Injection
+
+Use `RegisterEventMetadataInjector` for application-wide metadata. The callback
+receives an owned event snapshot and returns proposed additions. Relay validates
+the map, preserves existing metadata, and applies injectors in priority order.
+Returning an error rejects only that callback's additions; the event is still
+delivered.
+
+The following Go example registers application-wide metadata injection:
+
+```go
+err := nemo.RegisterEventMetadataInjector(
+	"application-metadata",
+	10,
+	func(event nemo.Event) (nemo.EventMetadata, error) {
+		return nemo.EventMetadata{
+			"application.event_kind": event.Kind(),
+		}, nil
+	},
+)
+if err != nil {
+	log.Fatal(err)
+}
+defer nemo.DeregisterEventMetadataInjector("application-metadata")
+```
+
+Use `ScopeRegisterEventMetadataInjector` for an active scope. Plugins use
+`PluginContext.RegisterEventMetadataInjector` so component name qualification
+and rollback cleanup apply to the registration.
+
+## OTLP Logs and Metrics
+
+Use `EmitEvent` with `WithEventDataSchema` and `WithEventSeverity` for a typed
+mark. Use `EmitMetric` for an atomically validated metric group. The examples
+below assume `nemo` is imported as
+`nemo "github.com/NVIDIA/NeMo-Relay/go/nemo_relay"`:
+
+```go
+if err := nemo.EmitEvent(
+	"cache-nearly-full",
+	nemo.WithEventData(json.RawMessage(`{"entries": 900}`)),
+	nemo.WithEventDataSchema(nemo.DataSchema{Name: "example.cache", Version: "1"}),
+	nemo.WithEventSeverity(nemo.LogSeverityWarn),
+); err != nil {
+	log.Fatal(err)
+}
+
+if err := nemo.EmitMetric("cache-entries", []nemo.MetricMeasurement{{
+	Name: "example.cache.entries", Kind: nemo.MetricKindGauge,
+	ValueType: nemo.MetricValueTypeU64, Value: uint64(900),
+}}); err != nil {
+	log.Fatal(err)
+}
+```
+
+Create direct OTLP log and metric subscribers separately. A bare OTLP/HTTP
+authority derives `/v1/logs` or `/v1/metrics` for its selected signal. Register
+the subscriber before emitting marks. During graceful shutdown, deregister it,
+force-flush it, shut it down, and call `Close` to free its FFI handle:
+
+```go
+// Equivalent explicit OTLP/HTTP paths are /v1/logs and /v1/metrics, respectively.
+logs, err := nemo.NewOpenTelemetryLogSubscriber(
+	nemo.NewOpenTelemetryLogConfig("http://localhost:4318"),
+)
+if err != nil {
+	log.Fatal(err)
+}
+if err := logs.Register("otlp-logs"); err != nil {
+	logs.Close()
+	log.Fatal(err)
+}
+metrics, err := nemo.NewOpenTelemetryMetricSubscriber(
+	nemo.NewOpenTelemetryMetricConfig("http://localhost:4318"),
+)
+if err != nil {
+	_ = logs.Deregister("otlp-logs")
+	logs.Close()
+	log.Fatal(err)
+}
+if err := metrics.Register("otlp-metrics"); err != nil {
+	metrics.Close()
+	_ = logs.Deregister("otlp-logs")
+	logs.Close()
+	log.Fatal(err)
+}
+defer func() {
+	_ = logs.Deregister("otlp-logs")
+	_ = logs.ForceFlush()
+	_ = logs.Shutdown()
+	logs.Close()
+	_ = metrics.Deregister("otlp-metrics")
+	_ = metrics.ForceFlush()
+	_ = metrics.Shutdown()
+	metrics.Close()
+}()
+
+diagnostics, err := logs.RuntimeDiagnostics()
+if err != nil {
+	log.Fatal(err)
+}
+for _, diagnostic := range diagnostics {
+	log.Printf("%s: %s", diagnostic.Code, diagnostic.Message)
+}
+```
+
+Direct trace, log, and metric subscribers expose `RuntimeDiagnostics` for
+bounded exporter and event-processing failures.
+
+For plugin-managed export, `NewObservabilityConfig` creates version 4
+configuration. Enable `Logs` and `Metrics` while leaving their `Endpoints`
+pointers nil to derive signal destinations from each trace endpoint:
+
+```go
+config := nemo.NewObservabilityConfig()
+otel := nemo.NewObservabilityOpenTelemetryConfig()
+otel.Enabled = true
+otel.Endpoints = []nemo.ObservabilityOpenTelemetryEndpointConfig{
+	nemo.NewObservabilityOpenTelemetryEndpointConfig(
+		nemo.OpenTelemetryTypeGenAI,
+		"http://localhost:4318/v1/traces",
+	),
+}
+logsConfig := nemo.NewObservabilityOpenTelemetryLogConfig()
+logsConfig.Enabled = true
+metricsConfig := nemo.NewObservabilityOpenTelemetryMetricConfig()
+metricsConfig.Enabled = true
+otel.Logs = &logsConfig
+otel.Metrics = &metricsConfig
+config.OpenTelemetry = &otel
+```
+
+In this configuration, Relay derives `/v1/logs` and `/v1/metrics` from the
+trace endpoint. Assign an explicit signal endpoint list with
+`ObservabilityOpenTelemetrySignalEndpoints` when a signal needs a different
+destination. Wrap `config` with `NewObservabilityComponentSpec` before plugin
+initialization.
 
 ## Installation
 

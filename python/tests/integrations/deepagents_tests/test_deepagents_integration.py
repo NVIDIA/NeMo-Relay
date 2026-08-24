@@ -327,6 +327,7 @@ def test_tool_call_routes_through_langchain_execution_middleware(
     assert kwargs["name"] == "lookup"
     assert kwargs["args"] == {"query": "original"}
     assert kwargs["handle"] is parent_handle
+    assert kwargs["tool_call_id"] == "call-1"
 
 
 def test_skill_load_mark_survives_deepagents_middleware(
@@ -458,6 +459,191 @@ def test_callback_handler_falls_back_for_non_hitl_interrupt(
     assert "deepagents_kind" not in _mark_metadata(marks[0])
 
 
+def test_callback_handler_creates_only_semantic_agent_scopes(
+    subscribed_events: list[nemo_relay.Event],
+    callback_handler: deepagents_integration.NemoRelayDeepAgentsCallbackHandler,
+):
+    root_run_id = uuid4()
+    node_run_id = uuid4()
+    subagent_run_id = uuid4()
+
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        callback_handler.on_chain_start(
+            {},
+            {"messages": ["hello"]},
+            run_id=root_run_id,
+            name="main-agent",
+            metadata={
+                "ls_integration": "deepagents",
+                "lc_agent_name": "main-agent",
+                "lc_versions": {"deepagents": "0.7.4"},
+            },
+        )
+        callback_handler.on_chain_start(
+            {},
+            {"messages": ["hello"]},
+            run_id=node_run_id,
+            parent_run_id=root_run_id,
+            name="main-agent",
+            metadata={
+                "ls_integration": "deepagents",
+                "lc_agent_name": "main-agent",
+                "lc_versions": {"deepagents": "0.7.4"},
+                "langgraph_node": "main-agent",
+            },
+        )
+        callback_handler.on_chain_start(
+            {},
+            {"messages": ["review"]},
+            run_id=subagent_run_id,
+            parent_run_id=node_run_id,
+            name="reviewer",
+            metadata={
+                "ls_integration": "langchain_create_agent",
+                "lc_agent_name": "reviewer",
+                "lc_versions": {"deepagents": "0.7.4"},
+                "langgraph_node": "reviewer",
+            },
+        )
+        callback_handler.on_chain_end({"messages": ["done"]}, run_id=root_run_id)
+        callback_handler.on_chain_end({"messages": ["reviewed"]}, run_id=subagent_run_id)
+        callback_handler.on_chain_end({"messages": ["ignored"]}, run_id=node_run_id)
+
+    nemo_relay.subscribers.flush()
+    scope_events = [event for event in subscribed_events if isinstance(event, nemo_relay.ScopeEvent)]
+    assert [(event.scope_category, event.name) for event in scope_events] == [
+        ("start", "request"),
+        ("start", "main-agent"),
+        ("start", "reviewer"),
+        ("end", "reviewer"),
+        ("end", "main-agent"),
+        ("end", "request"),
+    ]
+    starts = {event.name: event for event in scope_events if event.scope_category == "start"}
+    assert starts["main-agent"].metadata == {
+        "ls_integration": "deepagents",
+        "lc_agent_name": "main-agent",
+        "lc_versions": {"deepagents": "0.7.4"},
+        "integration": "deepagents",
+        "deepagents_agent_name": "main-agent",
+        "deepagents_agent_role": "orchestrator",
+        "langchain_run_id": str(root_run_id),
+    }
+    assert starts["reviewer"].metadata == {
+        "ls_integration": "langchain_create_agent",
+        "lc_agent_name": "reviewer",
+        "lc_versions": {"deepagents": "0.7.4"},
+        "langgraph_node": "reviewer",
+        "integration": "deepagents",
+        "deepagents_agent_name": "reviewer",
+        "deepagents_agent_role": "subagent",
+        "langchain_run_id": str(subagent_run_id),
+    }
+    assert starts["main-agent"].parent_uuid == starts["request"].uuid
+    assert starts["reviewer"].parent_uuid == starts["main-agent"].uuid
+
+
+@pytest.mark.parametrize(
+    ("name", "langgraph_node"),
+    [
+        (None, "researcher"),
+        ("main-agent", "tools"),
+    ],
+)
+def test_callback_handler_ignores_nonsemantic_graph_nodes(
+    subscribed_events: list[nemo_relay.Event],
+    callback_handler: deepagents_integration.NemoRelayDeepAgentsCallbackHandler,
+    name: str | None,
+    langgraph_node: str,
+):
+    run_id = uuid4()
+
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        callback_handler.on_chain_start(
+            {},
+            {"messages": ["hello"]},
+            run_id=run_id,
+            name=name,
+            metadata={
+                "ls_integration": "deepagents",
+                "lc_agent_name": "main-agent",
+                "lc_versions": {"deepagents": "0.7.4"},
+                "langgraph_node": langgraph_node,
+            },
+        )
+        callback_handler.on_chain_end({"messages": ["ignored"]}, run_id=run_id)
+
+    nemo_relay.subscribers.flush()
+    scope_events = [event for event in subscribed_events if isinstance(event, nemo_relay.ScopeEvent)]
+    assert [(event.scope_category, event.name) for event in scope_events] == [
+        ("start", "request"),
+        ("end", "request"),
+    ]
+
+
+def test_callback_handler_uses_fallback_for_unnamed_agent(
+    subscribed_events: list[nemo_relay.Event],
+    callback_handler: deepagents_integration.NemoRelayDeepAgentsCallbackHandler,
+):
+    run_id = uuid4()
+
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        callback_handler.on_chain_start(
+            {},
+            {"messages": ["hello"]},
+            run_id=run_id,
+            name=None,
+            metadata={
+                "ls_integration": "deepagents",
+                "lc_versions": {"deepagents": "0.7.4"},
+            },
+        )
+        callback_handler.on_chain_end({"messages": ["done"]}, run_id=run_id)
+
+    nemo_relay.subscribers.flush()
+    scope_events = [event for event in subscribed_events if isinstance(event, nemo_relay.ScopeEvent)]
+    assert [(event.scope_category, event.name) for event in scope_events] == [
+        ("start", "request"),
+        ("start", "DeepAgent"),
+        ("end", "DeepAgent"),
+        ("end", "request"),
+    ]
+
+
+def test_callback_handler_closes_semantic_agent_scope_on_error(
+    subscribed_events: list[nemo_relay.Event],
+    callback_handler: deepagents_integration.NemoRelayDeepAgentsCallbackHandler,
+):
+    run_id = uuid4()
+    error = RuntimeError("agent failed")
+
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        callback_handler.on_chain_start(
+            {},
+            {"messages": ["hello"]},
+            run_id=run_id,
+            name="main-agent",
+            metadata={
+                "ls_integration": "deepagents",
+                "lc_agent_name": "main-agent",
+                "lc_versions": {"deepagents": "0.7.4"},
+            },
+        )
+        callback_handler.on_chain_error(error, run_id=run_id)
+
+    nemo_relay.subscribers.flush()
+    agent_end = next(
+        event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.scope_category == "end" and event.name == "main-agent"
+    )
+    assert isinstance(agent_end.metadata, dict)
+    agent_end_metadata = cast(dict[str, Any], agent_end.metadata)
+    assert agent_end_metadata["otel.status_code"] == "ERROR"
+    assert agent_end_metadata["otel.status_description"] == "agent failed"
+    assert agent_end_metadata["deepagents_agent_role"] == "orchestrator"
+
+
 def test_add_nemo_relay_integration_preserves_backend(deepagents_integration_module: types.ModuleType):
     mock_backend = MagicMock(name="mock_backend")
     mock_compiled_subagent = MagicMock(name="mock_compiled_subagent")
@@ -546,13 +732,14 @@ def test_e2e_agent(
         ],
     )
     agent = create_deep_agent(**kwargs)
+    callback = deepagents_integration_module.NemoRelayDeepAgentsCallbackHandler()
 
     with nemo_relay.scope.scope("deepagents-request", nemo_relay.ScopeType.Agent):
         input_payload = {"messages": [{"role": "user", "content": "Create a file named turtle."}]}
         if use_async:
-            result = asyncio.run(agent.ainvoke(input_payload))
+            result = asyncio.run(agent.ainvoke(input_payload, config={"callbacks": [callback]}))
         else:
-            result = agent.invoke(input_payload)
+            result = agent.invoke(input_payload, config={"callbacks": [callback]})
 
     nemo_relay.subscribers.flush()
     assert (tmp_path / "turtle").read_text() == "shell"
@@ -574,6 +761,7 @@ def test_e2e_agent(
 
     expected_events = [
         "scope.start.deepagents-request",
+        "scope.start.main-agent",
         "mark..DeepAgents Skills Configured",
         "scope.start.mock-model",
         "scope.end.mock-model",
@@ -582,17 +770,101 @@ def test_e2e_agent(
         "scope.start.mock-model",
         "scope.end.mock-model",
         "scope.start.task",
+        "scope.start.reviewer",
         "mark..DeepAgents Skills Configured",
         "scope.start.mock-model",
         "scope.end.mock-model",
+        "scope.end.reviewer",
         "scope.end.task",
         "scope.start.mock-model",
         "scope.end.mock-model",
+        "scope.end.main-agent",
         "scope.end.deepagents-request",
     ]
     event_strings = [f"{event.kind}.{getattr(event, 'scope_category', '')}.{event.name}" for event in subscribed_events]
 
     assert event_strings == expected_events
+    scope_starts = {
+        event.name: event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.scope_category == "start" and event.name != "mock-model"
+    }
+    model_starts = [
+        event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.scope_category == "start" and event.name == "mock-model"
+    ]
+    assert scope_starts["main-agent"].parent_uuid == scope_starts["deepagents-request"].uuid
+    assert scope_starts["write_file"].parent_uuid == scope_starts["main-agent"].uuid
+    assert scope_starts["task"].parent_uuid == scope_starts["main-agent"].uuid
+    assert scope_starts["reviewer"].parent_uuid == scope_starts["main-agent"].uuid
+    assert [event.parent_uuid for event in model_starts] == [
+        scope_starts["main-agent"].uuid,
+        scope_starts["main-agent"].uuid,
+        scope_starts["reviewer"].uuid,
+        scope_starts["main-agent"].uuid,
+    ]
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_e2e_general_purpose_subagent_scope(
+    use_async: bool,
+    subscribed_events: list[nemo_relay.Event],
+    deepagents_integration_module: types.ModuleType,
+):
+    from deepagents import create_deep_agent
+    from langchain_core.messages import AIMessage
+
+    model = _mock_deepagents_chat_model(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "task",
+                        "args": {
+                            "description": "Return one concise result.",
+                            "subagent_type": "general-purpose",
+                        },
+                        "id": "call-1",
+                    }
+                ],
+            ),
+            AIMessage(content="general-purpose result"),
+            AIMessage(content="done"),
+        ]
+    )
+    agent = create_deep_agent(
+        **deepagents_integration_module.add_nemo_relay_integration(
+            model=model,
+            tools=[],
+            name="main-agent",
+        )
+    )
+    callback = deepagents_integration_module.NemoRelayDeepAgentsCallbackHandler()
+
+    with nemo_relay.scope.scope("deepagents-request", nemo_relay.ScopeType.Agent):
+        input_payload = {"messages": [{"role": "user", "content": "Delegate this task."}]}
+        if use_async:
+            result = asyncio.run(agent.ainvoke(input_payload, config={"callbacks": [callback]}))
+        else:
+            result = agent.invoke(input_payload, config={"callbacks": [callback]})
+
+    nemo_relay.subscribers.flush()
+    assert result["messages"][-1].content == "done"
+    starts = [
+        event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.scope_category == "start"
+    ]
+    main_agent = next(event for event in starts if event.name == "main-agent")
+    general_purpose = next(event for event in starts if event.name == "general-purpose")
+    model_starts = [event for event in starts if event.name == "mock-model"]
+    assert general_purpose.parent_uuid == main_agent.uuid
+    assert isinstance(general_purpose.metadata, dict)
+    general_purpose_metadata = cast(dict[str, Any], general_purpose.metadata)
+    assert general_purpose_metadata["deepagents_agent_role"] == "subagent"
+    assert [event.parent_uuid for event in model_starts] == [main_agent.uuid, main_agent.uuid]
 
 
 def test_e2e_agent_exports_openinference_output_contract(

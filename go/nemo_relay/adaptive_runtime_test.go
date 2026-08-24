@@ -12,10 +12,13 @@ import (
 
 const (
 	adaptiveRuntimeClosedMessage    = "adaptive runtime is nil or shut down"
+	expectedCleanReportMsg          = "expected clean report, got %#v"
 	forcedAdaptiveMarshalFailure    = "forced adaptive JSON marshal failure"
+	marshalFailedMsg                = "marshal failed: %v"
 	newAdaptiveRuntimeFailedMsg     = "NewAdaptiveRuntime failed: %v"
 	responseCacheTestNamespace      = "go-harness"
 	testAgentID                     = "go-agent"
+	unmarshalFailedMsg              = "unmarshal failed: %v"
 	validateAdaptiveConfigFailedMsg = "ValidateAdaptiveConfig failed: %v"
 )
 
@@ -41,7 +44,7 @@ func TestValidateAdaptiveConfigAndOwnedRuntime(t *testing.T) {
 		t.Fatalf(validateAdaptiveConfigFailedMsg, err)
 	}
 	if len(report.Diagnostics) != 0 {
-		t.Fatalf("expected clean report, got %#v", report.Diagnostics)
+		t.Fatalf(expectedCleanReportMsg, report.Diagnostics)
 	}
 
 	runtime, err := NewAdaptiveRuntime(NewAdaptiveConfig())
@@ -203,11 +206,11 @@ func assertResponseCacheJSONSurface(t *testing.T, responseCache ResponseCacheCon
 	config.ResponseCache = &responseCache
 	payload, err := json.Marshal(config)
 	if err != nil {
-		t.Fatalf("marshal failed: %v", err)
+		t.Fatalf(marshalFailedMsg, err)
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(payload, &decoded); err != nil {
-		t.Fatalf("unmarshal failed: %v", err)
+		t.Fatalf(unmarshalFailedMsg, err)
 	}
 	section, ok := decoded["response_cache"].(map[string]any)
 	if !ok {
@@ -236,7 +239,7 @@ func assertResponseCacheValidation(t *testing.T, responseCache ResponseCacheConf
 		t.Fatalf(validateAdaptiveConfigFailedMsg, err)
 	}
 	if len(report.Diagnostics) != 0 {
-		t.Fatalf("expected clean report, got %#v", report.Diagnostics)
+		t.Fatalf(expectedCleanReportMsg, report.Diagnostics)
 	}
 
 	bad := NewResponseCacheConfig()
@@ -253,6 +256,77 @@ func assertResponseCacheValidation(t *testing.T, responseCache ResponseCacheConf
 	}
 }
 
+func TestResponseCacheToolsConfigReachesTypedSurface(t *testing.T) {
+	rc := NewResponseCacheConfig()
+	rc.Namespace = "tool-cache-go-test"
+	tools := NewResponseCacheToolsConfig()
+	if tools.Priority == nil || *tools.Priority != 100 {
+		t.Fatalf("constructor tools priority default mismatch: %#v", tools.Priority)
+	}
+	if tools.CacheErrors {
+		t.Fatalf("constructor cache_errors default mismatch: %#v", tools.CacheErrors)
+	}
+	tools.Enabled = true
+	tools.CacheErrors = true
+	zero := int32(0)
+	classVersion := "class-v1"
+	tools.Priority = &zero
+	tools.Classes = map[string]ResponseCacheToolClass{
+		"read_only": {
+			Cacheable:   true,
+			ToolVersion: &classVersion,
+			Members:     []string{"docs_lookup"},
+		},
+	}
+	rc.Tools = &tools
+
+	config := NewAdaptiveConfig()
+	config.ResponseCache = &rc
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf(marshalFailedMsg, err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf(unmarshalFailedMsg, err)
+	}
+	rcSection, ok := decoded["response_cache"].(map[string]any)
+	if !ok {
+		t.Fatalf("response_cache missing from marshaled config: %s", payload)
+	}
+	toolsSection, ok := rcSection["tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("tools missing from marshaled response_cache: %#v", rcSection)
+	}
+	if enabled, _ := toolsSection["enabled"].(bool); !enabled {
+		t.Fatalf("tools.enabled not preserved: %#v", toolsSection)
+	}
+	if cacheErrors, ok := toolsSection["cache_errors"].(bool); !ok || !cacheErrors {
+		t.Fatalf("tools.cache_errors not preserved: %#v", toolsSection)
+	}
+	if priority, ok := toolsSection["priority"].(float64); !ok || priority != 0 {
+		t.Fatalf("explicit tools.priority = 0 must survive marshal: %#v", toolsSection)
+	}
+	classes, ok := toolsSection["classes"].(map[string]any)
+	if !ok || classes["read_only"] == nil {
+		t.Fatalf("tools.classes not preserved: %#v", toolsSection)
+	}
+	readOnly, ok := classes["read_only"].(map[string]any)
+	if !ok || readOnly["tool_version"] != "class-v1" {
+		t.Fatalf("class tool_version not preserved: %#v", classes["read_only"])
+	}
+
+	report, err := ValidateAdaptiveConfig(config)
+	if err != nil {
+		t.Fatalf("ValidateAdaptiveConfig failed: %v", err)
+	}
+	if len(report.Diagnostics) != 0 {
+		t.Fatalf("expected clean report, got %#v", report.Diagnostics)
+	}
+
+}
+
 func TestResponseCacheConfigPreservesOmissionAndExplicitZero(t *testing.T) {
 	t.Run("partial config delegates to Rust defaults", testPartialResponseCacheConfig)
 	t.Run("missing namespace remains invalid", testMissingResponseCacheNamespace)
@@ -264,11 +338,11 @@ func marshalResponseCacheConfig(t *testing.T, responseCache ResponseCacheConfig)
 	t.Helper()
 	payload, err := json.Marshal(responseCache)
 	if err != nil {
-		t.Fatalf("marshal failed: %v", err)
+		t.Fatalf(marshalFailedMsg, err)
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(payload, &decoded); err != nil {
-		t.Fatalf("unmarshal failed: %v", err)
+		t.Fatalf(unmarshalFailedMsg, err)
 	}
 	return decoded
 }

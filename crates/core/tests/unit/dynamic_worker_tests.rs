@@ -23,11 +23,11 @@ use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWork
 use nemo_relay_worker_proto::v1::stream_chunk::Item as StreamItem;
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, DropScopeStackRequest, EmitMarkRequest,
-    EmptyResult, GuardrailResult, HandshakeRequest, HandshakeResponse, HealthRequest,
-    HealthResponse, JsonEnvelope, JsonResult, JsonValue, LlmCodecDecodeRequest,
-    LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmNextRequest, LlmRequestInterceptResult,
-    LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, Registration, ScopeContext,
-    ScopeType as ProtoScopeType, ShutdownRequest, StreamChunk,
+    EmptyResult, GetRuntimeDiagnosticsRequest, GuardrailResult, HandshakeRequest,
+    HandshakeResponse, HealthRequest, HealthResponse, JsonEnvelope, JsonResult, JsonValue,
+    LlmCodecDecodeRequest, LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmNextRequest,
+    LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
+    Registration, ScopeContext, ScopeType as ProtoScopeType, ShutdownRequest, StreamChunk,
     ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
     ToolExecutionInterceptResult, ToolExecutionResultResponse, ToolNextRequest, ValidateRequest,
     ValidateResponse, WorkerAck,
@@ -43,6 +43,56 @@ use super::*;
 
 const ACTIVATION_ID: &str = "activation-test";
 const AUTH_TOKEN: &str = "auth-test";
+
+#[test]
+fn worker_runtime_rejects_gate_registration_after_cleanup() {
+    let state = WorkerHostRuntimeState::new(ACTIVATION_ID.into(), AUTH_TOKEN.into());
+    state.cleanup_conditional_middleware_guardrails();
+
+    let error = state
+        .register_owned_conditional_middleware_guardrail(
+            "late-gate".into(),
+            BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+            "target-subscriber".into(),
+            "disabled".into(),
+        )
+        .expect_err("gate registration after cleanup must fail");
+
+    assert!(matches!(error, FlowError::NotFound(_)));
+}
+
+#[test]
+fn worker_gate_cleanup_recovers_a_poisoned_ownership_lock() {
+    let state = WorkerHostRuntimeState::new(ACTIVATION_ID.into(), AUTH_TOKEN.into());
+    state
+        .conditional_middleware_guardrails
+        .lock()
+        .expect("gate ownership lock")
+        .insert(
+            "gate-handle".into(),
+            WorkerOwnedGate {
+                local_name: "owned-gate".into(),
+                qualified_name: "missing-global-gate".into(),
+            },
+        );
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = state
+            .conditional_middleware_guardrails
+            .lock()
+            .expect("gate ownership lock");
+        panic!("poison gate ownership lock");
+    }));
+
+    state.cleanup_conditional_middleware_guardrails();
+
+    assert!(
+        state
+            .conditional_middleware_guardrails
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_empty()
+    );
+}
 
 fn enable_operational_logs() {
     let _ = spdlog::init_log_crate_proxy();
@@ -478,6 +528,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 break_chain: false,
             }],
             error: None,
+            conditional_middleware_guardrails: Vec::new(),
         },
     )
     .expect_err("empty registration names should fail");
@@ -493,6 +544,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 break_chain: false,
             }],
             error: None,
+            conditional_middleware_guardrails: Vec::new(),
         },
     )
     .expect_err("unsupported registration surfaces should fail");
@@ -512,6 +564,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 break_chain: false,
             }],
             error: None,
+            conditional_middleware_guardrails: Vec::new(),
         },
     )
     .expect_err("unspecified registration surfaces should fail");
@@ -1825,14 +1878,20 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
         let state = context.read().unwrap();
         (
             state.collect_event_subscribers(&[]),
-            NemoRelayContextState::event_sanitize_entries(&state.mark_sanitize_guardrails, &[]),
+            NemoRelayContextState::event_sanitize_entries(
+                &state.mark_sanitize_guardrails,
+                &[],
+                crate::api::registry::RuntimeRegistrationKind::MarkSanitizeGuardrail,
+            ),
             NemoRelayContextState::event_sanitize_entries(
                 &state.scope_sanitize_start_guardrails,
                 &[],
+                crate::api::registry::RuntimeRegistrationKind::ScopeSanitizeStartGuardrail,
             ),
             NemoRelayContextState::event_sanitize_entries(
                 &state.scope_sanitize_end_guardrails,
                 &[],
+                crate::api::registry::RuntimeRegistrationKind::ScopeSanitizeEndGuardrail,
             ),
             state.tool_sanitize_request_entries(&[]),
             state.tool_sanitize_response_entries(&[]),
@@ -1918,6 +1977,24 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
         state: state.clone(),
     };
 
+    let diagnostics_auth_error = service
+        .get_runtime_diagnostics(Request::new(GetRuntimeDiagnosticsRequest {
+            activation_id: "wrong".into(),
+            auth_token: AUTH_TOKEN.into(),
+        }))
+        .await
+        .expect_err("bad activation id should fail diagnostics auth");
+    assert_eq!(diagnostics_auth_error.code(), tonic::Code::PermissionDenied);
+    let diagnostics = service
+        .get_runtime_diagnostics(Request::new(GetRuntimeDiagnosticsRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+        }))
+        .await
+        .expect("diagnostics request should succeed")
+        .into_inner();
+    assert!(diagnostics.entries.len() <= 32);
+
     let auth_error = service
         .emit_mark(Request::new(EmitMarkRequest {
             activation_id: "wrong".into(),
@@ -1926,6 +2003,8 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
             scope: None,
             data: None,
             metadata: None,
+            data_schema: None,
+            severity: String::new(),
         }))
         .await
         .expect_err("bad activation id should fail auth");
@@ -1942,6 +2021,8 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
             }),
             data: None,
             metadata: None,
+            data_schema: None,
+            severity: String::new(),
         }))
         .await
         .expect("missing stack should return host ack")
@@ -1962,11 +2043,74 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
             scope: None,
             data: None,
             metadata: None,
+            data_schema: None,
+            severity: String::new(),
         }))
         .await
         .expect("no-scope mark should succeed")
         .into_inner();
     assert!(ack.ok);
+
+    let ack = service
+        .emit_mark(Request::new(EmitMarkRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            name: "telemetry-options".into(),
+            scope: None,
+            data: Some(json_envelope("nemo.relay.Json@1", &json!({"measurements": []})).unwrap()),
+            metadata: None,
+            data_schema: Some(
+                json_envelope(
+                    "nemo.relay.DataSchema@1",
+                    &json!({
+                        "name": "nemo.relay.metric_measurements",
+                        "version": "1"
+                    }),
+                )
+                .unwrap(),
+            ),
+            severity: "warning".into(),
+        }))
+        .await
+        .expect("typed mark options should return host ack")
+        .into_inner();
+    assert!(ack.ok, "{:?}", ack.error);
+
+    for request in [
+        EmitMarkRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            name: "bad-schema".into(),
+            data_schema: Some(
+                json_envelope(
+                    "nemo.relay.DataSchema@1",
+                    &json!({"name": 7, "version": "1"}),
+                )
+                .unwrap(),
+            ),
+            ..EmitMarkRequest::default()
+        },
+        EmitMarkRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            name: "bad-severity".into(),
+            severity: "fatal".into(),
+            ..EmitMarkRequest::default()
+        },
+    ] {
+        let ack = service
+            .emit_mark(Request::new(request))
+            .await
+            .expect("invalid mark options should return host ack")
+            .into_inner();
+        assert!(!ack.ok);
+        assert!(
+            ack.error
+                .expect("invalid mark error")
+                .message
+                .contains("invalid argument")
+        );
+    }
 
     let push = service
         .push_scope(Request::new(PushScopeRequest {
@@ -2922,6 +3066,7 @@ impl PluginWorker for FakePluginWorker {
         Ok(tonic::Response::new(RegisterResponse {
             registrations: Vec::new(),
             error: None,
+            conditional_middleware_guardrails: Vec::new(),
         }))
     }
 

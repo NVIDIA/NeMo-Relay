@@ -130,6 +130,11 @@ impl<T: RegistryEntry> SortedRegistry<T> {
             .filter_map(|k| self.entries.get(k))
             .collect()
     }
+
+    /// Return every entry without imposing priority order.
+    pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
+        self.entries.values()
+    }
 }
 
 impl<T: RegistryEntry> Default for SortedRegistry<T> {

@@ -3,6 +3,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -231,7 +232,12 @@ describe('Tool execute', () => {
       () => toolCallExecuteAsync('exec_async_tool_legacy_raw', {}, async () => ({ legacy: true })),
     ];
     for (const execute of cases) {
-      await assert.rejects(execute, /must return ToolExecutionResult/i);
+      await assert.rejects(execute, (error) => {
+        assert.match(error.message, /must return ToolExecutionResult/i);
+        assert.match(error.message, /return \{ result: payload \}, not a raw object/i);
+        assert.doesNotMatch(error.message, /internal error/i);
+        return true;
+      });
     }
   });
 
@@ -361,6 +367,7 @@ describe('Tool execute', () => {
         {
           caller: 'node-tool',
         },
+        'node-managed-success-123',
       );
       assert.deepEqual(result, {
         result: 2,
@@ -380,14 +387,29 @@ describe('Tool execute', () => {
             {
               caller: 'node-tool-error',
             },
+            'node-managed-error-123',
           ),
         /tool status failure/,
       );
 
       await flushSubscribers();
+      const okStart = events.find(
+        (e) =>
+          e.name === 'exec_status_ok_tool' &&
+          e.kind === 'scope' &&
+          e.category === 'tool' &&
+          e.scope_category === 'start',
+      );
       const okEnd = events.find(
         (e) =>
           e.name === 'exec_status_ok_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'end',
+      );
+      const errorStart = events.find(
+        (e) =>
+          e.name === 'exec_status_error_tool' &&
+          e.kind === 'scope' &&
+          e.category === 'tool' &&
+          e.scope_category === 'start',
       );
       const errorEnd = events.find(
         (e) =>
@@ -396,10 +418,16 @@ describe('Tool execute', () => {
           e.category === 'tool' &&
           e.scope_category === 'end',
       );
+      assert.ok(okStart, 'expected successful tool start event');
       assert.ok(okEnd, 'expected successful tool end event');
+      assert.equal(okStart.category_profile.tool_call_id, 'node-managed-success-123');
+      assert.equal(okEnd.category_profile.tool_call_id, 'node-managed-success-123');
       assert.equal(okEnd.metadata.caller, 'node-tool');
       assert.equal(okEnd.metadata['otel.status_code'], 'OK');
+      assert.ok(errorStart, 'expected failed tool start event');
       assert.ok(errorEnd, 'expected failed tool end event');
+      assert.equal(errorStart.category_profile.tool_call_id, 'node-managed-error-123');
+      assert.equal(errorEnd.category_profile.tool_call_id, 'node-managed-error-123');
       assert.equal(errorEnd.metadata.caller, 'node-tool-error');
       assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
       assert.match(errorEnd.metadata['otel.status_description'], /tool status failure/);
@@ -410,27 +438,51 @@ describe('Tool execute', () => {
     }
   });
 
-  it('async execute awaits Promise-returning callbacks', async () => {
-    const result = await toolCallExecuteAsync(
-      'exec_async_tool',
-      {
-        x: 10,
-      },
-      async (args) => ({
-        result: args.x + 2,
-      }),
-      null,
-      TOOL_ATTR_LOCAL,
-      {
-        data: true,
-      },
-      {
-        meta: true,
-      },
-    );
-    assert.deepEqual(result, {
-      result: 12,
-    });
+  it('async execute awaits Promise-returning callbacks and records tool call IDs', async () => {
+    const events = [];
+    registerSubscriber('node_async_tool_call_id_sub', (event) => events.push(event));
+    try {
+      const result = await toolCallExecuteAsync(
+        'exec_async_tool',
+        {
+          x: 10,
+        },
+        async (args) => ({
+          result: args.x + 2,
+        }),
+        null,
+        TOOL_ATTR_LOCAL,
+        {
+          data: true,
+        },
+        {
+          meta: true,
+        },
+        'node-managed-async-123',
+      );
+      assert.deepEqual(result, {
+        result: 12,
+      });
+
+      await flushSubscribers();
+      const lifecycle = events.filter(
+        (event) => event.kind === 'scope' && event.category === 'tool' && event.name === 'exec_async_tool',
+      );
+      assert.deepEqual(
+        lifecycle.map((event) => event.scope_category),
+        ['start', 'end'],
+      );
+      assert.ok(lifecycle.every((event) => event.category_profile.tool_call_id === 'node-managed-async-123'));
+    } finally {
+      deregisterSubscriber('node_async_tool_call_id_sub');
+    }
+  });
+
+  it('generated execute declarations expose an additive trailing toolCallId', () => {
+    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+
+    assert.match(declarations, /toolCallExecute\([\s\S]*?metadata\?: Json[^,\n]*,[\s\S]*?toolCallId\?: string/);
+    assert.match(declarations, /toolCallExecuteAsync\([\s\S]*?metadata\?: Json[^,\n]*,[\s\S]*?toolCallId\?: string/);
   });
 
   it('async execute surfaces plain string rejections', async () => {
@@ -922,7 +974,13 @@ describe('Tool intercepts', () => {
           wrapped: true,
         },
         annotation: downstream.annotation,
-        pendingMarks: [{ name: 'node.tool.execution' }],
+        pendingMarks: [
+          {
+            name: 'node.tool.execution',
+            dataSchema: { name: 'example.tool.mark', version: '1' },
+            severity: 'warning',
+          },
+        ],
       };
     });
     try {
@@ -956,6 +1014,8 @@ describe('Tool intercepts', () => {
       assert.ok(end, 'expected tool end event');
       assert.ok(mark, 'expected tool execution pending mark');
       assert.deepEqual(end.category_profile.tool_result_annotation, { source: 'provider' });
+      assert.deepEqual(mark.data_schema, { name: 'example.tool.mark', version: '1' });
+      assert.equal(mark.metadata['nemo_relay.log.severity'], 'warn');
       assert.equal(mark.parent_uuid, start.uuid);
       assert.ok(events.indexOf(end) < events.indexOf(mark), 'expected tool end before pending mark');
       assert.ok(mark.timestamp > end.timestamp, 'expected pending mark timestamp after tool end');
@@ -1372,15 +1432,30 @@ describe('Tool intercepts', () => {
     }
   });
 
-  it('execution intercept rejects legacy raw results', async () => {
+  it('execution intercept rejects legacy raw results with forwarding guidance', async () => {
     registerToolExecutionIntercept('node_tool_exec_legacy', 10, async () => ({ legacyResult: true }));
     try {
       await assert.rejects(
         () => toolCallExecute('legacy_tool', {}, (args) => args, null, null, null, null),
-        /invalid JS tool execution intercept outcome/i,
+        (error) => {
+          assert.match(error.message, /tool execution intercept must return/i);
+          assert.match(error.message, /result: downstream\.result, annotation: downstream\.annotation/i);
+          assert.doesNotMatch(error.message, /internal error/i);
+          return true;
+        },
       );
     } finally {
       deregisterToolExecutionIntercept('node_tool_exec_legacy');
+    }
+  });
+
+  it('execution intercept may directly forward the canonical Node result', async () => {
+    registerToolExecutionIntercept('node_tool_exec_forward_result', 10, async (args, next) => next(args));
+    try {
+      const result = await toolCallExecute('forward_result_tool', { ok: true }, (args) => toolResult(args));
+      assert.deepEqual(result, toolResult({ ok: true }));
+    } finally {
+      deregisterToolExecutionIntercept('node_tool_exec_forward_result');
     }
   });
 

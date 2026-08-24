@@ -18,13 +18,21 @@ def add_nemo_relay_integration(
     instrument_subagents: bool = True,
     **overrides: Any,
 ) -> dict[str, Any]:
-    """
-    Receives the keyword arguments for ``create_deep_agent`` and returns them with NeMo Relay observability attached.
+    """Attach NeMo Relay observability to ``create_deep_agent`` keyword arguments.
 
     Use this helper as ``create_deep_agent(**add_nemo_relay_integration(...))``.
     It injects Deep Agents-aware middleware at the top level, adds the same
     middleware to dictionary-style custom subagents that do not inherit parent
     middleware, and leaves any provided backend unchanged.
+
+    Args:
+        kwargs: Existing keyword arguments for ``create_deep_agent``.
+        instrument_subagents: Whether to add Relay middleware to dictionary
+            subagents that do not inherit parent middleware.
+        **overrides: Keyword arguments that override values from ``kwargs``.
+
+    Returns:
+        dict[str, Any]: Arguments ready to pass to ``create_deep_agent``.
     """
     observed = dict(kwargs or {})
     observed.update(overrides)

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,14 +9,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use futures::StreamExt;
 use nemo_relay_plugin::{
     CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, EventSanitizeFields,
-    Json, LlmJsonAsyncStream, LlmRequest, LlmRequestInterceptOutcome, NativeExecutorConfig,
-    NativePlugin,
-    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncMiddlewareCb,
-    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncStream,
-    NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativePluginContext,
-    NemoRelayNativePluginV1, NemoRelayNativeString, NemoRelayNativeToolNextFn, NemoRelayStatus,
-    NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY, PendingMarkSpec, PluginContext, PluginRuntime,
-    ScopeCategory, ScopeType,
+    Json, LlmJsonAsyncStream, LlmRequest, LlmRequestInterceptOutcome, MetricKind,
+    MetricMeasurement, MetricValueType, NEMO_RELAY_NATIVE_ABI_VERSION,
+    NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
+    NativeExecutorConfig, NativePlugin, NemoRelayNativeAsyncCallbackState,
+    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
+    NemoRelayNativeAsyncStream, NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3,
+    NemoRelayNativeHostApiV4, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
+    NemoRelayNativeString, NemoRelayNativeToolNextFn, NemoRelayStatus, PendingMarkSpec,
+    PluginContext, PluginRuntime, RuntimeRegistrationKind, ScopeCategory, ScopeType,
     ToolExecutionInterceptOutcome,
 };
 use serde_json::{Map, json};
@@ -58,14 +60,49 @@ impl NativePlugin for FixtureNativePlugin {
 
     fn register(
         &mut self,
-        _plugin_config: &Map<String, Json>,
+        plugin_config: &Map<String, Json>,
         ctx: &mut PluginContext<'_>,
     ) -> nemo_relay_plugin::Result<()> {
+        let event_metadata_injector_error = plugin_config
+            .get("event_metadata_injector_error")
+            .and_then(Json::as_bool)
+            .unwrap_or(false);
+        register_fixture_event_metadata_injector(ctx, event_metadata_injector_error)?;
+        if plugin_config
+            .get("event_metadata_injector_only")
+            .and_then(Json::as_bool)
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
         let runtime = ctx.runtime();
         ctx.register_subscriber("fixture_subscriber", {
             let runtime = runtime.clone();
             move |event| subscriber_mark(&runtime, event)
         })?;
+        let subscriber_kinds = BTreeSet::from([RuntimeRegistrationKind::Subscriber]);
+        if !runtime
+            .list_runtime_registrations(Some(&subscriber_kinds))?
+            .iter()
+            .any(|registration| registration.local_name == "fixture_subscriber")
+        {
+            return Err("native runtime did not discover its subscriber".into());
+        }
+        ctx.register_conditional_middleware_guardrail(
+            "fixture_initial_gate",
+            &subscriber_kinds,
+            "missing-initial-target",
+            "fixture initial gate",
+        )?;
+        let dynamic_gate = runtime.register_conditional_middleware_guardrail(
+            "fixture_dynamic_gate",
+            &subscriber_kinds,
+            "missing-dynamic-target",
+            "fixture dynamic gate",
+        )?;
+        if !runtime.deregister_conditional_middleware_guardrail(&dynamic_gate)? {
+            return Err("native runtime did not remove its dynamic gate".into());
+        }
         ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize", 0, |_, fields| async move {
             Ok(mark_event_fields(fields, "native_plugin_mark"))
         })?;
@@ -155,10 +192,8 @@ impl NativePlugin for FixtureNativePlugin {
                         .unwrap_or(false)
                     {
                         let first_next = next.clone();
-                        let (first, second) = tokio::join!(
-                            first_next.call(args.clone()),
-                            next.call(args),
-                        );
+                        let (first, second) =
+                            tokio::join!(first_next.call(args.clone()), next.call(args),);
                         let result = first?;
                         second?;
                         result
@@ -279,6 +314,32 @@ impl NativePlugin for FixtureNativePlugin {
     }
 }
 
+fn register_fixture_event_metadata_injector(
+    ctx: &mut PluginContext<'_>,
+    return_error: bool,
+) -> nemo_relay_plugin::Result<()> {
+    ctx.register_event_metadata_injector(
+        "fixture_event_metadata_injector",
+        0,
+        move |event| async move {
+            if return_error {
+                return Err("fixture Event metadata injector error requested".into());
+            }
+            let mut additions = BTreeMap::new();
+            if event
+                .name()
+                .starts_with("external-plugin-event-metadata-injection")
+            {
+                additions.insert(
+                    "external.injector.transport".into(),
+                    json!("native_dynamic_rust"),
+                );
+            }
+            Ok(additions)
+        },
+    )
+}
+
 fn mark_event_fields(mut fields: EventSanitizeFields, marker: &str) -> EventSanitizeFields {
     let mut metadata = fields.metadata.unwrap_or_else(|| json!({}));
     metadata[marker] = json!(true);
@@ -302,6 +363,18 @@ fn emit_runtime_events(runtime: &PluginRuntime) -> nemo_relay_plugin::Result<()>
     runtime.emit_mark(
         "fixture.native.mark",
         Some(&Json::String("current".into())),
+        None,
+    )?;
+    runtime.emit_metric(
+        "fixture.native.metric",
+        vec![
+            MetricMeasurement::builder()
+                .name("fixture.native.count")
+                .kind(MetricKind::Counter)
+                .value_type(MetricValueType::U64)
+                .value(json!(1))
+                .build(),
+        ],
         None,
     )?;
     let scope = runtime.push_scope(
@@ -367,6 +440,98 @@ fn mark_json(mut value: Json, key: &str) -> Json {
 }
 
 nemo_relay_plugin::nemo_relay_plugin!(nemo_relay_fixture_native_plugin, || FixtureNativePlugin);
+
+unsafe extern "C" fn fixture_compat_register(
+    _user_data: *mut c_void,
+    _plugin_config_json: *const NemoRelayNativeString,
+    _ctx: *mut NemoRelayNativePluginContext,
+) -> NemoRelayStatus {
+    NemoRelayStatus::Ok
+}
+
+/// Raw ABI-v3 entry used to verify host fallback for already-built plugins.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v3(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus {
+    unsafe {
+        fixture_compat_entry(
+            host,
+            out,
+            NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE,
+            std::mem::size_of::<NemoRelayNativeHostApiV3>(),
+            b"fixture_native_v3",
+        )
+    }
+}
+
+/// Raw ABI-v2 entry used to verify host fallback for already-built plugins.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v2(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus {
+    unsafe {
+        fixture_compat_entry(
+            host,
+            out,
+            NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
+            std::mem::size_of::<NemoRelayNativeHostApiV1>(),
+            b"fixture_native_v2",
+        )
+    }
+}
+
+/// Raw ABI-v4 entry used to verify the final current table.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v4(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus {
+    unsafe {
+        fixture_compat_entry(
+            host,
+            out,
+            NEMO_RELAY_NATIVE_ABI_VERSION,
+            std::mem::size_of::<NemoRelayNativeHostApiV4>(),
+            b"fixture_native_v4",
+        )
+    }
+}
+
+unsafe fn fixture_compat_entry(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+    expected_version: u32,
+    minimum_size: usize,
+    kind: &[u8],
+) -> NemoRelayStatus {
+    if host.is_null() || out.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    let host = unsafe { &*host };
+    if host.abi_version != expected_version || host.struct_size < minimum_size {
+        return NemoRelayStatus::InvalidArg;
+    }
+    let mut plugin_kind = ptr::null_mut();
+    let status = unsafe { (host.string_new)(kind.as_ptr(), kind.len(), &mut plugin_kind) };
+    if status != NemoRelayStatus::Ok {
+        return status;
+    }
+    unsafe {
+        *out = NemoRelayNativePluginV1 {
+            struct_size: std::mem::size_of::<NemoRelayNativePluginV1>(),
+            plugin_kind,
+            allows_multiple_components: false,
+            user_data: ptr::null_mut(),
+            validate: None,
+            register: Some(fixture_compat_register),
+            drop: None,
+        };
+    }
+    NemoRelayStatus::Ok
+}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_async_entry(

@@ -32,7 +32,7 @@ Node.js bindings mirror the semantics exposed by this crate.
   sanitize observability payloads, rewrite requests, or wrap execution.
 - **Emit one lifecycle stream**: Subscribers can consume canonical runtime
   events in-process or export them to Agent Trajectory Interchange Format
-  (ATIF) or typed OpenTelemetry projections.
+  (ATIF) or OpenTelemetry traces, logs, and metrics.
 - **Integrate without changing orchestration**: Wrap framework and provider
   callbacks while leaving scheduling, retries, memory, and result handling in
   the owning application.
@@ -47,7 +47,7 @@ Node.js bindings mirror the semantics exposed by this crate.
   one shared plugin system.
 - **Built-in observability plugin**: Configure first-party Agent Trajectory
   Observability Format (ATOF), Agent Trajectory Interchange Format (ATIF),
-  and typed OpenTelemetry exporters from the core crate.
+  and OpenTelemetry trace, log, and metric exporters from the core crate.
 - **Codec and typed helpers**: Normalize provider requests and responses for
   framework integrations.
 - **Binding source of truth**: Use the runtime semantics mirrored by the
@@ -108,6 +108,102 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     scope::pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())?;
     Ok(())
 }
+```
+
+## OTLP Logs and Metrics
+
+Configure plugin-managed trace, log, and metric export with an observability
+version-4 component. When log and metric endpoints are omitted, Relay derives
+`/v1/logs` and `/v1/metrics` from each trace endpoint:
+
+```toml
+# plugins.toml
+version = 1
+
+[[components]]
+kind = "observability"
+
+[components.config]
+version = 4
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "gen_ai"
+endpoint = "http://localhost:4318/v1/traces"
+
+[components.config.opentelemetry.logs]
+enabled = true
+
+[components.config.opentelemetry.metrics]
+enabled = true
+```
+
+Emit a schema-tagged log mark with `event` and an atomically validated metric
+group with `metric`:
+
+```rust
+use nemo_relay::api::{
+    event::{DataSchema, LogSeverity, MetricKind, MetricMeasurement, MetricValueType},
+    scope::{self, EmitMarkEventParams, EmitMetricEventParams},
+};
+use serde_json::json;
+
+scope::event(
+    EmitMarkEventParams::builder()
+        .name("cache-nearly-full")
+        .data(json!({"entries": 900}))
+        .data_schema(DataSchema::builder().name("example.cache").version("1").build())
+        .severity(LogSeverity::Warn)
+        .build(),
+)?;
+scope::metric(
+    EmitMetricEventParams::builder()
+        .name("cache-entries")
+        .measurements(vec![
+            MetricMeasurement::builder()
+                .name("example.cache.entries")
+                .kind(MetricKind::Gauge)
+                .value_type(MetricValueType::U64)
+                .value(json!(900_u64))
+                .build(),
+        ])
+        .build(),
+)?;
+```
+
+Direct subscribers are independently managed. Register them before emitting
+marks, then deregister, force-flush, and shut them down during graceful
+teardown. The metric subscriber has the same lifecycle:
+
+```rust
+use nemo_relay::observability::{
+    otel_logs::{OpenTelemetryLogConfig, OpenTelemetryLogSubscriber},
+    otel_metrics::{OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber},
+};
+
+// Equivalent explicit OTLP/HTTP paths are /v1/logs and /v1/metrics, respectively.
+let logs = OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new(
+    "http://localhost:4318",
+))?;
+let metrics = OpenTelemetryMetricSubscriber::new(OpenTelemetryMetricConfig::new(
+    "http://localhost:4318",
+))?;
+logs.register("otlp-logs")?;
+metrics.register("otlp-metrics")?;
+
+let diagnostics = logs.runtime_diagnostics();
+for diagnostic in diagnostics.entries() {
+    eprintln!("{}: {}", diagnostic.code, diagnostic.message);
+}
+
+logs.deregister("otlp-logs")?;
+logs.force_flush()?;
+logs.shutdown()?;
+metrics.deregister("otlp-metrics")?;
+metrics.force_flush()?;
+metrics.shutdown()?;
 ```
 
 ## Documentation

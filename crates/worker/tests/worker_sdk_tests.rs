@@ -3,6 +3,7 @@
 
 //! End-to-end coverage for the Rust gRPC worker SDK service.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::net::{SocketAddr, TcpListener};
 use std::path::Path;
@@ -19,10 +20,11 @@ use futures_util::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
-    ANNOTATED_LLM_REQUEST_SCHEMA, Json, JsonStream, LlmNext, LlmRequest, LlmStreamNext,
-    PluginContext, PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
-    WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin, serve_plugin_arc,
-    serve_plugin_arc_with_config,
+    ANNOTATED_LLM_REQUEST_SCHEMA, DataSchema, EmitMarkOptions, Json, JsonStream, LlmNext,
+    LlmRequest, LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement, MetricValueType,
+    PluginContext, PluginRuntime, Result, RuntimeRegistrationKind, ScopeType,
+    ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError, WorkerServerConfig,
+    serve_plugin, serve_plugin_arc, serve_plugin_arc_with_config,
 };
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
@@ -30,10 +32,15 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
 };
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, CreateScopeStackResponse,
-    DropScopeStackRequest, EmitMarkRequest, HandshakeRequest, HealthRequest, HostAck,
-    InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmInvocation, LlmNextRequest,
-    LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest,
-    RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk,
+    DeregisterConditionalMiddlewareGuardrailRequest,
+    DeregisterConditionalMiddlewareGuardrailResponse, DropScopeStackRequest, EmitMarkRequest,
+    GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, HandshakeRequest, HealthRequest,
+    HostAck, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult,
+    ListRuntimeRegistrationsRequest, ListRuntimeRegistrationsResponse, LlmInvocation,
+    LlmNextRequest, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse,
+    RegisterConditionalMiddlewareGuardrailRequest, RegisterConditionalMiddlewareGuardrailResponse,
+    RegisterRequest, RegistrationSurface, RuntimeDiagnostic as ProtoRuntimeDiagnostic,
+    ScopeContext, ShutdownRequest, StreamChunk,
     ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
     ToolExecutionResult as ProtoToolExecutionResult, ToolExecutionResultResponse, ToolInvocation,
     ToolNextRequest, ValidateRequest, WorkerError,
@@ -65,6 +72,21 @@ const REQUIRED_WORKER_ENVS: &[&str] = &[
     "NEMO_RELAY_WORKER_TOKEN",
 ];
 static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[test]
+fn runtime_registration_dtos_reexport_shared_types() {
+    let identity = nemo_relay_worker::RuntimeRegistrationIdentity {
+        kind: nemo_relay_worker::RuntimeRegistrationKind::Subscriber,
+        local_name: "subscriber".into(),
+        effective_name: "subscriber".into(),
+        owner: nemo_relay_worker::RuntimeRegistrationOwner {
+            kind: nemo_relay_worker::RuntimeRegistrationOwnerKind::GlobalApi,
+            plugin_kind: None,
+            component_ordinal: None,
+        },
+    };
+    let _: nemo_relay_types::api::registry::RuntimeRegistrationIdentity = identity;
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn worker_service_enforces_auth_and_reports_registrations() {
@@ -118,6 +140,11 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         handshake
             .supported_surfaces
             .contains(&(RegistrationSurface::LlmStreamExecutionIntercept as i32))
+    );
+    assert!(
+        handshake
+            .supported_surfaces
+            .contains(&(RegistrationSurface::EventMetadataInjector as i32))
     );
 
     let bad_health = client
@@ -205,7 +232,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
     assert_eq!(invalid_register_config.code(), tonic::Code::InvalidArgument);
 
     let registrations = register_plugin(&mut client).await;
-    assert_eq!(registrations.len(), 21);
+    assert_eq!(registrations.len(), 22);
     for local_name in [
         "llm-sanitize-request",
         "llm-sanitize-response",
@@ -306,6 +333,38 @@ async fn worker_service_rejects_duplicate_registration_names_on_one_surface() {
     );
 
     handle.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_service_validates_initial_conditional_middleware_guardrails() {
+    for (mode, expected) in [
+        (InvalidInitialGate::EmptyKinds, "has no registration kinds"),
+        (InvalidInitialGate::EmptyTarget, "names must not be empty"),
+        (
+            InvalidInitialGate::Duplicate,
+            "duplicate conditional middleware guardrail",
+        ),
+    ] {
+        let (handle, mut client) = spawn_worker(
+            Arc::new(InvalidInitialGatePlugin(mode)),
+            "http://127.0.0.1:9".into(),
+        )
+        .await;
+        let response = client
+            .register(Request::new(RegisterRequest {
+                activation_id: ACTIVATION_ID.into(),
+                plugin_id: PLUGIN_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+                config: Some(json_env(json!({}))),
+            }))
+            .await
+            .expect("invalid initial gate should return protocol data")
+            .into_inner();
+        assert!(response.registrations.is_empty());
+        assert!(response.conditional_middleware_guardrails.is_empty());
+        assert!(response.error.unwrap().message.contains(expected));
+        handle.abort();
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -529,6 +588,13 @@ async fn worker_service_invokes_every_registration_surface() {
         events.lock().expect("events lock").as_slice(),
         ["subscriber-event"]
     );
+
+    let metadata = invoke_json(
+        &mut client,
+        event_invoke_surface("event-metadata", RegistrationSurface::EventMetadataInjector),
+    )
+    .await;
+    assert_eq!(metadata, json!({"worker.event_name": "subscriber-event"}));
 
     let mark_fields = invoke_json(
         &mut client,
@@ -789,6 +855,53 @@ async fn worker_service_invokes_every_registration_surface() {
     assert_eq!(stream_auth.code(), tonic::Code::PermissionDenied);
 
     let calls = host.calls();
+    let runtime_registration_requests = host.runtime_registration_requests();
+    assert_eq!(runtime_registration_requests.list.len(), 1);
+    assert_eq!(
+        runtime_registration_requests.list[0].activation_id,
+        ACTIVATION_ID
+    );
+    assert_eq!(runtime_registration_requests.list[0].auth_token, AUTH_TOKEN);
+    assert_eq!(
+        runtime_registration_requests.list[0].kinds,
+        vec![RegistrationSurface::Subscriber as i32]
+    );
+    assert_eq!(runtime_registration_requests.register.len(), 1);
+    assert_eq!(
+        runtime_registration_requests.register[0].activation_id,
+        ACTIVATION_ID
+    );
+    assert_eq!(
+        runtime_registration_requests.register[0].auth_token,
+        AUTH_TOKEN
+    );
+    assert_eq!(runtime_registration_requests.register[0].name, "timer-gate");
+    assert_eq!(
+        runtime_registration_requests.register[0].kinds,
+        vec![RegistrationSurface::Subscriber as i32]
+    );
+    assert_eq!(
+        runtime_registration_requests.register[0].registration_name,
+        "target-subscriber"
+    );
+    assert_eq!(
+        runtime_registration_requests.register[0].reason,
+        "timer active"
+    );
+    assert_eq!(runtime_registration_requests.deregister.len(), 1);
+    assert_eq!(
+        runtime_registration_requests.deregister[0].activation_id,
+        ACTIVATION_ID
+    );
+    assert_eq!(
+        runtime_registration_requests.deregister[0].auth_token,
+        AUTH_TOKEN
+    );
+    assert_eq!(
+        runtime_registration_requests.deregister[0].handle,
+        "gate-handle"
+    );
+    assert!(calls.contains(&"runtime_diagnostics".into()));
     assert!(calls.contains(&"mark:tool-exec:stack-1:parent-1".into()));
     assert!(calls.contains(&"create_scope_stack".into()));
     assert!(calls.contains(&"mark:tool-exec-isolated:isolated-stack:".into()));
@@ -805,6 +918,49 @@ async fn worker_service_invokes_every_registration_surface() {
     assert!(calls.contains(&"mark:stream-poll:stack-1:parent-1".into()));
     assert!(calls.contains(&"push:scope-agent:explicit-stack:".into()));
     assert!(calls.contains(&"push:scope-unknown:explicit-stack:".into()));
+    let telemetry_mark = host
+        .marks()
+        .into_iter()
+        .find(|request| request.name == "tool-exec-telemetry")
+        .expect("extended mark request");
+    assert_eq!(telemetry_mark.severity, "warn");
+    let data_schema = telemetry_mark.data_schema.expect("mark data schema");
+    assert_eq!(data_schema.schema, "nemo.relay.DataSchema@1");
+    assert_eq!(
+        decode_json_envelope::<DataSchema>(&data_schema).unwrap(),
+        DataSchema::builder()
+            .name("nemo.relay.metric_measurements")
+            .version("1")
+            .build()
+    );
+    let metric_mark = host
+        .marks()
+        .into_iter()
+        .find(|request| request.name == "tool-exec-metric")
+        .expect("metric mark request");
+    let metric_schema = metric_mark.data_schema.expect("metric data schema");
+    assert_eq!(
+        decode_json_envelope::<DataSchema>(&metric_schema).unwrap(),
+        DataSchema::builder()
+            .name("nemo.relay.metric_measurements")
+            .version("1")
+            .build()
+    );
+    assert_eq!(
+        decode_json_envelope::<Json>(&metric_mark.data.expect("metric data")).unwrap(),
+        json!({
+            "measurements": [{
+                "name": "worker.requests",
+                "kind": "counter",
+                "value_type": "u64",
+                "value": 1,
+                "unit": null,
+                "description": null,
+                "attributes": null,
+                "boundaries": null
+            }]
+        })
+    );
 
     worker_handle.abort();
     host_handle.abort();
@@ -1441,6 +1597,13 @@ async fn worker_service_propagates_host_runtime_errors() {
     for (failures, expected) in [
         (
             MockHostFailures {
+                runtime_diagnostics_unimplemented: true,
+                ..Default::default()
+            },
+            "runtime diagnostics require a Relay host with the grpc-v1 diagnostics extension",
+        ),
+        (
+            MockHostFailures {
                 emit_mark: HostFailure::WorkerError,
                 ..Default::default()
             },
@@ -1567,23 +1730,28 @@ async fn worker_service_propagates_host_runtime_errors() {
         );
     }
 
-    for (mode, expected) in [
+    for (index, (mode, expected)) in [
         (MockStreamMode::WorkerError, "stream worker failed"),
         (MockStreamMode::EmptyChunk, "empty stream chunk"),
         (MockStreamMode::TransportError, "stream status failed"),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         host.set_failures(MockHostFailures {
             llm_stream_mode: mode,
             ..Default::default()
         });
+        let mut request = llm_invoke(
+            "llm-stream",
+            RegistrationSurface::LlmStreamExecutionIntercept,
+            llm_request(),
+            None,
+            None,
+        );
+        request.invocation_id = format!("llm-stream-{index}");
         let mut stream = client
-            .invoke_stream(Request::new(llm_invoke(
-                "llm-stream",
-                RegistrationSurface::LlmStreamExecutionIntercept,
-                llm_request(),
-                None,
-                None,
-            )))
+            .invoke_stream(Request::new(request))
             .await
             .expect("stream invoke")
             .into_inner();
@@ -1619,6 +1787,50 @@ impl WorkerPlugin for DuplicateEventSanitizerPlugin {
     fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
         ctx.register_mark_sanitize_guardrail("duplicate", 0, |_, fields| async move { Ok(fields) });
         ctx.register_mark_sanitize_guardrail("duplicate", 1, |_, fields| async move { Ok(fields) });
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+enum InvalidInitialGate {
+    EmptyKinds,
+    EmptyTarget,
+    Duplicate,
+}
+
+struct InvalidInitialGatePlugin(InvalidInitialGate);
+
+impl WorkerPlugin for InvalidInitialGatePlugin {
+    fn plugin_id(&self) -> &str {
+        PLUGIN_ID
+    }
+
+    fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
+        let kinds = match self.0 {
+            InvalidInitialGate::EmptyKinds => BTreeSet::new(),
+            InvalidInitialGate::EmptyTarget | InvalidInitialGate::Duplicate => {
+                BTreeSet::from([RuntimeRegistrationKind::Subscriber])
+            }
+        };
+        let target = if matches!(self.0, InvalidInitialGate::EmptyTarget) {
+            ""
+        } else {
+            "target-subscriber"
+        };
+        ctx.register_conditional_middleware_guardrail(
+            "initial-gate",
+            kinds.clone(),
+            target,
+            "disabled",
+        );
+        if matches!(self.0, InvalidInitialGate::Duplicate) {
+            ctx.register_conditional_middleware_guardrail(
+                "initial-gate",
+                kinds,
+                target,
+                "also disabled",
+            );
+        }
         Ok(())
     }
 }
@@ -1754,12 +1966,24 @@ impl WorkerPlugin for SurfacePlugin {
 
     fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
         let runtime = ctx.runtime().expect("worker service provides runtime");
+        ctx.register_conditional_middleware_guardrail(
+            "initial-gate",
+            BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+            "missing-target",
+            "initial gate",
+        );
         let events = self.events.clone();
         ctx.register_subscriber("subscriber", move |event| {
             events
                 .lock()
                 .expect("events lock")
                 .push(event.name().into());
+        });
+        ctx.register_event_metadata_injector("event-metadata", 1, |event| async move {
+            Ok(BTreeMap::from([(
+                "worker.event_name".into(),
+                json!(event.name()),
+            )]))
         });
         ctx.register_mark_sanitize_guardrail("event-sanitize", 1, |event, mut fields| {
             let event_name = event.name().to_owned();
@@ -1813,7 +2037,75 @@ impl WorkerPlugin for SurfacePlugin {
         ctx.register_tool_execution_intercept("tool-exec", 1, move |_, value, next: ToolNext| {
             let runtime = tool_runtime.clone();
             async move {
+                let registrations = runtime
+                    .list_runtime_registrations(Some(BTreeSet::from([
+                        RuntimeRegistrationKind::Subscriber,
+                    ])))
+                    .await?;
+                if !registrations.is_empty() {
+                    return Err(WorkerSdkError::Callback(
+                        "mock runtime registration discovery was not empty".into(),
+                    ));
+                }
+                let gate = runtime
+                    .register_conditional_middleware_guardrail(
+                        "timer-gate",
+                        BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+                        "target-subscriber",
+                        "timer active",
+                    )
+                    .await?;
+                if !runtime
+                    .deregister_conditional_middleware_guardrail(&gate)
+                    .await?
+                {
+                    return Err(WorkerSdkError::Callback(
+                        "mock runtime did not remove the owned gate".into(),
+                    ));
+                }
+                let diagnostics = runtime.runtime_diagnostics().await?;
+                if diagnostics
+                    .get("otel.metric_mark_invalid")
+                    .map(|diagnostic| diagnostic.count)
+                    != Some(3)
+                {
+                    return Err(WorkerSdkError::Callback(
+                        "runtime diagnostics response did not contain the expected entry".into(),
+                    ));
+                }
                 runtime.emit_mark("tool-exec", None, None).await?;
+                runtime
+                    .emit_mark_with_options(
+                        "tool-exec-telemetry",
+                        Some(json!({"measurements": []})),
+                        None,
+                        EmitMarkOptions {
+                            data_schema: Some(
+                                DataSchema::builder()
+                                    .name("nemo.relay.metric_measurements")
+                                    .version("1")
+                                    .build(),
+                            ),
+                            severity: Some(LogSeverity::Warn),
+                        },
+                    )
+                    .await?;
+                runtime
+                    .emit_metric(
+                        "tool-exec-metric",
+                        vec![MetricMeasurement {
+                            name: "worker.requests".into(),
+                            kind: MetricKind::Counter,
+                            value_type: MetricValueType::U64,
+                            value: json!(1),
+                            unit: None,
+                            description: None,
+                            attributes: None,
+                            boundaries: None,
+                        }],
+                        None,
+                    )
+                    .await?;
                 let stack_id = runtime.create_scope_stack().await?;
                 let isolated_runtime = runtime.clone();
                 runtime
@@ -2030,6 +2322,7 @@ enum MockStreamMode {
 
 #[derive(Clone, Copy, Default)]
 struct MockHostFailures {
+    runtime_diagnostics_unimplemented: bool,
     emit_mark: HostFailure,
     create_scope_stack: bool,
     push_scope: bool,
@@ -2045,9 +2338,18 @@ struct MockHostFailures {
 }
 
 #[derive(Clone, Default)]
+struct RuntimeRegistrationRequests {
+    list: Vec<ListRuntimeRegistrationsRequest>,
+    register: Vec<RegisterConditionalMiddlewareGuardrailRequest>,
+    deregister: Vec<DeregisterConditionalMiddlewareGuardrailRequest>,
+}
+
+#[derive(Clone, Default)]
 struct MockHost {
     calls: Arc<Mutex<Vec<String>>>,
+    marks: Arc<Mutex<Vec<EmitMarkRequest>>>,
     failures: Arc<Mutex<MockHostFailures>>,
+    runtime_registration_requests: Arc<Mutex<RuntimeRegistrationRequests>>,
 }
 
 impl MockHost {
@@ -2059,6 +2361,10 @@ impl MockHost {
         self.calls.lock().expect("calls lock").push(call.into());
     }
 
+    fn marks(&self) -> Vec<EmitMarkRequest> {
+        self.marks.lock().expect("marks lock").clone()
+    }
+
     fn failures(&self) -> MockHostFailures {
         *self.failures.lock().expect("failures lock")
     }
@@ -2066,16 +2372,99 @@ impl MockHost {
     fn set_failures(&self, failures: MockHostFailures) {
         *self.failures.lock().expect("failures lock") = failures;
     }
+
+    fn runtime_registration_requests(&self) -> RuntimeRegistrationRequests {
+        self.runtime_registration_requests
+            .lock()
+            .expect("runtime registration requests lock")
+            .clone()
+    }
 }
 
 #[tonic::async_trait]
 impl RelayHostRuntime for MockHost {
+    async fn list_runtime_registrations(
+        &self,
+        request: Request<ListRuntimeRegistrationsRequest>,
+    ) -> std::result::Result<Response<ListRuntimeRegistrationsResponse>, Status> {
+        let request = request.into_inner();
+        authorize_host(&request.activation_id, &request.auth_token)?;
+        self.runtime_registration_requests
+            .lock()
+            .expect("runtime registration requests lock")
+            .list
+            .push(request);
+        Ok(Response::new(ListRuntimeRegistrationsResponse {
+            registrations: Vec::new(),
+            error: None,
+        }))
+    }
+
+    async fn register_conditional_middleware_guardrail(
+        &self,
+        request: Request<RegisterConditionalMiddlewareGuardrailRequest>,
+    ) -> std::result::Result<Response<RegisterConditionalMiddlewareGuardrailResponse>, Status> {
+        let request = request.into_inner();
+        authorize_host(&request.activation_id, &request.auth_token)?;
+        self.runtime_registration_requests
+            .lock()
+            .expect("runtime registration requests lock")
+            .register
+            .push(request);
+        Ok(Response::new(
+            RegisterConditionalMiddlewareGuardrailResponse {
+                handle: "gate-handle".into(),
+                error: None,
+            },
+        ))
+    }
+
+    async fn deregister_conditional_middleware_guardrail(
+        &self,
+        request: Request<DeregisterConditionalMiddlewareGuardrailRequest>,
+    ) -> std::result::Result<Response<DeregisterConditionalMiddlewareGuardrailResponse>, Status>
+    {
+        let request = request.into_inner();
+        authorize_host(&request.activation_id, &request.auth_token)?;
+        self.runtime_registration_requests
+            .lock()
+            .expect("runtime registration requests lock")
+            .deregister
+            .push(request);
+        Ok(Response::new(
+            DeregisterConditionalMiddlewareGuardrailResponse {
+                removed: true,
+                error: None,
+            },
+        ))
+    }
+
+    async fn get_runtime_diagnostics(
+        &self,
+        request: Request<GetRuntimeDiagnosticsRequest>,
+    ) -> std::result::Result<Response<GetRuntimeDiagnosticsResponse>, Status> {
+        let request = request.into_inner();
+        authorize_host(&request.activation_id, &request.auth_token)?;
+        self.record("runtime_diagnostics");
+        if self.failures().runtime_diagnostics_unimplemented {
+            return Err(Status::unimplemented("runtime diagnostics are unavailable"));
+        }
+        Ok(Response::new(GetRuntimeDiagnosticsResponse {
+            entries: vec![ProtoRuntimeDiagnostic {
+                code: "otel.metric_mark_invalid".into(),
+                message: "metric mark has an unsupported value".into(),
+                count: 3,
+            }],
+        }))
+    }
+
     async fn emit_mark(
         &self,
         request: Request<EmitMarkRequest>,
     ) -> std::result::Result<Response<HostAck>, Status> {
         let request = request.into_inner();
         authorize_host(&request.activation_id, &request.auth_token)?;
+        self.marks.lock().expect("marks lock").push(request.clone());
         let scope = request.scope.expect("scope context");
         self.record(format!(
             "mark:{}:{}:{}",

@@ -17,6 +17,11 @@ appropriate executor.
 
 Public data types:
     Json: Any JSON-serializable Python value.
+    DataSchema: Schema identity for a mark's opaque data payload.
+    LogSeverity: Telemetry severity assigned to an exported mark log.
+    MetricKind: OpenTelemetry instrument kind for a metric measurement.
+    MetricValueType: Explicit numeric representation for a metric measurement.
+    MetricMeasurement: One recording operation in a Relay metric mark.
     Event: A Relay event represented as a JSON object.
     EventSanitizeFields: Mutable event observability fields.
     LlmRequest: A Relay LLM request represented as a JSON object.
@@ -40,11 +45,19 @@ Public data types:
     ToolExecutionInterceptOutcome: Canonical tool execution-intercept result.
     DiagnosticLevel: Severity of a configuration diagnostic.
     ConfigDiagnostic: Structured configuration warning or error.
+    RuntimeDiagnostic: One aggregated host runtime diagnostic entry.
+    RuntimeDiagnostics: Immutable host runtime diagnostics snapshot.
+    RuntimeRegistrationKind: Kind of globally registered runtime behavior.
+    RuntimeRegistrationOwnerKind: Kind of owner that installed a registration.
+    RuntimeRegistrationOwner: Structured identity of a registration owner.
+    RuntimeRegistrationIdentity: Structured identity of a runtime registration.
+    ConditionalMiddlewareGuardrailHandle: Opaque handle for a registered guardrail.
     ScopeType: Semantic category for a Relay execution scope.
     WorkerSdkError: SDK, host-call, or worker protocol error.
 
 Public callback aliases:
     SubscriberCallback: Event subscriber callback.
+    EventMetadataInjectorCallback: Event metadata injector callback.
     EventSanitizeCallback: Mark or scope event sanitizer callback.
     ToolSanitizeCallback: Tool request or response sanitizer callback.
     ToolConditionalCallback: Tool execution guardrail callback.
@@ -71,9 +84,12 @@ Public functions:
 
 from ._api import (
     AnnotatedLlmRequest,
+    ConditionalMiddlewareGuardrailHandle,
     ConfigDiagnostic,
+    DataSchema,
     DiagnosticLevel,
     Event,
+    EventMetadataInjectorCallback,
     EventSanitizeCallback,
     EventSanitizeFields,
     Json,
@@ -97,9 +113,19 @@ from ._api import (
     LlmSanitizeResponseContext,
     LlmStreamExecutionCallback,
     LlmStreamNext,
+    LogSeverity,
+    MetricKind,
+    MetricMeasurement,
+    MetricValueType,
     PendingMarkSpec,
     PluginContext,
     PluginRuntime,
+    RuntimeDiagnostic,
+    RuntimeDiagnostics,
+    RuntimeRegistrationIdentity,
+    RuntimeRegistrationKind,
+    RuntimeRegistrationOwner,
+    RuntimeRegistrationOwnerKind,
     ScopeType,
     SubscriberCallback,
     ToolConditionalCallback,
@@ -118,15 +144,22 @@ from ._api import (
 
 __all__ = [
     "AnnotatedLlmRequest",
+    "ConditionalMiddlewareGuardrailHandle",
     "ConfigDiagnostic",
+    "DataSchema",
     "DiagnosticLevel",
     "Event",
+    "EventMetadataInjectorCallback",
     "EventSanitizeCallback",
     "EventSanitizeFields",
     "Json",
     "LlmConditionalCallback",
     "LlmCodecIdentity",
     "LlmExecutionCallback",
+    "LogSeverity",
+    "MetricKind",
+    "MetricMeasurement",
+    "MetricValueType",
     "LlmOptimizationContribution",
     "LlmOptimizationDataSchema",
     "LlmOptimizationEvidenceQuality",
@@ -146,6 +179,12 @@ __all__ = [
     "LlmStreamExecutionCallback",
     "PluginContext",
     "PluginRuntime",
+    "RuntimeDiagnostic",
+    "RuntimeDiagnostics",
+    "RuntimeRegistrationIdentity",
+    "RuntimeRegistrationKind",
+    "RuntimeRegistrationOwner",
+    "RuntimeRegistrationOwnerKind",
     "PendingMarkSpec",
     "ScopeType",
     "SubscriberCallback",

@@ -22,6 +22,182 @@ use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use sha2::{Digest, Sha256};
 
+#[test]
+fn activation_snapshots_use_a_short_directory_prefix() {
+    let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, None)]);
+    let snapshot_root = activation_snapshot_root().unwrap();
+    let snapshot_name = snapshot_root.file_name().unwrap().to_string_lossy();
+
+    assert!(snapshot_name.starts_with("nrs-"), "{snapshot_name}");
+    assert_eq!(snapshot_name.len(), "nrs-".len() + 32);
+    assert!(
+        snapshot_name["nrs-".len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    );
+}
+
+#[test]
+fn activation_snapshots_use_the_configured_parent_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let snapshots = temp.path().join("snapshots");
+    let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, Some(snapshots.as_os_str()))]);
+
+    assert_eq!(
+        activation_snapshot_root().unwrap().parent(),
+        Some(snapshots.as_path())
+    );
+    assert!(snapshots.is_dir());
+}
+
+#[test]
+fn activation_snapshots_reject_a_parent_inside_the_plugin_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir(&plugin_dir).unwrap();
+    let manifest_path = write_native_dynamic_manifest(&plugin_dir, "acme.snapshot-parent");
+    let snapshots = plugin_dir.join("snapshots");
+    let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, Some(snapshots.as_os_str()))]);
+
+    let error = DynamicPluginActivationSnapshot::create(
+        manifest_path.to_string_lossy().as_ref(),
+        "acme.snapshot-parent",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("must not be inside an active plugin directory"),
+        "{error}"
+    );
+}
+
+#[test]
+fn activation_snapshots_reject_a_parent_inside_another_active_plugin_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugin");
+    let other_plugin_dir = temp.path().join("other-plugin");
+    std::fs::create_dir(&plugin_dir).unwrap();
+    std::fs::create_dir(&other_plugin_dir).unwrap();
+    let manifest_path = write_native_dynamic_manifest(&plugin_dir, "acme.snapshot-parent");
+    let snapshots = other_plugin_dir.join("snapshots");
+    let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, Some(snapshots.as_os_str()))]);
+
+    let error = DynamicPluginActivationSnapshot::create_with_snapshot_source_directories(
+        manifest_path.to_string_lossy().as_ref(),
+        "acme.snapshot-parent",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+        &[other_plugin_dir.canonicalize().unwrap()],
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("must not be inside an active plugin directory"),
+        "{error}"
+    );
+}
+
+#[test]
+fn activation_snapshots_reject_a_parent_inside_an_external_entrypoint_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugin");
+    let worker_dir = temp.path().join("worker-runtime");
+    std::fs::create_dir(&plugin_dir).unwrap();
+    std::fs::create_dir(&worker_dir).unwrap();
+    let worker = worker_dir.join("worker.sh");
+    std::fs::write(&worker, b"#!/bin/sh\nexit 0\n").unwrap();
+    let digest = Sha256::digest(std::fs::read(&worker).unwrap())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let manifest_path = plugin_dir.join("relay-plugin.toml");
+    std::fs::write(
+        &manifest_path,
+        format!(
+            r#"manifest_version = 1
+
+[plugin]
+id = "acme.external-entrypoint"
+kind = "worker"
+
+[compat]
+relay = ">=0.8.0,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[source]
+artifact = "../worker-runtime/worker.sh"
+
+[integrity]
+sha256 = "sha256:{digest}"
+
+[load]
+runtime = "command"
+entrypoint = "../worker-runtime/worker.sh"
+"#
+        ),
+    )
+    .unwrap();
+    let snapshots = worker_dir.join("snapshots");
+    let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, Some(snapshots.as_os_str()))]);
+
+    let error = DynamicPluginActivationSnapshot::create(
+        manifest_path.to_string_lossy().as_ref(),
+        "acme.external-entrypoint",
+        DynamicPluginKind::Worker,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("must not be inside a directory copied into the activation snapshot"),
+        "{error}"
+    );
+}
+
+#[test]
+fn activation_snapshots_fall_back_to_the_system_temp_directory_for_an_empty_parent() {
+    let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, Some(OsStr::new("")))]);
+
+    assert_eq!(
+        activation_snapshot_root().unwrap().parent(),
+        Some(std::env::temp_dir().as_path())
+    );
+}
+
+#[test]
+fn activation_snapshots_fall_back_to_the_system_temp_directory_when_unset() {
+    let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, None)]);
+
+    assert_eq!(
+        activation_snapshot_root().unwrap().parent(),
+        Some(std::env::temp_dir().as_path())
+    );
+}
+
+#[test]
+fn activation_snapshots_reject_a_parent_that_is_not_a_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let parent = temp.path().join("parent-file");
+    std::fs::write(&parent, b"file").unwrap();
+    let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, Some(parent.as_os_str()))]);
+
+    assert!(activation_snapshot_root().is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn python_venv_launcher_detection_only_preserves_bin_python_links() {
@@ -186,6 +362,7 @@ impl EnvScope {
             ("HOME", Some(temp.path().as_os_str())),
             ("XDG_CONFIG_HOME", Some(xdg.as_os_str())),
             ("NEMO_RELAY_PYTHON", None),
+            (ACTIVATION_SNAPSHOT_DIR_ENV, None),
         ])
     }
 

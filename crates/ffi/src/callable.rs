@@ -16,6 +16,7 @@
 //! free function in an `Arc<UserData>` so the closure is `Send + Sync` and the
 //! free function is called exactly once when all references are dropped.
 
+use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::future::Future;
 use std::pin::Pin;
@@ -23,10 +24,11 @@ use std::sync::Arc;
 
 use libc::c_char;
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn, LlmExecutionNextFn,
-    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
-    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
-    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity,
+    LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
+    LlmSanitizeRequestContext, LlmSanitizeRequestFn, LlmSanitizeResponseContext,
+    LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn,
+    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
@@ -71,6 +73,49 @@ pub type NemoRelayToolConditionalCb = unsafe extern "C" fn(
     name: *const c_char,
     args_json: *const c_char,
 ) -> *mut c_char;
+
+/// Callback for a conditional middleware guardrail. `kinds_json` is a JSON
+/// array of configured runtime-registration kind strings. `kinds_json` and
+/// `registration_name` are borrowed for the callback invocation only. Returns
+/// NULL to enable the target or a reason string allocated compatibly with
+/// `nemo_relay_string_free` to disable it. Ownership of a non-null return value
+/// transfers to Relay.
+pub type NemoRelayConditionalMiddlewareGuardrailCb = Option<
+    unsafe extern "C" fn(
+        user_data: *mut libc::c_void,
+        kinds_json: *const c_char,
+        registration_name: *const c_char,
+    ) -> *mut c_char,
+>;
+
+type FfiConditionalMiddlewareGuardrailFn = unsafe extern "C" fn(
+    user_data: *mut libc::c_void,
+    kinds_json: *const c_char,
+    registration_name: *const c_char,
+) -> *mut c_char;
+
+/// Wrap a C conditional middleware guardrail callback for the core runtime.
+pub fn wrap_conditional_middleware_guardrail_fn(
+    cb: FfiConditionalMiddlewareGuardrailFn,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> nemo_relay::api::runtime::ConditionalMiddlewareGuardrailFn {
+    let ud = make_user_data(user_data, free_fn);
+    Arc::new(move |kinds, registration_name| {
+        clear_last_error();
+        let kinds = kinds.iter().map(|kind| kind.as_str()).collect::<Vec<_>>();
+        let c_kinds = json_to_c_string(&serde_json::to_value(kinds).unwrap_or_default());
+        let c_name = CString::new(registration_name).unwrap_or_default();
+        let result_ptr = unsafe { cb(ud.ptr, c_kinds, c_name.as_ptr()) };
+        unsafe { nemo_relay_string_free_internal(c_kinds) };
+        if result_ptr.is_null() {
+            return None;
+        }
+        let result = ptr_to_opt_string(result_ptr);
+        unsafe { nemo_relay_string_free_internal(result_ptr) };
+        result
+    })
+}
 
 /// Callback for tool execution (default callable). Receives arguments as JSON
 /// and returns a serialized `ToolExecutionResult` with required `result` and
@@ -199,6 +244,18 @@ pub type NemoRelayLlmExecInterceptCb = unsafe extern "C" fn(
 /// the runtime. The `FfiEvent` pointer is only valid for the duration of the call.
 pub type NemoRelayEventSubscriberCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, event: *const FfiEvent);
+
+/// Callback for event metadata injection.
+///
+/// The returned string must contain a JSON object whose properties are proposed
+/// metadata additions. It transfers to Relay and is freed exactly once. Return
+/// null after setting the last error message to report a callback failure.
+pub type NemoRelayEventMetadataInjectorCb = Option<
+    unsafe extern "C" fn(user_data: *mut libc::c_void, event: *const FfiEvent) -> *mut c_char,
+>;
+
+type FfiEventMetadataInjectorFn =
+    unsafe extern "C" fn(user_data: *mut libc::c_void, event: *const FfiEvent) -> *mut c_char;
 
 /// Callback for mark and scope event sanitizers.
 /// The returned JSON string transfers to Relay and is freed exactly once.
@@ -987,6 +1044,34 @@ pub fn wrap_event_subscriber(
     Arc::new(move |event: &Event| {
         let ffi_event = FfiEvent(event.clone());
         unsafe { cb(ud.ptr, &ffi_event) };
+    })
+}
+
+/// Wrap a C event metadata injector callback into a Rust closure.
+pub fn wrap_event_metadata_injector_fn(
+    cb: FfiEventMetadataInjectorFn,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> EventMetadataInjectorFn {
+    let ud = make_user_data(user_data, free_fn);
+    Arc::new(move |event: Arc<Event>| {
+        let ud = ud.clone();
+        Box::pin(async move {
+            clear_last_error();
+            let ffi_event = FfiEvent((*event).clone());
+            let result_ptr = unsafe { cb(ud.ptr, &ffi_event) };
+            let result =
+                json_result_from_ptr(result_ptr, "event metadata injector callback returned null")
+                    .and_then(|value| {
+                        serde_json::from_value::<BTreeMap<String, Json>>(value).map_err(|error| {
+                            FlowError::Internal(format!(
+                                "invalid event metadata injector result: {error}"
+                            ))
+                        })
+                    });
+            unsafe { nemo_relay_string_free_internal(result_ptr) };
+            result
+        })
     })
 }
 

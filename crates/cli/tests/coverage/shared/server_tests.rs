@@ -1839,6 +1839,28 @@ async fn static_only_cli_configuration_keeps_the_legacy_lifecycle() {
 }
 
 #[test]
+fn register_and_validate_plugin_components_rejects_legacy_switchyard_components() {
+    for enabled in [true, false] {
+        let config = PluginConfig {
+            components: vec![PluginComponentSpec {
+                kind: "switchyard".into(),
+                enabled,
+                config: Map::new(),
+            }],
+            ..PluginConfig::default()
+        };
+
+        let errors = register_and_validate_plugin_components(&config);
+        assert!(
+            errors
+                .iter()
+                .any(|error| matches!(error, PluginComponentSetupError::RemovedSwitchyard)),
+            "legacy Switchyard components must be rejected when enabled is {enabled}"
+        );
+    }
+}
+
+#[test]
 fn plugin_component_setup_errors_render_every_diagnostic_variant() {
     let adaptive = PluginComponentSetupError::Adaptive("adaptive failure".into());
     assert_eq!(adaptive.check_name(), "Adaptive plugin");
@@ -1859,26 +1881,15 @@ fn plugin_component_setup_errors_render_every_diagnostic_variant() {
         "PII redaction plugin registration failed: pii failure"
     );
 
-    #[cfg(feature = "switchyard")]
-    {
-        let switchyard = PluginComponentSetupError::Switchyard("registration".into());
-        assert_eq!(switchyard.check_name(), "Switchyard plugin");
-        assert!(switchyard.to_string().contains("registration failed"));
-
-        let atof = PluginComponentSetupError::SwitchyardAtof("atof ordering".into());
-        assert_eq!(atof.check_name(), "Switchyard ATOF");
-        assert_eq!(atof.diagnostic_details(), "atof ordering");
-        assert!(atof.to_string().contains("ATOF validation failed"));
-
-        let cache = PluginComponentSetupError::SwitchyardResponseCache("cache ordering".into());
-        assert_eq!(cache.check_name(), "Switchyard response cache");
-        assert_eq!(cache.diagnostic_details(), "cache ordering");
-        assert!(
-            cache
-                .to_string()
-                .contains("response-cache validation failed")
-        );
-    }
+    let switchyard = PluginComponentSetupError::RemovedSwitchyard;
+    assert_eq!(switchyard.check_name(), "Switchyard migration");
+    assert_eq!(switchyard.diagnostic_details(), switchyard.to_string());
+    assert!(
+        switchyard
+            .to_string()
+            .contains("removed in NeMo Relay >=0.8.0")
+    );
+    assert!(switchyard.to_string().contains("migration guide"));
 }
 
 fn dynamic_component_without_manifest(
@@ -1917,17 +1928,19 @@ async fn plugin_activation_covers_empty_invalid_and_missing_manifest_paths() {
     .expect("invalid config should fail activation");
     assert!(invalid.to_string().contains("invalid plugin config"));
 
-    let native = PluginActivation::initialize(
+    let dynamic_switchyard = PluginActivation::initialize(
         None,
         vec![dynamic_component_without_manifest(
-            "acme.native-missing",
+            "switchyard",
             DynamicPluginKind::RustDynamic,
         )],
     )
     .await
     .err()
-    .expect("native plugin without a manifest should fail activation");
-    assert!(native.to_string().contains("native dynamic plugin"));
+    .expect("dynamic Switchyard plugin without a manifest should reach dynamic activation");
+    let dynamic_switchyard = dynamic_switchyard.to_string();
+    assert!(dynamic_switchyard.contains("native dynamic plugin"));
+    assert!(!dynamic_switchyard.contains("removed in NeMo Relay 0.8"));
 
     let worker = PluginActivation::initialize(
         None,
@@ -1956,50 +1969,6 @@ async fn shutdown_future_helpers_cover_receiver_combinations() {
 
     let ready: ShutdownFuture = Box::pin(async {});
     combine_shutdown_futures(Some(ready), None).unwrap().await;
-}
-
-#[cfg(feature = "switchyard")]
-#[test]
-fn switchyard_must_run_before_response_cache() {
-    let build = |switchyard_priority, cache_priority| {
-        let switchyard = nemo_relay_switchyard::SwitchyardConfig {
-            priority: switchyard_priority,
-            ..nemo_relay_switchyard::SwitchyardConfig::default()
-        };
-        let adaptive = nemo_relay_adaptive::AdaptiveConfig {
-            response_cache: Some(nemo_relay_adaptive::ResponseCacheConfig {
-                namespace: "switchyard-order-test".into(),
-                priority: cache_priority,
-                ..nemo_relay_adaptive::ResponseCacheConfig::default()
-            }),
-            ..nemo_relay_adaptive::AdaptiveConfig::default()
-        };
-        PluginConfig {
-            components: vec![
-                switchyard.into(),
-                nemo_relay_adaptive::plugin_component::ComponentSpec::new(adaptive).into(),
-            ],
-            ..PluginConfig::default()
-        }
-    };
-
-    assert!(validate_switchyard_response_cache_order(&build(0, 50)).is_ok());
-    for (switchyard_priority, cache_priority) in [(50, 50), (51, 50)] {
-        let error =
-            validate_switchyard_response_cache_order(&build(switchyard_priority, cache_priority))
-                .unwrap_err();
-        assert!(
-            error.contains("must be lower"),
-            "unexpected ordering error: {error}"
-        );
-    }
-
-    let mut disabled = build(50, 50);
-    disabled.components[0].enabled = false;
-    assert!(
-        validate_switchyard_response_cache_order(&disabled).is_ok(),
-        "disabled Switchyard components do not participate in ordering"
-    );
 }
 
 #[tokio::test]

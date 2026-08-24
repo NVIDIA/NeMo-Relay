@@ -718,7 +718,7 @@ async def test_worker_activation_executes_and_releases_callbacks(worker_dynamic_
     loop = asyncio.get_running_loop()
     loop_thread = threading.get_ident()
 
-    async def tool_provider(args: Json) -> ToolExecutionResult[Json]:
+    async def tool_provider(args: Json) -> ToolExecutionResult[dict[str, Json]]:
         assert asyncio.get_running_loop() is loop
         assert threading.get_ident() == loop_thread
         await asyncio.sleep(0)
@@ -739,6 +739,7 @@ async def test_worker_activation_executes_and_releases_callbacks(worker_dynamic_
     try:
         result = await tools.execute("python-worker-fixture", {"input": True}, tool_provider)
         assert result.result["worker_plugin_tool_execution"] is True
+        assert isinstance(result.result["args"], dict)
         assert result.result["args"]["worker_plugin_tool_execution_request"] is True
 
         llm_result = await llm.execute(

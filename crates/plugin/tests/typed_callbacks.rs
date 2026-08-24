@@ -8,7 +8,7 @@
 // subset of their fields.
 #![allow(dead_code, unused_imports)]
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::ffi::c_void;
 use std::mem::{align_of, offset_of, size_of};
 use std::ptr::{self, NonNull};
@@ -21,10 +21,12 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use nemo_relay_plugin::{
-    AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DiagnosticLevel,
-    Event, EventCategory, EventSanitizeFields, Json, LlmCodecIdentity, LlmJsonAsyncStream,
-    LlmJsonStream, LlmNext, LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext,
-    NEMO_RELAY_NATIVE_ABI_VERSION, NativeExecutorConfig, NativePlugin,
+    AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DataSchema,
+    DiagnosticLevel, Event, EventCategory, EventSanitizeFields, Json, LlmCodecIdentity,
+    LlmJsonAsyncStream, LlmJsonStream, LlmNext, LlmRequest, LlmRequestInterceptOutcome, LlmStream,
+    LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement, MetricValueType,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE,
+    NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY, NativeExecutorConfig, NativePlugin,
     NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
     NemoRelayNativeAsyncLlmStreamOpenCb, NemoRelayNativeAsyncLlmStreamPullCb,
     NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
@@ -37,14 +39,29 @@ use nemo_relay_plugin::{
     NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
     NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
     NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
-    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
-    NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
-    NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
-    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb,
-    NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime, ScopeType,
-    ToolExecutionInterceptOutcome, ToolExecutionResult, ToolNext,
+    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginRuntime,
+    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
+    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
+    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
+    NemoRelayNativeWithScopeStackCb, NemoRelayStatus, PendingMarkSpec, PluginContext,
+    PluginRuntime, ScopeType, ToolExecutionInterceptOutcome, ToolExecutionResult, ToolNext,
 };
 use serde_json::{Map, json};
+
+#[test]
+fn runtime_registration_dtos_reexport_shared_types() {
+    let identity = nemo_relay_plugin::RuntimeRegistrationIdentity {
+        kind: nemo_relay_plugin::RuntimeRegistrationKind::Subscriber,
+        local_name: "subscriber".into(),
+        effective_name: "subscriber".into(),
+        owner: nemo_relay_plugin::RuntimeRegistrationOwner {
+            kind: nemo_relay_plugin::RuntimeRegistrationOwnerKind::GlobalApi,
+            plugin_kind: None,
+            component_ordinal: None,
+        },
+    };
+    let _: nemo_relay_types::api::registry::RuntimeRegistrationIdentity = identity;
+}
 
 #[test]
 fn async_abi_discriminants_reject_unknown_values() {
@@ -65,12 +82,13 @@ fn async_abi_discriminants_reject_unknown_values() {
         Kind::MarkSanitize,
         Kind::ScopeSanitizeStart,
         Kind::ScopeSanitizeEnd,
+        Kind::EventMetadataInjector,
     ];
     for (discriminant, kind) in middleware_kinds.into_iter().enumerate() {
         assert_eq!(kind as u32, discriminant as u32);
         assert_eq!(Kind::try_from(discriminant as u32), Ok(kind));
     }
-    assert!(NemoRelayNativeAsyncMiddlewareKind::try_from(14).is_err());
+    assert!(NemoRelayNativeAsyncMiddlewareKind::try_from(15).is_err());
     assert_eq!(
         NemoRelayNativeAsyncCallbackState::try_from(1),
         Ok(NemoRelayNativeAsyncCallbackState::Pending)
@@ -418,6 +436,10 @@ static ASYNC_STREAM_REGISTRATION: Mutex<Option<RegisteredAsyncStream>> = Mutex::
 static ASYNC_PUSH_BACKPRESSURE: AtomicUsize = AtomicUsize::new(0);
 static ASYNC_COMPLETION_RETAINS: AtomicUsize = AtomicUsize::new(0);
 static ASYNC_TOOL_NEXT_RESULT: AtomicBool = AtomicBool::new(false);
+static UNAVAILABLE_RUNTIME_CONTEXT_CALLS: AtomicUsize = AtomicUsize::new(0);
+static UNAVAILABLE_RUNTIME_RETAINS: AtomicUsize = AtomicUsize::new(0);
+static UNAVAILABLE_RUNTIME_RELEASES: AtomicUsize = AtomicUsize::new(0);
+static UNAVAILABLE_CONTEXT_GATE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn native_abi_struct_sizes_are_self_describing() {
@@ -440,8 +462,7 @@ fn native_abi_struct_sizes_are_self_describing() {
 
 #[cfg(target_pointer_width = "64")]
 fn assert_native_abi_platform_layout() {
-    assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 8);
-    assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 320);
+    assert_type_layout::<NemoRelayNativeHostApiV1>(8, 320);
     assert_eq!(
         host_api_offsets(),
         [
@@ -450,29 +471,36 @@ fn assert_native_abi_platform_layout() {
             296, 304, 312,
         ]
     );
-    assert_eq!(align_of::<NemoRelayNativeHostApiV3>(), 8);
-    assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 440);
+    assert_type_layout::<NemoRelayNativeHostApiV3>(8, 440);
     assert_eq!(
         host_api_v3_offsets(),
         [
             0, 320, 328, 336, 344, 352, 360, 368, 376, 384, 392, 400, 408, 416, 424, 432
         ]
     );
-    assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 8);
-    assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 512);
+    assert_type_layout::<NemoRelayNativeHostApiV4>(8, 584);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, v3), 0);
-    assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
-    assert_eq!(size_of::<NemoRelayNativePluginV1>(), 56);
+    assert_eq!(offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2), 512);
+    assert_eq!(
+        offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics),
+        520
+    );
+    assert_eq!(
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_context_register_conditional_middleware_guardrail
+        ),
+        576
+    );
+    assert_type_layout::<NemoRelayNativePluginV1>(8, 56);
     assert_eq!(plugin_offsets(), [0, 8, 16, 24, 32, 40, 48]);
-    assert_eq!(align_of::<NemoRelayNativeLlmStreamV1>(), 8);
-    assert_eq!(size_of::<NemoRelayNativeLlmStreamV1>(), 40);
+    assert_type_layout::<NemoRelayNativeLlmStreamV1>(8, 40);
     assert_eq!(stream_offsets(), [0, 8, 16, 24, 32]);
 }
 
 #[cfg(target_pointer_width = "32")]
 fn assert_native_abi_platform_layout() {
-    assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 4);
-    assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 160);
+    assert_type_layout::<NemoRelayNativeHostApiV1>(4, 160);
     assert_eq!(
         host_api_offsets(),
         [
@@ -480,23 +508,83 @@ fn assert_native_abi_platform_layout() {
             88, 92, 96, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 148, 152, 156,
         ]
     );
-    assert_eq!(align_of::<NemoRelayNativeHostApiV3>(), 4);
-    assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 216);
+    assert_type_layout::<NemoRelayNativeHostApiV3>(4, 216);
     assert_eq!(
         host_api_v3_offsets(),
         [
             0, 160, 164, 168, 172, 176, 180, 184, 188, 192, 196, 200, 204, 208, 212
         ]
     );
-    assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 4);
-    assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 252);
+    assert_type_layout::<NemoRelayNativeHostApiV4>(4, 288);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, v3), 0);
-    assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
-    assert_eq!(size_of::<NemoRelayNativePluginV1>(), 28);
+    assert_eq!(offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2), 252);
+    assert_eq!(
+        offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics),
+        256
+    );
+    assert_eq!(
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_context_register_conditional_middleware_guardrail
+        ),
+        284
+    );
+    assert_type_layout::<NemoRelayNativePluginV1>(4, 28);
     assert_eq!(plugin_offsets(), [0, 4, 8, 12, 16, 20, 24]);
-    assert_eq!(align_of::<NemoRelayNativeLlmStreamV1>(), 4);
-    assert_eq!(size_of::<NemoRelayNativeLlmStreamV1>(), 20);
+    assert_type_layout::<NemoRelayNativeLlmStreamV1>(4, 20);
     assert_eq!(stream_offsets(), [0, 4, 8, 12, 16]);
+}
+
+fn assert_type_layout<T>(expected_alignment: usize, expected_size: usize) {
+    assert_eq!(align_of::<T>(), expected_alignment);
+    assert_eq!(size_of::<T>(), expected_size);
+}
+
+#[test]
+fn native_abi_v4_extension_is_append_only() {
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 8);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 584);
+        assert_eq!(
+            host_api_v4_offsets(),
+            [0, 512, 520, 528, 536, 544, 552, 560, 568, 576]
+        );
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    {
+        assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 4);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 288);
+        assert_eq!(
+            host_api_v4_offsets(),
+            [0, 252, 256, 260, 264, 268, 272, 276, 280, 284]
+        );
+    }
+}
+
+fn host_api_v4_offsets() -> [usize; 10] {
+    [
+        offset_of!(NemoRelayNativeHostApiV4, v3),
+        offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2),
+        offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics),
+        offset_of!(NemoRelayNativeHostApiV4, plugin_context_runtime),
+        offset_of!(NemoRelayNativeHostApiV4, plugin_runtime_retain),
+        offset_of!(NemoRelayNativeHostApiV4, plugin_runtime_release),
+        offset_of!(NemoRelayNativeHostApiV4, plugin_runtime_list_registrations),
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_runtime_register_conditional_middleware_guardrail
+        ),
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_runtime_deregister_conditional_middleware_guardrail
+        ),
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_context_register_conditional_middleware_guardrail
+        ),
+    ]
 }
 
 fn host_api_v3_offsets() -> [usize; 16] {
@@ -1262,6 +1350,58 @@ unsafe extern "C" fn capture_emit_mark(
         !parent.is_null()
     ));
     NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_emit_mark_v2(
+    name: *const NemoRelayNativeString,
+    parent: *const NemoRelayNativeScopeHandle,
+    data_json: *const NemoRelayNativeString,
+    metadata_json: *const NemoRelayNativeString,
+    data_schema_json: *const NemoRelayNativeString,
+    severity: *const NemoRelayNativeString,
+    _timestamp_unix_micros: *const i64,
+) -> NemoRelayStatus {
+    let host = test_host();
+    let name = match required_host_string(&host, name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    let data = match optional_host_string(&host, data_json) {
+        Ok(data) => data,
+        Err(status) => return status,
+    };
+    let metadata = match optional_host_string(&host, metadata_json) {
+        Ok(metadata) => metadata,
+        Err(status) => return status,
+    };
+    let data_schema = match optional_host_string(&host, data_schema_json) {
+        Ok(data_schema) => data_schema,
+        Err(status) => return status,
+    };
+    let severity = match optional_host_string(&host, severity) {
+        Ok(severity) => severity,
+        Err(status) => return status,
+    };
+    RUNTIME_CALLS.lock().unwrap().push(format!(
+        "mark_v2:{name}:parent={}:data={data}:metadata={metadata}:data_schema={data_schema}:severity={severity}",
+        !parent.is_null()
+    ));
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_runtime_diagnostics(
+    out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let value =
+        c"{\"entries\":[{\"code\":\"otel.example\",\"message\":\"example failure\",\"count\":3}]}";
+    unsafe { test_string_new(value.as_ptr().cast(), value.to_bytes().len(), out) }
+}
+
+unsafe extern "C" fn capture_malformed_runtime_diagnostics(
+    out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let value = c"{not-json";
+    unsafe { test_string_new(value.as_ptr().cast(), value.to_bytes().len(), out) }
 }
 
 unsafe extern "C" fn capture_scope_stack_create(
@@ -2037,6 +2177,174 @@ unsafe extern "C" fn capture_async_release_pull_stream(
     }
 }
 
+unsafe extern "C" fn unavailable_plugin_context_runtime(
+    _ctx: *mut NemoRelayNativePluginContext,
+    out: *mut *const NemoRelayNativePluginRuntime,
+) -> NemoRelayStatus {
+    UNAVAILABLE_RUNTIME_CONTEXT_CALLS.fetch_add(1, Ordering::SeqCst);
+    if !out.is_null() {
+        unsafe { *out = ptr::null() };
+    }
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn unavailable_plugin_runtime_retain(
+    _runtime: *const NemoRelayNativePluginRuntime,
+) -> NemoRelayStatus {
+    UNAVAILABLE_RUNTIME_RETAINS.fetch_add(1, Ordering::SeqCst);
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn unavailable_plugin_runtime_release(
+    _runtime: *const NemoRelayNativePluginRuntime,
+) {
+    UNAVAILABLE_RUNTIME_RELEASES.fetch_add(1, Ordering::SeqCst);
+}
+
+unsafe extern "C" fn unavailable_plugin_runtime_list_registrations(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    _kinds_json: *const NemoRelayNativeString,
+    _out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn unavailable_plugin_runtime_register_gate(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    _name: *const NemoRelayNativeString,
+    _kinds_json: *const NemoRelayNativeString,
+    _registration_name: *const NemoRelayNativeString,
+    _reason: *const NemoRelayNativeString,
+    _out_handle: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn unavailable_plugin_runtime_deregister_gate(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    _handle: *const NemoRelayNativeString,
+    _out_removed: *mut bool,
+) -> NemoRelayStatus {
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn unavailable_plugin_context_register_gate(
+    _ctx: *mut NemoRelayNativePluginContext,
+    _name: *const NemoRelayNativeString,
+    _kinds_json: *const NemoRelayNativeString,
+    _registration_name: *const NemoRelayNativeString,
+    _reason: *const NemoRelayNativeString,
+) -> NemoRelayStatus {
+    UNAVAILABLE_CONTEXT_GATE_CALLS.fetch_add(1, Ordering::SeqCst);
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn capture_plugin_context_runtime(
+    _ctx: *mut NemoRelayNativePluginContext,
+    out: *mut *const NemoRelayNativePluginRuntime,
+) -> NemoRelayStatus {
+    if out.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out = NonNull::<NemoRelayNativePluginRuntime>::dangling().as_ptr() };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_plugin_runtime_retain(
+    _runtime: *const NemoRelayNativePluginRuntime,
+) -> NemoRelayStatus {
+    UNAVAILABLE_RUNTIME_RETAINS.fetch_add(1, Ordering::SeqCst);
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_plugin_runtime_release(_runtime: *const NemoRelayNativePluginRuntime) {
+    UNAVAILABLE_RUNTIME_RELEASES.fetch_add(1, Ordering::SeqCst);
+}
+
+unsafe extern "C" fn capture_plugin_runtime_list_registrations(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    kinds_json: *const NemoRelayNativeString,
+    out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    if out_json.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    let kinds = read_host_string(&test_host(), kinds_json).unwrap();
+    RUNTIME_CALLS.lock().unwrap().push(format!("list:{kinds}"));
+    unsafe {
+        *out_json = json_host_string(
+            &test_host(),
+            json!([{
+                "kind": "subscriber",
+                "local_name": "target",
+                "effective_name": "plugin::0::target",
+                "owner": {
+                    "kind": "plugin",
+                    "plugin_kind": "example",
+                    "component_ordinal": 0
+                }
+            }]),
+        )
+    };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_plugin_runtime_register_gate(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    name: *const NemoRelayNativeString,
+    kinds_json: *const NemoRelayNativeString,
+    registration_name: *const NemoRelayNativeString,
+    reason: *const NemoRelayNativeString,
+    out_handle: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    if out_handle.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    let host = test_host();
+    let values = [name, kinds_json, registration_name, reason]
+        .map(|value| read_host_string(&host, value).unwrap());
+    RUNTIME_CALLS.lock().unwrap().push(format!(
+        "register:{}:{}:{}:{}",
+        values[0], values[1], values[2], values[3]
+    ));
+    unsafe { *out_handle = host_string(&host, "gate-handle") };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_plugin_runtime_deregister_gate(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    handle: *const NemoRelayNativeString,
+    out_removed: *mut bool,
+) -> NemoRelayStatus {
+    if out_removed.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    let handle = read_host_string(&test_host(), handle).unwrap();
+    RUNTIME_CALLS
+        .lock()
+        .unwrap()
+        .push(format!("deregister:{handle}"));
+    unsafe { *out_removed = true };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_plugin_context_register_gate(
+    _ctx: *mut NemoRelayNativePluginContext,
+    name: *const NemoRelayNativeString,
+    kinds_json: *const NemoRelayNativeString,
+    registration_name: *const NemoRelayNativeString,
+    reason: *const NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let host = test_host();
+    let values = [name, kinds_json, registration_name, reason]
+        .map(|value| read_host_string(&host, value).unwrap());
+    RUNTIME_CALLS.lock().unwrap().push(format!(
+        "initial:{}:{}:{}:{}",
+        values[0], values[1], values[2], values[3]
+    ));
+    NemoRelayStatus::Ok
+}
+
 fn test_host_v4() -> NemoRelayNativeHostApiV4 {
     let mut v1 = test_host();
     v1.abi_version = 4;
@@ -2069,6 +2377,18 @@ fn test_host_v4() -> NemoRelayNativeHostApiV4 {
         async_llm_stream_release: capture_async_release_pull_stream,
         async_completion_retain: capture_async_completion_retain,
         async_stream_is_backpressured: capture_async_stream_backpressured,
+        emit_mark_v2: capture_emit_mark_v2,
+        get_runtime_diagnostics: capture_runtime_diagnostics,
+        plugin_context_runtime: unavailable_plugin_context_runtime,
+        plugin_runtime_retain: unavailable_plugin_runtime_retain,
+        plugin_runtime_release: unavailable_plugin_runtime_release,
+        plugin_runtime_list_registrations: unavailable_plugin_runtime_list_registrations,
+        plugin_runtime_register_conditional_middleware_guardrail:
+            unavailable_plugin_runtime_register_gate,
+        plugin_runtime_deregister_conditional_middleware_guardrail:
+            unavailable_plugin_runtime_deregister_gate,
+        plugin_context_register_conditional_middleware_guardrail:
+            unavailable_plugin_context_register_gate,
     }
 }
 
@@ -2130,6 +2450,10 @@ fn begin_test() -> MutexGuard<'static, ()> {
 
 fn reset_state() {
     ASYNC_COMPLETION_RETAINS.store(0, Ordering::SeqCst);
+    UNAVAILABLE_RUNTIME_CONTEXT_CALLS.store(0, Ordering::SeqCst);
+    UNAVAILABLE_RUNTIME_RETAINS.store(0, Ordering::SeqCst);
+    UNAVAILABLE_RUNTIME_RELEASES.store(0, Ordering::SeqCst);
+    UNAVAILABLE_CONTEXT_GATE_CALLS.store(0, Ordering::SeqCst);
     for registration in ASYNC_REGISTRATIONS.lock().unwrap().drain(..) {
         unsafe { registration.free() };
     }
@@ -2511,6 +2835,215 @@ fn plugin_runtime_scope_mark_and_stack_helpers_call_host() {
     assert_eq!(SCOPE_STACK_FREES.load(Ordering::SeqCst), 1);
     assert_eq!(SCOPE_STACK_BINDING_RESTORES.load(Ordering::SeqCst), 1);
     assert_eq!(SCOPE_STACK_BINDING_FREES.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn plugin_runtime_uses_v4_mark_options_extension() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let runtime = PluginRuntime::new(&host.v3.v1);
+    let data_schema = DataSchema::builder()
+        .name("example.mark")
+        .version("1")
+        .build();
+
+    runtime
+        .emit_mark_with_options(
+            "checkpoint",
+            Some(&json!({ "mark": true })),
+            Some(&json!({ "meta": true })),
+            Some(&data_schema),
+            Some(LogSeverity::Warn),
+        )
+        .unwrap();
+
+    assert!(RUNTIME_CALLS.lock().unwrap().iter().any(|call| {
+        call.starts_with("mark_v2:checkpoint:parent=false")
+            && call.contains(r#""mark":true"#)
+            && call.contains(r#""meta":true"#)
+            && call.contains(r#""name":"example.mark""#)
+            && call.contains("severity=warn")
+    }));
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn plugin_runtime_emits_metrics_and_requires_v4_diagnostics() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    PluginRuntime::new(&host.v3.v1)
+        .emit_metric(
+            "example.requests",
+            vec![MetricMeasurement {
+                name: "example.requests".into(),
+                kind: MetricKind::Counter,
+                value_type: MetricValueType::U64,
+                value: json!(1),
+                unit: Some("{request}".into()),
+                description: None,
+                attributes: Some(json!({"region": "test"})),
+                boundaries: None,
+            }],
+            Some(&json!({"source": "sdk-test"})),
+        )
+        .unwrap();
+
+    assert!(RUNTIME_CALLS.lock().unwrap().iter().any(|call| {
+        call.starts_with("mark_v2:example.requests:parent=false")
+            && call.contains(r#""name":"nemo.relay.metric_measurements""#)
+            && call.contains(r#""measurements":[{"attributes":{"region":"test"}"#)
+    }));
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
+
+    let legacy_host = test_host();
+    let error = PluginRuntime::new(&legacy_host)
+        .runtime_diagnostics()
+        .unwrap_err();
+    assert!(error.contains("runtime diagnostics require the native host ABI v4"));
+}
+
+#[test]
+fn plugin_runtime_reads_v4_runtime_diagnostics_extension() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let diagnostics = PluginRuntime::new(&host.v3.v1)
+        .runtime_diagnostics()
+        .unwrap();
+
+    assert_eq!(diagnostics.entries().len(), 1);
+    assert_eq!(diagnostics.entries()[0].code, "otel.example");
+    assert_eq!(diagnostics.entries()[0].count, 3);
+    assert_eq!(
+        diagnostics
+            .get("otel.example")
+            .map(|diagnostic| diagnostic.message.as_str()),
+        Some("example failure")
+    );
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn plugin_runtime_rejects_malformed_runtime_diagnostics_json() {
+    let _guard = begin_test();
+    let mut host = test_host_v4();
+    host.get_runtime_diagnostics = capture_malformed_runtime_diagnostics;
+
+    let error = PluginRuntime::new(&host.v3.v1)
+        .runtime_diagnostics()
+        .unwrap_err();
+    assert!(
+        error.contains("invalid runtime diagnostics result"),
+        "{error}"
+    );
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn plugin_context_handles_an_unavailable_runtime_capability() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let mut context = test_context(&host.v3.v1);
+    let runtime = context.runtime();
+    let kinds = BTreeSet::from([nemo_relay_plugin::RuntimeRegistrationKind::Subscriber]);
+
+    assert_eq!(UNAVAILABLE_RUNTIME_CONTEXT_CALLS.load(Ordering::SeqCst), 1);
+    assert!(
+        expect_string_err(runtime.list_runtime_registrations(None))
+            .contains("host does not support activation-owned runtime gate control")
+    );
+    assert!(
+        expect_string_err(runtime.register_conditional_middleware_guardrail(
+            "timer-gate",
+            &kinds,
+            "target-subscriber",
+            "timer active",
+        ))
+        .contains("host does not support activation-owned runtime gate control")
+    );
+
+    let cloned = runtime.clone();
+    drop(cloned);
+    drop(runtime);
+    assert_eq!(UNAVAILABLE_RUNTIME_RETAINS.load(Ordering::SeqCst), 0);
+    assert_eq!(UNAVAILABLE_RUNTIME_RELEASES.load(Ordering::SeqCst), 0);
+
+    let error = context
+        .register_conditional_middleware_guardrail(
+            "startup-gate",
+            &kinds,
+            "target-subscriber",
+            "disabled",
+        )
+        .unwrap_err();
+    assert!(error.contains("NotFound"), "{error}");
+    assert_eq!(UNAVAILABLE_CONTEXT_GATE_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn plugin_runtime_registration_controls_cover_success_and_lifecycle() {
+    let _guard = begin_test();
+    let mut host = test_host_v4();
+    host.plugin_context_runtime = capture_plugin_context_runtime;
+    host.plugin_runtime_retain = capture_plugin_runtime_retain;
+    host.plugin_runtime_release = capture_plugin_runtime_release;
+    host.plugin_runtime_list_registrations = capture_plugin_runtime_list_registrations;
+    host.plugin_runtime_register_conditional_middleware_guardrail =
+        capture_plugin_runtime_register_gate;
+    host.plugin_runtime_deregister_conditional_middleware_guardrail =
+        capture_plugin_runtime_deregister_gate;
+    host.plugin_context_register_conditional_middleware_guardrail =
+        capture_plugin_context_register_gate;
+    let mut context = test_context(&host.v3.v1);
+    let runtime = context.runtime();
+    let kinds = BTreeSet::from([nemo_relay_plugin::RuntimeRegistrationKind::Subscriber]);
+
+    let registrations = runtime
+        .list_runtime_registrations(Some(&kinds))
+        .expect("runtime registrations should decode");
+    assert_eq!(registrations[0].effective_name, "plugin::0::target");
+    let handle = runtime
+        .register_conditional_middleware_guardrail(
+            "timer-gate",
+            &kinds,
+            "plugin::0::target",
+            "timer active",
+        )
+        .expect("dynamic gate should register");
+    assert!(
+        runtime
+            .deregister_conditional_middleware_guardrail(&handle)
+            .unwrap()
+    );
+    context
+        .register_conditional_middleware_guardrail(
+            "startup-gate",
+            &kinds,
+            "plugin::0::target",
+            "startup disabled",
+        )
+        .expect("initial gate should register");
+
+    let clone = runtime.clone();
+    drop(clone);
+    drop(runtime);
+    assert_eq!(UNAVAILABLE_RUNTIME_RETAINS.load(Ordering::SeqCst), 1);
+    assert_eq!(UNAVAILABLE_RUNTIME_RELEASES.load(Ordering::SeqCst), 2);
+    let calls = RUNTIME_CALLS.lock().unwrap();
+    assert!(calls.iter().any(|call| call.starts_with("list:")));
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.starts_with("register:timer-gate:"))
+    );
+    assert!(calls.iter().any(|call| call == "deregister:gate-handle"));
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.starts_with("initial:startup-gate:"))
+    );
+    drop(calls);
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
 }
 
 fn assert_scope_runtime_calls(calls: &[String]) {
@@ -3100,6 +3633,13 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         },
     )
     .unwrap();
+    ctx.register_event_metadata_injector("event-metadata-async", 15, |event| async move {
+        Ok(std::collections::BTreeMap::from([(
+            "plugin.event_name".into(),
+            json!(event.name()),
+        )]))
+    })
+    .unwrap();
 
     let metadata = ASYNC_REGISTRATIONS
         .lock()
@@ -3114,7 +3654,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
             )
         })
         .collect::<Vec<_>>();
-    assert_eq!(metadata.len(), 13);
+    assert_eq!(metadata.len(), 14);
     assert_eq!(metadata[0].1, "mark-async");
     assert_eq!(metadata[0].2, 1);
     assert_eq!(
@@ -3146,6 +3686,18 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         "timestamp": "2026-01-01T00:00:00Z",
         "name": "checkpoint"
     });
+    let metadata_registration =
+        take_async_registration(NemoRelayNativeAsyncMiddlewareKind::EventMetadataInjector);
+    let result = invoke_async_registration(
+        &host,
+        &metadata_registration,
+        json!({ "event": event }),
+        None,
+    )
+    .unwrap();
+    assert_eq!(result, json!({ "plugin.event_name": "checkpoint" }));
+    unsafe { metadata_registration.free() };
+
     for kind in [
         NemoRelayNativeAsyncMiddlewareKind::MarkSanitize,
         NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeStart,
@@ -5027,6 +5579,30 @@ fn exported_entry_symbol_validates_args_before_constructor() {
         NemoRelayStatus::InvalidArg
     );
     assert_eq!(CONSTRUCTOR_CALLS.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn exported_entry_symbol_accepts_supported_prior_host_versions() {
+    let _guard = begin_test();
+    CONSTRUCTOR_CALLS.store(0, Ordering::SeqCst);
+
+    for abi_version in [
+        NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
+        NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE,
+        NEMO_RELAY_NATIVE_ABI_VERSION,
+    ] {
+        let mut host = test_host();
+        host.abi_version = abi_version;
+        let mut plugin = NemoRelayNativePluginV1::default();
+
+        assert_eq!(
+            unsafe { constructor_counting_entry(&host, &mut plugin) },
+            NemoRelayStatus::Ok
+        );
+        unsafe { drop_exported_plugin(&host, plugin) };
+    }
+
+    assert_eq!(CONSTRUCTOR_CALLS.load(Ordering::SeqCst), 3);
 }
 
 #[test]

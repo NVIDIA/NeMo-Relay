@@ -9,7 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+const observabilityDevProject = "observability-dev"
 
 const (
 	ClearPluginConfigurationFailed = "ClearPluginConfiguration failed"
@@ -28,8 +31,8 @@ const (
 
 func TestObservabilityConfigHelpers(t *testing.T) {
 	config := NewObservabilityConfig()
-	if config.Version != 3 {
-		t.Fatalf("expected version 3, got %d", config.Version)
+	if config.Version != 4 {
+		t.Fatalf("expected version 4, got %d", config.Version)
 	}
 	if config.EnableFullPayloads {
 		t.Fatal("full payloads should be disabled by default")
@@ -74,12 +77,23 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		NewObservabilityOpenTelemetryEndpointConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces"),
 	}
 	otel.Endpoints[0].HeaderEnv["authorization"] = "OTEL_AUTHORIZATION"
+	otel.Endpoints[0].PromoteMetadataPrefixes = []string{"nv."}
 	maxQueueSize := uint64(4096)
 	maxExportBatchSize := uint64(256)
 	scheduledDelayMillis := uint64(750)
 	otel.Endpoints[0].MaxQueueSize = &maxQueueSize
 	otel.Endpoints[0].MaxExportBatchSize = &maxExportBatchSize
 	otel.Endpoints[0].ScheduledDelayMillis = &scheduledDelayMillis
+	logs := NewObservabilityOpenTelemetryLogConfig()
+	logs.Enabled = true
+	metrics := NewObservabilityOpenTelemetryMetricConfig()
+	metrics.Enabled = true
+	metricEndpoint := NewObservabilityOpenTelemetrySignalEndpointConfig("https://collector.example/custom/metrics")
+	metricEndpoint.Headers["x-nv-project"] = observabilityDevProject
+	metricEndpoint.ResourceAttributes["nv.project"] = observabilityDevProject
+	metrics.Endpoints = ObservabilityOpenTelemetrySignalEndpoints(metricEndpoint)
+	otel.Logs = &logs
+	otel.Metrics = &metrics
 
 	config.Atof = &atof
 	config.Atif = &atif
@@ -151,10 +165,72 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 	if otelEndpoints[0].(map[string]any)["header_env"].(map[string]any)["authorization"] != "OTEL_AUTHORIZATION" {
 		t.Fatalf("expected OpenTelemetry header_env in serialized config: %#v", wrapped.Config)
 	}
+	promotePrefixes := otelEndpoints[0].(map[string]any)["promote_metadata_prefixes"].([]any)
+	if len(promotePrefixes) != 1 || promotePrefixes[0] != "nv." {
+		t.Fatalf("expected OpenTelemetry metadata promotion prefixes in serialized config: %#v", wrapped.Config)
+	}
 	if otelEndpoints[0].(map[string]any)["max_queue_size"] != float64(4096) ||
 		otelEndpoints[0].(map[string]any)["max_export_batch_size"] != float64(256) ||
 		otelEndpoints[0].(map[string]any)["scheduled_delay_millis"] != float64(750) {
 		t.Fatalf("expected OpenTelemetry batch settings in serialized config: %#v", wrapped.Config)
+	}
+	otelConfig := wrapped.Config["opentelemetry"].(map[string]any)
+	logs := otelConfig["logs"].(map[string]any)
+	if logs["minimum_severity"] != "info" || logs["max_queue_size"] != float64(2048) {
+		t.Fatalf("expected OpenTelemetry log defaults in serialized config: %#v", logs)
+	}
+	if _, explicit := logs["endpoints"]; explicit {
+		t.Fatalf("derived log endpoints should remain omitted: %#v", logs)
+	}
+	metrics := otelConfig["metrics"].(map[string]any)
+	metricEndpoints := metrics["endpoints"].([]any)
+	metricEndpoint := metricEndpoints[0].(map[string]any)
+	if metrics["temporality"] != "cumulative" || metrics["cardinality_limit"] != float64(2000) ||
+		metricEndpoint["endpoint"] != "https://collector.example/custom/metrics" ||
+		metricEndpoint["headers"].(map[string]any)["x-nv-project"] != observabilityDevProject ||
+		metricEndpoint["resource_attributes"].(map[string]any)["nv.project"] != observabilityDevProject {
+		t.Fatalf("expected OpenTelemetry metric settings in serialized config: %#v", metrics)
+	}
+}
+
+func TestObservabilitySignalEndpointOmittedVersusExplicitEmpty(t *testing.T) {
+	logs := NewObservabilityOpenTelemetryLogConfig()
+	logs.Enabled = true
+	metrics := NewObservabilityOpenTelemetryMetricConfig()
+	metrics.Enabled = true
+	cases := []struct {
+		name     string
+		omitted  any
+		explicit any
+	}{
+		{"logs", logs, func() any {
+			config := logs
+			config.Endpoints = ObservabilityOpenTelemetrySignalEndpoints()
+			return config
+		}()},
+		{"metrics", metrics, func() any {
+			config := metrics
+			config.Endpoints = ObservabilityOpenTelemetrySignalEndpoints()
+			return config
+		}()},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			omitted, err := json.Marshal(testCase.omitted)
+			if err != nil {
+				t.Fatalf("marshal omitted endpoints: %v", err)
+			}
+			if strings.Contains(string(omitted), `"endpoints"`) {
+				t.Fatalf("omitted endpoint list should derive from traces: %s", omitted)
+			}
+			explicitEmpty, err := json.Marshal(testCase.explicit)
+			if err != nil {
+				t.Fatalf("marshal explicit empty endpoints: %v", err)
+			}
+			if !strings.Contains(string(explicitEmpty), `"endpoints":[]`) {
+				t.Fatalf("explicit empty endpoint list must be preserved: %s", explicitEmpty)
+			}
+		})
 	}
 }
 
@@ -276,6 +352,82 @@ func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 
 	AssertAtofRecordCount(t, filepath.Join(dir, eventsJSONLFilename), 3)
 	AssertAtifAgentMetadata(t, TrajectoryFilePath(dir, handle))
+}
+
+func TestObservabilityPluginActivatesDerivedLogsAndExplicitMetrics(t *testing.T) {
+	if err := ClearPluginConfiguration(); err != nil {
+		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
+	}
+	t.Cleanup(func() {
+		requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
+	})
+
+	derivedRequests := make(chan otelRequest, 4)
+	derivedServer := NewOtelTestServer(t, derivedRequests)
+	defer derivedServer.Close()
+	metricRequests := make(chan otelRequest, 2)
+	metricServer := NewOtelTestServer(t, metricRequests)
+	defer metricServer.Close()
+
+	config := NewObservabilityConfig()
+	openTelemetry := NewObservabilityOpenTelemetryConfig()
+	openTelemetry.Enabled = true
+	openTelemetry.Endpoints = []ObservabilityOpenTelemetryEndpointConfig{
+		NewObservabilityOpenTelemetryEndpointConfig(OpenTelemetryTypeFull, derivedServer.URL+otelTestPath),
+	}
+	logs := NewObservabilityOpenTelemetryLogConfig()
+	logs.Enabled = true
+	openTelemetry.Logs = &logs
+	metrics := NewObservabilityOpenTelemetryMetricConfig()
+	metrics.Enabled = true
+	metrics.Endpoints = ObservabilityOpenTelemetrySignalEndpoints(
+		NewObservabilityOpenTelemetrySignalEndpointConfig(metricServer.URL),
+	)
+	openTelemetry.Metrics = &metrics
+	config.OpenTelemetry = &openTelemetry
+
+	if _, err := InitializePlugins(PluginConfig{
+		Version:    1,
+		Components: []PluginComponentSpec{ObservabilityComponent(config)},
+	}); err != nil {
+		t.Fatalf(fatalErrorFormat, InitializePluginsFailed, err)
+	}
+
+	runWithTestScopeStack(t, func() {
+		requireNoError(t, EmitEvent("go_plugin_exported_log", WithEventSeverity(LogSeverityError)), "EmitEvent failed")
+		requireNoError(t, EmitMetric("go_plugin_exported_metric", []MetricMeasurement{{
+			Name:      "example.go.plugin.requests",
+			Kind:      MetricKindCounter,
+			ValueType: MetricValueTypeU64,
+			Value:     uint64(1),
+		}}), "EmitMetric failed")
+	})
+	if err := ClearPluginConfiguration(); err != nil {
+		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
+	}
+
+	requireOtelRequest(t, derivedRequests, "/v1/logs", "go_plugin_exported_log")
+	requireOtelRequest(t, metricRequests, "/v1/metrics", "example.go.plugin.requests")
+}
+
+func requireOtelRequest(t *testing.T, requests <-chan otelRequest, path, bodyFragment string) {
+	t.Helper()
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	for {
+		select {
+		case request := <-requests:
+			if request.Path != path {
+				continue
+			}
+			if !strings.Contains(string(request.Body), bodyFragment) {
+				t.Fatalf("OTLP %s export did not contain %q", path, bodyFragment)
+			}
+			return
+		case <-timeout.C:
+			t.Fatalf("timed out waiting for OTLP %s export", path)
+		}
+	}
 }
 
 func NewAtofAndAtifTestConfig(dir string) ObservabilityConfig {

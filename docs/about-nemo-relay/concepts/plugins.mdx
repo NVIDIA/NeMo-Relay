@@ -20,11 +20,8 @@ Plugins package reusable runtime components.
 
 ## Plugin Configuration Model
 
-A plugin configuration document has three main areas:
-
-- `version`
-- `components`
-- `policy`
+A plugin configuration document combines a schema `version`, an ordered set of
+`components`, and a `policy` for unsupported configuration.
 
 ### Version
 
@@ -49,7 +46,7 @@ Two similarly named files serve different purposes:
 
 Refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
 for runtime configuration and
-[Discoverable Plugins](/build-plugins/dynamic-plugins/about) for the package
+[Package Discoverable Plugins](/build-plugins/package-discoverable-plugins) for the package
 manifest.
 
 ## Component Lifecycle
@@ -92,6 +89,9 @@ Runtime behavior after activation still belongs to the installed component. For
 example, an exporter can report delivery failures without changing tool or LLM
 execution semantics. Keep those component-specific failure rules in the
 component guide rather than redefining them in the plugin concept.
+
+The following diagram shows how a plugin configuration flows through validation
+and the component lifecycle into installed runtime behavior:
 
 <MermaidStyles />
 
@@ -147,11 +147,12 @@ It connects plugin configuration to the active runtime.
 
 ## What Plugins Can Register
 
-Depending on the component, a plugin can register:
-
-- Middleware
-- Subscribers
-- Related runtime helpers
+Depending on the component, a plugin can register middleware, subscribers, and
+runtime helpers. These are the same execution surfaces available elsewhere in
+Relay, but the component context gives them shared configuration and ownership.
+This includes activation-owned
+[conditional middleware guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
+that temporarily control the eligibility of an existing global registration.
 
 This is what makes plugins a packaging mechanism rather than a separate runtime
 model. Plugins do not replace scopes, middleware, or subscribers. They install
@@ -176,7 +177,7 @@ ordering, and events still own the canonical runtime record.
 All plugin components use the same validation and activation model. They differ
 in how their component kind becomes available to the host:
 
-| Delivery model | How it becomes available | Use when |
+| Delivery Model | How It Becomes Available | Use When |
 | --- | --- | --- |
 | Built-in | The Relay host registers a linked first-party component automatically. | The component ships as part of that host. |
 | Host-registered | An embedding application links a component crate and registers its kind before validation. | An embedding application decides which component crates to link. |
@@ -230,11 +231,9 @@ built-in integration is deprecated and scheduled for removal in NeMo Relay
 0.9. There is no replacement in NeMo Relay 0.8; any replacement will target 0.9
 or later. Do not use the built-in component for new deployments.
 
-The current shipped user-facing paths are:
-
-- The remote backend for Guardrails-service integration
-- The Python-backed local backend for `nemoguardrails` integration through a
-  subprocess worker
+The current user-facing paths are the remote backend for Guardrails-service
+integration and the Python-backed local backend that runs `nemoguardrails`
+through a subprocess worker.
 
 Detailed Guardrails plugin configuration belongs in
 [NeMo Guardrails Configuration](/configure-plugins/nemo-guardrails/configuration).
@@ -253,18 +252,9 @@ Configuration](/configure-plugins/pii-redaction/configuration).
 ### Model Pricing
 
 The core crate ships a built-in `pricing` component. It loads catalog sources
-that response codecs can use to annotate managed LLM responses with cost
-estimates. Configure catalog sources through [Model Pricing](/configure-plugins/model-pricing).
-
-### Switchyard (Experimental)
-
-The experimental `switchyard` component asks a separately running Switchyard
-Decision API to select a configured model backend. It is excluded from default
-CLI builds and is registered only when the CLI is built with the optional
-`switchyard` feature. Direct Rust, Python, and Node.js hosts do not register it
-automatically. Refer to
-[Switchyard (Experimental)](/configure-plugins/switchyard/about) for the pinned
-compatibility and deployment requirements.
+that response codecs can use to annotate managed or manually observed LLM
+responses with cost estimates. Configure catalog sources through
+[Model Pricing](/configure-plugins/model-pricing).
 
 For `plugins.toml` discovery, precedence, merge, and gateway editing rules,
 refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
@@ -283,7 +273,7 @@ manifest, optional static schema, host policy, compatibility, and trust
 evidence before enabling or running a dynamic plugin. During startup, Relay
 loads the enabled adapter and then validates the synthesized component. Refer
 to [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins)
-for the operator workflow and [Discoverable Plugins](/build-plugins/dynamic-plugins/about)
+for the operator workflow and [Package Discoverable Plugins](/build-plugins/package-discoverable-plugins)
 for the authoring workflow.
 
 The operator lifecycle is explicit:
@@ -306,11 +296,15 @@ host remains part of that host's owned plugin cleanup.
 
 ## Practical Guidance
 
-Use these practices when applying the concept in application or integration code.
-
-- Use plugins when behavior should be reusable across applications or
-  integrations.
-- Validate plugin config before initialization.
-- Treat plugins as the configuration-driven installation path for runtime
-  behavior.
-- Keep detailed field-by-field config questions in the relevant guide for that plugin component.
+- Reach for a plugin when runtime behavior is reusable across applications or
+  integrations, so hosts install it from configuration instead of registering
+  the same middleware and subscribers by hand.
+- Validate configuration before initialization, and inspect the activation
+  report to confirm what activated.
+- Keep field-by-field settings in the guide for the component that owns them
+  rather than restating them here.
+- Clear plugin configuration during graceful shutdown and test teardown so
+  plugin-owned registrations, managed workers, and native activations are
+  released.
+- Refer to the [plugin authoring overview](/build-plugins/about) to choose whether
+  a language-binding, native, or worker plugin is the right delivery model.

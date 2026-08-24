@@ -8,6 +8,7 @@
 //! so the runtime can compose tool and LLM middleware consistently across
 //! bindings.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -17,12 +18,21 @@ use tokio_stream::Stream;
 
 use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use crate::api::registry::RuntimeRegistrationKind;
 use crate::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::Result;
 use crate::json::Json;
 pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
+
+/// Decide whether matching global runtime registrations remain eligible.
+///
+/// Relay invokes this callback with the gate's configured registration kinds
+/// and the target registration's effective name. Returning `None` enables the
+/// target. Returning a reason string disables it for the current snapshot.
+pub type ConditionalMiddlewareGuardrailFn =
+    Arc<dyn Fn(&BTreeSet<RuntimeRegistrationKind>, &str) -> Option<String> + Send + Sync>;
 
 /// Sanitize mutable observability fields on a fully constructed event.
 ///
@@ -33,6 +43,17 @@ pub type EventSanitizeFn = Arc<
             Arc<Event>,
             EventSanitizeFields,
         ) -> Pin<Box<dyn Future<Output = Result<EventSanitizeFields>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Add flat metadata attributes to a fully constructed event.
+///
+/// The callback receives immutable event context and returns dotted metadata
+/// keys to insert. Relay validates the returned keys and values before merging
+/// them, and never overwrites metadata that is already present.
+pub type EventMetadataInjectorFn = Arc<
+    dyn Fn(Arc<Event>) -> Pin<Box<dyn Future<Output = Result<BTreeMap<String, Json>>> + Send>>
         + Send
         + Sync,
 >;

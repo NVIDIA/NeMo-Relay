@@ -15,7 +15,7 @@ use nemo_relay::api::runtime::{ScopeStackHandle, ThreadScopeStackBinding};
 use nemo_relay::plugin::PluginRegistrationContext;
 use serde_json::Value as Json;
 
-use nemo_relay::api::event::Event;
+use nemo_relay::api::event::{Event, LogSeverity, MetricKind, MetricValueType};
 #[cfg(test)]
 use nemo_relay::api::llm::LlmAttributes;
 use nemo_relay::api::llm::{LlmHandle, LlmRequest};
@@ -63,6 +63,14 @@ pub struct FfiAtifExporter(pub nemo_relay::observability::atif::AtifExporter);
 pub struct FfiAtofExporter(pub nemo_relay::observability::atof::AtofExporter);
 /// Opaque OpenTelemetry subscriber handle.
 pub struct FfiOpenTelemetrySubscriber(pub nemo_relay::observability::otel::OpenTelemetrySubscriber);
+/// Opaque OpenTelemetry log subscriber handle.
+pub struct FfiOpenTelemetryLogSubscriber(
+    pub nemo_relay::observability::otel_logs::OpenTelemetryLogSubscriber,
+);
+/// Opaque OpenTelemetry metric subscriber handle.
+pub struct FfiOpenTelemetryMetricSubscriber(
+    pub nemo_relay::observability::otel_metrics::OpenTelemetryMetricSubscriber,
+);
 /// Opaque owned adaptive runtime handle.
 pub struct FfiAdaptiveRuntime(pub std::sync::Mutex<Option<AdaptiveRuntime>>);
 /// Opaque owned dynamic plugin host activation.
@@ -124,6 +132,128 @@ pub enum NemoRelayScopeType {
     Custom = 9,
     /// Unknown or unspecified scope type.
     Unknown = 10,
+}
+
+/// Integer-backed OpenTelemetry instrument kind for one typed metric measurement.
+///
+/// This is intentionally not a Rust enum because foreign callers can supply any
+/// `int32_t` value. Exported functions validate the value before converting it
+/// to the core metric kind. Zero is reserved as unspecified so a
+/// zero-initialized measurement cannot select a metric kind accidentally.
+pub type NemoRelayMetricKind = i32;
+
+/// Unspecified metric kind. This value is invalid for a measurement.
+pub const NEMO_RELAY_METRIC_KIND_UNSPECIFIED: NemoRelayMetricKind = 0;
+/// Monotonic additive counter.
+pub const NEMO_RELAY_METRIC_KIND_COUNTER: NemoRelayMetricKind = 1;
+/// Additive counter that may increase or decrease.
+pub const NEMO_RELAY_METRIC_KIND_UP_DOWN_COUNTER: NemoRelayMetricKind = 2;
+/// Current sampled value.
+pub const NEMO_RELAY_METRIC_KIND_GAUGE: NemoRelayMetricKind = 3;
+/// Distribution sample.
+pub const NEMO_RELAY_METRIC_KIND_HISTOGRAM: NemoRelayMetricKind = 4;
+
+/// Integer-backed typed severity for a mark exported as an OpenTelemetry log.
+///
+/// This is intentionally not a Rust enum because foreign callers can supply any
+/// `int32_t` value. Exported functions validate the value before converting it
+/// to the core log severity.
+pub type NemoRelayLogSeverity = i32;
+
+/// Fine-grained tracing information.
+pub const NEMO_RELAY_LOG_SEVERITY_TRACE: NemoRelayLogSeverity = 0;
+/// Diagnostic information.
+pub const NEMO_RELAY_LOG_SEVERITY_DEBUG: NemoRelayLogSeverity = 1;
+/// Normal informational event.
+pub const NEMO_RELAY_LOG_SEVERITY_INFO: NemoRelayLogSeverity = 2;
+/// Warning condition.
+pub const NEMO_RELAY_LOG_SEVERITY_WARN: NemoRelayLogSeverity = 3;
+/// Error condition.
+pub const NEMO_RELAY_LOG_SEVERITY_ERROR: NemoRelayLogSeverity = 4;
+
+pub(crate) fn log_severity_from_ffi(value: NemoRelayLogSeverity) -> Option<LogSeverity> {
+    match value {
+        NEMO_RELAY_LOG_SEVERITY_TRACE => Some(LogSeverity::Trace),
+        NEMO_RELAY_LOG_SEVERITY_DEBUG => Some(LogSeverity::Debug),
+        NEMO_RELAY_LOG_SEVERITY_INFO => Some(LogSeverity::Info),
+        NEMO_RELAY_LOG_SEVERITY_WARN => Some(LogSeverity::Warn),
+        NEMO_RELAY_LOG_SEVERITY_ERROR => Some(LogSeverity::Error),
+        _ => None,
+    }
+}
+
+pub(crate) fn metric_kind_from_ffi(value: NemoRelayMetricKind) -> Option<MetricKind> {
+    match value {
+        NEMO_RELAY_METRIC_KIND_COUNTER => Some(MetricKind::Counter),
+        NEMO_RELAY_METRIC_KIND_UP_DOWN_COUNTER => Some(MetricKind::UpDownCounter),
+        NEMO_RELAY_METRIC_KIND_GAUGE => Some(MetricKind::Gauge),
+        NEMO_RELAY_METRIC_KIND_HISTOGRAM => Some(MetricKind::Histogram),
+        _ => None,
+    }
+}
+
+/// Integer-backed numeric representation selected from a typed metric
+/// measurement's value fields.
+///
+/// This is intentionally not a Rust enum because foreign callers can supply any
+/// `int32_t` value. Exported functions validate the value before converting it
+/// to the core metric value type. Zero is reserved as unspecified so a
+/// zero-initialized measurement cannot select a value field accidentally.
+pub type NemoRelayMetricValueType = i32;
+
+/// Unspecified metric value type. This value is invalid for a measurement.
+pub const NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED: NemoRelayMetricValueType = 0;
+/// Read `u64_value`.
+pub const NEMO_RELAY_METRIC_VALUE_TYPE_U64: NemoRelayMetricValueType = 1;
+/// Read `i64_value`.
+pub const NEMO_RELAY_METRIC_VALUE_TYPE_I64: NemoRelayMetricValueType = 2;
+/// Read `f64_value`.
+pub const NEMO_RELAY_METRIC_VALUE_TYPE_F64: NemoRelayMetricValueType = 3;
+
+pub(crate) fn metric_value_type_from_ffi(
+    value: NemoRelayMetricValueType,
+) -> Option<MetricValueType> {
+    match value {
+        NEMO_RELAY_METRIC_VALUE_TYPE_U64 => Some(MetricValueType::U64),
+        NEMO_RELAY_METRIC_VALUE_TYPE_I64 => Some(MetricValueType::I64),
+        NEMO_RELAY_METRIC_VALUE_TYPE_F64 => Some(MetricValueType::F64),
+        _ => None,
+    }
+}
+
+/// C representation of one typed metric SDK recording operation.
+///
+/// `value_type` selects exactly one of `u64_value`, `i64_value`, or
+/// `f64_value`. `unit`, `description`, and `attributes_json` are optional.
+/// A null `boundaries` pointer with `boundaries_len == 0` leaves histogram
+/// boundaries unspecified. A non-null pointer with zero length requests an
+/// explicit empty boundary list. For nonzero lengths, `boundaries` must point
+/// to that many doubles.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NemoRelayMetricMeasurement {
+    /// Required null-terminated OpenTelemetry instrument name.
+    pub name: *const c_char,
+    /// Required instrument kind. `NEMO_RELAY_METRIC_KIND_UNSPECIFIED` is invalid.
+    pub kind: NemoRelayMetricKind,
+    /// Required numeric value representation. `NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED` is invalid.
+    pub value_type: NemoRelayMetricValueType,
+    /// Unsigned value used when `value_type` is `U64`.
+    pub u64_value: u64,
+    /// Signed value used when `value_type` is `I64`.
+    pub i64_value: i64,
+    /// Double value used when `value_type` is `F64`.
+    pub f64_value: f64,
+    /// Optional null-terminated ASCII unit.
+    pub unit: *const c_char,
+    /// Optional null-terminated description.
+    pub description: *const c_char,
+    /// Optional null-terminated JSON attributes object.
+    pub attributes_json: *const c_char,
+    /// Optional histogram boundary array.
+    pub boundaries: *const f64,
+    /// Number of entries in `boundaries`.
+    pub boundaries_len: usize,
 }
 
 impl From<NemoRelayScopeType> for ScopeType {
@@ -261,6 +391,34 @@ pub unsafe extern "C" fn nemo_relay_atof_exporter_free(ptr: *mut FfiAtofExporter
 /// `ptr` must be a valid pointer returned by `nemo_relay_otel_subscriber_create`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_otel_subscriber_free(ptr: *mut FfiOpenTelemetrySubscriber) {
+    if !ptr.is_null() {
+        drop(unsafe { Box::from_raw(ptr) });
+    }
+}
+
+/// Free an OpenTelemetry log subscriber handle.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by
+/// `nemo_relay_otel_log_subscriber_create`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_free(
+    ptr: *mut FfiOpenTelemetryLogSubscriber,
+) {
+    if !ptr.is_null() {
+        drop(unsafe { Box::from_raw(ptr) });
+    }
+}
+
+/// Free an OpenTelemetry metric subscriber handle.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by
+/// `nemo_relay_otel_metric_subscriber_create`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_free(
+    ptr: *mut FfiOpenTelemetryMetricSubscriber,
+) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }

@@ -34,12 +34,13 @@ continuations. This is a source-breaking change for typed native Rust plugins;
 rebuild them with `nemo-relay-plugin` 0.8.0 and declare
 `compat.relay = ">=0.8.0,<1.0"`.
 
-Native ABI v4 adds completion-scoped codec operations and pull-based LLM
-stream continuations. Relay also negotiates the frozen ABI v3 and v2 table
-layouts for Relay 0.8-built plugins that target them, and native subscribers
-remain synchronous. Follow the [native Rust migration
+Native ABI v4 is current for Relay 0.8. It includes typed asynchronous
+middleware operations such as completion-scoped codecs and pull-based LLM
+stream continuations, then appends `emit_mark_v2` for typed data-schema and log
+severity options. Relay still accepts existing raw ABI v2 and v3 binaries, and
+native subscribers remain synchronous. Follow the [native Rust migration
 guide](/reference/migration-guides#upgrade-native-rust-plugins-to-nemo-relay-08)
-for callback and executor changes.
+for callback, executor, and mark-option changes.
 
 Managed and manual tool execution now uses the canonical
 `ToolExecutionResult` shape across Rust, Python, Node.js, Go, the public C
@@ -53,13 +54,26 @@ The following updates expand native Rust plugin capabilities:
 
 - Typed native Rust middleware can await Tokio timers, I/O, codecs, unary
   continuations, and downstream LLM streams on an SDK-owned executor.
-- Native ABI v4 provides completion-scoped codec operations and pull-based LLM
-  stream continuations.
+- Native ABI v4 provides completion-scoped codec operations, pull-based LLM
+  stream continuations, and appended `emit_mark_v2` support for typed data
+  schemas and log severity.
 - Tool callbacks and execution-intercept continuations share one canonical
   result contract with an optional opaque annotation.
 - ATOF, ATIF, and the `full` and `openinference` OpenTelemetry projections
   preserve sanitized tool result annotations without flattening their
   application-defined schemas.
+- Managed tool execution accepts an optional provider- or harness-supplied
+  tool-call ID and preserves it on the matching start and end events across
+  success, error, and cancellation paths.
+
+### OpenTelemetry Logs and Metrics
+
+- Independent OTLP log and metric pipelines are available alongside trace
+  export. Observability configuration version 4 derives log and metric
+  destinations from a trace endpoint when their endpoint lists are omitted.
+- Rust, Python, Node.js, and the experimental C FFI expose typed mark
+  schema and severity options plus metric helpers. Direct subscribers and
+  native and worker plugin SDKs expose bounded runtime diagnostics snapshots.
 
 ### Support Matrix and Compatibility Updates
 
@@ -104,6 +118,11 @@ Migration guidance for upgrading from 0.7 to 0.8 is available in the
   NeMo Relay is built into Hermes Agent, and Hermes Agent understands NeMo Relay
   plugin configurations. No separate observability plugin or Relay CLI setup is
   required.
+- Removed the experimental, service-backed Switchyard integration, including
+  the `nemo-relay-switchyard` crate, CLI `switchyard` feature, built-in
+  `switchyard` component, and service examples. Switchyard 0.3.0 will distribute
+  and document the Switchyard-owned dynamic plugin. Refer to the
+  [Switchyard migration guide](/reference/migration-guides#migrate-to-the-switchyard-owned-dynamic-plugin).
 
 Refer to [Migration Guides](/reference/migration-guides#move-project-configuration-to-a-supported-location)
 for destination paths and explicit-file alternatives.
@@ -132,9 +151,6 @@ for destination paths and explicit-file alternatives.
 - Codex 0.143 does not expose `SessionEnd`, and Codex multi-agent v2 encrypts
   delegated-task payloads that Relay cannot decrypt or reliably link.
 - The Node.js binding and package workflows require Node.js 24 or later.
-- The deprecated Switchyard plugin is experimental, excluded from default CLI
-  builds, and requires a separately managed compatible service and a named
-  authenticated ATOF HTTP stream sink. It is scheduled for removal in 0.8.
 - OpenClaw has public hook-backed telemetry. Its security and optimization
   coverage is partial because it does not own a managed execution path.
 - The built-in `nemo_guardrails` plugin is deprecated and scheduled for removal
