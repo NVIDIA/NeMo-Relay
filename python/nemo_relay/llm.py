@@ -29,14 +29,19 @@ Example::
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypeVar
 
+from nemo_relay import Json
 from nemo_relay._context import ensure_scope_stack
 from nemo_relay._native import (
+    LLMAttributes,
+    LLMHandle,
     LLMRequest,
+    LLMRequestInterceptOutcome,
     LlmStream,
+    ScopeHandle,
 )
 from nemo_relay._native import (
     llm_call as _native_llm_call,
@@ -57,9 +62,12 @@ from nemo_relay._native import (
     llm_stream_call_execute as _native_llm_stream_call_execute,
 )
 
+TResponse = TypeVar("TResponse", bound=Json)
+
 if TYPE_CHECKING:
-    from nemo_relay import Json
-    from nemo_relay._native import AnnotatedLLMResponse
+    from nemo_relay._native import (
+        AnnotatedLLMResponse,
+    )
     from nemo_relay.codecs import LlmCodec, LlmResponseCodec
 
 
@@ -67,13 +75,13 @@ def call(
     name: str,
     request: LLMRequest,
     *,
-    handle=None,
-    attributes=None,
-    data=None,
-    metadata=None,
+    handle: ScopeHandle | None = None,
+    attributes: LLMAttributes | None = None,
+    data: Json | None = None,
+    metadata: Json | None = None,
     model_name: str | None = None,
     timestamp: datetime | None = None,
-):
+) -> LLMHandle:
     """Start a manual LLM span and return its ``LLMHandle``.
 
     Args:
@@ -134,11 +142,11 @@ def call(
 
 
 def call_end(
-    handle,
-    response,
+    handle: LLMHandle,
+    response: Json,
     *,
-    data=None,
-    metadata=None,
+    data: Json | None = None,
+    metadata: Json | None = None,
     annotated_response: AnnotatedLLMResponse | Mapping[str, Json] | None = None,
     response_codec: LlmResponseCodec | None = None,
     timestamp: datetime | None = None,
@@ -191,16 +199,16 @@ def call_end(
 def execute(
     name: str,
     request: LLMRequest,
-    func,
+    func: Callable[[LLMRequest], TResponse | Awaitable[TResponse]],
     *,
-    handle=None,
-    attributes=None,
-    data=None,
-    metadata=None,
+    handle: ScopeHandle | None = None,
+    attributes: LLMAttributes | None = None,
+    data: Json | None = None,
+    metadata: Json | None = None,
     model_name: str | None = None,
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
-):
+) -> Awaitable[Any]:
     """Run an LLM call through the managed middleware pipeline.
 
     Pipeline order:
@@ -282,18 +290,18 @@ def execute(
 def stream_execute(
     name: str,
     request: LLMRequest,
-    func,
-    collector,
-    finalizer,
+    func: Callable[[LLMRequest], AsyncIterator[Json]],
+    collector: Callable[[Json], None],
+    finalizer: Callable[[], Json],
     *,
-    handle=None,
-    attributes=None,
-    data=None,
-    metadata=None,
+    handle: ScopeHandle | None = None,
+    attributes: LLMAttributes | None = None,
+    data: Json | None = None,
+    metadata: Json | None = None,
     model_name: str | None = None,
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
-) -> LlmStream:
+) -> Awaitable[LlmStream]:
     """Run a streaming LLM call through the managed middleware pipeline.
 
     Args:
@@ -382,7 +390,9 @@ def stream_execute(
     )
 
 
-def request_intercepts(name, request):
+def request_intercepts(
+    name: str, request: LLMRequest
+) -> LLMRequestInterceptOutcome | Awaitable[LLMRequestInterceptOutcome]:
     """Apply global LLM request intercepts to ``request``.
 
     Args:
@@ -404,7 +414,7 @@ def request_intercepts(name, request):
     return _native_llm_request_intercepts(name, request)
 
 
-def conditional_execution(request):
+def conditional_execution(request: LLMRequest) -> None | Awaitable[None]:
     """Run LLM conditional-execution guardrails for ``request``.
 
     Args:

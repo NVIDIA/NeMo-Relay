@@ -235,7 +235,15 @@ class ComponentSpec:
 
 
 def validate_config(config: PricingConfig | JsonObject) -> ConfigReport:
-    """Validate a model pricing config document without activating it."""
+    """Validate a model pricing config document without activating it.
+
+    Args:
+        config: Pricing configuration model or equivalent JSON object.
+
+    Returns:
+        ConfigReport: Diagnostics describing whether the configuration is
+        valid and can be activated.
+    """
     report = plugin_module.validate(
         plugin_module.PluginConfig(
             components=[ComponentSpec(config)],

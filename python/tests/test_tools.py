@@ -8,10 +8,12 @@ import contextvars
 import gc
 import warnings
 from collections import UserDict, UserList
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import cast
 
 import pytest
+from async_helpers import resolve_async_result
 
 from nemo_relay import (
     Event,
@@ -122,7 +124,7 @@ class TestToolsAsync:
             await tools.execute(
                 "legacy_raw_result",
                 {},
-                lambda _args: {"legacy": True},  # type: ignore[arg-type]
+                lambda _args: {"legacy": True},  # ty: ignore[invalid-argument-type]
             )
 
     async def test_execute_rejects_cyclic_results_and_remains_usable(self):
@@ -464,7 +466,8 @@ class TestToolIntercepts:
         transformed = tools.request_intercepts("direct_tool", {"input": True})
         intercepts.deregister_tool_request("py_req_int_direct")
 
-        assert transformed["direct"] is True
+        assert not isinstance(transformed, Awaitable)
+        assert transformed == {"input": True, "direct": True}
 
     def test_execution_intercept_register_deregister(self):
         intercepts.register_tool_execution(
@@ -673,8 +676,10 @@ class TestToolInterceptsAsync:
         try:
             result = await tools.execute("context_tool", {"ok": True}, lambda args: ToolExecutionResult(args))
             assert result.result == {"ok": True}
-            await tools.conditional_execution("context_tool_standalone", {})
-            assert await tools.request_intercepts("context_tool_standalone", {"ok": True}) == {"ok": True}
+            await resolve_async_result(tools.conditional_execution("context_tool_standalone", {}))
+            assert await resolve_async_result(tools.request_intercepts("context_tool_standalone", {"ok": True})) == {
+                "ok": True
+            }
         finally:
             request_id.reset(token)
             intercepts.deregister_tool_execution("py_tool_context_execution")

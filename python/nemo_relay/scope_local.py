@@ -21,10 +21,30 @@ Example::
 
 from __future__ import annotations
 
-from nemo_relay import EventMetadataInjectorCallback, ScopeHandle
+from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+from nemo_relay import (
+    EventMetadataInjectorCallback,
+    EventSanitizeGuardrail,
+    LlmConditionalExecutionGuardrail,
+    LlmExecutionIntercept,
+    LlmRequestIntercept,
+    LlmSanitizeRequestGuardrail,
+    LlmSanitizeResponseGuardrail,
+    LlmStreamExecutionIntercept,
+    ScopeHandle,
+    ToolConditionalExecutionGuardrail,
+    ToolExecutionIntercept,
+    ToolRequestIntercept,
+    ToolSanitizeGuardrail,
+)
 from nemo_relay._native import (
     scope_deregister_event_metadata_injector as _deregister_event_metadata_injector,
 )
+
+if TYPE_CHECKING:
+    from nemo_relay import Event
 from nemo_relay._native import (
     scope_deregister_llm_conditional_execution_guardrail as _deregister_llm_conditional_execution,
 )
@@ -130,42 +150,120 @@ def register_event_metadata_injector(
     priority: int,
     injector: EventMetadataInjectorCallback,
 ) -> None:
-    """Register an event metadata injector owned by an active scope."""
+    """Register an event metadata injector owned by a scope.
+
+    Args:
+        scope_handle: Scope that owns the registration.
+        name: Unique registration name within the scope.
+        priority: Execution order; lower values run first.
+        injector: Callback that returns metadata additions for emitted events.
+
+    Returns:
+        None: The injector remains active until removal or scope closure.
+    """
     _register_event_metadata_injector(scope_handle.uuid, name, priority, injector)
 
 
 def deregister_event_metadata_injector(scope_handle: ScopeHandle, name: str) -> bool:
-    """Remove a scope-local event metadata injector by registration name."""
+    """Remove a scope-local event metadata injector.
+
+    Args:
+        scope_handle: Scope that owns the registration.
+        name: Registration name to remove.
+
+    Returns:
+        bool: Whether an injector was removed.
+    """
     return _deregister_event_metadata_injector(scope_handle.uuid, name)
 
 
-def register_mark_sanitize(scope_handle, name, priority, guardrail):
-    """Register a scope-local mark event sanitizer."""
+def register_mark_sanitize(
+    scope_handle: ScopeHandle, name: str, priority: int, guardrail: EventSanitizeGuardrail
+) -> None:
+    """Register a mark-event sanitizer owned by a scope.
+
+    Args:
+        scope_handle: Scope that owns the registration.
+        name: Unique registration name within the scope.
+        priority: Execution order; lower values run first.
+        guardrail: Callback that sanitizes emitted mark-event fields.
+
+    Returns:
+        None: The sanitizer remains active until removal or scope closure.
+    """
     return _register_mark_sanitize(scope_handle.uuid, name, priority, guardrail)
 
 
-def deregister_mark_sanitize(scope_handle, name):
-    """Remove a scope-local mark event sanitizer."""
+def deregister_mark_sanitize(scope_handle: ScopeHandle, name: str) -> bool:
+    """Remove a scope-local mark-event sanitizer.
+
+    Args:
+        scope_handle: Scope that owns the registration.
+        name: Registration name to remove.
+
+    Returns:
+        bool: Whether a sanitizer was removed.
+    """
     return _deregister_mark_sanitize(scope_handle.uuid, name)
 
 
-def register_scope_sanitize_start(scope_handle, name, priority, guardrail):
-    """Register a scope-local sanitizer for scope start events."""
+def register_scope_sanitize_start(
+    scope_handle: ScopeHandle, name: str, priority: int, guardrail: EventSanitizeGuardrail
+) -> None:
+    """Register a scope-start event sanitizer owned by a scope.
+
+    Args:
+        scope_handle: Scope that owns the registration.
+        name: Unique registration name within the scope.
+        priority: Execution order; lower values run first.
+        guardrail: Callback that sanitizes emitted scope-start event fields.
+
+    Returns:
+        None: The sanitizer remains active until removal or scope closure.
+    """
     return _register_scope_sanitize_start(scope_handle.uuid, name, priority, guardrail)
 
 
-def deregister_scope_sanitize_start(scope_handle, name):
-    """Remove a scope-local scope-start event sanitizer."""
+def deregister_scope_sanitize_start(scope_handle: ScopeHandle, name: str) -> bool:
+    """Remove a scope-local scope-start sanitizer.
+
+    Args:
+        scope_handle: Scope that owns the registration.
+        name: Registration name to remove.
+
+    Returns:
+        bool: Whether a sanitizer was removed.
+    """
     return _deregister_scope_sanitize_start(scope_handle.uuid, name)
 
 
-def register_scope_sanitize_end(scope_handle, name, priority, guardrail):
-    """Register a scope-local sanitizer for scope end events."""
+def register_scope_sanitize_end(
+    scope_handle: ScopeHandle, name: str, priority: int, guardrail: EventSanitizeGuardrail
+) -> None:
+    """Register a scope-end event sanitizer owned by a scope.
+
+    Args:
+        scope_handle: Scope that owns the registration.
+        name: Unique registration name within the scope.
+        priority: Execution order; lower values run first.
+        guardrail: Callback that sanitizes emitted scope-end event fields.
+
+    Returns:
+        None: The sanitizer remains active until removal or scope closure.
+    """
     return _register_scope_sanitize_end(scope_handle.uuid, name, priority, guardrail)
 
 
-def deregister_scope_sanitize_end(scope_handle, name):
-    """Remove a scope-local scope-end event sanitizer."""
+def deregister_scope_sanitize_end(scope_handle: ScopeHandle, name: str) -> bool:
+    """Remove a scope-local scope-end sanitizer.
+
+    Args:
+        scope_handle: Scope that owns the registration.
+        name: Registration name to remove.
+
+    Returns:
+        bool: Whether a sanitizer was removed.
+    """
     return _deregister_scope_sanitize_end(scope_handle.uuid, name)
 
 
@@ -174,7 +272,9 @@ def deregister_scope_sanitize_end(scope_handle, name):
 # ---------------------------------------------------------------------------
 
 
-def register_tool_sanitize_request(scope_handle, name, priority, guardrail):
+def register_tool_sanitize_request(
+    scope_handle: ScopeHandle, name: str, priority: int, guardrail: ToolSanitizeGuardrail
+) -> None:
     """Register a scope-local tool sanitize-request guardrail.
 
     Args:
@@ -195,7 +295,7 @@ def register_tool_sanitize_request(scope_handle, name, priority, guardrail):
     return _register_tool_sanitize_request(scope_handle.uuid, name, priority, guardrail)
 
 
-def deregister_tool_sanitize_request(scope_handle, name):
+def deregister_tool_sanitize_request(scope_handle: ScopeHandle, name: str) -> bool:
     """Remove a scope-local tool sanitize-request guardrail.
 
     Args:
@@ -213,7 +313,9 @@ def deregister_tool_sanitize_request(scope_handle, name):
     return _deregister_tool_sanitize_request(scope_handle.uuid, name)
 
 
-def register_tool_sanitize_response(scope_handle, name, priority, guardrail):
+def register_tool_sanitize_response(
+    scope_handle: ScopeHandle, name: str, priority: int, guardrail: ToolSanitizeGuardrail
+) -> None:
     """Register a scope-local tool sanitize-response guardrail.
 
     Args:
@@ -234,7 +336,7 @@ def register_tool_sanitize_response(scope_handle, name, priority, guardrail):
     return _register_tool_sanitize_response(scope_handle.uuid, name, priority, guardrail)
 
 
-def deregister_tool_sanitize_response(scope_handle, name):
+def deregister_tool_sanitize_response(scope_handle: ScopeHandle, name: str) -> bool:
     """Remove a scope-local tool sanitize-response guardrail.
 
     Args:
@@ -252,7 +354,9 @@ def deregister_tool_sanitize_response(scope_handle, name):
     return _deregister_tool_sanitize_response(scope_handle.uuid, name)
 
 
-def register_tool_conditional_execution(scope_handle, name, priority, guardrail):
+def register_tool_conditional_execution(
+    scope_handle: ScopeHandle, name: str, priority: int, guardrail: ToolConditionalExecutionGuardrail
+) -> None:
     """Register a scope-local tool conditional-execution guardrail.
 
     Args:
@@ -274,7 +378,7 @@ def register_tool_conditional_execution(scope_handle, name, priority, guardrail)
     return _register_tool_conditional_execution(scope_handle.uuid, name, priority, guardrail)
 
 
-def deregister_tool_conditional_execution(scope_handle, name):
+def deregister_tool_conditional_execution(scope_handle: ScopeHandle, name: str) -> bool:
     """Remove a scope-local tool conditional-execution guardrail.
 
     Args:
@@ -297,7 +401,9 @@ def deregister_tool_conditional_execution(scope_handle, name):
 # ---------------------------------------------------------------------------
 
 
-def register_tool_request(scope_handle, name, priority, break_chain, fn):
+def register_tool_request(
+    scope_handle: ScopeHandle, name: str, priority: int, break_chain: bool, fn: ToolRequestIntercept
+) -> None:
     """Register a scope-local tool request intercept.
 
     Args:
@@ -321,7 +427,7 @@ def register_tool_request(scope_handle, name, priority, break_chain, fn):
     return _register_tool_request(scope_handle.uuid, name, priority, break_chain, fn)
 
 
-def deregister_tool_request(scope_handle, name):
+def deregister_tool_request(scope_handle: ScopeHandle, name: str) -> bool:
     """Remove a scope-local tool request intercept.
 
     Args:
@@ -338,7 +444,7 @@ def deregister_tool_request(scope_handle, name):
     return _deregister_tool_request(scope_handle.uuid, name)
 
 
-def register_tool_execution(scope_handle, name, priority, fn):
+def register_tool_execution(scope_handle: ScopeHandle, name: str, priority: int, fn: ToolExecutionIntercept) -> None:
     """Register scope-local middleware around tool execution.
 
     Args:
@@ -365,7 +471,7 @@ def register_tool_execution(scope_handle, name, priority, fn):
     return _register_tool_execution(scope_handle.uuid, name, priority, fn)
 
 
-def deregister_tool_execution(scope_handle, name):
+def deregister_tool_execution(scope_handle: ScopeHandle, name: str) -> bool:
     """Remove a scope-local tool execution intercept.
 
     Args:
@@ -388,7 +494,9 @@ def deregister_tool_execution(scope_handle, name):
 # ---------------------------------------------------------------------------
 
 
-def register_llm_sanitize_request(scope_handle, name, priority, guardrail):
+def register_llm_sanitize_request(
+    scope_handle: ScopeHandle, name: str, priority: int, guardrail: LlmSanitizeRequestGuardrail
+) -> None:
     """Register a scope-local LLM sanitize-request guardrail.
 
     Args:
@@ -409,7 +517,7 @@ def register_llm_sanitize_request(scope_handle, name, priority, guardrail):
     return _register_llm_sanitize_request(scope_handle.uuid, name, priority, guardrail)
 
 
-def deregister_llm_sanitize_request(scope_handle, name):
+def deregister_llm_sanitize_request(scope_handle: ScopeHandle, name: str) -> bool:
     """Remove a scope-local LLM sanitize-request guardrail.
 
     Args:
@@ -427,7 +535,9 @@ def deregister_llm_sanitize_request(scope_handle, name):
     return _deregister_llm_sanitize_request(scope_handle.uuid, name)
 
 
-def register_llm_sanitize_response(scope_handle, name, priority, guardrail):
+def register_llm_sanitize_response(
+    scope_handle: ScopeHandle, name: str, priority: int, guardrail: LlmSanitizeResponseGuardrail
+) -> None:
     """Register a scope-local LLM sanitize-response guardrail.
 
     Args:
@@ -448,7 +558,7 @@ def register_llm_sanitize_response(scope_handle, name, priority, guardrail):
     return _register_llm_sanitize_response(scope_handle.uuid, name, priority, guardrail)
 
 
-def deregister_llm_sanitize_response(scope_handle, name):
+def deregister_llm_sanitize_response(scope_handle: ScopeHandle, name: str) -> bool:
     """Remove a scope-local LLM sanitize-response guardrail.
 
     Args:
@@ -466,7 +576,9 @@ def deregister_llm_sanitize_response(scope_handle, name):
     return _deregister_llm_sanitize_response(scope_handle.uuid, name)
 
 
-def register_llm_conditional_execution(scope_handle, name, priority, guardrail):
+def register_llm_conditional_execution(
+    scope_handle: ScopeHandle, name: str, priority: int, guardrail: LlmConditionalExecutionGuardrail
+) -> None:
     """Register a scope-local LLM conditional-execution guardrail.
 
     Args:
@@ -488,7 +600,7 @@ def register_llm_conditional_execution(scope_handle, name, priority, guardrail):
     return _register_llm_conditional_execution(scope_handle.uuid, name, priority, guardrail)
 
 
-def deregister_llm_conditional_execution(scope_handle, name):
+def deregister_llm_conditional_execution(scope_handle: ScopeHandle, name: str) -> bool:
     """Remove a scope-local LLM conditional-execution guardrail.
 
     Args:
@@ -511,7 +623,9 @@ def deregister_llm_conditional_execution(scope_handle, name):
 # ---------------------------------------------------------------------------
 
 
-def register_llm_request(scope_handle, name, priority, break_chain, fn):
+def register_llm_request(
+    scope_handle: ScopeHandle, name: str, priority: int, break_chain: bool, fn: LlmRequestIntercept
+) -> None:
     """Register a scope-local LLM request intercept.
 
     Args:
@@ -521,8 +635,9 @@ def register_llm_request(scope_handle, name, priority, break_chain, fn):
         priority: Execution order for the intercept. Lower values run first.
         break_chain: Whether to stop applying lower-priority request intercepts
             after this intercept runs.
-        fn: Callable invoked as ``fn(name, request, annotated)`` that returns a
-            tuple of ``(request, annotated)`` for the next stage.
+        fn: Callable invoked as ``fn(name, request, annotated)`` that returns
+            an ``LLMRequestInterceptOutcome`` or an awaitable of that outcome
+            for the next stage.
 
     Returns:
         None: This function returns after the scope-local intercept is
@@ -535,7 +650,7 @@ def register_llm_request(scope_handle, name, priority, break_chain, fn):
     return _register_llm_request(scope_handle.uuid, name, priority, break_chain, fn)
 
 
-def deregister_llm_request(scope_handle, name):
+def deregister_llm_request(scope_handle: ScopeHandle, name: str) -> bool:
     """Remove a scope-local LLM request intercept.
 
     Args:
@@ -552,7 +667,7 @@ def deregister_llm_request(scope_handle, name):
     return _deregister_llm_request(scope_handle.uuid, name)
 
 
-def register_llm_execution(scope_handle, name, priority, fn):
+def register_llm_execution(scope_handle: ScopeHandle, name: str, priority: int, fn: LlmExecutionIntercept) -> None:
     """Register scope-local middleware around non-streaming LLM execution.
 
     Args:
@@ -577,7 +692,7 @@ def register_llm_execution(scope_handle, name, priority, fn):
     return _register_llm_execution(scope_handle.uuid, name, priority, fn)
 
 
-def deregister_llm_execution(scope_handle, name):
+def deregister_llm_execution(scope_handle: ScopeHandle, name: str) -> bool:
     """Remove a scope-local LLM execution intercept.
 
     Args:
@@ -595,7 +710,9 @@ def deregister_llm_execution(scope_handle, name):
     return _deregister_llm_execution(scope_handle.uuid, name)
 
 
-def register_llm_stream_execution(scope_handle, name, priority, fn):
+def register_llm_stream_execution(
+    scope_handle: ScopeHandle, name: str, priority: int, fn: LlmStreamExecutionIntercept
+) -> None:
     """Register scope-local middleware around streaming LLM execution.
 
     Args:
@@ -623,7 +740,7 @@ def register_llm_stream_execution(scope_handle, name, priority, fn):
     return _register_llm_stream_execution(scope_handle.uuid, name, priority, fn)
 
 
-def deregister_llm_stream_execution(scope_handle, name):
+def deregister_llm_stream_execution(scope_handle: ScopeHandle, name: str) -> bool:
     """Remove a scope-local streaming LLM execution intercept.
 
     Args:
@@ -646,7 +763,7 @@ def deregister_llm_stream_execution(scope_handle, name):
 # ---------------------------------------------------------------------------
 
 
-def register_subscriber(scope_handle, name, callback):
+def register_subscriber(scope_handle: ScopeHandle, name: str, callback: "Callable[[Event], None]") -> None:
     """Register an event subscriber that is active only for ``scope_handle``.
 
     Args:
@@ -677,7 +794,7 @@ def register_subscriber(scope_handle, name, callback):
     return _register_subscriber(scope_handle.uuid, name, callback)
 
 
-def deregister_subscriber(scope_handle, name):
+def deregister_subscriber(scope_handle: ScopeHandle, name: str) -> bool:
     """Remove a scope-local event subscriber.
 
     Args:

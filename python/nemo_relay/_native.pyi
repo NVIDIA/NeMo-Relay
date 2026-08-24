@@ -32,6 +32,7 @@ _JsonObject: TypeAlias = dict[str, _JsonValue]
 _Json: TypeAlias = _JsonValue
 _MessageContent: TypeAlias = str | Sequence[Mapping[str, _JsonValue]]
 _TToolResult = TypeVar("_TToolResult")
+_TLlmResult = TypeVar("_TLlmResult", bound=_Json)
 
 class _RuntimeRegistrationOwner(TypedDict):
     kind: str
@@ -1769,14 +1770,14 @@ def tool_call_end(
 def tool_call_execute(
     name: str,
     args: _Json,
-    func: Callable[[_Json], ToolExecutionResult[_Json] | Awaitable[ToolExecutionResult[_Json]]],
+    func: Callable[[_Json], ToolExecutionResult[_TToolResult] | Awaitable[ToolExecutionResult[_TToolResult]]],
     *,
     handle: ScopeHandle | None = None,
     attributes: ToolAttributes | None = None,
     data: _Json | None = None,
     metadata: _Json | None = None,
     tool_call_id: str | None = None,
-) -> Awaitable[ToolExecutionResult[_Json]]:
+) -> Awaitable[ToolExecutionResult[_TToolResult]]:
     """Execute a tool through the managed native middleware pipeline.
 
     Args:
@@ -1873,9 +1874,9 @@ def llm_call_end(
 def llm_call_execute(
     name: str,
     request: LLMRequest,
-    func: Callable[[LLMRequest], Awaitable[_Json]],
+    func: Callable[[LLMRequest], _TLlmResult | Awaitable[_TLlmResult]],
     **kwargs: object,
-) -> Awaitable[_Json]:
+) -> Awaitable[_TLlmResult]:
     """Execute a non-streaming LLM call through native middleware.
 
     Args:
@@ -1902,7 +1903,7 @@ def llm_stream_call_execute(
     collector: Callable[[_Json], None],
     finalizer: Callable[[], _Json],
     **kwargs: object,
-) -> LlmStream:
+) -> Awaitable[LlmStream]:
     """Execute a streaming LLM call through native middleware.
 
     Args:

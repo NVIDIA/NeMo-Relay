@@ -20,9 +20,20 @@ Example::
     assert result.result == {"result": "HELLO"}
 """
 
-from datetime import datetime
+from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from datetime import datetime
+from typing import TypeVar
+
+from nemo_relay import Json
 from nemo_relay._context import ensure_scope_stack
+from nemo_relay._native import (
+    ScopeHandle,
+    ToolAttributes,
+    ToolExecutionResult,
+    ToolHandle,
+)
 from nemo_relay._native import (
     tool_call as _native_tool_call,
 )
@@ -39,18 +50,20 @@ from nemo_relay._native import (
     tool_request_intercepts as _native_tool_request_intercepts,
 )
 
+TToolResult = TypeVar("TToolResult")
+
 
 def call(
-    name,
-    args,
+    name: str,
+    args: Json,
     *,
-    handle=None,
-    attributes=None,
-    data=None,
-    metadata=None,
-    tool_call_id=None,
+    handle: ScopeHandle | None = None,
+    attributes: ToolAttributes | None = None,
+    data: Json | None = None,
+    metadata: Json | None = None,
+    tool_call_id: str | None = None,
     timestamp: datetime | None = None,
-):
+) -> ToolHandle:
     """Start a manual tool span and return its ``ToolHandle``.
 
     Args:
@@ -109,7 +122,14 @@ def call(
     )
 
 
-def call_end(handle, result, *, data=None, metadata=None, timestamp: datetime | None = None):
+def call_end(
+    handle: ToolHandle,
+    result: ToolExecutionResult[Json],
+    *,
+    data: Json | None = None,
+    metadata: Json | None = None,
+    timestamp: datetime | None = None,
+) -> None:
     """Finish a manual tool span started by ``call()``.
 
     Args:
@@ -137,7 +157,17 @@ def call_end(handle, result, *, data=None, metadata=None, timestamp: datetime | 
     return _native_tool_call_end(handle, result, data=data, metadata=metadata, timestamp=timestamp)
 
 
-def execute(name, args, func, *, handle=None, attributes=None, data=None, metadata=None, tool_call_id=None):
+def execute(
+    name: str,
+    args: Json,
+    func: Callable[[Json], ToolExecutionResult[TToolResult] | Awaitable[ToolExecutionResult[TToolResult]]],
+    *,
+    handle: ScopeHandle | None = None,
+    attributes: ToolAttributes | None = None,
+    data: Json | None = None,
+    metadata: Json | None = None,
+    tool_call_id: str | None = None,
+) -> Awaitable[ToolExecutionResult[TToolResult]]:
     """Run a tool through the managed middleware pipeline.
 
     Pipeline order:
@@ -202,7 +232,7 @@ def execute(name, args, func, *, handle=None, attributes=None, data=None, metada
     )
 
 
-def request_intercepts(name, args):
+def request_intercepts(name: str, args: Json) -> Json | Awaitable[Json]:
     """Apply global tool request intercepts to ``args``.
 
     Args:
@@ -222,7 +252,7 @@ def request_intercepts(name, args):
     return _native_tool_request_intercepts(name, args)
 
 
-def conditional_execution(name, args):
+def conditional_execution(name: str, args: Json) -> None | Awaitable[None]:
     """Run tool conditional-execution guardrails for ``args``.
 
     Args:

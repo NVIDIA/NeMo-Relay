@@ -85,32 +85,80 @@ from nemo_relay._native import (
 
 
 def register_mark_sanitize(name: str, priority: int, guardrail: EventSanitizeGuardrail) -> None:
-    """Register a sanitizer for mark event observability fields."""
+    """Register a global mark-event sanitizer.
+
+    Args:
+        name: Unique registration name.
+        priority: Execution order; lower values run first.
+        guardrail: Callback that sanitizes emitted mark-event fields.
+
+    Returns:
+        None: The registration is active until deregistered.
+    """
     return _native_register_mark_sanitize(name, priority, guardrail)
 
 
 def deregister_mark_sanitize(name: str) -> bool:
-    """Remove a global mark event sanitizer by name."""
+    """Remove a global mark-event sanitizer.
+
+    Args:
+        name: Registration name to remove.
+
+    Returns:
+        bool: Whether a registration was removed.
+    """
     return _native_deregister_mark_sanitize(name)
 
 
 def register_scope_sanitize_start(name: str, priority: int, guardrail: EventSanitizeGuardrail) -> None:
-    """Register a sanitizer for every scope start event category."""
+    """Register a global sanitizer for scope-start event fields.
+
+    Args:
+        name: Unique registration name.
+        priority: Execution order; lower values run first.
+        guardrail: Callback that sanitizes emitted scope-start event fields.
+
+    Returns:
+        None: The registration is active until deregistered.
+    """
     return _native_register_scope_sanitize_start(name, priority, guardrail)
 
 
 def deregister_scope_sanitize_start(name: str) -> bool:
-    """Remove a global scope-start event sanitizer by name."""
+    """Remove a global scope-start sanitizer.
+
+    Args:
+        name: Registration name to remove.
+
+    Returns:
+        bool: Whether a registration was removed.
+    """
     return _native_deregister_scope_sanitize_start(name)
 
 
 def register_scope_sanitize_end(name: str, priority: int, guardrail: EventSanitizeGuardrail) -> None:
-    """Register a sanitizer for every scope end event category."""
+    """Register a global sanitizer for scope-end event fields.
+
+    Args:
+        name: Unique registration name.
+        priority: Execution order; lower values run first.
+        guardrail: Callback that sanitizes emitted scope-end event fields.
+
+    Returns:
+        None: The registration is active until deregistered.
+    """
     return _native_register_scope_sanitize_end(name, priority, guardrail)
 
 
 def deregister_scope_sanitize_end(name: str) -> bool:
-    """Remove a global scope-end event sanitizer by name."""
+    """Remove a global scope-end sanitizer.
+
+    Args:
+        name: Registration name to remove.
+
+    Returns:
+        bool: Whether a registration was removed.
+    """
     return _native_deregister_scope_sanitize_end(name)
 
 

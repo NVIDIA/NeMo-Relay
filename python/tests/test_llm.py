@@ -6,10 +6,11 @@
 import asyncio
 import contextvars
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from typing import NoReturn, cast
 
 import pytest
+from async_helpers import resolve_async_result
 
 from nemo_relay import (
     Event,
@@ -559,6 +560,7 @@ class TestLLMIntercepts:
         transformed = llm.request_intercepts("direct_llm", make_request())
         intercepts.deregister_llm_request("py_llm_req_direct")
 
+        assert not isinstance(transformed, Awaitable)
         assert transformed.request.content["direct"] is True
         assert len(transformed.pending_marks) == 1
         assert transformed.pending_marks[0].name == pending_mark.name
@@ -789,8 +791,8 @@ class TestLLMInterceptsAsync:
         token = request_id.set("emitter")
         try:
             assert await llm.execute("context_llm", make_request(), lambda _request: {}) == {"ok": True}
-            await llm.conditional_execution(make_request())
-            standalone = await llm.request_intercepts("context_llm_standalone", make_request())
+            await resolve_async_result(llm.conditional_execution(make_request()))
+            standalone = await resolve_async_result(llm.request_intercepts("context_llm_standalone", make_request()))
             assert standalone.request.content == make_request().content
         finally:
             request_id.reset(token)
@@ -889,7 +891,7 @@ class TestLLMInterceptsAsync:
             stream = await llm.stream_execute(
                 "custom_iterator_context_llm",
                 make_request(),
-                lambda _request: None,
+                lambda _request: None,  # ty: ignore[invalid-argument-type]
                 lambda _chunk: None,
                 lambda: {},
             )
@@ -1315,7 +1317,11 @@ class TestLLMStreaming:
 
     async def test_stream_execute_rejects_invalid_iterator(self):
         stream = await llm.stream_execute(
-            "stream_invalid_iter_llm", make_request(), lambda request: object(), lambda chunk: None, lambda: {}
+            "stream_invalid_iter_llm",
+            make_request(),
+            lambda request: object(),  # ty: ignore[invalid-argument-type]
+            lambda chunk: None,
+            lambda: {},
         )
         with pytest.raises(RuntimeError, match="__anext__"):
             await anext(stream)
@@ -1484,7 +1490,7 @@ class TestLLMStreaming:
                 await llm.stream_execute(
                     "async_stream_callback_fail_llm",
                     make_request(),
-                    async_stream_func,
+                    async_stream_func,  # ty: ignore[invalid-argument-type]
                     lambda chunk: None,
                     lambda: {},
                 )
@@ -1515,7 +1521,7 @@ class TestLLMStreaming:
                 make_request(),
                 stream_func,
                 lambda chunk: None,
-                lambda: object(),
+                lambda: object(),  # ty: ignore[invalid-argument-type]
             )
             chunks = []
             async for chunk in stream:
