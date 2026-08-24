@@ -55,6 +55,7 @@ describe('observability plugin helpers', () => {
         service_name: 'unknown_service',
         instrumentation_scope: 'opentelemetry',
         timeout_millis: 3000,
+        completed_span_context_ttl_millis: 60000,
         max_queue_size: 4096,
         max_export_batch_size: 256,
         scheduled_delay_millis: 750,
