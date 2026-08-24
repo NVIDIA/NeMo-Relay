@@ -2281,7 +2281,7 @@ unsafe extern "C" fn capture_plugin_runtime_list_registrations(
                 "owner": {
                     "kind": "plugin",
                     "plugin_kind": "example",
-                    "component_ordinal": 0
+                    "component_ordinal": 1
                 }
             }]),
         )

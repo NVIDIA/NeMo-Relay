@@ -2653,7 +2653,6 @@ async fn initialize_plugin_components(
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
 ) -> Result<Vec<PluginRegistration>> {
     ensure_builtin_plugins_registered()?;
-    let totals = plugin_component_totals(config);
     let mut ordinals: HashMap<&str, usize> = HashMap::new();
     let mut registrations = PendingPluginRegistrations::new(rollback_failures.clone());
 
@@ -2673,11 +2672,7 @@ async fn initialize_plugin_components(
             .entry(component.kind.as_str())
             .and_modify(|value| *value += 1)
             .or_insert(1);
-        let namespace = component_namespace(
-            &component.kind,
-            *ordinal,
-            totals.get(component.kind.as_str()).copied().unwrap_or(1),
-        );
+        let namespace = component_namespace(&component.kind, *ordinal);
 
         let mut pending =
             PendingPluginRegistrationContext::new(namespace, rollback_failures.clone());
@@ -2804,12 +2799,8 @@ fn plugin_component_totals(config: &PluginConfig) -> HashMap<&str, usize> {
     totals
 }
 
-fn component_namespace(kind: &str, ordinal: usize, total: usize) -> String {
-    if total > 1 {
-        format!("__nemo_relay_plugin__{kind}__{ordinal}__")
-    } else {
-        format!("__nemo_relay_plugin__{kind}__")
-    }
+fn component_namespace(kind: &str, ordinal: usize) -> String {
+    format!("__nemo_relay_plugin__{kind}__{ordinal}__")
 }
 
 fn validate_plugin_multiplicity(report: &mut ConfigReport, config: &PluginConfig) {

@@ -15,6 +15,7 @@ use tokio::sync::Notify;
 use crate::api::event::{BaseEvent, Event, MarkEvent};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::llm::{llm_conditional_execution, llm_request_intercepts};
+use crate::api::registry::{RuntimeRegistrationKind, list_runtime_registrations};
 use crate::api::runtime::global_context;
 use crate::api::runtime::{LlmJsonStream, NemoRelayContextState};
 use crate::api::tool::tool_conditional_execution;
@@ -25,6 +26,7 @@ struct PolicyAwarePlugin;
 
 struct SingletonPlugin;
 struct RecordingPlugin;
+struct DiscoverablePlugin;
 struct ReplacementPlugin;
 struct RestoreFailPlugin;
 struct RestoreBreakPlugin;
@@ -303,6 +305,24 @@ impl Plugin for RecordingPlugin {
             ));
             Ok(())
         })
+    }
+}
+
+impl Plugin for DiscoverablePlugin {
+    fn plugin_kind(&self) -> &str {
+        "discoverable.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        vec![]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        ctx: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move { ctx.register_subscriber("subscriber", Arc::new(|_| {})) })
     }
 }
 
@@ -1291,12 +1311,12 @@ fn test_plugin_component_helpers_and_serialization_error_variant() {
     assert_eq!(totals.get("alpha.plugin"), Some(&2));
     assert_eq!(totals.get("beta.plugin"), Some(&1));
     assert_eq!(
-        component_namespace("alpha.plugin", 1, totals["alpha.plugin"]),
+        component_namespace("alpha.plugin", 1),
         "__nemo_relay_plugin__alpha.plugin__1__"
     );
     assert_eq!(
-        component_namespace("beta.plugin", 1, totals["beta.plugin"]),
-        "__nemo_relay_plugin__beta.plugin__"
+        component_namespace("beta.plugin", 1),
+        "__nemo_relay_plugin__beta.plugin__1__"
     );
 
     let parse_error = serde_json::from_str::<PluginConfig>("{").unwrap_err();
@@ -1519,8 +1539,8 @@ fn test_initialize_plugins_restores_previous_configuration_after_failed_replacem
     assert_eq!(
         names,
         vec![
-            "__nemo_relay_plugin__recording.plugin__subscriber",
-            "__nemo_relay_plugin__recording.plugin__subscriber",
+            "__nemo_relay_plugin__recording.plugin__1__subscriber",
+            "__nemo_relay_plugin__recording.plugin__1__subscriber",
         ]
     );
     reset_global();
@@ -1558,8 +1578,8 @@ fn test_initialize_plugins_restores_previous_configuration_after_replacement_pan
     assert_eq!(
         recorded_names().lock().unwrap().as_slice(),
         [
-            "__nemo_relay_plugin__recording.plugin__subscriber",
-            "__nemo_relay_plugin__recording.plugin__subscriber",
+            "__nemo_relay_plugin__recording.plugin__1__subscriber",
+            "__nemo_relay_plugin__recording.plugin__1__subscriber",
         ]
     );
 
@@ -2174,6 +2194,74 @@ fn test_initialize_plugins_skips_disabled_components_and_namespaces_multiple_ins
             "__nemo_relay_plugin__recording.plugin__2__subscriber",
         ]
     );
+    reset_global();
+}
+
+#[test]
+fn test_initialize_plugins_assigns_ordinal_to_lone_enabled_component() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(RecordingPlugin)).unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(initialize_plugins_exact(PluginConfig {
+            components: vec![
+                PluginComponentSpec::new("recording.plugin"),
+                PluginComponentSpec {
+                    enabled: false,
+                    ..PluginComponentSpec::new("recording.plugin")
+                },
+            ],
+            ..PluginConfig::default()
+        }))
+        .unwrap();
+
+    assert_eq!(
+        recorded_names().lock().unwrap().as_slice(),
+        ["__nemo_relay_plugin__recording.plugin__1__subscriber"]
+    );
+    reset_global();
+}
+
+#[test]
+fn test_singleton_plugin_registration_discovers_ordinal() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(DiscoverablePlugin)).unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(initialize_plugins_exact(PluginConfig {
+            components: vec![PluginComponentSpec::new("discoverable.plugin")],
+            ..PluginConfig::default()
+        }))
+        .unwrap();
+
+    let registrations =
+        list_runtime_registrations(Some(&BTreeSet::from([RuntimeRegistrationKind::Subscriber])))
+            .unwrap();
+    let registration = registrations
+        .iter()
+        .find(|registration| registration.local_name == "subscriber")
+        .unwrap();
+    assert_eq!(
+        registration.effective_name,
+        "__nemo_relay_plugin__discoverable.plugin__1__subscriber"
+    );
+    assert_eq!(
+        registration.owner.plugin_kind.as_deref(),
+        Some("discoverable.plugin")
+    );
+    assert_eq!(registration.owner.component_ordinal, Some(1));
+
+    clear_plugin_configuration().unwrap();
     reset_global();
 }
 
