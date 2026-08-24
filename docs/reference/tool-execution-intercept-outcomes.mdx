@@ -10,14 +10,14 @@ canonical application-visible result:
 
 ```json
 {
-  "result": {},
-  "annotation": {}
+  "result": {}
 }
 ```
 
 `result` is required and contains the application-owned tool payload.
 `annotation` is optional opaque adjacent metadata. It can be any JSON value.
-An absent or JSON `null` annotation means that the result has no annotation.
+An absent or JSON `null` annotation means that the result has no annotation; an
+empty object (`{}`) is a present annotation.
 Relay transports the annotation without interpreting its schema.
 
 A tool execution intercept wraps or short-circuits that callback and returns a
@@ -26,7 +26,7 @@ canonical outcome:
 ```json
 {
   "result": {},
-  "annotation": {},
+  "annotation": {"source": "cache"},
   "pending_marks": []
 }
 ```

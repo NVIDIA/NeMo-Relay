@@ -194,6 +194,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 </Tabs>
 
+## Python: Return Tool Results to the Model
+
+In a Python manual chat loop, send only the managed tool result's business
+payload to the model:
+
+```python
+import json
+
+tool_result = await nemo_relay.tools.execute(name, args, tool_callback)
+messages.append(
+    {
+        "role": "tool",
+        "content": json.dumps(tool_result.result),
+        "tool_call_id": tool_call["id"],
+    }
+)
+```
+
+Keep `tool_result.annotation` in the Python application for its own metadata
+and observability use. Do not use `str(tool_result)` for the tool message: it
+serializes the Python wrapper and can expose annotation data instead of the
+tool's business result.
+
 ## Validate the Integration
 
 Check both behavior and instrumentation:
@@ -237,6 +260,9 @@ Check these symptoms first when the workflow does not behave as expected.
 - **The tool appears outside the agent scope**: Pass the current scope handle into the managed execute helper.
 - **The call fails before execution**: A conditional-execution guardrail rejected the request.
 - **Subscribers see different data than the tool receives**: Sanitize guardrails change event payloads, while request intercepts change the real arguments.
+- **Python: The model receives the result wrapper or annotation metadata**:
+  Send `json.dumps(tool_result.result)` in the tool message, not
+  `str(tool_result)`.
 
 ## Next Steps
 
