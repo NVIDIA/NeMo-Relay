@@ -141,6 +141,31 @@ changes together:
 5. Wrap the result passed to a manual tool end helper in
    `ToolExecutionResult`.
 
+### Return-Shape Errors
+
+Python distinguishes `ToolExecutionResult` from
+`ToolExecutionInterceptOutcome`. A callback that returns a raw dictionary is
+rejected; return `ToolExecutionResult(payload)` instead. A forwarding intercept
+must unwrap the downstream result:
+
+```python
+downstream = await next(args)
+return ToolExecutionInterceptOutcome(
+    result=downstream.result,
+    annotation=downstream.annotation,
+)
+```
+
+Do not pass `downstream` itself as the outcome result or return it directly.
+The resulting `RuntimeError` names the required wrapper and this unwrapping
+form.
+
+Node.js represents both values as compatible object shapes. Therefore,
+`return await next(args)` is a valid forwarding intercept in Node.js. Raw tool
+callback returns and raw intercept outcomes are still rejected with guidance to
+return `{ result: payload }` or
+`{ result: downstream.result, annotation: downstream.annotation }`.
+
 Rebuild native plugins and workers against the same NeMo Relay release that
 hosts them. For binding-specific examples, refer to the
 [Migration Guides](/reference/migration-guides#return-canonical-tool-execution-results).

@@ -118,12 +118,14 @@ class TestToolsAsync:
         assert result.result == {"result": 10}
 
     async def test_execute_rejects_legacy_raw_result(self):
-        with pytest.raises(RuntimeError, match="must return ToolExecutionResult"):
+        with pytest.raises(RuntimeError, match="must return ToolExecutionResult") as error:
             await tools.execute(
                 "legacy_raw_result",
                 {},
                 lambda _args: {"legacy": True},  # type: ignore[arg-type]
             )
+        assert "ToolExecutionResult(payload), not a raw dict" in str(error.value)
+        assert "internal error" not in str(error.value)
 
     async def test_execute_rejects_cyclic_results_and_remains_usable(self):
         def cyclic_result(_args):
@@ -935,10 +937,39 @@ class TestToolInterceptsAsync:
             lambda name, args, next: {"legacy_result": True},  # type: ignore[arg-type] # ty: ignore[invalid-argument-type]
         )
         try:
-            with pytest.raises(RuntimeError, match="must return ToolExecutionInterceptOutcome"):
+            with pytest.raises(RuntimeError, match="must return ToolExecutionInterceptOutcome") as error:
                 await tools.execute("legacy_tool", {}, lambda args: ToolExecutionResult(args))
+            assert "after await next(args)" in str(error.value)
+            assert "internal error" not in str(error.value)
         finally:
             intercepts.deregister_tool_execution("py_exec_legacy")
+
+    async def test_execution_intercept_rejects_downstream_result_without_unwrapping(self):
+        async def leftover(_name, args, next):
+            downstream = await next(args)
+            return ToolExecutionInterceptOutcome(downstream)  # type: ignore[arg-type]
+
+        intercepts.register_tool_execution("py_exec_leftover", 1, leftover)
+        try:
+            with pytest.raises(RuntimeError, match="must return ToolExecutionInterceptOutcome") as error:
+                await tools.execute("leftover_tool", {}, lambda args: ToolExecutionResult(args))
+            assert "result=downstream.result, annotation=downstream.annotation" in str(error.value)
+            assert "internal error" not in str(error.value)
+        finally:
+            intercepts.deregister_tool_execution("py_exec_leftover")
+
+    async def test_execution_intercept_rejects_downstream_result_as_its_outcome(self):
+        async def leftover_return(_name, args, next):
+            return await next(args)  # type: ignore[return-value]
+
+        intercepts.register_tool_execution("py_exec_leftover_return", 1, leftover_return)
+        try:
+            with pytest.raises(RuntimeError, match="must return ToolExecutionInterceptOutcome") as error:
+                await tools.execute("leftover_return_tool", {}, lambda args: ToolExecutionResult(args))
+            assert "result=downstream.result, annotation=downstream.annotation" in str(error.value)
+            assert "internal error" not in str(error.value)
+        finally:
+            intercepts.deregister_tool_execution("py_exec_leftover_return")
 
     async def test_request_intercept_break_chain(self):
         def first_fn(name, args):

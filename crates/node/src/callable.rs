@@ -806,10 +806,10 @@ pub fn wrap_js_tool_request_intercept_fn(
     })
 }
 
-fn parse_tool_execution_result(value: Json) -> Result<ToolExecutionResult> {
+pub(crate) fn parse_tool_execution_result(value: Json) -> Result<ToolExecutionResult> {
     serde_json::from_value(value).map_err(|error| {
-        FlowError::Internal(format!(
-            "tool execution callback must return ToolExecutionResult: {error}"
+        FlowError::InvalidArgument(format!(
+            "tool execution callback must return ToolExecutionResult; return {{ result: payload }}, not a raw object: {error}"
         ))
     })
 }
@@ -1604,8 +1604,8 @@ pub fn wrap_js_tool_exec_intercept_fn(
                 pending_marks: Vec<JsPendingMarkSpec>,
             }
             let outcome: JsOutcome = serde_json::from_value(result).map_err(|error| {
-                FlowError::Internal(format!(
-                    "invalid JS tool execution intercept outcome: {error}"
+                FlowError::InvalidArgument(format!(
+                    "tool execution intercept must return {{ result, annotation?, pendingMarks? }}; return {{ result: downstream.result, annotation: downstream.annotation }} after next(args): {error}"
                 ))
             })?;
             Ok(ToolExecutionInterceptOutcome {

@@ -57,7 +57,7 @@ use crate::convert::{json_to_py, py_to_json};
 use crate::py_types::{
     PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyLLMRequest, PyLLMRequestInterceptOutcome,
     PyLlmSanitizeRequestContext, PyLlmSanitizeResponseContext, PyScopeStack,
-    PyToolExecutionInterceptOutcome, PyToolExecutionResult,
+    PyToolExecutionInterceptOutcome, PyToolExecutionResult, TOOL_EXECUTION_INTERCEPT_RESULT_ERROR,
 };
 
 type PyValueFuture = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
@@ -73,6 +73,29 @@ fn python_callback_error(error: PyErr) -> FlowError {
     FlowError::CallbackException {
         message: error.to_string(),
         exception_type,
+    }
+}
+
+fn tool_execution_callback_result_error(error: impl std::fmt::Display) -> FlowError {
+    FlowError::InvalidArgument(format!(
+        "tool execution callback must return ToolExecutionResult; return ToolExecutionResult(payload), not a raw dict: {error}"
+    ))
+}
+
+fn tool_execution_intercept_outcome_error(error: impl std::fmt::Display) -> FlowError {
+    FlowError::InvalidArgument(format!(
+        "tool execution intercept must return ToolExecutionInterceptOutcome; after await next(args), return ToolExecutionInterceptOutcome(result=downstream.result, annotation=downstream.annotation): {error}"
+    ))
+}
+
+fn tool_execution_intercept_callback_error(error: PyErr) -> FlowError {
+    if error
+        .to_string()
+        .contains(TOOL_EXECUTION_INTERCEPT_RESULT_ERROR)
+    {
+        tool_execution_intercept_outcome_error(error)
+    } else {
+        python_callback_error(error)
     }
 }
 
@@ -537,6 +560,17 @@ async fn resolve_py_object_or_future(
     }
 }
 
+async fn resolve_py_tool_execution_intercept_outcome(
+    outcome: FlowResult<Result<Py<PyAny>, PyValueFuture>>,
+) -> FlowResult<Py<PyAny>> {
+    match outcome? {
+        Ok(value) => Ok(value),
+        Err(future) => future
+            .await
+            .map_err(tool_execution_intercept_callback_error),
+    }
+}
+
 fn next_async_iter_coro(async_iter: &Arc<Py<PyAny>>) -> FlowResult<Option<Py<PyAny>>> {
     Python::attach(|py| {
         py.import("nemo_relay._event_sanitizer_context")
@@ -997,11 +1031,7 @@ pub fn wrap_py_tool_exec_fn(
             Python::attach(|py| {
                 result
                     .extract::<PyToolExecutionResult>(py)
-                    .map_err(|error| {
-                        FlowError::Internal(format!(
-                            "tool execution callback must return ToolExecutionResult: {error}"
-                        ))
-                    })?
+                    .map_err(tool_execution_callback_result_error)?
                     .to_inner(py)
                     .map_err(|error| FlowError::Internal(error.to_string()))
             })
@@ -1153,7 +1183,7 @@ pub fn wrap_py_tool_exec_intercept_fn(
         let name = name.to_string();
         let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         Box::pin(async move {
-            let result = resolve_py_object_or_future(Python::attach(|py| {
+            let result = resolve_py_tool_execution_intercept_outcome(Python::attach(|py| {
                 let (invocation_context, task_locals) = copy_middleware_invocation(py, task_locals)
                     .map_err(|error| FlowError::Internal(error.to_string()))?;
                 let py_args =
@@ -1175,7 +1205,7 @@ pub fn wrap_py_tool_exec_intercept_fn(
                     }
                     None => callback.bind(py).call1((&name, py_args, py_next)),
                 }
-                .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
+                .map_err(tool_execution_intercept_callback_error)?;
                 split_py_object_or_future_with_locals(
                     py,
                     result.unbind(),
@@ -1188,11 +1218,7 @@ pub fn wrap_py_tool_exec_intercept_fn(
                 result
                     .extract::<PyToolExecutionInterceptOutcome>(py)
                     .map(|value| value.inner)
-                    .map_err(|e| {
-                        FlowError::Internal(format!(
-                            "tool execution intercept must return ToolExecutionInterceptOutcome: {e}"
-                        ))
-                    })
+                    .map_err(tool_execution_intercept_outcome_error)
             })
         })
     })

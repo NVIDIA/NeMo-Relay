@@ -232,7 +232,12 @@ describe('Tool execute', () => {
       () => toolCallExecuteAsync('exec_async_tool_legacy_raw', {}, async () => ({ legacy: true })),
     ];
     for (const execute of cases) {
-      await assert.rejects(execute, /must return ToolExecutionResult/i);
+      await assert.rejects(execute, (error) => {
+        assert.match(error.message, /must return ToolExecutionResult/i);
+        assert.match(error.message, /return \{ result: payload \}, not a raw object/i);
+        assert.doesNotMatch(error.message, /internal error/i);
+        return true;
+      });
     }
   });
 
@@ -1427,15 +1432,30 @@ describe('Tool intercepts', () => {
     }
   });
 
-  it('execution intercept rejects legacy raw results', async () => {
+  it('execution intercept rejects legacy raw results with forwarding guidance', async () => {
     registerToolExecutionIntercept('node_tool_exec_legacy', 10, async () => ({ legacyResult: true }));
     try {
       await assert.rejects(
         () => toolCallExecute('legacy_tool', {}, (args) => args, null, null, null, null),
-        /invalid JS tool execution intercept outcome/i,
+        (error) => {
+          assert.match(error.message, /tool execution intercept must return/i);
+          assert.match(error.message, /result: downstream\.result, annotation: downstream\.annotation/i);
+          assert.doesNotMatch(error.message, /internal error/i);
+          return true;
+        },
       );
     } finally {
       deregisterToolExecutionIntercept('node_tool_exec_legacy');
+    }
+  });
+
+  it('execution intercept may directly forward the canonical Node result', async () => {
+    registerToolExecutionIntercept('node_tool_exec_forward_result', 10, async (args, next) => next(args));
+    try {
+      const result = await toolCallExecute('forward_result_tool', { ok: true }, (args) => toolResult(args));
+      assert.deepEqual(result, toolResult({ ok: true }));
+    } finally {
+      deregisterToolExecutionIntercept('node_tool_exec_forward_result');
     }
   });
 
