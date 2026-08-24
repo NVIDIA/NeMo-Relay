@@ -420,6 +420,7 @@ fn signal_endpoint_lists_preserve_omitted_and_explicit_empty_shapes() {
 
 #[test]
 fn observability_v3_remains_trace_only_and_v4_accepts_signal_sections() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let trace_only = plugin_config(json!({
         "version": 3,
         "opentelemetry": {
@@ -487,6 +488,7 @@ fn observability_v3_remains_trace_only_and_v4_accepts_signal_sections() {
 
 #[test]
 fn disabled_signal_sections_reject_duplicate_explicit_destinations() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let config = plugin_config(json!({
         "version": 4,
         "opentelemetry": {
@@ -968,6 +970,7 @@ fn assert_default_stream_sink_shape() {
 
 #[test]
 fn version_three_rejects_removed_otlp_controls() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let report = validate_plugin_config(&plugin_config(json!({
         "opentelemetry": {
             "enabled": false,
@@ -1707,6 +1710,7 @@ fn outer_disabled_component_does_not_resolve_opentelemetry_header_env() {
 
 #[test]
 fn opentelemetry_endpoint_accepts_legacy_projection_controls_and_rejects_unknown_fields() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let report = validate_plugin_config(&plugin_config(json!({
         "policy": {"unknown_field": "error"},
         "opentelemetry": {
@@ -1806,6 +1810,7 @@ fn opentelemetry_endpoint_rejects_invalid_attribute_mappings() {
 
 #[test]
 fn opentelemetry_endpoint_accepts_valid_attribute_mappings() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let report = validate_plugin_config(&plugin_config(json!({
         "opentelemetry": {
             "enabled": true,
@@ -1829,6 +1834,7 @@ fn opentelemetry_endpoint_accepts_valid_attribute_mappings() {
 
 #[test]
 fn opentelemetry_endpoint_rejects_glob_metadata_promotion_prefix() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let report = validate_plugin_config(&plugin_config(json!({
         "opentelemetry": {
             "enabled": true,
@@ -1850,6 +1856,7 @@ fn opentelemetry_endpoint_rejects_glob_metadata_promotion_prefix() {
 
 #[test]
 fn opentelemetry_endpoint_rejects_invalid_and_case_duplicate_headers() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let report = validate_plugin_config(&plugin_config(json!({
         "opentelemetry": {
             "enabled": true,
@@ -3894,6 +3901,7 @@ fn opentelemetry_rejects_canonical_collision_during_validation_and_activation() 
 
 #[test]
 fn opentelemetry_allows_repeated_projection_types_at_the_same_destination() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let config = plugin_config(json!({
         "opentelemetry": {
             "enabled": true,
@@ -4080,6 +4088,7 @@ fn signal_delivery_state_classifies_generic_sdk_shutdown_error_as_delivery() {
 
 #[test]
 fn metric_cardinality_limit_rejects_usize_max_in_plugin_validation() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let config = plugin_config(json!({
         "version": 4,
         "opentelemetry": {
@@ -4651,6 +4660,7 @@ fn atif_storage_section_parses_empty_array() {
 
 #[test]
 fn atif_storage_unknown_backend_type_is_rejected() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let report = validate_plugin_config(&plugin_config(json!({
         "atif": {
             "enabled": true,
@@ -4669,6 +4679,7 @@ fn atif_storage_unknown_backend_type_is_rejected() {
 
 #[test]
 fn disabled_atif_storage_config_does_not_report_feature_disabled() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let report = validate_plugin_config(&plugin_config(json!({
         "atif": {
             "enabled": false,
@@ -4689,6 +4700,7 @@ fn disabled_atif_storage_config_does_not_report_feature_disabled() {
 
 #[test]
 fn atif_storage_empty_bucket_is_rejected() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let report = validate_plugin_config(&plugin_config(json!({
         "atif": {
             "enabled": true,
@@ -4707,6 +4719,7 @@ fn atif_storage_empty_bucket_is_rejected() {
 
 #[test]
 fn atif_storage_diagnostics_carry_sink_index() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let report = validate_plugin_config(&plugin_config(json!({
         "atif": {
             "enabled": true,
@@ -4730,6 +4743,7 @@ fn atif_storage_diagnostics_carry_sink_index() {
 
 #[test]
 fn atif_storage_empty_http_endpoint_is_rejected() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let report = validate_plugin_config(&plugin_config(json!({
         "atif": {
             "enabled": true,
@@ -4750,6 +4764,7 @@ fn atif_storage_empty_http_endpoint_is_rejected() {
 
 #[test]
 fn atif_storage_malformed_http_endpoint_is_rejected() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let report = validate_plugin_config(&plugin_config(json!({
         "atif": {
             "enabled": true,
@@ -4770,6 +4785,7 @@ fn atif_storage_malformed_http_endpoint_is_rejected() {
 
 #[test]
 fn atif_storage_http_timeout_must_be_positive() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let report = validate_plugin_config(&plugin_config(json!({
         "atif": {
             "enabled": true,
@@ -4794,6 +4810,7 @@ fn atif_storage_http_timeout_must_be_positive() {
 
 #[test]
 fn atif_storage_http_invalid_literal_header_name_is_rejected() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let report = validate_plugin_config(&plugin_config(json!({
         "atif": {
             "enabled": true,
@@ -4818,6 +4835,7 @@ fn atif_storage_http_invalid_literal_header_name_is_rejected() {
 
 #[test]
 fn atif_storage_http_invalid_literal_header_value_is_rejected() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let report = validate_plugin_config(&plugin_config(json!({
         "atif": {
             "enabled": true,
@@ -4911,6 +4929,7 @@ fn atif_storage_http_header_env_empty_env_is_rejected() {
 
 #[test]
 fn atif_storage_http_header_env_whitespace_name_is_rejected() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let report = validate_plugin_config(&plugin_config(json!({
         "atif": {
             "enabled": true,
@@ -5109,6 +5128,7 @@ fn atif_storage_secret_var_present_env_is_accepted() {
 
 #[test]
 fn atif_storage_secret_var_empty_name_is_rejected() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let report = validate_plugin_config(&plugin_config(json!({
         "atif": {
             "enabled": true,
