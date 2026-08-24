@@ -18,7 +18,7 @@ Tool lifecycle helpers.
 ### `call`
 
 ```python
-def call(name, args, *, handle = None, attributes = None, data = None, metadata = None, tool_call_id = None, timestamp: datetime | None = None)
+def call(name: str, args: Json, *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: Json | None = None, metadata: Json | None = None, tool_call_id: str | None = None, timestamp: datetime | None = None) -> ToolHandle
 ```
 
 Start a manual tool span and return its `ToolHandle`.
@@ -26,7 +26,7 @@ Start a manual tool span and return its `ToolHandle`.
 ### `call_end`
 
 ```python
-def call_end(handle, result, *, data = None, metadata = None, timestamp: datetime | None = None)
+def call_end(handle: ToolHandle, result: ToolExecutionResult[Json], *, data: Json | None = None, metadata: Json | None = None, timestamp: datetime | None = None) -> None
 ```
 
 Finish a manual tool span started by `call()`.
@@ -34,7 +34,7 @@ Finish a manual tool span started by `call()`.
 ### `execute`
 
 ```python
-def execute(name, args, func, *, handle = None, attributes = None, data = None, metadata = None, tool_call_id = None)
+def execute(name: str, args: Json, func: Callable[[Json], ToolExecutionResult[Json] | Awaitable[ToolExecutionResult[Json]]], *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: Json | None = None, metadata: Json | None = None, tool_call_id: str | None = None) -> Awaitable[ToolExecutionResult[Json]]
 ```
 
 Run a tool through the managed middleware pipeline.
@@ -42,7 +42,7 @@ Run a tool through the managed middleware pipeline.
 ### `request_intercepts`
 
 ```python
-def request_intercepts(name, args)
+def request_intercepts(name: str, args: Json) -> Json | Awaitable[Json]
 ```
 
 Apply global tool request intercepts to `args`.
@@ -50,7 +50,7 @@ Apply global tool request intercepts to `args`.
 ### `conditional_execution`
 
 ```python
-def conditional_execution(name, args)
+def conditional_execution(name: str, args: Json) -> Awaitable[None] | None
 ```
 
 Run tool conditional-execution guardrails for `args`.

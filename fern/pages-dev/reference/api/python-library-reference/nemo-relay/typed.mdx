@@ -146,19 +146,19 @@ Reconstruct a Python value from its tagged JSON representation.
 ### `tool_execute`
 
 ```python
-async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], Awaitable[ToolExecutionResult[TResult]]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None, tool_call_id: str | None = None) -> ToolExecutionResult[TResult]
+async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], Awaitable[ToolExecutionResult[TResult]]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: Json | None = None, metadata: Json | None = None, tool_call_id: str | None = None) -> ToolExecutionResult[TResult]
 ```
 
 ### `tool_execute`
 
 ```python
-async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], ToolExecutionResult[TResult]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None, tool_call_id: str | None = None) -> ToolExecutionResult[TResult]
+async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], ToolExecutionResult[TResult]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: Json | None = None, metadata: Json | None = None, tool_call_id: str | None = None) -> ToolExecutionResult[TResult]
 ```
 
 ### `tool_execute`
 
 ```python
-async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], ToolExecutionResult[TResult]] | Callable[[TArgs], Awaitable[ToolExecutionResult[TResult]]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None, tool_call_id: str | None = None) -> ToolExecutionResult[TResult]
+async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], ToolExecutionResult[TResult]] | Callable[[TArgs], Awaitable[ToolExecutionResult[TResult]]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: Json | None = None, metadata: Json | None = None, tool_call_id: str | None = None) -> ToolExecutionResult[TResult]
 ```
 
 Run `nemo_relay.tools.execute` with typed arguments and results.
@@ -166,19 +166,19 @@ Run `nemo_relay.tools.execute` with typed arguments and results.
 ### `llm_execute`
 
 ```python
-async def llm_execute(name: str, request: LLMRequest, func: Callable[[LLMRequest], Awaitable[TResponse]], response_json_codec: Codec[TResponse], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None, model_name: str | None = None, codec: LlmCodec | None = None, response_codec: LlmResponseCodec | None = None) -> TResponse
+async def llm_execute(name: str, request: LLMRequest, func: Callable[[LLMRequest], Awaitable[TResponse]], response_json_codec: Codec[TResponse], *, handle: ScopeHandle | None = None, attributes: LLMAttributes | None = None, data: Json | None = None, metadata: Json | None = None, model_name: str | None = None, codec: LlmCodec | None = None, response_codec: LlmResponseCodec | None = None) -> TResponse
 ```
 
 ### `llm_execute`
 
 ```python
-async def llm_execute(name: str, request: LLMRequest, func: Callable[[LLMRequest], TResponse], response_json_codec: Codec[TResponse], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None, model_name: str | None = None, codec: LlmCodec | None = None, response_codec: LlmResponseCodec | None = None) -> TResponse
+async def llm_execute(name: str, request: LLMRequest, func: Callable[[LLMRequest], TResponse], response_json_codec: Codec[TResponse], *, handle: ScopeHandle | None = None, attributes: LLMAttributes | None = None, data: Json | None = None, metadata: Json | None = None, model_name: str | None = None, codec: LlmCodec | None = None, response_codec: LlmResponseCodec | None = None) -> TResponse
 ```
 
 ### `llm_execute`
 
 ```python
-async def llm_execute(name: str, request: LLMRequest, func: Callable[[LLMRequest], TResponse] | Callable[[LLMRequest], Awaitable[TResponse]], response_json_codec: Codec[TResponse], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None, model_name: str | None = None, codec: LlmCodec | None = None, response_codec: LlmResponseCodec | None = None) -> TResponse
+async def llm_execute(name: str, request: LLMRequest, func: Callable[[LLMRequest], TResponse] | Callable[[LLMRequest], Awaitable[TResponse]], response_json_codec: Codec[TResponse], *, handle: ScopeHandle | None = None, attributes: LLMAttributes | None = None, data: Json | None = None, metadata: Json | None = None, model_name: str | None = None, codec: LlmCodec | None = None, response_codec: LlmResponseCodec | None = None) -> TResponse
 ```
 
 Run `nemo_relay.llm.execute` and decode the returned response type.
@@ -186,7 +186,7 @@ Run `nemo_relay.llm.execute` and decode the returned response type.
 ### `llm_stream_execute`
 
 ```python
-async def llm_stream_execute(name: str, request: LLMRequest, func: Callable[[LLMRequest], AsyncIterator[TResponseChunk]], collector: Callable[[TResponseChunk], None], finalizer: Callable[[], TResponse], chunk_json_codec: Codec[TResponseChunk], response_json_codec: Codec[TResponse], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None, model_name: str | None = None, codec: LlmCodec | None = None, response_codec: LlmResponseCodec | None = None) -> LlmStream
+async def llm_stream_execute(name: str, request: LLMRequest, func: Callable[[LLMRequest], AsyncIterator[TResponseChunk]], collector: Callable[[TResponseChunk], None], finalizer: Callable[[], TResponse], chunk_json_codec: Codec[TResponseChunk], response_json_codec: Codec[TResponse], *, handle: ScopeHandle | None = None, attributes: LLMAttributes | None = None, data: Json | None = None, metadata: Json | None = None, model_name: str | None = None, codec: LlmCodec | None = None, response_codec: LlmResponseCodec | None = None) -> LlmStream
 ```
 
 Run `nemo_relay.llm.stream_execute` with typed chunks and final output.
