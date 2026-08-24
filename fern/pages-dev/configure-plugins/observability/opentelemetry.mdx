@@ -95,6 +95,7 @@ promote_metadata_prefixes = ["app."]
 max_queue_size = 4096
 max_export_batch_size = 512
 scheduled_delay_millis = 1000
+completed_span_context_ttl_millis = 60000
 
 [components.config.opentelemetry.endpoints.header_env]
 authorization = "OTEL_AUTHORIZATION"
@@ -104,6 +105,7 @@ authorization = "OTEL_AUTHORIZATION"
 
 [components.config.opentelemetry.logs]
 enabled = true
+completed_span_context_ttl_millis = 60000
 minimum_severity = "info"
 
 [components.config.opentelemetry.metrics]
@@ -139,6 +141,7 @@ not stop application work or delivery to the other exporters.
 | `max_queue_size` | Environment or `2048` | Maximum completed spans buffered before this endpoint drops new spans. |
 | `max_export_batch_size` | Environment or `512` | Maximum spans exported in one batch; capped at the effective queue size. |
 | `scheduled_delay_millis` | Environment or `5000` ms | Maximum delay before this endpoint exports a non-full batch. A full batch exports sooner. |
+| `completed_span_context_ttl_millis` | `60000` | Positive duration for retaining completed scopes' trace context for late marks. |
 | `headers` | `{}` | String-to-string exporter headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
 | `resource_attributes` | `{}` | String-to-string resource attributes. |
@@ -263,6 +266,26 @@ set, `max_export_batch_size` must not exceed `max_queue_size`. When one size is
 inherited, the SDK caps the effective batch size at the effective queue size.
 The SDK falls back to its default for malformed environment values. Queue and
 batch sizes count spans, not bytes.
+
+## Completed Scope Lineage Retention
+
+Trace endpoints retain a completed scope's trace and parent span context for
+`completed_span_context_ttl_millis` after its scope-end event. A late mark in
+that window remains attached to the original trace and parent span. When the
+TTL expires, Relay emits subsequent marks as orphan spans and records the
+`otel.completed_span_context_expired` runtime diagnostic when it purges expired
+contexts.
+
+Keep closed scope handles only for short deferred follow-up work. Prefer
+emitting an event before the scope closes, or create a new active scope for
+later work. Increasing the TTL retains more completed contexts: memory grows
+with the completed-scope rate, TTL, and number of configured trace endpoints.
+
+OTLP logs use the same TTL-based completed-scope lineage behavior. Configure
+`opentelemetry.logs.completed_span_context_ttl_millis` independently when log
+export is enabled. Metrics do not retain completed-scope parent context. Do not
+rely on a closed scope handle for long-running follow-up work; emit the mark
+before closing the scope or use an active/new scope instead.
 
 If an endpoint's explicit batch settings are invalid, Relay skips that endpoint
 and records an `observability.invalid_otel_endpoint` configuration warning with
@@ -480,6 +503,7 @@ The `logs` section applies these processing settings to every log endpoint:
 | `max_queue_size` | `2048` | Maximum queued log records. |
 | `max_export_batch_size` | `512` | Maximum records in one batch; must not exceed the queue size. |
 | `scheduled_delay_millis` | `1000` | Maximum delay before exporting a partial batch. |
+| `completed_span_context_ttl_millis` | `60000` | Positive duration for retaining completed scope parent context for late logs. Contexts exactly at the TTL boundary remain linked. |
 
 Relay maps the event timestamp to the log timestamp and post-sanitization
 processing time to the observed timestamp. Sanitized `data` becomes the
