@@ -418,10 +418,11 @@ class RecordingHostStub:
                 pb.RuntimeRegistrationIdentity(
                     kind=pb.SUBSCRIBER,
                     local_name="opentelemetry",
-                    effective_name="__nemo_relay_plugin__observability__opentelemetry",
+                    effective_name="__nemo_relay_plugin__observability__1__opentelemetry",
                     owner=pb.RuntimeRegistrationOwner(
                         kind=pb.RUNTIME_REGISTRATION_OWNER_KIND_PLUGIN,
                         plugin_kind="observability",
+                        component_ordinal=1,
                     ),
                 )
             ]
@@ -2241,10 +2242,11 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         RuntimeRegistrationIdentity(
             kind=RuntimeRegistrationKind.SUBSCRIBER,
             local_name="opentelemetry",
-            effective_name="__nemo_relay_plugin__observability__opentelemetry",
+            effective_name="__nemo_relay_plugin__observability__1__opentelemetry",
             owner=plugin_api.RuntimeRegistrationOwner(
                 kind=RuntimeRegistrationOwnerKind.PLUGIN,
                 plugin_kind="observability",
+                component_ordinal=1,
             ),
         )
     ]

@@ -1511,7 +1511,7 @@ fn opentelemetry_endpoint_header_env_rejects_missing_and_duplicate_headers() {
             .read()
             .unwrap()
             .event_subscribers
-            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+            .contains_key("__nemo_relay_plugin__observability__1__opentelemetry")
     );
     clear_plugin_configuration().unwrap();
 }
@@ -1547,7 +1547,7 @@ fn invalid_log_endpoint_keeps_valid_signal_subscriber() {
             .read()
             .unwrap()
             .event_subscribers
-            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+            .contains_key("__nemo_relay_plugin__observability__1__opentelemetry")
     );
     clear_plugin_configuration().unwrap();
 }
@@ -1583,7 +1583,7 @@ fn invalid_metric_endpoint_keeps_valid_signal_subscriber() {
             .read()
             .unwrap()
             .event_subscribers
-            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+            .contains_key("__nemo_relay_plugin__observability__1__opentelemetry")
     );
     clear_plugin_configuration().unwrap();
 }
@@ -1635,7 +1635,7 @@ fn malformed_derived_signal_endpoint_keeps_valid_peers() {
             .read()
             .unwrap()
             .event_subscribers
-            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+            .contains_key("__nemo_relay_plugin__observability__1__opentelemetry")
     );
     clear_plugin_configuration().unwrap();
 }
@@ -2576,7 +2576,7 @@ fn atof_enabled_writes_jsonl_and_teardown_flushes() {
             .keys()
             .cloned()
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["__nemo_relay_plugin__observability__atof"]);
+        assert_eq!(names, vec!["__nemo_relay_plugin__observability__1__atof"]);
     }
 
     let agent = push_agent("atof-agent");
@@ -3703,11 +3703,11 @@ fn otlp_sections_register_inferred_subscribers_with_full_config() {
         .keys()
         .cloned()
         .collect::<Vec<_>>();
-    assert!(names.contains(&"__nemo_relay_plugin__observability__opentelemetry".to_string()));
+    assert!(names.contains(&"__nemo_relay_plugin__observability__1__opentelemetry".to_string()));
     assert_eq!(
         names
             .iter()
-            .filter(|name| *name == "__nemo_relay_plugin__observability__opentelemetry")
+            .filter(|name| *name == "__nemo_relay_plugin__observability__1__opentelemetry")
             .count(),
         1
     );
@@ -3918,7 +3918,7 @@ fn opentelemetry_rejects_canonical_collision_during_validation_and_activation() 
             .read()
             .unwrap()
             .event_subscribers
-            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+            .contains_key("__nemo_relay_plugin__observability__1__opentelemetry")
     );
 }
 
@@ -3994,7 +3994,7 @@ fn invalid_later_opentelemetry_endpoint_keeps_fanout_registration() {
             .read()
             .unwrap()
             .event_subscribers
-            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+            .contains_key("__nemo_relay_plugin__observability__1__opentelemetry")
     );
     clear_plugin_configuration().unwrap();
 }
