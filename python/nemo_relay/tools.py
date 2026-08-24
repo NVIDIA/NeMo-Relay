@@ -24,7 +24,6 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import TypeVar
 
 from nemo_relay import Json
 from nemo_relay._context import ensure_scope_stack
@@ -49,8 +48,6 @@ from nemo_relay._native import (
 from nemo_relay._native import (
     tool_request_intercepts as _native_tool_request_intercepts,
 )
-
-TToolResult = TypeVar("TToolResult")
 
 
 def call(
@@ -160,14 +157,14 @@ def call_end(
 def execute(
     name: str,
     args: Json,
-    func: Callable[[Json], ToolExecutionResult[TToolResult] | Awaitable[ToolExecutionResult[TToolResult]]],
+    func: Callable[[Json], ToolExecutionResult[Json] | Awaitable[ToolExecutionResult[Json]]],
     *,
     handle: ScopeHandle | None = None,
     attributes: ToolAttributes | None = None,
     data: Json | None = None,
     metadata: Json | None = None,
     tool_call_id: str | None = None,
-) -> Awaitable[ToolExecutionResult[TToolResult]]:
+) -> Awaitable[ToolExecutionResult[Json]]:
     """Run a tool through the managed middleware pipeline.
 
     Pipeline order:
@@ -252,7 +249,7 @@ def request_intercepts(name: str, args: Json) -> Json | Awaitable[Json]:
     return _native_tool_request_intercepts(name, args)
 
 
-def conditional_execution(name: str, args: Json) -> None | Awaitable[None]:
+def conditional_execution(name: str, args: Json) -> Awaitable[None] | None:
     """Run tool conditional-execution guardrails for ``args``.
 
     Args:
@@ -260,7 +257,7 @@ def conditional_execution(name: str, args: Json) -> None | Awaitable[None]:
         args: JSON-compatible tool arguments to validate.
 
     Returns:
-        None | Awaitable[None]: ``None`` when execution is allowed, returned
+        Awaitable[None] | None: ``None`` when execution is allowed, returned
         directly outside an event loop or through an awaitable inside one.
 
     Notes:

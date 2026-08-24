@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING
 
 from nemo_relay import Json
 from nemo_relay._context import ensure_scope_stack
@@ -61,8 +61,6 @@ from nemo_relay._native import (
 from nemo_relay._native import (
     llm_stream_call_execute as _native_llm_stream_call_execute,
 )
-
-TResponse = TypeVar("TResponse", bound=Json)
 
 if TYPE_CHECKING:
     from nemo_relay._native import (
@@ -199,7 +197,7 @@ def call_end(
 def execute(
     name: str,
     request: LLMRequest,
-    func: Callable[[LLMRequest], TResponse | Awaitable[TResponse]],
+    func: Callable[[LLMRequest], Json | Awaitable[Json]],
     *,
     handle: ScopeHandle | None = None,
     attributes: LLMAttributes | None = None,
@@ -208,7 +206,7 @@ def execute(
     model_name: str | None = None,
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
-) -> Awaitable[Any]:
+) -> Awaitable[Json]:
     """Run an LLM call through the managed middleware pipeline.
 
     Pipeline order:
@@ -414,7 +412,7 @@ def request_intercepts(
     return _native_llm_request_intercepts(name, request)
 
 
-def conditional_execution(request: LLMRequest) -> None | Awaitable[None]:
+def conditional_execution(request: LLMRequest) -> Awaitable[None] | None:
     """Run LLM conditional-execution guardrails for ``request``.
 
     Args:
@@ -422,7 +420,7 @@ def conditional_execution(request: LLMRequest) -> None | Awaitable[None]:
             conditional-execution guardrails.
 
     Returns:
-        None | Awaitable[None]: ``None`` when execution is allowed, returned
+        Awaitable[None] | None: ``None`` when execution is allowed, returned
         directly outside an event loop or through an awaitable inside one.
 
     Notes:

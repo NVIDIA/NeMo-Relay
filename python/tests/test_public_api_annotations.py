@@ -4,6 +4,7 @@
 """Regression tests for public Python API annotations and documentation."""
 
 import inspect
+from importlib import import_module
 from importlib.util import find_spec
 from types import ModuleType
 
@@ -18,10 +19,14 @@ def _public_modules() -> list[ModuleType]:
         for value in vars(nemo_relay).values()
         if isinstance(value, ModuleType) and value.__name__.startswith("nemo_relay")
     )
-    if find_spec("langchain_core") is not None:
-        from nemo_relay.integrations import deepagents, langchain, langgraph
-
-        modules.extend([deepagents, langchain, langgraph])
+    integration_dependencies = {
+        "nemo_relay.integrations.langchain": ("langchain_core",),
+        "nemo_relay.integrations.langgraph": ("langchain_core", "langgraph"),
+        "nemo_relay.integrations.deepagents": ("langchain_core", "langgraph", "deepagents"),
+    }
+    for module_name, dependencies in integration_dependencies.items():
+        if all(find_spec(dependency) is not None for dependency in dependencies):
+            modules.append(import_module(module_name))
     return modules
 
 
