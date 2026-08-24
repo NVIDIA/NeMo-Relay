@@ -91,11 +91,11 @@ fn scope_lineage_retains_active_contexts_and_preserves_root_trace_id() {
     let mut lineage = ScopeLineage::new();
     let root = Uuid::now_v7();
     lineage.process_start(&scope(root, ScopeCategory::Start));
-    for _ in 0..ACTIVE_LOG_SCOPE_HIGH_WATER {
+    for _ in 0..4_096 {
         lineage.process_start(&scope(Uuid::now_v7(), ScopeCategory::Start));
     }
 
-    assert_eq!(lineage.active.len(), ACTIVE_LOG_SCOPE_HIGH_WATER + 1);
+    assert_eq!(lineage.active.len(), 4_097);
     assert!(lineage.active.contains_key(&root));
 
     let child = Uuid::now_v7();
@@ -105,18 +105,6 @@ fn scope_lineage_retains_active_contexts_and_preserves_root_trace_id() {
     lineage.process_end(&scope(child, ScopeCategory::End));
     assert!(!lineage.active.contains_key(&child));
     assert!(lineage.completed.contains_key(&child));
-}
-
-#[test]
-fn log_processor_reports_active_lineage_high_water_once() {
-    let (mut processor, _exporter, _provider) = processor(LogSeverity::Info);
-    for _ in 0..=ACTIVE_LOG_SCOPE_HIGH_WATER {
-        processor.process(&scope(Uuid::now_v7(), ScopeCategory::Start));
-    }
-    assert!(processor.active_lineage_high_water_reported);
-
-    processor.process(&scope(Uuid::now_v7(), ScopeCategory::Start));
-    assert!(processor.active_lineage_high_water_reported);
 }
 
 #[test]

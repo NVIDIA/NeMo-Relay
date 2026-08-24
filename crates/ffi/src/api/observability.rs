@@ -1254,76 +1254,14 @@ fn build_ffi_otel_log_config(
 
 /// Creates an independently managed OpenTelemetry log subscriber.
 ///
-/// Numeric processing settings use their core-config defaults when zero.
+/// Numeric processing settings use their core-config defaults when zero, except
+/// `completed_span_context_ttl_millis`, which must be positive.
 ///
 /// # Safety
 /// Any non-null C strings must be valid and `out` must be non-null.
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_create(
-    transport: *const c_char,
-    endpoint: *const c_char,
-    headers_json: *const c_char,
-    resource_attributes_json: *const c_char,
-    service_name: *const c_char,
-    service_namespace: *const c_char,
-    service_version: *const c_char,
-    instrumentation_scope: *const c_char,
-    timeout_millis: u64,
-    minimum_severity: *const c_char,
-    max_queue_size: u64,
-    max_export_batch_size: u64,
-    scheduled_delay_millis: u64,
-    out: *mut *mut FfiOpenTelemetryLogSubscriber,
-) -> NemoRelayStatus {
-    clear_last_error();
-    if let Err(status) = required_out_ptr(out) {
-        return status;
-    }
-    let config = match build_ffi_otel_log_config(
-        transport,
-        endpoint,
-        headers_json,
-        resource_attributes_json,
-        service_name,
-        service_namespace,
-        service_version,
-        instrumentation_scope,
-        timeout_millis,
-        minimum_severity,
-        max_queue_size,
-        max_export_batch_size,
-        scheduled_delay_millis,
-        None,
-    ) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
-    let _runtime_guard = tokio_runtime().enter();
-    match OpenTelemetryLogSubscriber::new(config) {
-        Ok(subscriber) => {
-            unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetryLogSubscriber(subscriber))) };
-            NemoRelayStatus::Ok
-        }
-        Err(error) => {
-            set_last_error(&error.to_string());
-            NemoRelayStatus::Internal
-        }
-    }
-}
-
-/// Creates an independently managed OpenTelemetry log subscriber with
-/// completed-scope lineage retention configured in milliseconds.
-///
-/// Unlike `nemo_relay_otel_log_subscriber_create`, this version requires a
-/// positive `completed_span_context_ttl_millis`. The original constructor keeps
-/// its 60-second default for ABI compatibility.
-///
-/// # Safety
-/// Any non-null C strings must be valid and `out` must be non-null.
-#[unsafe(no_mangle)]
-#[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_create_v2(
     transport: *const c_char,
     endpoint: *const c_char,
     headers_json: *const c_char,

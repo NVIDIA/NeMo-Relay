@@ -45,7 +45,6 @@ use super::otel_signal::{
 const DEFAULT_MAX_QUEUE_SIZE: usize = 2_048;
 const DEFAULT_MAX_EXPORT_BATCH_SIZE: usize = 512;
 const DEFAULT_SCHEDULED_DELAY: Duration = Duration::from_secs(1);
-const ACTIVE_LOG_SCOPE_HIGH_WATER: usize = 4096;
 
 /// Configuration for an OTLP log subscriber.
 #[derive(Debug, Clone)]
@@ -682,7 +681,6 @@ struct LogEventProcessor {
     lineage: ScopeLineage,
     invalid_severity_count: u64,
     invalid_metric_count: u64,
-    active_lineage_high_water_reported: bool,
     runtime_diagnostics: SignalRuntimeDiagnostics,
     completed_span_context_ttl: Duration,
 }
@@ -714,7 +712,6 @@ impl LogEventProcessor {
             lineage: ScopeLineage::new(),
             invalid_severity_count: 0,
             invalid_metric_count: 0,
-            active_lineage_high_water_reported: false,
             runtime_diagnostics,
             completed_span_context_ttl,
         }
@@ -742,34 +739,10 @@ impl LogEventProcessor {
         match event.scope_category() {
             Some(crate::api::event::ScopeCategory::Start) => {
                 self.lineage.process_start(event);
-                self.report_active_lineage_high_water();
             }
             Some(crate::api::event::ScopeCategory::End) => self.lineage.process_end(event),
             None => self.process_mark(event),
         }
-    }
-
-    fn report_active_lineage_high_water(&mut self) {
-        let active_scope_count = self.lineage.active.len();
-        if active_scope_count <= ACTIVE_LOG_SCOPE_HIGH_WATER
-            || self.active_lineage_high_water_reported
-        {
-            return;
-        }
-        self.active_lineage_high_water_reported = true;
-        log::warn!(
-            target: "nemo_relay.observability",
-            event = "otel_log_active_scope_high_water",
-            active_scope_count;
-            "OpenTelemetry log lineage retained more than {ACTIVE_LOG_SCOPE_HIGH_WATER} active scopes to preserve trace context"
-        );
-        self.runtime_diagnostics.record(
-            "otel.log_active_scope_high_water",
-            format!(
-                "OpenTelemetry log lineage retained {active_scope_count} active scopes to preserve trace context"
-            ),
-            active_scope_count as u64,
-        );
     }
 
     fn process_mark(&mut self, event: &Event) {

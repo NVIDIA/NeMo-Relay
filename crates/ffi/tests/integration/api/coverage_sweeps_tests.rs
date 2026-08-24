@@ -1902,6 +1902,7 @@ fn test_ffi_typed_otel_signal_options_from_integration_binary() {
                     64,
                     16,
                     10,
+                    60_000,
                     out,
                 )
             },

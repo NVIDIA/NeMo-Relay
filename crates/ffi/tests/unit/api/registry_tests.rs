@@ -1035,6 +1035,7 @@ fn test_ffi_open_telemetry_log_and_metric_subscriber_construction() {
                 0,
                 0,
                 0,
+                60_000,
                 ptr::null_mut(),
             ),
             NemoRelayStatus::NullPointer
@@ -1054,6 +1055,7 @@ fn test_ffi_open_telemetry_log_and_metric_subscriber_construction() {
                 0,
                 0,
                 0,
+                60_000,
                 &mut log_subscriber,
             ),
             NemoRelayStatus::InvalidArg
@@ -1073,6 +1075,7 @@ fn test_ffi_open_telemetry_log_and_metric_subscriber_construction() {
                 0,
                 0,
                 0,
+                60_000,
                 &mut log_subscriber,
             ),
             NemoRelayStatus::Ok
@@ -1222,6 +1225,7 @@ fn test_ffi_open_telemetry_log_and_metric_subscribers_export_signals() {
                 0,
                 0,
                 0,
+                60_000,
                 &mut log_subscriber,
             ),
             NemoRelayStatus::Ok
@@ -1392,6 +1396,7 @@ fn test_ffi_open_telemetry_subscribers_return_runtime_diagnostics() {
                 0,
                 0,
                 0,
+                60_000,
                 &mut log_subscriber,
             ),
             NemoRelayStatus::Ok
