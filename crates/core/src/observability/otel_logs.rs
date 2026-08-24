@@ -41,7 +41,12 @@ use super::otel_signal::{
 const DEFAULT_MAX_QUEUE_SIZE: usize = 2_048;
 const DEFAULT_MAX_EXPORT_BATCH_SIZE: usize = 512;
 const DEFAULT_SCHEDULED_DELAY: Duration = Duration::from_secs(1);
-const COMPLETED_SPAN_CONTEXT_LIMIT: usize = 4096;
+// Log lineage uses a bounded cache. Unlike trace exporters, it does not apply
+// the completed-scope TTL because logs are independent records rather than
+// trace spans. Keep these limits distinct so the active-scope warning does not
+// imply a completed-context retention contract.
+const COMPLETED_LOG_CONTEXT_LIMIT: usize = 4096;
+const ACTIVE_LOG_SCOPE_HIGH_WATER: usize = 4096;
 
 /// Configuration for an OTLP log subscriber.
 #[derive(Debug, Clone)]
@@ -567,7 +572,7 @@ impl ScopeLineage {
         self.next_completed_generation = self.next_completed_generation.wrapping_add(1);
         self.completed.insert(event.uuid(), (generation, context));
         self.completed_order.push_back((event.uuid(), generation));
-        while self.completed_order.len() > COMPLETED_SPAN_CONTEXT_LIMIT {
+        while self.completed_order.len() > COMPLETED_LOG_CONTEXT_LIMIT {
             if let Some((expired, generation)) = self.completed_order.pop_front()
                 && self
                     .completed
@@ -658,7 +663,7 @@ impl LogEventProcessor {
 
     fn report_active_lineage_high_water(&mut self) {
         let active_scope_count = self.lineage.active.len();
-        if active_scope_count <= COMPLETED_SPAN_CONTEXT_LIMIT
+        if active_scope_count <= ACTIVE_LOG_SCOPE_HIGH_WATER
             || self.active_lineage_high_water_reported
         {
             return;
@@ -668,7 +673,7 @@ impl LogEventProcessor {
             target: "nemo_relay.observability",
             event = "otel_log_active_scope_high_water",
             active_scope_count;
-            "OpenTelemetry log lineage retained more than {COMPLETED_SPAN_CONTEXT_LIMIT} active scopes to preserve trace context"
+            "OpenTelemetry log lineage retained more than {ACTIVE_LOG_SCOPE_HIGH_WATER} active scopes to preserve trace context"
         );
         self.runtime_diagnostics.record(
             "otel.log_active_scope_high_water",

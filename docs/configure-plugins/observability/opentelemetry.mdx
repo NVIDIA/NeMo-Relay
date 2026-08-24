@@ -280,6 +280,12 @@ emitting an event before the scope closes, or create a new active scope for
 later work. Increasing the TTL retains more completed contexts: memory grows
 with the completed-scope rate, TTL, and number of configured trace endpoints.
 
+This TTL applies only to trace endpoints. OTLP logs preserve parent context from
+a separate bounded cache of at most 4,096 completed scopes, and metrics do not
+retain completed-scope parent context. Do not rely on a closed scope handle for
+long-running log follow-up work; emit the mark before closing the scope or use
+an active/new scope instead.
+
 If an endpoint's explicit batch settings are invalid, Relay skips that endpoint
 and records an `observability.invalid_otel_endpoint` configuration warning with
 its `opentelemetry.endpoints[N]` field. Other valid endpoints continue to

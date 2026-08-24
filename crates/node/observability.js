@@ -6,6 +6,7 @@
 const plugin = require('./plugin.js');
 
 const OBSERVABILITY_PLUGIN_KIND = 'observability';
+const DEFAULT_COMPLETED_SPAN_CONTEXT_TTL_MILLIS = 60_000;
 
 /**
  * Create a default observability component config.
@@ -68,7 +69,7 @@ function openTelemetryEndpoint(config) {
     service_name: 'unknown_service',
     instrumentation_scope: 'opentelemetry',
     timeout_millis: 3000,
-    completed_span_context_ttl_millis: 60000,
+    completed_span_context_ttl_millis: DEFAULT_COMPLETED_SPAN_CONTEXT_TTL_MILLIS,
     headers: {},
     header_env: {},
     resource_attributes: {},

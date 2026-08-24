@@ -284,10 +284,20 @@ fn build_otel_config(
                     "completedSpanContextTtlMillis must be a nonnegative u64 BigInt",
                 ));
             }
+            if value == 0 {
+                return Err(napi::Error::from_reason(
+                    "completedSpanContextTtlMillis must be greater than 0",
+                ));
+            }
             Ok(value)
         })
         .transpose()?
-        .unwrap_or(60_000);
+        .unwrap_or_else(|| {
+            u64::try_from(
+                nemo_relay::observability::otel::DEFAULT_COMPLETED_SPAN_CONTEXT_TTL.as_millis(),
+            )
+            .expect("the default completed span context TTL fits in u64 milliseconds")
+        });
 
     let mut config = nemo_relay::observability::otel::OpenTelemetryConfig::new(otel_type, endpoint)
         .with_transport(transport)

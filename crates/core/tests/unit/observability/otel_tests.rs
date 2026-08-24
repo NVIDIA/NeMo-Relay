@@ -1373,6 +1373,116 @@ fn direct_config_rejects_a_blank_endpoint_before_exporter_construction() {
 }
 
 #[test]
+fn trace_subscriber_constructors_reject_zero_completed_context_ttl() {
+    let config = OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://127.0.0.1:4318")
+        .with_completed_span_context_ttl(std::time::Duration::ZERO);
+    let error = match OpenTelemetrySubscriber::new(config) {
+        Ok(_) => panic!("zero TTL must be rejected"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(error, OpenTelemetryError::ExporterBuild(message) if message.contains("completed_span_context_ttl must be greater than 0"))
+    );
+
+    for typed in [false, true] {
+        let (provider, _exporter) = make_provider();
+        let options = OpenTelemetrySubscriberOptions {
+            completed_span_context_ttl: std::time::Duration::ZERO,
+            ..Default::default()
+        };
+        let result = if typed {
+            OpenTelemetrySubscriber::from_tracer_provider_with_type_and_options(
+                provider,
+                "test-scope",
+                OpenTelemetryType::OpenInference,
+                options,
+            )
+        } else {
+            OpenTelemetrySubscriber::from_tracer_provider_with_options(
+                provider,
+                "test-scope",
+                options,
+            )
+        };
+        let error = match result {
+            Ok(_) => panic!("zero TTL must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(error, OpenTelemetryError::ExporterBuild(message) if message.contains("completed_span_context_ttl must be greater than 0"))
+        );
+    }
+}
+
+#[test]
+fn subscriber_options_apply_custom_completed_context_ttl_at_the_boundary() {
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_options(
+        provider,
+        "test-scope",
+        OpenTelemetrySubscriberOptions {
+            completed_span_context_ttl: std::time::Duration::from_millis(10),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let callback = subscriber.subscriber();
+    let uuid = Uuid::now_v7();
+    let closed_at = chrono::Utc::now();
+    let scope_event = |category| {
+        Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .uuid(uuid)
+                .name("completed")
+                .timestamp(closed_at)
+                .build(),
+            category,
+            Vec::new(),
+            EventCategory::from(ScopeType::Tool),
+            None,
+        ))
+    };
+    let mark_event = |name, timestamp| {
+        Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .parent_uuid(uuid)
+                .name(name)
+                .timestamp(timestamp)
+                .build(),
+            None,
+            None,
+        ))
+    };
+
+    callback(&scope_event(ScopeCategory::Start));
+    callback(&scope_event(ScopeCategory::End));
+    callback(&mark_event(
+        "at-boundary",
+        closed_at + chrono::Duration::milliseconds(10),
+    ));
+    callback(&mark_event(
+        "after-boundary",
+        closed_at + chrono::Duration::milliseconds(11),
+    ));
+    subscriber.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let parent = finished_span_named(&spans, "completed");
+    let boundary_mark = finished_span_named(&spans, "mark:at-boundary");
+    let expired_mark = finished_span_named(&spans, "mark:after-boundary");
+    assert_eq!(
+        boundary_mark.span_context.trace_id(),
+        parent.span_context.trace_id()
+    );
+    assert_eq!(boundary_mark.parent_span_id, parent.span_context.span_id());
+    assert_ne!(
+        expired_mark.span_context.trace_id(),
+        parent.span_context.trace_id()
+    );
+    assert_ne!(expired_mark.parent_span_id, parent.span_context.span_id());
+}
+
+#[test]
 fn invalid_grpc_headers_are_rejected() {
     let err = build_grpc_metadata(&HashMap::from([(
         "bad key".to_string(),

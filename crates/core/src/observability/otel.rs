@@ -344,6 +344,9 @@ impl OpenTelemetryConfig {
     }
 
     /// Sets how long completed scopes retain their trace context for late marks.
+    ///
+    /// The value must be greater than zero. Subscriber construction fails with
+    /// [`OpenTelemetryError::ExporterBuild`] when the TTL is zero.
     pub fn with_completed_span_context_ttl(mut self, ttl: Duration) -> Self {
         self.completed_span_context_ttl = ttl;
         self

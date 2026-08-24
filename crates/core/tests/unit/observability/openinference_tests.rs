@@ -3230,19 +3230,25 @@ fn completed_span_context_ttl_retains_more_than_legacy_context_limit() {
     );
     let span_count = 4_098;
     let mut completed_uuids = Vec::with_capacity(span_count);
+    let timestamp = chrono::Utc::now();
 
     for index in 0..span_count {
         let uuid = Uuid::now_v7();
         completed_uuids.push(uuid);
         let name = format!("completed-{index}");
-        processor.process(&make_start_event(uuid, None, &name, ScopeType::Tool, None));
-        processor.process(&make_end_event(
-            uuid,
-            None,
-            &name,
-            ScopeType::Tool,
-            Some(json!({"status": "done"})),
-        ));
+        for category in [ScopeCategory::Start, ScopeCategory::End] {
+            processor.process(&Event::Scope(ScopeEvent::new(
+                BaseEvent::builder()
+                    .uuid(uuid)
+                    .name(&name)
+                    .timestamp(timestamp)
+                    .build(),
+                category,
+                Vec::new(),
+                EventCategory::from(ScopeType::Tool),
+                None,
+            )));
+        }
     }
 
     let oldest_uuid = completed_uuids[0];
@@ -3250,16 +3256,20 @@ fn completed_span_context_ttl_retains_more_than_legacy_context_limit() {
     assert!(processor.completed_span_contexts.contains_key(&oldest_uuid));
     assert!(processor.completed_span_contexts.contains_key(&recent_uuid));
 
-    processor.process(&make_mark_event(
-        Some(oldest_uuid),
-        "oldest-after-eviction",
-        Some(json!({"case": "oldest"})),
-    ));
-    processor.process(&make_mark_event(
-        Some(recent_uuid),
-        "recent-after-eviction",
-        Some(json!({"case": "recent"})),
-    ));
+    for (parent_uuid, name) in [
+        (oldest_uuid, "oldest-after-eviction"),
+        (recent_uuid, "recent-after-eviction"),
+    ] {
+        processor.process(&Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .parent_uuid(parent_uuid)
+                .name(name)
+                .timestamp(timestamp)
+                .build(),
+            None,
+            None,
+        )));
+    }
     processor.force_flush().unwrap();
 
     let spans = exporter.get_finished_spans().unwrap();

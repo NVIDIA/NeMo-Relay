@@ -132,7 +132,7 @@ describe('OpenTelemetrySubscriber', () => {
           endpoint: 'http://localhost:4318/v1/traces',
           completedSpanContextTtlMillis: 0n,
         }),
-      /completed_span_context_ttl must be greater than 0/i,
+      /completedSpanContextTtlMillis must be greater than 0/i,
     );
     assert.throws(
       () =>

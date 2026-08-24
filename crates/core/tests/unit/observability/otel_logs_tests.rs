@@ -73,11 +73,11 @@ fn scope_lineage_retains_active_contexts_and_preserves_root_trace_id() {
     let mut lineage = ScopeLineage::new();
     let root = Uuid::now_v7();
     lineage.process_start(&scope(root, ScopeCategory::Start));
-    for _ in 0..COMPLETED_SPAN_CONTEXT_LIMIT {
+    for _ in 0..ACTIVE_LOG_SCOPE_HIGH_WATER {
         lineage.process_start(&scope(Uuid::now_v7(), ScopeCategory::Start));
     }
 
-    assert_eq!(lineage.active.len(), COMPLETED_SPAN_CONTEXT_LIMIT + 1);
+    assert_eq!(lineage.active.len(), ACTIVE_LOG_SCOPE_HIGH_WATER + 1);
     assert!(lineage.active.contains_key(&root));
 
     let child = Uuid::now_v7();
@@ -92,7 +92,7 @@ fn scope_lineage_retains_active_contexts_and_preserves_root_trace_id() {
 #[test]
 fn log_processor_reports_active_lineage_high_water_once() {
     let (mut processor, _exporter, _provider) = processor(LogSeverity::Info);
-    for _ in 0..=COMPLETED_SPAN_CONTEXT_LIMIT {
+    for _ in 0..=ACTIVE_LOG_SCOPE_HIGH_WATER {
         processor.process(&scope(Uuid::now_v7(), ScopeCategory::Start));
     }
     assert!(processor.active_lineage_high_water_reported);
@@ -114,12 +114,12 @@ fn scope_lineage_reuses_completed_parent_and_bounds_completed_contexts() {
         .expect("completed parent context");
     assert_eq!(context.span_id(), relay_span_id(parent));
 
-    for _ in 0..=COMPLETED_SPAN_CONTEXT_LIMIT {
+    for _ in 0..=COMPLETED_LOG_CONTEXT_LIMIT {
         let uuid = Uuid::now_v7();
         lineage.process_start(&scope(uuid, ScopeCategory::Start));
         lineage.process_end(&scope(uuid, ScopeCategory::End));
     }
-    assert_eq!(lineage.completed.len(), COMPLETED_SPAN_CONTEXT_LIMIT);
+    assert_eq!(lineage.completed.len(), COMPLETED_LOG_CONTEXT_LIMIT);
     assert!(!lineage.completed.contains_key(&parent));
 
     lineage.process_end(&scope(Uuid::now_v7(), ScopeCategory::End));
@@ -134,15 +134,15 @@ fn scope_lineage_tombstones_replaced_completed_contexts() {
     lineage.process_start(&scope(reused, ScopeCategory::Start));
     lineage.process_end(&scope(reused, ScopeCategory::End));
 
-    for _ in 1..COMPLETED_SPAN_CONTEXT_LIMIT {
+    for _ in 1..COMPLETED_LOG_CONTEXT_LIMIT {
         let uuid = Uuid::now_v7();
         lineage.process_start(&scope(uuid, ScopeCategory::Start));
         lineage.process_end(&scope(uuid, ScopeCategory::End));
     }
 
-    assert_eq!(lineage.completed.len(), COMPLETED_SPAN_CONTEXT_LIMIT);
+    assert_eq!(lineage.completed.len(), COMPLETED_LOG_CONTEXT_LIMIT);
     assert!(lineage.completed.contains_key(&reused));
-    assert_eq!(lineage.completed_order.len(), COMPLETED_SPAN_CONTEXT_LIMIT);
+    assert_eq!(lineage.completed_order.len(), COMPLETED_LOG_CONTEXT_LIMIT);
 }
 
 #[test]
