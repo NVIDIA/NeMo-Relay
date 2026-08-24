@@ -14,6 +14,8 @@ Built-in codec for the Gemini generateContent API.
 
 Implements [`LlmCodec`](/reference/api/rust-library-reference/nemo-relay/codec/traits/trait-llmcodec) (request decode/encode) and [`LlmResponseCodec`](/reference/api/rust-library-reference/nemo-relay/codec/traits/trait-llmresponsecodec) (response decode) for the Gemini generateContent API format.
 
+Gemini function-call IDs are normalized as tool-call IDs and echoed in `functionResponse.id`. For legacy responses that omit an ID, the codec uses the function name only when it is unambiguous; duplicate effective IDs are rejected because their function responses cannot be correlated safely.
+
 ## Structs
 
 - [GeminiGenerateContentCodec](/reference/api/rust-library-reference/nemo-relay/codec/gemini_generate_content/struct-geminigeneratecontentcodec): Built-in codec for the Gemini generateContent API.

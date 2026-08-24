@@ -106,6 +106,8 @@ export interface OpenTelemetryConfig {
   instrumentationScope?: string
   /** Export timeout in milliseconds. Defaults to `3000`. */
   timeoutMillis?: number
+  /** Completed scope lineage retention in milliseconds as a `bigint`. Defaults to `60000`. */
+  completedSpanContextTtlMillis?: bigint
   /** Mark projection for full and OpenInference exporters. Defaults to `"inherit"`. */
   markProjection?: "inherit" | "event" | "tool"
   /** Mark names excluded from full and OpenInference projections. */
@@ -149,6 +151,8 @@ export interface OpenTelemetryLogConfig {
   maxExportBatchSize?: number
   /** Maximum delay before a partial batch is exported. Defaults to `1000`. */
   scheduledDelayMillis?: number
+  /** Completed scope lineage retention in milliseconds as a `bigint`. Defaults to `60000`. */
+  completedSpanContextTtlMillis?: bigint
 }
 ```
 

@@ -21,7 +21,7 @@ Global guardrail registration for tools and LLMs.
 def register_mark_sanitize(name: str, priority: int, guardrail: EventSanitizeGuardrail) -> None
 ```
 
-Register a sanitizer for mark event observability fields.
+Register a global mark-event sanitizer.
 
 ### `deregister_mark_sanitize`
 
@@ -29,7 +29,7 @@ Register a sanitizer for mark event observability fields.
 def deregister_mark_sanitize(name: str) -> bool
 ```
 
-Remove a global mark event sanitizer by name.
+Remove a global mark-event sanitizer.
 
 ### `register_scope_sanitize_start`
 
@@ -37,7 +37,7 @@ Remove a global mark event sanitizer by name.
 def register_scope_sanitize_start(name: str, priority: int, guardrail: EventSanitizeGuardrail) -> None
 ```
 
-Register a sanitizer for every scope start event category.
+Register a global sanitizer for scope-start event fields.
 
 ### `deregister_scope_sanitize_start`
 
@@ -45,7 +45,7 @@ Register a sanitizer for every scope start event category.
 def deregister_scope_sanitize_start(name: str) -> bool
 ```
 
-Remove a global scope-start event sanitizer by name.
+Remove a global scope-start sanitizer.
 
 ### `register_scope_sanitize_end`
 
@@ -53,7 +53,7 @@ Remove a global scope-start event sanitizer by name.
 def register_scope_sanitize_end(name: str, priority: int, guardrail: EventSanitizeGuardrail) -> None
 ```
 
-Register a sanitizer for every scope end event category.
+Register a global sanitizer for scope-end event fields.
 
 ### `deregister_scope_sanitize_end`
 
@@ -61,7 +61,7 @@ Register a sanitizer for every scope end event category.
 def deregister_scope_sanitize_end(name: str) -> bool
 ```
 
-Remove a global scope-end event sanitizer by name.
+Remove a global scope-end sanitizer.
 
 ### `register_tool_sanitize_request`
 

@@ -21,7 +21,7 @@ Scope-local middleware and subscriber registration.
 def register_event_metadata_injector(scope_handle: ScopeHandle, name: str, priority: int, injector: EventMetadataInjectorCallback) -> None
 ```
 
-Register an event metadata injector owned by an active scope.
+Register an event metadata injector owned by a scope.
 
 ### `deregister_event_metadata_injector`
 
@@ -29,60 +29,60 @@ Register an event metadata injector owned by an active scope.
 def deregister_event_metadata_injector(scope_handle: ScopeHandle, name: str) -> bool
 ```
 
-Remove a scope-local event metadata injector by registration name.
+Remove a scope-local event metadata injector.
 
 ### `register_mark_sanitize`
 
 ```python
-def register_mark_sanitize(scope_handle, name, priority, guardrail)
+def register_mark_sanitize(scope_handle: ScopeHandle, name: str, priority: int, guardrail: EventSanitizeGuardrail) -> None
 ```
 
-Register a scope-local mark event sanitizer.
+Register a mark-event sanitizer owned by a scope.
 
 ### `deregister_mark_sanitize`
 
 ```python
-def deregister_mark_sanitize(scope_handle, name)
+def deregister_mark_sanitize(scope_handle: ScopeHandle, name: str) -> bool
 ```
 
-Remove a scope-local mark event sanitizer.
+Remove a scope-local mark-event sanitizer.
 
 ### `register_scope_sanitize_start`
 
 ```python
-def register_scope_sanitize_start(scope_handle, name, priority, guardrail)
+def register_scope_sanitize_start(scope_handle: ScopeHandle, name: str, priority: int, guardrail: EventSanitizeGuardrail) -> None
 ```
 
-Register a scope-local sanitizer for scope start events.
+Register a scope-start event sanitizer owned by a scope.
 
 ### `deregister_scope_sanitize_start`
 
 ```python
-def deregister_scope_sanitize_start(scope_handle, name)
+def deregister_scope_sanitize_start(scope_handle: ScopeHandle, name: str) -> bool
 ```
 
-Remove a scope-local scope-start event sanitizer.
+Remove a scope-local scope-start sanitizer.
 
 ### `register_scope_sanitize_end`
 
 ```python
-def register_scope_sanitize_end(scope_handle, name, priority, guardrail)
+def register_scope_sanitize_end(scope_handle: ScopeHandle, name: str, priority: int, guardrail: EventSanitizeGuardrail) -> None
 ```
 
-Register a scope-local sanitizer for scope end events.
+Register a scope-end event sanitizer owned by a scope.
 
 ### `deregister_scope_sanitize_end`
 
 ```python
-def deregister_scope_sanitize_end(scope_handle, name)
+def deregister_scope_sanitize_end(scope_handle: ScopeHandle, name: str) -> bool
 ```
 
-Remove a scope-local scope-end event sanitizer.
+Remove a scope-local scope-end sanitizer.
 
 ### `register_tool_sanitize_request`
 
 ```python
-def register_tool_sanitize_request(scope_handle, name, priority, guardrail)
+def register_tool_sanitize_request(scope_handle: ScopeHandle, name: str, priority: int, guardrail: ToolSanitizeGuardrail) -> None
 ```
 
 Register a scope-local tool sanitize-request guardrail.
@@ -90,7 +90,7 @@ Register a scope-local tool sanitize-request guardrail.
 ### `deregister_tool_sanitize_request`
 
 ```python
-def deregister_tool_sanitize_request(scope_handle, name)
+def deregister_tool_sanitize_request(scope_handle: ScopeHandle, name: str) -> bool
 ```
 
 Remove a scope-local tool sanitize-request guardrail.
@@ -98,7 +98,7 @@ Remove a scope-local tool sanitize-request guardrail.
 ### `register_tool_sanitize_response`
 
 ```python
-def register_tool_sanitize_response(scope_handle, name, priority, guardrail)
+def register_tool_sanitize_response(scope_handle: ScopeHandle, name: str, priority: int, guardrail: ToolSanitizeGuardrail) -> None
 ```
 
 Register a scope-local tool sanitize-response guardrail.
@@ -106,7 +106,7 @@ Register a scope-local tool sanitize-response guardrail.
 ### `deregister_tool_sanitize_response`
 
 ```python
-def deregister_tool_sanitize_response(scope_handle, name)
+def deregister_tool_sanitize_response(scope_handle: ScopeHandle, name: str) -> bool
 ```
 
 Remove a scope-local tool sanitize-response guardrail.
@@ -114,7 +114,7 @@ Remove a scope-local tool sanitize-response guardrail.
 ### `register_tool_conditional_execution`
 
 ```python
-def register_tool_conditional_execution(scope_handle, name, priority, guardrail)
+def register_tool_conditional_execution(scope_handle: ScopeHandle, name: str, priority: int, guardrail: ToolConditionalExecutionGuardrail) -> None
 ```
 
 Register a scope-local tool conditional-execution guardrail.
@@ -122,7 +122,7 @@ Register a scope-local tool conditional-execution guardrail.
 ### `deregister_tool_conditional_execution`
 
 ```python
-def deregister_tool_conditional_execution(scope_handle, name)
+def deregister_tool_conditional_execution(scope_handle: ScopeHandle, name: str) -> bool
 ```
 
 Remove a scope-local tool conditional-execution guardrail.
@@ -130,7 +130,7 @@ Remove a scope-local tool conditional-execution guardrail.
 ### `register_tool_request`
 
 ```python
-def register_tool_request(scope_handle, name, priority, break_chain, fn)
+def register_tool_request(scope_handle: ScopeHandle, name: str, priority: int, break_chain: bool, fn: ToolRequestIntercept) -> None
 ```
 
 Register a scope-local tool request intercept.
@@ -138,7 +138,7 @@ Register a scope-local tool request intercept.
 ### `deregister_tool_request`
 
 ```python
-def deregister_tool_request(scope_handle, name)
+def deregister_tool_request(scope_handle: ScopeHandle, name: str) -> bool
 ```
 
 Remove a scope-local tool request intercept.
@@ -146,7 +146,7 @@ Remove a scope-local tool request intercept.
 ### `register_tool_execution`
 
 ```python
-def register_tool_execution(scope_handle, name, priority, fn)
+def register_tool_execution(scope_handle: ScopeHandle, name: str, priority: int, fn: ToolExecutionIntercept) -> None
 ```
 
 Register scope-local middleware around tool execution.
@@ -154,7 +154,7 @@ Register scope-local middleware around tool execution.
 ### `deregister_tool_execution`
 
 ```python
-def deregister_tool_execution(scope_handle, name)
+def deregister_tool_execution(scope_handle: ScopeHandle, name: str) -> bool
 ```
 
 Remove a scope-local tool execution intercept.
@@ -162,7 +162,7 @@ Remove a scope-local tool execution intercept.
 ### `register_llm_sanitize_request`
 
 ```python
-def register_llm_sanitize_request(scope_handle, name, priority, guardrail)
+def register_llm_sanitize_request(scope_handle: ScopeHandle, name: str, priority: int, guardrail: LlmSanitizeRequestGuardrail) -> None
 ```
 
 Register a scope-local LLM sanitize-request guardrail.
@@ -170,7 +170,7 @@ Register a scope-local LLM sanitize-request guardrail.
 ### `deregister_llm_sanitize_request`
 
 ```python
-def deregister_llm_sanitize_request(scope_handle, name)
+def deregister_llm_sanitize_request(scope_handle: ScopeHandle, name: str) -> bool
 ```
 
 Remove a scope-local LLM sanitize-request guardrail.
@@ -178,7 +178,7 @@ Remove a scope-local LLM sanitize-request guardrail.
 ### `register_llm_sanitize_response`
 
 ```python
-def register_llm_sanitize_response(scope_handle, name, priority, guardrail)
+def register_llm_sanitize_response(scope_handle: ScopeHandle, name: str, priority: int, guardrail: LlmSanitizeResponseGuardrail) -> None
 ```
 
 Register a scope-local LLM sanitize-response guardrail.
@@ -186,7 +186,7 @@ Register a scope-local LLM sanitize-response guardrail.
 ### `deregister_llm_sanitize_response`
 
 ```python
-def deregister_llm_sanitize_response(scope_handle, name)
+def deregister_llm_sanitize_response(scope_handle: ScopeHandle, name: str) -> bool
 ```
 
 Remove a scope-local LLM sanitize-response guardrail.
@@ -194,7 +194,7 @@ Remove a scope-local LLM sanitize-response guardrail.
 ### `register_llm_conditional_execution`
 
 ```python
-def register_llm_conditional_execution(scope_handle, name, priority, guardrail)
+def register_llm_conditional_execution(scope_handle: ScopeHandle, name: str, priority: int, guardrail: LlmConditionalExecutionGuardrail) -> None
 ```
 
 Register a scope-local LLM conditional-execution guardrail.
@@ -202,7 +202,7 @@ Register a scope-local LLM conditional-execution guardrail.
 ### `deregister_llm_conditional_execution`
 
 ```python
-def deregister_llm_conditional_execution(scope_handle, name)
+def deregister_llm_conditional_execution(scope_handle: ScopeHandle, name: str) -> bool
 ```
 
 Remove a scope-local LLM conditional-execution guardrail.
@@ -210,7 +210,7 @@ Remove a scope-local LLM conditional-execution guardrail.
 ### `register_llm_request`
 
 ```python
-def register_llm_request(scope_handle, name, priority, break_chain, fn)
+def register_llm_request(scope_handle: ScopeHandle, name: str, priority: int, break_chain: bool, fn: LlmRequestIntercept) -> None
 ```
 
 Register a scope-local LLM request intercept.
@@ -218,7 +218,7 @@ Register a scope-local LLM request intercept.
 ### `deregister_llm_request`
 
 ```python
-def deregister_llm_request(scope_handle, name)
+def deregister_llm_request(scope_handle: ScopeHandle, name: str) -> bool
 ```
 
 Remove a scope-local LLM request intercept.
@@ -226,7 +226,7 @@ Remove a scope-local LLM request intercept.
 ### `register_llm_execution`
 
 ```python
-def register_llm_execution(scope_handle, name, priority, fn)
+def register_llm_execution(scope_handle: ScopeHandle, name: str, priority: int, fn: LlmExecutionIntercept) -> None
 ```
 
 Register scope-local middleware around non-streaming LLM execution.
@@ -234,7 +234,7 @@ Register scope-local middleware around non-streaming LLM execution.
 ### `deregister_llm_execution`
 
 ```python
-def deregister_llm_execution(scope_handle, name)
+def deregister_llm_execution(scope_handle: ScopeHandle, name: str) -> bool
 ```
 
 Remove a scope-local LLM execution intercept.
@@ -242,7 +242,7 @@ Remove a scope-local LLM execution intercept.
 ### `register_llm_stream_execution`
 
 ```python
-def register_llm_stream_execution(scope_handle, name, priority, fn)
+def register_llm_stream_execution(scope_handle: ScopeHandle, name: str, priority: int, fn: LlmStreamExecutionIntercept) -> None
 ```
 
 Register scope-local middleware around streaming LLM execution.
@@ -250,7 +250,7 @@ Register scope-local middleware around streaming LLM execution.
 ### `deregister_llm_stream_execution`
 
 ```python
-def deregister_llm_stream_execution(scope_handle, name)
+def deregister_llm_stream_execution(scope_handle: ScopeHandle, name: str) -> bool
 ```
 
 Remove a scope-local streaming LLM execution intercept.
@@ -258,7 +258,7 @@ Remove a scope-local streaming LLM execution intercept.
 ### `register_subscriber`
 
 ```python
-def register_subscriber(scope_handle, name, callback)
+def register_subscriber(scope_handle: ScopeHandle, name: str, callback: 'Callable[[Event], None]') -> None
 ```
 
 Register an event subscriber that is active only for `scope_handle`.
@@ -266,7 +266,7 @@ Register an event subscriber that is active only for `scope_handle`.
 ### `deregister_subscriber`
 
 ```python
-def deregister_subscriber(scope_handle, name)
+def deregister_subscriber(scope_handle: ScopeHandle, name: str) -> bool
 ```
 
 Remove a scope-local event subscriber.
