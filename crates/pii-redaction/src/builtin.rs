@@ -254,24 +254,27 @@ impl CompiledBuiltinBackend {
             Json::String(value) => self
                 .sanitize_metric_string_at_path(value, &base_path)
                 .map(Json::String),
-            Json::Array(values) if values.iter().all(Json::is_string) => values
-                .into_iter()
-                .enumerate()
-                .map(|(index, value)| match value {
-                    Json::String(value) => self.sanitize_metric_string_at_path(
-                        value,
-                        &[
-                            base_path[0].clone(),
-                            base_path[1].clone(),
-                            base_path[2].clone(),
-                            base_path[3].clone(),
-                            index.to_string(),
-                        ],
-                    ),
-                    _ => unreachable!("checked all metric attribute values are strings"),
-                })
-                .collect::<Option<Vec<_>>>()
-                .map(|values| Json::Array(values.into_iter().map(Json::String).collect())),
+            Json::Array(values) if values.iter().all(Json::is_string) => Some(Json::Array(
+                values
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(index, value)| match value {
+                        Json::String(value) => self
+                            .sanitize_metric_string_at_path(
+                                value,
+                                &[
+                                    base_path[0].clone(),
+                                    base_path[1].clone(),
+                                    base_path[2].clone(),
+                                    base_path[3].clone(),
+                                    index.to_string(),
+                                ],
+                            )
+                            .map(Json::String),
+                        _ => unreachable!("checked all metric attribute values are strings"),
+                    })
+                    .collect(),
+            )),
             value => Some(value),
         }
     }

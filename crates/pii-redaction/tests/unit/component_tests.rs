@@ -1283,6 +1283,63 @@ async fn builtin_metric_marks_preserve_typed_measurements() {
 }
 
 #[tokio::test]
+async fn builtin_metric_marks_remove_only_targeted_string_array_elements() {
+    let data = json!({
+        "measurements": [{
+            "name": "example.request_count",
+            "kind": "counter",
+            "value_type": "u64",
+            "value": 1,
+            "attributes": {"regions": ["us-east", "us-west"]}
+        }]
+    });
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("example.metrics")
+            .data(data.clone())
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(
+        crate::builtin::CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                target_paths: vec!["/measurements/0/attributes/regions/0".to_string()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(data),
+            category_profile: None,
+            metadata: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let data = sanitized.data.unwrap();
+    serde_json::from_value::<MetricEnvelope>(data.clone())
+        .unwrap()
+        .validate()
+        .unwrap();
+    assert_eq!(
+        data["measurements"][0]["attributes"]["regions"],
+        json!(["us-west"])
+    );
+}
+
+#[tokio::test]
 async fn trajectory_metric_marks_drop_invalid_envelopes() {
     let data = json!({
         "measurements": [{
