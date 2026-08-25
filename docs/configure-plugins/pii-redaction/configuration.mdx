@@ -255,6 +255,10 @@ The plugin sanitizes optional text without invalidating the envelope:
 - With `target_paths`, those fields are sanitized only when their
   payload-relative JSON Pointer matches, such as
   `/measurements/0/description` or `/measurements/0/attributes/owner`.
+- With `action = "remove"`, targeting a whole string-array attribute removes
+  that attribute. Targeting an individual element removes that element and
+  compacts the remaining array; Relay cannot use a `null` placeholder because
+  typed OpenTelemetry metric attributes must remain valid homogeneous arrays.
 - Numeric and boolean metric attributes remain analytical telemetry.
 
 The `trajectory_context` preset replaces descriptions and string-valued
