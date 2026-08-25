@@ -268,6 +268,87 @@ def test_create_tool_node_preserves_command_and_error_handling(
     }
 
 
+@pytest.mark.parametrize("use_async", [False, True])
+def test_create_tool_node_preserves_list_command_results(use_async: bool):
+    from langchain_core.messages import AIMessage, ToolMessage
+    from langchain_core.tools import tool
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.types import Command
+
+    from nemo_relay.integrations.langgraph import create_tool_node
+
+    @tool
+    def update_offset():
+        """Return a list containing a graph state update command."""
+        return [
+            Command(
+                update={
+                    "offset": 9,
+                    "messages": [ToolMessage(content="updated", tool_call_id="call-list")],
+                }
+            )
+        ]
+
+    builder = StateGraph(ToolNodeState)
+    builder.add_node("tools", create_tool_node([update_offset]))
+    builder.add_edge(START, "tools")
+    builder.add_edge("tools", END)
+    graph = builder.compile()
+    input_state = {
+        "offset": 0,
+        "messages": [AIMessage(content="", tool_calls=[{"name": "update_offset", "args": {}, "id": "call-list"}])],
+    }
+
+    if use_async:
+        result = asyncio.run(graph.ainvoke(input_state))
+    else:
+        result = graph.invoke(input_state)
+
+    assert result["offset"] == 9
+    assert result["messages"][-1].content == "updated"
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_create_tool_node_propagates_graph_interrupts(use_async: bool):
+    from langchain_core.messages import AIMessage
+    from langchain_core.tools import tool
+    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.types import interrupt
+
+    from nemo_relay.integrations.langgraph import create_tool_node
+
+    @tool
+    def await_approval() -> str:
+        """Pause the graph until approval is supplied."""
+        interrupt("approval required")
+        return "approved"
+
+    builder = StateGraph(ToolNodeState)
+    builder.add_node("tools", create_tool_node([await_approval]))
+    builder.add_edge(START, "tools")
+    builder.add_edge("tools", END)
+    graph = builder.compile(checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": str(uuid4())}}
+    input_state = {
+        "offset": 0,
+        "messages": [
+            AIMessage(content="", tool_calls=[{"name": "await_approval", "args": {}, "id": "call-interrupt"}])
+        ],
+    }
+
+    if use_async:
+
+        async def collect_updates() -> list[dict[str, Any]]:
+            return [update async for update in graph.astream(input_state, config, stream_mode="updates")]
+
+        updates = asyncio.run(collect_updates())
+    else:
+        updates = list(graph.stream(input_state, config, stream_mode="updates"))
+
+    assert any("__interrupt__" in update for update in updates)
+
+
 @pytest.mark.parametrize("wrapper_name", ["wrap_tool_call", "awrap_tool_call"])
 def test_create_tool_node_rejects_custom_tool_wrappers(wrapper_name: str):
     from nemo_relay.integrations.langgraph import create_tool_node
