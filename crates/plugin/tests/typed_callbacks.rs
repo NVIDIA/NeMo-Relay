@@ -2277,7 +2277,7 @@ unsafe extern "C" fn capture_plugin_runtime_list_registrations(
             json!([{
                 "kind": "subscriber",
                 "local_name": "target",
-                "effective_name": "plugin::0::target",
+                "effective_name": "nemo-relay-plugin.v1.example:1:target",
                 "owner": {
                     "kind": "plugin",
                     "plugin_kind": "example",
@@ -3001,12 +3001,15 @@ fn plugin_runtime_registration_controls_cover_success_and_lifecycle() {
     let registrations = runtime
         .list_runtime_registrations(Some(&kinds))
         .expect("runtime registrations should decode");
-    assert_eq!(registrations[0].effective_name, "plugin::0::target");
+    assert_eq!(
+        registrations[0].effective_name,
+        "nemo-relay-plugin.v1.example:1:target"
+    );
     let handle = runtime
         .register_conditional_middleware_guardrail(
             "timer-gate",
             &kinds,
-            "plugin::0::target",
+            "nemo-relay-plugin.v1.example:1:target",
             "timer active",
         )
         .expect("dynamic gate should register");
@@ -3019,7 +3022,7 @@ fn plugin_runtime_registration_controls_cover_success_and_lifecycle() {
         .register_conditional_middleware_guardrail(
             "startup-gate",
             &kinds,
-            "plugin::0::target",
+            "nemo-relay-plugin.v1.example:1:target",
             "startup disabled",
         )
         .expect("initial gate should register");
