@@ -25,6 +25,7 @@ Public data types:
     LlmOptimizationTokens: Explicit token evidence by category.
     LlmOptimizationTokenImpact: Baseline, effective, and saved token evidence.
     LlmRequestInterceptOutcome: Canonical LLM request-intercept result.
+    EventCategory: Well-known semantic categories for Relay events.
     DiagnosticLevel: Severity of a configuration diagnostic.
     ConfigDiagnostic: Structured configuration warning or error.
     ScopeType: Semantic category for a Relay execution scope.
@@ -334,6 +335,26 @@ class LogSeverity(str, Enum):
     ERROR = "error"
 
 
+class EventCategory(str, Enum):
+    """Well-known semantic categories for Relay events.
+
+    Pass a string instead to preserve a producer-defined category that is not
+    represented here.
+    """
+
+    AGENT = "agent"
+    FUNCTION = "function"
+    LLM = "llm"
+    TOOL = "tool"
+    RETRIEVER = "retriever"
+    EMBEDDER = "embedder"
+    RERANKER = "reranker"
+    GUARDRAIL = "guardrail"
+    EVALUATOR = "evaluator"
+    CUSTOM = "custom"
+    UNKNOWN = "unknown"
+
+
 class MetricKind(str, Enum):
     """OpenTelemetry instrument kind recorded by a metric mark."""
 
@@ -469,7 +490,7 @@ class PendingMarkSpec:
     """Describe a mark Relay emits under a managed lifecycle scope."""
 
     name: str
-    category: str | None = None
+    category: EventCategory | str | None = None
     category_profile: Json | None = None
     data: Json | None = None
     metadata: Json | None = None
@@ -1639,7 +1660,7 @@ class PluginRuntime:
         *,
         data_schema: DataSchema | Mapping[str, Json] | None = None,
         severity: LogSeverity | str | None = None,
-        category: str | None = None,
+        category: EventCategory | str | None = None,
         scope_stack_id: str | None = None,
         parent_scope_id: str | None = None,
     ) -> None:
@@ -1652,7 +1673,8 @@ class PluginRuntime:
             data_schema: Optional typed schema identity for ``data``.
             severity: Optional telemetry log severity. ``warning`` is accepted
                 as an alias for ``warn``.
-            category: Optional semantic category for the mark.
+            category: Optional semantic category for the mark. Accepts an
+                :class:`EventCategory` value or a producer-defined string.
             scope_stack_id: Optional host-issued stack to correlate the event
                 with. When omitted, the current local binding is used.
             parent_scope_id: Optional parent scope for the event. When omitted,
@@ -1717,7 +1739,7 @@ class PluginRuntime:
         measurements: Iterable[MetricMeasurement | Mapping[str, Json]],
         metadata: Json | None = None,
         *,
-        category: str | None = None,
+        category: EventCategory | str | None = None,
         scope_stack_id: str | None = None,
         parent_scope_id: str | None = None,
     ) -> None:

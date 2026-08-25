@@ -28,6 +28,7 @@ from nemo_relay_plugin import (  # noqa: E402
     ConfigDiagnostic,
     DataSchema,
     DiagnosticLevel,
+    EventCategory,
     Json,
     LlmOptimizationContribution,
     LlmRequestInterceptOutcome,
@@ -2302,7 +2303,7 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         {"measurements": []},
         data_schema=DataSchema("nemo.relay.metric_measurements", "1"),
         severity=LogSeverity.WARNING,
-        category="custom",
+        category=EventCategory.CUSTOM,
     )
     await runtime.emit_metric(
         "telemetry-metric",
@@ -2314,7 +2315,7 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
                 "value": 42,
             }
         ],
-        category="custom",
+        category="vendor.metric",
     )
     await runtime.emit_mark("explicit", scope_stack_id="explicit-stack", parent_scope_id="explicit-parent")
     await runtime.drop_scope_stack(stack_id)
@@ -2347,7 +2348,7 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         "name": "nemo.relay.metric_measurements",
         "version": "1",
     }
-    assert metric_mark.category == "custom"
+    assert metric_mark.category == "vendor.metric"
 
     override_mark = next(
         request

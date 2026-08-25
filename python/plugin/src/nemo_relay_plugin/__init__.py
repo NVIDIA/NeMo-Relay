@@ -18,6 +18,7 @@ appropriate executor.
 Public data types:
     Json: Any JSON-serializable Python value.
     DataSchema: Schema identity for a mark's opaque data payload.
+    EventCategory: Well-known semantic category for a Relay event.
     LogSeverity: Telemetry severity assigned to an exported mark log.
     MetricKind: OpenTelemetry instrument kind for a metric measurement.
     MetricValueType: Explicit numeric representation for a metric measurement.
@@ -89,6 +90,7 @@ from ._api import (
     DataSchema,
     DiagnosticLevel,
     Event,
+    EventCategory,
     EventMetadataInjectorCallback,
     EventSanitizeCallback,
     EventSanitizeFields,
@@ -149,6 +151,7 @@ __all__ = [
     "DataSchema",
     "DiagnosticLevel",
     "Event",
+    "EventCategory",
     "EventMetadataInjectorCallback",
     "EventSanitizeCallback",
     "EventSanitizeFields",
