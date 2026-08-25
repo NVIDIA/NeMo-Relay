@@ -32,7 +32,12 @@ Plugin contexts qualify local names, and that qualification can change after a p
 restart or plugin configuration reload. A controller must not persist an effective name
 or construct one from a plugin kind, local name, or component position. In particular,
 singleton plugin component names include ordinal `1`; this normalizes their effective
-names with multi-component registrations.
+names with multi-component registrations. Relay currently emits plugin-component keys
+with the versioned internal grammar
+`nemo-relay-plugin.v1.{percent-encoded-kind}:{one-based-ordinal}:{percent-encoded-local-name}`.
+The kind and local name use UTF-8 percent encoding: unreserved RFC 3986 characters are
+literal, and delimiters, `%`, and non-ASCII bytes are escaped. This grammar is an
+implementation detail, not an application configuration or persistence format.
 
 Discovery reports global registrations even when a gate currently suppresses them. This
 behavior lets another controller inspect or manage an ineligible target. Discovery does
