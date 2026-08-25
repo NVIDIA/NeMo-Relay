@@ -165,14 +165,14 @@ runtime diagnostics:
 <Tabs>
 <Tab title="Python" language="python">
 ```python
-from nemo_relay_plugin import DataSchema, LogSeverity
+from nemo_relay_plugin import DataSchema, EventCategory, LogSeverity
 
 await ctx.runtime.emit_mark(
     "example.python_worker.policy_decision",
     {"allowed": True},
     data_schema=DataSchema("example.policy.decision", "1"),
     severity=LogSeverity.INFO,
-    category="custom",
+    category=EventCategory.CUSTOM,
 )
 await ctx.runtime.emit_metric(
     "example.python_worker.requests",
