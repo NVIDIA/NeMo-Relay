@@ -250,14 +250,18 @@ exporter can validate and export the mark.
 
 The plugin sanitizes optional text without invalidating the envelope:
 
-- Measurement descriptions follow the configured built-in action.
-- String-valued metric attributes follow the configured built-in action.
+- With no `target_paths`, measurement descriptions and string-valued metric
+  attributes follow the configured built-in action.
+- With `target_paths`, those fields are sanitized only when their
+  payload-relative JSON Pointer matches, such as
+  `/measurements/0/description` or `/measurements/0/attributes/owner`.
 - Numeric and boolean metric attributes remain analytical telemetry.
 
 The `trajectory_context` preset replaces descriptions and string-valued
 attributes with its configured replacement while retaining the required metric
-fields. Its `custom_mark_payload_policy` applies only to opaque marks in the
-`custom` category; it does not control Relay typed metric envelopes.
+fields. That preset does not accept `target_paths`. Its
+`custom_mark_payload_policy` applies only to opaque marks in the `custom`
+category; it does not control Relay typed metric envelopes.
 
 ## Action Semantics
 

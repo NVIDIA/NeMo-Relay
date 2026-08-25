@@ -189,6 +189,7 @@ impl CompiledBuiltinBackend {
             .unwrap_or(Json::Null)
     }
 
+    /// Sanitize optional metric text without modifying required export fields.
     fn sanitize_metric_envelope(&self, data: Json) -> Option<Json> {
         let mut envelope = serde_json::from_value::<MetricEnvelope>(data).ok()?;
         envelope.validate().ok()?;
@@ -212,6 +213,7 @@ impl CompiledBuiltinBackend {
         serde_json::to_value(envelope).ok()
     }
 
+    /// Sanitize metric text using its payload-relative JSON Pointer.
     fn sanitize_metric_string_at_path(
         &self,
         value: String,
@@ -222,6 +224,7 @@ impl CompiledBuiltinBackend {
             .and_then(|value| value.as_str().map(str::to_string))
     }
 
+    /// Sanitize string-valued attributes while retaining analytical values.
     fn sanitize_metric_attributes(&self, attributes: Json, measurement_index: usize) -> Json {
         let Json::Object(attributes) = attributes else {
             return attributes;
@@ -237,6 +240,7 @@ impl CompiledBuiltinBackend {
         )
     }
 
+    /// Sanitize one metric attribute without changing its scalar type.
     fn sanitize_metric_attribute(
         &self,
         value: Json,
@@ -631,6 +635,9 @@ fn event_sanitize_callback_with_scope_categories(
                 fields.metadata = fields
                     .metadata
                     .map(|metadata| backend.sanitize_json_preorder_dfs(metadata));
+                fields.category_profile = fields.category_profile.and_then(|profile| {
+                    sanitize_serializable_with_backend::<CategoryProfile>(&backend, profile).ok()
+                });
                 return Ok(fields);
             }
             let specialized_scope = matches!(event.as_ref(), Event::Scope(_))
@@ -668,6 +675,7 @@ fn event_sanitize_callback_with_scope_categories(
     })
 }
 
+/// Return whether an event carries Relay's typed metric schema.
 fn is_relay_metric_mark(event: &Event) -> bool {
     matches!(event, Event::Mark(_))
         && event.data_schema().is_some_and(|schema| {

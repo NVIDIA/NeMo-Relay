@@ -1186,7 +1186,10 @@ async fn trajectory_metric_marks_preserve_typed_measurements_and_redact_text() {
         Arc::new(event),
         EventSanitizeFields {
             data: Some(data),
-            category_profile: None,
+            category_profile: Some(CategoryProfile {
+                extra: BTreeMap::from([("owner".into(), json!("person@example.com"))]),
+                ..CategoryProfile::default()
+            }),
             metadata: Some(json!({"owner": "person@example.com"})),
         },
     )
@@ -1212,6 +1215,10 @@ async fn trajectory_metric_marks_preserve_typed_measurements_and_redact_text() {
     assert_eq!(data["measurements"][0]["attributes"]["attempt"], 2);
     assert_eq!(data["measurements"][0]["attributes"]["sampled"], true);
     assert_eq!(sanitized.metadata.unwrap()["owner"], "[REDACTED]");
+    assert_eq!(
+        sanitized.category_profile.unwrap().extra["owner"],
+        "[REDACTED]"
+    );
 }
 
 #[tokio::test]
@@ -1247,7 +1254,10 @@ async fn builtin_metric_marks_preserve_typed_measurements() {
         Arc::new(event),
         EventSanitizeFields {
             data: Some(data),
-            category_profile: None,
+            category_profile: Some(CategoryProfile {
+                extra: BTreeMap::from([("owner".into(), json!("person@example.com"))]),
+                ..CategoryProfile::default()
+            }),
             metadata: None,
         },
     )
@@ -1263,6 +1273,93 @@ async fn builtin_metric_marks_preserve_typed_measurements() {
     assert_eq!(data["measurements"][0]["value"], 1);
     assert!(data["measurements"][0]["description"].is_null());
     assert_eq!(data["measurements"][0]["attributes"], json!({}));
+    assert!(
+        !sanitized
+            .category_profile
+            .unwrap()
+            .extra
+            .contains_key("owner")
+    );
+}
+
+#[tokio::test]
+async fn trajectory_metric_marks_drop_invalid_envelopes() {
+    let data = json!({
+        "measurements": [{
+            "name": "example.invalid",
+            "kind": "counter",
+            "value_type": "invalid",
+            "value": 1
+        }]
+    });
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("example.metrics")
+            .data(data.clone())
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(data),
+            category_profile: None,
+            metadata: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(sanitized.data.is_none());
+}
+
+#[tokio::test]
+async fn builtin_metric_marks_drop_invalid_envelopes() {
+    let data = json!({
+        "measurements": [{
+            "name": "example.invalid",
+            "kind": "counter",
+            "value_type": "invalid",
+            "value": 1
+        }]
+    });
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("example.metrics")
+            .data(data.clone())
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(
+        crate::builtin::CompiledBuiltinBackend::new(BuiltinBackendConfig::default(), None).unwrap(),
+    );
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(data),
+            category_profile: None,
+            metadata: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(sanitized.data.is_none());
 }
 
 #[tokio::test]

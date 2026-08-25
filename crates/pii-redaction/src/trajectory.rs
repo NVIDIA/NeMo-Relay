@@ -137,6 +137,9 @@ impl TrajectorySanitizer {
             fields.metadata = fields
                 .metadata
                 .map(|value| redact_semantic_content(value, &self.replacement, None));
+            fields.category_profile = fields
+                .category_profile
+                .and_then(|profile| sanitize_category_profile(profile, &self.replacement));
             return fields;
         }
 
@@ -180,6 +183,7 @@ impl TrajectorySanitizer {
         fields
     }
 
+    /// Redact optional metric text without modifying required export fields.
     fn sanitize_metric_envelope(&self, data: Json) -> Option<Json> {
         let mut envelope = serde_json::from_value::<MetricEnvelope>(data).ok()?;
         envelope.validate().ok()?;
@@ -198,6 +202,7 @@ impl TrajectorySanitizer {
     }
 }
 
+/// Return whether an event carries Relay's typed metric schema.
 fn is_relay_metric_mark(event: &Event) -> bool {
     matches!(event, Event::Mark(_))
         && event.data_schema().is_some_and(|schema| {
@@ -205,6 +210,7 @@ fn is_relay_metric_mark(event: &Event) -> bool {
         })
 }
 
+/// Redact strings in a typed metric attribute object.
 fn redact_metric_string_attributes(value: Json, replacement: &str) -> Json {
     match value {
         Json::Object(values) => Json::Object(
@@ -217,6 +223,7 @@ fn redact_metric_string_attributes(value: Json, replacement: &str) -> Json {
     }
 }
 
+/// Redact an individual typed metric attribute when it contains text.
 fn redact_metric_string_attribute(value: Json, replacement: &str) -> Json {
     match value {
         Json::String(_) => Json::String(replacement.to_string()),
