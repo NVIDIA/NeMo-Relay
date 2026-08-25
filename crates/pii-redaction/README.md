@@ -145,7 +145,10 @@ detector = "email"
 `custom_mark_payload_policy = "preserve"` is the default and leaves unknown
 plugin mark payloads intact for analysis. Use `redact_all_leaves` when opaque
 plugins may emit content: scalar leaves in data, metadata, and opaque category
-profile fields are replaced while typed category identity remains valid.
+profile fields are replaced while typed category identity remains valid. Relay
+metric-schema marks use schema-aware sanitization instead: required measurement
+fields and numeric analytics remain valid for metric export, while descriptions
+and string attribute values are redacted.
 Strings become `[REDACTED]`, numbers become `0`, booleans become `false`, and
 nulls, keys, arrays, and object shape are retained.
 Known Relay marks are sanitized semantically so their structural and analytical

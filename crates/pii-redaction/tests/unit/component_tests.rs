@@ -6,8 +6,9 @@
 
 use super::*;
 use crate::api::event::{
-    BaseEvent, CategoryProfile, Event, EventCategory, EventSanitizeFields, MarkEvent,
-    ScopeCategory, ScopeEvent,
+    BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, EventSanitizeFields,
+    METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MarkEvent, MetricEnvelope, ScopeCategory,
+    ScopeEvent,
 };
 use crate::api::llm::{
     LlmCallExecuteParams, LlmCallParams, LlmRequest, LlmStreamCallExecuteParams, llm_call,
@@ -1132,6 +1133,136 @@ async fn trajectory_custom_mark_policy_is_explicit_and_shape_preserving() {
     let profile = sanitized.category_profile.unwrap();
     assert_eq!(profile.subtype.as_deref(), Some("neutral.plugin"));
     assert_eq!(profile.extra["opaque"]["label"], "[REDACTED]");
+}
+
+#[tokio::test]
+async fn trajectory_metric_marks_preserve_typed_measurements_and_redact_text() {
+    let data = json!({
+        "measurements": [
+            {
+                "name": "example.request_count",
+                "kind": "counter",
+                "value_type": "u64",
+                "value": 1,
+                "description": "private request count",
+                "attributes": {
+                    "owner": "person@example.com",
+                    "regions": ["us-east", "us-west"],
+                    "attempt": 2,
+                    "sampled": true
+                }
+            },
+            {
+                "name": "example.queue_delta",
+                "kind": "up_down_counter",
+                "value_type": "i64",
+                "value": -2
+            },
+            {
+                "name": "example.latency",
+                "kind": "histogram",
+                "value_type": "f64",
+                "value": 3.5,
+                "boundaries": [1.0, 5.0]
+            }
+        ]
+    });
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("example.metrics")
+            .data(data.clone())
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(data),
+            category_profile: None,
+            metadata: Some(json!({"owner": "person@example.com"})),
+        },
+    )
+    .await
+    .unwrap();
+
+    let data = sanitized.data.unwrap();
+    let envelope = serde_json::from_value::<MetricEnvelope>(data.clone()).unwrap();
+    envelope.validate().unwrap();
+    assert_eq!(data["measurements"][0]["value_type"], "u64");
+    assert_eq!(data["measurements"][0]["value"], 1);
+    assert_eq!(data["measurements"][1]["value_type"], "i64");
+    assert_eq!(data["measurements"][1]["value"], -2);
+    assert_eq!(data["measurements"][2]["value_type"], "f64");
+    assert_eq!(data["measurements"][2]["value"], 3.5);
+    assert_eq!(data["measurements"][2]["boundaries"], json!([1.0, 5.0]));
+    assert_eq!(data["measurements"][0]["description"], "[REDACTED]");
+    assert_eq!(data["measurements"][0]["attributes"]["owner"], "[REDACTED]");
+    assert_eq!(
+        data["measurements"][0]["attributes"]["regions"],
+        json!(["[REDACTED]", "[REDACTED]"])
+    );
+    assert_eq!(data["measurements"][0]["attributes"]["attempt"], 2);
+    assert_eq!(data["measurements"][0]["attributes"]["sampled"], true);
+    assert_eq!(sanitized.metadata.unwrap()["owner"], "[REDACTED]");
+}
+
+#[tokio::test]
+async fn builtin_metric_marks_preserve_typed_measurements() {
+    let data = json!({
+        "measurements": [{
+            "name": "example.request_count",
+            "kind": "counter",
+            "value_type": "u64",
+            "value": 1,
+            "description": "private request count",
+            "attributes": {"owner": "person@example.com"}
+        }]
+    });
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("example.metrics")
+            .data(data.clone())
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(
+        crate::builtin::CompiledBuiltinBackend::new(BuiltinBackendConfig::default(), None).unwrap(),
+    );
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(data),
+            category_profile: None,
+            metadata: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let data = sanitized.data.unwrap();
+    serde_json::from_value::<MetricEnvelope>(data.clone())
+        .unwrap()
+        .validate()
+        .unwrap();
+    assert_eq!(data["measurements"][0]["value_type"], "u64");
+    assert_eq!(data["measurements"][0]["value"], 1);
+    assert!(data["measurements"][0]["description"].is_null());
+    assert_eq!(data["measurements"][0]["attributes"], json!({}));
 }
 
 #[tokio::test]

@@ -241,6 +241,24 @@ The `builtin` section contains:
 | `unmasked_prefix` | Leading character count to keep when `action = "mask"`. Defaults to `0`, unless a detector-specific masking preset is active. |
 | `unmasked_suffix` | Trailing character count to keep when `action = "mask"`. Defaults to `0`, unless a detector-specific masking preset is active. |
 
+## Typed Metric Marks
+
+Relay recognizes marks that use its `nemo.relay.metric_measurements` schema as
+typed metric envelopes. PII sanitization preserves the measurement name, kind,
+value type, numeric value, and histogram boundaries so the OpenTelemetry metric
+exporter can validate and export the mark.
+
+The plugin sanitizes optional text without invalidating the envelope:
+
+- Measurement descriptions follow the configured built-in action.
+- String-valued metric attributes follow the configured built-in action.
+- Numeric and boolean metric attributes remain analytical telemetry.
+
+The `trajectory_context` preset replaces descriptions and string-valued
+attributes with its configured replacement while retaining the required metric
+fields. Its `custom_mark_payload_policy` applies only to opaque marks in the
+`custom` category; it does not control Relay typed metric envelopes.
+
 ## Action Semantics
 
 ### `remove`

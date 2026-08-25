@@ -9,7 +9,10 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 
-use nemo_relay::api::event::{CategoryProfile, Event, ScopeCategory};
+use nemo_relay::api::event::{
+    CategoryProfile, Event, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope,
+    ScopeCategory,
+};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::{
     BuiltinLlmCodec, EventSanitizeFn, LlmCodecIdentity, LlmSanitizeRequestFn,
@@ -184,6 +187,92 @@ impl CompiledBuiltinBackend {
     fn sanitize_json_preorder_dfs(&self, value: Json) -> Json {
         self.sanitize_json_preorder_dfs_at_path(value, &mut Vec::new())
             .unwrap_or(Json::Null)
+    }
+
+    fn sanitize_metric_envelope(&self, data: Json) -> Option<Json> {
+        let mut envelope = serde_json::from_value::<MetricEnvelope>(data).ok()?;
+        envelope.validate().ok()?;
+        for (index, measurement) in envelope.measurements.iter_mut().enumerate() {
+            measurement.description = measurement.description.take().and_then(|description| {
+                self.sanitize_metric_string_at_path(
+                    description,
+                    &[
+                        "measurements".to_string(),
+                        index.to_string(),
+                        "description".to_string(),
+                    ],
+                )
+            });
+            measurement.attributes = measurement
+                .attributes
+                .take()
+                .map(|attributes| self.sanitize_metric_attributes(attributes, index));
+        }
+        envelope.validate().ok()?;
+        serde_json::to_value(envelope).ok()
+    }
+
+    fn sanitize_metric_string_at_path(
+        &self,
+        value: String,
+        path_segments: &[String],
+    ) -> Option<String> {
+        let mut path_segments = path_segments.to_vec();
+        self.sanitize_json_preorder_dfs_at_path(Json::String(value), &mut path_segments)
+            .and_then(|value| value.as_str().map(str::to_string))
+    }
+
+    fn sanitize_metric_attributes(&self, attributes: Json, measurement_index: usize) -> Json {
+        let Json::Object(attributes) = attributes else {
+            return attributes;
+        };
+        Json::Object(
+            attributes
+                .into_iter()
+                .filter_map(|(key, value)| {
+                    self.sanitize_metric_attribute(value, measurement_index, &key)
+                        .map(|value| (key, value))
+                })
+                .collect(),
+        )
+    }
+
+    fn sanitize_metric_attribute(
+        &self,
+        value: Json,
+        measurement_index: usize,
+        attribute_key: &str,
+    ) -> Option<Json> {
+        let base_path = [
+            "measurements".to_string(),
+            measurement_index.to_string(),
+            "attributes".to_string(),
+            escape_json_pointer_segment(attribute_key),
+        ];
+        match value {
+            Json::String(value) => self
+                .sanitize_metric_string_at_path(value, &base_path)
+                .map(Json::String),
+            Json::Array(values) if values.iter().all(Json::is_string) => values
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| match value {
+                    Json::String(value) => self.sanitize_metric_string_at_path(
+                        value,
+                        &[
+                            base_path[0].clone(),
+                            base_path[1].clone(),
+                            base_path[2].clone(),
+                            base_path[3].clone(),
+                            index.to_string(),
+                        ],
+                    ),
+                    _ => unreachable!("checked all metric attribute values are strings"),
+                })
+                .collect::<Option<Vec<_>>>()
+                .map(|values| Json::Array(values.into_iter().map(Json::String).collect())),
+            value => Some(value),
+        }
     }
 
     fn sanitize_tool_result_annotation(&self, profile: &mut CategoryProfile) {
@@ -535,6 +624,15 @@ fn event_sanitize_callback_with_scope_categories(
             if let Some(trajectory) = backend.trajectory.as_ref() {
                 return Ok(trajectory.sanitize_event_fields(&event, fields));
             }
+            if is_relay_metric_mark(&event) {
+                fields.data = fields
+                    .data
+                    .and_then(|data| backend.sanitize_metric_envelope(data));
+                fields.metadata = fields
+                    .metadata
+                    .map(|metadata| backend.sanitize_json_preorder_dfs(metadata));
+                return Ok(fields);
+            }
             let specialized_scope = matches!(event.as_ref(), Event::Scope(_))
                 && event
                     .category()
@@ -568,6 +666,13 @@ fn event_sanitize_callback_with_scope_categories(
             Ok(fields)
         })
     })
+}
+
+fn is_relay_metric_mark(event: &Event) -> bool {
+    matches!(event, Event::Mark(_))
+        && event.data_schema().is_some_and(|schema| {
+            schema.name == METRIC_DATA_SCHEMA_NAME && schema.version == METRIC_DATA_SCHEMA_VERSION
+        })
 }
 
 pub(super) fn llm_sanitize_request_callback(
