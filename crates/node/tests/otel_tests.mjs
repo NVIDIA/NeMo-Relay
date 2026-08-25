@@ -58,6 +58,7 @@ describe('OpenTelemetrySubscriber', () => {
     assert.equal(subscriber.deregister(name), true);
     assert.equal(subscriber.deregister(name), false);
     subscriber.forceFlush();
+    assert.deepEqual(subscriber.runtimeDiagnostics(), []);
     subscriber.shutdown();
   });
 

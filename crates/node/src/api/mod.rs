@@ -5216,6 +5216,12 @@ impl OpenTelemetrySubscriber {
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
+    /// Return bounded runtime diagnostics recorded by this subscriber.
+    #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
+    pub fn runtime_diagnostics(&self) -> Json {
+        otel_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+    }
+
     /// Shut down the underlying tracer provider.
     #[napi]
     pub fn shutdown(&self) -> napi::Result<()> {

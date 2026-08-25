@@ -49,6 +49,7 @@ metric(
 const logDiagnostics: Array<{ code: string; message: string; count: number }> = logSubscriber.runtimeDiagnostics();
 const metricDiagnostics: Array<{ code: string; message: string; count: number }> =
   metricSubscriber.runtimeDiagnostics();
+const traceDiagnostics: Array<{ code: string; message: string; count: number }> = traceSubscriber.runtimeDiagnostics();
 logSubscriber.register('fixture-log-subscriber');
 const logDeregistered: boolean = logSubscriber.deregister('fixture-log-subscriber');
 logSubscriber.forceFlush();
