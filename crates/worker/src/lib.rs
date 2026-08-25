@@ -1000,7 +1000,7 @@ impl PluginRuntime {
         metadata: Option<Json>,
         options: EmitMarkOptions,
     ) -> Result<()> {
-        self.emit_mark_with_optional_category(name, data, metadata, options, None)
+        self.emit_mark_impl(name, data, metadata, options, None)
             .await
     }
 
@@ -1013,11 +1013,11 @@ impl PluginRuntime {
         options: EmitMarkOptions,
         category: EventCategory,
     ) -> Result<()> {
-        self.emit_mark_with_optional_category(name, data, metadata, options, Some(category))
+        self.emit_mark_impl(name, data, metadata, options, Some(category))
             .await
     }
 
-    async fn emit_mark_with_optional_category(
+    async fn emit_mark_impl(
         &self,
         name: &str,
         data: Option<Json>,
@@ -1097,11 +1097,34 @@ impl PluginRuntime {
         measurements: Vec<MetricMeasurement>,
         metadata: Option<Json>,
     ) -> Result<()> {
+        self.emit_metric_impl(name, measurements, metadata, None)
+            .await
+    }
+
+    /// Emits a validated Relay metric-measurement mark with an event category.
+    pub async fn emit_metric_with_category(
+        &self,
+        name: &str,
+        measurements: Vec<MetricMeasurement>,
+        metadata: Option<Json>,
+        category: EventCategory,
+    ) -> Result<()> {
+        self.emit_metric_impl(name, measurements, metadata, Some(category))
+            .await
+    }
+
+    async fn emit_metric_impl(
+        &self,
+        name: &str,
+        measurements: Vec<MetricMeasurement>,
+        metadata: Option<Json>,
+        category: Option<EventCategory>,
+    ) -> Result<()> {
         let envelope = MetricEnvelope { measurements };
         envelope
             .validate()
             .map_err(|err| WorkerSdkError::InvalidInput(err.to_string()))?;
-        self.emit_mark_with_optional_category(
+        self.emit_mark_impl(
             name,
             Some(serde_json::to_value(envelope)?),
             metadata,
@@ -1114,7 +1137,7 @@ impl PluginRuntime {
                 ),
                 severity: None,
             },
-            None,
+            category,
         )
         .await
     }

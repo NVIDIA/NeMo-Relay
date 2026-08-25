@@ -939,6 +939,7 @@ async fn worker_service_invokes_every_registration_surface() {
         .into_iter()
         .find(|request| request.name == "tool-exec-metric")
         .expect("metric mark request");
+    assert_eq!(metric_mark.category, "custom");
     let metric_schema = metric_mark.data_schema.expect("metric data schema");
     assert_eq!(
         decode_json_envelope::<DataSchema>(&metric_schema).unwrap(),
@@ -2093,7 +2094,7 @@ impl WorkerPlugin for SurfacePlugin {
                     )
                     .await?;
                 runtime
-                    .emit_metric(
+                    .emit_metric_with_category(
                         "tool-exec-metric",
                         vec![MetricMeasurement {
                             name: "worker.requests".into(),
@@ -2106,6 +2107,7 @@ impl WorkerPlugin for SurfacePlugin {
                             boundaries: None,
                         }],
                         None,
+                        EventCategory::custom(),
                     )
                     .await?;
                 let stack_id = runtime.create_scope_stack().await?;
