@@ -322,7 +322,7 @@ fn log_delivery_state_reports_queue_and_export_failures_independently() {
 }
 
 #[test]
-fn direct_log_processor_records_queue_drops_on_shutdown() {
+fn direct_log_processor_records_cumulative_queue_drops_on_flush_and_shutdown() {
     let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
     let delivery_diagnostics = Arc::new(LogDeliveryDiagnostics::new(
         "https://collector.example/v1/logs".to_string(),
@@ -332,9 +332,23 @@ fn direct_log_processor_records_queue_drops_on_shutdown() {
     delivery_diagnostics.accepted.store(1, Ordering::Relaxed);
     let processor = DiagnosticBatchLogProcessor {
         inner: BatchLogProcessor::builder(InMemoryLogExporter::default()).build(),
-        diagnostics: delivery_diagnostics,
+        diagnostics: Arc::clone(&delivery_diagnostics),
     };
 
+    processor.force_flush().unwrap();
+
+    let diagnostics = runtime_diagnostics.snapshot();
+    let diagnostic = diagnostics
+        .get("otel.logs_dropped")
+        .expect("direct subscriber flush drop diagnostic");
+    assert_eq!(diagnostic.count, 2);
+    assert!(
+        diagnostic
+            .message
+            .contains("https://collector.example/v1/logs")
+    );
+
+    delivery_diagnostics.emitted.store(5, Ordering::Relaxed);
     processor
         .shutdown_with_timeout(Duration::from_secs(1))
         .unwrap();
@@ -342,8 +356,8 @@ fn direct_log_processor_records_queue_drops_on_shutdown() {
     let diagnostics = runtime_diagnostics.snapshot();
     let diagnostic = diagnostics
         .get("otel.logs_dropped")
-        .expect("direct subscriber drop diagnostic");
-    assert_eq!(diagnostic.count, 2);
+        .expect("direct subscriber shutdown drop diagnostic");
+    assert_eq!(diagnostic.count, 4);
     assert!(
         diagnostic
             .message

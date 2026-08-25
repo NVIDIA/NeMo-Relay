@@ -4727,6 +4727,39 @@ fn dropped_spans_are_recorded_in_the_active_plugin_report() {
 }
 
 #[test]
+fn direct_trace_processor_records_cumulative_queue_drops_on_flush_and_shutdown() {
+    let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
+    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
+        InMemorySpanExporterBuilder::new().build(),
+        "https://collector.example/v1/traces".to_string(),
+        runtime_diagnostics.clone(),
+        BatchConfigBuilder::default().build(),
+    );
+    processor.completed_spans.store(3, Ordering::Relaxed);
+    processor.accepted_spans.store(1, Ordering::Relaxed);
+
+    processor.force_flush().unwrap();
+    assert_eq!(
+        runtime_diagnostics
+            .snapshot()
+            .get("otel.spans_dropped")
+            .map(|diagnostic| diagnostic.count),
+        Some(2)
+    );
+
+    processor.completed_spans.store(5, Ordering::Relaxed);
+    processor
+        .shutdown_with_timeout(Duration::from_secs(1))
+        .unwrap();
+    let diagnostics = runtime_diagnostics.snapshot();
+    let diagnostic = diagnostics
+        .get("otel.spans_dropped")
+        .expect("direct trace drop diagnostic");
+    assert_eq!(diagnostic.count, 4);
+    assert!(diagnostic.message.contains("https://collector.example:443"));
+}
+
+#[test]
 fn plugin_trace_subscriber_runtime_diagnostics_use_trace_field() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     let _ = crate::plugin::clear_plugin_configuration();

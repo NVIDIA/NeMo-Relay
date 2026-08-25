@@ -771,6 +771,8 @@ impl OpenTelemetrySubscriber {
     }
 
     /// Flushes finished spans through the underlying tracer provider.
+    ///
+    /// After a successful flush, runtime diagnostics include queue drops observed so far.
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
         self.inner
@@ -1066,7 +1068,7 @@ struct DiagnosticBatchSpanProcessor {
     completed_spans: AtomicU64,
     accepted_spans: Arc<AtomicU64>,
     diagnostics: Arc<TraceDeliveryDiagnostics>,
-    diagnostic_reported: AtomicBool,
+    reported_dropped_spans: AtomicU64,
 }
 
 impl DiagnosticBatchSpanProcessor {
@@ -1090,7 +1092,7 @@ impl DiagnosticBatchSpanProcessor {
             completed_spans: AtomicU64::new(0),
             accepted_spans,
             diagnostics,
-            diagnostic_reported: AtomicBool::new(false),
+            reported_dropped_spans: AtomicU64::new(0),
         }
     }
 
@@ -1099,17 +1101,28 @@ impl DiagnosticBatchSpanProcessor {
             .completed_spans
             .load(Ordering::Relaxed)
             .saturating_sub(self.accepted_spans.load(Ordering::Relaxed));
-        if dropped == 0 || self.diagnostic_reported.swap(true, Ordering::Relaxed) {
-            return dropped;
+        let mut reported = self.reported_dropped_spans.load(Ordering::Relaxed);
+        while dropped > reported {
+            match self.reported_dropped_spans.compare_exchange_weak(
+                reported,
+                dropped,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    self.diagnostics.runtime_diagnostics.record(
+                        "otel.spans_dropped",
+                        format!(
+                            "OpenTelemetry dropped spans before export to endpoint {} because the batch queue was full",
+                            self.diagnostics.endpoint
+                        ),
+                        dropped - reported,
+                    );
+                    break;
+                }
+                Err(current) => reported = current,
+            }
         }
-        self.diagnostics.runtime_diagnostics.record(
-            "otel.spans_dropped",
-            format!(
-                "OpenTelemetry dropped {dropped} spans before export to endpoint {} because the batch queue was full",
-                self.diagnostics.endpoint
-            ),
-            dropped,
-        );
         dropped
     }
 }
@@ -1126,6 +1139,9 @@ impl SpanProcessor for DiagnosticBatchSpanProcessor {
 
     fn force_flush(&self) -> OTelSdkResult {
         let result = self.inner.force_flush();
+        if result.is_ok() {
+            self.record_dropped_spans();
+        }
         if result.is_ok()
             && let Some(summary) = self.diagnostics.unresolved_failure_summary()
         {

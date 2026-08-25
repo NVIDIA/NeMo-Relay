@@ -219,6 +219,10 @@ before emitting marks, then deregister, force-flush, and shut it down during
 graceful teardown. Their `runtime_diagnostics()` snapshots contain bounded
 `code`, `message`, and `count` entries:
 
+A successful direct log or trace `force_flush()` also updates this snapshot
+with any queue drops observed so far; the diagnostic count remains cumulative
+through later flushes and shutdown.
+
 ```python
 from nemo_relay import (
     OpenTelemetryLogConfig,

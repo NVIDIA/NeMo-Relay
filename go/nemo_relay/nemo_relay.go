@@ -2608,7 +2608,8 @@ func (s *OpenTelemetrySubscriber) Deregister(name string) error {
 	return checkStatus(status)
 }
 
-// ForceFlush flushes finished spans through the underlying exporter.
+// ForceFlush flushes finished spans through the underlying exporter. A successful flush updates
+// RuntimeDiagnostics with queue drops observed so far.
 func (s *OpenTelemetrySubscriber) ForceFlush() error {
 	status := C.nemo_relay_otel_subscriber_force_flush(s.ptr)
 	return checkStatus(status)
@@ -2893,7 +2894,8 @@ func (s *OpenTelemetryLogSubscriber) Deregister(name string) error {
 	return checkStatus(C.nemo_relay_otel_log_subscriber_deregister(cName))
 }
 
-// ForceFlush drains Relay delivery and queued log batches.
+// ForceFlush drains Relay delivery and queued log batches. A successful flush updates
+// RuntimeDiagnostics with queue drops observed so far.
 func (s *OpenTelemetryLogSubscriber) ForceFlush() error {
 	return checkStatus(C.nemo_relay_otel_log_subscriber_force_flush(s.ptr))
 }

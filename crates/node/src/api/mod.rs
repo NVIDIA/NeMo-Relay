@@ -5207,6 +5207,8 @@ impl OpenTelemetrySubscriber {
     }
 
     /// Force a flush of finished spans through the exporter.
+    ///
+    /// A successful flush updates `runtimeDiagnostics()` with queue drops observed so far.
     #[napi]
     pub fn force_flush(&self) -> napi::Result<()> {
         self.inner
@@ -5295,6 +5297,8 @@ impl OpenTelemetryLogSubscriber {
     }
 
     /// Flush queued Relay events and the OTLP log processor.
+    ///
+    /// A successful flush updates `runtimeDiagnostics()` with queue drops observed so far.
     #[napi]
     pub fn force_flush(&self) -> napi::Result<()> {
         self.inner

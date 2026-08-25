@@ -321,6 +321,8 @@ impl OpenTelemetryLogSubscriber {
     }
 
     /// Flush queued Relay events and the OTLP log processor.
+    ///
+    /// After a successful flush, runtime diagnostics include queue drops observed so far.
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
         self.inner
@@ -414,7 +416,7 @@ struct LogDeliveryDiagnostics {
     emitted: AtomicU64,
     accepted: AtomicU64,
     export_failures: AtomicU64,
-    queue_reported: AtomicBool,
+    reported_queue_drops: AtomicU64,
     endpoint: String,
     runtime_diagnostics: SignalRuntimeDiagnostics,
 }
@@ -425,7 +427,7 @@ impl LogDeliveryDiagnostics {
             emitted: AtomicU64::new(0),
             accepted: AtomicU64::new(0),
             export_failures: AtomicU64::new(0),
-            queue_reported: AtomicBool::new(false),
+            reported_queue_drops: AtomicU64::new(0),
             endpoint,
             runtime_diagnostics,
         }
@@ -448,15 +450,27 @@ impl LogDeliveryDiagnostics {
             .emitted
             .load(Ordering::Relaxed)
             .saturating_sub(self.accepted.load(Ordering::Relaxed));
-        if dropped > 0 && !self.queue_reported.swap(true, Ordering::Relaxed) {
-            self.runtime_diagnostics.record(
-                "otel.logs_dropped",
-                format!(
-                    "OpenTelemetry dropped {dropped} logs before export to endpoint {} because the batch queue was full",
-                    self.endpoint
-                ),
+        let mut reported = self.reported_queue_drops.load(Ordering::Relaxed);
+        while dropped > reported {
+            match self.reported_queue_drops.compare_exchange_weak(
+                reported,
                 dropped,
-            );
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    self.runtime_diagnostics.record(
+                        "otel.logs_dropped",
+                        format!(
+                            "OpenTelemetry dropped logs before export to endpoint {} because the batch queue was full",
+                            self.endpoint
+                        ),
+                        dropped - reported,
+                    );
+                    break;
+                }
+                Err(current) => reported = current,
+            }
         }
         dropped
     }
@@ -514,7 +528,11 @@ impl LogProcessor for DiagnosticBatchLogProcessor {
     }
 
     fn force_flush(&self) -> OTelSdkResult {
-        self.inner.force_flush()
+        let result = self.inner.force_flush();
+        if result.is_ok() {
+            self.diagnostics.record_queue_drops();
+        }
+        result
     }
 
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {

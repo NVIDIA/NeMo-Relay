@@ -701,6 +701,8 @@ impl PyOpenTelemetrySubscriber {
     }
 
     /// Force a flush of finished spans through the exporter.
+    ///
+    /// A successful flush updates ``runtime_diagnostics()`` with queue drops observed so far.
     pub(crate) fn force_flush(&self, py: Python<'_>) -> PyResult<()> {
         py.detach(|| {
             self.with_runtime_context(|| {
@@ -915,6 +917,9 @@ impl PyOpenTelemetryLogSubscriber {
             .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
     }
 
+    /// Flush queued Relay events and the OTLP log processor.
+    ///
+    /// A successful flush updates ``runtime_diagnostics()`` with queue drops observed so far.
     fn force_flush(&self, py: Python<'_>) -> PyResult<()> {
         py.detach(|| self.inner.force_flush())
             .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))

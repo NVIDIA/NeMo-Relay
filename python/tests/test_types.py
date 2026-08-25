@@ -706,6 +706,36 @@ class TestOpenTelemetryTypes:
                 metric_subscriber.deregister(metric_name)
                 metric_subscriber.shutdown()
 
+    def test_direct_log_subscriber_reports_queue_drops_after_force_flush(self):
+        emitted = 200
+        with _OtelCollector() as collector:
+            config = OpenTelemetryLogConfig(collector.endpoint)
+            config.max_queue_size = 2
+            config.max_export_batch_size = 1
+            config.scheduled_delay_millis = 60_000
+            subscriber = OpenTelemetryLogSubscriber(config)
+            subscriber_name = f"py_otel_log_drops_{uuid4().hex}"
+            subscriber.register(subscriber_name)
+            try:
+                for index in range(emitted):
+                    scope.event(
+                        f"log-overflow-{index}",
+                        data={"index": index},
+                        severity=LogSeverity.Info,
+                    )
+                subscribers.flush()
+                subscriber.force_flush()
+
+                arrived = len(collector.server.requests)
+                assert arrived < emitted, "the fixture must overflow the log queue"
+                diagnostic = subscriber.runtime_diagnostics().get("otel.logs_dropped")
+                assert diagnostic is not None
+                assert diagnostic.count == emitted - arrived
+                assert collector.endpoint in diagnostic.message
+            finally:
+                subscriber.deregister(subscriber_name)
+                subscriber.shutdown()
+
     def test_config_defaults_mutation_and_repr(self):
         config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
 
