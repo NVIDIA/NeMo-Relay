@@ -1516,6 +1516,44 @@ fn opentelemetry_endpoint_header_env_rejects_missing_and_duplicate_headers() {
     clear_plugin_configuration().unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn opentelemetry_header_env_non_unicode_errors_do_not_expose_values() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let variable = "NEMO_RELAY_TEST_NON_UNICODE_OTEL_HEADER_ENV";
+    let secret = "relay-plugin-secret";
+    let mut value = vec![0xff];
+    value.extend_from_slice(secret.as_bytes());
+    unsafe { std::env::set_var(variable, std::ffi::OsString::from_vec(value)) };
+
+    let trace: OpenTelemetryEndpointConfig = serde_json::from_value(json!({
+        "type": "full",
+        "endpoint": "http://localhost:4318/v1/traces",
+        "header_env": {"authorization": variable}
+    }))
+    .unwrap();
+    let trace_error = build_otel_config(0, trace).unwrap_err().to_string();
+    assert!(trace_error.contains(variable));
+    assert!(!trace_error.contains(secret));
+
+    let logs: OpenTelemetrySignalEndpointConfig = serde_json::from_value(json!({
+        "endpoint": "http://localhost:4318/v1/logs",
+        "header_env": {"authorization": variable}
+    }))
+    .unwrap();
+    let log_error = resolve_signal_headers("logs", 0, &logs)
+        .unwrap_err()
+        .to_string();
+    assert!(log_error.contains(variable));
+    assert!(!log_error.contains(secret));
+
+    unsafe { std::env::remove_var(variable) };
+}
+
 #[test]
 fn invalid_log_endpoint_keeps_valid_signal_subscriber() {
     let _guard = crate::observability::test_mutex()

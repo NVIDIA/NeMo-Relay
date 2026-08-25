@@ -213,13 +213,21 @@ func TestOpenTelemetrySignalConfigRejectsFractionalMillisecondDurations(t *testi
 
 func TestOpenTelemetrySubscribersExposeRuntimeDiagnostics(t *testing.T) {
 	endpoint := "http://127.0.0.1:4318/v1/traces"
-	traceSubscriber, err := NewOpenTelemetrySubscriber(NewOpenTelemetryConfig(OpenTelemetryTypeFull, endpoint))
+	variable := "NEMO_RELAY_GO_SIGNAL_HEADER_" + time.Now().Format(otelTimeFormat)
+	t.Setenv(variable, "signal-route")
+	traceConfig := NewOpenTelemetryConfig(OpenTelemetryTypeFull, endpoint)
+	traceConfig.HeaderEnv["x-relay-route"] = variable
+	traceSubscriber, err := NewOpenTelemetrySubscriber(traceConfig)
 	requireNoError(t, err, "NewOpenTelemetrySubscriber failed")
 	defer traceSubscriber.Close()
-	logSubscriber, err := NewOpenTelemetryLogSubscriber(NewOpenTelemetryLogConfig(endpoint))
+	logConfig := NewOpenTelemetryLogConfig(endpoint)
+	logConfig.HeaderEnv["x-relay-route"] = variable
+	logSubscriber, err := NewOpenTelemetryLogSubscriber(logConfig)
 	requireNoError(t, err, "NewOpenTelemetryLogSubscriber failed")
 	defer logSubscriber.Close()
-	metricSubscriber, err := NewOpenTelemetryMetricSubscriber(NewOpenTelemetryMetricConfig(endpoint))
+	metricConfig := NewOpenTelemetryMetricConfig(endpoint)
+	metricConfig.HeaderEnv["x-relay-route"] = variable
+	metricSubscriber, err := NewOpenTelemetryMetricSubscriber(metricConfig)
 	requireNoError(t, err, "NewOpenTelemetryMetricSubscriber failed")
 	defer metricSubscriber.Close()
 

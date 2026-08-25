@@ -2199,9 +2199,9 @@ fn resolve_signal_headers(
                 "OpenTelemetry {signal}.endpoints[{index}] header {key:?} cannot appear in both headers and header_env"
             )));
         }
-        let value = std::env::var(variable).map_err(|error| {
+        let value = std::env::var(variable).map_err(|_| {
             PluginError::InvalidConfig(format!(
-                "OpenTelemetry {signal}.endpoints[{index}].header_env.{key} could not read environment variable {variable:?}: {error}"
+                "OpenTelemetry {signal}.endpoints[{index}].header_env.{key} could not read environment variable {variable:?}"
             ))
         })?;
         if value.trim().is_empty() || value.trim() != value {
@@ -3269,9 +3269,9 @@ fn apply_otel_environment_headers(
     header_env: HashMap<String, String>,
 ) -> PluginResult<CoreOpenTelemetryConfig> {
     for (key, variable) in header_env {
-        let value = std::env::var(&variable).map_err(|error| {
+        let value = std::env::var(&variable).map_err(|_| {
             PluginError::InvalidConfig(format!(
-                "OpenTelemetry endpoints[{index}].header_env.{key} could not read environment variable {variable:?}: {error}"
+                "OpenTelemetry endpoints[{index}].header_env.{key} could not read environment variable {variable:?}"
             ))
         })?;
         if value.trim().is_empty() || value.trim() != value {

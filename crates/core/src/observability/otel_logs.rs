@@ -38,8 +38,8 @@ use super::otel::{
 use super::otel_signal::{
     MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics, build_grpc_metadata,
     build_in_owned_runtime, classify_metric_mark, reject_signal_header_environment,
-    resolve_http_signal_endpoint, should_relog_runtime_diagnostic, signal_resource,
-    validate_signal_headers,
+    resolve_header_env, resolve_http_signal_endpoint, should_relog_runtime_diagnostic,
+    signal_resource, validate_signal_headers,
 };
 
 const DEFAULT_MAX_QUEUE_SIZE: usize = 2_048;
@@ -51,6 +51,7 @@ const DEFAULT_SCHEDULED_DELAY: Duration = Duration::from_secs(1);
 pub struct OpenTelemetryLogConfig {
     endpoint: String,
     headers: HashMap<String, String>,
+    header_env: HashMap<String, String>,
     resource_attributes: HashMap<String, String>,
     service_name: String,
     service_namespace: Option<String>,
@@ -72,6 +73,7 @@ impl OpenTelemetryLogConfig {
         Self {
             endpoint: endpoint.into(),
             headers: HashMap::new(),
+            header_env: HashMap::new(),
             resource_attributes: HashMap::new(),
             service_name: "unknown_service".to_string(),
             service_namespace: None,
@@ -97,6 +99,12 @@ impl OpenTelemetryLogConfig {
     /// Add an exporter header or gRPC metadata entry.
     pub fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.insert(key.into(), value.into());
+        self
+    }
+
+    /// Map an exporter header name to the environment variable supplying its value.
+    pub fn with_header_env(mut self, key: impl Into<String>, variable: impl Into<String>) -> Self {
+        self.header_env.insert(key.into(), variable.into());
         self
     }
 
@@ -247,8 +255,10 @@ impl OpenTelemetryLogSubscriber {
         Self::new_with_runtime_diagnostics(config)
     }
 
-    fn new_with_runtime_diagnostics(config: OpenTelemetryLogConfig) -> Result<Self> {
+    fn new_with_runtime_diagnostics(mut config: OpenTelemetryLogConfig) -> Result<Self> {
         config.validate()?;
+        config.headers = resolve_header_env(&config.headers, &config.header_env)?;
+        validate_signal_headers(&config.headers)?;
         let minimum_severity = config.minimum_severity;
         let completed_span_context_ttl = config.completed_span_context_ttl;
         let instrumentation_scope = config.instrumentation_scope.clone();

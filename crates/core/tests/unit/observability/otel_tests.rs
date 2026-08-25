@@ -1202,6 +1202,7 @@ fn make_mark_event_with_metadata(parent_uuid: Option<Uuid>, metadata: Json) -> E
 struct CapturedHttpRequest {
     path: String,
     content_type: String,
+    authorization: Option<String>,
     body: Vec<u8>,
 }
 
@@ -1227,6 +1228,7 @@ fn read_http_request(stream: &mut impl Read) -> CapturedHttpRequest {
     CapturedHttpRequest {
         path: request_line.split_whitespace().nth(1).unwrap().to_string(),
         content_type: header_value(&headers_text, "content-type").unwrap_or_default(),
+        authorization: header_value(&headers_text, "authorization"),
         body: bytes[header_end..header_end + content_length].to_vec(),
     }
 }
@@ -1283,6 +1285,7 @@ fn config_defaults_and_builder_overrides_are_applied() {
         OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4318/v1/traces")
             .with_service_name("demo-agent")
             .with_header("authorization", "Bearer token")
+            .with_header_env("x-api-key", "NEMO_RELAY_TEST_API_KEY")
             .with_resource_attribute("deployment.environment", "test")
             .with_service_namespace("agents")
             .with_service_version("1.2.3")
@@ -1301,6 +1304,10 @@ fn assert_config_builder_overrides(config: &OpenTelemetryConfig) {
     assert_eq!(
         config.headers.get("authorization"),
         Some(&"Bearer token".into())
+    );
+    assert_eq!(
+        config.header_env.get("x-api-key"),
+        Some(&"NEMO_RELAY_TEST_API_KEY".into())
     );
     assert_eq!(
         config.resource_attributes.get("deployment.environment"),
@@ -1523,6 +1530,109 @@ fn direct_config_rejects_invalid_and_case_duplicate_headers() {
         };
         assert!(matches!(error, OpenTelemetryError::InvalidHeader { .. }));
     }
+}
+
+#[test]
+fn direct_config_rejects_invalid_header_env_without_exposing_values() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let missing = format!("NEMO_RELAY_TEST_MISSING_HEADER_{}", Uuid::now_v7().simple());
+
+    for (variable, value, expected) in [
+        (missing.as_str(), None, "is not set"),
+        ("NEMO_RELAY_TEST_BLANK_HEADER", Some("  "), "nonblank value"),
+        (
+            "NEMO_RELAY_TEST_SECRET_HEADER",
+            Some("relay-secret\ninvalid"),
+            "valid header value",
+        ),
+    ] {
+        if let Some(value) = value {
+            unsafe { std::env::set_var(variable, value) };
+        }
+        let error = match OpenTelemetrySubscriber::new(
+            OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4318/v1/traces")
+                .with_header_env("authorization", variable),
+        ) {
+            Ok(_) => panic!("invalid header_env should fail activation"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        assert!(message.contains(expected), "unexpected error: {message}");
+        assert!(!message.contains("relay-secret"));
+        unsafe { std::env::remove_var(variable) };
+    }
+
+    for variable in ["", " padded ", "INVALID=NAME", "INVALID\0NAME"] {
+        let error = match OpenTelemetrySubscriber::new(
+            OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4318/v1/traces")
+                .with_header_env("authorization", variable),
+        ) {
+            Ok(_) => panic!("invalid environment variable reference should fail activation"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("header_env must name"));
+    }
+
+    let error = match OpenTelemetrySubscriber::new(
+        OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4318/v1/traces")
+            .with_header("Authorization", "static")
+            .with_header_env("authorization", &missing),
+    ) {
+        Ok(_) => panic!("case-insensitive duplicate should fail before environment lookup"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("unique across headers and header_env")
+    );
+
+    unsafe { std::env::set_var(&missing, "valid") };
+    let exact_error = match OpenTelemetrySubscriber::new(
+        OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4318/v1/traces")
+            .with_header("authorization", "static")
+            .with_header_env("authorization", &missing),
+    ) {
+        Ok(_) => panic!("exact duplicate should fail activation"),
+        Err(error) => error,
+    };
+    assert!(
+        exact_error
+            .to_string()
+            .contains("unique across headers and header_env")
+    );
+    unsafe { std::env::remove_var(&missing) };
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_config_non_unicode_header_env_errors_do_not_expose_values() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let variable = format!(
+        "NEMO_RELAY_TEST_NON_UNICODE_DIRECT_HEADER_{}",
+        Uuid::now_v7().simple()
+    );
+    let secret = "relay-direct-secret";
+    let mut value = vec![0xff];
+    value.extend_from_slice(secret.as_bytes());
+    unsafe { std::env::set_var(&variable, std::ffi::OsString::from_vec(value)) };
+
+    let error = match OpenTelemetrySubscriber::new(
+        OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4318/v1/traces")
+            .with_header_env("authorization", &variable),
+    ) {
+        Ok(_) => panic!("non-Unicode header environment value should fail activation"),
+        Err(error) => error,
+    };
+    let message = error.to_string();
+    assert!(message.contains(&variable));
+    assert!(!message.contains(secret));
+
+    unsafe { std::env::remove_var(variable) };
 }
 
 #[test]
@@ -3165,8 +3275,17 @@ fn http_config_exports_scope_push_pop_and_marks_without_tokio_runtime() {
     let (request_tx, request_rx) = mpsc::channel();
     spawn_http_collector(listener, request_tx);
 
-    let config = OpenTelemetryConfig::http_binary("demo-agent").with_endpoint(endpoint);
+    let variable = format!(
+        "NEMO_RELAY_TEST_HEADER_SNAPSHOT_{}",
+        Uuid::now_v7().simple()
+    );
+    let secret = "Bearer activation-secret";
+    unsafe { std::env::set_var(&variable, secret) };
+    let config = OpenTelemetryConfig::http_binary("demo-agent")
+        .with_endpoint(endpoint)
+        .with_header_env("authorization", &variable);
     let subscriber = OpenTelemetrySubscriber::new(config).unwrap();
+    unsafe { std::env::set_var(&variable, "Bearer changed-secret") };
     let name = format!("otel_http_{}", Uuid::now_v7().simple());
 
     subscriber.register(&name).unwrap();
@@ -3204,7 +3323,22 @@ fn http_config_exports_scope_push_pop_and_marks_without_tokio_runtime() {
         .expect("expected an OTLP request");
     assert_eq!(request.path, "/v1/traces");
     assert_eq!(request.content_type, "application/x-protobuf");
+    assert_eq!(request.authorization.as_deref(), Some(secret));
     assert!(!request.body.is_empty());
+    assert!(
+        !request
+            .body
+            .windows(secret.len())
+            .any(|window| window == secret.as_bytes())
+    );
+    assert!(
+        subscriber
+            .runtime_diagnostics()
+            .entries()
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains(secret))
+    );
+    unsafe { std::env::remove_var(variable) };
 }
 
 #[test]

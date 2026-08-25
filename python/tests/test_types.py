@@ -616,16 +616,21 @@ class TestOpenTelemetryTypes:
             subscriber.deregister(subscriber_name)
             subscriber.shutdown()
 
-    def test_signal_config_defaults_and_lifecycle(self):
+    def test_signal_config_defaults_and_lifecycle(self, monkeypatch: pytest.MonkeyPatch):
+        variable = f"NEMO_RELAY_PY_SIGNAL_HEADER_{uuid4().hex}"
+        monkeypatch.setenv(variable, "signal-route")
         log_config = OpenTelemetryLogConfig("http://localhost:4318/v1/logs")
         assert log_config.minimum_severity == LogSeverity.Info
         assert log_config.max_queue_size == 2048
         assert log_config.max_export_batch_size == 512
         assert log_config.scheduled_delay_millis == 1000
         assert log_config.completed_span_context_ttl_millis == 60000
+        assert log_config.header_env == {}
         log_config.minimum_severity = LogSeverity.Warn
         log_config.headers = {"authorization": "Bearer token"}
+        log_config.set_header_from_env("x-relay-route", variable)
         log_config.resource_attributes = {"deployment.environment": "test"}
+        assert log_config.header_env == {"x-relay-route": variable}
 
         log_subscriber = OpenTelemetryLogSubscriber(log_config)
         log_name = f"py_otel_log_{uuid4().hex}"
@@ -642,9 +647,12 @@ class TestOpenTelemetryTypes:
         assert metric_config.temporality == MetricTemporality.Cumulative
         assert metric_config.max_instruments == 256
         assert metric_config.cardinality_limit == 2000
+        assert metric_config.header_env == {}
         metric_config.temporality = MetricTemporality.Delta
         metric_config.headers = {"authorization": "Bearer token"}
+        metric_config.set_header_from_env("x-relay-route", variable)
         metric_config.resource_attributes = {"deployment.environment": "test"}
+        assert metric_config.header_env == {"x-relay-route": variable}
 
         metric_subscriber = OpenTelemetryMetricSubscriber(metric_config)
         metric_name = f"py_otel_metric_{uuid4().hex}"
@@ -746,6 +754,7 @@ class TestOpenTelemetryTypes:
         assert config.instrumentation_scope == "opentelemetry"
         assert config.timeout_millis == 3000
         assert config.headers == {}
+        assert config.header_env == {}
         assert config.resource_attributes == {}
         assert config.mark_projection == "inherit"
         assert config.mark_exclude_names == ["llm.chunk"]
@@ -758,6 +767,7 @@ class TestOpenTelemetryTypes:
         config.instrumentation_scope = "py-tests"
         config.timeout_millis = 1250
         config.set_header("authorization", "Bearer token")
+        config.set_header_from_env("x-api-key", "NEMO_RELAY_API_KEY")
         config.set_resource_attribute("deployment.environment", "test")
         config.mark_projection = "tool"
         config.mark_exclude_names = ["custom.mark"]
@@ -765,6 +775,7 @@ class TestOpenTelemetryTypes:
         config.promote_metadata_prefixes = ["nv."]
 
         assert config.headers == {"authorization": "Bearer token"}
+        assert config.header_env == {"x-api-key": "NEMO_RELAY_API_KEY"}
         assert config.resource_attributes == {"deployment.environment": "test"}
         assert config.mark_projection == "tool"
         assert config.mark_exclude_names == ["custom.mark"]
@@ -777,6 +788,9 @@ class TestOpenTelemetryTypes:
 
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
             config.headers = cast(dict[str, str], [])
+
+        with pytest.raises(ValueError, match="dict\\[str, str\\]"):
+            config.header_env = cast(dict[str, str], {"authorization": 1})
 
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
             config.resource_attributes = cast(dict[str, str], {"env": 1})
@@ -831,14 +845,19 @@ class TestOpenTelemetryTypes:
         with pytest.raises(RuntimeError, match="completed_span_context_ttl must be greater than 0"):
             OpenTelemetrySubscriber(zero_ttl)
 
-    def test_subscriber_exports_scope_and_mark_events_end_to_end(self):
+    def test_subscriber_exports_scope_and_mark_events_end_to_end(self, monkeypatch: pytest.MonkeyPatch):
         with _OtelCollector() as collector:
             source = "python-é" * 20
+            variable = f"NEMO_RELAY_PY_HEADER_{uuid4().hex}"
+            secret = "Bearer python-activation-secret"
+            monkeypatch.setenv(variable, secret)
             config = OpenTelemetryConfig("full", collector.endpoint)
             config.service_name = "py-agent"
             config.promote_metadata_prefixes = ["nv."]
+            config.header_env = {"authorization": variable}
 
             subscriber = OpenTelemetrySubscriber(config)
+            monkeypatch.setenv(variable, "Bearer python-changed-secret")
             subscriber_name = f"py_otel_e2e_{uuid4().hex}"
             subscriber.register(subscriber_name)
 
@@ -863,12 +882,44 @@ class TestOpenTelemetryTypes:
                 request = collector.wait_for_request()
                 assert request["path"] == "/v1/traces"
                 assert request["headers"]["content-type"] == "application/x-protobuf"
+                assert request["headers"]["authorization"] == secret
                 assert request["body"]
+                assert secret.encode() not in request["body"]
                 assert b"nemo_relay.mark.metadata.source" in request["body"]
                 assert _otlp_string_attribute("nv.binding", "python") in request["body"]
+                assert all(secret not in entry.message for entry in subscriber.runtime_diagnostics().entries)
             finally:
                 subscriber.deregister(subscriber_name)
                 subscriber.shutdown()
+
+    def test_subscriber_rejects_header_env_case_collision(self, monkeypatch: pytest.MonkeyPatch):
+        variable = f"NEMO_RELAY_PY_DUPLICATE_HEADER_{uuid4().hex}"
+        monkeypatch.setenv(variable, "Bearer secret")
+        config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
+        config.headers = {"Authorization": "static"}
+        config.header_env = {"authorization": variable}
+
+        with pytest.raises(RuntimeError, match="unique across headers and header_env"):
+            OpenTelemetrySubscriber(config)
+
+    def test_subscriber_rejects_unset_blank_and_invalid_header_env_values(self, monkeypatch: pytest.MonkeyPatch):
+        variable = f"NEMO_RELAY_PY_INVALID_HEADER_{uuid4().hex}"
+        config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
+        config.header_env = {"authorization": variable}
+
+        monkeypatch.delenv(variable, raising=False)
+        with pytest.raises(RuntimeError, match="is not set"):
+            OpenTelemetrySubscriber(config)
+
+        monkeypatch.setenv(variable, "  ")
+        with pytest.raises(RuntimeError, match="nonblank value"):
+            OpenTelemetrySubscriber(config)
+
+        secret = "relay-python-secret"
+        monkeypatch.setenv(variable, f"{secret}\ninvalid")
+        with pytest.raises(RuntimeError, match="valid header value") as failure:
+            OpenTelemetrySubscriber(config)
+        assert secret not in str(failure.value)
 
     def test_trace_export_failure_stays_unhealthy_until_a_later_export_succeeds(self):
         with _OtelCollector(response_status=503) as collector:

@@ -1781,6 +1781,33 @@ NemoRelayStatus nemo_relay_otel_subscriber_create_with_projection_options(const 
  * # Safety
  * Any non-null C strings must be valid and `out` must be non-null.
  */
+NemoRelayStatus nemo_relay_otel_subscriber_create_with_projection_options_v4(const char *otel_type,
+                                                                             const char *transport,
+                                                                             const char *endpoint,
+                                                                             const char *headers_json,
+                                                                             const char *header_env_json,
+                                                                             const char *resource_attributes_json,
+                                                                             const char *service_name,
+                                                                             const char *service_namespace,
+                                                                             const char *service_version,
+                                                                             const char *instrumentation_scope,
+                                                                             uint64_t timeout_millis,
+                                                                             const char *mark_projection,
+                                                                             const char *mark_exclude_names_json,
+                                                                             const char *attribute_mappings_json,
+                                                                             const char *promote_metadata_prefixes_json,
+                                                                             uint64_t completed_span_context_ttl_millis,
+                                                                             struct FfiOpenTelemetrySubscriber **out);
+
+/**
+ * Creates one typed OpenTelemetry exporter subscriber with projection, metadata, and lineage controls.
+ *
+ * This compatibility entrypoint configures only static headers. Use
+ * `nemo_relay_otel_subscriber_create_with_projection_options_v4` for `header_env`.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
 NemoRelayStatus nemo_relay_otel_subscriber_create_with_projection_options_v3(const char *otel_type,
                                                                              const char *transport,
                                                                              const char *endpoint,
@@ -1894,6 +1921,29 @@ NemoRelayStatus nemo_relay_otel_log_subscriber_create(const char *transport,
                                                       struct FfiOpenTelemetryLogSubscriber **out);
 
 /**
+ * Creates an independently managed OpenTelemetry log subscriber with `header_env` support.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_log_subscriber_create_v2(const char *transport,
+                                                         const char *endpoint,
+                                                         const char *headers_json,
+                                                         const char *header_env_json,
+                                                         const char *resource_attributes_json,
+                                                         const char *service_name,
+                                                         const char *service_namespace,
+                                                         const char *service_version,
+                                                         const char *instrumentation_scope,
+                                                         uint64_t timeout_millis,
+                                                         const char *minimum_severity,
+                                                         uint64_t max_queue_size,
+                                                         uint64_t max_export_batch_size,
+                                                         uint64_t scheduled_delay_millis,
+                                                         uint64_t completed_span_context_ttl_millis,
+                                                         struct FfiOpenTelemetryLogSubscriber **out);
+
+/**
  * Registers an OpenTelemetry log subscriber globally.
  *
  * # Safety
@@ -1964,6 +2014,28 @@ NemoRelayStatus nemo_relay_otel_metric_subscriber_create(const char *transport,
                                                          uint64_t max_instruments,
                                                          uint64_t cardinality_limit,
                                                          struct FfiOpenTelemetryMetricSubscriber **out);
+
+/**
+ * Creates an independently managed OpenTelemetry metric subscriber with `header_env` support.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_metric_subscriber_create_v2(const char *transport,
+                                                            const char *endpoint,
+                                                            const char *headers_json,
+                                                            const char *header_env_json,
+                                                            const char *resource_attributes_json,
+                                                            const char *service_name,
+                                                            const char *service_namespace,
+                                                            const char *service_version,
+                                                            const char *instrumentation_scope,
+                                                            uint64_t timeout_millis,
+                                                            uint64_t export_interval_millis,
+                                                            const char *temporality,
+                                                            uint64_t max_instruments,
+                                                            uint64_t cardinality_limit,
+                                                            struct FfiOpenTelemetryMetricSubscriber **out);
 
 /**
  * Registers an OpenTelemetry metric subscriber globally.
@@ -3313,10 +3385,11 @@ void nemo_relay_atof_exporter_free(struct FfiAtofExporter *ptr);
 
 /**
  * Free an OpenTelemetry subscriber handle previously returned by
- * `nemo_relay_otel_subscriber_create`.
+ * an OpenTelemetry subscriber constructor.
  *
  * # Safety
- * `ptr` must be a valid pointer returned by `nemo_relay_otel_subscriber_create`, or null.
+ * `ptr` must be a valid pointer returned by `nemo_relay_otel_subscriber_create` or
+ * `nemo_relay_otel_subscriber_create_with_projection_options_v4`, or null.
  */
 void nemo_relay_otel_subscriber_free(struct FfiOpenTelemetrySubscriber *ptr);
 
@@ -3325,7 +3398,8 @@ void nemo_relay_otel_subscriber_free(struct FfiOpenTelemetrySubscriber *ptr);
  *
  * # Safety
  * `ptr` must be a valid pointer returned by
- * `nemo_relay_otel_log_subscriber_create`, or null.
+ * `nemo_relay_otel_log_subscriber_create` or
+ * `nemo_relay_otel_log_subscriber_create_v2`, or null.
  */
 void nemo_relay_otel_log_subscriber_free(struct FfiOpenTelemetryLogSubscriber *ptr);
 
@@ -3334,7 +3408,8 @@ void nemo_relay_otel_log_subscriber_free(struct FfiOpenTelemetryLogSubscriber *p
  *
  * # Safety
  * `ptr` must be a valid pointer returned by
- * `nemo_relay_otel_metric_subscriber_create`, or null.
+ * `nemo_relay_otel_metric_subscriber_create` or
+ * `nemo_relay_otel_metric_subscriber_create_v2`, or null.
  */
 void nemo_relay_otel_metric_subscriber_free(struct FfiOpenTelemetryMetricSubscriber *ptr);
 

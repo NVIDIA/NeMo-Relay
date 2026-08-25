@@ -385,10 +385,11 @@ pub unsafe extern "C" fn nemo_relay_atof_exporter_free(ptr: *mut FfiAtofExporter
 }
 
 /// Free an OpenTelemetry subscriber handle previously returned by
-/// `nemo_relay_otel_subscriber_create`.
+/// an OpenTelemetry subscriber constructor.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by `nemo_relay_otel_subscriber_create`, or null.
+/// `ptr` must be a valid pointer returned by `nemo_relay_otel_subscriber_create` or
+/// `nemo_relay_otel_subscriber_create_with_projection_options_v4`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_otel_subscriber_free(ptr: *mut FfiOpenTelemetrySubscriber) {
     if !ptr.is_null() {
@@ -400,7 +401,8 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_free(ptr: *mut FfiOpenTeleme
 ///
 /// # Safety
 /// `ptr` must be a valid pointer returned by
-/// `nemo_relay_otel_log_subscriber_create`, or null.
+/// `nemo_relay_otel_log_subscriber_create` or
+/// `nemo_relay_otel_log_subscriber_create_v2`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_free(
     ptr: *mut FfiOpenTelemetryLogSubscriber,
@@ -414,7 +416,8 @@ pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_free(
 ///
 /// # Safety
 /// `ptr` must be a valid pointer returned by
-/// `nemo_relay_otel_metric_subscriber_create`, or null.
+/// `nemo_relay_otel_metric_subscriber_create` or
+/// `nemo_relay_otel_metric_subscriber_create_v2`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_free(
     ptr: *mut FfiOpenTelemetryMetricSubscriber,

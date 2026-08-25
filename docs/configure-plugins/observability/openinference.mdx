@@ -71,6 +71,7 @@ config = OpenTelemetryConfig(
     "http://localhost:6006/v1/traces",
 )
 config.service_name = "agent-service"
+config.header_env = {"authorization": "OTEL_AUTHORIZATION"}
 subscriber = OpenTelemetrySubscriber(config)
 ```
 </Tab>
@@ -82,6 +83,7 @@ const subscriber = new OpenTelemetrySubscriber({
   type: "openinference",
   endpoint: "http://localhost:6006/v1/traces",
   serviceName: "agent-service",
+  headerEnv: { authorization: "OTEL_AUTHORIZATION" },
 });
 ```
 </Tab>
@@ -94,7 +96,8 @@ let config = OpenTelemetryConfig::new(
     OpenTelemetryType::OpenInference,
     "http://localhost:6006/v1/traces",
 )
-.with_service_name("agent-service");
+.with_service_name("agent-service")
+.with_header_env("authorization", "OTEL_AUTHORIZATION");
 let subscriber = OpenTelemetrySubscriber::new(config)?;
 ```
 </Tab>
