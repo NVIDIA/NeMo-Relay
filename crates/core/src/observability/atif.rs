@@ -1150,31 +1150,35 @@ fn openai_responses_input_content_message(content: &Json) -> Option<Json> {
     None
 }
 
-/// Try to promote `tool_calls` from the raw LLM response into `AtifToolCall` entries.
+/// Try to promote provider tool calls from a raw LLM response into `AtifToolCall` entries.
 ///
-/// Expected shape per OpenAI convention:
-/// ```json
-/// "tool_calls": [{ "id": "...", "type": "function", "function": { "name": "...", "arguments": "..." } }]
-/// ```
+/// Supports generic/OpenAI Chat `tool_calls`, OpenAI Responses `function_call`
+/// output items, and Anthropic `tool_use` content blocks. Provider-specific ID
+/// semantics are preserved so later observations can correlate to the call.
 ///
 /// String `arguments` are parsed into JSON for consistency with NeMo Relay tool events
 /// which always provide parsed arguments.
 ///
 /// Returns `None` if there are no tool calls or the structure is unrecognized.
 fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
-    let arr = tool_call_array(output)
-        .filter(|arr| !arr.is_empty())
-        .map(|arr| arr.iter().collect::<Vec<_>>())
-        .or_else(|| openai_responses_function_call_items(output))
-        .or_else(|| anthropic_messages_tool_use_items(output))?;
+    let (arr, origin) = if let Some(tool_calls) = tool_call_array(output).filter(|a| !a.is_empty())
+    {
+        (
+            tool_calls.iter().collect::<Vec<_>>(),
+            ToolCallOrigin::Generic,
+        )
+    } else if let Some(function_calls) = openai_responses_function_call_items(output) {
+        (function_calls, ToolCallOrigin::OpenAiResponses)
+    } else {
+        (
+            anthropic_messages_tool_use_items(output)?,
+            ToolCallOrigin::AnthropicMessages,
+        )
+    };
     let mut calls = Vec::with_capacity(arr.len());
     for (index, tc) in arr.iter().enumerate() {
         let tc_obj = tc.as_object()?;
-        let mut id = tc_obj
-            .get("id")
-            .or_else(|| tc_obj.get("tool_call_id"))
-            .or_else(|| tc_obj.get("call_id"))
-            .and_then(Json::as_str)
+        let mut id = tool_call_id_for_origin(tc_obj, origin)
             .unwrap_or("")
             .to_string();
         let func = tc_obj.get("function").and_then(Json::as_object);
@@ -1208,6 +1212,37 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
         });
     }
     if calls.is_empty() { None } else { Some(calls) }
+}
+
+#[derive(Clone, Copy)]
+enum ToolCallOrigin {
+    Generic,
+    OpenAiResponses,
+    AnthropicMessages,
+}
+
+fn tool_call_id_for_origin(
+    tool_call: &serde_json::Map<String, Json>,
+    origin: ToolCallOrigin,
+) -> Option<&str> {
+    match origin {
+        // Responses distinguishes the output item `id` (`fc_*`) from the
+        // invocation `call_id` used by function_call_output and tool events.
+        ToolCallOrigin::OpenAiResponses => {
+            ["call_id", "id", "tool_call_id"].iter().find_map(|field| {
+                tool_call
+                    .get(*field)
+                    .and_then(Json::as_str)
+                    .filter(|value| !value.is_empty())
+            })
+        }
+        ToolCallOrigin::Generic | ToolCallOrigin::AnthropicMessages => tool_call
+            .get("id")
+            .or_else(|| tool_call.get("tool_call_id"))
+            .or_else(|| tool_call.get("call_id"))
+            .and_then(Json::as_str)
+            .filter(|value| !value.is_empty()),
+    }
 }
 
 // Annotation adapters: read the normalized message from an annotation, returning
