@@ -203,7 +203,7 @@ impl TrajectorySanitizer {
 }
 
 /// Return whether an event carries Relay's typed metric schema.
-fn is_relay_metric_mark(event: &Event) -> bool {
+pub(crate) fn is_relay_metric_mark(event: &Event) -> bool {
     matches!(event, Event::Mark(_))
         && event.data_schema().is_some_and(|schema| {
             schema.name == METRIC_DATA_SCHEMA_NAME && schema.version == METRIC_DATA_SCHEMA_VERSION

@@ -9,10 +9,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 
-use nemo_relay::api::event::{
-    CategoryProfile, Event, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope,
-    ScopeCategory,
-};
+use nemo_relay::api::event::{CategoryProfile, Event, MetricEnvelope, ScopeCategory};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::{
     BuiltinLlmCodec, EventSanitizeFn, LlmCodecIdentity, LlmSanitizeRequestFn,
@@ -29,7 +26,7 @@ use nemo_relay::plugin::{PluginError, Result as PluginResult};
 use super::component::BuiltinBackendConfig;
 use super::detectors::BuiltinDetector;
 use super::overlay::BuiltinCodecName;
-use super::trajectory::{CustomMarkPayloadPolicy, TrajectorySanitizer};
+use super::trajectory::{CustomMarkPayloadPolicy, TrajectorySanitizer, is_relay_metric_mark};
 
 #[derive(Clone)]
 pub(super) struct CompiledBuiltinBackend {
@@ -673,14 +670,6 @@ fn event_sanitize_callback_with_scope_categories(
             Ok(fields)
         })
     })
-}
-
-/// Return whether an event carries Relay's typed metric schema.
-fn is_relay_metric_mark(event: &Event) -> bool {
-    matches!(event, Event::Mark(_))
-        && event.data_schema().is_some_and(|schema| {
-            schema.name == METRIC_DATA_SCHEMA_NAME && schema.version == METRIC_DATA_SCHEMA_VERSION
-        })
 }
 
 pub(super) fn llm_sanitize_request_callback(
