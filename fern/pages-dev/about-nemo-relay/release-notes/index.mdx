@@ -27,44 +27,63 @@ Relay](/about-nemo-relay/overview).
 
 ## Release 0.8
 
-NeMo Relay 0.8 changes the typed native Rust SDK's guardrail, sanitizer, and
-intercept callbacks to return futures. The SDK runs these futures on one
-plugin-owned Tokio executor and provides async, cloneable unary and streaming
-continuations. This is a source-breaking change for typed native Rust plugins;
-rebuild them with `nemo-relay-plugin` 0.8.0 and declare
-`compat.relay = ">=0.8.0,<1.0"`.
-
-Native ABI v4 is current for Relay 0.8. It includes typed asynchronous
-middleware operations such as completion-scoped codecs and pull-based LLM
-stream continuations, then appends `emit_mark_v2` for typed data-schema and log
-severity options. Relay still accepts existing raw ABI v2 and v3 binaries, and
-native subscribers remain synchronous. Follow the [native Rust migration
-guide](/reference/migration-guides#upgrade-native-rust-plugins-to-nemo-relay-08)
-for callback, executor, and mark-option changes.
-
-Managed and manual tool execution now uses the canonical
-`ToolExecutionResult` shape across Rust, Python, Node.js, Go, the public C
-surface, native plugins, and `grpc-v1` workers. The required `result` remains
-application-owned, while an optional opaque `annotation` travels beside it and
-is projected consistently into sanitized observability.
+NeMo Relay 0.8 strengthens plugin extensibility, managed tool execution, and
+observability while introducing source-breaking migration steps for native Rust
+plugins, Node.js streaming intercepts, and tool-result callbacks.
 
 ### Highlights
 
 The following updates expand native Rust plugin capabilities:
 
 - Typed native Rust middleware can await Tokio timers, I/O, codecs, unary
-  continuations, and downstream LLM streams on an SDK-owned executor.
-- Native ABI v4 provides completion-scoped codec operations, pull-based LLM
-  stream continuations, and appended `emit_mark_v2` support for typed data
-  schemas and log severity.
-- Tool callbacks and execution-intercept continuations share one canonical
-  result contract with an optional opaque annotation.
+  continuations, and downstream LLM streams on an SDK-owned executor. Native
+  ABI v4 adds completion-scoped codec operations, pull-based LLM stream
+  continuations, and `emit_mark_v2` support for typed data schemas and log
+  severity. Existing raw ABI v2 and v3 binaries remain loadable without a
+  rebuild for host-table compatibility; rebuild only when the plugin also needs
+  the changed native API 1 tool-result contract.
+- Tool callbacks and execution-intercept continuations now share the canonical
+  `ToolExecutionResult` contract across Rust, Python, Node.js, Go, the public C
+  surface, native plugins, and `grpc-v1` workers. The application-owned
+  `result` can travel with an optional opaque `annotation` for observability.
 - ATOF, ATIF, and the `full` and `openinference` OpenTelemetry projections
   preserve sanitized tool result annotations without flattening their
   application-defined schemas.
 - Managed tool execution accepts an optional provider- or harness-supplied
   tool-call ID and preserves it on the matching start and end events across
   success, error, and cancellation paths.
+
+### Runtime Controls and Caching
+
+- Conditional middleware guardrails let applications and plugins temporarily
+  exclude matching global registrations, such as an exporter during an outage
+  or an expensive intercept while a dependency is unhealthy. Gates are
+  fail-open, so a failed control callback does not silently remove runtime
+  behavior. See [Conditional Middleware
+  Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails).
+- Event metadata injectors can enrich events from application code and plugins
+  across Rust, Python, Node.js, Go, and the C FFI. Selected metadata keys can
+  also be promoted into OpenTelemetry attributes, making useful application
+  context available to telemetry backends without changing event schemas.
+- The Adaptive response cache can now cache explicitly classified, read-only
+  tool results. Tool caching is disabled by default because a cache hit skips
+  the live tool call; configure a stable TTL and tool policy only when that is
+  safe for the tool's behavior. See [Response
+  Cache](/configure-plugins/adaptive/response-cache).
+
+### Provider and Framework Support
+
+- Built-in codecs now support OCI Generative AI chat payloads and Gemini
+  `generateContent` payloads, including streaming and normalized lifecycle
+  data. Use these codecs directly when a framework sends either provider's
+  request shape. See [Provider
+  Codecs](/integrate-into-frameworks/provider-codecs).
+- Managed LLM requests now carry a runtime-owned W3C `traceparent` header,
+  allowing downstream provider work to remain connected to the Relay trace.
+- The Deep Agents integration now models the orchestrator and in-process
+  subagents as nested semantic Agent scopes. This makes parent-child activity
+  easier to understand without turning internal LangGraph nodes into extra
+  agent spans.
 
 ### OpenTelemetry Logs and Metrics
 
@@ -74,6 +93,10 @@ The following updates expand native Rust plugin capabilities:
 - Rust, Python, Node.js, and the experimental C FFI expose typed mark
   schema and severity options plus metric helpers. Direct subscribers and
   native and worker plugin SDKs expose bounded runtime diagnostics snapshots.
+- OpenTelemetry keeps valid endpoints active when a peer endpoint is invalid,
+  retains completed trace context for late events for a configurable period,
+  and reports signal-specific delivery failures without exposing sensitive
+  endpoint details.
 
 ### Support Matrix and Compatibility Updates
 
@@ -89,19 +112,34 @@ Migration guidance for upgrading from 0.7 to 0.8 is available in the
 
 - Typed native Rust middleware callbacks now return futures and receive owned
   arguments. Native subscribers and raw synchronous ABI entry points are
-  unchanged.
+  unchanged. Rebuild typed native Rust middleware plugins with
+  `nemo-relay-plugin` 0.8.0 and declare `compat.relay = ">=0.8.0,<1.0"`; see
+  the [native Rust migration
+  guide](/reference/migration-guides#upgrade-native-rust-plugins-to-nemo-relay-08).
+- Node.js LLM streaming execution intercepts now receive and return lazy async
+  iterables. Existing intercepts that collect `next(request)` into an array or
+  return a scalar or array must use an async generator instead. See the [Node.js
+  stream-intercept migration
+  guide](/reference/migration-guides#stream-nodejs-llm-execution-intercepts-lazily).
+- Relay-created plugin-component effective names now use a versioned format
+  that includes a one-based component ordinal, including ordinal `1` for a
+  singleton component. Effective names are an internal implementation detail:
+  discover them from the active runtime instead of constructing or persisting
+  them.
 - Managed tool callbacks, execution-intercept continuations, execute-helper
   returns, and manual tool end APIs now use `ToolExecutionResult` instead of a
   raw JSON result. Applications that need the original business payload must
   read its `result` field. Refer to the
   [tool result migration guide](/reference/migration-guides#return-canonical-tool-execution-results).
 - Relay 0.8 resets native API 1 and the `grpc-v1` tool-result contract to the
-  canonical `ToolExecutionResult` shape. Rebuild every native and worker plugin
-  and declare a `compat.relay` range that excludes Relay versions before 0.8.
-  The native ABI v4 table remains unchanged. The worker package and RPC method
-  names remain `nemo.relay.worker.v1`, but the `ToolNext` response and
-  tool-execution outcome field now use structured protobuf messages. Regenerate
-  custom worker bindings before rebuilding.
+  canonical `ToolExecutionResult` shape. Rebuild native API 1 and worker
+  plugins that use tool callbacks, execution intercepts, or manual tool-end
+  APIs, and declare a `compat.relay` range that excludes Relay versions before
+  0.8. Frozen raw ABI v2 and v3 binaries that do not use this changed contract
+  remain loadable without a rebuild. The native ABI v4 table remains unchanged.
+  The worker package and RPC method names remain `nemo.relay.worker.v1`, but
+  the `ToolNext` response and tool-execution outcome field now use structured
+  protobuf messages. Regenerate custom worker bindings before rebuilding.
 - Repository-local `.nemo-relay/config.toml`, `plugins.toml`, and
   `.dynamic-plugins.json` files are no longer discovered or activated. Runtime
   resolution is explicit-or-user followed by higher-precedence system policy.
@@ -134,6 +172,34 @@ for destination paths and explicit-file alternatives.
   `/v1/traces`; when version 4 implicitly derives log or metric destinations
   from either form, it uses `/v1/logs` or `/v1/metrics` respectively. Explicit
   trace, log, and metric endpoint paths remain unchanged.
+- OpenTelemetry activation now isolates invalid endpoints so they do not
+  disable valid trace, log, or metric destinations. Repeated shutdown is also
+  safe, and blocked trace flushes no longer delay event delivery to other
+  subscribers.
+- OTLP diagnostics now retain distinct causes, identify the affected signal,
+  report direct log queue drops and trace or metric export failures, and redact
+  sensitive endpoint details from trace-export failures.
+- Successful force flushes for direct OTLP trace and log subscribers now expose
+  all queue drops observed so far in runtime diagnostics. The reported count
+  remains cumulative through later flushes and shutdown.
+- Deferred marks can retain their completed trace lineage for a configurable
+  time instead of becoming orphaned after a fixed number of completed scopes.
+- ATIF exports now correlate OpenAI Responses function-call results with the
+  semantic invocation `call_id`, so the exported tool observation remains
+  connected to the matching tool call instead of being orphaned by the response
+  item's separate identifier.
+
+### Other Improvements
+
+- Manually observed LLM responses can now receive configured model-pricing
+  estimates when they include sufficient normalized model and usage data;
+  provider-reported costs remain authoritative.
+- `nemo-relay run --dry-run` now warns when the forwarded command repeats the
+  explicitly selected coding-agent executable, helping catch a common launch
+  mistake without changing live-launch behavior.
+- Set `NEMO_RELAY_PLUGIN_SNAPSHOT_DIR` to choose the parent directory for
+  plugin activation snapshots when system temporary paths are unsuitable or
+  too long.
 
 ## Known Issues in 0.8
 
