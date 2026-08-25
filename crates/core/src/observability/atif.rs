@@ -1214,6 +1214,7 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
     if calls.is_empty() { None } else { Some(calls) }
 }
 
+/// Provider payload shape governing tool-call identifier semantics.
 #[derive(Clone, Copy)]
 enum ToolCallOrigin {
     Generic,
@@ -1221,6 +1222,7 @@ enum ToolCallOrigin {
     AnthropicMessages,
 }
 
+/// Select the first usable correlation identifier for the provider payload shape.
 fn tool_call_id_for_origin(
     tool_call: &serde_json::Map<String, Json>,
     origin: ToolCallOrigin,
@@ -1236,12 +1238,14 @@ fn tool_call_id_for_origin(
                     .filter(|value| !value.is_empty())
             })
         }
-        ToolCallOrigin::Generic | ToolCallOrigin::AnthropicMessages => tool_call
-            .get("id")
-            .or_else(|| tool_call.get("tool_call_id"))
-            .or_else(|| tool_call.get("call_id"))
-            .and_then(Json::as_str)
-            .filter(|value| !value.is_empty()),
+        ToolCallOrigin::Generic | ToolCallOrigin::AnthropicMessages => {
+            ["id", "tool_call_id", "call_id"].iter().find_map(|field| {
+                tool_call
+                    .get(*field)
+                    .and_then(Json::as_str)
+                    .filter(|value| !value.is_empty())
+            })
+        }
     }
 }
 

@@ -2462,12 +2462,41 @@ fn test_non_responses_tool_calls_preserve_provider_id_semantics() {
                 "call_id": "responses_call_2",
                 "tool_call_id": "legacy_call_2",
                 "function": {"name": "chat_tool_2", "arguments": "{}"}
+            },
+            {
+                "type": "function",
+                "id": null,
+                "tool_call_id": "legacy_call_3",
+                "function": {"name": "chat_tool_3", "arguments": "{}"}
+            },
+            {
+                "type": "function",
+                "id": "",
+                "call_id": "responses_call_4",
+                "function": {"name": "chat_tool_4", "arguments": "{}"}
+            },
+            {
+                "type": "function",
+                "id": 42,
+                "tool_call_id": "legacy_call_5",
+                "function": {"name": "chat_tool_5", "arguments": "{}"}
+            },
+            {
+                "type": "function",
+                "id": null,
+                "tool_call_id": "",
+                "call_id": false,
+                "function": {"name": "chat_tool_6", "arguments": "{}"}
             }
         ]
     }))
     .expect("Chat Completions tool call");
     assert_eq!(chat_calls[0].tool_call_id, "chat_call_1");
     assert_eq!(chat_calls[1].tool_call_id, "legacy_call_2");
+    assert_eq!(chat_calls[2].tool_call_id, "legacy_call_3");
+    assert_eq!(chat_calls[3].tool_call_id, "responses_call_4");
+    assert_eq!(chat_calls[4].tool_call_id, "legacy_call_5");
+    assert_eq!(chat_calls[5].tool_call_id, "chat_tool_6:6");
 
     let anthropic_calls = extract_tool_calls(&json!({
         "type": "message",
@@ -2478,11 +2507,19 @@ fn test_non_responses_tool_calls_preserve_provider_id_semantics() {
                 "call_id": "responses_call_1",
                 "name": "anthropic_tool",
                 "input": {}
+            },
+            {
+                "type": "tool_use",
+                "id": null,
+                "tool_call_id": "toolu_2",
+                "name": "anthropic_tool_2",
+                "input": {}
             }
         ]
     }))
     .expect("Anthropic tool use");
     assert_eq!(anthropic_calls[0].tool_call_id, "toolu_1");
+    assert_eq!(anthropic_calls[1].tool_call_id, "toolu_2");
 }
 
 #[test]
