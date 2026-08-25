@@ -269,6 +269,61 @@ def test_create_tool_node_preserves_command_and_error_handling(
 
 
 @pytest.mark.parametrize("use_async", [False, True])
+def test_create_tool_node_preserves_selective_error_handling(use_async: bool):
+    from langchain_core.messages import AIMessage
+    from langchain_core.tools import tool
+    from langgraph.graph import END, START, StateGraph
+
+    from nemo_relay.integrations.langgraph import create_tool_node
+
+    @tool
+    def value_error() -> str:
+        """Raise an error selected by the ToolNode policy."""
+        raise ValueError("handled")
+
+    @tool
+    def runtime_error() -> str:
+        """Raise an error outside the ToolNode policy."""
+        raise RuntimeError("unhandled")
+
+    def build_graph(tool: Any):
+        builder = StateGraph(ToolNodeState)
+        builder.add_node("tools", create_tool_node([tool], handle_tool_errors=ValueError))
+        builder.add_edge(START, "tools")
+        builder.add_edge("tools", END)
+        return builder.compile()
+
+    handled_graph = build_graph(value_error)
+    unhandled_graph = build_graph(runtime_error)
+    handled_input = {
+        "offset": 0,
+        "messages": [AIMessage(content="", tool_calls=[{"name": "value_error", "args": {}, "id": "call-value"}])],
+    }
+    unhandled_input = {
+        "offset": 0,
+        "messages": [AIMessage(content="", tool_calls=[{"name": "runtime_error", "args": {}, "id": "call-runtime"}])],
+    }
+
+    if use_async:
+
+        async def invoke_handled() -> ToolNodeState:
+            return await handled_graph.ainvoke(handled_input)
+
+        async def invoke_unhandled() -> ToolNodeState:
+            return await unhandled_graph.ainvoke(unhandled_input)
+
+        handled_result = asyncio.run(invoke_handled())
+        with pytest.raises(RuntimeError, match="internal error"):
+            asyncio.run(invoke_unhandled())
+    else:
+        handled_result = handled_graph.invoke(handled_input)
+        with pytest.raises(RuntimeError, match="internal error"):
+            unhandled_graph.invoke(unhandled_input)
+
+    assert handled_result["messages"][-1].status == "error"
+
+
+@pytest.mark.parametrize("use_async", [False, True])
 def test_create_tool_node_preserves_list_command_results(use_async: bool):
     from langchain_core.messages import AIMessage, ToolMessage
     from langchain_core.tools import tool

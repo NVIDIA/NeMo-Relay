@@ -66,7 +66,15 @@ def _handle_tool_error(error: Exception, policy: object) -> str:
         if isinstance(error, ToolInvocationError):
             return error.message
         raise error
-    if isinstance(policy, bool | tuple) or (isinstance(policy, type) and issubclass(policy, Exception)):
+    if isinstance(policy, tuple):
+        if not isinstance(error, policy):
+            raise error
+        return _TOOL_CALL_ERROR_TEMPLATE.format(error=repr(error))
+    if isinstance(policy, type) and issubclass(policy, Exception):
+        if not isinstance(error, policy):
+            raise error
+        return _TOOL_CALL_ERROR_TEMPLATE.format(error=repr(error))
+    if policy is True:
         return _TOOL_CALL_ERROR_TEMPLATE.format(error=repr(error))
     if isinstance(policy, str):
         return policy
