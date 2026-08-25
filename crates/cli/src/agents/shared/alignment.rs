@@ -47,15 +47,17 @@ impl SubagentSessionContext {
 pub(crate) enum GatewayRouteKind {
     OpenAiResponses,
     OpenAiChatCompletions,
+    OpenAiImagesGenerations,
     OpenAiModels,
     AnthropicMessages,
     AnthropicCountTokens,
 }
 
 impl GatewayRouteKind {
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::OpenAiResponses,
         Self::OpenAiChatCompletions,
+        Self::OpenAiImagesGenerations,
         Self::OpenAiModels,
         Self::AnthropicMessages,
         Self::AnthropicCountTokens,
@@ -65,6 +67,7 @@ impl GatewayRouteKind {
         match self {
             Self::OpenAiResponses => "openai.responses",
             Self::OpenAiChatCompletions => "openai.chat_completions",
+            Self::OpenAiImagesGenerations => "openai.images.generations",
             Self::OpenAiModels => "openai.models",
             Self::AnthropicMessages => "anthropic.messages",
             Self::AnthropicCountTokens => "anthropic.count_tokens",
@@ -386,6 +389,7 @@ fn provider_request_extractor(route: GatewayRouteKind) -> &'static dyn ProviderR
     match route {
         GatewayRouteKind::OpenAiResponses => &OPENAI_RESPONSES_REQUEST_EXTRACTOR,
         GatewayRouteKind::OpenAiChatCompletions => &OPENAI_CHAT_COMPLETIONS_REQUEST_EXTRACTOR,
+        GatewayRouteKind::OpenAiImagesGenerations => &OPENAI_MODELS_REQUEST_EXTRACTOR,
         GatewayRouteKind::OpenAiModels => &OPENAI_MODELS_REQUEST_EXTRACTOR,
         GatewayRouteKind::AnthropicMessages => &ANTHROPIC_MESSAGES_REQUEST_EXTRACTOR,
         GatewayRouteKind::AnthropicCountTokens => &ANTHROPIC_COUNT_TOKENS_REQUEST_EXTRACTOR,

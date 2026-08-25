@@ -82,6 +82,20 @@ pub(crate) async fn passthrough(
     run_managed_gateway(state, prepared, prep).await
 }
 
+/// Transparently proxies OpenAI image-generation requests without emitting LLM events.
+///
+/// Relay has no image-generation codec, so preserving the upstream response exactly is safer than
+/// forcing this distinct API shape through the managed text-generation pipeline.
+pub(crate) async fn images_generations(
+    State(state): State<AppState>,
+    mut request: Request<Body>,
+) -> Result<Response<Body>, CliError> {
+    state.touch();
+    let authorization = state.authorize_provider_request(request.headers_mut())?;
+    let prepared = prepare_gateway_request(&state.config, request, authorization).await?;
+    run_unmanaged_gateway(state, prepared).await
+}
+
 /// Exact failure material from one ordinary upstream attempt.
 ///
 /// Retry-aware routing attempts use [`FlowError::Upstream`].
@@ -1069,6 +1083,7 @@ where
     let (env_var, header_name) = match route {
         ProviderRoute::OpenAiResponses
         | ProviderRoute::OpenAiChatCompletions
+        | ProviderRoute::OpenAiImagesGenerations
         | ProviderRoute::OpenAiModels => ("OPENAI_API_KEY", http::header::AUTHORIZATION.as_str()),
         ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => {
             ("ANTHROPIC_API_KEY", "x-api-key")
@@ -1086,6 +1101,7 @@ where
     let header_value = match route {
         ProviderRoute::OpenAiResponses
         | ProviderRoute::OpenAiChatCompletions
+        | ProviderRoute::OpenAiImagesGenerations
         | ProviderRoute::OpenAiModels => format!("Bearer {value}"),
         ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => value,
     };

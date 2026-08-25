@@ -295,6 +295,14 @@ fn selects_provider_routes() {
         ProviderRoute::from_path("/models"),
         Some(ProviderRoute::OpenAiModels)
     );
+    assert_eq!(
+        ProviderRoute::from_path("/v1/images/generations"),
+        Some(ProviderRoute::OpenAiImagesGenerations)
+    );
+    assert_eq!(
+        ProviderRoute::OpenAiImagesGenerations.name(),
+        "openai.images.generations"
+    );
     assert_eq!(ProviderRoute::OpenAiModels.name(), "openai.models");
     assert_eq!(
         ProviderRoute::AnthropicMessages.name(),
@@ -315,6 +323,10 @@ fn selects_provider_routes() {
     assert_eq!(
         ProviderRoute::OpenAiModels.alignment_route(),
         GatewayRouteKind::OpenAiModels
+    );
+    assert_eq!(
+        ProviderRoute::OpenAiImagesGenerations.alignment_route(),
+        GatewayRouteKind::OpenAiImagesGenerations
     );
     assert_eq!(
         ProviderRoute::AnthropicMessages.alignment_route(),
@@ -351,6 +363,7 @@ fn generation_routes_have_request_codecs_and_passthrough_routes_do_not() {
 
     for route in [
         ProviderRoute::AnthropicCountTokens,
+        ProviderRoute::OpenAiImagesGenerations,
         ProviderRoute::OpenAiModels,
     ] {
         let codecs = codecs_for_route(route);
@@ -413,6 +426,17 @@ fn generation_route_codecs_reject_stream_mode_changes() {
 
 #[test]
 fn dispatch_override_routes_cover_models_and_count_tokens() {
+    for alias in [
+        "openai_images_generations",
+        "openai.images.generations",
+        "/v1/images/generations",
+    ] {
+        assert_eq!(
+            ProviderRoute::from_dispatch_override(alias),
+            Some(ProviderRoute::OpenAiImagesGenerations),
+            "alias {alias}"
+        );
+    }
     for alias in ["openai_models", "openai.models", "/models", "/v1/models"] {
         assert_eq!(
             ProviderRoute::from_dispatch_override(alias),
@@ -438,6 +462,7 @@ fn provider_route_names_round_trip_through_alignment_routes() {
     for route in [
         ProviderRoute::OpenAiResponses,
         ProviderRoute::OpenAiChatCompletions,
+        ProviderRoute::OpenAiImagesGenerations,
         ProviderRoute::OpenAiModels,
         ProviderRoute::AnthropicMessages,
         ProviderRoute::AnthropicCountTokens,
@@ -474,6 +499,11 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
     assert_eq!(
         ProviderRoute::OpenAiModels.upstream_url(&config, "/models"),
         "http://openai/v1/models"
+    );
+    assert_eq!(
+        ProviderRoute::OpenAiImagesGenerations
+            .upstream_url(&config, "/v1/images/generations?output_format=png"),
+        "http://openai/v1/images/generations?output_format=png"
     );
     assert_eq!(
         ProviderRoute::AnthropicMessages.upstream_url(&config, "/v1/messages"),
@@ -1678,6 +1708,10 @@ fn configured_auth_headers_are_provider_specific_and_precede_environment_keys() 
     for (route, expected) in [
         (ProviderRoute::OpenAiResponses, "Basic openai-custom"),
         (ProviderRoute::OpenAiChatCompletions, "Basic openai-custom"),
+        (
+            ProviderRoute::OpenAiImagesGenerations,
+            "Basic openai-custom",
+        ),
         (ProviderRoute::OpenAiModels, "Basic openai-custom"),
         (ProviderRoute::AnthropicMessages, "Bearer anthropic-custom"),
         (

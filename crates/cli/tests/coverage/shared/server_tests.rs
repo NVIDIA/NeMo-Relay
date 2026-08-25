@@ -2284,6 +2284,42 @@ async fn gateway_forwards_openai_json_without_rewriting_payload() {
 }
 
 #[tokio::test]
+async fn gateway_transparently_forwards_openai_image_generations() {
+    let upstream = spawn_upstream(false).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/images/generations?output_format=png")
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer image-test")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-image-1",
+                        "prompt": "a tiny relay robot"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["model"], json!("gpt-image-1"));
+    assert_eq!(body["prompt"], json!("a tiny relay robot"));
+    assert_eq!(
+        body["path"],
+        json!("/v1/images/generations?output_format=png")
+    );
+    assert_eq!(body["authorization"], json!("Bearer image-test"));
+}
+
+#[tokio::test]
 async fn transparent_gateway_requires_and_consumes_its_invocation_token() {
     let upstream = spawn_upstream(false).await;
     let mut config = test_config();
@@ -3298,11 +3334,13 @@ async fn wait_for_gateway(url: &str) {
 }
 
 async fn spawn_upstream(streaming: bool) -> TestServer {
-    async fn chat(headers: HeaderMap, body: Bytes) -> impl IntoResponse {
+    async fn chat(uri: axum::http::Uri, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
         let payload: Value = serde_json::from_slice(&body).unwrap();
         Json(json!({
+            "path": uri.path_and_query().map(|value| value.as_str()),
             "model": payload["model"],
             "input": payload["input"],
+            "prompt": payload["prompt"],
             "authorization": headers
                 .get(header::AUTHORIZATION)
                 .and_then(|value| value.to_str().ok()),
@@ -3341,6 +3379,7 @@ async fn spawn_upstream(streaming: bool) -> TestServer {
     } else {
         Router::new()
             .route("/v1/chat/completions", post(chat))
+            .route("/v1/images/generations", post(chat))
             .route("/v1/responses", post(chat))
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

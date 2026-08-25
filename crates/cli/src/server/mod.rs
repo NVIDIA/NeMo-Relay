@@ -584,6 +584,7 @@ fn router_with_state(state: AppState) -> Router {
         .route("/models", get(gateway::models))
         .route("/v1/responses", post(gateway::passthrough))
         .route("/v1/chat/completions", post(gateway::passthrough))
+        .route("/v1/images/generations", post(gateway::images_generations))
         .route("/v1/messages", post(gateway::passthrough))
         .route("/v1/messages/count_tokens", post(gateway::passthrough))
         .route("/v1/models", get(gateway::models))
