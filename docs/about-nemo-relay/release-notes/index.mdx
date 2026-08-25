@@ -118,6 +118,11 @@ Migration guidance for upgrading from 0.7 to 0.8 is available in the
   return a scalar or array must use an async generator instead. See the [Node.js
   stream-intercept migration
   guide](/reference/migration-guides#stream-nodejs-llm-execution-intercepts-lazily).
+- Relay-created plugin-component effective names now use a versioned format
+  that includes a one-based component ordinal, including ordinal `1` for a
+  singleton component. Effective names are an internal implementation detail:
+  discover them from the active runtime instead of constructing or persisting
+  them.
 - Managed tool callbacks, execution-intercept continuations, execute-helper
   returns, and manual tool end APIs now use `ToolExecutionResult` instead of a
   raw JSON result. Applications that need the original business payload must
@@ -169,8 +174,15 @@ for destination paths and explicit-file alternatives.
 - OTLP diagnostics now retain distinct causes, identify the affected signal,
   report direct log queue drops and trace or metric export failures, and redact
   sensitive endpoint details from trace-export failures.
+- Successful force flushes for direct OTLP trace and log subscribers now expose
+  all queue drops observed so far in runtime diagnostics. The reported count
+  remains cumulative through later flushes and shutdown.
 - Deferred marks can retain their completed trace lineage for a configurable
   time instead of becoming orphaned after a fixed number of completed scopes.
+- ATIF exports now correlate OpenAI Responses function-call results with the
+  semantic invocation `call_id`, so the exported tool observation remains
+  connected to the matching tool call instead of being orphaned by the response
+  item's separate identifier.
 
 ### Other Improvements
 
