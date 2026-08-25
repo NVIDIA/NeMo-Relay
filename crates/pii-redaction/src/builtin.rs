@@ -254,27 +254,34 @@ impl CompiledBuiltinBackend {
             Json::String(value) => self
                 .sanitize_metric_string_at_path(value, &base_path)
                 .map(Json::String),
-            Json::Array(values) if values.iter().all(Json::is_string) => Some(Json::Array(
-                values
-                    .into_iter()
-                    .enumerate()
-                    .filter_map(|(index, value)| match value {
-                        Json::String(value) => self
-                            .sanitize_metric_string_at_path(
-                                value,
-                                &[
-                                    base_path[0].clone(),
-                                    base_path[1].clone(),
-                                    base_path[2].clone(),
-                                    base_path[3].clone(),
-                                    index.to_string(),
-                                ],
-                            )
-                            .map(Json::String),
-                        _ => unreachable!("checked all metric attribute values are strings"),
-                    })
-                    .collect(),
-            )),
+            Json::Array(values) if values.iter().all(Json::is_string) => {
+                if matches!(self.action, BuiltinAction::Remove)
+                    && self.matches_current_preorder_path(&base_path)
+                {
+                    return None;
+                }
+                Some(Json::Array(
+                    values
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(index, value)| match value {
+                            Json::String(value) => self
+                                .sanitize_metric_string_at_path(
+                                    value,
+                                    &[
+                                        base_path[0].clone(),
+                                        base_path[1].clone(),
+                                        base_path[2].clone(),
+                                        base_path[3].clone(),
+                                        index.to_string(),
+                                    ],
+                                )
+                                .map(Json::String),
+                            _ => unreachable!("checked all metric attribute values are strings"),
+                        })
+                        .collect(),
+                ))
+            }
             value => Some(value),
         }
     }
