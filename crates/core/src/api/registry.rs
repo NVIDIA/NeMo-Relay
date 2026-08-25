@@ -139,8 +139,9 @@ fn registration_identity(
     kind: RuntimeRegistrationKind,
     effective_name: &str,
 ) -> RuntimeRegistrationIdentity {
-    const PREFIX: &str = "__nemo_relay_plugin__";
-    let Some(rest) = effective_name.strip_prefix(PREFIX) else {
+    let Some((plugin_kind, component_ordinal, local_name)) =
+        crate::plugin::decode_plugin_component_effective_name(effective_name)
+    else {
         return RuntimeRegistrationIdentity {
             kind,
             local_name: effective_name.to_string(),
@@ -152,17 +153,6 @@ fn registration_identity(
             },
         };
     };
-    let mut pieces = rest.split("__");
-    let plugin_kind = pieces.next().unwrap_or_default().to_string();
-    let second = pieces.next().unwrap_or_default();
-    let (component_ordinal, local_name) = match second.parse::<u32>() {
-        Ok(ordinal) => (Some(ordinal), pieces.collect::<Vec<_>>().join("__")),
-        Err(_) => {
-            let mut local = vec![second];
-            local.extend(pieces);
-            (None, local.join("__"))
-        }
-    };
     RuntimeRegistrationIdentity {
         kind,
         local_name,
@@ -170,7 +160,7 @@ fn registration_identity(
         owner: RuntimeRegistrationOwner {
             kind: RuntimeRegistrationOwnerKind::Plugin,
             plugin_kind: Some(plugin_kind),
-            component_ordinal,
+            component_ordinal: Some(component_ordinal),
         },
     }
 }

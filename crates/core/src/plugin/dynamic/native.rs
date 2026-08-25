@@ -529,6 +529,7 @@ struct NativeHostPluginContext {
 
 struct NativeHostPluginRuntime {
     namespace: String,
+    encode_local_names: bool,
     active: AtomicBool,
     gates: Mutex<HashMap<String, NativeOwnedGate>>,
 }
@@ -3935,9 +3936,11 @@ unsafe extern "C" fn native_plugin_context_runtime(
         Ok(ctx) => ctx,
         Err(status) => return status,
     };
-    let namespace = unsafe { &*host_ctx.ctx }.qualify_name("");
+    let context = unsafe { &*host_ctx.ctx };
+    let namespace = context.qualify_name("");
     let runtime = Arc::new(NativeHostPluginRuntime {
         namespace,
+        encode_local_names: context.uses_plugin_component_namespace(),
         active: AtomicBool::new(true),
         gates: Mutex::new(HashMap::new()),
     });
@@ -4060,7 +4063,15 @@ unsafe extern "C" fn native_plugin_runtime_register_conditional_middleware_guard
         return NemoRelayStatus::AlreadyExists;
     }
     let handle = format!("gate-{}", Uuid::now_v7());
-    let qualified_name = format!("{}{}", runtime.namespace, local_name);
+    let qualified_name = if runtime.encode_local_names {
+        format!(
+            "{}{}",
+            runtime.namespace,
+            crate::plugin::encode_plugin_component_field(&local_name)
+        )
+    } else {
+        format!("{}{}", runtime.namespace, local_name)
+    };
     if let Err(error) = register_conditional_middleware_guardrail(
         &qualified_name,
         kinds,

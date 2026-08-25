@@ -15,7 +15,9 @@ use tokio::sync::Notify;
 use crate::api::event::{BaseEvent, Event, MarkEvent};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::llm::{llm_conditional_execution, llm_request_intercepts};
-use crate::api::registry::{RuntimeRegistrationKind, list_runtime_registrations};
+use crate::api::registry::{
+    RuntimeRegistrationKind, RuntimeRegistrationOwnerKind, list_runtime_registrations,
+};
 use crate::api::runtime::global_context;
 use crate::api::runtime::{LlmJsonStream, NemoRelayContextState};
 use crate::api::tool::tool_conditional_execution;
@@ -1312,11 +1314,15 @@ fn test_plugin_component_helpers_and_serialization_error_variant() {
     assert_eq!(totals.get("beta.plugin"), Some(&1));
     assert_eq!(
         component_namespace("alpha.plugin", 1),
-        "__nemo_relay_plugin__alpha.plugin__1__"
+        "nemo-relay-plugin.v1.alpha.plugin:1:"
     );
     assert_eq!(
         component_namespace("beta.plugin", 1),
-        "__nemo_relay_plugin__beta.plugin__1__"
+        "nemo-relay-plugin.v1.beta.plugin:1:"
+    );
+    assert_eq!(
+        component_namespace("alpha/plugin:π%", 2),
+        "nemo-relay-plugin.v1.alpha%2Fplugin%3A%CF%80%25:2:"
     );
 
     let parse_error = serde_json::from_str::<PluginConfig>("{").unwrap_err();
@@ -1328,6 +1334,103 @@ fn test_plugin_component_helpers_and_serialization_error_variant() {
         other => panic!("unexpected conversion result: {other}"),
     }
 
+    reset_global();
+}
+
+#[test]
+fn test_plugin_component_effective_names_escape_and_discover_fields() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    let namespace = component_namespace("analytics/plugin:π%", 1);
+    let mut plugin_context = PluginRegistrationContext::with_plugin_component_namespace(namespace);
+    let mut global_registration_context = PluginRegistrationContext::new();
+    plugin_context
+        .register_subscriber("cache/value:π%", Arc::new(|_| {}))
+        .unwrap();
+    global_registration_context
+        .register_subscriber("global:subscriber", Arc::new(|_| {}))
+        .unwrap();
+    global_registration_context
+        .register_subscriber(
+            "__nemo_relay_plugin__analytics__1__subscriber",
+            Arc::new(|_| {}),
+        )
+        .unwrap();
+
+    let registrations =
+        list_runtime_registrations(Some(&BTreeSet::from([RuntimeRegistrationKind::Subscriber])))
+            .unwrap();
+    let plugin_registration = registrations
+        .iter()
+        .find(|registration| registration.local_name == "cache/value:π%")
+        .unwrap();
+    assert_eq!(
+        plugin_registration.effective_name,
+        "nemo-relay-plugin.v1.analytics%2Fplugin%3A%CF%80%25:1:cache%2Fvalue%3A%CF%80%25"
+    );
+    assert_eq!(
+        plugin_registration.owner.plugin_kind.as_deref(),
+        Some("analytics/plugin:π%")
+    );
+    assert_eq!(plugin_registration.owner.component_ordinal, Some(1));
+
+    let global_registration = registrations
+        .iter()
+        .find(|registration| registration.effective_name == "global:subscriber")
+        .unwrap();
+    assert_eq!(global_registration.local_name, "global:subscriber");
+    assert_eq!(
+        global_registration.owner.kind,
+        RuntimeRegistrationOwnerKind::GlobalApi
+    );
+    assert_eq!(global_registration.owner.component_ordinal, None);
+
+    let legacy_style_global_registration = registrations
+        .iter()
+        .find(|registration| {
+            registration.effective_name == "__nemo_relay_plugin__analytics__1__subscriber"
+        })
+        .unwrap();
+    assert_eq!(
+        legacy_style_global_registration.owner.kind,
+        RuntimeRegistrationOwnerKind::GlobalApi
+    );
+    assert_eq!(
+        legacy_style_global_registration.owner.component_ordinal,
+        None
+    );
+
+    let child_context = plugin_context.with_child_namespace("profile/π:");
+    assert_eq!(
+        child_context.qualify_name("subscriber%"),
+        "nemo-relay-plugin.v1.analytics%2Fplugin%3A%CF%80%25:1:profile%2F%CF%80%3Asubscriber%25"
+    );
+    assert!(
+        decode_plugin_component_effective_name(
+            "nemo-relay-plugin.v1.analytics%2Fplugin%3A%CF%80%25:1:cache%2Fvalue%3A%CF%80%25"
+        )
+        .is_some()
+    );
+    assert!(
+        decode_plugin_component_effective_name(
+            "nemo-relay-plugin.v1.analytics/plugin:1:subscriber"
+        )
+        .is_none()
+    );
+    assert!(
+        decode_plugin_component_effective_name("nemo-relay-plugin.v1.analytics:0:subscriber")
+            .is_none()
+    );
+    assert!(
+        decode_plugin_component_effective_name("__nemo_relay_plugin__analytics__1__subscriber")
+            .is_none()
+    );
+
+    let mut plugin_registrations = plugin_context.into_registrations();
+    rollback_registrations(&mut plugin_registrations);
+    let mut global_registrations = global_registration_context.into_registrations();
+    rollback_registrations(&mut global_registrations);
     reset_global();
 }
 
@@ -1539,8 +1642,8 @@ fn test_initialize_plugins_restores_previous_configuration_after_failed_replacem
     assert_eq!(
         names,
         vec![
-            "__nemo_relay_plugin__recording.plugin__1__subscriber",
-            "__nemo_relay_plugin__recording.plugin__1__subscriber",
+            "nemo-relay-plugin.v1.recording.plugin:1:subscriber",
+            "nemo-relay-plugin.v1.recording.plugin:1:subscriber",
         ]
     );
     reset_global();
@@ -1578,8 +1681,8 @@ fn test_initialize_plugins_restores_previous_configuration_after_replacement_pan
     assert_eq!(
         recorded_names().lock().unwrap().as_slice(),
         [
-            "__nemo_relay_plugin__recording.plugin__1__subscriber",
-            "__nemo_relay_plugin__recording.plugin__1__subscriber",
+            "nemo-relay-plugin.v1.recording.plugin:1:subscriber",
+            "nemo-relay-plugin.v1.recording.plugin:1:subscriber",
         ]
     );
 
@@ -2190,8 +2293,8 @@ fn test_initialize_plugins_skips_disabled_components_and_namespaces_multiple_ins
     assert_eq!(
         names,
         vec![
-            "__nemo_relay_plugin__recording.plugin__1__subscriber",
-            "__nemo_relay_plugin__recording.plugin__2__subscriber",
+            "nemo-relay-plugin.v1.recording.plugin:1:subscriber",
+            "nemo-relay-plugin.v1.recording.plugin:2:subscriber",
         ]
     );
     reset_global();
@@ -2222,7 +2325,7 @@ fn test_initialize_plugins_assigns_ordinal_to_lone_enabled_component() {
 
     assert_eq!(
         recorded_names().lock().unwrap().as_slice(),
-        ["__nemo_relay_plugin__recording.plugin__1__subscriber"]
+        ["nemo-relay-plugin.v1.recording.plugin:1:subscriber"]
     );
     reset_global();
 }
@@ -2253,7 +2356,7 @@ fn test_singleton_plugin_registration_discovers_ordinal() {
         .unwrap();
     assert_eq!(
         registration.effective_name,
-        "__nemo_relay_plugin__discoverable.plugin__1__subscriber"
+        "nemo-relay-plugin.v1.discoverable.plugin:1:subscriber"
     );
     assert_eq!(
         registration.owner.plugin_kind.as_deref(),

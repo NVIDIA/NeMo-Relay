@@ -73,9 +73,7 @@ pub(super) fn register_local_backend(
         "Plugin resource access validation started"
     );
     let mut scoped_context = profile_name.map(|profile_name| {
-        PluginRegistrationContext::with_namespace(
-            ctx.qualify_name(&format!("{}/", profile_registration_prefix(profile_name))),
-        )
+        ctx.with_child_namespace(&format!("{}/", profile_registration_prefix(profile_name)))
     });
     let provider_context = scoped_context.as_mut().unwrap_or(ctx);
     match provider(config, provider_context) {
