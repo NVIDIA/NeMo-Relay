@@ -2,7 +2,7 @@
 title: "Struct Plugin Runtime"
 sidebar-title: "PluginRuntime"
 description: "Cloneable handle for calling the Relay host runtime from worker callbacks."
-position: 25
+position: 26
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -51,6 +51,12 @@ Emits a mark event through the host runtime.
 
 Emits a mark event through the host runtime with optional schema and severity fields.
 
+#### `emit_mark_with_options_and_category`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn emit_mark_with_options_and_category(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    options: <a href=\"struct-emitmarkoptions\">EmitMarkOptions</a>,\n    category: <a href=\"struct-eventcategory\">EventCategory</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Emits a mark event through the host runtime with optional schema, severity, and category.
+
 #### `runtime_diagnostics`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn runtime_diagnostics(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-runtimediagnostics\">RuntimeDiagnostics</a>&gt;"}} /></pre>
@@ -62,6 +68,12 @@ Return a bounded snapshot of active host runtime diagnostics.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn emit_metric(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    measurements: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-metricmeasurement\">MetricMeasurement</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 Emits a validated Relay metric-measurement mark through the host runtime.
+
+#### `emit_metric_with_category`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn emit_metric_with_category(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    measurements: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-metricmeasurement\">MetricMeasurement</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    category: <a href=\"struct-eventcategory\">EventCategory</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Emits a validated Relay metric-measurement mark with an event category.
 
 #### `create_scope_stack`
 

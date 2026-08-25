@@ -152,26 +152,27 @@ the worker registrations. Failed registration returns no initial gates. Ordinary
 teardown removes every gate that remains owned by the worker activation.
 
 Use typed [mark](/about-nemo-relay/concepts/events) options when an exported mark needs
-a data schema or log severity. Use
+a data schema, log severity, or semantic category. Use
 `emit_metric` for Relay metric measurements. `runtime_diagnostics` returns the bounded,
 ordered host-level `{ code, message, count }` snapshot. It does not identify the plugin
 that recorded a diagnostic.
 
 ## Emit Typed Telemetry and Read Diagnostics
 
-Choose your worker language to add schema and severity metadata to a mark and inspect
+Choose your worker language to add schema, severity, and category metadata to a mark and inspect
 runtime diagnostics:
 
 <Tabs>
 <Tab title="Python" language="python">
 ```python
-from nemo_relay_plugin import DataSchema, LogSeverity
+from nemo_relay_plugin import DataSchema, EventCategory, LogSeverity
 
 await ctx.runtime.emit_mark(
     "example.python_worker.policy_decision",
     {"allowed": True},
     data_schema=DataSchema("example.policy.decision", "1"),
     severity=LogSeverity.INFO,
+    category=EventCategory.CUSTOM,
 )
 await ctx.runtime.emit_metric(
     "example.python_worker.requests",
@@ -185,10 +186,10 @@ if diagnostic is not None:
 </Tab>
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay_worker::{DataSchema, EmitMarkOptions, LogSeverity};
+use nemo_relay_worker::{DataSchema, EmitMarkOptions, EventCategory, LogSeverity};
 
 runtime
-    .emit_mark_with_options(
+    .emit_mark_with_options_and_category(
         "example.rust_worker.policy_decision",
         Some(json!({ "allowed": true })),
         None,
@@ -201,6 +202,7 @@ runtime
             ),
             severity: Some(LogSeverity::Info),
         },
+        EventCategory::custom(),
     )
     .await?;
 
