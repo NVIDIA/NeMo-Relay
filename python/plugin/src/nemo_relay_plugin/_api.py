@@ -1661,7 +1661,8 @@ class PluginRuntime:
         Raises:
             WorkerSdkError: The scope selection is invalid or the host rejects
                 the request.
-            TypeError: A payload is not JSON-serializable.
+            TypeError: A payload is not JSON-serializable, or ``category`` is
+                neither a string nor ``None``.
         """
         if category is not None and not isinstance(category, str):
             raise TypeError("category must be a string or None")
