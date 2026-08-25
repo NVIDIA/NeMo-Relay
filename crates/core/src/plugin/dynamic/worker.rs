@@ -70,7 +70,7 @@ use tokio_stream::wrappers::UnixListenerStream;
 #[cfg(unix)]
 use tower::service_fn;
 
-use crate::api::event::{DataSchema, Event, EventSanitizeFields, LogSeverity};
+use crate::api::event::{DataSchema, Event, EventCategory, EventSanitizeFields, LogSeverity};
 use crate::api::llm::{LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmRequest};
 use crate::api::registry::{
     RuntimeRegistrationKind, RuntimeRegistrationOwnerKind,
@@ -2876,6 +2876,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             metadata,
             data_schema,
             severity,
+            category,
         } = request.into_inner();
         self.state.authorize(&activation_id, &auth_token)?;
         let data_schema = optional_typed_envelope::<DataSchema>(
@@ -2884,6 +2885,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             DATA_SCHEMA_SCHEMA,
         );
         let severity = optional_log_severity(&severity);
+        let category = (!category.is_empty()).then(|| EventCategory::new(category));
         let result = self.with_stack(scope.as_ref(), || {
             emit_scope_mark(
                 EmitMarkEventParams::builder()
@@ -2892,6 +2894,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                     .metadata_opt(optional_envelope_to_json(metadata)?)
                     .data_schema_opt(data_schema?)
                     .severity_opt(severity?)
+                    .category_opt(category)
                     .build(),
             )
         });

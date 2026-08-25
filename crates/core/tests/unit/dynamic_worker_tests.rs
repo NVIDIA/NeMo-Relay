@@ -2005,6 +2005,7 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
             metadata: None,
             data_schema: None,
             severity: String::new(),
+            category: String::new(),
         }))
         .await
         .expect_err("bad activation id should fail auth");
@@ -2023,6 +2024,7 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
             metadata: None,
             data_schema: None,
             severity: String::new(),
+            category: String::new(),
         }))
         .await
         .expect("missing stack should return host ack")
@@ -2045,6 +2047,7 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
             metadata: None,
             data_schema: None,
             severity: String::new(),
+            category: String::new(),
         }))
         .await
         .expect("no-scope mark should succeed")
@@ -2070,6 +2073,7 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
                 .unwrap(),
             ),
             severity: "warning".into(),
+            category: "custom".into(),
         }))
         .await
         .expect("typed mark options should return host ack")

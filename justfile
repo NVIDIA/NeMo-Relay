@@ -1077,6 +1077,7 @@ check-python-worker-proto:
     emit_mark = pb.EmitMarkRequest.DESCRIPTOR.fields_by_name
     assert emit_mark["data_schema"].number == 7
     assert emit_mark["severity"].number == 8
+    assert emit_mark["category"].number == 9
     tool_result = pb.ToolExecutionResult.DESCRIPTOR.fields_by_name
     assert tool_result["result"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
     assert tool_result["annotation"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"

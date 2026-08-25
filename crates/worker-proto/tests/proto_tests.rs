@@ -217,6 +217,7 @@ fn emit_mark_additive_fields_preserve_legacy_wire_compatibility() {
     assert_eq!(legacy.name, "mark");
     assert!(legacy.data_schema.is_none());
     assert!(legacy.severity.is_empty());
+    assert!(legacy.category.is_empty());
 
     let request = EmitMarkRequest {
         name: "mark".into(),
@@ -228,12 +229,13 @@ fn emit_mark_additive_fields_preserve_legacy_wire_compatibility() {
             .unwrap(),
         ),
         severity: "warn".into(),
+        category: "custom".into(),
         ..EmitMarkRequest::default()
     };
     let encoded = request.encode_to_vec();
     assert_eq!(
         encoded,
-        b"\x22\x04mark\x3a\x52\x0a\x17nemo.relay.DataSchema@1\x12\x37{\"name\":\"nemo.relay.metric_measurements\",\"version\":\"1\"}\x42\x04warn"
+        b"\x22\x04mark\x3a\x52\x0a\x17nemo.relay.DataSchema@1\x12\x37{\"name\":\"nemo.relay.metric_measurements\",\"version\":\"1\"}\x42\x04warn\x4a\x06custom"
             .to_vec()
     );
     let round_trip = EmitMarkRequest::decode(encoded.as_slice()).unwrap();

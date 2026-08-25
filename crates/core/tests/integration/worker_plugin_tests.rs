@@ -446,6 +446,12 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
             .unwrap()["worker_plugin_mark"],
         true
     );
+    assert_eq!(
+        find_event(&captured_events, "fixture.worker.mark", None)
+            .category()
+            .map(|category| category.as_str()),
+        Some("custom")
+    );
     assert_parent(
         &captured_events,
         "fixture.worker.scope",

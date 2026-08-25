@@ -2302,6 +2302,7 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         {"measurements": []},
         data_schema=DataSchema("nemo.relay.metric_measurements", "1"),
         severity=LogSeverity.WARNING,
+        category="custom",
     )
     await runtime.emit_metric(
         "telemetry-metric",
@@ -2313,6 +2314,7 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
                 "value": 42,
             }
         ],
+        category="custom",
     )
     await runtime.emit_mark("explicit", scope_stack_id="explicit-stack", parent_scope_id="explicit-parent")
     await runtime.drop_scope_stack(stack_id)
@@ -2334,6 +2336,7 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         "version": "1",
     }
     assert telemetry_mark.severity == "warn"
+    assert telemetry_mark.category == "custom"
     metric_mark = next(
         request
         for request in host_stub.requests
@@ -2344,6 +2347,7 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         "name": "nemo.relay.metric_measurements",
         "version": "1",
     }
+    assert metric_mark.category == "custom"
 
     override_mark = next(
         request
@@ -2370,6 +2374,8 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         await runtime.emit_mark("empty-parent", scope_stack_id="stack", parent_scope_id="")
     with pytest.raises(ValueError, match="invalid log severity"):
         await runtime.emit_mark("invalid-severity", severity="fatal")
+    with pytest.raises(TypeError, match="category must be a string or None"):
+        await runtime.emit_mark("invalid-category", category=cast(Any, 1))
     with pytest.raises(ValueError, match="exactly name and version"):
         await runtime.emit_mark("invalid-schema", data_schema={"name": "schema"})
     with pytest.raises(TypeError, match="measurements must contain mappings"):

@@ -253,7 +253,7 @@ The host-runtime request and response fields are complete in the following table
 
 | RPC | Request Fields | Response Fields |
 |---|---|---|
-| `EmitMark` | `activation_id`, `auth_token`, captured `scope`, `name`, optional `data`, `metadata`, `data_schema`, and `severity` | `HostAck.ok` or `HostAck.error` |
+| `EmitMark` | `activation_id`, `auth_token`, captured `scope`, `name`, optional `data`, `metadata`, `data_schema`, `severity`, and `category` | `HostAck.ok` or `HostAck.error` |
 | `GetRuntimeDiagnostics` | `activation_id` and `auth_token` | Ordered `RuntimeDiagnostic` entries with `code`, `message`, and `count` |
 | `PushScope` | `activation_id`, `auth_token`, captured `scope`, `name`, `scope_type`, and optional `data`, `metadata`, and `input` | `scope_handle_id` or `error` |
 | `PopScope` | `activation_id`, `auth_token`, owned `scope_handle_id`, and optional `output` and `metadata` | `HostAck.ok` or `HostAck.error` |
@@ -270,9 +270,10 @@ The host-runtime request and response fields are complete in the following table
 agent, function, tool, LLM, retriever, embedder, reranker, guardrail, evaluator, custom,
 and unknown scopes. The unspecified wire value is invalid for a pushed scope.
 
-`EmitMarkRequest.data_schema` uses the `nemo.relay.DataSchema@1` envelope, and
-`severity` accepts `trace`, `debug`, `info`, `warn`, or `error`. Omitting both preserves
-the original mark behavior. `GetRuntimeDiagnostics` aggregates repeated codes, retains
+`EmitMarkRequest.data_schema` uses the `nemo.relay.DataSchema@1` envelope,
+`severity` accepts `trace`, `debug`, `info`, `warn`, or `error`, and `category` is an
+optional semantic category for the emitted mark. Omitting these fields preserves the
+original mark behavior. `GetRuntimeDiagnostics` aggregates repeated codes, retains
 the latest message, sorts entries by code, and returns at most 32 entries. It is a
 host-level view, so it does not identify the plugin that recorded a diagnostic.
 

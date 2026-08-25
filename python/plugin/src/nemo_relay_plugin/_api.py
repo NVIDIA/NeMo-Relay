@@ -1639,6 +1639,7 @@ class PluginRuntime:
         *,
         data_schema: DataSchema | Mapping[str, Json] | None = None,
         severity: LogSeverity | str | None = None,
+        category: str | None = None,
         scope_stack_id: str | None = None,
         parent_scope_id: str | None = None,
     ) -> None:
@@ -1651,6 +1652,7 @@ class PluginRuntime:
             data_schema: Optional typed schema identity for ``data``.
             severity: Optional telemetry log severity. ``warning`` is accepted
                 as an alias for ``warn``.
+            category: Optional semantic category for the mark.
             scope_stack_id: Optional host-issued stack to correlate the event
                 with. When omitted, the current local binding is used.
             parent_scope_id: Optional parent scope for the event. When omitted,
@@ -1661,6 +1663,8 @@ class PluginRuntime:
                 the request.
             TypeError: A payload is not JSON-serializable.
         """
+        if category is not None and not isinstance(category, str):
+            raise TypeError("category must be a string or None")
         response = await self._host_stub.EmitMark(
             pb.EmitMarkRequest(
                 activation_id=self._activation_id,
@@ -1674,6 +1678,7 @@ class PluginRuntime:
                     DATA_SCHEMA_SCHEMA,
                 ),
                 severity=_log_severity_value(severity),
+                category=category or "",
             )
         )
         _ack_to_result(response)
@@ -1711,6 +1716,7 @@ class PluginRuntime:
         measurements: Iterable[MetricMeasurement | Mapping[str, Json]],
         metadata: Json | None = None,
         *,
+        category: str | None = None,
         scope_stack_id: str | None = None,
         parent_scope_id: str | None = None,
     ) -> None:
@@ -1719,6 +1725,7 @@ class PluginRuntime:
         Relay performs authoritative metric-schema validation after the mark is
         sanitized. This helper supplies the reserved schema and preserves each
         measurement mapping without maintaining a second validator in the SDK.
+        The optional category is forwarded to the emitted mark.
         """
         encoded: list[dict[str, Json]] = []
         for measurement in measurements:
@@ -1730,6 +1737,7 @@ class PluginRuntime:
             {"measurements": encoded},
             metadata,
             data_schema=DataSchema(METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION),
+            category=category,
             scope_stack_id=scope_stack_id,
             parent_scope_id=parent_scope_id,
         )

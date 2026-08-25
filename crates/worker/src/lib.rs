@@ -35,7 +35,7 @@ use futures_util::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::{
-    DataSchema, Event, EventSanitizeFields, LogSeverity, METRIC_DATA_SCHEMA_NAME,
+    DataSchema, Event, EventCategory, EventSanitizeFields, LogSeverity, METRIC_DATA_SCHEMA_NAME,
     METRIC_DATA_SCHEMA_VERSION, MetricEnvelope, MetricKind, MetricMeasurement, MetricValueType,
     PendingMarkSpec,
 };
@@ -1000,6 +1000,31 @@ impl PluginRuntime {
         metadata: Option<Json>,
         options: EmitMarkOptions,
     ) -> Result<()> {
+        self.emit_mark_with_optional_category(name, data, metadata, options, None)
+            .await
+    }
+
+    /// Emits a mark event through the host runtime with optional schema, severity, and category.
+    pub async fn emit_mark_with_options_and_category(
+        &self,
+        name: &str,
+        data: Option<Json>,
+        metadata: Option<Json>,
+        options: EmitMarkOptions,
+        category: EventCategory,
+    ) -> Result<()> {
+        self.emit_mark_with_optional_category(name, data, metadata, options, Some(category))
+            .await
+    }
+
+    async fn emit_mark_with_optional_category(
+        &self,
+        name: &str,
+        data: Option<Json>,
+        metadata: Option<Json>,
+        options: EmitMarkOptions,
+        category: Option<EventCategory>,
+    ) -> Result<()> {
         let scope = self.current_scope_context();
         let mut client = self.host_client().await?;
         let response = client
@@ -1020,6 +1045,11 @@ impl PluginRuntime {
                     .map(severity_wire_value)
                     .transpose()?
                     .unwrap_or_default(),
+                category: category
+                    .as_ref()
+                    .map(EventCategory::as_str)
+                    .unwrap_or_default()
+                    .into(),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
@@ -1071,7 +1101,7 @@ impl PluginRuntime {
         envelope
             .validate()
             .map_err(|err| WorkerSdkError::InvalidInput(err.to_string()))?;
-        self.emit_mark_with_options(
+        self.emit_mark_with_optional_category(
             name,
             Some(serde_json::to_value(envelope)?),
             metadata,
@@ -1084,6 +1114,7 @@ impl PluginRuntime {
                 ),
                 severity: None,
             },
+            None,
         )
         .await
     }

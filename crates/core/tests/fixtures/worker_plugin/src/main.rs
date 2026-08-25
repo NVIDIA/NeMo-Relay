@@ -4,8 +4,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use nemo_relay_worker::{
-    ConfigDiagnostic, DiagnosticLevel, EventSanitizeFields, Json, LlmRequest,
-    METRIC_DATA_SCHEMA_NAME, MetricKind, MetricMeasurement, MetricValueType, PendingMarkSpec,
+    ConfigDiagnostic, DiagnosticLevel, EmitMarkOptions, EventCategory, EventSanitizeFields, Json,
+    LlmRequest, METRIC_DATA_SCHEMA_NAME, MetricKind, MetricMeasurement, MetricValueType,
+    PendingMarkSpec,
 };
 use nemo_relay_worker::{
     JsonStream, LlmNext, LlmStreamNext, PluginContext, RuntimeRegistrationKind, ScopeType,
@@ -384,7 +385,13 @@ async fn emit_runtime_events(
     runtime: nemo_relay_worker::PluginRuntime,
 ) -> nemo_relay_worker::Result<()> {
     runtime
-        .emit_mark("fixture.worker.mark", Some(json!("current")), None)
+        .emit_mark_with_options_and_category(
+            "fixture.worker.mark",
+            Some(json!("current")),
+            None,
+            EmitMarkOptions::default(),
+            EventCategory::custom(),
+        )
         .await?;
     let scope = runtime
         .push_scope(
