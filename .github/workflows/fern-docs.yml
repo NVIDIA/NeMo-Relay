@@ -363,12 +363,31 @@ jobs:
         run: |
           "$GITHUB_WORKSPACE/source-checkout/node_modules/.bin/fern" generate --docs
 
+  skip-alpha-version-docs:
+    name: Skip nightly alpha docs
+    if: >-
+      ${{
+        (github.ref_type == 'tag' && contains(github.ref_name, '-alpha.'))
+        || (github.event_name == 'workflow_dispatch' && contains(inputs.tag, '-alpha.'))
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Report skipped docs publication
+        run: echo "Skipping Fern docs publication for nightly alpha tag."
+
   release-version-docs:
     name: Release docs version
     if: >-
       ${{
-        github.ref_type == 'tag'
-        || (github.event_name == 'workflow_dispatch' && inputs.tag != '' && inputs.tag != null)
+        (github.ref_type == 'tag' && !contains(github.ref_name, '-alpha.'))
+        || (
+          github.event_name == 'workflow_dispatch'
+          && inputs.tag != ''
+          && inputs.tag != null
+          && !contains(inputs.tag, '-alpha.')
+        )
       }}
     runs-on: ubuntu-latest
     environment: fern
