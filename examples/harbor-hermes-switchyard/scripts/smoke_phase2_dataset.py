@@ -278,15 +278,24 @@ def validate_relay_runtime(
         switchyard_manifest = tomllib.load(stream)
     dynamic_plugins = relay_config.get("plugins", {}).get("dynamic", [])
     components = {component["kind"]: component for component in relay_config.get("components", [])}
-    plugin_id = switchyard_manifest.get("plugin", {}).get("id")
+    manifest_plugin_id = switchyard_manifest.get("plugin", {}).get("id")
+    is_direct = len(dynamic_plugins) == 0
+    if is_direct:
+        switchyard_wiring_ok = True
+        dynamic_plugin_id = None
+    else:
+        switchyard_wiring_ok = (
+            len(dynamic_plugins) == 1
+            and dynamic_plugins[0].get("manifest") == "/opt/relay-plugins/nvidia.switchyard/relay-plugin.toml"
+            and manifest_plugin_id == "nvidia.switchyard"
+        )
+        dynamic_plugin_id = manifest_plugin_id
     if (
         provenance.get("nemo_relay", {}).get("version") != wheel_version(relay_wheel)
         or provenance.get("nemo_relay", {}).get("wheel_sha256") != sha256_file(relay_wheel)
         or provenance.get("switchyard", {}).get("library_sha256") is None
         or compatibility.get("status") != "passed"
-        or len(dynamic_plugins) != 1
-        or dynamic_plugins[0].get("manifest") != "/opt/relay-plugins/nvidia.switchyard/relay-plugin.toml"
-        or plugin_id != "nvidia.switchyard"
+        or not switchyard_wiring_ok
         or components.get("observability", {}).get("config", {}).get("version") != 3
     ):
         raise ValueError("Relay/Hermes/Switchyard smoke wiring did not pass")
@@ -299,7 +308,7 @@ def validate_relay_runtime(
         "relay_config_sha256": provenance["relay_config_sha256"],
         "relay_architecture": provenance["nemo_relay"]["architecture"],
         "routing": provenance["routing"],
-        "dynamic_plugin_id": plugin_id,
+        "dynamic_plugin_id": dynamic_plugin_id,
         "observability_version": 3,
         "compatibility_status": compatibility["status"],
     }
