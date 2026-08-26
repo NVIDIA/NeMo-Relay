@@ -838,7 +838,7 @@ def shared_preflight(args: argparse.Namespace, tasks: list[Task]) -> dict[str, A
         verified_models.update(
             verify_provider_catalog(
                 provider_url,
-                provider_authorization,
+                f"Bearer {provider_authorization}",
                 args.plugin_contract["catalog_models"],
             )
         )
