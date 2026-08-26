@@ -94,6 +94,8 @@ export interface OpenTelemetryConfig {
   endpoint: string
   /** Extra exporter headers/metadata as string key/value pairs. */
   headers?: Json
+  /** Header names mapped to environment variables resolved during subscriber activation. */
+  headerEnv?: Record<string, string>
   /** Extra OpenTelemetry resource attributes as string key/value pairs. */
   resourceAttributes?: Json
   /** `service.name` resource attribute. Defaults to `"unknown_service"`. */
@@ -131,6 +133,8 @@ export interface OpenTelemetryLogConfig {
   transport?: "http_binary" | "grpc"
   /** Extra exporter headers/metadata as string key/value pairs. */
   headers?: Record<string, string>
+  /** Header names mapped to environment variables resolved during subscriber activation. */
+  headerEnv?: Record<string, string>
   /** Extra OpenTelemetry resource attributes as string key/value pairs. */
   resourceAttributes?: Record<string, string>
   /** `service.name` resource attribute. Defaults to `"unknown_service"`. */
@@ -168,6 +172,8 @@ export interface OpenTelemetryMetricConfig {
   transport?: "http_binary" | "grpc"
   /** Extra exporter headers/metadata as string key/value pairs. */
   headers?: Record<string, string>
+  /** Header names mapped to environment variables resolved during subscriber activation. */
+  headerEnv?: Record<string, string>
   /** Extra OpenTelemetry resource attributes as string key/value pairs. */
   resourceAttributes?: Record<string, string>
   /** `service.name` resource attribute. Defaults to `"unknown_service"`. */

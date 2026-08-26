@@ -683,6 +683,7 @@ config = OpenTelemetryConfig(
     "http://localhost:4318/v1/traces",
 )
 config.service_name = "agent-service"
+config.header_env = {"authorization": "OTEL_AUTHORIZATION"}
 subscriber = OpenTelemetrySubscriber(config)
 ```
 </Tab>
@@ -694,6 +695,7 @@ const subscriber = new OpenTelemetrySubscriber({
   type: "gen_ai",
   endpoint: "http://localhost:4318/v1/traces",
   serviceName: "agent-service",
+  headerEnv: { authorization: "OTEL_AUTHORIZATION" },
 });
 ```
 </Tab>
@@ -706,11 +708,29 @@ let config = OpenTelemetryConfig::new(
     OpenTelemetryType::GenAi,
     "http://localhost:4318/v1/traces",
 )
-.with_service_name("agent-service");
+.with_service_name("agent-service")
+.with_header_env("authorization", "OTEL_AUTHORIZATION");
 let subscriber = OpenTelemetrySubscriber::new(config)?;
 ```
 </Tab>
 </Tabs>
+
+Set each referenced environment variable before constructing the subscriber.
+Direct trace, log, and metric configs resolve `header_env` when the subscriber
+is constructed and retain that value for the subscriber's activation. Changing
+the process environment affects only a subsequently constructed subscriber.
+Static `headers` remain unchanged. A header name cannot appear in both maps,
+including names that differ only by ASCII case, and names within `header_env`
+must also be unique ignoring ASCII case.
+
+Each `header_env` reference must be nonblank, have no surrounding whitespace,
+and contain neither `=` nor NUL. Its environment value must be set, nonblank,
+contain no leading or trailing whitespace, be valid Unicode, and be a valid HTTP
+header value. Validation errors name the header and environment variable but do
+not include the resolved value.
+Relay supplies resolved values only as outbound OTLP request headers; it does
+not copy them into Event data, OpenTelemetry payloads, resource attributes, or
+runtime diagnostics.
 
 The log and metric equivalents are `OpenTelemetryLogConfig` with
 `OpenTelemetryLogSubscriber`, and `OpenTelemetryMetricConfig` with
