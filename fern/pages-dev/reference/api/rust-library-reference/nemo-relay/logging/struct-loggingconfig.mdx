@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct LoggingConfig &#123;\n    pub level: <a href=\"enum-loglevel\">LogLevel</a>,\n    pub stderr_format: <a href=\"enum-logformat\">LogFormat</a>,\n    pub sinks: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"enum-logsinkconfig\">LogSinkConfig</a>&gt;,\n    pub flush_interval_millis: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct LoggingConfig &#123;\n    pub level: <a href=\"enum-loglevel\">LogLevel</a>,\n    pub stderr_enabled: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub stderr_format: <a href=\"enum-logformat\">LogFormat</a>,\n    pub sinks: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"enum-logsinkconfig\">LogSinkConfig</a>&gt;,\n    pub flush_interval_millis: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>,\n&#125;"}} /></pre>
 
 Operational logging configuration for [`LoggingRuntime::configure`](/reference/api/rust-library-reference/nemo-relay/logging/struct-loggingruntime).
 
@@ -21,9 +21,13 @@ Operational logging configuration for [`LoggingRuntime::configure`](/reference/a
 
 Minimum severity for operational logs.
 
+### `stderr_enabled: bool`
+
+Whether the stderr sink is enabled.
+
 ### `stderr_format: LogFormat`
 
-Encoding for the always-on stderr sink.
+Encoding for the stderr sink when it is enabled.
 
 ### `sinks: Vec<LogSinkConfig>`
 
@@ -45,7 +49,7 @@ Periodic flush cadence in milliseconds applied to all file sinks. `0` disables p
 
 Resolves logging configuration from the supported process environment.
 
-Returns `None` when no logging environment variables are present. Direct level and stderr format settings may be combined. `NEMO_RELAY_LOG_CONFIG_PATH` selects an absolute TOML file instead and is mutually exclusive with both direct settings.
+Returns `None` when no logging environment variables are present. Direct level, stderr, and stderr format settings may be combined. `NEMO_RELAY_LOG_CONFIG_PATH` selects an absolute TOML file instead and is mutually exclusive with all direct settings.
 
 #### `from_file_path`
 
