@@ -485,6 +485,14 @@ fn is_relay_extension(path: &Path) -> bool {
         .is_some_and(|parent| manifest_names_relay(&parent.join("package.json")))
 }
 
+/// Whether a directory is a loadable copy of *this* extension.
+///
+/// The same manifest-name test pi's own discovery effectively applies, exposed so the
+/// installer can tell somebody's working extension from a directory that merely exists.
+pub(super) fn is_relay_extension_dir(dir: &Path) -> bool {
+    manifest_names_relay(&dir.join("package.json"))
+}
+
 fn manifest_names_relay(manifest: &Path) -> bool {
     std::fs::read_to_string(manifest)
         .ok()

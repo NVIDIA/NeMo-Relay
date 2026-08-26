@@ -1,15 +1,16 @@
 ---
 title: "Coding Agent Installation"
-description: "Install and manage persistent NeMo Relay integrations for Claude Code and Codex."
+description: "Install and manage persistent NeMo Relay integrations for Claude Code, Codex, and pi."
 position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-Install a persistent integration when you want Claude Code or Codex to load
-NeMo Relay without a `nemo-relay` wrapper command. Both use their normal plugin
-systems.
+Install a persistent integration when you want a coding agent to load NeMo
+Relay without a `nemo-relay` wrapper command. Claude Code and Codex use their
+normal plugin systems; pi has no plugin system, so Relay writes an extension into
+pi's own auto-discovery directory instead. See [pi](/nemo-relay-cli/pi).
 
 Each persistent integration forwards the lifecycle signals that its host
 exposes, including agent, subagent, tool, prompt, compaction, and stop events

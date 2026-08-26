@@ -1242,12 +1242,25 @@ impl Session {
         boundary_metadata: Option<Value>,
         reason: &str,
     ) -> Result<(Vec<String>, Option<SubscriberDelivery>), CliError> {
-        if self.turn_scope.is_none() {
-            return Ok((Vec::new(), None));
-        }
+        // Active spans are closed before the turn check, not after it.
+        //
+        // A tool span does not always live under a turn. `ensure_tool_scope_started` parents
+        // one to the *session* scope for a host with explicit turn boundaries when no turn is
+        // open, which is exactly what pi's inline shell does between turns -- so returning
+        // early here closed the session over a span that never ended, and the trace was
+        // malformed rather than merely incomplete. Reachable without a signal: the extension
+        // posts `user_bash_end` through a fire-and-forget path that swallows failures, so one
+        // dropped post plus `/quit` was enough.
+        //
+        // All three closers drain empty collections, so running them with no turn open costs
+        // nothing when there is nothing to close.
         self.close_active_llms(reason).await?;
         self.close_active_tools(reason).await?;
         let closed_subagents = self.close_active_subagents(reason).await?;
+        if self.turn_scope.is_none() {
+            self.clear_correlation_state();
+            return Ok((closed_subagents, None));
+        }
         let output = self.last_turn_llm_output.take().unwrap_or(output);
         self.clear_correlation_state();
         let subscriber_delivery = self.close_turn_scope(output, boundary_metadata)?;

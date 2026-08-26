@@ -87,7 +87,7 @@ jobs:
       run_python: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.python == 'true' }}
       run_python_integration_langchain: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.python_integration_langchain == 'true' }}
       run_python_package: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.python_package == 'true' }}
-      run_rust: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.rust == 'true' }}
+      run_rust: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.rust == 'true' || steps.filter.outputs.pi == 'true' }}
       run_rust_package: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.rust_package == 'true' }}
 
     steps:

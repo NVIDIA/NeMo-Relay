@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, ValueEnum};
@@ -78,10 +78,29 @@ impl UninstallCommand {
     }
 }
 
+/// Drop pi from an `all` run that carries `--install-dir`.
+///
+/// `--install-dir` names the marketplace root, which pi does not have -- pi rejects the
+/// flag rather than silently ignoring it, and inside `all` that rejection failed the whole
+/// command. Codex and Claude Code would install correctly and `nemo-relay install all
+/// --install-dir X` still exited 1, which is a regression for users who never asked about
+/// pi. An explicit `install pi --install-dir` still gets the error, because there the flag
+/// is the user's stated intent rather than a default carried along.
+fn marketplace_scoped(target: InstallTarget, install_dir: Option<&Path>) -> Vec<CodingAgent> {
+    let candidates = target.agents();
+    if !target.is_all() || install_dir.is_none() {
+        return candidates;
+    }
+    candidates
+        .into_iter()
+        .filter(|agent| !matches!(agent, CodingAgent::Pi))
+        .collect()
+}
+
 pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
     let target = command.host;
     let request = command.into_runtime();
-    let candidates = target.agents();
+    let candidates = marketplace_scoped(target, request.install_dir.as_deref());
     let agents = if target.is_all() {
         crate::agents::detected_install_integrations(&candidates)
     } else {
@@ -103,7 +122,7 @@ pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
 pub(super) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError> {
     let target = command.host;
     let request = command.into_runtime();
-    let candidates = target.agents();
+    let candidates = marketplace_scoped(target, request.install_dir.as_deref());
     let agents = if target.is_all() {
         crate::agents::uninstallable_integrations(&candidates, request.install_dir.as_deref())
     } else {

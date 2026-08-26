@@ -78,9 +78,13 @@ const GUARDRAIL_REJECTION_TYPE = 'nemo_relay_guardrail_rejected';
 function headers(config: GatewayConfig): Record<string, string> {
   return {
     'content-type': 'application/json',
-    // The gateway strips inbound routing-identity headers as an anti-spoofing
-    // measure and re-derives its own, so this is the only session signal that
-    // survives -- it must also appear in the payload.
+    // On the hook route the gateway *reads* this header to key the session
+    // (`adapters::pi_session_id`), and without it a second live agent drops each
+    // call into a throwaway root. It is stripped and re-derived only on the
+    // provider-passthrough route, which is a different request entirely -- which
+    // is why the provider registration attaches its own copy. It must also appear
+    // in the payload, because a payload session id is what a direct `curl` of the
+    // hook route has.
     'x-nemo-relay-session-id': config.sessionId,
   };
 }
@@ -207,13 +211,22 @@ async function safeJson(response: Response): Promise<{
   }
 }
 
+/** The largest delay Node can hold in a timer without wrapping. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
 /** Read gateway configuration from the environment the CLI's launcher sets. */
 export function configFromEnv(sessionId: string): GatewayConfig {
   const url = (process.env.NEMO_RELAY_PI_GATEWAY_URL ?? 'http://127.0.0.1:4040').replace(/\/+$/, '');
   const timeoutRaw = Number(process.env.NEMO_RELAY_PI_TIMEOUT_MS);
+  // Clamped, not just validated. Node stores a timer delay in a 32-bit int, so anything
+  // above 2^31-1 wraps to ~1 ms rather than to a long wait -- and a 1 ms timeout makes every
+  // gated call fault, which under the default fail-open policy silently stops enforcing.
+  // A value too large to honor should behave like "effectively never", not like "instantly".
+  const timeoutMs =
+    Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? Math.min(timeoutRaw, MAX_TIMEOUT_MS) : 5000;
   return {
     url,
-    timeoutMs: Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : 5000,
+    timeoutMs,
     onFault: process.env.NEMO_RELAY_PI_FAIL === 'closed' ? 'closed' : 'open',
     sessionId,
   };

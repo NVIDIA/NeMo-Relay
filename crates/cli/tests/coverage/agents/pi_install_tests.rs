@@ -106,7 +106,7 @@ fn install_refuses_a_directory_relay_did_not_write_even_with_force() {
     for force in [false, true] {
         let error = install(request(force, false)).unwrap_err().to_string();
         assert!(
-            error.contains("was not written by NeMo Relay"),
+            error.contains("NeMo Relay did not write"),
             "force={force} gave: {error}"
         );
     }
@@ -321,4 +321,132 @@ fn a_managed_install_is_uninstallable_but_never_a_marketplace_integration() {
             .contains(&crate::agents::CodingAgent::Pi),
         "`uninstall all` has to see a managed pi install"
     );
+}
+
+/// Rewrite the recorded file list, the way a tampered or corrupted state file would read.
+fn record_paths(root: &Path, entries: &[(&str, &str)]) {
+    let state = root.join(".nemo-relay-install.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state).unwrap()).unwrap();
+    value["files"] = entries
+        .iter()
+        .map(|(path, sha)| serde_json::json!({ "path": path, "sha256": sha }))
+        .collect();
+    std::fs::write(&state, value.to_string()).unwrap();
+}
+
+fn sha256_of(path: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(std::fs::read(path).unwrap());
+    format!(
+        "sha256:{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
+}
+
+/// ⚠️ Uninstall must never become an arbitrary-file delete.
+///
+/// Every recorded path is joined to the install root and removed, and `Path::join` with an
+/// absolute path replaces the root outright. The recorded hash is no guard: it is compared
+/// against whatever sits at the resolved path, so pairing the traversal with the victim's
+/// own digest satisfies it. Both shapes are covered because they escape by different means.
+#[test]
+fn uninstall_refuses_state_that_names_a_path_outside_the_install() {
+    for escape in ["../../victim.txt", "/tmp/nemo-relay-pi-victim-absolute.txt"] {
+        let temp = tempfile::tempdir().unwrap();
+        let _scope = scoped(temp.path());
+        install(request(false, false)).unwrap();
+
+        let victim = if escape.starts_with('/') {
+            let victim = std::env::temp_dir().join("nemo-relay-pi-victim-absolute.txt");
+            std::fs::write(&victim, "not yours to delete").unwrap();
+            victim
+        } else {
+            let victim = temp.path().join("victim.txt");
+            std::fs::write(&victim, "not yours to delete").unwrap();
+            victim
+        };
+        let recorded = if escape.starts_with('/') {
+            victim.display().to_string()
+        } else {
+            escape.to_string()
+        };
+        record_paths(&root(), &[(recorded.as_str(), &sha256_of(&victim))]);
+
+        let error = uninstall(removal(false)).unwrap_err().to_string();
+
+        assert!(
+            error.contains("not a path inside the install directory"),
+            "{escape} was accepted: {error}"
+        );
+        assert!(
+            victim.exists(),
+            "{escape} deleted a file outside the install"
+        );
+        let _ = std::fs::remove_file(&victim);
+    }
+}
+
+/// The same state is refused on the way in, so `--force` cannot launder it either.
+#[test]
+fn install_refuses_state_that_names_a_path_outside_the_install() {
+    let temp = tempfile::tempdir().unwrap();
+    let _scope = scoped(temp.path());
+    install(request(false, false)).unwrap();
+    record_paths(&root(), &[("../escape.ts", "sha256:0")]);
+
+    let error = install(request(true, false)).unwrap_err().to_string();
+
+    assert!(
+        error.contains("not a path inside the install directory"),
+        "{error}"
+    );
+}
+
+/// An edit Relay cannot read as text is still an edit, and uninstall must keep it.
+///
+/// Hashing through `read_to_string` made any non-UTF-8 edit unreadable, and collapsing that
+/// to "unmodified" deleted the very file the keep-edited rule exists to protect.
+#[test]
+fn uninstall_keeps_a_file_edited_into_something_unreadable() {
+    let temp = tempfile::tempdir().unwrap();
+    let _scope = scoped(temp.path());
+    install(request(false, false)).unwrap();
+    let edited = root().join("index.ts");
+    std::fs::write(&edited, [0xff, 0xfe, 0x00, 0x01]).unwrap();
+
+    uninstall(removal(false)).unwrap();
+
+    assert!(
+        edited.exists(),
+        "a non-UTF-8 edit must be kept like any other"
+    );
+    assert_eq!(std::fs::read(&edited).unwrap(), [0xff, 0xfe, 0x00, 0x01]);
+}
+
+/// What uninstall leaves behind must not dead-end the next install.
+///
+/// Keeping an edited file leaves a directory with no state file and no manifest. Reading
+/// that as somebody's extension refused every reinstall, `--force` included, while telling
+/// the user the copy already worked -- and it did not, because pi cannot load it.
+#[test]
+fn leftovers_from_a_kept_edit_can_be_installed_over_with_force() {
+    let temp = tempfile::tempdir().unwrap();
+    let _scope = scoped(temp.path());
+    install(request(false, false)).unwrap();
+    std::fs::write(root().join("index.ts"), "// mine").unwrap();
+    uninstall(removal(false)).unwrap();
+
+    let error = install(request(false, false)).unwrap_err().to_string();
+    assert!(
+        error.contains("is not a loadable pi extension"),
+        "the refusal must not claim the leftovers work: {error}"
+    );
+    assert!(!error.contains("already finds it"), "{error}");
+
+    assert_eq!(install(request(true, false)).unwrap(), ExitCode::SUCCESS);
+    assert!(is_installed());
 }

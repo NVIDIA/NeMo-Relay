@@ -9,9 +9,11 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Use this guide to observe local [pi](https://github.com/earendil-works/pi)
 sessions and to gate pi tool calls and model calls on a NeMo Relay policy. The pi
-integration is a proof of concept. Tool and turn activity always reach Relay;
-model traffic reaches it when the gateway forwards to the endpoint the selected
-model would otherwise call, which is what [Model
+integration is a proof of concept. Tool and turn activity reach Relay whenever
+the gateway is reachable — the extension defaults to failing **open**, so an
+unavailable gateway lets pi carry on and that activity is simply not recorded.
+Model traffic reaches Relay when the gateway forwards to the endpoint the
+selected model would otherwise call, which is what [Model
 Redirection](#model-redirection) explains.
 
 pi has no native hook-configuration file, and its external event stream is
@@ -32,8 +34,10 @@ not as an error.
 
 Install pi 0.84.x, and confirm the NeMo Relay extension is reachable. Anything
 below 0.84.0 is rejected; anything above 0.84.x is accepted but reported as
-**unverified**, by both `doctor` and the launcher, because pi can change a hook
-shape in a minor release and the symptom is missing spans rather than an error:
+**unverified**, because pi can change a hook shape in a minor release and the
+symptom is missing spans rather than an error. `doctor` reports it in its output;
+the launcher records it as a warning-level log line, so `nemo-relay pi` shows it
+only at `--log-level warn` or lower:
 
 ```bash
 nemo-relay doctor pi
@@ -65,8 +69,9 @@ setup offers this install if pi has no copy of the extension. The wizard only
 runs when no Relay configuration exists yet, so on a machine already configured
 for another agent, run the command above.
 
-pi has no plugin marketplace — no manifest, no `pi plugin` verb, and no MCP
-client for a plugin-owned server to serve — so this is not a marketplace install
+pi has no plugin marketplace — no marketplace manifest, no `pi plugin` verb, and
+no MCP client for a plugin-owned server to serve — so this is not a marketplace
+install
 like the Claude Code and Codex ones. `--install-dir` therefore does not apply:
 pi decides where its extensions live. Set `PI_CODING_AGENT_DIR` to move pi's
 whole configuration.
@@ -104,13 +109,18 @@ rather than by package, so a copy in one place and a copy in another are two
 packages: both register hooks, every turn, tool and inline-shell event is
 reported twice, each turn closes as superseded by its own duplicate, and the
 inline-shell gate decides one command twice. `nemo-relay install pi` refuses
-when another copy would load beside it — including a project-scoped copy in the
-current directory, which pi loads beside a user-scope install whenever the
-project is trusted — and the launcher refuses to start. Keep one copy.
+when another copy would load beside it, and the launcher refuses to start. Keep
+one copy.
 
-That last check reads only the current directory, so installing from elsewhere
-does not see a project copy and does not stop. `nemo-relay doctor pi` reports one
-wherever you run it.
+**Project scope is the exception, and the two commands treat it differently.**
+`nemo-relay install pi` refuses when the current directory holds a project-scoped
+copy, because installing would be the act that creates the second one. The
+launcher does *not* refuse over it — it launches and prints a note — because a
+project copy loads only in a trusted project, and refusing would block every
+launch in an untrusted one over a copy that will not run.
+
+Both checks read only the current directory, `nemo-relay doctor pi` included. Run
+from outside the project, none of the three sees the copy.
 </Warning>
 
 Because the manual routes look exactly like the managed one, `nemo-relay install
@@ -129,8 +139,7 @@ of the gating.
 
 The extension is **not published to npm**, deliberately: `nemo-relay install pi`
 and the two manual routes already cover user scope, and publishing would add a
-namespace, a build step and release wiring for a fourth spelling of the same
-thing.
+namespace, a build step and release wiring for one more route to the same files.
 
 <Warning>
 **Do not install into `.pi/extensions/` or with `pi install --local`.** pi adds
@@ -147,7 +156,9 @@ is that Relay appears to do nothing. `nemo-relay doctor pi` warns about it.
 Use the wrapper for local observability that leaves your pi configuration
 untouched. It is **not install-free**: the extension has to be present already,
 because a hook can only originate inside it, so run the install above first. On a
-clean machine this command fails, and names the routes that fix it.
+clean machine the first-time setup wizard offers that install; once a Relay
+configuration exists the wizard no longer runs, and this command fails instead
+and names the routes that fix it.
 
 ```bash
 nemo-relay pi
@@ -246,7 +257,12 @@ recorded on the session scope rather than opening an empty turn to hold it.
 | `tool_call` | Tool span start, and the gate |
 | `tool_execution_end` | Tool span end, for every outcome including blocked |
 | `user_bash` | Tool span start named `user_bash`, and the inline shell gate |
-| *(after `user_bash` completes)* | `user_bash_end`, a tool span end. Synthesized by the extension, because pi reports no completion for inline shell |
+| *(after the `user_bash` verdict)* | `user_bash_end`, a tool span end. Synthesized by the extension the moment the gate decides, **before the command runs** — pi reports no completion for inline shell, so this span measures the policy decision and not the shell command's duration |
+
+**Tool results are truncated at 2000 characters** before the extension forwards
+them, with the overflow replaced by a `... [truncated N chars]` suffix. A
+guardrail or subscriber that reads a tool result sees the truncated form, so do
+not write policy that depends on the tail of a long result.
 
 pi's `tool_execution_start` is deliberately not forwarded: it fires before
 argument validation and also for calls that never execute. `tool_result` is not
@@ -332,9 +348,10 @@ stating that a policy could not be applied rather than that the request was
 refused. Running the original arguments would silently discard the policy.
 
 The shipped `examples/rust-native-plugin` demonstrates the mechanism rather than
-a policy: its tool request intercept tags arguments with `native_plugin_tag` and
-`native_tool_request_intercept`, which adds keys and so blocks every pi tool
-call. Enable it to see the refusal, not as a template to copy.
+a policy: its tool request intercept inserts `plugin_tag` and `plugin_tool` into
+the arguments, which adds keys and so blocks every pi tool call. Those two names
+are what you will see in the refusal reason. Enable it to see the refusal, not as
+a template to copy.
 
 ## Inline Shell Gating
 
@@ -489,9 +506,10 @@ configured in `plugins.toml`, a single-tool turn produces a `pi` session scope,
 one `pi-turn` scope with `turn_source: turn_start`, and the tool span nested
 under it.
 
-If turn scopes are missing entirely, the extension is not loading. pi collects
-extension load errors rather than aborting, so a failure is silent — run pi with
-`-e` pointing at the entry point directly to isolate it.
+If turn scopes are missing entirely, the extension is not loading. pi 0.84 prints
+the load failure on standard error and exits before the session starts, so read
+stderr first — the failure is reported, not silent. Running pi with `-e` pointing
+at the entry point directly isolates it.
 
 ## Troubleshoot LLM Lifecycle
 

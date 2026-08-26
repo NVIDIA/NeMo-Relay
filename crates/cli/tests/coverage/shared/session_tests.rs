@@ -5839,3 +5839,94 @@ async fn pi_inline_shell_between_turns_does_not_invent_a_turn() {
     drop(captured);
     deregister_subscriber(subscriber_name).unwrap();
 }
+
+// A tool span parented to the *session* scope has to close with it.
+//
+// `close_turn` used to return early when no turn was open, before closing active tools -- so a
+// span `ensure_tool_scope_started` had parented to the session scope was simply abandoned, and the
+// session scope closed over a span that never ended. Reachable without any signal: the extension
+// posts `user_bash_end` through a fire-and-forget path that swallows every failure, so one dropped
+// post plus `/quit` produced a malformed trace rather than merely an incomplete one.
+#[tokio::test]
+async fn an_inline_shell_span_closes_even_when_its_end_never_arrives() {
+    let subscriber_name = "cli-pi-orphan-shell-span-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured = Arc::new(StdMutex::new(Vec::<(String, Option<ScopeCategory>)>::new()));
+    let events = captured.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            let Some(metadata) = event.metadata() else {
+                return;
+            };
+            if metadata.get("session_id").and_then(Value::as_str) != Some("pi-orphan-shell-session")
+            {
+                return;
+            }
+            events
+                .lock()
+                .unwrap()
+                .push((event.name().to_string(), event.scope_category()));
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let session = json!({ "session_id": "pi-orphan-shell-session" });
+    for payload in [
+        json!({ "hook_event_name": "session_start", "reason": "startup" }),
+        // No turn is ever opened, and no `user_bash_end` ever arrives.
+        json!({
+            "hook_event_name": "user_bash", "tool_call_id": "user-bash-0",
+            "tool_name": "user_bash",
+            "input": { "command": "git status", "cwd": "/work", "exclude_from_context": false },
+            "attempt_index": 0, "turn_seq": 0
+        }),
+        json!({ "hook_event_name": "session_shutdown", "reason": "quit" }),
+    ] {
+        let mut merged = session.clone();
+        merged
+            .as_object_mut()
+            .unwrap()
+            .extend(payload.as_object().unwrap().clone());
+        apply_pi_hook(&manager, merged).await;
+    }
+
+    flush_subscribers().unwrap();
+    let captured = captured.lock().unwrap();
+    let sequence = captured
+        .iter()
+        .map(|(name, category)| (name.as_str(), *category))
+        .collect::<Vec<_>>();
+
+    let opened = sequence
+        .iter()
+        .filter(|(name, category)| *name == "user_bash" && *category == Some(ScopeCategory::Start))
+        .count();
+    let closed = sequence
+        .iter()
+        .filter(|(name, category)| *name == "user_bash" && *category == Some(ScopeCategory::End))
+        .count();
+    assert_eq!(
+        (opened, closed),
+        (1, 1),
+        "the inline shell span must be closed by the shutdown that closes its parent, not left \
+         open. sequence: {sequence:?}"
+    );
+
+    // And it must close *before* the scope that contains it, or the trace is still malformed.
+    let shell_end = sequence
+        .iter()
+        .position(|(name, category)| *name == "user_bash" && *category == Some(ScopeCategory::End))
+        .expect("the inline shell span should close");
+    let session_end = sequence
+        .iter()
+        .rposition(|(_, category)| *category == Some(ScopeCategory::End))
+        .expect("the session scope should close");
+    assert!(
+        shell_end <= session_end,
+        "no span may outlive the scope that opened it. sequence: {sequence:?}"
+    );
+    drop(captured);
+    deregister_subscriber(subscriber_name).unwrap();
+}

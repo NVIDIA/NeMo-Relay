@@ -92,8 +92,17 @@ enum Occupant {
     /// Distinct from `Foreign` because it *is* ours and refusing to touch it forever
     /// would be wrong; the answer is to upgrade, not to delete by hand.
     FutureSchema(u64),
-    /// Something Relay did not write -- a hand-placed copy, most likely.
+    /// A Relay extension Relay did not write -- the hand-placed `cp -r`, most likely.
     Foreign,
+    /// A directory with no install state that is not a loadable extension either.
+    ///
+    /// Distinct from `Foreign` because there is nothing here to protect. It is what an
+    /// uninstall leaves behind when it keeps an edited file, and treating it as somebody's
+    /// extension dead-ended the user: reinstall refused, `--force` included, while telling
+    /// them the copy already worked -- and it did not, because the manifest was gone.
+    Residue,
+    /// Install state naming a path this code will not act on.
+    Tampered(String),
 }
 
 /// What a Relay-managed install recorded about itself.
@@ -115,10 +124,10 @@ fn occupant(root: &Path) -> Occupant {
         return Occupant::Vacant;
     }
     let Ok(raw) = std::fs::read_to_string(root.join(STATE_FILE)) else {
-        return Occupant::Foreign;
+        return unmanaged_occupant(root);
     };
     let Ok(value) = serde_json::from_str::<Value>(&raw) else {
-        return Occupant::Foreign;
+        return unmanaged_occupant(root);
     };
     let schema = value.get("schema").and_then(Value::as_u64).unwrap_or(0);
     if schema != STATE_SCHEMA {
@@ -129,29 +138,78 @@ fn occupant(root: &Path) -> Occupant {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let files = value
+    let mut files = Vec::new();
+    for entry in value
         .get("files")
         .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|entry| {
-                    Some(RecordedFile {
-                        path: entry.get("path").and_then(Value::as_str)?.to_string(),
-                        sha256: entry.get("sha256").and_then(Value::as_str)?.to_string(),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        let (Some(path), Some(sha256)) = (
+            entry.get("path").and_then(Value::as_str),
+            entry.get("sha256").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        // Refuse the whole state rather than skipping the bad entry: a state file naming a
+        // path outside the tree is not a partially-valid install, it is one nothing here
+        // should act on.
+        if safe_relative(path).is_none() {
+            return Occupant::Tampered(path.to_string());
+        }
+        files.push(RecordedFile {
+            path: path.to_string(),
+            sha256: sha256.to_string(),
+        });
+    }
     Occupant::Managed(InstallState {
         relay_version,
         files,
     })
 }
 
-fn digest(contents: &str) -> String {
-    let digest = Sha256::digest(contents.as_bytes());
+/// What a directory without usable install state is: somebody's extension, or leftovers.
+fn unmanaged_occupant(root: &Path) -> Occupant {
+    if super::doctor::is_relay_extension_dir(root) {
+        Occupant::Foreign
+    } else {
+        Occupant::Residue
+    }
+}
+
+/// A recorded path this code is willing to join to the install root.
+///
+/// ⚠️ **Every recorded path is joined to the root and then deleted, and `Path::join` with
+/// an absolute path replaces the root outright.** So a `.nemo-relay-install.json` naming
+/// `/etc/...` or `../../..` turned `nemo-relay uninstall pi` into an arbitrary-file delete
+/// running as the invoking user. The recorded hash is no guard at all: it is compared
+/// against whatever sits at the resolved path, so it is satisfied by the victim file
+/// itself.
+///
+/// Only `Normal` components are accepted -- no root, no prefix, no `.`, no `..`.
+fn safe_relative(path: &str) -> Option<PathBuf> {
+    let candidate = Path::new(path);
+    let all_normal = candidate
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)));
+    (all_normal && candidate.components().next().is_some()).then(|| candidate.to_path_buf())
+}
+
+/// Resolve a recorded path under the root, refusing anything that escapes it.
+///
+/// Component validation alone is not enough: a recorded `src/foo.ts` still escapes when
+/// `src` is a symlink pointing outside the tree, because the removal follows it. This
+/// canonicalizes the parent and checks containment, which closes that too.
+fn contained_target(root: &Path, relative: &Path) -> Option<PathBuf> {
+    let target = root.join(relative);
+    let parent = target.parent()?;
+    let real_root = std::fs::canonicalize(root).ok()?;
+    let real_parent = std::fs::canonicalize(parent).ok()?;
+    real_parent.starts_with(&real_root).then_some(target)
+}
+
+fn digest(contents: &[u8]) -> String {
+    let digest = Sha256::digest(contents);
     format!(
         "sha256:{}",
         digest
@@ -170,9 +228,16 @@ fn modified_files(root: &Path, state: &InstallState) -> Vec<String> {
         .files
         .iter()
         .filter(|recorded| {
-            std::fs::read_to_string(root.join(&recorded.path))
-                .map(|actual| digest(&actual) != recorded.sha256)
-                .unwrap_or(false)
+            // Bytes, not text. Reading as UTF-8 made a file edited into anything non-textual
+            // unreadable, `unwrap_or(false)` called that "unmodified", and uninstall then
+            // deleted the very edit it exists to preserve.
+            match std::fs::read(root.join(&recorded.path)) {
+                Ok(bytes) => digest(&bytes) != recorded.sha256,
+                // Already gone: nothing to keep and nothing to delete.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                // Unreadable for any other reason: it cannot be shown to be ours, so keep it.
+                Err(_) => true,
+            }
         })
         .map(|recorded| recorded.path.clone())
         .collect()
@@ -302,12 +367,28 @@ fn plan_install(root: &Path, force: bool) -> Result<InstallAction, CliError> {
     match occupant(root) {
         Occupant::Vacant => Ok(InstallAction::Wrote),
         Occupant::Foreign => Err(CliError::Install(format!(
-            "{} already exists and was not written by NeMo Relay -- most likely the `cp -r` \
-             the pi guide documents. It is left alone, `--force` included, because Relay \
-             cannot tell an unmanaged copy from one you edited. It already works: \
-             `nemo-relay run --agent pi` finds it. To replace it with a managed install, \
-             remove the directory yourself and run this again",
+            "{} is a working NeMo Relay pi extension that NeMo Relay did not write -- most \
+             likely the `cp -r` the pi guide documents. It is left alone, `--force` \
+             included, because Relay cannot tell an unmanaged copy from one you edited. \
+             `nemo-relay run --agent pi` already finds it. To replace it with a managed \
+             install, remove the directory yourself and run this again",
             root.display()
+        ))),
+        Occupant::Residue if force => Ok(InstallAction::Wrote),
+        Occupant::Residue => Err(CliError::Install(format!(
+            "{} exists, holds no NeMo Relay install state, and is not a loadable pi \
+             extension either -- pi would not load it, so nothing there is working. It is \
+             most likely what an earlier `nemo-relay uninstall pi` left behind when it kept \
+             a file you had edited. Re-run with `--force` to install over it, or remove the \
+             directory yourself",
+            root.display()
+        ))),
+        Occupant::Tampered(path) => Err(CliError::Install(format!(
+            "{} records an install-state entry naming {path:?}, which is not a path inside \
+             the install directory. Nothing here will act on it. Remove {} yourself and run \
+             this again",
+            root.display(),
+            root.join(STATE_FILE).display()
         ))),
         Occupant::FutureSchema(schema) => Err(CliError::Install(format!(
             "{} was written by a newer nemo-relay whose install state is version {schema}; \
@@ -364,7 +445,7 @@ fn write_extension(root: &Path) -> Result<(), CliError> {
         std::fs::write(&target, file.contents).map_err(|error| {
             CliError::Install(format!("could not write {}: {error}", target.display()))
         })?;
-        recorded.push(json!({ "path": file.path, "sha256": digest(file.contents) }));
+        recorded.push(json!({ "path": file.path, "sha256": digest(file.contents.as_bytes()) }));
     }
     let state = json!({
         "schema": STATE_SCHEMA,
@@ -432,6 +513,25 @@ pub(crate) fn uninstall(request: UninstallRequest) -> Result<ExitCode, CliError>
                 root.display()
             )));
         }
+        Occupant::Residue => {
+            return Err(CliError::Install(format!(
+                "{} holds no NeMo Relay install state, so there is nothing here to \
+                 uninstall. It is most likely what an earlier uninstall left behind when it \
+                 kept a file you had edited; remove the directory yourself if you are done \
+                 with it",
+                root.display()
+            )));
+        }
+        Occupant::Tampered(path) => {
+            return Err(CliError::Install(format!(
+                "{} records an install-state entry naming {path:?}, which is not a path \
+                 inside the install directory. Removing what that state names could delete \
+                 files outside the extension, so nothing here will act on it. Remove {} \
+                 yourself and run this again",
+                root.display(),
+                root.join(STATE_FILE).display()
+            )));
+        }
     };
 
     let kept = modified_files(&root, &state);
@@ -465,7 +565,15 @@ fn remove_recorded(root: &Path, state: &InstallState, kept: &[String]) -> Result
         if kept.contains(&recorded.path) {
             continue;
         }
-        let target = root.join(&recorded.path);
+        // Re-resolved rather than joined blind. `occupant` already rejected state naming a
+        // path outside the tree, and this closes the remaining route: a recorded path whose
+        // parent is a symlink out of the directory.
+        let Some(relative) = safe_relative(&recorded.path) else {
+            continue;
+        };
+        let Some(target) = contained_target(root, &relative) else {
+            continue;
+        };
         match std::fs::remove_file(&target) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

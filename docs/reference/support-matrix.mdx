@@ -59,8 +59,11 @@ lifecycle, and trust requirements.
 ## Coding Agents Supported by the CLI
 
 The CLI supports local coding-agent sessions where agent hooks and provider
-traffic can reach the local Relay gateway. It rejects prerelease, malformed,
-and older CLI versions during installation, diagnostics, and transparent runs.
+traffic can reach the local Relay gateway. For Claude Code and Codex it rejects
+prerelease, malformed, and older CLI versions during installation, diagnostics,
+and transparent runs. `nemo-relay install pi` is the exception: it writes a
+directory and never runs pi, so it checks no version — diagnostics and transparent
+runs still do.
 
 | Agent | Minimum version | Supported CLI capabilities | Current limitations |
 | --- | --- | --- | --- |

@@ -140,8 +140,10 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
 
   // Declared as a function rather than a generic arrow: `<T>(...) => ...` in a
   // .ts file is ambiguous with JSX, and pi's jiti loader resolves it that way
-  // and fails to load the extension -- silently, because pi collects extension
-  // load errors rather than aborting.
+  // and fails to load the extension. pi 0.84 prints that failure on stderr and
+  // exits before the session starts, so it is reported rather than silent --
+  // but it is reported by pi, not by anything here, and nothing Relay writes
+  // will appear at all.
   function enqueue<T>(job: () => Promise<T>): Promise<T> {
     const result = chain.then(job, job);
     chain = result.then(
@@ -565,8 +567,11 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     ctx: ExtensionContext,
     callId: string,
     // `policy-allowed` rather than `ok`: pi reports no completion for inline shell,
-    // so the gate knows what it decided and never what happened.
-    status: 'policy-allowed' | 'error',
+    // so the gate knows what it decided and never what happened. `fault-allowed` is
+    // separate on purpose -- a command the gateway never ruled on is not a command policy
+    // permitted, and recording both as `policy-allowed` made an unenforced session read
+    // exactly like an enforced one.
+    status: 'policy-allowed' | 'fault-allowed' | 'error',
     content: string,
   ): void => {
     emit(ctx, {
@@ -637,10 +642,8 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
           }),
         );
 
-        const decision =
-          outcome.kind === 'fault'
-            ? resolveFault(active, outcome, USER_BASH_TOOL_NAME)
-            : outcome;
+        const faulted = outcome.kind === 'fault';
+        const decision = faulted ? resolveFault(active, outcome, USER_BASH_TOOL_NAME) : outcome;
 
         if (decision.kind === 'block') {
           endUserBash(ctx, callId, 'error', decision.reason);
@@ -661,7 +664,14 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
         // hook to tell us how it went. It can still fail, and a later `user_bash`
         // handler can replace execution entirely -- so claiming success here would put
         // a false outcome in the trace. What we know is what we decided.
-        endUserBash(ctx, callId, 'policy-allowed', 'Allowed by policy; pi has not reported the outcome.');
+        endUserBash(
+          ctx,
+          callId,
+          faulted ? 'fault-allowed' : 'policy-allowed',
+          faulted
+            ? 'Allowed without a policy decision: the gateway did not answer and the fail-open policy applies.'
+            : 'Allowed by policy; pi has not reported the outcome.',
+        );
         // `undefined` is the only correct allow value: any object at all is a
         // result or an operations override, and either would stop pi running
         // the command as the user typed it.

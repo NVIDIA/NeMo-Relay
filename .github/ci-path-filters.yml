@@ -163,6 +163,9 @@ rust:
   - 'Cargo.toml'
   - 'crates/**/Cargo.toml'
   - 'crates/**/*.rs'
+  # The vendored pi extension is `.ts`/`.json` under a Rust crate, and a Rust test asserts
+  # it matches `integrations/pi`. Without this the drift guard never runs on the copy.
+  - 'crates/cli/assets/**'
   - 'crates/worker-proto/proto/**'
   - 'crates/ffi/cbindgen.toml'
   - 'integrations/coding-agents/**'

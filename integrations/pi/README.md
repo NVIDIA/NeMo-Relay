@@ -95,10 +95,11 @@ install path, and loads no extension. Worse than nothing: the clone's root
 `skills/` *is* picked up, so you get NeMo Relay's Codex and Claude skills in pi
 and none of the gating.
 
-**This package is deliberately not published to npm.** The file drop and the
-local-path install both work and cover user scope; publishing would add an npm
-namespace, a build step (the sources are TypeScript that nothing compiles today),
-a `files` allowlist and release wiring for a third spelling. It is
+**This package is deliberately not published to npm.** `nemo-relay install pi`,
+the file drop and the local-path install all work and cover user scope;
+publishing would add an npm namespace, a build step (the sources are TypeScript
+that nothing compiles today), a `files` allowlist and release wiring for one more
+route to the same files. It is
 `private: true` for that reason, not by oversight — and it carries a
 `pi.extensions` manifest key so both working routes resolve explicitly rather
 than relying on pi's directory fallback.
@@ -124,7 +125,7 @@ Run it first whenever Relay does not seem to be doing anything.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `NEMO_RELAY_PI_EXTENSION` | unset | The first place the launcher looks for this extension. Ignored unless the path exists **and** its `package.json` names `nemo-relay-pi`, in which case resolution falls through to a user-scope install. Set by the launcher from what it resolved |
+| `NEMO_RELAY_PI_EXTENSION` | unset | The first place the launcher looks for this extension. A path that exists **and** whose `package.json` names `nemo-relay-pi` is used; anything else is ignored and resolution falls through to a user-scope install. Set by the launcher from what it resolved |
 | `NEMO_RELAY_PI_GATEWAY_URL` | `http://127.0.0.1:4040` | Gateway base URL |
 | `NEMO_RELAY_PI_TIMEOUT_MS` | `5000` | Per-request timeout. Posts are serialized, so a gating hook also waits out everything queued ahead of it — an unresponsive gateway costs this once per queued post, not once |
 | `NEMO_RELAY_PI_FAIL` | `open` | `closed` blocks tool calls and inline shell commands when the gateway is unreachable |
