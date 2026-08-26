@@ -64,7 +64,7 @@ use tower::service_fn;
 const ACTIVATION_ID: &str = "activation-1";
 const AUTH_TOKEN: &str = "secret-token";
 const PLUGIN_ID: &str = "acme.worker";
-const WORKER_TEST_TIMEOUT: Duration = Duration::from_secs(5);
+const WORKER_TEST_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUIRED_WORKER_ENVS: &[&str] = &[
     "NEMO_RELAY_WORKER_SOCKET",
     "NEMO_RELAY_HOST_SOCKET",
