@@ -68,6 +68,20 @@ def make_payload(root: Path, *, digest: str = "a" * 64) -> dict[str, object]:
     return marker
 
 
+def make_switchyard_bundle_dir(tmp_path: Path, experiment: str) -> Path:
+    """Mimic prepare_runtime.py's staged bundle layout for one experiment,
+    for tests that call _validate_relay_config directly against a real
+    on-disk switchyard-routes.toml/pricing.json."""
+    switchyard_source, pricing_source = runtime_preparer_module.experiment_paths(
+        EXAMPLE_ROOT / "config", experiment
+    )
+    bundle = tmp_path / f"switchyard-bundle-{experiment}"
+    bundle.mkdir(parents=True, exist_ok=True)
+    (bundle / "switchyard-routes.toml").write_bytes(switchyard_source.read_bytes())
+    (bundle / "pricing.json").write_bytes(pricing_source.read_bytes())
+    return bundle
+
+
 def test_hermetic_runtime_contract_accepts_bound_payload(tmp_path: Path) -> None:
     marker = make_payload(tmp_path)
     actual = agent_module._load_hermetic_runtime(
@@ -121,39 +135,50 @@ def test_setup_admission_binds_agent_source() -> None:
     assert admission_module.sha256_file(expected) == agent_module._sha256(expected)
 
 
-def test_bridge_accepts_current_classifier_routing_contract() -> None:
-    agent_module._validate_relay_config(EXAMPLE_ROOT / "config" / "plugins.toml.in")
+def test_bridge_accepts_current_classifier_routing_contract(tmp_path: Path) -> None:
+    bundle = make_switchyard_bundle_dir(tmp_path, "default")
+    agent_module._validate_relay_config(EXAMPLE_ROOT / "config" / "plugins.toml.in", bundle)
 
 
-@pytest.mark.parametrize("name", ["plugins.random.toml.in", "plugins.escalation.toml.in"])
-def test_bridge_accepts_additional_router_group_contracts(name: str) -> None:
-    assert agent_module._validate_relay_config(EXAMPLE_ROOT / "config" / name) == "switchyard"
+@pytest.mark.parametrize("experiment", ["random", "escalation"])
+def test_bridge_accepts_additional_router_group_contracts(experiment: str, tmp_path: Path) -> None:
+    bundle = make_switchyard_bundle_dir(tmp_path, experiment)
+    assert agent_module._validate_relay_config(EXAMPLE_ROOT / "config" / "plugins.toml.in", bundle) == "switchyard"
 
 
-def test_bridge_accepts_opus_only_direct_baseline() -> None:
+def test_bridge_accepts_opus_only_direct_baseline(tmp_path: Path) -> None:
     path = EXAMPLE_ROOT / "config" / "plugins.opus48-baseline.toml.in"
-    assert agent_module._validate_relay_config(path) == "direct"
+    assert agent_module._validate_relay_config(path, tmp_path) == "direct"
 
 
-def test_bridge_accepts_sol_direct_and_both_stage_picker_contracts() -> None:
+def test_bridge_accepts_sol_direct_and_both_stage_picker_contracts(tmp_path: Path) -> None:
     assert (
-        agent_module._validate_relay_config(EXAMPLE_ROOT / "config" / "plugins.sol56-baseline.toml.in")
+        agent_module._validate_relay_config(EXAMPLE_ROOT / "config" / "plugins.sol56-baseline.toml.in", tmp_path)
         == "direct"
     )
-    for name in ("plugins.sol56-deepseek-v4-cf03.toml.in", "plugins.sol56-deepseek-v4-ef03.toml.in"):
-        assert agent_module._validate_relay_config(EXAMPLE_ROOT / "config" / name) == "switchyard"
+    for experiment in ("sol56-deepseek-v4-cf03", "sol56-deepseek-v4-ef03"):
+        bundle = make_switchyard_bundle_dir(tmp_path, experiment)
+        assert (
+            agent_module._validate_relay_config(EXAMPLE_ROOT / "config" / "plugins.toml.in", bundle)
+            == "switchyard"
+        )
 
 
 def test_sol_stage_contracts_use_two_models_and_deepseek_judge_controls() -> None:
     expected_picker = {
-        "plugins.sol56-deepseek-v4-cf03.toml.in": "capable_first",
-        "plugins.sol56-deepseek-v4-ef03.toml.in": "efficient_first",
+        "sol56-deepseek-v4-cf03": "capable_first",
+        "sol56-deepseek-v4-ef03": "efficient_first",
     }
-    for name, picker in expected_picker.items():
-        with (EXAMPLE_ROOT / "config" / name).open("rb") as stream:
-            config = tomllib.load(stream)
-        settings = runtime_preparer_module.plugin_settings(config)
-        targets = config["plugins"]["dynamic"][0]["config"]["targets"]
+    with (EXAMPLE_ROOT / "config" / "plugins.toml.in").open("rb") as stream:
+        config = tomllib.load(stream)
+    for experiment, picker in expected_picker.items():
+        switchyard_source, _pricing_source = runtime_preparer_module.experiment_paths(
+            EXAMPLE_ROOT / "config", experiment
+        )
+        with switchyard_source.open("rb") as stream:
+            switchyard_routes = tomllib.load(stream)
+        settings = runtime_preparer_module.plugin_settings(config, switchyard_routes)
+        targets = switchyard_routes["targets"]
         assert settings["picker"] == picker
         assert settings["confidence_threshold"] == 0.3
         assert settings["strong_model"] == "openai/openai/gpt-5.6-sol"
@@ -163,18 +188,24 @@ def test_sol_stage_contracts_use_two_models_and_deepseek_judge_controls() -> Non
         assert targets["judge"]["extra_body"] == {"reasoning": {"enabled": False}}
 
 
-def test_glm_stage_signal_and_classifier_arms_are_distinct_and_valid() -> None:
+def test_glm_stage_signal_and_classifier_arms_are_distinct_and_valid(tmp_path: Path) -> None:
     expected = {
-        "plugins.sol56-glm52-stage-ef05-signal.toml.in": None,
-        "plugins.sol56-glm52-stage-ef05-classifier.toml.in": "judge",
+        "sol56-glm52-stage-ef05-signal": None,
+        "sol56-glm52-stage-ef05-classifier": "judge",
     }
-    for name, classifier_target in expected.items():
-        path = EXAMPLE_ROOT / "config" / name
-        assert agent_module._validate_relay_config(path) == "switchyard"
-        with path.open("rb") as stream:
-            config = tomllib.load(stream)
-        settings = runtime_preparer_module.plugin_settings(config)
-        targets = config["plugins"]["dynamic"][0]["config"]["targets"]
+    path = EXAMPLE_ROOT / "config" / "plugins.toml.in"
+    with path.open("rb") as stream:
+        config = tomllib.load(stream)
+    for experiment, classifier_target in expected.items():
+        bundle = make_switchyard_bundle_dir(tmp_path, experiment)
+        assert agent_module._validate_relay_config(path, bundle) == "switchyard"
+        switchyard_source, _pricing_source = runtime_preparer_module.experiment_paths(
+            EXAMPLE_ROOT / "config", experiment
+        )
+        with switchyard_source.open("rb") as stream:
+            switchyard_routes = tomllib.load(stream)
+        settings = runtime_preparer_module.plugin_settings(config, switchyard_routes)
+        targets = switchyard_routes["targets"]
         assert settings["picker"] == "efficient_first"
         assert settings["confidence_threshold"] == 0.5
         assert settings["classifier_target"] == classifier_target
@@ -182,20 +213,23 @@ def test_glm_stage_signal_and_classifier_arms_are_distinct_and_valid() -> None:
         assert settings["weak_model"] == "nvidia/zai-org/glm-5.2"
         # Switchyard's pinned native plugin accepts routed OpenAI Chat
         # targets; the Responses API is not yet a valid router target.
-        assert targets["strong"]["protocol"] == "openai_chat"
+        assert switchyard_routes["llm_clients"]["nvidia"]["format"] == "openai_chat"
         assert targets["strong"]["extra_body"] == {"reasoning": {"effort": "medium"}}
         assert targets["weak"]["extra_body"] == {"reasoning": {"enabled": False}}
         if classifier_target is None:
             assert set(targets) == {"strong", "weak"}
             assert "judge_model" not in settings
         else:
-            assert targets["judge"]["model"] == "nvidia/zai-org/glm-5.2"
+            assert targets["judge"]["id"] == "nvidia/zai-org/glm-5.2"
 
 
 def test_runtime_provenance_derives_stage_router_contract() -> None:
     with (EXAMPLE_ROOT / "config" / "plugins.toml.in").open("rb") as stream:
         config = tomllib.load(stream)
-    settings = runtime_preparer_module.plugin_settings(config)
+    switchyard_source, _pricing_source = runtime_preparer_module.experiment_paths(EXAMPLE_ROOT / "config", "default")
+    with switchyard_source.open("rb") as stream:
+        switchyard_routes = tomllib.load(stream)
+    settings = runtime_preparer_module.plugin_settings(config, switchyard_routes)
     assert settings["algorithm"] == "stage_router"
     assert settings["classifier_target"] == "judge"
     assert settings["picker"] == "efficient_first"
@@ -204,16 +238,26 @@ def test_runtime_provenance_derives_stage_router_contract() -> None:
 
 
 def test_runtime_provenance_derives_random_router_contract() -> None:
-    with (EXAMPLE_ROOT / "config" / "plugins.random.toml.in").open("rb") as stream:
-        settings = runtime_preparer_module.plugin_settings(tomllib.load(stream))
+    with (EXAMPLE_ROOT / "config" / "plugins.toml.in").open("rb") as stream:
+        config = tomllib.load(stream)
+    switchyard_source, _pricing_source = runtime_preparer_module.experiment_paths(EXAMPLE_ROOT / "config", "random")
+    with switchyard_source.open("rb") as stream:
+        switchyard_routes = tomllib.load(stream)
+    settings = runtime_preparer_module.plugin_settings(config, switchyard_routes)
     assert settings["algorithm"] == "random"
     assert settings["random_weights"] == {"strong": 1.0, "weak": 1.0}
     assert "classifier_target" not in settings
 
 
 def test_runtime_provenance_derives_escalation_router_contract() -> None:
-    with (EXAMPLE_ROOT / "config" / "plugins.escalation.toml.in").open("rb") as stream:
-        settings = runtime_preparer_module.plugin_settings(tomllib.load(stream))
+    with (EXAMPLE_ROOT / "config" / "plugins.toml.in").open("rb") as stream:
+        config = tomllib.load(stream)
+    switchyard_source, _pricing_source = runtime_preparer_module.experiment_paths(
+        EXAMPLE_ROOT / "config", "escalation"
+    )
+    with switchyard_source.open("rb") as stream:
+        switchyard_routes = tomllib.load(stream)
+    settings = runtime_preparer_module.plugin_settings(config, switchyard_routes)
     assert settings["algorithm"] == "llm_classifier"
     assert settings["classifier_mode"] == "escalation"
     assert settings["classifier_target"] == "judge"
@@ -227,7 +271,7 @@ def test_runtime_provenance_derives_escalation_router_contract() -> None:
 def test_runtime_provenance_derives_direct_opus_baseline() -> None:
     with (EXAMPLE_ROOT / "config" / "plugins.opus48-baseline.toml.in").open("rb") as stream:
         config = tomllib.load(stream)
-    settings = runtime_preparer_module.plugin_settings(config)
+    settings = runtime_preparer_module.plugin_settings(config, None)
     assert settings == {
         "algorithm": "direct",
         "direct_model": "aws/anthropic/bedrock-claude-opus-4-8",
@@ -251,15 +295,21 @@ def test_runtime_preparer_admits_only_collector_bootstrap_state(tmp_path: Path) 
 
 def test_offline_overrides_keep_classifier_pricing_aliases_distinct(tmp_path: Path) -> None:
     output = tmp_path / "plugins.toml"
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    switchyard_source, pricing_source = runtime_preparer_module.experiment_paths(EXAMPLE_ROOT / "config", "default")
     settings = runtime_preparer_module.render_config(
         EXAMPLE_ROOT / "config" / "plugins.toml.in",
         output,
+        bundle,
         {
             "HERMES_COMMIT": "a" * 40,
             "OPENINFERENCE_ENDPOINT": "http://127.0.0.1:4318/v1/traces",
             "PHOENIX_PROJECT": "offline",
             "EVAL_COHORT": "offline",
         },
+        switchyard_source,
+        pricing_source,
         {
             "provider_base_url": "http://127.0.0.1:8000/v1",
             "strong_model": "phase2/fake-strong",
@@ -267,9 +317,7 @@ def test_offline_overrides_keep_classifier_pricing_aliases_distinct(tmp_path: Pa
             "judge_model": "phase2/fake-judge",
         },
     )
-    with output.open("rb") as stream:
-        config = tomllib.load(stream)
-    entries = config["components"][0]["config"]["sources"][0]["catalog"]["entries"]
+    entries = json.loads((bundle / "pricing.json").read_text(encoding="utf-8"))["entries"]
     assert settings["judge_model"] == "phase2/fake-judge"
     assert {entry["model_id"] for entry in entries} == {
         "phase2/fake-strong",

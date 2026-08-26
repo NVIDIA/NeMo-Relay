@@ -16,7 +16,7 @@ from typing import Any, Iterable
 _SCRIPT_ROOT = Path(__file__).resolve().parent
 if str(_SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_ROOT))
-from relay_version import require_supported_version  # noqa: E402
+from relay_version import RELAY_REQUIREMENT, require_supported_version  # noqa: E402
 
 SCHEMA_VERSION = "harbor-hermes-switchyard.validation.v1"
 HERMES_MAX_TURNS = 90
@@ -262,7 +262,7 @@ def validate_receipt_provenance(receipt: dict[str, Any], provenance: dict[str, A
         try:
             require_supported_version(relay.get("version", ""))
         except ValueError:
-            errors.append("receipt did not record nemo-relay>=0.7.0")
+            errors.append(f"receipt did not record {RELAY_REQUIREMENT}")
     if relay.get("wheel_sha256") != provenance_relay.get("wheel_sha256"):
         errors.append("Relay wheel digest does not match runtime provenance")
     if receipt.get("relay_config_sha256") != provenance.get("relay_config_sha256"):

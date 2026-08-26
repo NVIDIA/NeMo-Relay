@@ -249,7 +249,7 @@ def test_task_runtime_overrides_are_explicit_and_affect_effective_memory() -> No
 
 def test_direct_opus_baseline_contract_has_no_router_targets() -> None:
     module = load_coordinator()
-    contract = module.plugin_contract(EXAMPLE_ROOT / "config" / "plugins.opus48-baseline.toml.in")
+    contract = module.plugin_contract(EXAMPLE_ROOT / "config" / "plugins.opus48-baseline.toml.in", None)
     assert contract["mode"] == "direct"
     assert contract["required_models"] == ["aws/anthropic/bedrock-claude-opus-4-8"]
     assert contract["weak_model"] is None
@@ -258,13 +258,13 @@ def test_direct_opus_baseline_contract_has_no_router_targets() -> None:
 
 def test_new_sol_matrix_contracts_are_two_model_stage_routes() -> None:
     module = load_coordinator()
-    direct = module.plugin_contract(EXAMPLE_ROOT / "config" / "plugins.sol56-baseline.toml.in")
+    direct = module.plugin_contract(EXAMPLE_ROOT / "config" / "plugins.sol56-baseline.toml.in", None)
     assert direct["required_models"] == ["openai/openai/gpt-5.6-sol"]
-    for name, picker in (
-        ("plugins.sol56-deepseek-v4-cf03.toml.in", "capable_first"),
-        ("plugins.sol56-deepseek-v4-ef03.toml.in", "efficient_first"),
+    for experiment, picker in (
+        ("sol56-deepseek-v4-cf03", "capable_first"),
+        ("sol56-deepseek-v4-ef03", "efficient_first"),
     ):
-        contract = module.plugin_contract(EXAMPLE_ROOT / "config" / name)
+        contract = module.plugin_contract(EXAMPLE_ROOT / "config" / "plugins.toml.in", experiment)
         assert contract["required_models"] == [
             "nvidia/deepseek-ai/deepseek-v4-flash",
             "openai/openai/gpt-5.6-sol",
@@ -448,6 +448,8 @@ def test_smoke_evidence_is_bound_to_exact_local_dataset(tmp_path: Path) -> None:
     library = bundle / "libswitchyard_nemo_relay_plugin.so"
     library.write_bytes(b"switchyard")
     plugin_template = EXAMPLE_ROOT / "config" / "plugins.toml.in"
+    switchyard_experiment = "default"
+    switchyard_source, pricing_source = module.experiment_paths(plugin_template.parent, switchyard_experiment)
     evidence_path = tmp_path / "smoke.json"
     evidence = {
         "schema_version": "harbor-hermes-switchyard.phase2-smoke.v1",
@@ -461,7 +463,9 @@ def test_smoke_evidence_is_bound_to_exact_local_dataset(tmp_path: Path) -> None:
             "status": "passed",
             "relay_wheel_sha256": module.sha256_file(relay_wheel),
             "switchyard_library_sha256": module.sha256_file(library),
-            "plugin_config_template_sha256": module.sha256_file(plugin_template),
+            "plugin_config_template_sha256": module.plugin_config_identity_sha256(
+                plugin_template, switchyard_source, pricing_source
+            ),
         },
         "tasks": [
             {
@@ -476,11 +480,15 @@ def test_smoke_evidence_is_bound_to_exact_local_dataset(tmp_path: Path) -> None:
         ],
     }
     evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
-    module.validate_smoke_evidence(evidence_path, 2, dataset, 3, "aarch64", relay_wheel, bundle, plugin_template)
+    module.validate_smoke_evidence(
+        evidence_path, 2, dataset, 3, "aarch64", relay_wheel, bundle, plugin_template, switchyard_experiment
+    )
 
     (dataset / "task-b" / "task.toml").write_text('[environment]\nmemory = "8G"\n', encoding="utf-8")
     try:
-        module.validate_smoke_evidence(evidence_path, 2, dataset, 3, "aarch64", relay_wheel, bundle, plugin_template)
+        module.validate_smoke_evidence(
+            evidence_path, 2, dataset, 3, "aarch64", relay_wheel, bundle, plugin_template, switchyard_experiment
+        )
     except ValueError:
         pass
     else:
@@ -489,7 +497,9 @@ def test_smoke_evidence_is_bound_to_exact_local_dataset(tmp_path: Path) -> None:
     (dataset / "task-b" / "task.toml").write_text('[environment]\nmemory = "4G"\n', encoding="utf-8")
     (dataset / "task-a" / "instruction.md").write_text("changed instruction\n", encoding="utf-8")
     try:
-        module.validate_smoke_evidence(evidence_path, 2, dataset, 3, "aarch64", relay_wheel, bundle, plugin_template)
+        module.validate_smoke_evidence(
+            evidence_path, 2, dataset, 3, "aarch64", relay_wheel, bundle, plugin_template, switchyard_experiment
+        )
     except ValueError:
         pass
     else:
@@ -497,7 +507,9 @@ def test_smoke_evidence_is_bound_to_exact_local_dataset(tmp_path: Path) -> None:
     (dataset / "task-a" / "instruction.md").write_text("instruction for task-a\n", encoding="utf-8")
 
     try:
-        module.validate_smoke_evidence(evidence_path, 2, dataset, 4, "aarch64", relay_wheel, bundle, plugin_template)
+        module.validate_smoke_evidence(
+            evidence_path, 2, dataset, 4, "aarch64", relay_wheel, bundle, plugin_template, switchyard_experiment
+        )
     except ValueError:
         pass
     else:
@@ -538,7 +550,7 @@ def test_phase2_environment_allows_an_explicitly_blank_canary() -> None:
     required_values = validator.split("required_values=(", 1)[1].split(")", 1)[0]
     assert "TBENCH_CANARY_TASK" not in required_values
     assert "[[ ! ${TBENCH_CANARY_TASK+x} ]]" in validator
-    assert "non-placeholder Bearer credential" in validator
+    assert "non-placeholder bare provider credential" in validator
 
 
 def test_runtime_snapshot_remains_bound_after_checkout_changes(tmp_path: Path) -> None:
@@ -725,7 +737,7 @@ def test_runner_keeps_benchmark_completion_separate_from_integration_validation(
 
 def test_plugin_contract_owns_routes_and_authorization_name() -> None:
     module = load_coordinator()
-    contract = module.plugin_contract(EXAMPLE_ROOT / "config" / "plugins.toml.in")
+    contract = module.plugin_contract(EXAMPLE_ROOT / "config" / "plugins.toml.in", "default")
     assert contract["strong_model"] == "aws/anthropic/bedrock-claude-opus-4-8"
     assert contract["weak_model"] == "nvidia/nvidia/nemotron-3-ultra-nvfp4"
     assert contract["judge_model"] == "aws/anthropic/bedrock-claude-sonnet-4-6"
@@ -740,7 +752,7 @@ def test_plugin_contract_owns_routes_and_authorization_name() -> None:
 
 def test_random_router_contract_is_equal_weight_and_entropy_backed() -> None:
     module = load_coordinator()
-    contract = module.plugin_contract(EXAMPLE_ROOT / "config" / "plugins.random.toml.in")
+    contract = module.plugin_contract(EXAMPLE_ROOT / "config" / "plugins.toml.in", "random")
     assert contract["algorithm"] == "random"
     assert contract["random_weights"] == {"strong": 1.0, "weak": 1.0}
     assert contract["classifier_target"] is None
@@ -752,7 +764,7 @@ def test_random_router_contract_is_equal_weight_and_entropy_backed() -> None:
 
 def test_escalation_router_contract_uses_tuned_defaults_explicitly() -> None:
     module = load_coordinator()
-    contract = module.plugin_contract(EXAMPLE_ROOT / "config" / "plugins.escalation.toml.in")
+    contract = module.plugin_contract(EXAMPLE_ROOT / "config" / "plugins.toml.in", "escalation")
     assert contract["algorithm"] == "llm_classifier"
     assert contract["classifier_mode"] == "escalation"
     assert contract["classifier_target"] == "judge"
@@ -852,6 +864,8 @@ def test_offline_evidence_is_bound_to_runtime_inputs(tmp_path: Path) -> None:
     library = bundle / "libswitchyard_nemo_relay_plugin.so"
     library.write_bytes(b"switchyard")
     plugin_template = EXAMPLE_ROOT / "config" / "plugins.toml.in"
+    switchyard_experiment = "default"
+    switchyard_source, pricing_source = module.experiment_paths(plugin_template.parent, switchyard_experiment)
     evidence_path = tmp_path / "offline.json"
     evidence = {
         "schema_version": "harbor-hermes-switchyard.phase2-offline-admission.v1",
@@ -860,16 +874,22 @@ def test_offline_evidence_is_bound_to_runtime_inputs(tmp_path: Path) -> None:
         "relay_architecture": "x86_64",
         "relay_wheel_sha256": module.sha256_file(relay_wheel),
         "switchyard_library_sha256": module.sha256_file(library),
-        "plugin_config_template_sha256": module.sha256_file(plugin_template),
+        "plugin_config_template_sha256": module.plugin_config_identity_sha256(
+            plugin_template, switchyard_source, pricing_source
+        ),
         "provider_requests": 4,
         "surviving_shutdown_threads": [],
     }
     evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
-    module.validate_offline_evidence(evidence_path, "x86_64", relay_wheel, bundle, plugin_template)
+    module.validate_offline_evidence(
+        evidence_path, "x86_64", relay_wheel, bundle, plugin_template, switchyard_experiment
+    )
     evidence["relay_architecture"] = "aarch64"
     evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
     try:
-        module.validate_offline_evidence(evidence_path, "x86_64", relay_wheel, bundle, plugin_template)
+        module.validate_offline_evidence(
+            evidence_path, "x86_64", relay_wheel, bundle, plugin_template, switchyard_experiment
+        )
     except ValueError:
         pass
     else:

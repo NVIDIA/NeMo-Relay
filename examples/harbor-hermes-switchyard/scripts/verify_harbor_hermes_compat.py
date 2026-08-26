@@ -27,7 +27,7 @@ def load_bridge(path: Path):
     return module
 
 
-def run_mixed_mode_rejection(module, valid_config: Path) -> str:
+def run_mixed_mode_rejection(module, valid_config: Path, switchyard_bundle_dir: Path) -> str:
     text = valid_config.read_text(encoding="utf-8")
     text += """
 
@@ -41,7 +41,7 @@ environment_ref = "worker-env"
         path = Path(directory) / "plugins.toml"
         path.write_text(text, encoding="utf-8")
         try:
-            module._validate_relay_config(path)
+            module._validate_relay_config(path, switchyard_bundle_dir)
         except ValueError as error:
             return str(error)
     raise AssertionError("mixed standard and worker plugin modes were accepted")
@@ -89,6 +89,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bridge", type=Path, required=True)
     parser.add_argument("--relay-config", type=Path, required=True)
+    parser.add_argument("--switchyard-bundle-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -100,8 +101,9 @@ def main() -> int:
     if bridge.populate_context_post_run is not Hermes.populate_context_post_run:
         raise AssertionError("bridge must inherit Harbor's ATIF conversion behavior")
     verify_run_wrapper(args.bridge.read_text(encoding="utf-8"))
-    module._validate_relay_config(args.relay_config.resolve())
-    mixed_error = run_mixed_mode_rejection(module, args.relay_config.resolve())
+    switchyard_bundle_dir = args.switchyard_bundle_dir.resolve()
+    module._validate_relay_config(args.relay_config.resolve(), switchyard_bundle_dir)
+    mixed_error = run_mixed_mode_rejection(module, args.relay_config.resolve(), switchyard_bundle_dir)
 
     result = {
         "schema_version": "harbor-hermes-switchyard.compatibility.v1",

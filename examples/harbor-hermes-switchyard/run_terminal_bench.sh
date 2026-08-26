@@ -297,6 +297,7 @@ relay_wheel_path="$($python_bin -c 'import json,pathlib,sys; p=json.load(open(sy
 "$python_bin" "$example_root/scripts/verify_harbor_hermes_compat.py" \
   --bridge "$example_root/agents/harbor_hermes_agent.py" \
   --relay-config "$run_root/runtime/plugins.toml" \
+  --switchyard-bundle-dir "$run_root/runtime/switchyard-plugin" \
   --output "$run_root/artifacts/harbor-hermes-compatibility.json" \
   >"$run_root/compatibility.log"
 

@@ -262,6 +262,8 @@ def validate_relay_runtime(
             str(example_root / "agents" / "harbor_hermes_agent.py"),
             "--relay-config",
             str(run_root / "runtime" / "plugins.toml"),
+            "--switchyard-bundle-dir",
+            str(run_root / "runtime" / "switchyard-plugin"),
             "--output",
             str(compatibility_path),
         ],

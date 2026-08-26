@@ -76,7 +76,6 @@ def materialize_source(
     destination: Path,
     *,
     repository: str,
-    repository_ref: str,
     commit: str,
 ) -> None:
     clone = destination.parent / "clone"
@@ -87,10 +86,8 @@ def materialize_source(
                 [
                     "git",
                     "clone",
-                    "--no-tags",
                     "--filter=blob:none",
-                    "--branch",
-                    repository_ref,
+                    "--no-checkout",
                     repository,
                     str(clone),
                 ],
@@ -155,7 +152,7 @@ EOF
 chmod 0755 /opt/hermes-runtime/bin/python /opt/hermes-runtime/bin/hermes \
   /opt/hermes-runtime/bin/uv
 
-/opt/hermes-runtime/bin/hermes version
+/opt/hermes-runtime/bin/hermes --version
 /opt/hermes-runtime/bin/python -c \
   'import importlib.metadata as m; assert tuple(map(int, m.version("nemo-relay").split("."))) >= (0, 7, 0)'
 '''
@@ -228,7 +225,6 @@ def main() -> int:
             materialize_source(
                 source,
                 repository=args.hermes_repository,
-                repository_ref=args.hermes_ref,
                 commit=args.hermes_commit,
             )
             for attempt in range(1, 5):

@@ -124,7 +124,7 @@ def _hermetic_runtime_readiness_command(
         f"for attempt in {attempt_numbers}; do "
         f'if {runtime}/bin/python -c "import importlib.metadata as m; '
         "assert tuple(map(int, m.version('nemo-relay').split('.'))) >= (0, 7, 0)\" "
-        f"&& {runtime}/bin/hermes version; then "
+        f"&& {runtime}/bin/hermes --version; then "
         "runtime_ready=0; break; "
         "else runtime_ready=$?; fi; "
         f'if [ "$attempt" -lt {attempts} ]; then sleep {delay_seconds}; fi; '
@@ -665,7 +665,7 @@ class HarborHermesAgent(Hermes):
                 f"UV_PROJECT_ENVIRONMENT={install_dir}/venv "
                 "/tmp/hermes/bin/uv sync --frozen --extra all; "
                 'export PATH="$HOME/.local/bin:$PATH"; '
-                "hermes version; "
+                "hermes --version; "
                 f'{install_dir}/venv/bin/python -c "import importlib.metadata as m; '
                 "assert tuple(map(int, m.version('nemo-relay').split('.'))) >= (0, 7, 0)\""
             ),
