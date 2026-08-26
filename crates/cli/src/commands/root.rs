@@ -76,6 +76,27 @@ pub(crate) enum Command {
                       nemo-relay --openai-base-url https://inference-api.nvidia.com codex"
     )]
     Codex(EasyPathCommand),
+    /// Run pi with observability (setup on first use; the extension must already be installed)
+    #[command(
+        long_about = "Run the `pi` CLI under an ephemeral NeMo Relay gateway. pi has no native \
+                      hook-configuration file and its external event stream is observation-only, \
+                      so hook calls cannot be injected from outside the process -- they originate \
+                      inside the NeMo Relay pi extension. This command loads that extension with \
+                      `pi -e <path>` and passes the gateway URL to it through \
+                      NEMO_RELAY_PI_GATEWAY_URL. Unlike the Claude Code and Codex shortcuts it is \
+                      therefore not install-free: the extension has to be present already, and \
+                      the launch error names the install routes when it is not. Run \
+                      `nemo-relay doctor pi` to see which path it loads from. Model calls are \
+                      routed through the gateway only when the selected model's provider already \
+                      targets this gateway's upstream; tool and turn activity always reach Relay. \
+                      First-time use launches the setup wizard so the `[agents.pi]` block lands \
+                      in the XDG user `config.toml`.",
+        after_help = "Examples:\n  \
+                      nemo-relay pi\n  \
+                      nemo-relay pi -- -p \"summarize this repository\"\n  \
+                      nemo-relay pi --dry-run"
+    )]
+    Pi(EasyPathCommand),
     /// Keep a shared Relay gateway ready for an MCP client.
     #[command(
         long_about = "Start or reuse a shared native NeMo Relay gateway for an MCP stdio \
@@ -118,6 +139,7 @@ impl Command {
         match self {
             Self::Claude(_) => "claude",
             Self::Codex(_) => "codex",
+            Self::Pi(_) => "pi",
             Self::Mcp => "mcp",
             Self::Config(_) => "config",
             Self::Plugins(_) => "plugins",

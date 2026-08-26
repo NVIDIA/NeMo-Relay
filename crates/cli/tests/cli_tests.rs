@@ -2894,7 +2894,7 @@ fn cli_help_lists_easy_path_agent_shortcuts() {
     let output = Command::new(gateway_bin()).arg("--help").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    for agent in ["claude", "codex"] {
+    for agent in ["claude", "codex", "pi"] {
         assert!(
             stdout.contains(&format!("  {agent}")),
             "expected `--help` to list `{agent}` subcommand, got:\n{stdout}"
@@ -2902,6 +2902,51 @@ fn cli_help_lists_easy_path_agent_shortcuts() {
     }
     assert!(!stdout.contains("  hermes"));
     assert!(!stdout.contains("  cursor"));
+}
+
+/// The pi shortcut selects pi, and selects it the way `run --agent pi` does.
+///
+/// Worth asserting on the launch plan rather than on the parse: the dispatch arm is
+/// one line and the failure it guards against is silent, because every shortcut takes
+/// the same `EasyPathCommand` and a wrong `CodingAgent` still parses, still launches,
+/// and only shows up as an agent that was never instrumented.
+#[test]
+fn cli_pi_shortcut_prepares_a_pi_launch_with_the_extension() {
+    let temp = tempfile::tempdir().unwrap();
+    let user_config = temp.path().join("xdg/nemo-relay/config.toml");
+    std::fs::create_dir_all(user_config.parent().unwrap()).unwrap();
+    std::fs::write(user_config, "[agents.pi]\ncommand = \"pi\"\n").unwrap();
+
+    // The launcher resolves the extension through the same check `doctor pi` uses, and
+    // that check reads the manifest name -- so a bare directory is not enough.
+    let extension = temp.path().join("extension");
+    std::fs::create_dir_all(&extension).unwrap();
+    std::fs::write(
+        extension.join("package.json"),
+        r#"{"name": "nemo-relay-pi", "pi": {"extensions": ["./index.ts"]}}"#,
+    )
+    .unwrap();
+    std::fs::write(extension.join("index.ts"), "export default 1").unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .env("NEMO_RELAY_PI_EXTENSION", &extension)
+        .args(["pi", "--dry-run"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "pi shortcut dry run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!("argv = pi -e {}", extension.display())),
+        "expected the plan to load the extension with `-e`, got:\n{stdout}"
+    );
 }
 
 #[test]

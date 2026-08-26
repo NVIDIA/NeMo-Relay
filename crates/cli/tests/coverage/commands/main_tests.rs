@@ -82,6 +82,7 @@ fn easy_path_setup_inherits_explicit_plugin_target() {
 fn operational_command_names_cover_logging_exempt_commands() {
     for (args, expected) in [
         (vec!["nemo-relay", "codex"], "codex"),
+        (vec!["nemo-relay", "pi"], "pi"),
         (vec!["nemo-relay", "config"], "config"),
     ] {
         let cli = Cli::try_parse_from(args).unwrap();
@@ -358,7 +359,7 @@ fn doctor_accepts_offline_flag() {
 
 #[test]
 fn agent_shortcut_parser_accepts_dry_run_before_forwarded_arguments() {
-    for shortcut in ["claude", "codex"] {
+    for shortcut in ["claude", "codex", "pi"] {
         let cli = Cli::try_parse_from([
             "nemo-relay",
             shortcut,
@@ -369,7 +370,9 @@ fn agent_shortcut_parser_accepts_dry_run_before_forwarded_arguments() {
         ])
         .unwrap();
         let command = match cli.command {
-            Some(Command::Claude(command)) | Some(Command::Codex(command)) => command,
+            Some(Command::Claude(command))
+            | Some(Command::Codex(command))
+            | Some(Command::Pi(command)) => command,
             other => panic!("expected agent shortcut command, got {other:?}"),
         };
         assert!(command.dry_run);

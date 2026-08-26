@@ -61,9 +61,9 @@ under the active session scope.
 
 ## Transparent Run
 
-Use the agent shortcuts for no-install local observability. The wrapper starts
-a gateway on a dynamic `127.0.0.1` port, injects the resolved hook and gateway
-configuration into the launched coding agent, and stops the gateway when the
+Use the agent shortcuts for local observability. The wrapper starts a gateway on
+a dynamic `127.0.0.1` port, injects the resolved hook and gateway configuration
+into the launched coding agent, and stops the gateway when the
 agent exits. Relay owns the launched wrapper and its descendants as one process
 tree, so a gateway failure cannot leave an agent running without its private
 gateway and hook configuration. Interactive Unix launches transfer foreground
@@ -74,7 +74,14 @@ before Relay removes the injected configuration.
 ```bash
 nemo-relay codex
 nemo-relay claude
+nemo-relay pi
 ```
+
+`nemo-relay codex` and `nemo-relay claude` need no install: the wrapper injects
+their hooks per run. `nemo-relay pi` is the exception. pi has no native
+hook-configuration file, so its hooks can only originate inside a NeMo Relay
+extension that is already installed, and the shortcut fails on a clean machine
+with the install routes named. See [pi](/nemo-relay-cli/pi).
 
 Use `nemo-relay run -- <command>` when you want to launch an explicit command
 instead of the built-in shortcut:

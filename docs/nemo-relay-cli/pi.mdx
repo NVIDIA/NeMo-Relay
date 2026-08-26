@@ -99,15 +99,21 @@ is that Relay appears to do nothing. `nemo-relay doctor pi` warns about it.
 Use the wrapper for local observability that leaves your pi configuration
 untouched. It is **not install-free**: the extension has to be present already,
 because a hook can only originate inside it, so run the install above first. On a
-clean machine this command fails, and names the routes that fix it. There is no
-`nemo-relay pi` shortcut, so use `run`:
+clean machine this command fails, and names the routes that fix it.
 
 ```bash
-nemo-relay run --agent pi
+nemo-relay pi
 ```
 
-The wrapper starts a gateway on a dynamic `127.0.0.1` port, loads the NeMo Relay
-extension with `pi -e <path>`, and passes the gateway URL to it through
+Pass pi arguments after `--`:
+
+```bash
+nemo-relay pi -- -p "Summarize this repository."
+```
+
+This shortcut is equivalent to `nemo-relay run --agent pi`. The wrapper starts a
+gateway on a dynamic `127.0.0.1` port, loads the NeMo Relay extension with
+`pi -e <path>`, and passes the gateway URL to it through
 `NEMO_RELAY_PI_GATEWAY_URL`. `pi -e` is the reliable loader here: it is
 trust-ungated, loads before extension discovery, and survives `--no-extensions`,
 so a launched session is instrumented regardless of the user's own pi
