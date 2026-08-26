@@ -45,6 +45,8 @@ MODULE_TITLES = {
     "nemo-relay-node/plugin": "Plugin Helpers",
     "nemo-relay-node/adaptive": "Adaptive Helpers",
     "nemo-relay-node/observability": "Observability Helpers",
+    "nemo-relay-node/pii_redaction": "PII Redaction Helpers",
+    "nemo-relay-node/model_pricing": "Model Pricing Helpers",
 }
 MODULE_DESCRIPTIONS = {
     "nemo-relay-node": "Main runtime lifecycle, scope, middleware, subscriber, and exporter APIs.",
@@ -52,6 +54,8 @@ MODULE_DESCRIPTIONS = {
     "nemo-relay-node/plugin": "Plugin configuration, validation, activation, and registration helpers.",
     "nemo-relay-node/adaptive": "Adaptive plugin configuration helpers.",
     "nemo-relay-node/observability": "Observability plugin configuration helpers.",
+    "nemo-relay-node/pii_redaction": "PII redaction plugin configuration helpers.",
+    "nemo-relay-node/model_pricing": "Model pricing plugin configuration helpers.",
 }
 BASE_URL = "/reference/api/nodejs-library-reference"
 
