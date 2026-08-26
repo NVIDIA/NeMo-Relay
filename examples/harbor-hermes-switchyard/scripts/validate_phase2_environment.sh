@@ -36,7 +36,7 @@ required_values=(
   HARBOR_BIN EVAL_PYTHON TBENCH_DATASET_PATH SWITCHYARD_BUNDLE RELAY_WHEEL
   RELAY_ARCHITECTURE PLUGIN_CONFIG_TEMPLATE TERMINAL_BENCH_SMOKE_EVIDENCE
   TERMINAL_BENCH_OFFLINE_EVIDENCE PHOENIX_BASE_URL PHOENIX_PROJECT EVAL_COHORT
-  TBENCH_SAMPLE_COUNT TBENCH_CANARY_TASK TBENCH_CONCURRENCY
+  TBENCH_SAMPLE_COUNT TBENCH_CONCURRENCY
   TBENCH_SETUP_CONCURRENCY TBENCH_SETUP_BATCH_SIZE TBENCH_SETUP_MAX_INFRA_ATTEMPTS
   TBENCH_PARALLEL_MAX_MEMORY_GB TBENCH_DOCKER_MEMORY_RESERVE_GB
   TBENCH_MINIMUM_FREE_GB SWITCHYARD_PROVIDER_AUTHORIZATION
@@ -47,6 +47,10 @@ for name in "${required_values[@]}"; do
     exit 2
   fi
 done
+if [[ ! ${TBENCH_CANARY_TASK+x} ]]; then
+  echo "required Phase 2 variable is unset: TBENCH_CANARY_TASK" >&2
+  exit 2
+fi
 for name in EXAMPLE_ROOT TERMINAL_BENCH_RUN_ROOT TERMINAL_BENCH_ADMISSION_ROOT \
   TERMINAL_BENCH_BOOTSTRAP_ROOT HARBOR_BIN EVAL_PYTHON \
   TBENCH_DATASET_PATH SWITCHYARD_BUNDLE RELAY_WHEEL PLUGIN_CONFIG_TEMPLATE \
@@ -56,6 +60,17 @@ for name in EXAMPLE_ROOT TERMINAL_BENCH_RUN_ROOT TERMINAL_BENCH_ADMISSION_ROOT \
     exit 2
   fi
 done
+if [[ -n "${TBENCH_REUSE_SETUP_EVIDENCE:-}" ]]; then
+  if [[ "$TBENCH_REUSE_SETUP_EVIDENCE" != /* || ! -d "$TBENCH_REUSE_SETUP_EVIDENCE" ]]; then
+    echo "TBENCH_REUSE_SETUP_EVIDENCE must select an existing absolute setup-admission directory" >&2
+    exit 2
+  fi
+fi
+if [[ -n "${ADMISSION_PLUGIN_CONFIG_TEMPLATE:-}" \
+  && ( "$ADMISSION_PLUGIN_CONFIG_TEMPLATE" != /* || ! -f "$ADMISSION_PLUGIN_CONFIG_TEMPLATE" ) ]]; then
+  echo "ADMISSION_PLUGIN_CONFIG_TEMPLATE must select an existing absolute template" >&2
+  exit 2
+fi
 for name in TBENCH_SAMPLE_COUNT TBENCH_CONCURRENCY TBENCH_SETUP_CONCURRENCY \
   TBENCH_SETUP_BATCH_SIZE TBENCH_SETUP_MAX_INFRA_ATTEMPTS TBENCH_PARALLEL_MAX_MEMORY_GB \
   TBENCH_DOCKER_MEMORY_RESERVE_GB TBENCH_MINIMUM_FREE_GB; do
@@ -74,6 +89,17 @@ done
 for path in "$HARBOR_BIN" "$EVAL_PYTHON" "$RELAY_WHEEL" "$PLUGIN_CONFIG_TEMPLATE"; do
   [[ -f "$path" ]] || { echo "required Phase 2 file is missing" >&2; exit 2; }
 done
+if [[ "$SWITCHYARD_PROVIDER_AUTHORIZATION" != "Bearer "* \
+  || "$SWITCHYARD_PROVIDER_AUTHORIZATION" == "Bearer replace-with-"* ]]; then
+  echo "SWITCHYARD_PROVIDER_AUTHORIZATION must contain a non-placeholder Bearer credential" >&2
+  exit 2
+fi
+"$EVAL_PYTHON" - <<'PY'
+import sys
+
+if sys.version_info < (3, 11):
+    raise SystemExit("EVAL_PYTHON must be Python 3.11 or newer")
+PY
 
 "$EVAL_PYTHON" - "$PLUGIN_CONFIG_TEMPLATE" <<'PY'
 import sys
@@ -82,14 +108,32 @@ import tomllib
 with open(sys.argv[1], "rb") as stream:
     config = tomllib.load(stream)
 plugins = config.get("plugins", {}).get("dynamic", [])
-if len(plugins) != 1:
-    raise SystemExit("plugin config must contain one dynamic plugin")
-targets = plugins[0].get("config", {}).get("targets", {})
-if set(targets) != {"strong", "weak", "judge"}:
-    raise SystemExit("plugin config must contain strong, weak, and judge targets")
-for target in targets.values():
-    if target.get("header_env") != {"authorization": "SWITCHYARD_PROVIDER_AUTHORIZATION"}:
-        raise SystemExit("plugin config must reference SWITCHYARD_PROVIDER_AUTHORIZATION")
+if plugins:
+    if len(plugins) != 1:
+        raise SystemExit("routed config must contain one dynamic plugin")
+    targets = plugins[0].get("config", {}).get("targets", {})
+    algorithm = plugins[0].get("config", {}).get("algorithm", {})
+    expected_targets = {"strong", "weak"}
+    if algorithm.get("kind") != "stage_router" or algorithm.get("classifier") is not None:
+        expected_targets.add("judge")
+    if set(targets) != expected_targets:
+        raise SystemExit(f"plugin config targets must be {sorted(expected_targets)} for its algorithm")
+    for target in targets.values():
+        if target.get("header_env") != {"authorization": "SWITCHYARD_PROVIDER_AUTHORIZATION"}:
+            raise SystemExit("plugin config must reference SWITCHYARD_PROVIDER_AUTHORIZATION")
+else:
+    components = {item.get("kind"): item for item in config.get("components", [])}
+    caller = components.get("observability", {}).get("config", {}).get("atif", {}).get("model_name")
+    entries = (
+        components.get("pricing", {})
+        .get("config", {})
+        .get("sources", [{}])[0]
+        .get("catalog", {})
+        .get("entries", [])
+    )
+    models = [entry.get("model_id") for entry in entries]
+    if not isinstance(caller, str) or not caller or models != [caller]:
+        raise SystemExit("direct baseline config must price only its Hermes caller model")
 PY
 
 echo "Phase 2 environment validation passed (secret values withheld)"

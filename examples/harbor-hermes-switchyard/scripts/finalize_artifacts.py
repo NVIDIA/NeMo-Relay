@@ -15,12 +15,12 @@ import sys
 import time
 import tomllib
 from pathlib import Path
+from typing import Any
 
 _SCRIPT_ROOT = Path(__file__).resolve().parent
 if str(_SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_ROOT))
-from relay_version import require_supported_version
-from typing import Any
+from relay_version import require_supported_version  # noqa: E402
 
 SCHEMA_VERSION = "harbor-hermes-switchyard.phase1.v1"
 MAX_DIAGNOSTIC_BYTES = 1024 * 1024
@@ -66,8 +66,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--switchyard-commit", required=True)
     parser.add_argument("--relay-wheel-sha256", required=True)
     parser.add_argument("--relay-config", type=Path, required=True)
-    parser.add_argument("--switchyard-manifest", type=Path, required=True)
-    parser.add_argument("--switchyard-library", type=Path, required=True)
+    parser.add_argument("--routing-mode", choices=("switchyard", "direct"), required=True)
+    parser.add_argument("--switchyard-manifest", type=Path)
+    parser.add_argument("--switchyard-library", type=Path)
     parser.add_argument("--session-handle", default="")
     parser.add_argument("--started-at", type=float)
     parser.add_argument("--error-type", default="")
@@ -75,17 +76,29 @@ def parse_args() -> argparse.Namespace:
 
 
 def initialize(args: argparse.Namespace, root: Path) -> None:
-    with args.switchyard_manifest.open("rb") as stream:
-        manifest = tomllib.load(stream)
-    plugin_id = manifest.get("plugin", {}).get("id")
-    if plugin_id != "nvidia.switchyard":
-        raise ValueError(f"unexpected Switchyard plugin id: {plugin_id!r}")
+    plugin_id: str | None = None
+    switchyard_dependency: dict[str, Any] | None = None
+    routing_mode = getattr(args, "routing_mode", "switchyard")
+    if routing_mode == "switchyard":
+        if args.switchyard_manifest is None or args.switchyard_library is None:
+            raise ValueError("Switchyard mode requires its manifest and library")
+        with args.switchyard_manifest.open("rb") as stream:
+            manifest = tomllib.load(stream)
+        plugin_id = manifest.get("plugin", {}).get("id")
+        if plugin_id != "nvidia.switchyard":
+            raise ValueError(f"unexpected Switchyard plugin id: {plugin_id!r}")
+        switchyard_dependency = {
+            "commit": args.switchyard_commit,
+            "plugin_id": plugin_id,
+            "manifest_sha256": sha256(args.switchyard_manifest),
+            "library_sha256": sha256(args.switchyard_library),
+        }
 
     config_digest = sha256(args.relay_config)
     receipt = {
         "schema_version": SCHEMA_VERSION,
         "status": "initialized",
-        "activation_mode": "relay_standard_dynamic",
+        "activation_mode": "relay_standard_dynamic" if plugin_id else "relay_components_only",
         "session_handle": args.session_handle or None,
         "dependencies": {
             "nemo_relay": {
@@ -96,21 +109,25 @@ def initialize(args: argparse.Namespace, root: Path) -> None:
                 "repository": args.hermes_repository,
                 "commit": args.hermes_commit,
             },
-            "switchyard": {
-                "commit": args.switchyard_commit,
-                "plugin_id": plugin_id,
-                "manifest_sha256": sha256(args.switchyard_manifest),
-                "library_sha256": sha256(args.switchyard_library),
-            },
+            "switchyard": switchyard_dependency,
         },
         "relay_config_sha256": config_digest,
-        "dynamic_plugin_ids": [plugin_id],
-        "routing_contract": {
-            "relay_outer_lifecycle": True,
-            "execution_intercept_owner": plugin_id,
-            "provider_http_client_owner": "switchyard-llm-client",
-            "separate_switchyard_service": False,
-        },
+        "dynamic_plugin_ids": [plugin_id] if plugin_id else [],
+        "routing_contract": (
+            {
+                "relay_outer_lifecycle": True,
+                "execution_intercept_owner": plugin_id,
+                "provider_http_client_owner": "switchyard-llm-client",
+                "separate_switchyard_service": False,
+            }
+            if plugin_id
+            else {
+                "relay_outer_lifecycle": True,
+                "execution_intercept_owner": None,
+                "provider_http_client_owner": "hermes-openai-client",
+                "separate_switchyard_service": False,
+            }
+        ),
         "artifacts": {
             "root": str(root),
             "atof": str(root / "relay" / "trajectory.atof.jsonl"),
@@ -190,7 +207,11 @@ def _response_from_cli_log(text: str) -> tuple[str | None, str | None]:
             session_id = match.group(1)
     if marker_index is None:
         return None, None
-    response = "\n".join(lines[marker_index + 1 :]).strip()
+    # Hermes quiet mode prints its final response to stdout and then writes the
+    # automation ``session_id`` marker to stderr. Harbor combines both streams
+    # in ``hermes.txt``, preserving that order. Nothing after the marker is a
+    # response; post-marker text is diagnostic output from a later wrapper.
+    response = "\n".join(lines[:marker_index]).strip()
     return response or None, session_id
 
 
@@ -259,9 +280,7 @@ def complete(args: argparse.Namespace, root: Path) -> None:
             {
                 "type": args.error_type or "RelayCleanupError",
                 "phase": (
-                    "shutdown"
-                    if cleanup_failure or args.error_type == "InjectedPostResponseFailure"
-                    else "agent"
+                    "shutdown" if cleanup_failure or args.error_type == "InjectedPostResponseFailure" else "agent"
                 ),
             }
             if late_failure

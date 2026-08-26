@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import argparse
 import ast
+import copy
 import importlib.metadata
 import importlib.util
 import json
 import tempfile
 from pathlib import Path
 
+import yaml
 from harbor.agents.installed.hermes import Hermes
 
 
@@ -66,6 +68,23 @@ def verify_run_wrapper(source: str) -> None:
         raise AssertionError("bridge run() must delegate exactly once to super().run()")
 
 
+def verify_evaluation_config(bridge) -> dict[str, object]:
+    """Require Harbor's config plus only the benchmark isolation overrides."""
+
+    model = "openai/relay-compatibility-stub"
+    inherited = yaml.safe_load(Hermes._build_config_yaml(model))
+    observed = yaml.safe_load(bridge._build_config_yaml(model))
+    expected = copy.deepcopy(inherited)
+    expected.setdefault("skills", {})["creation_nudge_interval"] = 0
+    expected.setdefault("curator", {})["enabled"] = False
+    if observed != expected:
+        raise AssertionError("bridge config must differ only by disabled persistence maintenance")
+    return {
+        "background_skill_review": "disabled",
+        "periodic_curator": "disabled",
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bridge", type=Path, required=True)
@@ -77,8 +96,7 @@ def main() -> int:
     bridge = module.HarborHermesAgent
     if not issubclass(bridge, Hermes):
         raise AssertionError("HarborHermesAgent must subclass Harbor's built-in Hermes")
-    if bridge._build_config_yaml is not Hermes._build_config_yaml:
-        raise AssertionError("bridge must inherit Harbor's Hermes config.yaml behavior")
+    evaluation_config = verify_evaluation_config(bridge)
     if bridge.populate_context_post_run is not Hermes.populate_context_post_run:
         raise AssertionError("bridge must inherit Harbor's ATIF conversion behavior")
     verify_run_wrapper(args.bridge.read_text(encoding="utf-8"))
@@ -98,6 +116,7 @@ def main() -> int:
             "Harbor ATIF conversion",
         ],
         "overrides": ["installation", "configuration staging", "artifact framing"],
+        "evaluation_config": evaluation_config,
         "mixed_mode_rejection": mixed_error,
     }
     args.output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

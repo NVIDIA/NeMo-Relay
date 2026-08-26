@@ -3,8 +3,9 @@
 This example runs one complete Terminal-Bench 2.0 cohort through Harbor and
 Hermes. Hermes owns an in-process NeMo Relay runtime satisfying `nemo-relay>=0.7.0`; Relay loads the
 Switchyard native plugin, and Switchyard selects and calls the configured
-provider route. It runs one resumable 89-task cohort. Multi-cohort execution
-and result aggregation are intentionally out of scope for this example.
+provider route. The cohort runner operates on one resumable 89-task cohort at
+a time. An optional, separate report workflow can compare or aggregate several
+completed run roots without mutating them.
 
 ## 1. Pinned inputs
 
@@ -12,8 +13,8 @@ and result aggregation are intentionally out of scope for this example.
 |---|---|
 | NeMo Relay | Latest released `nemo-relay>=0.7.0` platform wheel, installed by digest rather than from this source checkout. |
 | Hermes | `bbednarski9/hermes-agent`, detached commit `a3d472f0e6bdc376df87b1436a461c4796db6747` from PR #77915. |
-| Switchyard | `bbednarski9/Switchyard`, detached commit `8daac03edf8544144833af1fd009b3da737715bc` from PR #270. |
-| Harbor | `harbor==0.18.0`, local export of dataset `terminal-bench@2.0`. |
+| Switchyard | `bbednarski9/Switchyard`, detached commit `baaf678fca0c941b36e53fa30b563b350f8bb2f0` from PR #270. |
+| Harbor | `harbor==0.20.0`, official registry export of `terminal-bench@2.0`. |
 
 Every source checkout is detached and verified. The Hermes installer is
 followed by `uv sync --frozen`, then the selected released Relay wheel is
@@ -52,9 +53,9 @@ The two configuration files have deliberately different responsibilities:
   policy, native plugin manifest, authorization variable **name**, Relay
   components, and OpenInference export behavior.
 
-The template configures AWS-hosted Opus 5 as the strong route, AWS-hosted
-Sonnet 5 as the efficient route, and AWS-hosted Sonnet 4.6 as the classifier
-judge, with a `0.5` threshold and
+The template configures AWS-hosted Claude Opus 4.8 as the strong route, NVIDIA
+Nemotron 3 Ultra NVFP4 as the efficient route, and AWS-hosted Claude Sonnet 4.6
+as the classifier judge, with a `0.5` threshold and
 session affinity. The coordinator derives its required route-diversity gates
 from the strong and efficient targets, while preflight also verifies the judge.
 Environment variables cannot override these settings.
@@ -77,8 +78,10 @@ reaching a provider.
 
 ## 4. Host prerequisites
 
-- Linux or macOS, Bash, Python 3.11+, Docker, and `tmux`;
-- a local, immutable Terminal-Bench 2.0 dataset export containing 89 tasks;
+- Linux or macOS, Bash, Python 3.11+, Docker with the Compose v2 plugin, and
+  `tmux`;
+- an immutable 89-task Terminal-Bench 2.0 export downloaded from Harbor's
+  official registry;
 - a Switchyard plugin bundle and released Relay wheel satisfying `nemo-relay>=0.7.0`, matching Docker's
   architecture (`x86_64` or `aarch64`);
 - a Phoenix endpoint accepting OTLP/HTTP OpenInference traces; and
@@ -86,14 +89,60 @@ reaching a provider.
   neither; the Docker admission makes no provider calls but may pull its image,
   pinned sources, and packages when they are not cached.
 
-On macOS, keep the dataset, bundle, wheel, admission, and run roots under a
-directory shared with Docker (normally `/Users/...`).
+Keep the dataset, bundle, wheel, admission, and run roots on a filesystem
+shared with the Docker daemon. On Docker Desktop this normally means a
+directory explicitly shared with Docker; on a Linux Docker Engine host, normal
+host paths are shared by default.
+
+### Select the active Docker architecture and create matching artifacts
+
+The runtime only supports `x86_64` and `aarch64`. Select the value from the
+Docker daemon—not from a previous machine or checkout—and use it consistently
+for the Relay wheel and Switchyard bundle:
+
+```bash
+case "$(docker info --format '{{.Architecture}}')" in
+  x86_64|amd64) export RELAY_ARCHITECTURE=x86_64 ;;
+  aarch64|arm64) export RELAY_ARCHITECTURE=aarch64 ;;
+  *) echo "unsupported Docker architecture" >&2; exit 2 ;;
+esac
+```
+
+Relay is intentionally consumed as a released platform wheel, rather than
+built from this source checkout. Download a wheel for the selected Linux
+architecture (the `cp311`/`abi3` tags are required by the Hermes runtime):
+
+```bash
+PYTHON_BIN=/absolute/path/to/python3.11-or-newer
+"$PYTHON_BIN" -c 'import sys; assert sys.version_info >= (3, 11), sys.version'
+mkdir -p /absolute/path/to/relay-wheels
+"$PYTHON_BIN" -m pip download --only-binary=:all: --no-deps \
+  --platform "manylinux2014_${RELAY_ARCHITECTURE}" \
+  --implementation cp --python-version 311 --abi abi3 \
+  --dest /absolute/path/to/relay-wheels 'nemo-relay>=0.7.0'
+```
+
+Build the Switchyard native bundle for that same architecture. With no
+`SWITCHYARD_TARGET_ARCHITECTURE` override, the builder detects the Docker
+daemon architecture automatically; the explicit setting below makes the
+chosen input visible in the command:
+
+```bash
+SWITCHYARD_TARGET_ARCHITECTURE="$RELAY_ARCHITECTURE" \
+  ./scripts/build_switchyard_plugin.sh /absolute/path/to/switchyard-bundle
+```
+
+Set `RELAY_ARCHITECTURE`, `RELAY_WHEEL`, and `SWITCHYARD_BUNDLE` in `.env` to
+the resulting architecture-matched artifacts. A wheel or bundle from a
+different architecture is rejected during admission.
 
 Install the exact Harbor-side requirements:
 
 ```bash
 cd examples/harbor-hermes-switchyard
-python3 -m venv .venv
+PYTHON_BIN=/absolute/path/to/python3.11-or-newer
+"$PYTHON_BIN" -c 'import sys; assert sys.version_info >= (3, 11), sys.version'
+"$PYTHON_BIN" -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
@@ -104,11 +153,39 @@ source this file into the interactive shell used to start `tmux`.
 ```bash
 cp .env.example .env
 chmod 0600 .env
-./scripts/validate_phase2_environment.sh .env
 ```
 
-The validator reports names and paths only. It rejects legacy secret-file
-variables and never renders or prints the authorization value.
+The validator is run after the registry export below. It reports names and
+paths only, rejects legacy secret-file variables, and never renders or prints
+the authorization value.
+
+### Download the immutable Terminal-Bench export from the Harbor registry
+
+After setting `TBENCH_DATASET_PATH` in `.env`, download the official dataset
+once. Harbor exports it as `<output-dir>/terminal-bench`; therefore the output
+directory must be the parent of `TBENCH_DATASET_PATH`. Do not pass
+`--overwrite`: a cohort is bound to this export and must use a new run root if
+the dataset is downloaded again.
+
+```bash
+set +x
+set -a
+source .env
+set +a
+set +x
+
+mkdir -p "$(dirname "$TBENCH_DATASET_PATH")"
+"$HARBOR_BIN" datasets download terminal-bench@2.0 \
+  --output-dir "$(dirname "$TBENCH_DATASET_PATH")" --export
+"$EXAMPLE_ROOT/scripts/validate_phase2_environment.sh" "$EXAMPLE_ROOT/.env"
+```
+
+Confirm Docker and Compose before continuing:
+
+```bash
+docker info >/dev/null
+docker compose version
+```
 
 ## 5. Prepare and validate a cohort run
 
@@ -129,9 +206,10 @@ set +x
 
 ## 6. Verify the complete dataset without provider tokens
 
-This all-89 no-token admission loads and uniquely selects all tasks, hashes their instructions and
-verifiers, expands the complete Harbor job graph, denies registry/provider
-access, and renders the runtime. It starts neither Docker nor an agent.
+This all-89 no-token admission loads and uniquely selects the immutable local
+export, hashes its instructions and verifiers, expands the complete Harbor job
+graph, denies further registry/provider access, and renders the runtime. It
+starts neither Docker nor an agent.
 
 ```bash
 mkdir -p "$TERMINAL_BENCH_ADMISSION_ROOT"
@@ -150,6 +228,7 @@ chmod 0700 "$TERMINAL_BENCH_ADMISSION_ROOT"
 
 The passed evidence binds task names, task/instruction/verifier hashes,
 concurrency, architecture, Relay wheel, Switchyard library, and plugin config.
+It is intentionally offline after the registry export.
 
 ## 7. Verify the offline container runtime
 
@@ -255,6 +334,13 @@ exit  # only when returning from the short-lived admission shell above
 ./scripts/launch_phase2_tmux.sh harbor-hermes-switchyard-phase2-run-1
 ```
 
+On Linux, the launcher checks Docker access from inside the detached process.
+If an existing tmux server predates the user's `docker` group membership, the
+child re-executes under that group with `sg docker`. If the user is not a member
+of the group, the launcher fails before starting the cohort instead of entering
+an ineffective supervisor retry loop. Docker Desktop hosts continue directly
+when `docker info` succeeds.
+
 Operational commands:
 
 ```bash
@@ -312,5 +398,38 @@ The cohort passes only when:
 - `summary.json.status` is `passed`.
 
 `report.md` is regenerated after each completed attempt and is safe for
-progress review. Running multiple cohorts and aggregating their reports are not
-part of this runbook.
+progress review.
+
+## 12. Optional quantitative multi-run report
+
+After every selected cohort passes its completion gates, use the
+[`terminal-bench-report`](terminal-bench-report/SKILL.md) workflow to aggregate
+repeated configurations or compare router strategies. Reporting is read-only:
+give the analyzer arbitrary run-root paths, explicit public labels, a group for
+each repeated configuration, and an observed baseline group when one exists.
+Do not derive report numbers from progress logs or conversation history.
+
+```bash
+python terminal-bench-report/scripts/analyze.py \
+  --run-root /absolute/path/to/control-r1 --label control-r1 --group control \
+  --run-root /absolute/path/to/control-r2 --label control-r2 --group control \
+  --run-root /absolute/path/to/trial-r1 --label trial-r1 --group trial \
+  --run-root /absolute/path/to/trial-r2 --label trial-r2 --group trial \
+  --output-dir /absolute/path/to/new-report-bundle \
+  --mode compare \
+  --expected-group-size 2 \
+  --baseline-group control \
+  --analysis-request "Compare complete configurations with N-run variance"
+
+terminal-bench-report/scripts/render_pdf.sh \
+  /absolute/path/to/new-report-bundle
+```
+
+The analyzer fails closed on incomplete final inputs unless `--allow-partial`
+is explicitly requested. It resolves the run-bound dataset, configuration,
+model roles, router parameters, and pricing; reports pass@1 and sample standard
+deviation by group; distinguishes observed-control cost from same-workload
+counterfactual cost; audits serving-call and routing-only token coverage; and
+emits structured JSON/CSV evidence and SVG charts before PDF rendering. Review
+`evidence/report-validation.json`, `evidence/pdf-validation.json`, and every PDF
+page before distributing the report.

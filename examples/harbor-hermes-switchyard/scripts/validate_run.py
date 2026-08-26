@@ -8,16 +8,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
+from typing import Any, Iterable
 
 _SCRIPT_ROOT = Path(__file__).resolve().parent
 if str(_SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_ROOT))
-from relay_version import require_supported_version
-from typing import Any, Iterable
+from relay_version import require_supported_version  # noqa: E402
 
 SCHEMA_VERSION = "harbor-hermes-switchyard.validation.v1"
+HERMES_MAX_TURNS = 90
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -49,28 +51,129 @@ def read_benchmark_passed(value: dict[str, Any]) -> bool | None:
     return None
 
 
-def is_verifier_backed_agent_timeout_nonpass(
-    direct_result: dict[str, Any], harbor_result: dict[str, Any]
-) -> bool:
-    """Recognize a completed benchmark non-pass caused by Harbor's agent deadline.
+def is_verifier_backed_agent_timeout_completion(direct_result: dict[str, Any], harbor_result: dict[str, Any]) -> bool:
+    """Recognize a verifier-backed benchmark result at Harbor's agent deadline.
 
-    Harbor cancels the agent subprocess at its configured deadline, so the
-    direct adapter records ``CancelledError`` and cannot emit a final response
-    or terminal ATIF/AGENT span.  The outcome is complete only when Harbor
-    independently records ``AgentTimeoutError`` and the verifier produces a
-    non-passing reward.  Other cancellation and missing-artifact cases remain
-    integration failures.
+    Harbor normally cancels the agent subprocess at its configured deadline,
+    so the direct adapter records ``CancelledError`` and Harbor records
+    ``AgentTimeoutError``.  The installed-agent execution path can instead
+    surface the same terminal deadline as ``NonZeroAgentExitCodeError`` with
+    shell exit 130.  In either representation, require Harbor's independently
+    produced verifier reward. Other cancellation, nonzero-exit,
+    and missing-artifact cases remain integration failures.
     """
     error = direct_result.get("error")
     exception = harbor_result.get("exception_info")
-    return (
+    if not (
         direct_result.get("status") == "failed"
         and isinstance(error, dict)
         and error.get("phase") == "agent"
-        and error.get("type") == "CancelledError"
         and isinstance(exception, dict)
-        and exception.get("exception_type") == "AgentTimeoutError"
+        and isinstance(read_benchmark_passed(harbor_result), bool)
+    ):
+        return False
+
+    canonical_timeout = error.get("type") == "CancelledError" and exception.get("exception_type") == "AgentTimeoutError"
+    installed_agent_deadline = (
+        error.get("type") == "NonZeroAgentExitCodeError"
+        and exception.get("exception_type") == "NonZeroAgentExitCodeError"
+        and "Command failed (exit 130):" in str(exception.get("exception_message", ""))
+    )
+    return canonical_timeout or installed_agent_deadline
+
+
+def is_verifier_backed_agent_timeout_nonpass(direct_result: dict[str, Any], harbor_result: dict[str, Any]) -> bool:
+    """Recognize the non-passing subset of verifier-backed deadline completion."""
+
+    return (
+        is_verifier_backed_agent_timeout_completion(direct_result, harbor_result)
         and read_benchmark_passed(harbor_result) is False
+    )
+
+
+def is_verifier_backed_turn_budget_nonpass(
+    direct_result: dict[str, Any],
+    harbor_result: dict[str, Any],
+    logical_llm_call_count: int,
+) -> bool:
+    """Recognize a completed non-pass after Hermes exhausts its call budget."""
+
+    return (
+        is_verifier_backed_turn_budget_completion(
+            direct_result,
+            harbor_result,
+            logical_llm_call_count,
+        )
+        and read_benchmark_passed(harbor_result) is False
+    )
+
+
+def is_verifier_backed_turn_budget_completion(
+    direct_result: dict[str, Any],
+    harbor_result: dict[str, Any],
+    logical_llm_call_count: int,
+) -> bool:
+    """Recognize verifier-backed completion at Hermes's logical-call budget.
+
+    Harbor 0.20.0's installed Hermes adapter configures 90 turns. Hermes exits
+    cleanly when it reaches that bound, so there is no exception to distinguish
+    the outcome from an artifact-framing failure. Require exactly 90 logical
+    Hermes calls and an independently normalized verifier result before
+    tolerating the missing final response. Switchyard route decisions are not
+    used because transport retries can make them exceed the logical-call count.
+    """
+
+    return (
+        direct_result.get("status") == "failed"
+        and direct_result.get("final_response") is None
+        and direct_result.get("error") is None
+        and harbor_result.get("exception_info") is None
+        and isinstance(read_benchmark_passed(harbor_result), bool)
+        and logical_llm_call_count == HERMES_MAX_TURNS
+    )
+
+
+def quiet_log_has_response_before_session_marker(text: str) -> bool:
+    """Recognize Hermes's documented quiet-mode response framing."""
+
+    lines = text.splitlines()
+    nonempty = [index for index, line in enumerate(lines) if line.strip()]
+    if not nonempty:
+        return False
+    marker_index = nonempty[-1]
+    if not re.fullmatch(r"\s*session_id:\s*\S+\s*", lines[marker_index]):
+        return False
+    return any(line.strip() for line in lines[:marker_index])
+
+
+def is_verifier_backed_quiet_output_completion(
+    direct_result: dict[str, Any],
+    receipt: dict[str, Any],
+    harbor_result: dict[str, Any],
+    diagnostic_text: str,
+) -> bool:
+    """Recognize a clean run hidden by the reversed quiet-output parser.
+
+    This condition is deliberately evidence-heavy because it repairs an
+    artifact-framing defect after execution. It requires a zero-error agent
+    result, independently normalized Harbor verdict, no Harbor exception,
+    successful adapter cleanup, and the exact terminal framing emitted by the
+    pinned Hermes CLI.
+    """
+
+    cleanup = receipt.get("cleanup")
+    return (
+        direct_result.get("status") == "failed"
+        and direct_result.get("final_response") is None
+        and direct_result.get("error") is None
+        and harbor_result.get("exception_info") is None
+        and isinstance(read_benchmark_passed(harbor_result), bool)
+        and isinstance(cleanup, dict)
+        and cleanup.get("late_failure") is False
+        and cleanup.get("plugin_host_closed") is True
+        and cleanup.get("exporters_flushed") is True
+        and cleanup.get("completion_marker_written") is True
+        and quiet_log_has_response_before_session_marker(diagnostic_text)
     )
 
 
@@ -149,7 +252,7 @@ def validate_receipt_provenance(receipt: dict[str, Any], provenance: dict[str, A
     dependencies = receipt.get("dependencies", {})
     relay = dependencies.get("nemo_relay", {})
     hermes = dependencies.get("hermes", {})
-    switchyard = dependencies.get("switchyard", {})
+    switchyard = dependencies.get("switchyard")
     provenance_relay = provenance.get("nemo_relay", {})
     provenance_hermes = provenance.get("hermes", {})
     provenance_switchyard = provenance.get("switchyard", {})
@@ -166,23 +269,40 @@ def validate_receipt_provenance(receipt: dict[str, Any], provenance: dict[str, A
         errors.append("Relay config digest does not match runtime provenance")
     if hermes.get("commit") != provenance_hermes.get("commit"):
         errors.append("Hermes commit does not match runtime provenance")
-    if switchyard.get("commit") != provenance_switchyard.get("commit"):
-        errors.append("Switchyard commit does not match runtime provenance")
-    if switchyard.get("manifest_sha256") != provenance_switchyard.get("manifest_sha256"):
-        errors.append("Switchyard manifest digest does not match runtime provenance")
-    if switchyard.get("library_sha256") != provenance_switchyard.get("library_sha256"):
-        errors.append("Switchyard library digest does not match runtime provenance")
-    if receipt.get("dynamic_plugin_ids") != ["nvidia.switchyard"]:
-        errors.append("receipt did not record only nvidia.switchyard")
-    if receipt.get("activation_mode") != "relay_standard_dynamic":
-        errors.append("receipt did not record standard dynamic activation")
-    if receipt.get("routing_contract") != {
-        "relay_outer_lifecycle": True,
-        "execution_intercept_owner": "nvidia.switchyard",
-        "provider_http_client_owner": "switchyard-llm-client",
-        "separate_switchyard_service": False,
-    }:
-        errors.append("receipt did not record the expected Relay/Switchyard ownership contract")
+    routing_mode = provenance.get("routing", {}).get("algorithm")
+    if routing_mode == "direct":
+        if switchyard is not None:
+            errors.append("direct baseline receipt unexpectedly recorded Switchyard")
+        if receipt.get("dynamic_plugin_ids") != []:
+            errors.append("direct baseline receipt recorded dynamic plugins")
+        if receipt.get("activation_mode") != "relay_components_only":
+            errors.append("direct baseline did not record components-only Relay activation")
+        if receipt.get("routing_contract") != {
+            "relay_outer_lifecycle": True,
+            "execution_intercept_owner": None,
+            "provider_http_client_owner": "hermes-openai-client",
+            "separate_switchyard_service": False,
+        }:
+            errors.append("receipt did not record the expected direct-provider ownership contract")
+    else:
+        switchyard = switchyard or {}
+        if switchyard.get("commit") != provenance_switchyard.get("commit"):
+            errors.append("Switchyard commit does not match runtime provenance")
+        if switchyard.get("manifest_sha256") != provenance_switchyard.get("manifest_sha256"):
+            errors.append("Switchyard manifest digest does not match runtime provenance")
+        if switchyard.get("library_sha256") != provenance_switchyard.get("library_sha256"):
+            errors.append("Switchyard library digest does not match runtime provenance")
+        if receipt.get("dynamic_plugin_ids") != ["nvidia.switchyard"]:
+            errors.append("receipt did not record only nvidia.switchyard")
+        if receipt.get("activation_mode") != "relay_standard_dynamic":
+            errors.append("receipt did not record standard dynamic activation")
+        if receipt.get("routing_contract") != {
+            "relay_outer_lifecycle": True,
+            "execution_intercept_owner": "nvidia.switchyard",
+            "provider_http_client_owner": "switchyard-llm-client",
+            "separate_switchyard_service": False,
+        }:
+            errors.append("receipt did not record the expected Relay/Switchyard ownership contract")
     cleanup = receipt.get("cleanup", {})
     if not cleanup.get("plugin_host_closed") or not cleanup.get("exporters_flushed"):
         errors.append("receipt did not prove plugin close and exporter flush")
@@ -234,9 +354,7 @@ def inspect_openinference(path: Path) -> dict[str, Any]:
                         kind = attributes.get("openinference.span.kind")
                         if isinstance(kind, str) and kind:
                             span_kinds.add(kind)
-                        scope_lineage = attributes.get("nemo_relay.uuid") and attributes.get(
-                            "nemo_relay.scope_type"
-                        )
+                        scope_lineage = attributes.get("nemo_relay.uuid") and attributes.get("nemo_relay.scope_type")
                         mark_lineage = (
                             attributes.get("nemo_relay.mark.uuid")
                             and attributes.get("nemo_relay.mark.parent_uuid")
@@ -262,6 +380,8 @@ def inspect_atof(path: Path) -> dict[str, Any]:
     cache_read_tokens = 0
     cache_write_tokens = 0
     decision_count = 0
+    logical_llm_call_count = 0
+    auxiliary_logical_llm_call_count = 0
     with path.open(encoding="utf-8") as stream:
         for line_number, line in enumerate(stream, 1):
             if not line.strip():
@@ -271,24 +391,39 @@ def inspect_atof(path: Path) -> dict[str, Any]:
                 raise ValueError(f"ATOF line {line_number} is not an object")
             count += 1
             name = payload.get("name")
+            if name == "hermes.logical_llm_call" and payload.get("scope_category") == "start":
+                metadata = payload.get("metadata")
+                role = metadata.get("hermes.call_role") if isinstance(metadata, dict) else None
+                if isinstance(role, str) and role.startswith("auxiliary:"):
+                    auxiliary_logical_llm_call_count += 1
+                else:
+                    logical_llm_call_count += 1
             if isinstance(name, str) and name.startswith("switchyard.routing."):
                 marks.append(name)
                 if name == "switchyard.routing.decision":
                     decision_count += 1
-                for container in (payload.get("data"), payload.get("metadata")):
-                    if isinstance(container, dict):
-                        for key in ("model", "selected_model", "target_model"):
-                            value = container.get(key)
+                    # Only decisions select the serving route. Routing-only LLM
+                    # accounting marks may select the internal `judge` target,
+                    # which is valid overhead but not a completion destination.
+                    for container in (payload.get("data"), payload.get("metadata")):
+                        if isinstance(container, dict):
+                            for key in ("model", "selected_model", "target_model"):
+                                value = container.get(key)
+                                if isinstance(value, str) and value:
+                                    models.append(value)
+                            value = container.get("selected_target")
                             if isinstance(value, str) and value:
-                                models.append(value)
-                        value = container.get("selected_target")
-                        if isinstance(value, str) and value:
-                            targets.append(value)
+                                targets.append(value)
             profile = payload.get("category_profile")
             response = profile.get("annotated_response") if isinstance(profile, dict) else None
             data = payload.get("data")
             if isinstance(response, dict):
                 model = response.get("model")
+                if isinstance(model, str) and model:
+                    models.append(model)
+            if name == "openai.chat_completions" and payload.get("scope_category") == "start":
+                content = data.get("content") if isinstance(data, dict) else None
+                model = content.get("model") if isinstance(content, dict) else None
                 if isinstance(model, str) and model:
                     models.append(model)
             if name == "openai.chat_completions" and payload.get("scope_category") == "end":
@@ -310,6 +445,8 @@ def inspect_atof(path: Path) -> dict[str, Any]:
         "models": sorted(set(models)),
         "targets": sorted(set(targets)),
         "decision_count": decision_count,
+        "logical_llm_call_count": logical_llm_call_count,
+        "auxiliary_logical_llm_call_count": auxiliary_logical_llm_call_count,
         "cache_read_tokens": cache_read_tokens,
         "cache_write_tokens": cache_write_tokens,
     }
@@ -355,6 +492,7 @@ def main() -> int:
         "completion": root / "completion.json",
         "atof": root / "relay" / "trajectory.atof.jsonl",
     }
+    hermes_tail = root / "diagnostics" / "hermes-tail.txt"
     for name, path in required.items():
         if not path.is_file():
             target = benchmark_errors if name == "result" else integration_errors
@@ -425,6 +563,8 @@ def main() -> int:
     routed_models: list[str] = []
     routed_targets: list[str] = []
     switchyard_decision_count = 0
+    logical_llm_call_count = 0
+    auxiliary_logical_llm_call_count = 0
     cache_read_tokens = 0
     cache_write_tokens = 0
     if required["atof"].is_file():
@@ -434,17 +574,28 @@ def main() -> int:
         routed_models = atof_evidence["models"]
         routed_targets = atof_evidence["targets"]
         switchyard_decision_count = atof_evidence["decision_count"]
+        logical_llm_call_count = atof_evidence["logical_llm_call_count"]
+        auxiliary_logical_llm_call_count = atof_evidence["auxiliary_logical_llm_call_count"]
         cache_read_tokens = atof_evidence["cache_read_tokens"]
         cache_write_tokens = atof_evidence["cache_write_tokens"]
         if event_count == 0:
             integration_errors.append("ATOF artifact is empty")
-        if not routing_marks:
-            integration_errors.append("ATOF artifact has no Switchyard routing evidence")
-        if not routed_targets:
-            integration_errors.append("ATOF artifact has no selected Switchyard target")
-        unexpected_targets = sorted(set(routed_targets) - {"strong", "weak"})
-        if unexpected_targets:
-            integration_errors.append(f"ATOF artifact selected unexpected targets: {unexpected_targets}")
+        routing_mode = provenance.get("routing", {}).get("algorithm")
+        if routing_mode == "direct":
+            direct_model = provenance.get("routing", {}).get("direct_model")
+            if routing_marks or routed_targets:
+                integration_errors.append("direct baseline unexpectedly emitted Switchyard routing evidence")
+            accepted_direct_models = {direct_model, f"openai/{direct_model}"}
+            if not accepted_direct_models.intersection(routed_models):
+                integration_errors.append("ATOF artifact did not record the direct Opus provider model")
+        else:
+            if not routing_marks:
+                integration_errors.append("ATOF artifact has no Switchyard routing evidence")
+            if not routed_targets:
+                integration_errors.append("ATOF artifact has no selected Switchyard target")
+            unexpected_targets = sorted(set(routed_targets) - {"strong", "weak"})
+            if unexpected_targets:
+                integration_errors.append(f"ATOF artifact selected unexpected targets: {unexpected_targets}")
 
     caller_model = provenance.get("routing", {}).get("hermes_caller_model")
     target_models = {
@@ -457,7 +608,7 @@ def main() -> int:
             *(target_models[target] for target in routed_targets if target_models.get(target)),
         }
     )
-    if caller_model and caller_model in routed_models:
+    if provenance.get("routing", {}).get("algorithm") != "direct" and caller_model and caller_model in routed_models:
         integration_errors.append("Hermes caller stub appeared as a routed provider model")
 
     secret_values: list[bytes] = []
@@ -501,13 +652,23 @@ def main() -> int:
     else:
         benchmark_errors.append("missing Harbor job directory for benchmark completion")
 
-    terminal_timeout_nonpass = is_verifier_backed_agent_timeout_nonpass(result, harbor_result)
-    if terminal_timeout_nonpass:
+    terminal_timeout_completion = is_verifier_backed_agent_timeout_completion(result, harbor_result)
+    terminal_timeout_nonpass = terminal_timeout_completion and read_benchmark_passed(harbor_result) is False
+    terminal_turn_budget_completion = is_verifier_backed_turn_budget_completion(
+        result, harbor_result, logical_llm_call_count
+    )
+    terminal_turn_budget_nonpass = terminal_turn_budget_completion and read_benchmark_passed(harbor_result) is False
+    diagnostic_text = hermes_tail.read_text(encoding="utf-8", errors="replace") if hermes_tail.is_file() else ""
+    terminal_quiet_output_completion = is_verifier_backed_quiet_output_completion(
+        result, receipt, harbor_result, diagnostic_text
+    )
+    if terminal_timeout_completion or terminal_turn_budget_completion or terminal_quiet_output_completion:
         tolerated_benchmark_errors = {
             "invalid direct result status: 'failed'",
             "direct result has no normalized final response",
         }
         benchmark_errors = [error for error in benchmark_errors if error not in tolerated_benchmark_errors]
+    if terminal_timeout_completion:
         tolerated_integration_errors = {
             "missing ATIF trajectory",
         }
@@ -533,11 +694,17 @@ def main() -> int:
         "harbor_timeout_multipliers": harbor_timeout_multipliers,
         "benchmark_task_passed": benchmark_passed,
         "terminal_agent_timeout_nonpass": terminal_timeout_nonpass,
+        "terminal_agent_timeout_completion": terminal_timeout_completion,
+        "terminal_turn_budget_completion": terminal_turn_budget_completion,
+        "terminal_turn_budget_nonpass": terminal_turn_budget_nonpass,
+        "terminal_quiet_output_completion": terminal_quiet_output_completion,
         "atof_event_count": event_count,
         "atif_trajectory_count": len(atif_files),
         "openinference": openinference_evidence,
         "switchyard_routing_marks": routing_marks,
         "switchyard_decision_count": switchyard_decision_count,
+        "logical_llm_call_count": logical_llm_call_count,
+        "auxiliary_logical_llm_call_count": auxiliary_logical_llm_call_count,
         "routed_models": routed_models,
         "routed_targets": routed_targets,
         "cache_read_tokens": cache_read_tokens,

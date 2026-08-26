@@ -20,6 +20,7 @@ harbor_bin="${HARBOR_BIN:-$example_root/.venv/bin/harbor}"
 python_bin="${EVAL_PYTHON:-$example_root/.venv/bin/python}"
 smoke_evidence="${TERMINAL_BENCH_SMOKE_EVIDENCE:-}"
 offline_evidence="${TERMINAL_BENCH_OFFLINE_EVIDENCE:-}"
+reuse_setup_evidence="${TBENCH_REUSE_SETUP_EVIDENCE:-}"
 phoenix_url="${PHOENIX_BASE_URL:-}"
 phoenix_project="${PHOENIX_PROJECT:-}"
 eval_cohort="${EVAL_COHORT:-}"
@@ -27,6 +28,7 @@ switchyard_bundle="${SWITCHYARD_BUNDLE:-}"
 relay_wheel="${RELAY_WHEEL:-}"
 relay_architecture="${RELAY_ARCHITECTURE:-x86_64}"
 plugin_config_template="${PLUGIN_CONFIG_TEMPLATE:-$example_root/config/plugins.toml.in}"
+admission_plugin_config_template="${ADMISSION_PLUGIN_CONFIG_TEMPLATE:-}"
 sample_count="${TBENCH_SAMPLE_COUNT:-89}"
 # An explicitly blank value disables canary-first scheduling. An unset value
 # keeps the conservative default.
@@ -71,6 +73,24 @@ if [[ "$dataset_root" != /* || ! -d "$dataset_root" ]]; then
   exit 2
 fi
 
+reuse_setup_args=()
+if [[ -n "$reuse_setup_evidence" ]]; then
+  if [[ "$reuse_setup_evidence" != /* || ! -d "$reuse_setup_evidence" ]]; then
+    echo "TBENCH_REUSE_SETUP_EVIDENCE must select an existing absolute setup-admission directory" >&2
+    exit 2
+  fi
+  reuse_setup_args=(--reuse-setup-evidence "$reuse_setup_evidence")
+fi
+
+admission_plugin_args=()
+if [[ -n "$admission_plugin_config_template" ]]; then
+  if [[ "$admission_plugin_config_template" != /* || ! -f "$admission_plugin_config_template" ]]; then
+    echo "ADMISSION_PLUGIN_CONFIG_TEMPLATE must select an existing absolute template" >&2
+    exit 2
+  fi
+  admission_plugin_args=(--admission-plugin-config-template "$admission_plugin_config_template")
+fi
+
 exec "$python_bin" "$example_root/scripts/run_phase2_cohort.py" \
   --run-root "$run_root" \
   --dataset "$dataset" \
@@ -86,7 +106,9 @@ exec "$python_bin" "$example_root/scripts/run_phase2_cohort.py" \
   --minimum-free-gb "$minimum_free_gb" \
   --smoke-evidence "$smoke_evidence" \
   --offline-evidence "$offline_evidence" \
+  "${reuse_setup_args[@]}" \
   --plugin-config-template "$plugin_config_template" \
+  "${admission_plugin_args[@]}" \
   --task-runner "$example_root/run_terminal_bench.sh" \
   --harbor-bin "$harbor_bin" \
   --python-bin "$python_bin" \

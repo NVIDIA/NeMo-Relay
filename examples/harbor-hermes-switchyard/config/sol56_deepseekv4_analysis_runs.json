@@ -1,0 +1,64 @@
+{
+  "schema_version": "harbor-hermes-switchyard.final-analysis-inputs.v1",
+  "spdx_copyright": "Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.",
+  "spdx_license": "Apache-2.0",
+  "title": "Terminal-Bench 2.1: GPT-5.6 Sol and DeepSeek V4 routing comparison (N=3)",
+  "analysis_request": "Compare N=3 complete runs for GPT-5.6 Sol direct, capable-first at confidence 0.3, and efficient-first at confidence 0.3. Use the direct group as the observed baseline and emphasize final pass@1, end-to-end model cost including routing-only token usage, run variance, task-aligned effects, model choice, cache efficiency, and routing-token accounting.",
+  "dataset": "terminal-bench/terminal-bench-2-1",
+  "baseline_group": "sol56-direct",
+  "sample_size_per_group": 3,
+  "groups": [
+    {
+      "id": "sol56-direct",
+      "label": "GPT-5.6 Sol direct baseline",
+      "role": "observed_control",
+      "run_roots": [
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-sol56-direct-pr270-5c84c16-r1",
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-sol56-direct-pr270-5c84c16-r2",
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-sol56-direct-pr270-5c84c16-r3"
+      ]
+    },
+    {
+      "id": "cf-at-0.3",
+      "label": "Capable-first staged router at 0.3",
+      "role": "trial",
+      "run_roots": [
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-sol56-deepseekv4-cf03-pr270-5c84c16-v3-r1",
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-sol56-deepseekv4-cf03-pr270-5c84c16-v3-r2",
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-sol56-deepseekv4-cf03-pr270-5c84c16-v3-r3"
+      ]
+    },
+    {
+      "id": "ef-at-0.3",
+      "label": "Efficient-first staged router at 0.3",
+      "role": "trial",
+      "run_roots": [
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-sol56-deepseekv4-ef03-pr270-5c84c16-v3-r1",
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-sol56-deepseekv4-ef03-pr270-5c84c16-v3-r2",
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-sol56-deepseekv4-ef03-pr270-5c84c16-v3-r3"
+      ]
+    }
+  ],
+  "excluded_groups": [],
+  "analysis_contract": {
+    "performance_metric": "pass@1",
+    "primary_variation": "sample standard deviation across three independent run-level observations",
+    "cost_baseline": "mean end-to-end model cost across the three GPT-5.6 Sol direct runs",
+    "routing_overhead": "dedicated switchyard.routing.llm_call ATOF usage marks, priced by the run-bound catalog and added without the excluded serving call",
+    "paired_comparison": "task-aligned per-configuration pass frequencies with a bootstrap interval over tasks; replicate indices are not treated as natural pairs",
+    "primary_plots": [
+      "configuration mean pass@1 bars with individual runs and sample-standard-deviation error bars",
+      "configuration mean end-to-end model-cost bars with individual runs and sample-standard-deviation error bars",
+      "observed end-to-end cost versus the same-workload all-Sol counterfactual"
+    ],
+    "secondary_sections": [
+      "exact router and judge settings",
+      "routing-only prompt, completion, reasoning, and cache-token accounting",
+      "task repeatability and task-aligned deltas",
+      "effective-model and routing-source distributions",
+      "cache efficiency and token usage",
+      "cost coverage and telemetry reconciliation",
+      "limitations and intermediate conclusions"
+    ]
+  }
+}

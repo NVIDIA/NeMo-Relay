@@ -16,7 +16,7 @@ default_harbor_bin="$example_root/.venv/bin/harbor"
 default_python_bin="$example_root/.venv/bin/python"
 harbor_bin="${HARBOR_BIN:-$default_harbor_bin}"
 python_bin="${EVAL_PYTHON:-$default_python_bin}"
-expected_harbor_version="0.18.0"
+expected_harbor_version="0.20.0"
 eval_phase="${EVAL_PHASE:-phase1}"
 tbench_dataset_path="${TBENCH_DATASET_PATH:-}"
 switchyard_bundle="${SWITCHYARD_BUNDLE:-}"
@@ -31,6 +31,8 @@ inject_post_response_failure="${INJECT_POST_RESPONSE_FAILURE:-false}"
 hermetic_runtime_dir="${HERMETIC_RUNTIME_DIR:-}"
 hermetic_runtime_sha256="${HERMETIC_RUNTIME_SHA256:-}"
 harbor_force_build="${HARBOR_FORCE_BUILD:-true}"
+task_memory_override_mb="${TASK_MEMORY_OVERRIDE_MB:-}"
+verifier_cpu_thread_limit="${VERIFIER_CPU_THREAD_LIMIT:-}"
 
 if [[ -z "$run_root" || "$run_root" != /* ]]; then
   echo "usage: $0 /absolute/new-run-root" >&2
@@ -108,6 +110,14 @@ if [[ "$harbor_force_build" != "true" && "$harbor_force_build" != "false" ]]; th
   echo "HARBOR_FORCE_BUILD must be true or false" >&2
   exit 2
 fi
+if [[ -n "$task_memory_override_mb" && ! "$task_memory_override_mb" =~ ^[1-9][0-9]*$ ]]; then
+  echo "TASK_MEMORY_OVERRIDE_MB must be a positive integer when set" >&2
+  exit 2
+fi
+if [[ -n "$verifier_cpu_thread_limit" && ! "$verifier_cpu_thread_limit" =~ ^[1-9][0-9]*$ ]]; then
+  echo "VERIFIER_CPU_THREAD_LIMIT must be a positive integer when set" >&2
+  exit 2
+fi
 
 docker info >/dev/null
 curl --fail --silent --show-error \
@@ -119,10 +129,23 @@ temporary_build=""
 temporary_secret_dir=""
 collector_name=""
 collector_running=0
+collector_log=""
+capture_collector_logs() {
+  if [[ -n "$collector_name" && -n "$collector_log" ]]; then
+    docker logs "$collector_name" >"$collector_log" 2>&1 || true
+  fi
+}
+remove_collector() {
+  if [[ -n "$collector_name" ]]; then
+    capture_collector_logs
+    docker rm --force "$collector_name" >/dev/null 2>&1 || true
+  fi
+  collector_running=0
+}
 cleanup() {
   local status=$?
   if [[ "$collector_running" == 1 ]]; then
-    docker stop --time 10 "$collector_name" >/dev/null 2>&1 || true
+    remove_collector
   fi
   if [[ -n "$temporary_build" && -d "$temporary_build" ]]; then
     rm -rf "$temporary_build"
@@ -174,13 +197,62 @@ if [[ -z "$switchyard_bundle" ]]; then
     "$example_root/scripts/build_switchyard_plugin.sh" "$switchyard_bundle"
 fi
 
-free_port="$($python_bin - <<'PY'
+docker_host_gateway="$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')"
+if [[ -z "$docker_host_gateway" ]]; then
+  echo "Docker's default bridge network does not define a host gateway" >&2
+  exit 1
+fi
+
+# Let Docker allocate and reserve the host port in one operation. Selecting an
+# ephemeral port with a probe socket and releasing it before `docker run` races
+# when several cohorts launch collectors concurrently.
+mkdir -p -m 0700 "$run_root/telemetry"
+collector_name="harbor-hermes-switchyard-$($python_bin -c 'import uuid; print(uuid.uuid4().hex[:12])')"
+collector_log="$run_root/collector.log"
+docker run --detach \
+  --name "$collector_name" \
+  --user "$(id -u):$(id -g)" \
+  --publish "$docker_host_gateway::4318" \
+  --volume "$example_root/config/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro" \
+  --volume "$run_root/telemetry:/artifacts" \
+  "$collector_image" \
+  --config=/etc/otelcol-contrib/config.yaml >"$run_root/collector.container-id"
+collector_running=1
+published_endpoint="$(docker port "$collector_name" 4318/tcp | head -n 1)"
+free_port="${published_endpoint##*:}"
+if [[ ! "$free_port" =~ ^[1-9][0-9]*$ ]]; then
+  capture_collector_logs
+  echo "Docker did not publish the OpenTelemetry collector port" >&2
+  exit 1
+fi
+
+collector_ready=0
+for _ in {1..20}; do
+  collector_state="$(docker inspect --format '{{.State.Status}}' "$collector_name" 2>/dev/null || true)"
+  if [[ "$collector_state" != "running" ]]; then
+    capture_collector_logs
+    echo "OpenTelemetry collector exited before becoming ready; see $collector_log" >&2
+    exit 1
+  fi
+  if [[ -f "$run_root/telemetry/trajectory.openinference.json" ]] && \
+    "$python_bin" -c '
 import socket
-with socket.socket() as sock:
-    sock.bind(("127.0.0.1", 0))
-    print(sock.getsockname()[1])
-PY
-)"
+import sys
+
+with socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=1):
+    pass
+' "$docker_host_gateway" "$free_port" 2>/dev/null; then
+    collector_ready=1
+    break
+  fi
+  sleep 0.25
+done
+if [[ "$collector_ready" != 1 ]]; then
+  capture_collector_logs
+  echo "OpenTelemetry collector did not become ready; see $collector_log" >&2
+  exit 1
+fi
+
 openinference_endpoint="http://host.docker.internal:$free_port/v1/traces"
 
 prepare_args=(
@@ -192,6 +264,7 @@ prepare_args=(
   --openinference-endpoint "$openinference_endpoint"
   --phoenix-project "$phoenix_project"
   --eval-cohort "$eval_cohort"
+  --allow-existing-collector-state
 )
 if [[ -n "$relay_wheel" ]]; then
   prepare_args+=(--relay-wheel "$relay_wheel")
@@ -199,6 +272,16 @@ fi
 "$python_bin" "${prepare_args[@]}" >"$run_root.prepare.log"
 
 hermes_caller_model="$($python_bin -c 'import json,sys; print(json.load(open(sys.argv[1]))["routing"]["hermes_caller_model"])' "$run_root/runtime/provenance.json")"
+routing_mode="$($python_bin -c 'import json,sys; print(json.load(open(sys.argv[1]))["routing"]["algorithm"])' "$run_root/runtime/provenance.json")"
+agent_openai_base_url="$fail_closed_openai_base_url"
+agent_openrouter_base_url="$fail_closed_openai_base_url"
+if [[ "$routing_mode" == "direct" ]]; then
+  agent_openai_base_url="$($python_bin -c 'import json,sys; print(json.load(open(sys.argv[1]))["routing"]["direct_base_url"])' "$run_root/runtime/provenance.json")"
+  agent_openrouter_base_url="$agent_openai_base_url"
+elif [[ "$routing_mode" != "random" && "$routing_mode" != "llm_classifier" && "$routing_mode" != "stage_router" ]]; then
+  echo "unsupported runtime routing mode: $routing_mode" >&2
+  exit 2
+fi
 
 relay_wheel_sha256="$($python_bin -c 'import json,sys; print(json.load(open(sys.argv[1]))["nemo_relay"]["wheel_sha256"])' "$run_root/runtime/provenance.json")"
 relay_wheel_path="$($python_bin -c 'import json,pathlib,sys; p=json.load(open(sys.argv[1])); print(pathlib.Path(sys.argv[1]).parent / "wheels" / p["nemo_relay"]["wheel"])' "$run_root/runtime/provenance.json")"
@@ -209,16 +292,28 @@ relay_wheel_path="$($python_bin -c 'import json,pathlib,sys; p=json.load(open(sy
   --output "$run_root/artifacts/harbor-hermes-compatibility.json" \
   >"$run_root/compatibility.log"
 
-mkdir -m 0700 "$run_root/telemetry"
-collector_name="harbor-hermes-switchyard-$($python_bin -c 'import uuid; print(uuid.uuid4().hex[:12])')"
-docker run --detach --rm \
-  --name "$collector_name" \
-  --publish "127.0.0.1:$free_port:4318" \
-  --volume "$example_root/config/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro" \
-  --volume "$run_root/telemetry:/artifacts" \
-  "$collector_image" \
-  --config=/etc/otelcol-contrib/config.yaml >"$run_root/collector.container-id"
-collector_running=1
+host_gateway_compose="$run_root/runtime/docker-compose-host-gateway.json"
+"$python_bin" - "$host_gateway_compose" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.write_text(
+    json.dumps(
+        {
+            "services": {
+                "main": {
+                    "extra_hosts": ["host.docker.internal:host-gateway"],
+                }
+            }
+        },
+        indent=2,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+PY
 
 export PYTHONPATH="$example_root/agents${PYTHONPATH:+:$PYTHONPATH}"
 export OPENAI_API_KEY="relay-managed-placeholder"
@@ -251,6 +346,16 @@ harbor_build_args=()
 if [[ "$harbor_force_build" == "true" ]]; then
   harbor_build_args+=(--force-build)
 fi
+harbor_resource_args=()
+if [[ -n "$task_memory_override_mb" ]]; then
+  harbor_resource_args+=(--override-memory-mb "$task_memory_override_mb")
+fi
+verifier_env_args=()
+if [[ -n "$verifier_cpu_thread_limit" ]]; then
+  for variable in OMP_NUM_THREADS MKL_NUM_THREADS OPENBLAS_NUM_THREADS NUMEXPR_NUM_THREADS VECLIB_MAXIMUM_THREADS; do
+    verifier_env_args+=(--ve "$variable=$verifier_cpu_thread_limit")
+  done
+fi
 (
   "$harbor_bin" run \
     "${dataset_args[@]}" \
@@ -268,10 +373,11 @@ fi
     --ak "relay_architecture=$relay_architecture" \
     "${agent_kwargs[@]}" \
     --ae 'OPENAI_API_KEY=${OPENAI_API_KEY}' \
-    --ae "OPENAI_BASE_URL=$fail_closed_openai_base_url" \
+    --ae "OPENAI_BASE_URL=$agent_openai_base_url" \
     --ae 'OPENROUTER_API_KEY=relay-intercepted' \
-    --ae "OPENROUTER_BASE_URL=$fail_closed_openai_base_url" \
+    --ae "OPENROUTER_BASE_URL=$agent_openrouter_base_url" \
     --mounts "$mounts_json" \
+    --extra-docker-compose "$host_gateway_compose" \
     "${agent_hosts[@]}" \
     --artifact /logs/agent/direct-hermes \
     --agent-include-logs hermes-session.jsonl \
@@ -283,11 +389,19 @@ fi
     --agent-timeout-multiplier "$agent_timeout_multiplier" \
     --agent-setup-timeout-multiplier "$agent_setup_timeout_multiplier" \
     --environment-build-timeout-multiplier "$environment_build_timeout_multiplier" \
+    "${harbor_resource_args[@]}" \
+    "${verifier_env_args[@]}" \
     "${harbor_build_args[@]}" \
     --yes
 ) >"$run_root/harbor.log" 2>&1
 
-docker stop --time 10 "$collector_name" >/dev/null
+if ! docker stop --time 10 "$collector_name" >/dev/null; then
+  capture_collector_logs
+  echo "OpenTelemetry collector stopped before Harbor completed; see $collector_log" >&2
+  exit 1
+fi
+capture_collector_logs
+docker rm "$collector_name" >/dev/null
 collector_running=0
 
 direct_result="$($python_bin - "$run_root/jobs/$job_name" <<'PY'

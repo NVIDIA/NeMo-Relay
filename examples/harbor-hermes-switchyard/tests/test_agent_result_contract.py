@@ -106,7 +106,7 @@ def test_empty_session_uses_bounded_quiet_cli_output(tmp_path: Path, monkeypatch
     session = tmp_path / "hermes-session.jsonl"
     session.write_text("", encoding="utf-8")
     log = tmp_path / "hermes.txt"
-    log.write_text("startup warning\n\nsession_id: cli-session\ncompleted\nanswer\n", encoding="utf-8")
+    log.write_text("completed\nanswer\n\nsession_id: cli-session\n", encoding="utf-8")
     monkeypatch.setattr(module, "HERMES_SESSION", session)
     monkeypatch.setattr(module, "HERMES_LOG", log)
     monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "0.7.1")
@@ -119,6 +119,27 @@ def test_empty_session_uses_bounded_quiet_cli_output(tmp_path: Path, monkeypatch
     assert result["status"] == "completed"
     assert result["session_id"] == "cli-session"
     assert result["final_response"] == "completed\nanswer"
+
+
+def test_quiet_cli_output_after_session_marker_is_not_promoted(tmp_path: Path, monkeypatch) -> None:
+    module = load_finalizer()
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    session = tmp_path / "hermes-session.jsonl"
+    session.write_text("", encoding="utf-8")
+    log = tmp_path / "hermes.txt"
+    log.write_text("session_id: cli-session\nlate wrapper error\n", encoding="utf-8")
+    monkeypatch.setattr(module, "HERMES_SESSION", session)
+    monkeypatch.setattr(module, "HERMES_LOG", log)
+    monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "0.7.1")
+
+    args = make_args(tmp_path)
+    module.initialize(args, root)
+    module.complete(args, root)
+
+    result = json.loads((root / "direct-hermes-result.json").read_text())
+    assert result["status"] == "failed"
+    assert result["final_response"] is None
 
 
 def test_failed_agent_output_is_not_promoted_to_a_completed_response(tmp_path: Path, monkeypatch) -> None:

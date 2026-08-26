@@ -320,13 +320,13 @@ def main() -> int:
     dataset_root = args.dataset_root.expanduser().resolve(strict=True)
     if args.concurrency <= 0:
         raise ValueError("concurrency must be positive")
-    if importlib.metadata.version("harbor") != "0.18.0":
-        raise RuntimeError("Phase 2 smoke requires Harbor 0.18.0")
+    if importlib.metadata.version("harbor") != "0.20.0":
+        raise RuntimeError("Phase 2 smoke requires Harbor 0.20.0")
     if (
         subprocess.run([str(args.harbor_bin), "--version"], check=True, capture_output=True, text=True).stdout.strip()
-        != "0.18.0"
+        != "0.20.0"
     ):
-        raise RuntimeError("Phase 2 smoke Harbor CLI is not 0.18.0")
+        raise RuntimeError("Phase 2 smoke Harbor CLI is not 0.20.0")
 
     with tempfile.TemporaryDirectory(prefix="harbor-phase2-smoke-") as directory:
         temporary_root = Path(directory)
@@ -357,7 +357,7 @@ def main() -> int:
     result = {
         "schema_version": SCHEMA_VERSION,
         "status": "passed",
-        "harbor_version": "0.18.0",
+        "harbor_version": "0.20.0",
         "dataset_name": dataset_root.name,
         "task_count": len(task_records),
         "dataset_task_definitions_sha256": combined_digest(dataset_root, task_tomls),

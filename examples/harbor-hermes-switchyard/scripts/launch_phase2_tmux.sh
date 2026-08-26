@@ -35,5 +35,5 @@ fi
 # into the detached session; run_phase2_from_env.sh sources it with xtrace off.
 tmux new-session -d -s "$session" \
   -e "TERMINAL_BENCH_ENV_FILE=$env_file" \
-  "$example_root/scripts/run_phase2_from_env.sh"
+  "$example_root/scripts/run_phase2_with_docker_group.sh"
 echo "started tmux session: $session"

@@ -1,0 +1,35 @@
+% SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+% SPDX-License-Identifier: Apache-2.0
+
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{caption}
+\usepackage{longtable}
+\usepackage{microtype}
+\usepackage{xcolor}
+
+\definecolor{ReportGreen}{HTML}{76B900}
+\definecolor{ReportInk}{HTML}{17212B}
+\definecolor{ReportLink}{HTML}{145DA0}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=ReportLink,
+  urlcolor=ReportLink,
+  citecolor=ReportLink
+}
+
+\setlength{\emergencystretch}{3em}
+\setlength{\LTpre}{0.6em}
+\setlength{\LTpost}{0.8em}
+\renewcommand{\arraystretch}{1.12}
+\captionsetup{font=small,labelfont=bf}
+\clubpenalty=10000
+\widowpenalty=10000
+\displaywidowpenalty=10000
+\raggedbottom
+
+% Reserve enough room for two-digit subsection numbers in the table of contents.
+\makeatletter
+\renewcommand*{\l@subsection}{\@dottedtocline{2}{1.5em}{3.2em}}
+\makeatother

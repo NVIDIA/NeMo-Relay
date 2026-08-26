@@ -47,6 +47,12 @@ else
   mkdir -m 0700 "$artifacts"
 fi
 
+# Preserve the complete bootstrap and smoke transcript.  A hermetic smoke can
+# fail before it has produced JSON evidence (for example while installing the
+# pinned Hermes checkout); keeping this log makes such failures diagnosable
+# without changing the immutable runtime bundle.
+smoke_log="$artifacts/offline-compatibility.log"
+
 docker run --rm \
   --platform "$platform" \
   --volume "$example_root:/example:ro" \
@@ -121,7 +127,7 @@ docker run --rm \
       echo "offline secret leaked into persisted evidence" >&2
       exit 1
     fi
-  '
+  ' 2>&1 | tee "$smoke_log"
 
 python3 - "$artifacts" "$run_root/runtime/provenance.json" "$admission_output" <<'PY'
 import hashlib

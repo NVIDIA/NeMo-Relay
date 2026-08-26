@@ -125,10 +125,128 @@ def test_bridge_accepts_current_classifier_routing_contract() -> None:
     agent_module._validate_relay_config(EXAMPLE_ROOT / "config" / "plugins.toml.in")
 
 
-def test_runtime_provenance_derives_classifier_target_from_plugin_config() -> None:
+@pytest.mark.parametrize("name", ["plugins.random.toml.in", "plugins.escalation.toml.in"])
+def test_bridge_accepts_additional_router_group_contracts(name: str) -> None:
+    assert agent_module._validate_relay_config(EXAMPLE_ROOT / "config" / name) == "switchyard"
+
+
+def test_bridge_accepts_opus_only_direct_baseline() -> None:
+    path = EXAMPLE_ROOT / "config" / "plugins.opus48-baseline.toml.in"
+    assert agent_module._validate_relay_config(path) == "direct"
+
+
+def test_bridge_accepts_sol_direct_and_both_stage_picker_contracts() -> None:
+    assert (
+        agent_module._validate_relay_config(EXAMPLE_ROOT / "config" / "plugins.sol56-baseline.toml.in")
+        == "direct"
+    )
+    for name in ("plugins.sol56-deepseek-v4-cf03.toml.in", "plugins.sol56-deepseek-v4-ef03.toml.in"):
+        assert agent_module._validate_relay_config(EXAMPLE_ROOT / "config" / name) == "switchyard"
+
+
+def test_sol_stage_contracts_use_two_models_and_deepseek_judge_controls() -> None:
+    expected_picker = {
+        "plugins.sol56-deepseek-v4-cf03.toml.in": "capable_first",
+        "plugins.sol56-deepseek-v4-ef03.toml.in": "efficient_first",
+    }
+    for name, picker in expected_picker.items():
+        with (EXAMPLE_ROOT / "config" / name).open("rb") as stream:
+            config = tomllib.load(stream)
+        settings = runtime_preparer_module.plugin_settings(config)
+        targets = config["plugins"]["dynamic"][0]["config"]["targets"]
+        assert settings["picker"] == picker
+        assert settings["confidence_threshold"] == 0.3
+        assert settings["strong_model"] == "openai/openai/gpt-5.6-sol"
+        assert settings["weak_model"] == "nvidia/deepseek-ai/deepseek-v4-flash"
+        assert settings["judge_model"] == settings["weak_model"]
+        assert targets["weak"]["extra_body"] == {"reasoning": {"enabled": False}}
+        assert targets["judge"]["extra_body"] == {"reasoning": {"enabled": False}}
+
+
+def test_glm_stage_signal_and_classifier_arms_are_distinct_and_valid() -> None:
+    expected = {
+        "plugins.sol56-glm52-stage-ef05-signal.toml.in": None,
+        "plugins.sol56-glm52-stage-ef05-classifier.toml.in": "judge",
+    }
+    for name, classifier_target in expected.items():
+        path = EXAMPLE_ROOT / "config" / name
+        assert agent_module._validate_relay_config(path) == "switchyard"
+        with path.open("rb") as stream:
+            config = tomllib.load(stream)
+        settings = runtime_preparer_module.plugin_settings(config)
+        targets = config["plugins"]["dynamic"][0]["config"]["targets"]
+        assert settings["picker"] == "efficient_first"
+        assert settings["confidence_threshold"] == 0.5
+        assert settings["classifier_target"] == classifier_target
+        assert settings["strong_model"] == "openai/openai/gpt-5.6-sol"
+        assert settings["weak_model"] == "nvidia/zai-org/glm-5.2"
+        # Switchyard's pinned native plugin accepts routed OpenAI Chat
+        # targets; the Responses API is not yet a valid router target.
+        assert targets["strong"]["protocol"] == "openai_chat"
+        assert targets["strong"]["extra_body"] == {"reasoning": {"effort": "medium"}}
+        assert targets["weak"]["extra_body"] == {"reasoning": {"enabled": False}}
+        if classifier_target is None:
+            assert set(targets) == {"strong", "weak"}
+            assert "judge_model" not in settings
+        else:
+            assert targets["judge"]["model"] == "nvidia/zai-org/glm-5.2"
+
+
+def test_runtime_provenance_derives_stage_router_contract() -> None:
     with (EXAMPLE_ROOT / "config" / "plugins.toml.in").open("rb") as stream:
         config = tomllib.load(stream)
-    assert runtime_preparer_module.plugin_settings(config)["classifier_target"] == "judge"
+    settings = runtime_preparer_module.plugin_settings(config)
+    assert settings["algorithm"] == "stage_router"
+    assert settings["classifier_target"] == "judge"
+    assert settings["picker"] == "efficient_first"
+    assert settings["confidence_threshold"] == 0.5
+    assert settings["recent_turn_window"] == 3
+
+
+def test_runtime_provenance_derives_random_router_contract() -> None:
+    with (EXAMPLE_ROOT / "config" / "plugins.random.toml.in").open("rb") as stream:
+        settings = runtime_preparer_module.plugin_settings(tomllib.load(stream))
+    assert settings["algorithm"] == "random"
+    assert settings["random_weights"] == {"strong": 1.0, "weak": 1.0}
+    assert "classifier_target" not in settings
+
+
+def test_runtime_provenance_derives_escalation_router_contract() -> None:
+    with (EXAMPLE_ROOT / "config" / "plugins.escalation.toml.in").open("rb") as stream:
+        settings = runtime_preparer_module.plugin_settings(tomllib.load(stream))
+    assert settings["algorithm"] == "llm_classifier"
+    assert settings["classifier_mode"] == "escalation"
+    assert settings["classifier_target"] == "judge"
+    assert settings["escalation"] == {
+        "confirmations": 1,
+        "recent_turn_window": 28,
+        "window_message_chars": 500,
+    }
+
+
+def test_runtime_provenance_derives_direct_opus_baseline() -> None:
+    with (EXAMPLE_ROOT / "config" / "plugins.opus48-baseline.toml.in").open("rb") as stream:
+        config = tomllib.load(stream)
+    settings = runtime_preparer_module.plugin_settings(config)
+    assert settings == {
+        "algorithm": "direct",
+        "direct_model": "aws/anthropic/bedrock-claude-opus-4-8",
+        "direct_base_url": "https://inference-api.nvidia.com/v1",
+        "hermes_caller_model": "aws/anthropic/bedrock-claude-opus-4-8",
+    }
+
+
+def test_runtime_preparer_admits_only_collector_bootstrap_state(tmp_path: Path) -> None:
+    run_root = tmp_path / "attempt"
+    telemetry = run_root / "telemetry"
+    telemetry.mkdir(parents=True)
+    (run_root / "collector.container-id").write_text("collector-id\n", encoding="utf-8")
+
+    runtime_preparer_module.initialize_run_root(run_root, allow_existing_collector_state=True)
+
+    (run_root / "unexpected").write_text("unexpected\n", encoding="utf-8")
+    with pytest.raises(FileExistsError, match="active collector bootstrap"):
+        runtime_preparer_module.initialize_run_root(run_root, allow_existing_collector_state=True)
 
 
 def test_offline_overrides_keep_classifier_pricing_aliases_distinct(tmp_path: Path) -> None:
@@ -207,6 +325,9 @@ def test_payload_builder_forwards_non_secret_version_pins() -> None:
     assert 'f"UV_VERSION={UV_VERSION}"' in source
     assert 'f"PYTHON_VERSION={PYTHON_VERSION}"' in source
     assert 'f"RELAY_WHEEL_NAME={relay_wheel.name}"' in source
+    assert 'f"nofile={BUILDER_NOFILE_LIMIT}"' in source
+    assert 'f"HOST_UID={os.getuid()}"' in source
+    assert 'f"HOST_GID={os.getgid()}"' in source
 
 
 def test_completed_result_is_invalidated_by_plan_input_change(tmp_path: Path) -> None:
@@ -260,6 +381,38 @@ def test_job_result_import_keeps_newest_attempt(tmp_path: Path) -> None:
     admission_module.parse_job_results(tmp_path, plan)
     result = json.loads((tmp_path / "task-results" / "task-one.json").read_text())
     assert result["exception_message"] == "new failure"
+
+
+def test_namespaced_task_result_uses_a_single_safe_filename(tmp_path: Path) -> None:
+    task_name = "terminal-bench/task-one"
+    plan = {
+        "inputs": {"concurrency": 4},
+        "tasks": [{"name": task_name, "task_sha256": "b" * 64}],
+    }
+    trial = tmp_path / "jobs" / "job-001" / "trial-one"
+    trial.mkdir(parents=True)
+    (trial / "result.json").write_text(
+        json.dumps(
+            {
+                "task_name": task_name,
+                "exception_info": None,
+                "environment_setup": {"finished_at": "2026-08-08T00:00:00Z"},
+                "agent_setup": {"finished_at": "2026-08-08T00:00:01Z"},
+                "agent_execution": None,
+                "verifier": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "task-results").mkdir()
+
+    admission_module.parse_job_results(tmp_path, plan)
+
+    path = admission_module.result_path(tmp_path, task_name)
+    assert path.name == "terminal-bench%2Ftask-one.json"
+    assert path.parent == tmp_path / "task-results"
+    assert json.loads(path.read_text())["task_name"] == task_name
+    assert admission_module.completed_names(tmp_path, plan) == {task_name}
 
 
 def test_clock_preflight_rejects_remote_time_drift() -> None:
@@ -340,12 +493,14 @@ def test_harbor_command_uses_install_only_without_provider_secret(
         return Completed()
 
     monkeypatch.setattr(admission_module.subprocess, "run", fake_run)
-    assert admission_module.run_harbor(args, plan, ["one", "two"]) == 0
+    assert admission_module.run_harbor(args, plan, ["terminal-bench/one", "two"]) == 0
     assert "--install-only" in captured
     assert "--disable-verification" in captured
     assert "--force-build" in captured
     assert "--no-delete" not in captured
     assert captured.count("--include-task-name") == 2
+    included = [captured[index + 1] for index, value in enumerate(captured) if value == "--include-task-name"]
+    assert included == ["one", "two"]
     rendered = " ".join(captured)
     assert "SWITCHYARD_PROVIDER_AUTHORIZATION" not in rendered
     assert "provider-authorization" not in rendered

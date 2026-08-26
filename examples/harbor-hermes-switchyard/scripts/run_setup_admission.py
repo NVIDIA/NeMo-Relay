@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 import time
+import urllib.parse
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
@@ -322,7 +323,8 @@ def build_plan(args: argparse.Namespace, tasks: list[Task], payload: dict[str, A
 
 
 def result_path(root: Path, task_name: str) -> Path:
-    return root / "task-results" / f"{task_name}.json"
+    filename = f"{urllib.parse.quote(task_name, safe='')}.json"
+    return root / "task-results" / filename
 
 
 def completed_names(root: Path, plan: dict[str, Any]) -> set[str]:
@@ -494,7 +496,7 @@ def run_harbor(args: argparse.Namespace, plan: dict[str, Any], pending: list[str
     if args.preserve_containers:
         command.append("--no-delete")
     for task_name in pending:
-        command.extend(["--include-task-name", task_name])
+        command.extend(["--include-task-name", task_name.rsplit("/", 1)[-1]])
     env = os.environ.copy()
     agent_path = Path(__file__).resolve().parents[1] / "agents"
     env["PYTHONPATH"] = f"{agent_path}{os.pathsep}{env.get('PYTHONPATH', '')}".rstrip(os.pathsep)
@@ -549,8 +551,8 @@ def main() -> int:
     (args.output / "jobs").mkdir(mode=0o700, exist_ok=True)
     (args.output / "task-results").mkdir(mode=0o700, exist_ok=True)
 
-    if harbor_version != "0.18.0":
-        raise RuntimeError(f"setup admission requires Harbor 0.18.0, found {harbor_version}")
+    if harbor_version != "0.20.0":
+        raise RuntimeError(f"setup admission requires Harbor 0.20.0, found {harbor_version}")
     payload = load_payload(args.hermetic_runtime)
     tasks = discover_tasks(args.dataset)
     known_names = {task.name for task in tasks}

@@ -4,9 +4,8 @@
 
 set -euo pipefail
 
-switchyard_repository="${SWITCHYARD_REPOSITORY:-https://github.com/bbednarski9/Switchyard.git}"
-switchyard_commit="${SWITCHYARD_COMMIT:-8daac03edf8544144833af1fd009b3da737715bc}"
-target_architecture="${SWITCHYARD_TARGET_ARCHITECTURE:-x86_64}"
+switchyard_repository="${SWITCHYARD_REPOSITORY:-https://github.com/NVIDIA-NeMo/Switchyard.git}"
+switchyard_commit="${SWITCHYARD_COMMIT:-5c84c16e84fa781452b1ab9a96a0f12303619824}"
 output_dir="${1:-}"
 
 if [[ -z "$output_dir" ]]; then
@@ -35,11 +34,20 @@ done
 docker info >/dev/null
 
 docker_architecture="$(docker info --format '{{.Architecture}}')"
+case "$docker_architecture" in
+  x86_64|amd64) docker_architecture="x86_64" ;;
+  aarch64|arm64) docker_architecture="aarch64" ;;
+  *)
+    echo "unsupported Docker architecture: $docker_architecture" >&2
+    exit 2
+    ;;
+esac
+target_architecture="${SWITCHYARD_TARGET_ARCHITECTURE:-$docker_architecture}"
 if [[ "$target_architecture" != "x86_64" && "$target_architecture" != "aarch64" ]]; then
   echo "SWITCHYARD_TARGET_ARCHITECTURE must be x86_64 or aarch64" >&2
   exit 2
 fi
-if [[ "$docker_architecture" == "aarch64" || "$docker_architecture" == "arm64" ]]; then
+if [[ "$docker_architecture" == "aarch64" ]]; then
   builder_image="${SWITCHYARD_BUILDER_IMAGE:-rust:1.96.1-bullseye@sha256:69e444ec65a82386d041a4a3d15e47a797967b90ae24aa342bd8a3600dd9e244}"
   builder_platform="linux/arm64"
   if [[ "$target_architecture" == "x86_64" ]]; then
@@ -130,17 +138,32 @@ python3 - "$staging_dir" "$switchyard_repository" "$switchyard_commit" "$builder
 import hashlib
 import json
 import pathlib
+import re
 import sys
-import tomllib
+
+
+def plugin_id(path: pathlib.Path) -> str | None:
+    """Read the one manifest field this builder needs without a TOML dependency."""
+    section = ""
+    section_pattern = re.compile(r"^\[([A-Za-z0-9_.-]+)\]$")
+    id_pattern = re.compile(r'^id\s*=\s*"([^"\\]+)"\s*(?:#.*)?$')
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if match := section_pattern.fullmatch(line):
+            section = match.group(1)
+            continue
+        if section == "plugin" and (match := id_pattern.fullmatch(line)):
+            return match.group(1)
+    raise ValueError("bundle manifest does not define plugin.id")
 
 output = pathlib.Path(sys.argv[1])
 repository, commit, builder, builder_platform, cargo_target, target_architecture = sys.argv[2:]
 manifest_path = output / "relay-plugin.toml"
 if not manifest_path.is_file():
     raise SystemExit("bundle did not contain relay-plugin.toml")
-with manifest_path.open("rb") as stream:
-    manifest = tomllib.load(stream)
-if manifest.get("plugin", {}).get("id") != "nvidia.switchyard":
+if plugin_id(manifest_path) != "nvidia.switchyard":
     raise SystemExit("bundle manifest has the wrong plugin id")
 libraries = [
     path for path in output.iterdir()

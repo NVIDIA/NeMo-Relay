@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 
-async def exercise(model: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+async def exercise(model: str, *, escalation: bool) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     from agent.relay_runtime import RelayRuntime
 
     import nemo_relay
@@ -30,32 +30,36 @@ async def exercise(model: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
 
     responses: list[dict[str, Any]] = []
     try:
-        cases = (
-            ("phase2-offline-weak-session", "reply with the smoke marker"),
-            ("phase2-offline-strong-session", "force strong route and reply with the smoke marker"),
-        )
-        for session_id, prompt in cases:
+        cases = [
+            ("phase2-offline-weak-session", ["reply with the smoke marker"]),
+            ("phase2-offline-strong-session", ["force strong route and reply with the smoke marker"]),
+        ]
+        for session_id, prompts in cases:
             session = host.ensure_session({"session_id": session_id})
             if session is None:
                 raise RuntimeError("Hermes Relay runtime did not open a session")
-            request = nemo_relay.LLMRequest(
-                {},
-                {
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                },
-            )
-            response = await host.run_in_session_async(
-                session,
-                nemo_relay.llm.execute,
-                "openai.chat_completions",
-                request,
-                forbidden_downstream,
-                model_name=model,
-                response_codec=nemo_relay.codecs.OpenAIChatCodec(),
-            )
-            responses.append(response)
+            messages: list[dict[str, str]] = []
+            for prompt in prompts:
+                messages.append({"role": "user", "content": prompt})
+                request = nemo_relay.LLMRequest(
+                    {},
+                    {
+                        "model": model,
+                        "messages": messages,
+                        "stream": False,
+                    },
+                )
+                response = await host.run_in_session_async(
+                    session,
+                    nemo_relay.llm.execute,
+                    "openai.chat_completions",
+                    request,
+                    forbidden_downstream,
+                    model_name=model,
+                    response_codec=nemo_relay.codecs.OpenAIChatCodec(),
+                )
+                responses.append(response)
+                messages.append({"role": "assistant", "content": response["choices"][0]["message"]["content"]})
             host.close_session({"session_id": session_id})
         active_report = nemo_relay.plugin.report()
         if active_report is None:
@@ -66,7 +70,7 @@ async def exercise(model: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if downstream_called:
         raise AssertionError("Relay downstream callback was invoked")
     contents = [response["choices"][0]["message"]["content"] for response in responses]
-    if contents != ["OFFLINE_SWITCHYARD_OK", "OFFLINE_SWITCHYARD_OK"]:
+    if contents != ["OFFLINE_SWITCHYARD_OK"] * 2:
         raise AssertionError(f"unexpected fake-provider responses: {contents!r}")
     return responses, report
 
@@ -82,13 +86,26 @@ def main() -> int:
     plugin = config["plugins"]["dynamic"][0]["config"]
     algorithm = plugin["algorithm"]
     targets = plugin["targets"]
-    classifier_model = targets[algorithm["classifier_target"]]["model"]
-    weak_model = targets[algorithm["weak_target"]]["model"]
-    strong_model = targets[algorithm["strong_target"]]["model"]
+    algorithm_kind = algorithm["kind"]
+    classifier_mode = algorithm.get("mode", "capability")
+    if algorithm_kind == "random":
+        classifier_model = None
+        weak_model = targets["weak"]["model"]
+        strong_model = targets["strong"]["model"]
+    elif algorithm_kind == "stage_router":
+        classifier = algorithm.get("classifier")
+        classifier_model = targets[classifier["target"]]["model"] if isinstance(classifier, dict) else None
+        weak_model = targets[algorithm["efficient_target"]]["model"]
+        strong_model = targets[algorithm["capable_target"]]["model"]
+    else:
+        classifier_model = targets[algorithm["classifier_target"]]["model"]
+        weak_model = targets[algorithm["weak_target"]]["model"]
+        strong_model = targets[algorithm["strong_target"]]["model"]
     artifacts = args.artifacts.resolve()
     artifacts.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.environ["HERMES_NEMO_RELAY_PLUGINS_TOML"] = str(args.plugins.resolve())
-    responses, report = asyncio.run(exercise(args.model))
+    is_escalation = algorithm_kind == "llm_classifier" and classifier_mode == "escalation"
+    responses, report = asyncio.run(exercise(args.model, escalation=is_escalation))
 
     atof = artifacts / "relay" / "trajectory.atof.jsonl"
     atif = sorted((artifacts / "relay" / "atif").glob("trajectory-*.atif.json"))
@@ -105,19 +122,45 @@ def main() -> int:
     if not marks:
         raise AssertionError("Switchyard routing marks were not emitted")
     requests = [json.loads(line) for line in args.request_log.read_text(encoding="utf-8").splitlines() if line.strip()]
-    if len(requests) != 4 or not all(item.get("authorization_present") for item in requests):
-        raise AssertionError("fake provider did not receive exactly four authenticated requests")
+    signal_only_stage = algorithm_kind == "stage_router" and classifier_model is None
+    expected_request_count = 2 if algorithm_kind == "random" or signal_only_stage else 5 if is_escalation else 4
+    if len(requests) != expected_request_count or not all(item.get("authorization_present") for item in requests):
+        raise AssertionError(
+            f"fake provider did not receive exactly {expected_request_count} authenticated requests"
+        )
     request_kinds = [item.get("request_kind") for item in requests]
-    if request_kinds != ["classifier", "completion", "classifier", "completion"]:
+    if algorithm_kind == "random" or signal_only_stage:
+        expected_kinds = ["completion", "completion"]
+    elif is_escalation:
+        expected_kinds = [
+            "completion",
+            "classifier",
+            "completion",
+            "classifier",
+            "completion",
+        ]
+    else:
+        expected_kinds = ["classifier", "completion", "classifier", "completion"]
+    if request_kinds != expected_kinds:
         raise AssertionError(f"unexpected provider request sequence: {request_kinds}")
     request_models = [item.get("model") for item in requests]
-    expected_models = [
-        classifier_model,
-        weak_model,
-        classifier_model,
-        strong_model,
-    ]
-    if request_models != expected_models:
+    if algorithm_kind == "random":
+        if any(model not in {weak_model, strong_model} for model in request_models):
+            raise AssertionError(f"random routing selected an unexpected model: {request_models}")
+    elif signal_only_stage:
+        if request_models != [weak_model, weak_model]:
+            raise AssertionError(f"signal-only stage router should fall open to weak: {request_models}")
+    elif is_escalation:
+        expected_models = [
+            weak_model,
+            classifier_model,
+            weak_model,
+            classifier_model,
+            strong_model,
+        ]
+        if request_models != expected_models:
+            raise AssertionError(f"unexpected provider model sequence: {request_models}")
+    elif request_models != [classifier_model, weak_model, classifier_model, strong_model]:
         raise AssertionError(f"unexpected provider model sequence: {request_models}")
     if args.model in request_models:
         raise AssertionError("Hermes caller stub reached the provider")

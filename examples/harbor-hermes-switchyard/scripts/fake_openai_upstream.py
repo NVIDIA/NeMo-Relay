@@ -16,6 +16,7 @@ from typing import Any
 class Handler(BaseHTTPRequestHandler):
     token: str
     request_log: Path
+    escalation_classifier_calls = 0
 
     def log_message(self, _format: str, *_args: Any) -> None:
         return
@@ -30,7 +31,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/v1/chat/completions":
+        if self.path not in {"/v1/chat/completions", "/v1/responses"}:
             self.send_error(404)
             return
         if self.headers.get("authorization") != f"Bearer {self.token}":
@@ -42,10 +43,14 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, json.JSONDecodeError):
             self.send_error(400)
             return
-        messages = request.get("messages", [])
+        messages = request.get("messages", request.get("input", []))
         serialized_messages = json.dumps(messages, separators=(",", ":"))
         is_classifier = request.get("response_format") is not None or (
             "p_solve" in serialized_messages and "capability_boundary" in serialized_messages
+        )
+        serialized_response_format = json.dumps(request.get("response_format"), separators=(",", ":"))
+        is_escalation_classifier = is_classifier and (
+            '"escalate"' in serialized_response_format or "escalat" in serialized_messages.lower()
         )
         log_entry = {
             "path": self.path,
@@ -57,7 +62,17 @@ class Handler(BaseHTTPRequestHandler):
         with self.request_log.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(log_entry, separators=(",", ":")) + "\n")
         content = "OFFLINE_SWITCHYARD_OK"
-        if is_classifier:
+        if is_escalation_classifier:
+            type(self).escalation_classifier_calls += 1
+            force_strong = type(self).escalation_classifier_calls >= 2
+            content = json.dumps(
+                {
+                    "escalate": force_strong,
+                    "reason": "deterministic offline trajectory verdict",
+                },
+                separators=(",", ":"),
+            )
+        elif is_classifier:
             force_strong = "force strong route" in serialized_messages
             content = json.dumps(
                 {
@@ -89,6 +104,24 @@ class Handler(BaseHTTPRequestHandler):
                 "total_tokens": 7,
             },
         }
+        if self.path == "/v1/responses":
+            response = {
+                "id": "resp-phase1",
+                "object": "response",
+                "created_at": int(time.time()),
+                "model": request.get("model", "phase1-model"),
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "msg-phase1",
+                        "type": "message",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": content}],
+                    }
+                ],
+                "usage": {"input_tokens": 4, "output_tokens": 3, "total_tokens": 7},
+            }
         body = json.dumps(response).encode("utf-8")
         self.send_response(200)
         self.send_header("content-type", "application/json")

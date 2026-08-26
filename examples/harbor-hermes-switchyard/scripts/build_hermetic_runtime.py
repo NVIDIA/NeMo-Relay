@@ -35,6 +35,7 @@ DEFAULT_HERMES_COMMIT = "a3d472f0e6bdc376df87b1436a461c4796db6747"
 UV_VERSION = "0.11.16"
 PYTHON_VERSION = "3.11.13"
 BUILDER_IMAGE = "python:3.11-bullseye"
+BUILDER_NOFILE_LIMIT = "65535:65535"
 
 
 def sha256_file(path: Path) -> str:
@@ -119,6 +120,7 @@ def build_payload(
 ) -> None:
     script = r'''
 set -euo pipefail
+trap 'chown -R "${HOST_UID}:${HOST_GID}" /opt/hermes-runtime || true' EXIT
 python -m pip install --no-cache-dir "uv==${UV_VERSION}"
 
 mkdir -p /opt/hermes-runtime/bin /opt/hermes-runtime/lib
@@ -166,12 +168,18 @@ chmod 0755 /opt/hermes-runtime/bin/python /opt/hermes-runtime/bin/hermes \
             "--rm",
             "--platform",
             platform,
+            "--ulimit",
+            f"nofile={BUILDER_NOFILE_LIMIT}",
             "--env",
             f"UV_VERSION={UV_VERSION}",
             "--env",
             f"PYTHON_VERSION={PYTHON_VERSION}",
             "--env",
             f"RELAY_WHEEL_NAME={relay_wheel.name}",
+            "--env",
+            f"HOST_UID={os.getuid()}",
+            "--env",
+            f"HOST_GID={os.getgid()}",
             "--volume",
             f"{source}:/source:ro",
             "--volume",

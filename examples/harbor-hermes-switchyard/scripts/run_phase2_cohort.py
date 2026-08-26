@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -35,6 +36,7 @@ PLAN_SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-plan.v1"
 TASK_STATE_SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-task-state.v1"
 EXPECTED_HERMES_COMMIT = "a3d472f0e6bdc376df87b1436a461c4796db6747"
 HERMETIC_RUNTIME_SCHEMA = "harbor-hermes-switchyard.hermetic-runtime.v1"
+SETUP_REUSE_SCHEMA = "harbor-hermes-switchyard.setup-evidence-reuse.v1"
 INFRASTRUCTURE_PATTERNS = (
     "apt-get update && apt-get install",
     "cannot connect to the docker daemon",
@@ -54,11 +56,23 @@ INFRASTRUCTURE_PATTERNS = (
     "phoenix upload",
     "provider has been unresponsive",
     "provider returned http 408",
+    "response remained truncated after",
     "registry-1.docker.io",
     "temporary failure in name resolution",
     "tls handshake timeout",
     "too many requests",
+    "verifiertimeouterror",
 )
+
+TASK_RUNTIME_OVERRIDES: dict[str, dict[str, int]] = {
+    # The published 2 GiB limit is insufficient when the task fans out
+    # ImageMagick/Tesseract workers. Two preserved runs produced kernel-confirmed
+    # cgroup OOM kills, including the Hermes process itself.
+    "extract-moves-from-video": {"memory_mb": 8192},
+    # The official verifier's CPU-only PyTorch multiprocessing test can hang in
+    # autograd when OpenMP/MKL create worker pools inside the one-CPU container.
+    "torch-pipeline-parallelism": {"verifier_cpu_thread_limit": 1},
+}
 
 
 @dataclass(frozen=True)
@@ -71,8 +85,23 @@ class Task:
     def directory_name(self) -> str:
         return f"{self.index:03d}-{self.name}"
 
+    @property
+    def runtime_override(self) -> dict[str, int]:
+        return dict(TASK_RUNTIME_OVERRIDES.get(self.name, {}))
+
+    @property
+    def effective_memory_gb(self) -> int:
+        memory_mb = self.runtime_override.get("memory_mb")
+        return max(self.memory_gb, memory_mb // 1024 if memory_mb else self.memory_gb)
+
     def as_json(self) -> dict[str, Any]:
-        return {"index": self.index, "name": self.name, "memory_gb": self.memory_gb}
+        return {
+            "index": self.index,
+            "name": self.name,
+            "memory_gb": self.memory_gb,
+            "effective_memory_gb": self.effective_memory_gb,
+            "runtime_override": self.runtime_override,
+        }
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -108,8 +137,13 @@ def sha256_file_set(root: Path, paths: list[Path]) -> str:
     return digest.hexdigest()
 
 
-def parse_memory_gb(value: object, task_name: str) -> int:
-    text = str(value or "2G").strip()
+def parse_memory_gb(environment: dict[str, object], task_name: str) -> int:
+    memory_mb = environment.get("memory_mb")
+    if memory_mb is not None:
+        if isinstance(memory_mb, bool) or not isinstance(memory_mb, int) or memory_mb <= 0 or memory_mb % 1024:
+            raise ValueError(f"unsupported memory value for {task_name}: {memory_mb} MB")
+        return memory_mb // 1024
+    text = str(environment.get("memory") or "2G").strip()
     match = re.fullmatch(r"([1-9][0-9]*)G", text, re.IGNORECASE)
     if not match:
         raise ValueError(f"unsupported memory value for {task_name}: {text}")
@@ -128,7 +162,7 @@ def discover_tasks(dataset_root: Path, sample_count: int, excluded: set[str], ca
             continue
         with task_toml.open("rb") as stream:
             config = tomllib.load(stream)
-        memory = parse_memory_gb((config.get("environment") or {}).get("memory"), task_root.name)
+        memory = parse_memory_gb(config.get("environment") or {}, task_root.name)
         discovered.append((task_root.name, memory))
     selected = discovered[:sample_count]
     if len(selected) != sample_count:
@@ -183,6 +217,7 @@ def classify_attempt_failure(log_text: str, attempt: Path) -> str:
     diagnostic_paths = [
         *attempt.rglob("*.log"),
         *attempt.rglob("result.json"),
+        *attempt.rglob("hermes-tail.txt"),
     ]
     for path in sorted(diagnostic_paths):
         try:
@@ -198,37 +233,131 @@ def classify_attempt_failure(log_text: str, attempt: Path) -> str:
 def plugin_contract(path: Path) -> dict[str, Any]:
     with path.open("rb") as stream:
         config = tomllib.load(stream)
-    plugins = config.get("plugins", {}).get("dynamic", [])
+    components = {component.get("kind"): component for component in config.get("components", [])}
+    caller = components.get("observability", {}).get("config", {}).get("atif", {}).get("model_name")
+    plugin_table = config.get("plugins")
+    plugins = plugin_table.get("dynamic") if isinstance(plugin_table, dict) else None
+    if plugins is None:
+        entries = (
+            components.get("pricing", {})
+            .get("config", {})
+            .get("sources", [{}])[0]
+            .get("catalog", {})
+            .get("entries", [])
+        )
+        if not isinstance(entries, list) or len(entries) != 1:
+            raise ValueError("direct baseline configuration must price exactly one model")
+        model = entries[0].get("model_id")
+        if not isinstance(model, str) or not model or caller != model:
+            raise ValueError("direct baseline pricing and Hermes must use the same model")
+        return {
+            "mode": "direct",
+            "required_models": [model],
+            "catalog_models": [model],
+            "strong_model": model,
+            "weak_model": None,
+            "judge_model": None,
+            "hermes_caller_model": caller,
+            "provider_base_urls": ["https://inference-api.nvidia.com/v1"],
+            "sha256": sha256_file(path),
+        }
     if len(plugins) != 1:
         raise ValueError("plugin configuration must define exactly one dynamic plugin")
-    targets = plugins[0].get("config", {}).get("targets", {})
-    if set(targets) != {"strong", "weak", "judge"}:
-        raise ValueError("plugin configuration must define strong, weak, and judge targets")
+    plugin_config = plugins[0].get("config", {})
+    targets = plugin_config.get("targets", {})
+    algorithm = plugin_config.get("algorithm", {})
+    if not isinstance(algorithm, dict):
+        raise ValueError("plugin algorithm configuration must be a table")
+    algorithm_kind = algorithm.get("kind")
+    expected_targets = {"strong", "weak"}
+    if algorithm_kind != "stage_router" or algorithm.get("classifier") is not None:
+        expected_targets.add("judge")
+    if set(targets) != expected_targets:
+        raise ValueError(f"plugin configuration targets must be {sorted(expected_targets)}")
     for target in targets.values():
         if target.get("header_env") != {"authorization": "SWITCHYARD_PROVIDER_AUTHORIZATION"}:
             raise ValueError("plugin authorization must reference SWITCHYARD_PROVIDER_AUTHORIZATION")
     models = [targets[name].get("model") for name in ("weak", "strong")]
-    catalog_models = [*models, targets["judge"].get("model")]
-    base_urls = sorted({targets[name].get("base_url") for name in ("weak", "strong", "judge")})
+    catalog_models = [*models, *([targets["judge"].get("model")] if "judge" in targets else [])]
+    base_urls = sorted({targets[name].get("base_url") for name in targets})
     if any(not isinstance(value, str) or not value for value in catalog_models + base_urls):
         raise ValueError("plugin target models and base URLs must be non-empty")
     for base_url in base_urls:
         parsed = urllib.parse.urlsplit(base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
             raise ValueError("plugin target base URLs must be credential-free HTTP(S) URLs")
-    components = {component.get("kind"): component for component in config.get("components", [])}
-    caller = components.get("observability", {}).get("config", {}).get("atif", {}).get("model_name")
     if not isinstance(caller, str) or caller in models:
         raise ValueError("Hermes caller model must be distinct from plugin target models")
+    contract: dict[str, Any] = {
+        "algorithm": algorithm_kind,
+        "classifier_target": None,
+        "classifier_mode": None,
+        "picker": None,
+        "confidence_threshold": None,
+        "recent_turn_window": algorithm.get("recent_turn_window"),
+        "random_weights": None,
+        "escalation": None,
+    }
+    if algorithm_kind == "random":
+        if algorithm != {"kind": "random"}:
+            raise ValueError("random routing must omit a fixed seed")
+        weights = {name: targets[name].get("weight", 1) for name in ("strong", "weak", "judge")}
+        if weights != {"strong": 1, "weak": 1, "judge": 0}:
+            raise ValueError("random routing must split equally across strong and weak with judge disabled")
+        contract["random_weights"] = {"strong": 1.0, "weak": 1.0}
+    elif algorithm_kind == "llm_classifier":
+        if (
+            algorithm.get("classifier_target") != "judge"
+            or algorithm.get("weak_target") != "weak"
+            or algorithm.get("strong_target") != "strong"
+        ):
+            raise ValueError("LLM-classifier targets do not match the configured semantic tiers")
+        contract["classifier_target"] = "judge"
+        classifier_mode = algorithm.get("mode", "capability")
+        if classifier_mode not in {"capability", "escalation"}:
+            raise ValueError("LLM-classifier mode must be capability or escalation")
+        contract["classifier_mode"] = classifier_mode
+        if classifier_mode == "escalation":
+            escalation = algorithm.get("escalation")
+            if escalation != {
+                "confirmations": 1,
+                "recent_turn_window": 28,
+                "window_message_chars": 500,
+            }:
+                raise ValueError("escalation settings do not match the trial contract")
+            contract["escalation"] = dict(escalation)
+    elif algorithm_kind == "stage_router":
+        classifier = algorithm.get("classifier")
+        if (
+            algorithm.get("capable_target") != "strong"
+            or algorithm.get("efficient_target") != "weak"
+            or algorithm.get("picker") not in {"capable_first", "efficient_first"}
+            or (classifier is not None and (not isinstance(classifier, dict) or classifier.get("target") != "judge"))
+        ):
+            raise ValueError("stage-router targets do not match the configured semantic tiers")
+        confidence_threshold = algorithm.get("confidence_threshold")
+        if not isinstance(confidence_threshold, (int, float)) or not 0 <= confidence_threshold <= 1:
+            raise ValueError("stage-router confidence threshold must be in [0, 1]")
+        contract.update(
+            {
+                "classifier_target": "judge" if classifier is not None else None,
+                "picker": algorithm["picker"],
+                "confidence_threshold": float(confidence_threshold),
+            }
+        )
+    else:
+        raise ValueError(f"unsupported plugin algorithm: {algorithm_kind!r}")
     return {
-        "required_models": sorted(models),
-        "catalog_models": sorted(catalog_models),
+        "mode": "switchyard",
+        "required_models": sorted(set(models)),
+        "catalog_models": sorted(set(catalog_models)),
         "strong_model": targets["strong"]["model"],
         "weak_model": targets["weak"]["model"],
-        "judge_model": targets["judge"]["model"],
+        "judge_model": targets["judge"]["model"] if "judge" in targets else None,
         "hermes_caller_model": caller,
         "provider_base_urls": base_urls,
         "sha256": sha256_file(path),
+        **contract,
     }
 
 
@@ -449,6 +578,109 @@ def validate_offline_evidence(
         raise ValueError(f"Phase 2 offline admission evidence is not passed: {path}")
 
 
+def validate_reused_setup_evidence(
+    args: argparse.Namespace,
+    tasks: list[Task],
+) -> dict[str, Any] | None:
+    """Validate a complete prior setup admission for build-free reuse."""
+
+    root = args.reuse_setup_evidence
+    if root is None:
+        return None
+    root = root.resolve()
+    plan_path = root / "plan.json"
+    summary_path = root / "summary.json"
+    plan = read_json(plan_path)
+    summary = read_json(summary_path)
+    if plan.get("schema_version") != setup_admission.PLAN_SCHEMA:
+        raise ValueError(f"reused setup evidence has an unsupported plan schema: {plan_path}")
+    if summary.get("schema_version") != setup_admission.SUMMARY_SCHEMA:
+        raise ValueError(f"reused setup evidence has an unsupported summary schema: {summary_path}")
+
+    harbor_tasks = setup_admission.discover_tasks(args.dataset_root)
+    current_records = [setup_admission.task_record(task) for task in harbor_tasks]
+    expected_names = [task.name for task in tasks]
+    observed_names = [str(record.get("name", "")).rsplit("/", 1)[-1] for record in current_records]
+    if len(current_records) != len(tasks) or observed_names != expected_names or plan.get("tasks") != current_records:
+        raise ValueError("reused setup evidence does not match the selected dataset tasks")
+
+    inputs = plan.get("inputs")
+    if not isinstance(inputs, dict):
+        raise ValueError("reused setup evidence plan has no inputs object")
+    expected_inputs = {
+        "dataset_root": str(args.dataset_root),
+        "dataset_sha256": setup_admission.canonical_sha256(
+            [{key: value for key, value in record.items() if key != "task_dir"} for record in current_records]
+        ),
+        "hermetic_runtime_sha256": args.hermetic_runtime_payload["content_sha256"],
+        "hermes_commit": args.hermetic_runtime_payload["hermes_commit"],
+        "relay_architecture": args.relay_architecture,
+        "relay_wheel_sha256": sha256_file(args.relay_wheel),
+        "switchyard_library_sha256": sha256_file(switchyard_library(args.switchyard_bundle)),
+        "harbor_version": setup_admission.harbor_version,
+        "concurrency": args.setup_concurrency,
+        "batch_size": args.setup_batch_size,
+        "maximum_infrastructure_attempts": args.setup_max_infra_attempts,
+        "force_build": True,
+        "preserve_containers": False,
+    }
+    mismatches = {
+        key: {"expected": value, "actual": inputs.get(key)}
+        for key, value in expected_inputs.items()
+        if inputs.get(key) != value
+    }
+    setup_agent_sha256 = inputs.get("setup_agent_sha256")
+    if not isinstance(setup_agent_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", setup_agent_sha256):
+        mismatches["setup_agent_sha256"] = {"expected": "sha256", "actual": setup_agent_sha256}
+    if mismatches:
+        raise ValueError(f"reused setup evidence input mismatch: {mismatches}")
+
+    source_plan_sha256 = setup_admission.canonical_sha256(plan)
+    if (
+        summary.get("status") != "passed"
+        or summary.get("plan_sha256") != source_plan_sha256
+        or summary.get("planned") != len(tasks)
+        or summary.get("passed") != len(tasks)
+        or summary.get("failed") != 0
+        or summary.get("pending") != 0
+    ):
+        raise ValueError("reused setup evidence summary is not a complete bound pass")
+
+    bindings = setup_admission.task_bindings(plan)
+    results: dict[str, Path] = {}
+    for path in sorted((root / "task-results").rglob("*.json")):
+        result = read_json(path)
+        name = result.get("task_name")
+        if name not in bindings:
+            raise ValueError(f"reused setup evidence contains an unknown task result: {path}")
+        if name in results:
+            raise ValueError(f"reused setup evidence contains duplicate results for {name}")
+        if (
+            result.get("schema_version") != setup_admission.RESULT_SCHEMA
+            or result.get("status") != "passed"
+            or result.get("binding_sha256") != bindings[name]
+            or result.get("agent_execution_skipped") is not True
+            or result.get("verifier_skipped") is not True
+        ):
+            raise ValueError(f"reused setup evidence contains an invalid task result: {path}")
+        results[str(name)] = path
+    if set(results) != set(bindings):
+        missing = sorted(set(bindings).difference(results))
+        raise ValueError(f"reused setup evidence is missing task results: {missing}")
+
+    evidence_files = [plan_path, summary_path, *results.values()]
+    return {
+        "schema_version": SETUP_REUSE_SCHEMA,
+        "mode": "reused",
+        "status": "passed",
+        "source_root": str(root),
+        "source_plan_sha256": source_plan_sha256,
+        "source_setup_agent_sha256": setup_agent_sha256,
+        "evidence_sha256": sha256_file_set(root, evidence_files),
+        "task_count": len(results),
+    }
+
+
 def probe_url(url: str, label: str, attempts: int = 3) -> None:
     for attempt in range(1, attempts + 1):
         request = urllib.request.Request(url, method="GET")
@@ -512,7 +744,7 @@ def normalize_architecture(value: str) -> str:
 
 def capacity_requirement_gb(args: argparse.Namespace, tasks: list[Task]) -> int:
     parallel = args.concurrency * args.parallel_max_memory_gb
-    largest = max(task.memory_gb for task in tasks)
+    largest = max(task.effective_memory_gb for task in tasks)
     return max(parallel, largest) + args.docker_memory_reserve_gb
 
 
@@ -544,8 +776,8 @@ def shared_preflight(args: argparse.Namespace, tasks: list[Task]) -> dict[str, A
     version = subprocess.run(
         [str(args.harbor_bin), "--version"], check=True, capture_output=True, text=True
     ).stdout.strip()
-    if version != "0.18.0":
-        raise RuntimeError(f"Harbor 0.18.0 is required; {args.harbor_bin} reports {version}")
+    if version != "0.20.0":
+        raise RuntimeError(f"Harbor 0.20.0 is required; {args.harbor_bin} reports {version}")
     python_version = subprocess.run(
         [
             str(args.python_bin),
@@ -556,8 +788,8 @@ def shared_preflight(args: argparse.Namespace, tasks: list[Task]) -> dict[str, A
         capture_output=True,
         text=True,
     ).stdout.strip()
-    if python_version != "0.18.0":
-        raise RuntimeError(f"Harbor Python 0.18.0 is required; {args.python_bin} provides {python_version}")
+    if python_version != "0.20.0":
+        raise RuntimeError(f"Harbor Python 0.20.0 is required; {args.python_bin} provides {python_version}")
     probe_url(args.phoenix_url, "Phoenix")
     provider_authorization = os.environ.get("SWITCHYARD_PROVIDER_AUTHORIZATION")
     if not provider_authorization:
@@ -581,7 +813,7 @@ def shared_preflight(args: argparse.Namespace, tasks: list[Task]) -> dict[str, A
         "disk_free_gb": free_bytes // 1024**3,
         "concurrency": args.concurrency,
         "parallel_task_memory_gb": args.parallel_max_memory_gb,
-        "largest_task_memory_gb": max(task.memory_gb for task in tasks),
+        "largest_task_memory_gb": max(task.effective_memory_gb for task in tasks),
         "docker_memory_reserve_gb": args.docker_memory_reserve_gb,
         "required_docker_memory_gb": required_memory_gb,
         "docker_memory_gb": docker_memory_gb,
@@ -612,7 +844,7 @@ def make_plan(args: argparse.Namespace, tasks: list[Task]) -> dict[str, Any]:
         runtime_sources.extend(
             path
             for path in (example_root / relative).rglob("*")
-            if path.is_file() and path.suffix in {".py", ".sh", ".toml", ".yaml"}
+            if path.is_file() and path.suffix in {".py", ".sh", ".toml", ".yaml", ".in"}
         )
     task_definitions = [args.dataset_root / task.name / "task.toml" for task in tasks]
     return {
@@ -628,14 +860,29 @@ def make_plan(args: argparse.Namespace, tasks: list[Task]) -> dict[str, Any]:
         "parallel_max_memory_gb": args.parallel_max_memory_gb,
         "docker_memory_reserve_gb": args.docker_memory_reserve_gb,
         "minimum_free_gb": args.minimum_free_gb,
+        "setup_admission": getattr(args, "reused_setup_evidence_payload", None)
+        or {
+            "schema_version": SETUP_REUSE_SCHEMA,
+            "mode": "fresh",
+        },
         "phoenix_project": args.phoenix_project,
         "evaluation_cohort": args.eval_cohort,
         "timeout_multipliers": {"agent": 3, "agent_setup": 6, "environment_build": 6},
         "required_models": args.plugin_contract["required_models"],
         "require_cache_hit": args.require_cache_hit,
         "routing": {
+            "mode": args.plugin_contract["mode"],
+            "algorithm": args.plugin_contract.get("algorithm"),
             "strong_model": args.plugin_contract["strong_model"],
             "weak_model": args.plugin_contract["weak_model"],
+            "judge_model": args.plugin_contract["judge_model"],
+            "classifier_target": args.plugin_contract.get("classifier_target"),
+            "classifier_mode": args.plugin_contract.get("classifier_mode"),
+            "picker": args.plugin_contract.get("picker"),
+            "confidence_threshold": args.plugin_contract.get("confidence_threshold"),
+            "recent_turn_window": args.plugin_contract.get("recent_turn_window"),
+            "random_weights": args.plugin_contract.get("random_weights"),
+            "escalation": args.plugin_contract.get("escalation"),
             "hermes_caller_model": args.plugin_contract["hermes_caller_model"],
             "provider_base_urls": args.plugin_contract["provider_base_urls"],
         },
@@ -646,6 +893,9 @@ def make_plan(args: argparse.Namespace, tasks: list[Task]) -> dict[str, Any]:
             "phase2_smoke_evidence_sha256": sha256_file(args.smoke_evidence),
             "phase2_offline_evidence_sha256": sha256_file(args.offline_evidence),
             "plugin_config_template_sha256": sha256_file(args.plugin_config_template),
+            "admission_plugin_config_template_sha256": sha256_file(
+                args.admission_plugin_config_template
+            ),
             "relay_wheel_sha256": sha256_file(args.relay_wheel),
             "switchyard_manifest_sha256": sha256_file(manifest),
             "switchyard_library_sha256": sha256_file(library_candidates[0]),
@@ -770,14 +1020,17 @@ def write_report(root: Path, summary: dict[str, Any]) -> None:
         f"- Cache-read tokens: {gates['cache_hit']['cache_read_tokens']}",
         f"- Observed provider models: {', '.join(gates['route_diversity']['observed_models']) or 'none'}",
         "",
-        "| # | Task | Memory | Evidence | Benchmark | Attempts | Spans |",
+        "| # | Task | Memory (task/effective) | Evidence | Benchmark | Attempts | Spans |",
         "|---:|---|---:|---|---|---:|---:|",
     ]
     for task in summary["tasks"]:
         benchmark = task.get("benchmark_task_passed")
         benchmark_text = "pass" if benchmark is True else "non-pass" if benchmark is False else "pending"
+        memory_text = f"{task['memory_gb']}G"
+        if task["effective_memory_gb"] != task["memory_gb"]:
+            memory_text += f"/{task['effective_memory_gb']}G"
         lines.append(
-            f"| {task['index']:03d} | `{task['name']}` | {task['memory_gb']}G | {task['status']} | "
+            f"| {task['index']:03d} | `{task['name']}` | {memory_text} | {task['status']} | "
             f"{benchmark_text} | {task['attempt_count']} | {task.get('uploaded_spans', 0)} |"
         )
     (root / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -797,6 +1050,30 @@ class CohortRunner:
             write_report(self.args.run_root, summary)
 
     def provision_environments(self) -> bool:
+        reused = getattr(self.args, "reused_setup_evidence_payload", None)
+        if reused is not None:
+            write_json(
+                self.args.run_root / "setup-state.json",
+                {
+                    "schema_version": "harbor-hermes-switchyard.phase2-setup-state.v1",
+                    "status": "passed",
+                    "failure_class": None,
+                    "exit_code": 0,
+                    "summary": {
+                        "schema_version": setup_admission.SUMMARY_SCHEMA,
+                        "status": "passed",
+                        "planned": len(self.tasks),
+                        "passed": len(self.tasks),
+                        "failed": 0,
+                        "pending": 0,
+                    },
+                    "hermetic_runtime_sha256": self.args.hermetic_runtime_payload["content_sha256"],
+                    "force_build": True,
+                    "setup_concurrency": self.args.setup_concurrency,
+                    "reused_setup_evidence": reused,
+                },
+            )
+            return True
         output = self.args.run_root / "setup-admission"
         command = [
             str(self.args.python_bin),
@@ -887,8 +1164,17 @@ class CohortRunner:
                 # cannot replace the architecture-validated setup-admission image.
                 # The setup lane has already populated Docker's layer cache.
                 "HARBOR_FORCE_BUILD": "true",
+                # Clear host values so overrides are always derived from the
+                # immutable per-task policy below.
+                "TASK_MEMORY_OVERRIDE_MB": "",
+                "VERIFIER_CPU_THREAD_LIMIT": "",
             }
         )
+        override = task.runtime_override
+        if memory_mb := override.get("memory_mb"):
+            env["TASK_MEMORY_OVERRIDE_MB"] = str(memory_mb)
+        if thread_limit := override.get("verifier_cpu_thread_limit"):
+            env["VERIFIER_CPU_THREAD_LIMIT"] = str(thread_limit)
         with log_path.open("wb") as log:
             process = await asyncio.create_subprocess_exec(
                 str(self.args.task_runner), str(attempt), env=env, stdout=log, stderr=asyncio.subprocess.STDOUT
@@ -1017,8 +1303,8 @@ class CohortRunner:
             if not await self.run_task(first):
                 return False
             remaining = self.tasks[1:]
-        parallel = [task for task in remaining if task.memory_gb <= self.args.parallel_max_memory_gb]
-        serial = [task for task in remaining if task.memory_gb > self.args.parallel_max_memory_gb]
+        parallel = [task for task in remaining if task.effective_memory_gb <= self.args.parallel_max_memory_gb]
+        serial = [task for task in remaining if task.effective_memory_gb > self.args.parallel_max_memory_gb]
         if not await self.run_parallel_lane(parallel):
             return False
         for task in serial:
@@ -1052,7 +1338,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--minimum-free-gb", type=int, default=100)
     parser.add_argument("--smoke-evidence", type=Path, required=True)
     parser.add_argument("--offline-evidence", type=Path, required=True)
+    parser.add_argument(
+        "--reuse-setup-evidence",
+        type=Path,
+        help="complete prior setup-admission directory to verify and reuse without rebuilding",
+    )
     parser.add_argument("--plugin-config-template", type=Path, required=True)
+    parser.add_argument(
+        "--admission-plugin-config-template",
+        type=Path,
+        help="routed template that produced smoke/offline evidence for a direct control",
+    )
     parser.add_argument("--task-runner", type=Path, default=example_root / "run_terminal_bench.sh")
     parser.add_argument(
         "--setup-admission-runner",
@@ -1104,6 +1400,8 @@ def parse_args() -> argparse.Namespace:
     args.bootstrap_root = (
         (args.bootstrap_root or args.run_root.parent / "harbor-hermes-switchyard-bootstrap").expanduser().resolve()
     )
+    if args.reuse_setup_evidence is not None:
+        args.reuse_setup_evidence = args.reuse_setup_evidence.expanduser().resolve()
     if args.plan_only and args.preflight_only:
         parser.error("--plan-only and --preflight-only are mutually exclusive")
     return args
@@ -1113,6 +1411,17 @@ def main() -> int:
     args = parse_args()
     args.plugin_contract = plugin_contract(args.plugin_config_template)
     args.required_model = args.plugin_contract["required_models"]
+    admission_plugin_template = args.admission_plugin_config_template or args.plugin_config_template
+    if args.plugin_contract["mode"] == "direct":
+        # Dataset/setup admission was already proven with the routed template.
+        # The direct baseline config is validated independently and does not
+        # load that admitted plugin during provider execution.
+        admission_plugin_template = args.admission_plugin_config_template or (
+            args.task_runner.parent / "config" / "plugins.toml.in"
+        )
+    elif args.admission_plugin_config_template is not None:
+        raise ValueError("a routed cohort must use its own plugin template for admission evidence")
+    args.admission_plugin_config_template = admission_plugin_template.resolve(strict=True)
     validate_smoke_evidence(
         args.smoke_evidence,
         args.sample_count,
@@ -1121,14 +1430,14 @@ def main() -> int:
         args.relay_architecture,
         args.relay_wheel,
         args.switchyard_bundle,
-        args.plugin_config_template,
+        admission_plugin_template,
     )
     validate_offline_evidence(
         args.offline_evidence,
         args.relay_architecture,
         args.relay_wheel,
         args.switchyard_bundle,
-        args.plugin_config_template,
+        admission_plugin_template,
     )
     args.canary_task = args.canary_task or None
     tasks = discover_tasks(args.dataset_root, args.sample_count, set(args.exclude_task), args.canary_task)
@@ -1142,6 +1451,7 @@ def main() -> int:
         bootstrap_preflight(args)
         args.hermetic_runtime, args.hermetic_runtime_payload = ensure_hermetic_runtime(args)
         args.setup_runtime = prepare_setup_runtime(args)
+        args.reused_setup_evidence_payload = validate_reused_setup_evidence(args, tasks)
         plan = make_plan(args, tasks)
         load_or_create_plan(args.run_root / "plan.json", plan)
         if args.plan_only:
