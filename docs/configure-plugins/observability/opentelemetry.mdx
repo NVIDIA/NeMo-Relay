@@ -725,8 +725,9 @@ must also be unique ignoring ASCII case.
 
 Each `header_env` reference must be nonblank, have no surrounding whitespace,
 and contain neither `=` nor NUL. Its environment value must be set, nonblank,
-unpadded, valid Unicode, and a valid HTTP header value. Validation errors name
-the header and environment variable but do not include the resolved value.
+contain no leading or trailing whitespace, be valid Unicode, and be a valid HTTP
+header value. Validation errors name the header and environment variable but do
+not include the resolved value.
 Relay supplies resolved values only as outbound OTLP request headers; it does
 not copy them into Event data, OpenTelemetry payloads, resource attributes, or
 runtime diagnostics.

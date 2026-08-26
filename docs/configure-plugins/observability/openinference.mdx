@@ -103,5 +103,11 @@ let subscriber = OpenTelemetrySubscriber::new(config)?;
 </Tab>
 </Tabs>
 
+Direct OpenInference subscribers use the shared
+[`header_env` construction, validation, and secret-handling behavior](/configure-plugins/observability/opentelemetry#direct-subscribers).
+Set `OTEL_AUTHORIZATION` to the complete, nonblank authorization header value
+before constructing `OpenTelemetrySubscriber`. Subscriber construction fails
+if the environment variable is missing or invalid.
+
 Register the subscriber before instrumented work. During graceful teardown,
 deregister it, flush it, and then shut it down.
