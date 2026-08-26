@@ -18,13 +18,18 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import tomli_w
+from plugin_config_paths import (
+    SWITCHYARD_ROUTES_PATH,
+    derive_paired_paths,
+    plugin_config_identity_sha256,
+)
 from relay_version import RELAY_REQUIREMENT, wheel_version
 
-HERMES_REPOSITORY = "https://github.com/bbednarski9/hermes-agent.git"
-HERMES_REF = "feat/relay-native-plugin-init"
-HERMES_COMMIT = "a3d472f0e6bdc376df87b1436a461c4796db6747"
+HERMES_REPOSITORY = "https://github.com/NousResearch/hermes-agent.git"
+HERMES_REF = "v2026.8.19"
+HERMES_COMMIT = "fcbd1076a93841fa88855acce810e342a5b78101"
 SWITCHYARD_REPOSITORY = "https://github.com/NVIDIA-NeMo/Switchyard.git"
-SWITCHYARD_COMMIT = "5c84c16e84fa781452b1ab9a96a0f12303619824"
+SWITCHYARD_COMMIT = "ee84cf62f0b5efae5fc1537278cd8e16768c89ff"
 SAFE_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}")
 DIRECT_PROVIDER_BASE_URL = "https://inference-api.nvidia.com/v1"
 
@@ -105,7 +110,9 @@ def verify_native_library(path: Path, architecture: str) -> None:
         raise ValueError(f"Switchyard library does not target {architecture}: ELF e_machine={machine}")
 
 
-def plugin_settings(config: dict[str, object]) -> dict[str, object]:
+def plugin_settings(
+    config: dict[str, object], switchyard_routes: dict[str, object] | None
+) -> dict[str, object]:
     components = config.get("components")
     if not isinstance(components, list):
         raise ValueError("Relay components are missing")
@@ -154,37 +161,48 @@ def plugin_settings(config: dict[str, object]) -> dict[str, object]:
     if len(dynamic) != 1 or not isinstance(dynamic[0], dict):
         raise ValueError("plugins.toml.in must define exactly one dynamic plugin")
     plugin_config = dynamic[0].get("config")
-    if not isinstance(plugin_config, dict) or not isinstance(plugin_config.get("targets"), dict):
+    if not isinstance(plugin_config, dict):
+        raise ValueError("Switchyard plugin configuration is missing")
+    if plugin_config.get("switchyard_config_path") != SWITCHYARD_ROUTES_PATH:
+        raise ValueError("plugins.toml.in must reference the staged switchyard-routes.toml")
+    switchyard_config = switchyard_routes
+    if not isinstance(switchyard_config, dict) or switchyard_config.get("schema_version") != 1:
+        raise ValueError("switchyard-routes.toml must declare schema_version = 1")
+    llm_clients = switchyard_config.get("llm_clients")
+    if not isinstance(llm_clients, dict) or set(llm_clients) != {"nvidia"}:
+        raise ValueError("Switchyard deployment must define exactly one llm_clients.nvidia client")
+    client = llm_clients["nvidia"]
+    base_url = checked_url(str(client.get("base_url", "")), "nvidia_base_url")
+    if client.get("api_key_env") != "SWITCHYARD_PROVIDER_AUTHORIZATION":
+        raise ValueError("switchyard-routes.toml must reference SWITCHYARD_PROVIDER_AUTHORIZATION")
+    if not isinstance(switchyard_config.get("targets"), dict):
         raise ValueError("Switchyard dynamic plugin targets are missing")
-    targets = plugin_config["targets"]
+    targets = switchyard_config["targets"]
+    routes = switchyard_config.get("routes")
+    if not isinstance(routes, dict) or set(routes) != {"default"}:
+        raise ValueError("Switchyard deployment must define exactly one routes.default route")
+    route = routes["default"]
+    if not isinstance(route, dict):
+        raise ValueError("routes.default must be a table")
     settings: dict[str, object] = {}
-    algorithm = plugin_config.get("algorithm")
-    if not isinstance(algorithm, dict):
-        raise ValueError("Switchyard algorithm configuration is missing")
-    algorithm_kind = algorithm.get("kind")
+    algorithm_kind = route.get("type")
     if algorithm_kind != "stage_router" and set(targets) != {"strong", "weak", "judge"}:
         raise ValueError("this Switchyard routing mode requires strong, weak, and judge targets")
     if algorithm_kind == "random":
-        if algorithm != {"kind": "random"}:
+        if route != {"id": route.get("id"), "type": "random", "targets": ["strong", "weak"]}:
             raise ValueError("Switchyard random routing must omit a fixed seed")
-        if {name: targets[name].get("weight", 1) for name in ("strong", "weak", "judge")} != {
-            "strong": 1,
-            "weak": 1,
-            "judge": 0,
-        }:
-            raise ValueError("Switchyard random routing must use an equal strong/weak split")
         settings["random_weights"] = {"strong": 1.0, "weak": 1.0}
     elif algorithm_kind == "llm_classifier":
-        classifier_target = algorithm.get("classifier_target")
+        classifier_target = route.get("classifier_target")
         if classifier_target not in targets:
             raise ValueError("Switchyard classifier_target must reference a configured target")
         settings["classifier_target"] = classifier_target
-        classifier_mode = algorithm.get("mode", "capability")
+        classifier_mode = route.get("mode", "capability")
         if classifier_mode not in {"capability", "escalation"}:
             raise ValueError("Switchyard LLM-classifier mode is invalid")
         settings["classifier_mode"] = classifier_mode
         if classifier_mode == "escalation":
-            escalation = algorithm.get("escalation")
+            escalation = route.get("escalation")
             if escalation != {
                 "confirmations": 1,
                 "recent_turn_window": 28,
@@ -193,14 +211,14 @@ def plugin_settings(config: dict[str, object]) -> dict[str, object]:
                 raise ValueError("Switchyard escalation settings do not match the trial contract")
             settings["escalation"] = dict(escalation)
     elif algorithm_kind == "stage_router":
-        if algorithm.get("capable_target") != "strong" or algorithm.get("efficient_target") != "weak":
+        if route.get("capable_target") != "strong" or route.get("efficient_target") != "weak":
             raise ValueError("Switchyard stage-router tiers must reference strong and weak targets")
-        if algorithm.get("picker") not in {"capable_first", "efficient_first"}:
+        if route.get("picker") not in {"capable_first", "efficient_first"}:
             raise ValueError("Switchyard stage-router picker is invalid")
-        confidence_threshold = algorithm.get("confidence_threshold")
+        confidence_threshold = route.get("confidence_threshold")
         if not isinstance(confidence_threshold, (int, float)) or not 0 <= confidence_threshold <= 1:
             raise ValueError("Switchyard stage-router confidence threshold is invalid")
-        classifier = algorithm.get("classifier")
+        classifier = route.get("classifier")
         if classifier is not None and (not isinstance(classifier, dict) or classifier.get("target") != "judge"):
             raise ValueError("Switchyard stage-router classifier must reference the judge target")
         expected_targets = {"strong", "weak", "judge"} if classifier is not None else {"strong", "weak"}
@@ -209,9 +227,9 @@ def plugin_settings(config: dict[str, object]) -> dict[str, object]:
         settings.update(
             {
                 "classifier_target": classifier["target"] if classifier is not None else None,
-                "picker": algorithm["picker"],
+                "picker": route["picker"],
                 "confidence_threshold": float(confidence_threshold),
-                "recent_turn_window": algorithm.get("recent_turn_window"),
+                "recent_turn_window": route.get("recent_turn_window"),
             }
         )
     else:
@@ -221,17 +239,17 @@ def plugin_settings(config: dict[str, object]) -> dict[str, object]:
         target = targets[name]
         if not isinstance(target, dict):
             raise ValueError(f"Switchyard target is invalid: {name}")
-        model = checked_label(str(target.get("model", "")), f"{name}_model")
-        base_url = checked_url(str(target.get("base_url", "")), f"{name}_base_url")
-        header_env = target.get("header_env")
-        if header_env != {"authorization": "SWITCHYARD_PROVIDER_AUTHORIZATION"}:
-            raise ValueError("plugins.toml.in must reference SWITCHYARD_PROVIDER_AUTHORIZATION")
+        if target.get("llm_client") != "nvidia":
+            raise ValueError(f"Switchyard target must use the nvidia llm_client: {name}")
+        model = checked_label(str(target.get("id", "")), f"{name}_model")
         settings[f"{name}_model"] = model
         settings[f"{name}_base_url"] = base_url
     if settings["strong_model"] == settings["weak_model"]:
         raise ValueError("strong and weak models must be distinct")
     settings["algorithm"] = algorithm_kind
     settings["hermes_caller_model"] = caller_model
+    if route.get("id") != caller_model:
+        raise ValueError("Switchyard route id must match the Hermes caller model")
     provider_models = {settings["strong_model"], settings["weak_model"]}
     if "judge_model" in settings:
         provider_models.add(settings["judge_model"])
@@ -243,6 +261,7 @@ def plugin_settings(config: dict[str, object]) -> dict[str, object]:
 def render_config(
     template: Path,
     output: Path,
+    bundle: Path,
     replacements: dict[str, str],
     test_overrides: dict[str, str] | None = None,
 ) -> dict[str, object]:
@@ -255,19 +274,32 @@ def render_config(
     if unresolved:
         raise ValueError(f"unresolved Relay config placeholders: {unresolved}")
     config = tomllib.loads(rendered)
-    if test_overrides:
-        plugin = config["plugins"]["dynamic"][0]["config"]
-        target_names = tuple(plugin["targets"])
-        old_models = {name: plugin["targets"][name]["model"] for name in target_names}
-        for name in target_names:
-            override = f"{name}_model"
-            plugin["targets"][name]["model"] = test_overrides[override]
-            plugin["targets"][name]["base_url"] = test_overrides["provider_base_url"]
-        pricing = config["components"][0]["config"]["sources"][0]["catalog"]["entries"]
-        replacement_models = {old_models[name]: test_overrides[f"{name}_model"] for name in old_models}
-        for entry in pricing:
-            entry["model_id"] = replacement_models.get(entry["model_id"], entry["model_id"])
-    settings = plugin_settings(config)
+
+    plugins = config.get("plugins")
+    dynamic_plugins = plugins.get("dynamic") if isinstance(plugins, dict) else None
+    switchyard_routes: dict[str, object] | None = None
+    if dynamic_plugins is not None:
+        switchyard_source, pricing_source = derive_paired_paths(template)
+        with switchyard_source.open("rb") as stream:
+            switchyard_routes = tomllib.load(stream)
+        pricing_catalog = json.loads(pricing_source.read_text(encoding="utf-8"))
+        if test_overrides:
+            target_names = tuple(switchyard_routes["targets"])
+            old_models = {name: switchyard_routes["targets"][name]["id"] for name in target_names}
+            for name in target_names:
+                override = f"{name}_model"
+                switchyard_routes["targets"][name]["id"] = test_overrides[override]
+            for client in switchyard_routes.get("llm_clients", {}).values():
+                client["base_url"] = test_overrides["provider_base_url"]
+            replacement_models = {old_models[name]: test_overrides[f"{name}_model"] for name in old_models}
+            for entry in pricing_catalog.get("entries", []):
+                entry["model_id"] = replacement_models.get(entry["model_id"], entry["model_id"])
+        (bundle / "switchyard-routes.toml").write_bytes(tomli_w.dumps(switchyard_routes).encode("utf-8"))
+        (bundle / "pricing.json").write_text(
+            json.dumps(pricing_catalog, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+    settings = plugin_settings(config, switchyard_routes)
     output.write_text(tomli_w.dumps(config), encoding="utf-8")
     os.chmod(output, 0o600)
     return settings
@@ -353,6 +385,7 @@ def main() -> int:
     routing = render_config(
         plugin_template,
         config_path,
+        bundle,
         {
             "HERMES_COMMIT": HERMES_COMMIT,
             "OPENINFERENCE_ENDPOINT": openinference_endpoint,
@@ -388,7 +421,7 @@ def main() -> int:
             "library_sha256": sha256(libraries[0]),
         },
         "relay_config_sha256": sha256(config_path),
-        "plugin_config_template_sha256": sha256(plugin_template),
+        "plugin_config_template_sha256": plugin_config_identity_sha256(plugin_template),
         "routing": {
             **routing,
         },

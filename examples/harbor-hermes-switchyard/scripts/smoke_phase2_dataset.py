@@ -131,9 +131,9 @@ async def validate_local_dataset(
                         import_path="harbor_hermes_agent:HarborHermesAgent",
                         model_name="openai/ollama-route-stub",
                         kwargs={
-                            "repository_url": "https://github.com/bbednarski9/hermes-agent.git",
-                            "repository_ref": "feat/relay-native-plugin-init",
-                            "commit": "a3d472f0e6bdc376df87b1436a461c4796db6747",
+                            "repository_url": "https://github.com/NousResearch/hermes-agent.git",
+                            "repository_ref": "v2026.8.19",
+                            "commit": "fcbd1076a93841fa88855acce810e342a5b78101",
                             "relay_config_path": "/smoke/runtime/plugins.toml",
                             "switchyard_bundle_dir": "/smoke/runtime/switchyard-plugin",
                             "relay_wheel_path": "/smoke/runtime/nemo-relay.whl",

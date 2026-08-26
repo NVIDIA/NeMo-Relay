@@ -29,12 +29,17 @@ _SCRIPT_ROOT = Path(__file__).resolve().parent
 if str(_SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_ROOT))
 import run_setup_admission as setup_admission  # noqa: E402
+from plugin_config_paths import (  # noqa: E402
+    SWITCHYARD_ROUTES_PATH,
+    derive_paired_paths,
+    plugin_config_identity_sha256,
+)
 from relay_version import wheel_version  # noqa: E402
 
 SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-cohort.v1"
 PLAN_SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-plan.v1"
 TASK_STATE_SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-task-state.v1"
-EXPECTED_HERMES_COMMIT = "a3d472f0e6bdc376df87b1436a461c4796db6747"
+EXPECTED_HERMES_COMMIT = "fcbd1076a93841fa88855acce810e342a5b78101"
 HERMETIC_RUNTIME_SCHEMA = "harbor-hermes-switchyard.hermetic-runtime.v1"
 SETUP_REUSE_SCHEMA = "harbor-hermes-switchyard.setup-evidence-reuse.v1"
 INFRASTRUCTURE_PATTERNS = (
@@ -264,22 +269,39 @@ def plugin_contract(path: Path) -> dict[str, Any]:
     if len(plugins) != 1:
         raise ValueError("plugin configuration must define exactly one dynamic plugin")
     plugin_config = plugins[0].get("config", {})
-    targets = plugin_config.get("targets", {})
-    algorithm = plugin_config.get("algorithm", {})
+    if plugin_config.get("switchyard_config_path") != SWITCHYARD_ROUTES_PATH:
+        raise ValueError("plugin configuration must reference the staged switchyard-routes.toml")
+    switchyard_source, _pricing_source = derive_paired_paths(path)
+    with switchyard_source.open("rb") as stream:
+        switchyard_config = tomllib.load(stream)
+    if not isinstance(switchyard_config, dict) or switchyard_config.get("schema_version") != 1:
+        raise ValueError("switchyard-routes.toml must declare schema_version = 1")
+    targets = switchyard_config.get("targets", {})
+    llm_clients = switchyard_config.get("llm_clients", {})
+    if not isinstance(llm_clients, dict) or set(llm_clients) != {"nvidia"}:
+        raise ValueError("plugin configuration must define exactly one llm_clients.nvidia client")
+    client = llm_clients["nvidia"]
+    if client.get("api_key_env") != "SWITCHYARD_PROVIDER_AUTHORIZATION":
+        raise ValueError("plugin authorization must reference SWITCHYARD_PROVIDER_AUTHORIZATION")
+    routes = switchyard_config.get("routes", {})
+    if not isinstance(routes, dict) or set(routes) != {"default"}:
+        raise ValueError("plugin configuration must define exactly one routes.default route")
+    algorithm = routes["default"]
     if not isinstance(algorithm, dict):
-        raise ValueError("plugin algorithm configuration must be a table")
-    algorithm_kind = algorithm.get("kind")
+        raise ValueError("plugin route configuration must be a table")
+    algorithm_kind = algorithm.get("type")
     expected_targets = {"strong", "weak"}
     if algorithm_kind != "stage_router" or algorithm.get("classifier") is not None:
         expected_targets.add("judge")
     if set(targets) != expected_targets:
         raise ValueError(f"plugin configuration targets must be {sorted(expected_targets)}")
     for target in targets.values():
-        if target.get("header_env") != {"authorization": "SWITCHYARD_PROVIDER_AUTHORIZATION"}:
-            raise ValueError("plugin authorization must reference SWITCHYARD_PROVIDER_AUTHORIZATION")
-    models = [targets[name].get("model") for name in ("weak", "strong")]
-    catalog_models = [*models, *([targets["judge"].get("model")] if "judge" in targets else [])]
-    base_urls = sorted({targets[name].get("base_url") for name in targets})
+        if target.get("llm_client") != "nvidia":
+            raise ValueError("plugin targets must use the nvidia llm_client")
+    models = [targets[name].get("id") for name in ("weak", "strong")]
+    catalog_models = [*models, *([targets["judge"].get("id")] if "judge" in targets else [])]
+    base_url = client.get("base_url")
+    base_urls = [base_url]
     if any(not isinstance(value, str) or not value for value in catalog_models + base_urls):
         raise ValueError("plugin target models and base URLs must be non-empty")
     for base_url in base_urls:
@@ -288,6 +310,8 @@ def plugin_contract(path: Path) -> dict[str, Any]:
             raise ValueError("plugin target base URLs must be credential-free HTTP(S) URLs")
     if not isinstance(caller, str) or caller in models:
         raise ValueError("Hermes caller model must be distinct from plugin target models")
+    if algorithm.get("id") != caller:
+        raise ValueError("Switchyard route id must match the Hermes caller model")
     contract: dict[str, Any] = {
         "algorithm": algorithm_kind,
         "classifier_target": None,
@@ -299,11 +323,8 @@ def plugin_contract(path: Path) -> dict[str, Any]:
         "escalation": None,
     }
     if algorithm_kind == "random":
-        if algorithm != {"kind": "random"}:
+        if algorithm != {"id": algorithm.get("id"), "type": "random", "targets": ["strong", "weak"]}:
             raise ValueError("random routing must omit a fixed seed")
-        weights = {name: targets[name].get("weight", 1) for name in ("strong", "weak", "judge")}
-        if weights != {"strong": 1, "weak": 1, "judge": 0}:
-            raise ValueError("random routing must split equally across strong and weak with judge disabled")
         contract["random_weights"] = {"strong": 1.0, "weak": 1.0}
     elif algorithm_kind == "llm_classifier":
         if (
@@ -351,9 +372,9 @@ def plugin_contract(path: Path) -> dict[str, Any]:
         "mode": "switchyard",
         "required_models": sorted(set(models)),
         "catalog_models": sorted(set(catalog_models)),
-        "strong_model": targets["strong"]["model"],
-        "weak_model": targets["weak"]["model"],
-        "judge_model": targets["judge"]["model"] if "judge" in targets else None,
+        "strong_model": targets["strong"]["id"],
+        "weak_model": targets["weak"]["id"],
+        "judge_model": targets["judge"]["id"] if "judge" in targets else None,
         "hermes_caller_model": caller,
         "provider_base_urls": base_urls,
         "sha256": sha256_file(path),
@@ -551,7 +572,7 @@ def validate_smoke_evidence(
         or evidence["relay_runtime"].get("relay_wheel_sha256") != sha256_file(relay_wheel)
         or evidence["relay_runtime"].get("switchyard_library_sha256")
         != sha256_file(switchyard_library(switchyard_bundle))
-        or evidence["relay_runtime"].get("plugin_config_template_sha256") != sha256_file(plugin_config_template)
+        or evidence["relay_runtime"].get("plugin_config_template_sha256") != plugin_config_identity_sha256(plugin_config_template)
     ):
         raise ValueError(f"Phase 2 all-task smoke evidence is not passed: {path}")
 
@@ -571,7 +592,7 @@ def validate_offline_evidence(
         or evidence.get("relay_architecture") != relay_architecture
         or evidence.get("relay_wheel_sha256") != sha256_file(relay_wheel)
         or evidence.get("switchyard_library_sha256") != sha256_file(switchyard_library(switchyard_bundle))
-        or evidence.get("plugin_config_template_sha256") != sha256_file(plugin_config_template)
+        or evidence.get("plugin_config_template_sha256") != plugin_config_identity_sha256(plugin_config_template)
         or evidence.get("provider_requests", 0) <= 0
         or evidence.get("surviving_shutdown_threads") != []
     ):
@@ -892,8 +913,8 @@ def make_plan(args: argparse.Namespace, tasks: list[Task]) -> dict[str, Any]:
             "dataset_task_definitions_sha256": sha256_file_set(args.dataset_root, task_definitions),
             "phase2_smoke_evidence_sha256": sha256_file(args.smoke_evidence),
             "phase2_offline_evidence_sha256": sha256_file(args.offline_evidence),
-            "plugin_config_template_sha256": sha256_file(args.plugin_config_template),
-            "admission_plugin_config_template_sha256": sha256_file(
+            "plugin_config_template_sha256": plugin_config_identity_sha256(args.plugin_config_template),
+            "admission_plugin_config_template_sha256": plugin_config_identity_sha256(
                 args.admission_plugin_config_template
             ),
             "relay_wheel_sha256": sha256_file(args.relay_wheel),

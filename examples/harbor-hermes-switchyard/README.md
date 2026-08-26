@@ -12,7 +12,7 @@ completed run roots without mutating them.
 | Dependency | Input used by this example |
 |---|---|
 | NeMo Relay | Latest released `nemo-relay>=0.7.0` platform wheel, installed by digest rather than from this source checkout. |
-| Hermes | `bbednarski9/hermes-agent`, detached commit `a3d472f0e6bdc376df87b1436a461c4796db6747` from PR #77915. |
+| Hermes | `NousResearch/hermes-agent`, release `v2026.8.19` (commit `fcbd1076a93841fa88855acce810e342a5b78101`), which includes PR #77915. |
 | Switchyard | `bbednarski9/Switchyard`, detached commit `baaf678fca0c941b36e53fa30b563b350f8bb2f0` from PR #270. |
 | Harbor | `harbor==0.20.0`, official registry export of `terminal-bench@2.0`. |
 
@@ -46,8 +46,9 @@ The two configuration files have deliberately different responsibilities:
 
 - `.env.example` is copied to an untracked, mode-`0600`
   `.env`. It contains per-machine paths, the run identity, Phoenix
-  destination, manually selected capacity, and the real
-  `SWITCHYARD_PROVIDER_AUTHORIZATION` header.
+  destination, manually selected capacity, and the real bare-token
+  `SWITCHYARD_PROVIDER_AUTHORIZATION` credential (Switchyard adds the
+  `Bearer ` prefix itself).
 - `config/plugins.toml.in` is checked in and non-secret. It is the only source
   of provider URLs, protocols, strong, weak, and judge models, routing/classifier
   policy, native plugin manifest, authorization variable **name**, Relay

@@ -83,24 +83,25 @@ def main() -> int:
     parser.add_argument("--model", default="ollama-route-stub")
     args = parser.parse_args()
     config = tomllib.loads(args.plugins.read_text(encoding="utf-8"))
-    plugin = config["plugins"]["dynamic"][0]["config"]
-    algorithm = plugin["algorithm"]
+    switchyard_config_path = config["plugins"]["dynamic"][0]["config"]["switchyard_config_path"]
+    plugin = tomllib.loads(Path(switchyard_config_path).read_text(encoding="utf-8"))
+    algorithm = plugin["routes"]["default"]
     targets = plugin["targets"]
-    algorithm_kind = algorithm["kind"]
+    algorithm_kind = algorithm["type"]
     classifier_mode = algorithm.get("mode", "capability")
     if algorithm_kind == "random":
         classifier_model = None
-        weak_model = targets["weak"]["model"]
-        strong_model = targets["strong"]["model"]
+        weak_model = targets["weak"]["id"]
+        strong_model = targets["strong"]["id"]
     elif algorithm_kind == "stage_router":
         classifier = algorithm.get("classifier")
-        classifier_model = targets[classifier["target"]]["model"] if isinstance(classifier, dict) else None
-        weak_model = targets[algorithm["efficient_target"]]["model"]
-        strong_model = targets[algorithm["capable_target"]]["model"]
+        classifier_model = targets[classifier["target"]]["id"] if isinstance(classifier, dict) else None
+        weak_model = targets[algorithm["efficient_target"]]["id"]
+        strong_model = targets[algorithm["capable_target"]]["id"]
     else:
-        classifier_model = targets[algorithm["classifier_target"]]["model"]
-        weak_model = targets[algorithm["weak_target"]]["model"]
-        strong_model = targets[algorithm["strong_target"]]["model"]
+        classifier_model = targets[algorithm["classifier_target"]]["id"]
+        weak_model = targets[algorithm["weak_target"]]["id"]
+        strong_model = targets[algorithm["strong_target"]]["id"]
     artifacts = args.artifacts.resolve()
     artifacts.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.environ["HERMES_NEMO_RELAY_PLUGINS_TOML"] = str(args.plugins.resolve())

@@ -29,10 +29,10 @@ from typing_extensions import override
 
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
-_DEFAULT_HERMES_REPOSITORY = "https://github.com/bbednarski9/hermes-agent.git"
-_DEFAULT_HERMES_REF = "feat/relay-native-plugin-init"
-_DEFAULT_HERMES_COMMIT = "a3d472f0e6bdc376df87b1436a461c4796db6747"
-_DEFAULT_SWITCHYARD_COMMIT = "5c84c16e84fa781452b1ab9a96a0f12303619824"
+_DEFAULT_HERMES_REPOSITORY = "https://github.com/NousResearch/hermes-agent.git"
+_DEFAULT_HERMES_REF = "v2026.8.19"
+_DEFAULT_HERMES_COMMIT = "fcbd1076a93841fa88855acce810e342a5b78101"
+_DEFAULT_SWITCHYARD_COMMIT = "ee84cf62f0b5efae5fc1537278cd8e16768c89ff"
 _ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
 _MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}")
 _PROVIDER_AUTHORIZATION_FILE = "/run/secrets/switchyard-provider-authorization"
@@ -218,7 +218,7 @@ def _validate_direct_baseline_config(config: dict[str, Any]) -> str:
     return "direct"
 
 
-def _validate_relay_config(path: Path) -> str:
+def _validate_relay_config(path: Path, switchyard_bundle_dir: Path) -> str:
     with path.open("rb") as stream:
         config = tomllib.load(stream)
 
@@ -239,18 +239,60 @@ def _validate_relay_config(path: Path) -> str:
         raise ValueError("the dynamic plugin must reference the staged Switchyard manifest")
 
     plugin_config = plugin.get("config")
-    if not isinstance(plugin_config, dict) or plugin_config.get("version") != 2:
-        raise ValueError("the Switchyard plugin must use config version = 2")
-    algorithm = plugin_config.get("algorithm")
-    algorithm_kind = algorithm.get("kind") if isinstance(algorithm, dict) else None
+    if not isinstance(plugin_config, dict):
+        raise ValueError("the Switchyard plugin configuration must be a table")
+    if plugin_config.get("switchyard_config_path") != "/opt/relay-plugins/nvidia.switchyard/switchyard-routes.toml":
+        raise ValueError("the Switchyard plugin must reference the staged switchyard-routes.toml")
+    switchyard_routes_path = switchyard_bundle_dir / "switchyard-routes.toml"
+    if not switchyard_routes_path.is_file():
+        raise FileNotFoundError(switchyard_routes_path)
+    with switchyard_routes_path.open("rb") as stream:
+        switchyard_config = tomllib.load(stream)
+    if not isinstance(switchyard_config, dict) or switchyard_config.get("schema_version") != 1:
+        raise ValueError("switchyard-routes.toml must declare schema_version = 1")
+
+    llm_clients = switchyard_config.get("llm_clients")
+    if not isinstance(llm_clients, dict) or set(llm_clients) != {"nvidia"}:
+        raise ValueError("the Switchyard deployment must define exactly one llm_clients.nvidia client")
+    client = llm_clients["nvidia"]
+    if not isinstance(client, dict) or client.get("format") != "openai_chat":
+        raise ValueError("the nvidia llm_client must use the openai_chat format")
+    if client.get("forward_auth"):
+        raise ValueError("the nvidia llm_client must not forward caller credentials")
+    base_url = client.get("base_url")
+    parsed_base_url = urlsplit(base_url) if isinstance(base_url, str) else None
+    if (
+        parsed_base_url is None
+        or parsed_base_url.scheme not in {"http", "https"}
+        or not parsed_base_url.hostname
+        or parsed_base_url.username is not None
+        or parsed_base_url.password is not None
+    ):
+        raise ValueError("the nvidia llm_client must use a credential-free HTTP(S) base URL")
+    authorization_env = client.get("api_key_env")
+    if not isinstance(authorization_env, str) or not _ENV_NAME.fullmatch(authorization_env):
+        raise ValueError("the nvidia llm_client must source its key from an environment variable")
+
+    routes = switchyard_config.get("routes")
+    if not isinstance(routes, dict) or set(routes) != {"default"}:
+        raise ValueError("the Switchyard deployment must define exactly one routes.default route")
+    route = routes["default"]
+    if not isinstance(route, dict):
+        raise ValueError("routes.default must be a table")
+    route_id = route.get("id")
+    if not isinstance(route_id, str) or not route_id:
+        raise ValueError("routes.default must define a public model id")
+    algorithm_kind = route.get("type")
     if algorithm_kind == "random":
-        if algorithm != {"kind": "random"}:
+        expected_route = {"id": route_id, "type": "random", "targets": ["strong", "weak"]}
+        if route != expected_route:
             raise ValueError("the Switchyard random-router contract must use entropy-backed selection")
     elif algorithm_kind == "llm_classifier":
-        mode = algorithm.get("mode", "capability")
+        mode = route.get("mode", "capability")
         if mode == "escalation":
-            expected_algorithm = {
-                "kind": "llm_classifier",
+            expected_route = {
+                "id": route_id,
+                "type": "llm_classifier",
                 "mode": "escalation",
                 "classifier_target": "judge",
                 "weak_target": "weak",
@@ -262,46 +304,44 @@ def _validate_relay_config(path: Path) -> str:
                     "window_message_chars": 500,
                 },
             }
-            if algorithm != expected_algorithm:
+            if route != expected_route:
                 raise ValueError("the Switchyard escalation-router contract does not match the Phase 2 design")
         elif mode != "capability":
             raise ValueError("the Switchyard LLM-classifier mode is unsupported")
     elif algorithm_kind == "stage_router":
-        picker = algorithm.get("picker")
-        confidence_threshold = algorithm.get("confidence_threshold")
-        expected_algorithm = {
-            "kind": "stage_router",
+        picker = route.get("picker")
+        confidence_threshold = route.get("confidence_threshold")
+        expected_route = {
+            "id": route_id,
+            "type": "stage_router",
             "capable_target": "strong",
             "efficient_target": "weak",
             "picker": picker,
             "confidence_threshold": confidence_threshold,
             "recent_turn_window": 3,
         }
-        classifier = algorithm.get("classifier")
+        classifier = route.get("classifier")
         if classifier is not None:
-            expected_algorithm["classifier"] = {
+            expected_route["classifier"] = {
                 "target": "judge",
                 "base_threshold": 0.5,
                 "threshold_step": 0.0,
                 "recent_turn_window": 3,
-                "max_output_tokens": 4096,
             }
         if (
             picker not in {"capable_first", "efficient_first"}
             or isinstance(confidence_threshold, bool)
             or not isinstance(confidence_threshold, (int, float))
             or not 0 <= confidence_threshold <= 1
-            or algorithm != expected_algorithm
+            or route != expected_route
         ):
             raise ValueError("the Switchyard stage-router contract does not match the Phase 2 design")
     else:
         raise ValueError(f"unsupported Switchyard algorithm: {algorithm_kind!r}")
-    if plugin_config.get("default_targets") != {"openai_chat": "strong"}:
-        raise ValueError("the Switchyard OpenAI default target must be strong")
 
-    targets = plugin_config.get("targets")
+    targets = switchyard_config.get("targets")
     expected_targets = {"strong", "weak", "judge"}
-    if algorithm_kind == "stage_router" and algorithm.get("classifier") is None:
+    if algorithm_kind == "stage_router" and route.get("classifier") is None:
         expected_targets = {"strong", "weak"}
     if not isinstance(targets, dict) or set(targets) != expected_targets:
         raise ValueError(f"Switchyard targets must be exactly {sorted(expected_targets)} for this routing mode")
@@ -309,50 +349,29 @@ def _validate_relay_config(path: Path) -> str:
     for name, target in targets.items():
         if not isinstance(target, dict):
             raise ValueError(f"Switchyard target {name!r} must be a table")
-        expected_transport = (
-            ("openai_responses", "/v1/responses")
-            if (
-                algorithm_kind != "stage_router"
-                and name == "strong"
-                and target.get("protocol") == "openai_responses"
-            )
-            else ("openai_chat", "/v1/chat/completions")
-        )
-        if (target.get("protocol"), target.get("endpoint")) != expected_transport:
-            raise ValueError(f"Switchyard target {name!r} uses an unsupported protocol/endpoint pair")
-        if target.get("drop_caller_extra_body") is not True:
-            raise ValueError(f"Switchyard target {name!r} must drop Hermes' caller-specific extra_body wrapper")
-        base_url = target.get("base_url")
-        parsed_base_url = urlsplit(base_url) if isinstance(base_url, str) else None
-        if (
-            parsed_base_url is None
-            or parsed_base_url.scheme not in {"http", "https"}
-            or not parsed_base_url.hostname
-            or parsed_base_url.username is not None
-            or parsed_base_url.password is not None
-        ):
-            raise ValueError(f"Switchyard target {name!r} must use a credential-free HTTP(S) base URL")
-        model = target.get("model")
+        if target.get("llm_client") != "nvidia":
+            raise ValueError(f"Switchyard target {name!r} must use the nvidia llm_client")
+        model = target.get("id")
         if not isinstance(model, str) or not model:
             raise ValueError(f"Switchyard target {name!r} must define a model")
         provider_models.add(model)
-        header_env = target.get("header_env")
-        authorization_env = header_env.get("authorization") if isinstance(header_env, dict) else None
-        if not isinstance(authorization_env, str) or not _ENV_NAME.fullmatch(authorization_env):
-            raise ValueError(f"Switchyard target {name!r} must source authorization from an environment variable")
-    if targets["strong"]["model"] == targets["weak"]["model"]:
+    if targets["strong"]["id"] == targets["weak"]["id"]:
         raise ValueError("Switchyard strong and weak targets must use distinct models")
-    if algorithm_kind == "random" and {
-        name: targets[name].get("weight", 1) for name in ("strong", "weak", "judge")
-    } != {"strong": 1, "weak": 1, "judge": 0}:
-        raise ValueError("random routing must split equally across strong and weak with judge disabled")
 
     pricing = _find_named_component(config, "pricing")
     pricing_config = pricing.get("config")
     sources = pricing_config.get("sources") if isinstance(pricing_config, dict) else None
-    if not isinstance(sources, list) or len(sources) != 1 or sources[0].get("type") != "inline":
-        raise ValueError("pricing must use exactly one inline catalog")
-    catalog = sources[0].get("catalog")
+    if (
+        not isinstance(sources, list)
+        or len(sources) != 1
+        or sources[0].get("type") != "file"
+        or sources[0].get("path") != "/opt/relay-plugins/nvidia.switchyard/pricing.json"
+    ):
+        raise ValueError("pricing must reference the staged pricing.json")
+    pricing_path = switchyard_bundle_dir / "pricing.json"
+    if not pricing_path.is_file():
+        raise FileNotFoundError(pricing_path)
+    catalog = json.loads(pricing_path.read_text(encoding="utf-8"))
     entries = catalog.get("entries") if isinstance(catalog, dict) and catalog.get("version") == 1 else None
     if not isinstance(entries, list) or {entry.get("model_id") for entry in entries} != provider_models:
         raise ValueError("pricing entries must match the Switchyard provider models")
@@ -372,6 +391,8 @@ def _validate_relay_config(path: Path) -> str:
     caller_model = atif.get("model_name") if isinstance(atif, dict) else None
     if not isinstance(caller_model, str) or not caller_model or caller_model in provider_models:
         raise ValueError("the fail-closed Hermes caller model must not be a Switchyard provider model")
+    if caller_model != route_id:
+        raise ValueError("the Switchyard route id must match the Hermes caller model")
     opentelemetry = observability_config.get("opentelemetry")
     endpoints = opentelemetry.get("endpoints") if isinstance(opentelemetry, dict) else None
     if not isinstance(opentelemetry, dict) or opentelemetry.get("enabled") is not True:
@@ -392,7 +413,7 @@ def _validate_relay_config(path: Path) -> str:
         if isinstance(value, dict):
             for key, nested in value.items():
                 if key == "headers":
-                    raise ValueError(f"literal headers are forbidden; use header_env ({location}.headers)")
+                    raise ValueError(f"literal headers are forbidden; use api_key_env ({location}.headers)")
                 reject_literal_headers(nested, f"{location}.{key}")
         elif isinstance(value, list):
             for index, nested in enumerate(value):
@@ -474,7 +495,7 @@ class HarborHermesAgent(Hermes):
             raise ValueError("Relay wheel digest does not match relay_wheel_sha256")
         if "manylinux" not in self.relay_wheel_path.name or relay_architecture not in self.relay_wheel_path.name:
             raise ValueError(f"Relay wheel must target Linux {relay_architecture}")
-        self.routing_mode = _validate_relay_config(self.relay_config_path)
+        self.routing_mode = _validate_relay_config(self.relay_config_path, self.switchyard_bundle_dir)
         self.direct_model: str | None = None
         if self.routing_mode == "direct":
             with self.relay_config_path.open("rb") as stream:

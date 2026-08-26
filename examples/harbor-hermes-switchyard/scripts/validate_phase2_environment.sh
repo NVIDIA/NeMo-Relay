@@ -89,9 +89,10 @@ done
 for path in "$HARBOR_BIN" "$EVAL_PYTHON" "$RELAY_WHEEL" "$PLUGIN_CONFIG_TEMPLATE"; do
   [[ -f "$path" ]] || { echo "required Phase 2 file is missing" >&2; exit 2; }
 done
-if [[ "$SWITCHYARD_PROVIDER_AUTHORIZATION" != "Bearer "* \
-  || "$SWITCHYARD_PROVIDER_AUTHORIZATION" == "Bearer replace-with-"* ]]; then
-  echo "SWITCHYARD_PROVIDER_AUTHORIZATION must contain a non-placeholder Bearer credential" >&2
+if [[ -z "$SWITCHYARD_PROVIDER_AUTHORIZATION" \
+  || "$SWITCHYARD_PROVIDER_AUTHORIZATION" == "replace-with-"* \
+  || "$SWITCHYARD_PROVIDER_AUTHORIZATION" == "Bearer "* ]]; then
+  echo "SWITCHYARD_PROVIDER_AUTHORIZATION must contain a non-placeholder bare provider credential (no Bearer prefix)" >&2
   exit 2
 fi
 "$EVAL_PYTHON" - <<'PY'
@@ -104,23 +105,51 @@ PY
 "$EVAL_PYTHON" - "$PLUGIN_CONFIG_TEMPLATE" <<'PY'
 import sys
 import tomllib
+from pathlib import Path
 
+SWITCHYARD_ROUTES_PATH = "/opt/relay-plugins/nvidia.switchyard/switchyard-routes.toml"
+
+
+def derive_switchyard_source(template_path: Path) -> Path:
+    stem = template_path.name
+    if not stem.startswith("plugins.") or not stem.endswith(".toml.in"):
+        raise SystemExit(f"unexpected plugin config template name: {stem}")
+    name = stem[len("plugins.") : -len(".toml.in")] or "default"
+    return template_path.parent / "switchyard" / f"{name}.toml"
+
+
+template_path = Path(sys.argv[1])
 with open(sys.argv[1], "rb") as stream:
     config = tomllib.load(stream)
 plugins = config.get("plugins", {}).get("dynamic", [])
 if plugins:
     if len(plugins) != 1:
         raise SystemExit("routed config must contain one dynamic plugin")
-    targets = plugins[0].get("config", {}).get("targets", {})
-    algorithm = plugins[0].get("config", {}).get("algorithm", {})
+    plugin_config = plugins[0].get("config", {})
+    if plugin_config.get("switchyard_config_path") != SWITCHYARD_ROUTES_PATH:
+        raise SystemExit("plugin config must reference the staged switchyard-routes.toml")
+    with derive_switchyard_source(template_path).open("rb") as stream:
+        switchyard_config = tomllib.load(stream)
+    if not isinstance(switchyard_config, dict) or switchyard_config.get("schema_version") != 1:
+        raise SystemExit("switchyard-routes.toml must declare schema_version = 1")
+    targets = switchyard_config.get("targets", {})
+    routes = switchyard_config.get("routes", {})
+    if not isinstance(routes, dict) or set(routes) != {"default"}:
+        raise SystemExit("plugin config must define exactly one routes.default route")
+    algorithm = routes["default"]
     expected_targets = {"strong", "weak"}
-    if algorithm.get("kind") != "stage_router" or algorithm.get("classifier") is not None:
+    if algorithm.get("type") != "stage_router" or algorithm.get("classifier") is not None:
         expected_targets.add("judge")
     if set(targets) != expected_targets:
         raise SystemExit(f"plugin config targets must be {sorted(expected_targets)} for its algorithm")
+    llm_clients = switchyard_config.get("llm_clients", {})
+    if not isinstance(llm_clients, dict) or set(llm_clients) != {"nvidia"}:
+        raise SystemExit("plugin config must define exactly one llm_clients.nvidia client")
+    if llm_clients["nvidia"].get("api_key_env") != "SWITCHYARD_PROVIDER_AUTHORIZATION":
+        raise SystemExit("plugin config must reference SWITCHYARD_PROVIDER_AUTHORIZATION")
     for target in targets.values():
-        if target.get("header_env") != {"authorization": "SWITCHYARD_PROVIDER_AUTHORIZATION"}:
-            raise SystemExit("plugin config must reference SWITCHYARD_PROVIDER_AUTHORIZATION")
+        if target.get("llm_client") != "nvidia":
+            raise SystemExit("plugin targets must use the nvidia llm_client")
 else:
     components = {item.get("kind"): item for item in config.get("components", [])}
     caller = components.get("observability", {}).get("config", {}).get("atif", {}).get("model_name")

@@ -9,9 +9,9 @@ run_root="${1:-}"
 admission_output="${2:-$run_root/artifacts/offline-admission.json}"
 image="${OFFLINE_COMPAT_IMAGE:-python:3.11-bookworm}"
 platform="${OFFLINE_COMPAT_PLATFORM:-linux/amd64}"
-hermes_repository="${HERMES_REPOSITORY:-https://github.com/bbednarski9/hermes-agent.git}"
-hermes_ref="${HERMES_REF:-feat/relay-native-plugin-init}"
-hermes_commit="${HERMES_COMMIT:-a3d472f0e6bdc376df87b1436a461c4796db6747}"
+hermes_repository="${HERMES_REPOSITORY:-https://github.com/NousResearch/hermes-agent.git}"
+hermes_ref="${HERMES_REF:-v2026.8.19}"
+hermes_commit="${HERMES_COMMIT:-fcbd1076a93841fa88855acce810e342a5b78101}"
 
 if [[ -z "$run_root" || "$run_root" != /* ]]; then
   echo "usage: $0 /absolute/prepared-run-root" >&2
@@ -65,10 +65,10 @@ docker run --rm \
     export DEBIAN_FRONTEND=noninteractive
     export HERMES_HOME=/tmp/hermes
     export HERMES_NEMO_RELAY_PLUGINS_TOML=/runtime/plugins.toml
-    export SWITCHYARD_PROVIDER_AUTHORIZATION="Bearer phase2-offline-secret-value"
+    export SWITCHYARD_PROVIDER_AUTHORIZATION="phase2-offline-secret-value"
     apt-get update
     apt-get install -y --no-install-recommends build-essential ca-certificates curl git ripgrep xz-utils
-    git clone --no-tags --branch "'"$hermes_ref"'" "'"$hermes_repository"'" /tmp/hermes-agent-src
+    git clone --no-checkout "'"$hermes_repository"'" /tmp/hermes-agent-src
     git -C /tmp/hermes-agent-src fetch --depth 1 origin "'"$hermes_commit"'"
     git -C /tmp/hermes-agent-src checkout --detach "'"$hermes_commit"'"
     # The installer treats ffmpeg as optional, but a root-owned Debian smoke
