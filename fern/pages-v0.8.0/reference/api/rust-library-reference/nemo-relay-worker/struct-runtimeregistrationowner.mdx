@@ -2,7 +2,7 @@
 title: "Struct Runtime Registration Owner"
 sidebar-title: "RuntimeRegistrationOwner"
 description: "Discovery metadata describing the owner of a runtime registration."
-position: 29
+position: 30
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -25,7 +25,7 @@ Plugin kind for plugin-owned registrations.
 
 ### `component_ordinal: Option<u32>`
 
-Zero-based component ordinal when multiple components share a kind.
+One-based ordinal for a Relay-created plugin component, when applicable.
 
 ## Trait Implementations
 

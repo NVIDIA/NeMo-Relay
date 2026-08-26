@@ -101,7 +101,7 @@ it adds the provider route. The plugin also declares the native
 
 For Codex, `nemo-relay install codex` registers the local marketplace, installs
 `nemo-relay-plugin@nemo-relay-local`, enables Codex hooks, and configures the
-`nemo-relay-openai` provider alias at `http://127.0.0.1:47632`. The plugin's
+`nemo-relay-openai` provider alias at `http://127.0.0.1:47632/v1`. The plugin's
 `hooks/hooks.json` is the sole persistent Relay hook source. The installer uses
 the Codex app-server API to select hooks by plugin ID, exact canonical command,
 and event definition. It never trusts unrelated user, project, or plugin hooks.

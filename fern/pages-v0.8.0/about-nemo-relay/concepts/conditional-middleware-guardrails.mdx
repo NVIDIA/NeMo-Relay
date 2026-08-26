@@ -23,13 +23,21 @@ Relay describes each gateable global registration with four identity fields:
 - `kind` identifies the subscriber, metadata injector, guardrail, or intercept family.
 - `local_name` is the name that the registration owner supplied.
 - `effective_name` is the runtime name that a conditional middleware guardrail targets.
-- `owner` identifies core, global API, or plugin ownership. Plugin ownership also
-  includes the plugin kind and component ordinal when available.
+- `owner` identifies core, global API, or plugin ownership. Relay-created plugin
+  registrations include the plugin kind and a one-based component ordinal. The ordinal
+  is assigned among enabled components of the same kind in configuration order.
 
 Applications and plugins must discover the effective name from the active runtime.
 Plugin contexts qualify local names, and that qualification can change after a process
 restart or plugin configuration reload. A controller must not persist an effective name
-or construct one from a plugin kind, local name, or component position.
+or construct one from a plugin kind, local name, or component position. In particular,
+singleton plugin component names include ordinal `1`; this normalizes their effective
+names with multi-component registrations. Relay currently emits plugin-component keys
+with the versioned internal grammar
+`nemo-relay-plugin.v1.{percent-encoded-kind}:{one-based-ordinal}:{percent-encoded-local-name}`.
+The kind and local name use UTF-8 percent encoding: unreserved RFC 3986 characters are
+literal, and delimiters, `%`, and non-ASCII bytes are escaped. This grammar is an
+implementation detail, not an application configuration or persistence format.
 
 Discovery reports global registrations even when a gate currently suppresses them. This
 behavior lets another controller inspect or manage an ineligible target. Discovery does

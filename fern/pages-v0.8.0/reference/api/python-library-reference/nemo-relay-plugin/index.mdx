@@ -143,6 +143,10 @@ Return the canonical JSON representation.
 
 Telemetry severity assigned to an exported mark log.
 
+### `EventCategory(str, Enum)`
+
+Well-known semantic categories for Relay events.
+
 ### `MetricKind(str, Enum)`
 
 OpenTelemetry instrument kind recorded by a metric mark.
@@ -602,7 +606,7 @@ Remove a host-resident gate owned by this worker activation.
 ##### `emit_mark`
 
 ```python
-async def emit_mark(name: str, data: Json | None = None, metadata: Json | None = None, *, data_schema: DataSchema | Mapping[str, Json] | None = None, severity: LogSeverity | str | None = None, scope_stack_id: str | None = None, parent_scope_id: str | None = None) -> None
+async def emit_mark(name: str, data: Json | None = None, metadata: Json | None = None, *, data_schema: DataSchema | Mapping[str, Json] | None = None, severity: LogSeverity | str | None = None, category: EventCategory | str | None = None, scope_stack_id: str | None = None, parent_scope_id: str | None = None) -> None
 ```
 
 Emit a mark event through the Relay host runtime.
@@ -618,7 +622,7 @@ Return a bounded snapshot of active host runtime diagnostics.
 ##### `emit_metric`
 
 ```python
-async def emit_metric(name: str, measurements: Iterable[MetricMeasurement | Mapping[str, Json]], metadata: Json | None = None, *, scope_stack_id: str | None = None, parent_scope_id: str | None = None) -> None
+async def emit_metric(name: str, measurements: Iterable[MetricMeasurement | Mapping[str, Json]], metadata: Json | None = None, *, category: EventCategory | str | None = None, scope_stack_id: str | None = None, parent_scope_id: str | None = None) -> None
 ```
 
 Emit a Relay metric-measurement mark through the host runtime.

@@ -35,6 +35,14 @@ Creates an empty plugin registration context.
 
 Creates a plugin registration context that namespaces all registration names.
 
+#### `with_child_namespace`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_child_namespace(&amp;self, local_namespace: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; Self"}} /></pre>
+
+Creates a child context that extends this context's namespace.
+
+Child contexts preserve Relay-created plugin component qualification so their local namespace segments and registration names remain encoded as one effective component name.
+
 #### `qualify_name`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn qualify_name(&amp;self, name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>"}} /></pre>

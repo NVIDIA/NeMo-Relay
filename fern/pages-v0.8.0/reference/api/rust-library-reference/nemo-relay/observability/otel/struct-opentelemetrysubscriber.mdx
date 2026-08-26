@@ -87,6 +87,8 @@ Deregisters a previously-registered global subscriber by name.
 
 Flushes finished spans through the underlying tracer provider.
 
+After a successful flush, runtime diagnostics include queue drops observed so far.
+
 #### `shutdown`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn shutdown(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>

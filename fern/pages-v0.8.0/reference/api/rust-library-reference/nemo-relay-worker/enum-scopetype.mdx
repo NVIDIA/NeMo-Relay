@@ -2,7 +2,7 @@
 title: "Enum Scope Type"
 sidebar-title: "ScopeType"
 description: "Semantic category attached to a scope lifecycle span."
-position: 47
+position: 48
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -139,11 +139,19 @@ Return the stable lowercase string form used for encoded scope types.
 
 ### `impl From<&EventCategory> for ScopeType`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;&amp;EventCategory&gt; for <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;&amp;<a href=\"struct-eventcategory\">EventCategory</a>&gt; for <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
 
 #### `from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(value: &amp;EventCategory) -&gt; <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(value: &amp;<a href=\"struct-eventcategory\">EventCategory</a>) -&gt; <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+
+### `impl From<ScopeType> for EventCategory`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-scopetype\">ScopeType</a>&gt; for <a href=\"struct-eventcategory\">EventCategory</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(value: <a href=\"enum-scopetype\">ScopeType</a>) -&gt; <a href=\"struct-eventcategory\">EventCategory</a>"}} /></pre>
 
 ### `impl Hash for ScopeType`
 

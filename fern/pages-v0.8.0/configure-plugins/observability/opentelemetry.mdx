@@ -726,7 +726,9 @@ call the binding's force-flush method (`force_flush()` or `forceFlush()`), and
 then call `shutdown()`. Force flush first crosses Relay's subscriber barrier
 and then flushes the provider. Log shutdown drains the batch queue. Metric
 shutdown performs the reader's final collection; it does not add a second
-metric flush.
+metric flush. For direct trace and log subscribers, a successful force flush
+updates `runtime_diagnostics()` with any batch queue drops observed so far; the
+diagnostic count remains cumulative through later flushes and shutdown.
 
 ### Log and Metric Subscriber Lifecycle
 
