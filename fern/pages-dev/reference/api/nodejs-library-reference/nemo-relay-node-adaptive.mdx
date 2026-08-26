@@ -97,7 +97,7 @@ export interface AcgConfig {
 
 ### `ResponseCacheConfig`
 
-Opt-in exact-match LLM response and tool-result cache settings.
+Opt-in LLM response and tool-result cache settings.
 
 ```ts
 export interface ResponseCacheConfig {
@@ -110,7 +110,7 @@ export interface ResponseCacheConfig {
   priority?: number;
   bypassRate?: number;
   cacheNondeterministic?: boolean;
-  keyStrategy?: string;
+  keyStrategy?: ResponseCacheKeyStrategy;
   headerAllowlist?: string[];
   backend?: BackendSpec;
   /** Opt-in tool-result cache; omit to leave the tool surface off. */
@@ -478,7 +478,7 @@ export declare function acgConfig(config?: AcgConfig): AcgConfig;
 
 Create response-cache settings with defaults applied.
 
-Merges caller-supplied overrides onto the opt-in LLM response and tool-result cache config shape (exact-match) used by the adaptive plugin. This is a section of the adaptive component, not a standalone plugin kind.
+Merges caller-supplied overrides onto the opt-in LLM response and tool-result cache config shape used by the adaptive plugin. This is a section of the adaptive component, not a standalone plugin kind.
 
 **Parameters**
 
@@ -546,7 +546,24 @@ Set manual latency sensitivity on the current scope.
 export declare function setLatencySensitivity(value: number): void;
 ```
 
+## Type Aliases
+
+### `ResponseCacheKeyStrategy` type alias
+
+```ts
+export type ResponseCacheKeyStrategy = (typeof ResponseCacheKeyStrategy)[keyof typeof ResponseCacheKeyStrategy];
+```
+
 ## Constants
+
+### `ResponseCacheKeyStrategy` constant
+
+Supported LLM response-cache key derivation strategies.
+
+```ts
+export const ResponseCacheKeyStrategy: {
+  readonly ExactRequest: 'exact_request';
+```
 
 ### `ADAPTIVE_PLUGIN_KIND`
 
