@@ -39,6 +39,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Detect changed paths
         id: filter
@@ -71,6 +72,7 @@ jobs:
         with:
           path: source-checkout
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Load CI tool versions
         id: ci-config
@@ -256,6 +258,7 @@ jobs:
         with:
           path: source-checkout
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Load CI tool versions
         id: ci-config
@@ -411,6 +414,7 @@ jobs:
           ref: ${{ steps.version.outputs.tag }}
           path: source-checkout
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Load CI tool versions
         id: ci-config
