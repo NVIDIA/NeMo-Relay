@@ -269,7 +269,11 @@ def test_create_tool_node_preserves_command_and_error_handling(
 
 
 @pytest.mark.parametrize("use_async", [False, True])
-def test_create_tool_node_preserves_selective_error_handling(use_async: bool):
+@pytest.mark.parametrize("policy", [ValueError, (ValueError,)])
+def test_create_tool_node_preserves_selective_error_handling(
+    use_async: bool,
+    policy: type[ValueError] | tuple[type[ValueError], ...],
+):
     from langchain_core.messages import AIMessage
     from langchain_core.tools import tool
     from langgraph.graph import END, START, StateGraph
@@ -288,7 +292,7 @@ def test_create_tool_node_preserves_selective_error_handling(use_async: bool):
 
     def build_graph(tool: Any):
         builder = StateGraph(ToolNodeState)
-        builder.add_node("tools", create_tool_node([tool], handle_tool_errors=ValueError))
+        builder.add_node("tools", create_tool_node([tool], handle_tool_errors=policy))
         builder.add_edge(START, "tools")
         builder.add_edge("tools", END)
         return builder.compile()
