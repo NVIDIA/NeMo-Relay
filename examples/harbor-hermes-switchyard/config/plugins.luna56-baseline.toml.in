@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Direct GPT-5.6 Sol control. No Switchyard plugin is loaded; Relay retains
+# Direct GPT-5.6 Luna control. No Switchyard plugin is loaded; Relay retains
 # pricing and observability around the managed Hermes LLM lifecycle.
 version = 1
 
@@ -17,17 +17,17 @@ version = 1
 
 [[components.config.sources.catalog.entries]]
 provider = "openai"
-model_id = "openai/openai/gpt-5.6-sol"
+model_id = "openai/openai/gpt-5.6-luna"
 currency = "USD"
 unit = "per_token"
 pricing_as_of = "2026-08-26"
 pricing_source = "OpenRouter model catalog API (https://openrouter.ai/api/v1/models)"
 
 [components.config.sources.catalog.entries.rates]
-input_per_million = 2.0
-output_per_million = 10.0
-cache_read_per_million = 0.2
-cache_write_per_million = 2.5
+input_per_million = 0.2
+output_per_million = 1.2
+cache_read_per_million = 0.02
+cache_write_per_million = 0.25
 
 [components.config.sources.catalog.entries.prompt_cache]
 read_accounting = "included_in_prompt_tokens"
@@ -52,7 +52,7 @@ filename = "trajectory.atof.jsonl"
 enabled = true
 agent_name = "Hermes"
 agent_version = "@HERMES_COMMIT@"
-model_name = "openai/openai/gpt-5.6-sol"
+model_name = "openai/openai/gpt-5.6-luna"
 output_directory = "/logs/agent/direct-hermes/relay/atif"
 filename_template = "trajectory-{session_id}.atif.json"
 
