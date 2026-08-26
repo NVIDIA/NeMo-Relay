@@ -9,7 +9,7 @@ use nemo_relay::plugin::{
 use serde_json::Value as Json;
 
 use crate::config::{AdaptiveConfig, BackendSpec, ResponseCacheConfig};
-use crate::response_cache::config::{KEY_STRATEGY_EXACT_REQUEST, ResponseCacheKeyStrategy, ToolCacheConfig, ToolClass};
+use crate::response_cache::config::{ResponseCacheKeyStrategy, ToolCacheConfig, ToolClass};
 use crate::response_cache::tool::{is_supported_tool_pattern, wildcard_patterns_overlap};
 
 pub fn validate_config(config: &AdaptiveConfig) -> ConfigReport {
