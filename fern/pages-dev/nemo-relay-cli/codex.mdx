@@ -139,7 +139,7 @@ nemo-relay install codex
 
 The installer creates a local marketplace, installs
 `nemo-relay-plugin@nemo-relay-local`, enables Codex hooks, and configures the
-`nemo-relay-openai` provider alias at `http://127.0.0.1:47632`. It then uses the
+`nemo-relay-openai` provider alias at `http://127.0.0.1:47632/v1`. It then uses the
 existing `nemo-relay` binary on `PATH`; it does not install a plugin-local Relay
 binary.
 
@@ -311,7 +311,7 @@ model_provider = "nemo-relay-openai"
 
 [model_providers.nemo-relay-openai]
 name = "NeMo Relay OpenAI"
-base_url = "http://127.0.0.1:4040"
+base_url = "http://127.0.0.1:4040/v1"
 wire_api = "responses"
 requires_openai_auth = true
 supports_websockets = false
