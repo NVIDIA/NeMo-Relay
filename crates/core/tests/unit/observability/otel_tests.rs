@@ -1604,6 +1604,25 @@ fn direct_config_rejects_invalid_header_env_without_exposing_values() {
     unsafe { std::env::remove_var(&missing) };
 }
 
+#[test]
+fn direct_config_rejects_case_duplicate_header_env_names() {
+    let missing = format!("NEMO_RELAY_TEST_MISSING_HEADER_{}", Uuid::now_v7().simple());
+    let error = match OpenTelemetrySubscriber::new(
+        OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4318/v1/traces")
+            .with_header_env("Authorization", &missing)
+            .with_header_env("authorization", &missing),
+    ) {
+        Ok(_) => panic!("case-insensitive header_env duplicate should fail activation"),
+        Err(error) => error,
+    };
+
+    assert!(
+        error
+            .to_string()
+            .contains("unique across headers and header_env")
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn direct_config_non_unicode_header_env_errors_do_not_expose_values() {
