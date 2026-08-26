@@ -8,6 +8,7 @@ import sys
 
 _LOG_ENVIRONMENT = (
     "NEMO_RELAY_LOG",
+    "NEMO_RELAY_LOG_STDERR",
     "NEMO_RELAY_LOG_STDERR_FORMAT",
     "NEMO_RELAY_LOG_CONFIG_PATH",
 )
@@ -35,6 +36,16 @@ def test_binding_initializes_logging_from_environment():
 
     assert completed.returncode == 0, completed.stderr
     assert '"event":"logging_initialized"' in completed.stderr
+
+
+def test_binding_disables_stderr_logging_from_environment():
+    completed = _import_nemo_relay(
+        NEMO_RELAY_LOG="info",
+        NEMO_RELAY_LOG_STDERR="false",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert not completed.stderr
 
 
 def test_binding_rejects_invalid_logging_environment():

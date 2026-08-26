@@ -16,6 +16,7 @@ const loggingHelperEnvironment = "NEMO_RELAY_TEST_LOGGING_HELPER"
 
 var loggingEnvironmentNames = map[string]struct{}{
 	"NEMO_RELAY_LOG":               {},
+	"NEMO_RELAY_LOG_STDERR":        {},
 	"NEMO_RELAY_LOG_STDERR_FORMAT": {},
 	"NEMO_RELAY_LOG_CONFIG_PATH":   {},
 }
@@ -44,8 +45,25 @@ func TestBindingLoggingEnvironment(t *testing.T) {
 	}
 
 	t.Run("initializes from environment", testLoggingInitialization)
+	t.Run("disables stderr from environment", testLoggingDisabledStderr)
 	t.Run("rejects invalid environment", testLoggingInvalidEnvironment)
 	t.Run("flushes file sink during shutdown", testLoggingFileSinkShutdown)
+}
+
+func testLoggingDisabledStderr(t *testing.T) {
+	command := exec.Command(os.Args[0], loggingEnvironmentTestRunArg)
+	command.Env = loggingTestEnvironment(
+		loggingHelperEnvironment+"=shutdown",
+		"NEMO_RELAY_LOG=info",
+		"NEMO_RELAY_LOG_STDERR=false",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("binding initialization failed: %v\n%s", err, output)
+	}
+	if strings.Contains(string(output), `"event":"logging_initialized"`) {
+		t.Fatalf("stderr logging was not disabled:\n%s", output)
+	}
 }
 
 func testLoggingInitialization(t *testing.T) {

@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const packageDirectory = fileURLToPath(new URL('..', import.meta.url));
-const loggingEnvironmentNames = ['NEMO_RELAY_LOG', 'NEMO_RELAY_LOG_STDERR_FORMAT', 'NEMO_RELAY_LOG_CONFIG_PATH'];
+const loggingEnvironmentNames = ['NEMO_RELAY_LOG', 'NEMO_RELAY_LOG_STDERR', 'NEMO_RELAY_LOG_STDERR_FORMAT', 'NEMO_RELAY_LOG_CONFIG_PATH'];
 
 function requireBinding(loggingEnvironment, source = "require('./index.js')") {
   const environment = { ...process.env };
@@ -34,6 +34,16 @@ describe('operational logging', () => {
 
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stderr, /"event":"logging_initialized"/);
+  });
+
+  it('disables stderr logging from the environment', () => {
+    const result = requireBinding({
+      NEMO_RELAY_LOG: 'info',
+      NEMO_RELAY_LOG_STDERR: 'false',
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
   });
 
   it('rejects an invalid logging environment', () => {

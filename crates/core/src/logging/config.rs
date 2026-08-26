@@ -11,6 +11,7 @@ use crate::error::{FlowError, Result};
 use serde::Deserialize;
 
 const LOG_LEVEL_ENV: &str = "NEMO_RELAY_LOG";
+const LOG_STDERR_ENV: &str = "NEMO_RELAY_LOG_STDERR";
 const LOG_STDERR_FORMAT_ENV: &str = "NEMO_RELAY_LOG_STDERR_FORMAT";
 const LOG_CONFIG_PATH_ENV: &str = "NEMO_RELAY_LOG_CONFIG_PATH";
 
@@ -43,7 +44,9 @@ pub const MAX_FILE_SINK_RETAINED_FILES: usize = 9;
 pub struct LoggingConfig {
     /// Minimum severity for operational logs.
     pub level: LogLevel,
-    /// Encoding for the always-on stderr sink.
+    /// Whether the stderr sink is enabled.
+    pub stderr_enabled: bool,
+    /// Encoding for the stderr sink when it is enabled.
     pub stderr_format: LogFormat,
     /// Additional file sinks beyond stderr.
     pub sinks: Vec<LogSinkConfig>,
@@ -56,6 +59,7 @@ impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
             level: LogLevel::Error,
+            stderr_enabled: true,
             stderr_format: LogFormat::Human,
             sinks: Vec::new(),
             flush_interval_millis: DEFAULT_FILE_FLUSH_INTERVAL_MILLIS,
@@ -66,30 +70,36 @@ impl Default for LoggingConfig {
 impl LoggingConfig {
     /// Resolves logging configuration from the supported process environment.
     ///
-    /// Returns `None` when no logging environment variables are present. Direct level and stderr
-    /// format settings may be combined. `NEMO_RELAY_LOG_CONFIG_PATH` selects an absolute TOML file
-    /// instead and is mutually exclusive with both direct settings.
+    /// Returns `None` when no logging environment variables are present. Direct level, stderr,
+    /// and stderr format settings may be combined. `NEMO_RELAY_LOG_CONFIG_PATH` selects an
+    /// absolute TOML file instead and is mutually exclusive with all direct settings.
     pub fn from_environment() -> Result<Option<Self>> {
         let level = environment_value(LOG_LEVEL_ENV)?;
+        let stderr_enabled = environment_value(LOG_STDERR_ENV)?;
         let stderr_format = environment_value(LOG_STDERR_FORMAT_ENV)?;
         let config_path = environment_value(LOG_CONFIG_PATH_ENV)?;
 
-        if config_path.is_some() && (level.is_some() || stderr_format.is_some()) {
+        if config_path.is_some()
+            && (level.is_some() || stderr_enabled.is_some() || stderr_format.is_some())
+        {
             return Err(FlowError::InvalidArgument(format!(
                 "{LOG_CONFIG_PATH_ENV} cannot be combined with {LOG_LEVEL_ENV} or \
-                 {LOG_STDERR_FORMAT_ENV}"
+                 {LOG_STDERR_ENV} or {LOG_STDERR_FORMAT_ENV}"
             )));
         }
         if let Some(path) = config_path {
             return Self::from_file_path(path).map(Some);
         }
-        if level.is_none() && stderr_format.is_none() {
+        if level.is_none() && stderr_enabled.is_none() && stderr_format.is_none() {
             return Ok(None);
         }
 
         let mut config = Self::default();
         if let Some(level) = level {
             config.level = LogLevel::parse(&level)?;
+        }
+        if let Some(stderr_enabled) = stderr_enabled {
+            config.stderr_enabled = parse_bool(LOG_STDERR_ENV, &stderr_enabled)?;
         }
         if let Some(stderr_format) = stderr_format {
             config.stderr_format = LogFormat::parse(&stderr_format)?;
@@ -200,6 +210,16 @@ impl LogFormat {
     }
 }
 
+fn parse_bool(name: &str, raw: &str) -> Result<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" => Ok(true),
+        "false" | "0" => Ok(false),
+        other => Err(FlowError::InvalidArgument(format!(
+            "invalid {name} value '{other}'; expected true or false"
+        ))),
+    }
+}
+
 /// Additional operational log sink beyond always-on stderr.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogSinkConfig {
@@ -296,6 +316,7 @@ struct LoggingDocument {
 #[serde(deny_unknown_fields)]
 struct RawLoggingConfig {
     level: Option<String>,
+    stderr_enabled: Option<bool>,
     stderr_format: Option<String>,
     flush_interval_millis: Option<u64>,
     #[serde(default)]
@@ -307,6 +328,9 @@ impl RawLoggingConfig {
         let mut config = LoggingConfig::default();
         if let Some(level) = self.level {
             config.level = LogLevel::parse(&level)?;
+        }
+        if let Some(stderr_enabled) = self.stderr_enabled {
+            config.stderr_enabled = stderr_enabled;
         }
         if let Some(stderr_format) = self.stderr_format {
             config.stderr_format = LogFormat::parse(&stderr_format)?;

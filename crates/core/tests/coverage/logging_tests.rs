@@ -99,8 +99,15 @@ struct LoggingEnvScope {
 impl LoggingEnvScope {
     fn set(values: &[(&'static str, Option<&OsStr>)]) -> Self {
         let guard = lock_logging_tests();
+        let mut values = values.to_vec();
+        if !values
+            .iter()
+            .any(|(name, _)| *name == "NEMO_RELAY_LOG_STDERR")
+        {
+            values.push(("NEMO_RELAY_LOG_STDERR", None));
+        }
         let mut previous = Vec::with_capacity(values.len());
-        for &(name, value) in values {
+        for (name, value) in values {
             previous.push((name, std::env::var_os(name)));
             unsafe {
                 match value {
@@ -292,6 +299,7 @@ fn default_logging_runtime_rejects_invalid_environment() {
 fn logging_config_from_environment_resolves_direct_settings() {
     let _environment = LoggingEnvScope::set(&[
         ("NEMO_RELAY_LOG", Some(OsStr::new("debug"))),
+        ("NEMO_RELAY_LOG_STDERR", Some(OsStr::new("false"))),
         ("NEMO_RELAY_LOG_STDERR_FORMAT", Some(OsStr::new("jsonl"))),
         ("NEMO_RELAY_LOG_CONFIG_PATH", None),
     ]);
@@ -301,8 +309,22 @@ fn logging_config_from_environment_resolves_direct_settings() {
         .expect("direct environment settings should select a configuration");
 
     assert_eq!(config.level, LogLevel::Debug);
+    assert!(!config.stderr_enabled);
     assert_eq!(config.stderr_format, LogFormat::Jsonl);
     assert!(config.sinks.is_empty());
+}
+
+#[test]
+fn logging_config_rejects_invalid_stderr_environment_value() {
+    let _environment = LoggingEnvScope::set(&[
+        ("NEMO_RELAY_LOG", None),
+        ("NEMO_RELAY_LOG_STDERR", Some(OsStr::new("sometimes"))),
+        ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
+        ("NEMO_RELAY_LOG_CONFIG_PATH", None),
+    ]);
+
+    let error = LoggingConfig::from_environment().unwrap_err().to_string();
+    assert!(error.contains("NEMO_RELAY_LOG_STDERR"), "{error}");
 }
 
 #[test]
