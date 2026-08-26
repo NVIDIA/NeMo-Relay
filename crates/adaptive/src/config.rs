@@ -34,7 +34,7 @@ pub struct AdaptiveConfig {
     /// Adaptive Cache Governor settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acg: Option<AcgComponentConfig>,
-    /// Opt-in exact-match LLM response and tool-result cache. When present,
+    /// Opt-in LLM response and tool-result cache. When present,
     /// the adaptive plugin installs the response-cache execution intercept(s).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_cache: Option<ResponseCacheConfig>,
@@ -191,7 +191,7 @@ impl Default for AcgComponentConfig {
     }
 }
 
-/// Configuration for the adaptive plugin's exact-match LLM response and
+/// Configuration for the adaptive plugin's LLM response and
 /// opt-in tool-result cache feature.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]

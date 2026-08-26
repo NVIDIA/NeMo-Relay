@@ -419,7 +419,11 @@ class ResponseCacheConfig:
                 "priority": self.priority,
                 "bypass_rate": self.bypass_rate,
                 "cache_nondeterministic": self.cache_nondeterministic,
-                "key_strategy": self.key_strategy.value,
+                "key_strategy": (
+                    self.key_strategy.value
+                    if isinstance(self.key_strategy, ResponseCacheKeyStrategy)
+                    else self.key_strategy
+                ),
                 "header_allowlist": self.header_allowlist,
                 "backend": _normalize(self.backend),
                 "tools": _normalize(self.tools),
