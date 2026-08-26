@@ -710,9 +710,7 @@ def _router_configuration_sections(runs: list[dict[str, Any]]) -> list[str]:
                 "",
                 "| Router setting | Resolved value and provenance |",
                 "| --- | --- |",
-                f"| Plugin config version | `{_setting_value(router.get('version'))}` ({_setting_source(top_sources.get('version'))}) |",
                 f"| Plugin priority | `{_setting_value(router.get('priority'))}` ({_setting_source(top_sources.get('priority'))}) |",
-                f"| Retries after initial routing attempt | `{_setting_value(router.get('max_retries'))}` ({_setting_source(top_sources.get('max_retries'))}) |",
             ]
         )
         excluded_algorithm_fields = {
@@ -730,8 +728,6 @@ def _router_configuration_sections(runs: list[dict[str, Any]]) -> list[str]:
                 f"| Algorithm `{key}` | `{_setting_value(value)}` "
                 f"({_setting_source(algorithm_sources.get(source_key))}) |"
             )
-        lines.append(f"| Protocol fallback targets | `{_setting_value(router.get('default_targets'))}` (configured) |")
-
         prompt_source = algorithm_sources.get("prompt", "unresolved")
         if algorithm.get("prompt_configured"):
             prompt_description = (
@@ -776,9 +772,7 @@ def _router_configuration_sections(runs: list[dict[str, Any]]) -> list[str]:
             lines.append(
                 f"- `{name}`: protocol `{target.get('protocol', 'unresolved')}`; "
                 f"base URL `{target.get('base_url', 'unresolved')}`; "
-                f"endpoint `{target.get('endpoint', 'unresolved')}`; "
-                f"weight `{_setting_value(target.get('weight'))}`; drop caller `extra_body` "
-                f"`{_setting_value(target.get('drop_caller_extra_body'))}`."
+                f"extra body `{_setting_value(target.get('extra_body'))}`."
             )
         scientific = run["scientific_configuration"]
         lines.extend(

@@ -122,16 +122,8 @@ read_accounting = "included_in_prompt_tokens"
 [[plugins.dynamic]]
 manifest = "/plugin.toml"
 [plugins.dynamic.config]
-version = 2
-max_retries = 1
-[plugins.dynamic.config.algorithm]
-kind = "classifier"
-[plugins.dynamic.config.targets.strong]
-model = "strong-model"
-protocol = "openai_chat"
-[plugins.dynamic.config.targets.weak]
-model = "weak-model"
-protocol = "openai_chat"
+priority = 0
+switchyard_config_path = "/opt/relay-plugins/nvidia.switchyard/switchyard-routes.toml"
 """.strip()
         + "\n",
         encoding="utf-8",
@@ -143,35 +135,32 @@ protocol = "openai_chat"
             {
                 "type": "object",
                 "properties": {
-                    "version": {"const": 2},
                     "priority": {"type": "integer", "default": 0},
-                    "max_retries": {"type": "integer", "default": 3},
-                    "algorithm": {
-                        "oneOf": [
-                            {
-                                "properties": {
-                                    "kind": {"const": "classifier"},
-                                    "threshold_step": {"type": "number", "default": 0},
-                                    "max_output_tokens": {"type": "integer", "default": 4096},
-                                    "prompt": {"type": "string"},
-                                }
-                            }
-                        ]
-                    },
-                    "targets": {
-                        "additionalProperties": {
-                            "properties": {
-                                "model": {"type": "string"},
-                                "protocol": {"type": "string"},
-                                "base_url": {"type": "string"},
-                                "weight": {"type": "number", "default": 1},
-                                "drop_caller_extra_body": {"type": "boolean", "default": False},
-                            }
-                        }
-                    },
+                    "switchyard_config_path": {"type": "string"},
                 },
             }
         ),
+        encoding="utf-8",
+    )
+    schema_root.joinpath("switchyard-routes.toml").write_text(
+        """
+schema_version = 1
+[llm_clients.nvidia]
+format = "openai_chat"
+base_url = "https://example.test/v1"
+api_key_env = "SWITCHYARD_PROVIDER_AUTHORIZATION"
+[targets.strong]
+id = "strong-model"
+llm_client = "nvidia"
+[targets.weak]
+id = "weak-model"
+llm_client = "nvidia"
+[routes.default]
+id = "caller-model"
+type = "llm_classifier"
+max_output_tokens = 4096
+""".strip()
+        + "\n",
         encoding="utf-8",
     )
     for index, name in ((1, "task-a"), (2, "task-b")):
@@ -275,9 +264,9 @@ def test_interim_run_keeps_performance_and_cost_denominators_separate(tmp_path: 
     assert calls[0]["telemetry_receipt_present"] is False
     router = run["runtime_profile"]
     assert router["algorithm"]["max_output_tokens"] == 4096
-    assert router["algorithm_sources"]["max_output_tokens"] == "schema_default"
+    assert router["algorithm_sources"]["max_output_tokens"] == "configured"
     assert router["algorithm_sources"]["prompt"] == "plugin_builtin_not_serialized"
-    assert router["targets"]["weak"]["weight"] == 1
+    assert router["targets"]["weak"]["model"] == "weak-model"
     assert run["router_overhead_usage_status"] == "not_applicable"
 
 
@@ -345,9 +334,9 @@ def test_classifier_judge_cost_is_not_fabricated_when_usage_is_absent(tmp_path: 
     module = load_library()
     root = tmp_path / "classifier-run"
     write_synthetic_run(root, complete=True)
-    config = root / "setup-runtime" / "runtime" / "plugins.toml"
+    config = root / "setup-runtime" / "runtime" / "switchyard-plugin" / "switchyard-routes.toml"
     rendered = config.read_text(encoding="utf-8").replace(
-        'kind = "classifier"', 'kind = "llm_classifier"\nclassifier_target = "strong"'
+        'type = "llm_classifier"', 'type = "llm_classifier"\nclassifier_target = "strong"'
     )
     config.write_text(rendered, encoding="utf-8")
 
@@ -364,10 +353,10 @@ def test_classifier_report_does_not_price_unparsed_overhead_span(tmp_path: Path)
     module = load_library()
     root = tmp_path / "classifier-overhead-run"
     write_synthetic_run(root, complete=True)
-    config = root / "setup-runtime" / "runtime" / "plugins.toml"
+    config = root / "setup-runtime" / "runtime" / "switchyard-plugin" / "switchyard-routes.toml"
     config.write_text(
         config.read_text(encoding="utf-8").replace(
-            'kind = "classifier"', 'kind = "llm_classifier"\nclassifier_target = "strong"'
+            'type = "llm_classifier"', 'type = "llm_classifier"\nclassifier_target = "strong"'
         ),
         encoding="utf-8",
     )
@@ -394,10 +383,10 @@ def test_classifier_report_prices_routing_llm_call_marks(tmp_path: Path) -> None
     module = load_library()
     root = tmp_path / "classifier-mark-run"
     write_synthetic_run(root, complete=True)
-    config = root / "setup-runtime" / "runtime" / "plugins.toml"
+    config = root / "setup-runtime" / "runtime" / "switchyard-plugin" / "switchyard-routes.toml"
     config.write_text(
         config.read_text(encoding="utf-8").replace(
-            'kind = "classifier"', 'kind = "llm_classifier"\nclassifier_target = "weak"'
+            'type = "llm_classifier"', 'type = "llm_classifier"\nclassifier_target = "weak"'
         ),
         encoding="utf-8",
     )
@@ -757,10 +746,10 @@ def test_final_performance_cost_partial_disclosure_does_not_claim_incomplete_run
     roots = [tmp_path / "control", tmp_path / "trial"]
     for root in roots:
         write_synthetic_run(root, complete=True)
-        config = root / "setup-runtime" / "runtime" / "plugins.toml"
+        config = root / "setup-runtime" / "runtime" / "switchyard-plugin" / "switchyard-routes.toml"
         config.write_text(
             config.read_text(encoding="utf-8").replace(
-                'kind = "classifier"', 'kind = "llm_classifier"\nclassifier_target = "strong"'
+                'type = "llm_classifier"', 'type = "llm_classifier"\nclassifier_target = "strong"'
             ),
             encoding="utf-8",
         )

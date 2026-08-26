@@ -102,10 +102,18 @@ def parse_runtime_config(root: Path) -> dict[str, Any]:
         config = tomllib.load(stream)
     components = {component.get("kind"): component for component in config.get("components", [])}
     pricing_component = components.get("pricing", {})
-    sources = pricing_component.get("config", {}).get("sources", [])
+    pricing_sources = pricing_component.get("config", {}).get("sources", [])
+    pricing_catalog_version: int | None = None
     entries: list[dict[str, Any]] = []
-    for source in sources:
-        for entry in source.get("catalog", {}).get("entries", []):
+    for source in pricing_sources:
+        if source.get("type") == "file":
+            pricing_path = path.parent / "switchyard-plugin" / "pricing.json"
+            catalog = read_json(pricing_path) if pricing_path.is_file() else {}
+        else:
+            catalog = source.get("catalog", {})
+        if pricing_catalog_version is None:
+            pricing_catalog_version = catalog.get("version")
+        for entry in catalog.get("entries", []):
             rates = entry.get("rates", {})
             entries.append(
                 {
@@ -134,59 +142,65 @@ def parse_runtime_config(root: Path) -> dict[str, Any]:
     schema = read_json(schema_path) if schema_path.is_file() else {}
     schema_properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
     top_values, top_sources = _resolved_mapping(switchyard, schema_properties)
-    algorithm_config = switchyard.get("algorithm", {})
-    algorithm_schema: dict[str, Any] = {}
-    algorithm_variants = schema_properties.get("algorithm", {}).get("oneOf", [])
-    for variant in algorithm_variants:
-        kind_schema = variant.get("properties", {}).get("kind", {})
-        if kind_schema.get("const") == algorithm_config.get("kind"):
-            algorithm_schema = variant
-            break
-    algorithm_properties = algorithm_schema.get("properties", {})
-    algorithm, algorithm_sources = _resolved_mapping(algorithm_config, algorithm_properties)
-    prompt = algorithm.pop("prompt", None)
-    algorithm_sources.pop("prompt", None)
+
+    # The Switchyard-native plugin's own config.schema.json only describes the
+    # priority/switchyard_config_path wrapper; the routing algorithm and
+    # target/client details live in a separate switchyard-routes.toml
+    # deployment file with no bundled schema, so "configured vs. schema
+    # default" provenance is only available for the wrapper fields above.
+    switchyard_routes: dict[str, Any] = {}
+    if len(dynamic) == 1:
+        routes_path = path.parent / "switchyard-plugin" / "switchyard-routes.toml"
+        if routes_path.is_file():
+            with routes_path.open("rb") as stream:
+                switchyard_routes = tomllib.load(stream)
+    llm_clients = switchyard_routes.get("llm_clients", {})
+    route = switchyard_routes.get("routes", {}).get("default", {})
+
+    algorithm = {key: value for key, value in route.items() if key not in {"id", "type"}}
+    algorithm["kind"] = route.get("type")
+    classifier = algorithm.get("classifier")
+    prompt = classifier.get("prompt") if isinstance(classifier, dict) else algorithm.get("prompt")
+    algorithm.pop("prompt", None)
     algorithm["prompt_configured"] = isinstance(prompt, str)
     algorithm["prompt_length"] = len(prompt) if isinstance(prompt, str) else None
     algorithm["prompt_sha256"] = hashlib.sha256(prompt.encode()).hexdigest() if isinstance(prompt, str) else None
-    algorithm_sources["prompt"] = (
-        "configured_digest"
-        if isinstance(prompt, str)
-        else ("plugin_builtin_not_serialized" if "prompt" in algorithm_properties else "not_exposed_by_schema")
-    )
-    algorithm["unexposed_generation_controls"] = [
-        key for key in ("temperature", "top_p", "seed") if key not in algorithm_properties
-    ]
-    targets = switchyard.get("targets", {})
-    target_schema = schema_properties.get("targets", {}).get("additionalProperties", {})
-    target_properties = target_schema.get("properties", {})
+    algorithm["unexposed_generation_controls"] = ["temperature", "top_p", "seed"]
+    algorithm_sources = {
+        key: "configured"
+        for key, value in algorithm.items()
+        if key not in {"prompt_configured", "prompt_length", "prompt_sha256", "unexposed_generation_controls"}
+        and value is not None
+    }
+    algorithm_sources["prompt"] = "configured_digest" if isinstance(prompt, str) else "plugin_builtin_not_serialized"
+
+    targets = switchyard_routes.get("targets", {})
     resolved_targets: dict[str, dict[str, Any]] = {}
     target_sources: dict[str, dict[str, str]] = {}
     for name, target in sorted(targets.items()):
-        values, sources_for_target = _resolved_mapping(target, target_properties)
-        header_env = values.pop("header_env", {})
-        sources_for_target.pop("header_env", None)
-        values["header_names"] = sorted(header_env) if isinstance(header_env, dict) else []
-        sources_for_target["header_names"] = "configured_names_only" if header_env else "not_configured"
-        resolved_targets[name] = values
-        target_sources[name] = sources_for_target
+        client_name = target.get("llm_client")
+        client = llm_clients.get(client_name, {}) if isinstance(client_name, str) else {}
+        resolved_targets[name] = {
+            "model": target.get("id"),
+            "protocol": client.get("format"),
+            "base_url": client.get("base_url"),
+            "extra_body": target.get("extra_body"),
+        }
+        target_sources[name] = {
+            "header_names": "configured_names_only" if client.get("api_key_env") else "not_configured",
+        }
     profile = {
-        "pricing_catalog_version": sources[0].get("catalog", {}).get("version") if sources else None,
+        "pricing_catalog_version": pricing_catalog_version,
         "pricing_entries": sorted(entries, key=lambda item: str(item.get("model_id"))),
         "switchyard": {
             "routing_mode": "switchyard" if len(dynamic) == 1 else "direct",
             "enabled": len(dynamic) == 1,
-            "version": top_values.get("version"),
             "priority": top_values.get("priority"),
-            "max_retries": top_values.get("max_retries"),
-            "default_targets": switchyard.get("default_targets", {}),
             "algorithm": algorithm,
             "algorithm_sources": algorithm_sources,
             "targets": resolved_targets,
             "target_sources": target_sources,
-            "top_level_sources": {
-                key: top_sources.get(key, "unresolved") for key in ("version", "priority", "max_retries")
-            },
+            "top_level_sources": {"priority": top_sources.get("priority", "unresolved")},
             "config_schema_sha256": sha256_file(schema_path) if schema_path.is_file() else None,
         },
     }
