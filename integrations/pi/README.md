@@ -45,7 +45,17 @@ NEMO_RELAY_PI_GATEWAY_URL=http://127.0.0.1:4040 \
 
 ### Where to Install It
 
-**User scope only**, by either of two routes:
+**User scope only.** The simplest route is to let Relay do it, which needs no
+checkout of this repository -- the `nemo-relay` binary carries a copy of this
+extension:
+
+```bash
+nemo-relay install pi
+```
+
+That writes `~/.pi/agent/extensions/nemo-relay` and records what it wrote, so
+`nemo-relay uninstall pi` removes exactly that and leaves anything you edited.
+To manage the extension yourself instead, use either of:
 
 ```bash
 # 1 · file drop
@@ -55,8 +65,14 @@ cp -r integrations/pi ~/.pi/agent/extensions/nemo-relay
 pi install /path/to/NeMo-Relay/integrations/pi
 ```
 
+Install **one** copy. pi de-duplicates its extension set by path rather than by
+package, so two copies are two packages: both register hooks and every event is
+reported twice. `nemo-relay install pi` refuses when another copy would load
+beside it, and the launcher refuses to start.
+
 | Path | Install Here? | Trust-Gated? |
 |---|---|---|
+| `nemo-relay install pi` | Yes -- writes the first row | No |
 | `~/.pi/agent/extensions/` | Yes | No |
 | `pi install <local path>` | Yes | No |
 | `settings.json` `"extensions": [...]` | Yes | Only the project copy |

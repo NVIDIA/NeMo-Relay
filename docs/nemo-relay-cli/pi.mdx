@@ -59,6 +59,12 @@ auto-discovers. The `nemo-relay` binary carries the extension, so no repository
 checkout is needed. pi does not have to be on `PATH` either — the install writes
 a directory rather than driving pi.
 
+You may not need to run it explicitly. When `nemo-relay pi` or `nemo-relay
+config` runs the first-time setup wizard and pi is among the selected agents,
+setup offers this install if pi has no copy of the extension. The wizard only
+runs when no Relay configuration exists yet, so on a machine already configured
+for another agent, run the command above.
+
 pi has no plugin marketplace — no manifest, no `pi plugin` verb, and no MCP
 client for a plugin-owned server to serve — so this is not a marketplace install
 like the Claude Code and Codex ones. `--install-dir` therefore does not apply:

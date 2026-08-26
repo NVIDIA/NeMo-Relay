@@ -70,6 +70,17 @@ pub(crate) fn installed_version() -> Option<String> {
     }
 }
 
+/// Whether first-run setup has an install worth offering.
+///
+/// Only when pi has no copy at all, in any scope. A copy that is already installed needs
+/// no offer, and a project-scoped one -- the trap the guide warns about twice -- must not
+/// quietly become the reason a *second* copy appears, because two copies double every hook
+/// and stop the launcher. `doctor` reports a project-scoped copy on its own; setup stays
+/// out of it.
+pub(crate) fn setup_install_available() -> bool {
+    install_root().is_some() && !super::doctor::extension_configured()
+}
+
 /// What is sitting at the install path.
 enum Occupant {
     /// Nothing there.

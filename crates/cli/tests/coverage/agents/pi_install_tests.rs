@@ -268,3 +268,31 @@ fn a_newer_install_state_is_reported_as_upgradable_not_as_foreign() {
         assert!(error.contains("Upgrade nemo-relay"), "{error}");
     }
 }
+
+/// The wizard offers only when pi has nothing.
+#[test]
+fn setup_offers_an_install_only_when_nothing_is_there() {
+    let temp = tempfile::tempdir().unwrap();
+    let _scope = scoped(temp.path());
+
+    assert!(
+        setup_install_available(),
+        "a clean machine should be offered one"
+    );
+
+    install(request(false, false)).unwrap();
+    assert!(
+        !setup_install_available(),
+        "an install already written needs no offer"
+    );
+}
+
+/// A copy the user placed themselves already works, so setup stays quiet about it.
+#[test]
+fn setup_makes_no_offer_over_an_unmanaged_copy() {
+    let temp = tempfile::tempdir().unwrap();
+    let _scope = scoped(temp.path());
+    write_unmanaged_copy(&temp.path().join("extensions").join("mine"));
+
+    assert!(!setup_install_available());
+}

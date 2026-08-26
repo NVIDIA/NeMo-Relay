@@ -80,8 +80,9 @@ nemo-relay pi
 `nemo-relay codex` and `nemo-relay claude` need no install: the wrapper injects
 their hooks per run. `nemo-relay pi` is the exception. pi has no native
 hook-configuration file, so its hooks can only originate inside a NeMo Relay
-extension that is already installed. Run `nemo-relay install pi` once first; on a
-clean machine the shortcut fails and names that command. See
+extension that is already installed. On a clean machine the first-time setup
+wizard offers to install it; once a Relay configuration exists the wizard no
+longer runs, so install it with `nemo-relay install pi`. See
 [pi](/nemo-relay-cli/pi).
 
 Use `nemo-relay run -- <command>` when you want to launch an explicit command
