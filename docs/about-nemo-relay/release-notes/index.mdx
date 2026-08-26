@@ -167,6 +167,10 @@ for destination paths and explicit-file alternatives.
 
 ### Fixed Known Issues in 0.8
 
+- Codex image-generation requests now pass through the local Relay gateway to
+  the configured OpenAI upstream. Persistent Codex installations must refresh
+  the `nemo-relay-openai` provider configuration; see [Migration
+  Guides](/reference/migration-guides#refresh-the-installed-codex-provider-configuration).
 - Restored a trailing `/` on an OTLP/HTTP trace endpoint as an explicit
   root-path destination. A bare HTTP authority still defaults to
   `/v1/traces`; when version 4 implicitly derives log or metric destinations

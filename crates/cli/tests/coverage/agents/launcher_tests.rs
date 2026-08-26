@@ -263,7 +263,7 @@ fn prepares_codex_config_overrides() {
             .argv
             .iter()
             .any(|arg| arg.contains("model_providers.nemo-relay-openai")
-                && arg.contains("base_url=\"http://127.0.0.1:1234\"")
+                && arg.contains("base_url=\"http://127.0.0.1:1234/v1\"")
                 // Codex sends its own credentials (ChatGPT-Plus OAuth or OPENAI_API_KEY).
                 // When OPENAI_API_KEY is in the environment the gateway substitutes it;
                 // otherwise codex's own auth is forwarded as-is.
@@ -341,6 +341,29 @@ fn prepares_codex_config_overrides() {
         assert_eq!(entries.last(), Some(&current_exe_dir));
     }
     prepared.restore().unwrap();
+}
+
+#[test]
+fn prepares_codex_config_overrides_with_versioned_trailing_slash_gateway_url() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Codex,
+        vec!["codex".into()],
+        "http://127.0.0.1:1234/",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    assert!(prepared.argv.iter().any(|arg| {
+        arg.contains("model_providers.nemo-relay-openai")
+            && arg.contains("base_url=\"http://127.0.0.1:1234/v1\"")
+    }));
 }
 
 #[test]

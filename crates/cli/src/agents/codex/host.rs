@@ -796,6 +796,7 @@ pub(crate) fn prepare_codex_config(path: &Path) -> Result<(), String> {
 }
 
 pub(crate) fn install_codex_config(path: &Path, gateway_url: &str) -> Result<(), String> {
+    let gateway_url = super::versioned_gateway_url(gateway_url);
     let challenge = BootstrapChallengeKey::load().map_err(|error| error.to_string())?;
     let client_token = challenge.client_token();
     let raw = read_optional_text(path)?;
@@ -805,8 +806,8 @@ pub(crate) fn install_codex_config(path: &Path, gateway_url: &str) -> Result<(),
     let backup_snapshot = snapshot_optional_file(&backup_path(path))?;
     let has_managed_proof =
         codex_provider_client_token(&doc).is_some_and(|token| challenge.verify_client_token(token));
-    let provider_extensions = codex_provider_user_extensions(&doc, gateway_url);
-    let unmodified_managed_install = codex_config_doc_has_managed_install(&doc, gateway_url)
+    let provider_extensions = codex_provider_user_extensions(&doc, &gateway_url);
+    let unmodified_managed_install = codex_config_doc_has_managed_install(&doc, &gateway_url)
         && has_managed_proof
         && codex_provider_has_only_generated_fields(&doc);
     if !unmodified_managed_install
@@ -814,7 +815,7 @@ pub(crate) fn install_codex_config(path: &Path, gateway_url: &str) -> Result<(),
             path,
             &raw,
             &doc,
-            gateway_url,
+            &gateway_url,
             has_managed_proof,
             &challenge,
         )
@@ -833,7 +834,7 @@ pub(crate) fn install_codex_config(path: &Path, gateway_url: &str) -> Result<(),
     let providers = ensure_table(&mut doc, "model_providers");
     let mut provider = Table::new();
     provider["name"] = value("NeMo Relay");
-    provider["base_url"] = value(gateway_url);
+    provider["base_url"] = value(&gateway_url);
     provider["wire_api"] = value("responses");
     provider["requires_openai_auth"] = value(true);
     provider["supports_websockets"] = value(false);
@@ -1210,6 +1211,7 @@ pub(crate) fn uninstall_codex_config(
     gateway_url: &str,
     preserve_hooks: bool,
 ) -> Result<(), String> {
+    let gateway_url = super::versioned_gateway_url(gateway_url);
     if !path.exists() {
         return Ok(());
     }
@@ -1220,13 +1222,13 @@ pub(crate) fn uninstall_codex_config(
         .map_err(|error| format!("invalid TOML in {}: {error}", path.display()))?;
     let challenge = BootstrapChallengeKey::load_existing().map_err(|error| error.to_string())?;
     let backup_doc = read_codex_backup_doc(path)?
-        .map(|backup| sanitize_codex_backup_doc(backup, gateway_url, challenge.as_ref()));
+        .map(|backup| sanitize_codex_backup_doc(backup, &gateway_url, challenge.as_ref()));
     let restore_dangling_symlink = backup_doc
         .as_ref()
         .is_some_and(codex_backup_marks_original_config_absent);
     let original_symlink_target = backup_doc.as_ref().and_then(codex_backup_symlink_target);
-    let preserved_provider = codex_extended_provider_without_proof(&doc, gateway_url);
-    let provider_is_managed = codex_provider_item_is_managed(&doc, gateway_url);
+    let preserved_provider = codex_extended_provider_without_proof(&doc, &gateway_url);
+    let provider_is_managed = codex_provider_item_is_managed(&doc, &gateway_url);
     match backup_doc.as_ref() {
         Some(backup_doc) => {
             restore_codex_config_from_backup(
@@ -1597,6 +1599,9 @@ pub(crate) fn codex_provider_table_is_managed_for_gateway(
     provider: &Table,
     gateway_url: &str,
 ) -> bool {
+    let gateway_url = gateway_url.trim_end_matches('/');
+    let versioned_gateway_url = super::versioned_gateway_url(gateway_url);
+    let legacy_gateway_url = gateway_url.strip_suffix("/v1").unwrap_or(gateway_url);
     provider
         .get("name")
         .and_then(Item::as_value)
@@ -1606,7 +1611,9 @@ pub(crate) fn codex_provider_table_is_managed_for_gateway(
             .get("base_url")
             .and_then(Item::as_value)
             .and_then(|value| value.as_str())
-            == Some(gateway_url)
+            .is_some_and(|base_url| {
+                base_url == versioned_gateway_url.as_str() || base_url == legacy_gateway_url
+            })
         && provider
             .get("wire_api")
             .and_then(Item::as_value)

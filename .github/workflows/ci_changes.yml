@@ -89,9 +89,10 @@ jobs:
     steps:
       - name: Checkout
         if: ${{ ! inputs.full_ci }}
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Resolve comparison base
         id: comparison-base
@@ -121,7 +122,7 @@ jobs:
       - name: Detect changed paths
         id: filter
         if: ${{ ! inputs.full_ci }}
-        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.01
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           base: ${{ steps.comparison-base.outputs.base }}
           filters: .github/ci-path-filters.yml

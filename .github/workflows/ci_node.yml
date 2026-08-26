@@ -86,13 +86,15 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Load CI tool versions
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
 
-      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: false
           toolchain: ${{ steps.ci-config.outputs.rust_version }}
@@ -109,7 +111,7 @@ jobs:
         with:
           tool: cargo-llvm-cov@${{ steps.ci-config.outputs.cargo_llvm_cov_version }},just@${{ steps.ci-config.outputs.just_version }}
 
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
@@ -123,7 +125,7 @@ jobs:
         run: just --set ci true test-openclaw
 
       - name: Upload Node coverage to Codecov
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
+        uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0
         if: ${{ !startsWith(matrix.platform, 'windows') }}
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -175,13 +177,15 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Load CI tool versions
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
 
-      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: false
           toolchain: ${{ steps.ci-config.outputs.rust_version }}
@@ -205,7 +209,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
@@ -264,13 +268,15 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Load CI tool versions
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
 
-      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: false
           toolchain: ${{ steps.ci-config.outputs.rust_version }}
@@ -283,7 +289,7 @@ jobs:
           cache-bin: false
           save-if: false
 
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
@@ -350,7 +356,7 @@ jobs:
 
       - name: Checkout
         if: ${{ !contains(matrix.platform, 'musl') }}
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -359,7 +365,7 @@ jobs:
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
 
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: ${{ !contains(matrix.platform, 'musl') }}
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
