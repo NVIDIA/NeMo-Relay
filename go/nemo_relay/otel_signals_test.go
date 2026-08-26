@@ -282,10 +282,15 @@ func TestOpenTelemetryLogSubscriberLifecycleAndDerivation(t *testing.T) {
 	server := NewOtelTestServer(t, requests)
 	defer server.Close()
 
+	variable := "NEMO_RELAY_GO_LOG_HEADER_" + time.Now().Format(otelTimeFormat)
+	secret := "go-log-activation-route"
+	t.Setenv(variable, secret)
 	config := NewOpenTelemetryLogConfig(server.URL + "/v1/traces")
 	config.ServiceName = "go-log-test"
+	config.HeaderEnv["x-relay-route"] = variable
 	subscriber, err := NewOpenTelemetryLogSubscriber(config)
 	requireNoError(t, err, "NewOpenTelemetryLogSubscriber failed")
+	t.Setenv(variable, "go-log-changed-route")
 	defer subscriber.Close()
 	name := "go_otel_log_" + time.Now().Format(otelTimeFormat)
 	requireNoError(t, subscriber.Register(name), "log Register failed")
@@ -304,8 +309,21 @@ func TestOpenTelemetryLogSubscriberLifecycleAndDerivation(t *testing.T) {
 		if !bytes.Contains(request.Body, []byte("go_exported_log")) {
 			t.Fatal("log export did not contain mark name")
 		}
+		if request.RelayRoute != secret {
+			t.Fatalf("expected activation-time log header, got %q", request.RelayRoute)
+		}
+		if bytes.Contains(request.Body, []byte(secret)) {
+			t.Fatal("log export body exposed the environment-derived header value")
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for OTLP log request")
+	}
+	diagnostics, err := subscriber.RuntimeDiagnostics()
+	requireNoError(t, err, "log RuntimeDiagnostics failed")
+	for _, diagnostic := range diagnostics {
+		if strings.Contains(diagnostic.Message, secret) {
+			t.Fatal("log runtime diagnostics exposed the environment-derived header value")
+		}
 	}
 	requireNoError(t, subscriber.Deregister(name), "log Deregister failed")
 	requireNoError(t, subscriber.Shutdown(), "log Shutdown failed")
@@ -316,10 +334,15 @@ func TestOpenTelemetryMetricSubscriberLifecycleAndDerivation(t *testing.T) {
 	server := NewOtelTestServer(t, requests)
 	defer server.Close()
 
+	variable := "NEMO_RELAY_GO_METRIC_HEADER_" + time.Now().Format(otelTimeFormat)
+	secret := "go-metric-activation-route"
+	t.Setenv(variable, secret)
 	config := NewOpenTelemetryMetricConfig(server.URL + "/v1/traces")
 	config.ServiceName = "go-metric-test"
+	config.HeaderEnv["x-relay-route"] = variable
 	subscriber, err := NewOpenTelemetryMetricSubscriber(config)
 	requireNoError(t, err, "NewOpenTelemetryMetricSubscriber failed")
+	t.Setenv(variable, "go-metric-changed-route")
 	defer subscriber.Close()
 	name := "go_otel_metric_" + time.Now().Format(otelTimeFormat)
 	requireNoError(t, subscriber.Register(name), "metric Register failed")
@@ -343,8 +366,21 @@ func TestOpenTelemetryMetricSubscriberLifecycleAndDerivation(t *testing.T) {
 		if !bytes.Contains(request.Body, []byte("example.requests")) {
 			t.Fatal("metric export did not contain instrument name")
 		}
+		if request.RelayRoute != secret {
+			t.Fatalf("expected activation-time metric header, got %q", request.RelayRoute)
+		}
+		if bytes.Contains(request.Body, []byte(secret)) {
+			t.Fatal("metric export body exposed the environment-derived header value")
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for OTLP metric request")
+	}
+	diagnostics, err := subscriber.RuntimeDiagnostics()
+	requireNoError(t, err, "metric RuntimeDiagnostics failed")
+	for _, diagnostic := range diagnostics {
+		if strings.Contains(diagnostic.Message, secret) {
+			t.Fatal("metric runtime diagnostics exposed the environment-derived header value")
+		}
 	}
 	requireNoError(t, subscriber.Deregister(name), "metric Deregister failed")
 	requireNoError(t, subscriber.Shutdown(), "metric Shutdown failed")

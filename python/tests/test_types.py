@@ -680,9 +680,15 @@ class TestOpenTelemetryTypes:
         with pytest.raises(RuntimeError, match="cardinality_limit must be greater than 0"):
             OpenTelemetryMetricSubscriber(metric_config)
 
-    def test_signal_subscribers_export_to_signal_relative_paths(self):
+    def test_signal_subscribers_export_to_signal_relative_paths(self, monkeypatch: pytest.MonkeyPatch):
         with _OtelCollector() as collector:
-            log_subscriber = OpenTelemetryLogSubscriber(OpenTelemetryLogConfig(collector.endpoint))
+            variable = f"NEMO_RELAY_PY_LOG_HEADER_{uuid4().hex}"
+            secret = "python-log-activation-route"
+            monkeypatch.setenv(variable, secret)
+            log_config = OpenTelemetryLogConfig(collector.endpoint)
+            log_config.header_env = {"x-relay-route": variable}
+            log_subscriber = OpenTelemetryLogSubscriber(log_config)
+            monkeypatch.setenv(variable, "python-log-changed-route")
             log_name = f"py_otel_log_e2e_{uuid4().hex}"
             log_subscriber.register(log_name)
             try:
@@ -690,15 +696,23 @@ class TestOpenTelemetryTypes:
                 log_subscriber.force_flush()
                 request = collector.wait_for_request()
                 assert request["path"] == "/v1/logs"
+                assert request["headers"]["x-relay-route"] == secret
                 assert request["body"]
+                assert secret.encode() not in request["body"]
+                assert all(secret not in entry.message for entry in log_subscriber.runtime_diagnostics().entries)
             finally:
                 log_subscriber.deregister(log_name)
                 log_subscriber.shutdown()
 
         with _OtelCollector() as collector:
+            variable = f"NEMO_RELAY_PY_METRIC_HEADER_{uuid4().hex}"
+            secret = "python-metric-activation-route"
+            monkeypatch.setenv(variable, secret)
             metric_config = OpenTelemetryMetricConfig(collector.endpoint)
             metric_config.export_interval_millis = 100
+            metric_config.header_env = {"x-relay-route": variable}
             metric_subscriber = OpenTelemetryMetricSubscriber(metric_config)
+            monkeypatch.setenv(variable, "python-metric-changed-route")
             metric_name = f"py_otel_metric_e2e_{uuid4().hex}"
             metric_subscriber.register(metric_name)
             try:
@@ -709,7 +723,10 @@ class TestOpenTelemetryTypes:
                 metric_subscriber.force_flush()
                 request = collector.wait_for_request()
                 assert request["path"] == "/v1/metrics"
+                assert request["headers"]["x-relay-route"] == secret
                 assert request["body"]
+                assert secret.encode() not in request["body"]
+                assert all(secret not in entry.message for entry in metric_subscriber.runtime_diagnostics().entries)
             finally:
                 metric_subscriber.deregister(metric_name)
                 metric_subscriber.shutdown()
