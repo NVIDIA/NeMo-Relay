@@ -41,10 +41,16 @@ The selected coding-agent CLI must also be available at a supported version:
 
 - Claude Code 2.1.121 or newer through `claude`.
 - `codex-cli` 0.143.0 or newer through `codex`.
+- pi 0.84.x through `pi`.
 
-Relay checks the selected CLI version before modifying agent configuration.
-Prerelease, malformed, and older versions are rejected consistently by install,
-doctor, and transparent launch paths.
+For Claude Code and Codex, Relay checks the selected CLI version before
+modifying agent configuration. Prerelease, malformed, and older versions are
+rejected consistently by install, doctor, and transparent launch paths.
+
+`nemo-relay install pi` does not check pi's version, because it never runs pi:
+it writes a directory into pi's auto-discovery location, which succeeds whether
+or not pi is present. It reports when `pi` is absent from `PATH`. Version
+checking for pi happens in `nemo-relay doctor pi` and at transparent launch.
 
 ## Install a Persistent Integration
 
@@ -53,6 +59,7 @@ Run the command for the coding-agent integration that you want to install:
 ```bash
 nemo-relay install claude-code
 nemo-relay install codex
+nemo-relay install pi
 ```
 
 Install every supported host detected on the machine:
@@ -62,7 +69,13 @@ nemo-relay install all
 ```
 
 `install all` selects only supported agents whose CLI is present. It fails if
-Claude Code and Codex are both absent.
+Claude Code, Codex and pi are all absent.
+
+`nemo-relay install pi` differs from the other two: pi has no plugin
+marketplace, so Relay writes the extension into pi's own auto-discovery
+directory rather than generating a marketplace plugin. `--install-dir` does not
+apply to it, and it does not require `pi` on `PATH` when installed by name. See
+[pi](/nemo-relay-cli/pi).
 
 Use `--dry-run` to preview the operation without changing host configuration.
 For Claude Code and Codex, the preview includes marketplace paths and host

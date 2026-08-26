@@ -50,8 +50,17 @@ pub(super) struct AgentDescriptor {
 /// Rather than synthesize manifests pi will never read, the marketplace surface
 /// rejects pi explicitly and the gateway surface (hooks, launch, doctor) is
 /// implemented for real.
-pub(crate) const PI_MARKETPLACE_UNSUPPORTED: &str = "pi has no plugin marketplace; install the NeMo Relay pi extension with `pi install <source>` \
-     or place it in `~/.pi/agent/extensions/`, then run pi through `nemo-relay run --agent pi`";
+///
+/// "No marketplace" is not "nothing to install into", and this constant used to
+/// imply otherwise. `nemo-relay install pi` writes a package directory into pi's
+/// own auto-discovery location (`agents::pi::install`), which is a real
+/// persistent install by a route that has no marketplace in it. What stays
+/// unsupported is everything below: a generated plugin manifest, a host
+/// registration verb, and a plugin-owned MCP server, none of which pi has a
+/// consumer for.
+pub(crate) const PI_MARKETPLACE_UNSUPPORTED: &str = "pi has no plugin marketplace; \
+     `nemo-relay install pi` writes the extension into pi's own auto-discovery directory \
+     instead, and `nemo-relay pi` runs pi against it";
 
 /// Reached only if a marketplace code path forgets to reject pi first.
 macro_rules! pi_marketplace_unreachable {
@@ -578,9 +587,9 @@ pub(crate) fn install_integration(
     match agent {
         CodingAgent::Codex => codex::install::install(command),
         CodingAgent::ClaudeCode => claude::install::install(command),
-        CodingAgent::Pi => Err(crate::error::CliError::Install(
-            PI_MARKETPLACE_UNSUPPORTED.to_string(),
-        )),
+        // Not a marketplace install: pi auto-discovers a package directory under its own
+        // agent directory, so Relay writes one there instead of synthesizing a manifest.
+        CodingAgent::Pi => pi::install::install(command),
     }
 }
 
@@ -591,9 +600,7 @@ pub(crate) fn uninstall_integration(
     match agent {
         CodingAgent::Codex => codex::install::uninstall(command),
         CodingAgent::ClaudeCode => claude::install::uninstall(command),
-        CodingAgent::Pi => Err(crate::error::CliError::Install(
-            PI_MARKETPLACE_UNSUPPORTED.to_string(),
-        )),
+        CodingAgent::Pi => pi::install::uninstall(command),
     }
 }
 
@@ -615,8 +622,11 @@ pub(crate) fn installed_integrations(
     candidates
         .iter()
         .copied()
-        .filter(|agent| {
-            crate::installation::marketplace::persisted_state_exists(*agent, &install_dir)
+        .filter(|agent| match agent {
+            // pi writes no marketplace state to look for; its install is a directory under
+            // pi's own agent directory, which `install_dir` does not address.
+            CodingAgent::Pi => pi::install::is_installed(),
+            agent => crate::installation::marketplace::persisted_state_exists(*agent, &install_dir),
         })
         .collect()
 }

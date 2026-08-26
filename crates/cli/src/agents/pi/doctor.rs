@@ -105,8 +105,8 @@ pub(crate) fn hook_status() -> Result<String, String> {
             site.scope.describe()
         )),
         None => Ok(format!(
-            "NeMo Relay pi extension not located; set {PI_EXTENSION_PATH_ENV}, run \
-             `pi install <path to integrations/pi>`, or copy it into `~/.pi/agent/extensions/`"
+            "NeMo Relay pi extension not located; run `nemo-relay install pi`, or set \
+             {PI_EXTENSION_PATH_ENV} to a copy you manage yourself"
         )),
     }
 }
@@ -794,7 +794,7 @@ fn user_settings_path() -> Option<PathBuf> {
 }
 
 /// `~/.pi/agent`, honoring pi's own directory override.
-fn pi_agent_dir() -> Option<PathBuf> {
+pub(super) fn pi_agent_dir() -> Option<PathBuf> {
     match std::env::var_os(PI_AGENT_DIR_ENV) {
         Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
         _ => Some(
@@ -807,7 +807,7 @@ fn pi_agent_dir() -> Option<PathBuf> {
 }
 
 /// `~/.pi/agent/extensions`, the auto-discovery directory.
-fn user_extensions_dir() -> Option<PathBuf> {
+pub(super) fn user_extensions_dir() -> Option<PathBuf> {
     Some(pi_agent_dir()?.join("extensions"))
 }
 

@@ -39,6 +39,7 @@ pub(crate) enum InstallTarget {
     Codex,
     #[value(name = "claude-code", alias = "claude")]
     ClaudeCode,
+    Pi,
     All,
 }
 
@@ -47,7 +48,8 @@ impl InstallTarget {
         match self {
             Self::Codex => vec![CodingAgent::Codex],
             Self::ClaudeCode => vec![CodingAgent::ClaudeCode],
-            Self::All => vec![CodingAgent::Codex, CodingAgent::ClaudeCode],
+            Self::Pi => vec![CodingAgent::Pi],
+            Self::All => vec![CodingAgent::Codex, CodingAgent::ClaudeCode, CodingAgent::Pi],
         }
     }
 
@@ -87,7 +89,7 @@ pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
     };
     if agents.is_empty() {
         return Err(CliError::Install(
-            "no supported Claude Code or Codex host CLI was detected".into(),
+            "no supported Claude Code, Codex, or pi host CLI was detected".into(),
         ));
     }
     if !request.dry_run {
@@ -109,7 +111,7 @@ pub(super) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError>
     };
     if agents.is_empty() {
         return Err(CliError::Install(
-            "no installed Claude Code or Codex integration state was found".into(),
+            "no installed Claude Code, Codex, or pi integration state was found".into(),
         ));
     }
     run_agent_operations(agents, "uninstall", |agent| {

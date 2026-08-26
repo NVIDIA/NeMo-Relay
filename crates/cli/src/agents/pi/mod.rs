@@ -14,7 +14,9 @@ use semver::Version;
 
 use super::AgentDescriptor;
 
+pub(crate) mod assets;
 pub(crate) mod doctor;
+pub(crate) mod install;
 pub(crate) mod launch;
 
 pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {

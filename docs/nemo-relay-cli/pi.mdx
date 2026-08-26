@@ -44,19 +44,41 @@ load from and whether pi will trust it, and whether the gateway is answering at
 the URL the extension posts to. Run it first whenever Relay does not seem to be
 doing anything.
 
-**Relay-managed installation is unavailable**: `nemo-relay install pi` is
-unsupported, because pi has no plugin marketplace — no manifest, no `pi plugin`
-verb, and no MCP client for a plugin-owned server to serve — so there is nothing
-for Relay to install into.
+## Install The Extension
 
-Install the extension yourself instead, once. `pi install <source>` and a copy
-into an auto-discovered directory are both **persistent**: pi loads the
-extension on every later run, and `nemo-relay run --agent pi` finds it without
-any variable being set.
+Install it once. The install is **persistent**: pi loads the extension on every
+later run, and both `nemo-relay pi` and `nemo-relay run --agent pi` find it
+without any variable being set.
 
-### Install At User Scope
+```bash
+nemo-relay install pi
+```
 
-Two routes, both untrusted-project-proof:
+This writes the extension into `~/.pi/agent/extensions/nemo-relay`, which pi
+auto-discovers. The `nemo-relay` binary carries the extension, so no repository
+checkout is needed. pi does not have to be on `PATH` either — the install writes
+a directory rather than driving pi.
+
+pi has no plugin marketplace — no manifest, no `pi plugin` verb, and no MCP
+client for a plugin-owned server to serve — so this is not a marketplace install
+like the Claude Code and Codex ones. `--install-dir` therefore does not apply:
+pi decides where its extensions live. Set `PI_CODING_AGENT_DIR` to move pi's
+whole configuration.
+
+Remove it with:
+
+```bash
+nemo-relay uninstall pi
+```
+
+Uninstall removes only the files the install recorded, and only while they still
+match what was written. A file you edited is kept, and so is the directory
+holding it.
+
+### Install It Yourself Instead
+
+Two manual routes, both untrusted-project-proof, if you would rather manage the
+extension yourself:
 
 ```bash
 # 1 · file drop
@@ -66,10 +88,24 @@ cp -r integrations/pi ~/.pi/agent/extensions/nemo-relay
 pi install /path/to/NeMo-Relay/integrations/pi
 ```
 
-`nemo-relay run --agent pi` resolves either route too — or
-`NEMO_RELAY_PI_EXTENSION`, if you set it — and passes what it finds to `-e`,
-which loads first and is never trust-gated. It needs one of them: it never
-promotes a project-scoped install to `-e`.
+Relay resolves either route too — or `NEMO_RELAY_PI_EXTENSION`, if you set it —
+and passes what it finds to `-e`, which loads first and is never trust-gated. It
+needs one of them: it never promotes a project-scoped install to `-e`.
+
+<Warning>
+**Do not install a second copy.** pi de-duplicates its extension set by path
+rather than by package, so a copy in one place and a copy in another are two
+packages: both register hooks, every turn, tool and inline-shell event is
+reported twice, each turn closes as superseded by its own duplicate, and the
+inline-shell gate decides one command twice. `nemo-relay install pi` refuses
+when another copy would load beside it, and the launcher refuses to start. Keep
+one copy.
+</Warning>
+
+Because the manual routes look exactly like the managed one, `nemo-relay install
+pi` never overwrites a directory it did not write, `--force` included, and
+`nemo-relay uninstall pi` never removes one. Every managed install records what
+it wrote.
 
 <Warning>
 **Do not install from a git URL.** pi has no subdirectory syntax for a git
@@ -80,9 +116,10 @@ so the install reports success and loads nothing — while the clone's root
 of the gating.
 </Warning>
 
-The extension is **not published to npm**, deliberately: the file drop and the
-local-path install already cover user scope, and publishing would add a namespace,
-a build step and release wiring for a third spelling of the same thing.
+The extension is **not published to npm**, deliberately: `nemo-relay install pi`
+and the two manual routes already cover user scope, and publishing would add a
+namespace, a build step and release wiring for a fourth spelling of the same
+thing.
 
 <Warning>
 **Do not install into `.pi/extensions/` or with `pi install --local`.** pi adds
@@ -120,10 +157,12 @@ so a launched session is instrumented regardless of the user's own pi
 configuration.
 
 The launcher resolves the extension from the same places `nemo-relay doctor pi`
-looks — `NEMO_RELAY_PI_EXTENSION` first, then a user-scope install — so either
-install route above is enough and no variable is required. Unlike Claude Code and
-Codex, there is no Relay-managed install location to fall back on, because pi
-extensions live in the user's own configuration directories.
+looks — `NEMO_RELAY_PI_EXTENSION` first, then a user-scope install — so any
+install route above is enough and no variable is required. That includes the one
+`nemo-relay install pi` writes, which lands in a user-scope directory of pi's
+rather than in a Relay-owned plugin root like the Claude Code and Codex installs.
+pi extensions live in the user's own configuration directories, so Relay writes
+into one instead of managing a location of its own.
 
 A **project-scoped** install is deliberately never used. `-e` is not trust-gated,
 so passing one would load repository code pi itself declined to trust. Launch

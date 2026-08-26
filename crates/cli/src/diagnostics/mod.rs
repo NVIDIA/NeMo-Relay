@@ -498,6 +498,7 @@ async fn agent_preflight_checks(
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut checks = vec![pi_extension_trust_check(&cwd)];
+    checks.extend(pi_managed_install_check());
     // The filesystem check is free and always worth running -- a stray project-scoped
     // extension is worth knowing about whether or not pi is set up yet. The network probe
     // is not: a bare `nemo-relay doctor` on a machine that does not use pi would spend the
@@ -506,6 +507,40 @@ async fn agent_preflight_checks(
         checks.push(pi_gateway_reachability_check(probe_mode, resolved).await);
     }
     checks
+}
+
+/// Report a Relay-managed install that is older than the binary driving it.
+///
+/// pi ships breaking changes through *minor* releases, and the extension is what
+/// translates pi's hook shapes for the gateway -- so an extension written by an older
+/// Relay is the same silent failure the version floor exists to catch, arriving from the
+/// other side. Only a managed install can be checked: a copy the user placed themselves
+/// records no version, and inferring one from its contents would report drift on an edit.
+///
+/// Nothing is reported when there is no managed install, because there is nothing to be
+/// stale -- the other pi checks already cover "installed, somewhere else" and "not
+/// installed at all".
+fn pi_managed_install_check() -> Option<Check> {
+    const NAME: &str = "pi extension install";
+    let installed = crate::agents::pi::install::installed_version()?;
+    let current = crate::agents::pi::assets::EXTENSION_VERSION;
+    if installed == current {
+        return Some(Check {
+            name: NAME,
+            status: Status::Pass,
+            details: format!("NeMo Relay-managed, version {installed}"),
+        });
+    }
+    Some(Check {
+        name: NAME,
+        status: Status::Warn,
+        details: format!(
+            "the installed NeMo Relay pi extension is version {installed} and this build \
+             ships {current}. pi can change a hook shape in a minor release, and the \
+             symptom is missing spans rather than an error. Run `nemo-relay install pi` \
+             to update it"
+        ),
+    })
 }
 
 /// Warn when an extension sits somewhere pi will silently ignore.
@@ -604,8 +639,8 @@ fn pi_extension_trust_check(cwd: &Path) -> Check {
             name: NAME,
             status: Status::Info,
             details: format!(
-                "the NeMo Relay pi extension was not found; set {} or install it with \
-                 `pi install <path to integrations/pi>`",
+                "the NeMo Relay pi extension was not found; run `nemo-relay install pi`, \
+                 or set {} to a copy you manage yourself",
                 crate::agents::pi::launch::PI_EXTENSION_PATH_ENV
             ),
         },
