@@ -37,3 +37,12 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
 pub(super) fn parse_version(raw: &str) -> Option<Version> {
     Version::parse(raw.strip_prefix("codex-cli ")?).ok()
 }
+
+pub(super) fn versioned_gateway_url(gateway_url: &str) -> String {
+    let gateway_url = gateway_url.trim_end_matches('/');
+    if gateway_url.ends_with("/v1") {
+        gateway_url.to_string()
+    } else {
+        format!("{gateway_url}/v1")
+    }
+}

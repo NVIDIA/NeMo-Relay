@@ -1235,6 +1235,10 @@ tool_namespace = "agents"
         installed["features"]["multi_agent_v2"]["tool_namespace"].as_str(),
         Some("agents")
     );
+    assert_eq!(
+        installed["model_providers"]["nemo-relay-openai"]["base_url"].as_str(),
+        Some("http://127.0.0.1:47632/v1")
+    );
 
     uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
 
@@ -1603,7 +1607,7 @@ fn codex_backup_migration_preserves_user_provider_extensions() {
     let uninstalled = fs::read_to_string(&path).unwrap();
     assert!(uninstalled.contains("user_option = \"keep\""));
     assert!(!uninstalled.contains("model_provider = \"nemo-relay-openai\""));
-    assert!(uninstalled.contains(&format!("base_url = \"{DEFAULT_URL}\"")));
+    assert!(uninstalled.contains(&format!("base_url = \"{DEFAULT_URL}/v1\"")));
     assert!(!uninstalled.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
     assert!(!uninstalled.contains("hooks = true"));
     assert!(!backup_path(&path).exists());
@@ -1642,7 +1646,7 @@ fn codex_reinstall_round_trips_user_provider_fields_and_headers() {
     assert!(backup.contains("user_option = \"keep\""));
     assert!(backup.contains("x-user-header = \"keep-header\""));
     assert!(!backup.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
-    assert!(backup.contains(&format!("base_url = \"{DEFAULT_URL}\"")));
+    assert!(backup.contains(&format!("base_url = \"{DEFAULT_URL}/v1\"")));
 
     uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
     let uninstalled = fs::read_to_string(&path).unwrap();
@@ -1650,7 +1654,7 @@ fn codex_reinstall_round_trips_user_provider_fields_and_headers() {
     assert!(uninstalled.contains("user_option = \"keep\""));
     assert!(uninstalled.contains("x-user-header = \"keep-header\""));
     assert!(!uninstalled.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
-    assert!(uninstalled.contains(&format!("base_url = \"{DEFAULT_URL}\"")));
+    assert!(uninstalled.contains(&format!("base_url = \"{DEFAULT_URL}/v1\"")));
     assert!(!uninstalled.contains("hooks = true"));
 }
 
@@ -1679,7 +1683,7 @@ fn codex_direct_uninstall_preserves_a_complete_extended_provider_inactively() {
     uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
     let uninstalled = fs::read_to_string(&path).unwrap();
     assert!(uninstalled.contains("model_provider = \"openai\""));
-    assert!(uninstalled.contains(&format!("base_url = \"{DEFAULT_URL}\"")));
+    assert!(uninstalled.contains(&format!("base_url = \"{DEFAULT_URL}/v1\"")));
     assert!(uninstalled.contains("name = \"NeMo Relay\""));
     assert!(uninstalled.contains("user_option = \"keep\""));
     assert!(uninstalled.contains("x-user-header = \"keep-header\""));
@@ -1718,7 +1722,7 @@ fn codex_uninstall_sanitizes_an_extended_contaminated_backup_without_the_key() {
     let uninstalled = fs::read_to_string(&path).unwrap();
     assert!(uninstalled.contains("custom = \"keep\""));
     assert!(!uninstalled.contains("model_provider = \"nemo-relay-openai\""));
-    assert!(uninstalled.contains(&format!("base_url = \"{DEFAULT_URL}\"")));
+    assert!(uninstalled.contains(&format!("base_url = \"{DEFAULT_URL}/v1\"")));
     assert!(uninstalled.contains("user_option = \"keep\""));
     assert!(uninstalled.contains("x-user-header = \"keep-header\""));
     assert!(!uninstalled.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
@@ -1756,7 +1760,7 @@ fn codex_uninstall_sanitizes_an_extended_contaminated_backup_after_key_rotation(
     let uninstalled = fs::read_to_string(&path).unwrap();
     assert!(uninstalled.contains("custom = \"keep\""));
     assert!(!uninstalled.contains("model_provider = \"nemo-relay-openai\""));
-    assert!(uninstalled.contains(&format!("base_url = \"{DEFAULT_URL}\"")));
+    assert!(uninstalled.contains(&format!("base_url = \"{DEFAULT_URL}/v1\"")));
     assert!(uninstalled.contains("user_option = \"keep\""));
     assert!(uninstalled.contains("x-user-header = \"keep-header\""));
     assert!(!uninstalled.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
@@ -2669,7 +2673,7 @@ fn codex_uninstall_removes_proof_from_a_user_modified_provider() {
     uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
     let updated = fs::read_to_string(&path).unwrap();
 
-    assert!(updated.contains("base_url = \"http://127.0.0.1:49999\""));
+    assert!(updated.contains("base_url = \"http://127.0.0.1:49999/v1\""));
     assert!(!updated.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
     assert!(!backup_path(&path).exists());
 }
