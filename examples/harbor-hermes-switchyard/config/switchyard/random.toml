@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+schema_version = 1
+
+[llm_clients.nvidia]
+format = "openai_chat"
+base_url = "https://inference-api.nvidia.com/v1"
+api_key_env = "SWITCHYARD_PROVIDER_AUTHORIZATION"
+
+[targets.strong]
+id = "aws/anthropic/bedrock-claude-opus-4-8"
+llm_client = "nvidia"
+
+[targets.weak]
+id = "nvidia/nvidia/nemotron-3-ultra-nvfp4"
+llm_client = "nvidia"
+
+[targets.judge]
+id = "aws/anthropic/bedrock-claude-sonnet-4-6"
+llm_client = "nvidia"
+
+[routes.default]
+id = "ollama-route-stub"
+type = "random"
+targets = ["strong", "weak"]

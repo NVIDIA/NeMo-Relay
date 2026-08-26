@@ -23,6 +23,11 @@ switchyard_bundle="${SWITCHYARD_BUNDLE:-}"
 relay_wheel="${RELAY_WHEEL:-}"
 relay_architecture="${RELAY_ARCHITECTURE:-x86_64}"
 plugin_config_template="${PLUGIN_CONFIG_TEMPLATE:-$example_root/config/plugins.toml.in}"
+if [[ -z "${PLUGIN_CONFIG_TEMPLATE:-}" ]]; then
+  switchyard_experiment="${SWITCHYARD_EXPERIMENT:-default}"
+else
+  switchyard_experiment="${SWITCHYARD_EXPERIMENT:-}"
+fi
 agent_timeout_multiplier="${AGENT_TIMEOUT_MULTIPLIER:-3}"
 agent_setup_timeout_multiplier="${AGENT_SETUP_TIMEOUT_MULTIPLIER:-6}"
 environment_build_timeout_multiplier="${ENVIRONMENT_BUILD_TIMEOUT_MULTIPLIER:-6}"
@@ -266,6 +271,9 @@ prepare_args=(
   --eval-cohort "$eval_cohort"
   --allow-existing-collector-state
 )
+if [[ -n "$switchyard_experiment" ]]; then
+  prepare_args+=(--switchyard-experiment "$switchyard_experiment")
+fi
 if [[ -n "$relay_wheel" ]]; then
   prepare_args+=(--relay-wheel "$relay_wheel")
 fi

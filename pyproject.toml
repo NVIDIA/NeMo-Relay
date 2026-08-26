@@ -7,7 +7,7 @@ build-backend = "maturin"
 
 [project]
 name = "nemo-relay"
-dynamic = ["version"]
+version = "0.8.0"
 description = "Python bindings for the NeMo Relay agent runtime."
 readme = "python/nemo_relay/README.md"
 requires-python = ">=3.11"

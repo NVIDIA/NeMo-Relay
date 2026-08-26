@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 import tomli_w
 from plugin_config_paths import (
     SWITCHYARD_ROUTES_PATH,
-    derive_paired_paths,
+    experiment_paths,
     plugin_config_identity_sha256,
 )
 from relay_version import RELAY_REQUIREMENT, wheel_version
@@ -263,6 +263,8 @@ def render_config(
     output: Path,
     bundle: Path,
     replacements: dict[str, str],
+    switchyard_source: Path | None,
+    pricing_source: Path | None,
     test_overrides: dict[str, str] | None = None,
 ) -> dict[str, object]:
     rendered = template.read_text(encoding="utf-8")
@@ -277,9 +279,12 @@ def render_config(
 
     plugins = config.get("plugins")
     dynamic_plugins = plugins.get("dynamic") if isinstance(plugins, dict) else None
+    if dynamic_plugins is not None and (switchyard_source is None or pricing_source is None):
+        raise ValueError("this plugin template requires --switchyard-experiment")
+    if dynamic_plugins is None and (switchyard_source is not None or pricing_source is not None):
+        raise ValueError("--switchyard-experiment must not be set for a direct baseline template")
     switchyard_routes: dict[str, object] | None = None
     if dynamic_plugins is not None:
-        switchyard_source, pricing_source = derive_paired_paths(template)
         with switchyard_source.open("rb") as stream:
             switchyard_routes = tomllib.load(stream)
         pricing_catalog = json.loads(pricing_source.read_text(encoding="utf-8"))
@@ -328,6 +333,7 @@ def main() -> int:
     parser.add_argument("--relay-wheel", type=Path)
     parser.add_argument("--relay-architecture", choices=("x86_64", "aarch64"), default="x86_64")
     parser.add_argument("--plugin-config-template", type=Path)
+    parser.add_argument("--switchyard-experiment")
     parser.add_argument("--test-provider-base-url")
     parser.add_argument("--test-strong-model")
     parser.add_argument("--test-weak-model")
@@ -368,6 +374,12 @@ def main() -> int:
     phoenix_project = checked_label(args.phoenix_project, "phoenix_project")
     eval_cohort = checked_label(args.eval_cohort, "eval_cohort")
     plugin_template = (args.plugin_config_template or example_root / "config" / "plugins.toml.in").resolve(strict=True)
+    switchyard_source: Path | None = None
+    pricing_source: Path | None = None
+    if args.switchyard_experiment is not None:
+        switchyard_source, pricing_source = experiment_paths(plugin_template.parent, args.switchyard_experiment)
+        switchyard_source = switchyard_source.resolve(strict=True)
+        pricing_source = pricing_source.resolve(strict=True)
     test_values = (args.test_provider_base_url, args.test_strong_model, args.test_weak_model)
     if any(test_values) and not all(test_values):
         raise ValueError("test provider, strong model, and weak model overrides must be supplied together")
@@ -392,6 +404,8 @@ def main() -> int:
             "PHOENIX_PROJECT": phoenix_project,
             "EVAL_COHORT": eval_cohort,
         },
+        switchyard_source,
+        pricing_source,
         test_overrides,
     )
 
@@ -421,7 +435,9 @@ def main() -> int:
             "library_sha256": sha256(libraries[0]),
         },
         "relay_config_sha256": sha256(config_path),
-        "plugin_config_template_sha256": plugin_config_identity_sha256(plugin_template),
+        "plugin_config_template_sha256": plugin_config_identity_sha256(
+            plugin_template, switchyard_source, pricing_source
+        ),
         "routing": {
             **routing,
         },

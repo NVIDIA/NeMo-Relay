@@ -102,33 +102,36 @@ if sys.version_info < (3, 11):
     raise SystemExit("EVAL_PYTHON must be Python 3.11 or newer")
 PY
 
-"$EVAL_PYTHON" - "$PLUGIN_CONFIG_TEMPLATE" <<'PY'
+"$EVAL_PYTHON" - "$PLUGIN_CONFIG_TEMPLATE" "${SWITCHYARD_EXPERIMENT:-}" <<'PY'
+import re
 import sys
 import tomllib
 from pathlib import Path
 
 SWITCHYARD_ROUTES_PATH = "/opt/relay-plugins/nvidia.switchyard/switchyard-routes.toml"
+EXPERIMENT_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 
-def derive_switchyard_source(template_path: Path) -> Path:
-    stem = template_path.name
-    if not stem.startswith("plugins.") or not stem.endswith(".toml.in"):
-        raise SystemExit(f"unexpected plugin config template name: {stem}")
-    name = stem[len("plugins.") : -len(".toml.in")] or "default"
-    return template_path.parent / "switchyard" / f"{name}.toml"
+def switchyard_source(config_dir: Path, experiment: str) -> Path:
+    if not EXPERIMENT_NAME.fullmatch(experiment):
+        raise SystemExit(f"invalid SWITCHYARD_EXPERIMENT: {experiment!r}")
+    return config_dir / "switchyard" / f"{experiment}.toml"
 
 
 template_path = Path(sys.argv[1])
+experiment = sys.argv[2] or None
 with open(sys.argv[1], "rb") as stream:
     config = tomllib.load(stream)
 plugins = config.get("plugins", {}).get("dynamic", [])
 if plugins:
     if len(plugins) != 1:
         raise SystemExit("routed config must contain one dynamic plugin")
+    if experiment is None:
+        raise SystemExit("SWITCHYARD_EXPERIMENT is required for a switchyard-routed template")
     plugin_config = plugins[0].get("config", {})
     if plugin_config.get("switchyard_config_path") != SWITCHYARD_ROUTES_PATH:
         raise SystemExit("plugin config must reference the staged switchyard-routes.toml")
-    with derive_switchyard_source(template_path).open("rb") as stream:
+    with switchyard_source(template_path.parent, experiment).open("rb") as stream:
         switchyard_config = tomllib.load(stream)
     if not isinstance(switchyard_config, dict) or switchyard_config.get("schema_version") != 1:
         raise SystemExit("switchyard-routes.toml must declare schema_version = 1")
@@ -151,6 +154,8 @@ if plugins:
         if target.get("llm_client") != "nvidia":
             raise SystemExit("plugin targets must use the nvidia llm_client")
 else:
+    if experiment is not None:
+        raise SystemExit("SWITCHYARD_EXPERIMENT must not be set for a direct baseline template")
     components = {item.get("kind"): item for item in config.get("components", [])}
     caller = components.get("observability", {}).get("config", {}).get("atif", {}).get("model_name")
     entries = (

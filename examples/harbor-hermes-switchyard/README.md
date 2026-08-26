@@ -246,6 +246,7 @@ OFFLINE_ROOT="$TERMINAL_BENCH_ADMISSION_ROOT/offline-runtime"
   --relay-wheel "$RELAY_WHEEL" \
   --relay-architecture "$RELAY_ARCHITECTURE" \
   --plugin-config-template "$PLUGIN_CONFIG_TEMPLATE" \
+  --switchyard-experiment "$SWITCHYARD_EXPERIMENT" \
   --test-provider-base-url http://127.0.0.1:8000/v1 \
   --test-strong-model phase2/fake-strong \
   --test-weak-model phase2/fake-weak \

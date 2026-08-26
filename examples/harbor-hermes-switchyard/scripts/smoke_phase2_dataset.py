@@ -227,32 +227,32 @@ def validate_relay_runtime(
     relay_wheel: Path,
     relay_architecture: str,
     plugin_config_template: Path,
+    switchyard_experiment: str | None,
 ) -> dict[str, Any]:
     run_root = temporary_root / "runtime-smoke"
-    subprocess.run(
-        [
-            sys.executable,
-            str(example_root / "scripts" / "prepare_runtime.py"),
-            "--run-root",
-            str(run_root),
-            "--switchyard-bundle",
-            str(switchyard_bundle),
-            "--relay-wheel",
-            str(relay_wheel),
-            "--relay-architecture",
-            relay_architecture,
-            "--plugin-config-template",
-            str(plugin_config_template),
-            "--openinference-endpoint",
-            "http://127.0.0.1:4318/v1/traces",
-            "--phoenix-project",
-            "phase2-smoke",
-            "--eval-cohort",
-            "phase2-smoke",
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
+    prepare_args = [
+        sys.executable,
+        str(example_root / "scripts" / "prepare_runtime.py"),
+        "--run-root",
+        str(run_root),
+        "--switchyard-bundle",
+        str(switchyard_bundle),
+        "--relay-wheel",
+        str(relay_wheel),
+        "--relay-architecture",
+        relay_architecture,
+        "--plugin-config-template",
+        str(plugin_config_template),
+        "--openinference-endpoint",
+        "http://127.0.0.1:4318/v1/traces",
+        "--phoenix-project",
+        "phase2-smoke",
+        "--eval-cohort",
+        "phase2-smoke",
+    ]
+    if switchyard_experiment is not None:
+        prepare_args += ["--switchyard-experiment", switchyard_experiment]
+    subprocess.run(prepare_args, check=True, stdout=subprocess.DEVNULL)
     compatibility_path = run_root / "artifacts" / "harbor-hermes-compatibility.json"
     subprocess.run(
         [
@@ -312,6 +312,7 @@ def main() -> int:
     parser.add_argument("--relay-wheel", type=Path, required=True)
     parser.add_argument("--relay-architecture", choices=("x86_64", "aarch64"), required=True)
     parser.add_argument("--plugin-config-template", type=Path, required=True)
+    parser.add_argument("--switchyard-experiment")
     parser.add_argument("--concurrency", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -331,7 +332,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="harbor-phase2-smoke-") as directory:
         temporary_root = Path(directory)
         authorization_file = temporary_root / "switchyard-provider-authorization"
-        authorization_file.write_text("Bearer offline-placeholder", encoding="utf-8")
+        authorization_file.write_text("offline-placeholder", encoding="utf-8")
         authorization_file.chmod(0o600)
         task_records, network_attempts = asyncio.run(
             validate_local_dataset(
@@ -351,6 +352,7 @@ def main() -> int:
             args.relay_wheel.expanduser().resolve(strict=True),
             args.relay_architecture,
             args.plugin_config_template.expanduser().resolve(strict=True),
+            args.switchyard_experiment,
         )
 
     task_tomls = [dataset_root / record["name"] / "task.toml" for record in task_records]

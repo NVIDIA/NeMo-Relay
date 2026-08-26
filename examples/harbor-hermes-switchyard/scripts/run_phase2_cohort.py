@@ -31,7 +31,7 @@ if str(_SCRIPT_ROOT) not in sys.path:
 import run_setup_admission as setup_admission  # noqa: E402
 from plugin_config_paths import (  # noqa: E402
     SWITCHYARD_ROUTES_PATH,
-    derive_paired_paths,
+    experiment_paths,
     plugin_config_identity_sha256,
 )
 from relay_version import wheel_version  # noqa: E402
@@ -235,7 +235,7 @@ def classify_attempt_failure(log_text: str, attempt: Path) -> str:
     return "harness_or_integration"
 
 
-def plugin_contract(path: Path) -> dict[str, Any]:
+def plugin_contract(path: Path, switchyard_experiment: str | None) -> dict[str, Any]:
     with path.open("rb") as stream:
         config = tomllib.load(stream)
     components = {component.get("kind"): component for component in config.get("components", [])}
@@ -243,6 +243,8 @@ def plugin_contract(path: Path) -> dict[str, Any]:
     plugin_table = config.get("plugins")
     plugins = plugin_table.get("dynamic") if isinstance(plugin_table, dict) else None
     if plugins is None:
+        if switchyard_experiment is not None:
+            raise ValueError("--switchyard-experiment must not be set for a direct baseline template")
         entries = (
             components.get("pricing", {})
             .get("config", {})
@@ -271,7 +273,9 @@ def plugin_contract(path: Path) -> dict[str, Any]:
     plugin_config = plugins[0].get("config", {})
     if plugin_config.get("switchyard_config_path") != SWITCHYARD_ROUTES_PATH:
         raise ValueError("plugin configuration must reference the staged switchyard-routes.toml")
-    switchyard_source, _pricing_source = derive_paired_paths(path)
+    if switchyard_experiment is None:
+        raise ValueError("--switchyard-experiment is required for a switchyard-routed template")
+    switchyard_source, _pricing_source = experiment_paths(path.parent, switchyard_experiment)
     with switchyard_source.open("rb") as stream:
         switchyard_config = tomllib.load(stream)
     if not isinstance(switchyard_config, dict) or switchyard_config.get("schema_version") != 1:
@@ -465,29 +469,29 @@ def prepare_setup_runtime(args: argparse.Namespace) -> Path:
     if temporary.exists():
         raise ValueError(f"stale setup runtime preparation exists: {temporary}")
     try:
-        subprocess.run(
-            [
-                str(args.python_bin),
-                str(args.runtime_preparer),
-                "--run-root",
-                str(temporary),
-                "--switchyard-bundle",
-                str(args.switchyard_bundle),
-                "--relay-wheel",
-                str(args.relay_wheel),
-                "--relay-architecture",
-                args.relay_architecture,
-                "--plugin-config-template",
-                str(args.plugin_config_template),
-                "--openinference-endpoint",
-                "http://127.0.0.1:9/v1/traces",
-                "--phoenix-project",
-                args.phoenix_project,
-                "--eval-cohort",
-                args.eval_cohort,
-            ],
-            check=True,
-        )
+        preparer_args = [
+            str(args.python_bin),
+            str(args.runtime_preparer),
+            "--run-root",
+            str(temporary),
+            "--switchyard-bundle",
+            str(args.switchyard_bundle),
+            "--relay-wheel",
+            str(args.relay_wheel),
+            "--relay-architecture",
+            args.relay_architecture,
+            "--plugin-config-template",
+            str(args.plugin_config_template),
+            "--openinference-endpoint",
+            "http://127.0.0.1:9/v1/traces",
+            "--phoenix-project",
+            args.phoenix_project,
+            "--eval-cohort",
+            args.eval_cohort,
+        ]
+        if args.switchyard_experiment is not None:
+            preparer_args += ["--switchyard-experiment", args.switchyard_experiment]
+        subprocess.run(preparer_args, check=True)
         temporary.replace(destination)
     except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -523,7 +527,13 @@ def validate_smoke_evidence(
     relay_wheel: Path,
     switchyard_bundle: Path,
     plugin_config_template: Path,
+    switchyard_experiment: str | None,
 ) -> None:
+    switchyard_source, pricing_source = (
+        experiment_paths(plugin_config_template.parent, switchyard_experiment)
+        if switchyard_experiment is not None
+        else (None, None)
+    )
     evidence = read_json(path)
     dataset_root = dataset_root.resolve()
     task_tomls = sorted(dataset_root.glob("*/task.toml"))
@@ -572,7 +582,8 @@ def validate_smoke_evidence(
         or evidence["relay_runtime"].get("relay_wheel_sha256") != sha256_file(relay_wheel)
         or evidence["relay_runtime"].get("switchyard_library_sha256")
         != sha256_file(switchyard_library(switchyard_bundle))
-        or evidence["relay_runtime"].get("plugin_config_template_sha256") != plugin_config_identity_sha256(plugin_config_template)
+        or evidence["relay_runtime"].get("plugin_config_template_sha256")
+        != plugin_config_identity_sha256(plugin_config_template, switchyard_source, pricing_source)
     ):
         raise ValueError(f"Phase 2 all-task smoke evidence is not passed: {path}")
 
@@ -583,7 +594,13 @@ def validate_offline_evidence(
     relay_wheel: Path,
     switchyard_bundle: Path,
     plugin_config_template: Path,
+    switchyard_experiment: str | None,
 ) -> None:
+    switchyard_source, pricing_source = (
+        experiment_paths(plugin_config_template.parent, switchyard_experiment)
+        if switchyard_experiment is not None
+        else (None, None)
+    )
     evidence = read_json(path)
     if (
         evidence.get("schema_version") != "harbor-hermes-switchyard.phase2-offline-admission.v1"
@@ -592,7 +609,8 @@ def validate_offline_evidence(
         or evidence.get("relay_architecture") != relay_architecture
         or evidence.get("relay_wheel_sha256") != sha256_file(relay_wheel)
         or evidence.get("switchyard_library_sha256") != sha256_file(switchyard_library(switchyard_bundle))
-        or evidence.get("plugin_config_template_sha256") != plugin_config_identity_sha256(plugin_config_template)
+        or evidence.get("plugin_config_template_sha256")
+        != plugin_config_identity_sha256(plugin_config_template, switchyard_source, pricing_source)
         or evidence.get("provider_requests", 0) <= 0
         or evidence.get("surviving_shutdown_threads") != []
     ):
@@ -913,9 +931,23 @@ def make_plan(args: argparse.Namespace, tasks: list[Task]) -> dict[str, Any]:
             "dataset_task_definitions_sha256": sha256_file_set(args.dataset_root, task_definitions),
             "phase2_smoke_evidence_sha256": sha256_file(args.smoke_evidence),
             "phase2_offline_evidence_sha256": sha256_file(args.offline_evidence),
-            "plugin_config_template_sha256": plugin_config_identity_sha256(args.plugin_config_template),
+            "plugin_config_template_sha256": plugin_config_identity_sha256(
+                args.plugin_config_template,
+                *(
+                    experiment_paths(args.plugin_config_template.parent, args.switchyard_experiment)
+                    if args.switchyard_experiment is not None
+                    else (None, None)
+                ),
+            ),
             "admission_plugin_config_template_sha256": plugin_config_identity_sha256(
-                args.admission_plugin_config_template
+                args.admission_plugin_config_template,
+                *(
+                    experiment_paths(
+                        args.admission_plugin_config_template.parent, args.admission_switchyard_experiment
+                    )
+                    if args.admission_switchyard_experiment is not None
+                    else (None, None)
+                ),
             ),
             "relay_wheel_sha256": sha256_file(args.relay_wheel),
             "switchyard_manifest_sha256": sha256_file(manifest),
@@ -1366,9 +1398,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--plugin-config-template", type=Path, required=True)
     parser.add_argument(
+        "--switchyard-experiment",
+        help="config/switchyard/<name>.toml and config/pricing/<name>.json pair for a routed template",
+    )
+    parser.add_argument(
         "--admission-plugin-config-template",
         type=Path,
         help="routed template that produced smoke/offline evidence for a direct control",
+    )
+    parser.add_argument(
+        "--admission-switchyard-experiment",
+        help="switchyard experiment matching --admission-plugin-config-template, if it needs one",
     )
     parser.add_argument("--task-runner", type=Path, default=example_root / "run_terminal_bench.sh")
     parser.add_argument(
@@ -1430,19 +1470,21 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    args.plugin_contract = plugin_contract(args.plugin_config_template)
+    args.plugin_contract = plugin_contract(args.plugin_config_template, args.switchyard_experiment)
     args.required_model = args.plugin_contract["required_models"]
     admission_plugin_template = args.admission_plugin_config_template or args.plugin_config_template
+    admission_switchyard_experiment = args.admission_switchyard_experiment or args.switchyard_experiment
     if args.plugin_contract["mode"] == "direct":
         # Dataset/setup admission was already proven with the routed template.
         # The direct baseline config is validated independently and does not
         # load that admitted plugin during provider execution.
-        admission_plugin_template = args.admission_plugin_config_template or (
-            args.task_runner.parent / "config" / "plugins.toml.in"
-        )
+        if args.admission_plugin_config_template is None:
+            admission_plugin_template = args.task_runner.parent / "config" / "plugins.toml.in"
+            admission_switchyard_experiment = args.admission_switchyard_experiment or "default"
     elif args.admission_plugin_config_template is not None:
         raise ValueError("a routed cohort must use its own plugin template for admission evidence")
     args.admission_plugin_config_template = admission_plugin_template.resolve(strict=True)
+    args.admission_switchyard_experiment = admission_switchyard_experiment
     validate_smoke_evidence(
         args.smoke_evidence,
         args.sample_count,
@@ -1452,6 +1494,7 @@ def main() -> int:
         args.relay_wheel,
         args.switchyard_bundle,
         admission_plugin_template,
+        admission_switchyard_experiment,
     )
     validate_offline_evidence(
         args.offline_evidence,
@@ -1459,6 +1502,7 @@ def main() -> int:
         args.relay_wheel,
         args.switchyard_bundle,
         admission_plugin_template,
+        admission_switchyard_experiment,
     )
     args.canary_task = args.canary_task or None
     tasks = discover_tasks(args.dataset_root, args.sample_count, set(args.exclude_task), args.canary_task)
