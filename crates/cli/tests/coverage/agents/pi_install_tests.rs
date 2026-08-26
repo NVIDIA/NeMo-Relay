@@ -296,3 +296,29 @@ fn setup_makes_no_offer_over_an_unmanaged_copy() {
 
     assert!(!setup_install_available());
 }
+
+/// The two collectors answer different questions, and conflating them panicked `doctor`.
+///
+/// `installed_integrations` feeds marketplace-only readiness code that is `unreachable!()`
+/// for pi, so a managed install must not appear there. `uninstallable_integrations` is what
+/// `uninstall all` asks, and pi belongs in that one.
+#[test]
+fn a_managed_install_is_uninstallable_but_never_a_marketplace_integration() {
+    let temp = tempfile::tempdir().unwrap();
+    let _scope = scoped(temp.path());
+    let marketplace = temp.path().join("plugins");
+    let all = crate::agents::CodingAgent::ALL;
+
+    install(request(false, false)).unwrap();
+
+    assert!(
+        !crate::agents::installed_integrations(&all, Some(&marketplace))
+            .contains(&crate::agents::CodingAgent::Pi),
+        "pi in this list reaches marketplace code that aborts on it"
+    );
+    assert!(
+        crate::agents::uninstallable_integrations(&all, Some(&marketplace))
+            .contains(&crate::agents::CodingAgent::Pi),
+        "`uninstall all` has to see a managed pi install"
+    );
+}

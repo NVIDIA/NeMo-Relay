@@ -104,8 +104,13 @@ rather than by package, so a copy in one place and a copy in another are two
 packages: both register hooks, every turn, tool and inline-shell event is
 reported twice, each turn closes as superseded by its own duplicate, and the
 inline-shell gate decides one command twice. `nemo-relay install pi` refuses
-when another copy would load beside it, and the launcher refuses to start. Keep
-one copy.
+when another copy would load beside it — including a project-scoped copy in the
+current directory, which pi loads beside a user-scope install whenever the
+project is trusted — and the launcher refuses to start. Keep one copy.
+
+That last check reads only the current directory, so installing from elsewhere
+does not see a project copy and does not stop. `nemo-relay doctor pi` reports one
+wherever you run it.
 </Warning>
 
 Because the manual routes look exactly like the managed one, `nemo-relay install

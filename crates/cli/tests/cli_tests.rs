@@ -5038,3 +5038,131 @@ fn pricing_catalog_json(model_id: &str) -> String {
 }}"#
     )
 }
+
+/// Install the NeMo Relay pi extension into an isolated pi home, the way a user would.
+fn install_pi_extension(temp: &std::path::Path) -> std::path::PathBuf {
+    let pi_home = temp.join("pi-home");
+    std::fs::create_dir_all(&pi_home).unwrap();
+    let output = Command::new(gateway_bin())
+        .current_dir(temp)
+        .env("PI_CODING_AGENT_DIR", &pi_home)
+        .env("HOME", temp)
+        .env("XDG_CONFIG_HOME", temp.join("xdg"))
+        .args(["install", "pi", "--skip-doctor"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "install pi failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    pi_home
+}
+
+/// A managed pi install must not take `doctor` down -- for pi or for anything else.
+///
+/// This is a regression test with a real bug behind it. Teaching `installed_integrations`
+/// about pi so `uninstall all` could see a managed install also handed pi to the
+/// marketplace readiness collector, whose `PluginLayout::new` is `unreachable!()` for pi.
+/// One `nemo-relay install pi` then aborted `doctor` for *every* agent, and the installer's
+/// own output tells the user to run it. 1365 unit tests passed with that live, because none
+/// of them ran the binary with a managed install on disk.
+#[test]
+fn cli_doctor_survives_a_managed_pi_install() {
+    let temp = tempfile::tempdir().unwrap();
+    let pi_home = install_pi_extension(temp.path());
+
+    for arguments in [
+        vec!["doctor", "pi", "--offline"],
+        vec!["doctor", "--offline"],
+        vec!["doctor", "claude", "--json", "--offline"],
+    ] {
+        let output = Command::new(gateway_bin())
+            .current_dir(temp.path())
+            .env("PI_CODING_AGENT_DIR", &pi_home)
+            .env("HOME", temp.path())
+            .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+            .args(&arguments)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stderr.contains("panicked"),
+            "`{}` panicked with a managed pi install:\n{stderr}",
+            arguments.join(" ")
+        );
+        assert_ne!(
+            output.status.code(),
+            Some(101),
+            "`{}` aborted with a managed pi install",
+            arguments.join(" ")
+        );
+    }
+}
+
+/// `--plugin pi` asks about marketplace state pi does not have, and used to abort over it.
+///
+/// Reachable with nothing installed at all: adding `pi` to the `<HOST>` value enum for
+/// `install` also made it a valid `--plugin` argument, and every path behind that flag is
+/// `unreachable!()` for pi. It has to refuse in words instead.
+#[test]
+fn cli_plugin_doctor_refuses_pi_instead_of_aborting() {
+    let temp = tempfile::tempdir().unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
+        .env("PI_CODING_AGENT_DIR", temp.path().join("pi-home"))
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .args(["doctor", "--plugin", "pi", "--offline"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    assert_ne!(output.status.code(), Some(101));
+    assert!(
+        stderr.contains("no marketplace plugin to diagnose"),
+        "expected a refusal naming the right command, got:\n{stderr}"
+    );
+    assert!(stderr.contains("nemo-relay doctor pi"), "{stderr}");
+}
+
+/// Installing must not manufacture the duplicate the launcher refuses to start over.
+///
+/// A project-scoped copy is excluded from the launcher's duplicate check on purpose --
+/// refusing there would block every launch in an untrusted project. Installing is the
+/// opposite case: it is the act that creates the second copy, and a trusted project then
+/// loads both, doubling every hook and every policy gate.
+#[test]
+fn cli_install_pi_refuses_to_add_a_copy_beside_a_project_scoped_one() {
+    let temp = tempfile::tempdir().unwrap();
+    let pi_home = temp.path().join("pi-home");
+    let project = temp.path().join("project");
+    let project_copy = project.join(".pi").join("extensions").join("relay");
+    std::fs::create_dir_all(&project_copy).unwrap();
+    std::fs::create_dir_all(&pi_home).unwrap();
+    std::fs::write(
+        project_copy.join("package.json"),
+        r#"{"name": "nemo-relay-pi", "pi": {"extensions": ["./index.ts"]}}"#,
+    )
+    .unwrap();
+    std::fs::write(project_copy.join("index.ts"), "export default 1").unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&project)
+        .env("PI_CODING_AGENT_DIR", &pi_home)
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .args(["install", "pi", "--skip-doctor"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "the install should have refused");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("project-scoped copy"), "{stderr}");
+    assert!(
+        !pi_home.join("extensions").join("nemo-relay").exists(),
+        "nothing should have been written at user scope"
+    );
+}

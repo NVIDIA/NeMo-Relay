@@ -612,6 +612,18 @@ pub(crate) fn detected_install_integrations(candidates: &[CodingAgent]) -> Vec<C
         .collect()
 }
 
+/// Hosts with **marketplace plugin state** under `install_dir`.
+///
+/// ⚠️ **pi is never in this list, and putting it there panics the doctor.** Every consumer
+/// feeds the result into marketplace-only code -- `PluginLayout::new` calls
+/// `marketplace_manifest_relative`, which is `unreachable!()` for pi -- so a pi here is not
+/// a wrong answer, it is an abort. That regression shipped once: teaching this function
+/// about pi so `uninstall all` could see a managed install also put pi in front of the
+/// readiness collector, and a single `nemo-relay install pi` then panicked `doctor` for
+/// *every* agent.
+///
+/// Use [`uninstallable_integrations`] for "what can Relay remove", which is the question
+/// that has a pi answer.
 pub(crate) fn installed_integrations(
     candidates: &[CodingAgent],
     install_dir: Option<&Path>,
@@ -622,13 +634,27 @@ pub(crate) fn installed_integrations(
     candidates
         .iter()
         .copied()
-        .filter(|agent| match agent {
-            // pi writes no marketplace state to look for; its install is a directory under
-            // pi's own agent directory, which `install_dir` does not address.
-            CodingAgent::Pi => pi::install::is_installed(),
-            agent => crate::installation::marketplace::persisted_state_exists(*agent, &install_dir),
+        .filter(|agent| !matches!(agent, CodingAgent::Pi))
+        .filter(|agent| {
+            crate::installation::marketplace::persisted_state_exists(*agent, &install_dir)
         })
         .collect()
+}
+
+/// Hosts with integration state Relay can remove, which is a wider question.
+///
+/// Marketplace state for Codex and Claude Code, and a Relay-managed extension directory for
+/// pi. Separate from [`installed_integrations`] because only one of the two questions has a
+/// pi answer, and answering both from one function is what broke `doctor`.
+pub(crate) fn uninstallable_integrations(
+    candidates: &[CodingAgent],
+    install_dir: Option<&Path>,
+) -> Vec<CodingAgent> {
+    let mut agents = installed_integrations(candidates, install_dir);
+    if candidates.contains(&CodingAgent::Pi) && pi::install::is_installed() {
+        agents.push(CodingAgent::Pi);
+    }
+    agents
 }
 
 pub(crate) fn doctor_integration(

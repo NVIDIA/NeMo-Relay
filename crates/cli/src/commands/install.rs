@@ -105,7 +105,7 @@ pub(super) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError>
     let request = command.into_runtime();
     let candidates = target.agents();
     let agents = if target.is_all() {
-        crate::agents::installed_integrations(&candidates, request.install_dir.as_deref())
+        crate::agents::uninstallable_integrations(&candidates, request.install_dir.as_deref())
     } else {
         candidates
     };

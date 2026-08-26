@@ -219,6 +219,29 @@ pub(crate) fn install(request: InstallRequest) -> Result<ExitCode, CliError> {
             other.display()
         )));
     }
+    // And a project-scoped copy, which the check above deliberately ignores.
+    //
+    // The launcher only *notes* one, because refusing there would block every launch in an
+    // untrusted project over a copy that will not load. Installing is the opposite case: it
+    // is the act that creates the second copy, and a trusted project then loads both, so
+    // every hook, turn and policy gate fires twice. Declining to create a problem is a
+    // lower bar than declining to run because one exists.
+    //
+    // ⚠️ This sees only the current directory, so it is a partial guard by construction --
+    // installing from anywhere else leaves the same project copy in place. It catches the
+    // common case, which is installing from the project you are working in; the guide's
+    // standing advice not to install project-scoped is what covers the rest.
+    if let Some(project) = super::doctor::project_copies_beside(&current_dir(), &root).first() {
+        return Err(CliError::Install(format!(
+            "{} is a project-scoped copy of the NeMo Relay pi extension, and pi loads it \
+             beside a user-scope install whenever this project is trusted -- so installing \
+             here would report every turn, tool and inline-shell event twice, and decide \
+             every policy gate twice. Remove that copy (project scope is never a supported \
+             install location: `-p`, `--mode json` and `--mode rpc` never prompt for trust, \
+             so it is silently skipped there), or install from outside this project",
+            project.display()
+        )));
+    }
 
     let action = plan_install(&root, request.force)?;
     if request.dry_run {
