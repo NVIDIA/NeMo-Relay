@@ -146,7 +146,7 @@
           "default": "documentation-controlled-subscriber"
         },
         "reason": {
-          "description": "Non-empty constant reason returned while the registration is suppressed.",
+          "description": "Non-empty reason returned by the callback while the registration is suppressed.",
           "type": "string",
           "minLength": 1,
           "default": "disabled by documentation plugin"

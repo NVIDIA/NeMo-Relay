@@ -662,7 +662,7 @@ fn assert_native_host_api_versions() {
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV4>(), 8);
-        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV4>(), 584);
+        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV4>(), 600);
         assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV4, v3), 0);
         assert_eq!(
             std::mem::offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2),
@@ -679,11 +679,25 @@ fn assert_native_host_api_versions() {
             ),
             576
         );
+        assert_eq!(
+            std::mem::offset_of!(
+                NemoRelayNativeHostApiV4,
+                plugin_runtime_register_conditional_middleware_guardrail_callback
+            ),
+            584
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                NemoRelayNativeHostApiV4,
+                plugin_context_register_conditional_middleware_guardrail_callback
+            ),
+            592
+        );
     }
     #[cfg(target_pointer_width = "32")]
     {
         assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV4>(), 4);
-        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV4>(), 288);
+        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV4>(), 296);
         assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV4, v3), 0);
         assert_eq!(
             std::mem::offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2),
@@ -699,6 +713,20 @@ fn assert_native_host_api_versions() {
                 plugin_context_register_conditional_middleware_guardrail
             ),
             284
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                NemoRelayNativeHostApiV4,
+                plugin_runtime_register_conditional_middleware_guardrail_callback
+            ),
+            288
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                NemoRelayNativeHostApiV4,
+                plugin_context_register_conditional_middleware_guardrail_callback
+            ),
+            292
         );
     }
 }

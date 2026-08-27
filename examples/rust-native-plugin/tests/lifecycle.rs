@@ -23,6 +23,7 @@ static TEST_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
 const PLUGIN_ID: &str = "examples.rust_native_policy";
 const SUBSCRIBER: &str = "rust_native_example_lifecycle_events";
 const CONTROLLED_SUBSCRIBER: &str = "documentation-controlled-subscriber";
+const ALLOWED_SUBSCRIBER: &str = "documentation-observed-subscriber";
 
 #[tokio::test]
 async fn built_cdylib_validates_activates_runs_and_unloads() {
@@ -51,6 +52,15 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
         }),
     )
     .expect("controlled subscriber should register");
+    let allowed_events = Arc::new(AtomicUsize::new(0));
+    let captured_allowed_events = Arc::clone(&allowed_events);
+    register_subscriber(
+        ALLOWED_SUBSCRIBER,
+        Arc::new(move |_| {
+            captured_allowed_events.fetch_add(1, Ordering::SeqCst);
+        }),
+    )
+    .expect("allowed subscriber should register");
 
     let config = documented_config();
     let (activation, report) = PluginHostActivation::activate(
@@ -112,6 +122,37 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
     activation
         .clear()
         .expect("callbacks should clear before the library unloads");
+
+    let (allowed_activation, report) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [DynamicPluginActivationSpec {
+            plugin_id: PLUGIN_ID.into(),
+            kind: DynamicPluginKind::RustDynamic,
+            manifest_ref: manifest.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: allowed_config(),
+        }],
+    )
+    .await
+    .expect("the allow-path native configuration should activate");
+    assert!(report.diagnostics.is_empty(), "{report:?}");
+    flush_subscribers().expect("allow-path activation events should flush");
+    let allowed_baseline = allowed_events.load(Ordering::SeqCst);
+    tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("allowed_tool")
+            .args(json!({}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
+            .build(),
+    )
+    .await
+    .expect("a None gate decision should leave the matching subscriber enabled");
+    flush_subscribers().expect("allow-path subscriber events should flush");
+    assert!(allowed_events.load(Ordering::SeqCst) > allowed_baseline);
+    allowed_activation
+        .clear()
+        .expect("allow-path native plugin should unload cleanly");
+
     tool_call_execute(
         ToolCallExecuteParams::builder()
             .name("restored_tool")
@@ -125,6 +166,7 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
     assert!(controlled_events.load(Ordering::SeqCst) > controlled_baseline);
     deregister_subscriber(CONTROLLED_SUBSCRIBER)
         .expect("controlled subscriber should deregister");
+    deregister_subscriber(ALLOWED_SUBSCRIBER).expect("allowed subscriber should deregister");
     deregister_subscriber(SUBSCRIBER).expect("test subscriber should deregister");
     assert!(!list_plugin_kinds().contains(&PLUGIN_ID.to_owned()));
 }
@@ -156,6 +198,19 @@ fn documented_config() -> Map<String, serde_json::Value> {
     .as_object()
     .expect("documented configuration is an object")
     .clone()
+}
+
+fn allowed_config() -> Map<String, serde_json::Value> {
+    let mut config = documented_config();
+    config
+        .get_mut("registration_control")
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("registration control config should be an object")
+        .insert(
+            "registration_name".into(),
+            json!(ALLOWED_SUBSCRIBER),
+        );
+    config
 }
 
 fn build_cdylib() -> (TempDir, PathBuf) {

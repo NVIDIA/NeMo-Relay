@@ -57,11 +57,16 @@ impl NativePlugin for ExampleNativePlugin {
         let plugin_runtime = context.runtime();
 
         if config.registration_control.enabled {
+            let reason = config.registration_control.reason.clone();
             context.register_conditional_middleware_guardrail(
                 "documentation_registration_control",
                 &config.registration_control.kinds.iter().copied().collect(),
                 &config.registration_control.registration_name,
-                &config.registration_control.reason,
+                move |_, registration_name| {
+                    registration_name
+                        .starts_with("documentation-controlled-")
+                        .then(|| reason.clone())
+                },
             )?;
         }
 

@@ -92,13 +92,13 @@ impl NativePlugin for FixtureNativePlugin {
             "fixture_initial_gate",
             &subscriber_kinds,
             "missing-initial-target",
-            "fixture initial gate",
+            |_, _| Some("fixture initial gate".into()),
         )?;
         let dynamic_gate = runtime.register_conditional_middleware_guardrail(
             "fixture_dynamic_gate",
             &subscriber_kinds,
             "missing-dynamic-target",
-            "fixture dynamic gate",
+            |_, _| Some("fixture dynamic gate".into()),
         )?;
         if !runtime.deregister_conditional_middleware_guardrail(&dynamic_gate)? {
             return Err("native runtime did not remove its dynamic gate".into());

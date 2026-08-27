@@ -85,8 +85,9 @@ so one plugin cannot remove another plugin's gate.
 
 Language-binding gates evaluate callbacks against current in-process state. Worker gates
 evaluate their callbacks through the authenticated `grpc-v1` invocation path and fail
-open on callback, transport, or timeout errors. Native plugins install a host-resident
-constant reason so snapshot construction never enters the dynamic library.
+open on callback, transport, or timeout errors. Native gates synchronously enter the
+trusted in-process plugin and fail open when the callback reports an ABI error or returns
+an invalid reason. Relay retains the native library until every owned gate is removed.
 
 ## Callback Safety
 
