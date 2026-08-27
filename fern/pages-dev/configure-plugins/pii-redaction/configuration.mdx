@@ -143,8 +143,8 @@ Use `builtin` mode when NeMo Relay should sanitize emitted observability
 payloads with a deterministic first-party backend.
 
 This is the recommended mode when the privacy behavior is common enough to be
-described declaratively with built-in actions, detector presets, exact target
-paths, and supported codecs.
+described declaratively with built-in actions, detector presets, target
+selectors, and supported codecs.
 
 ### Requirements
 
@@ -216,7 +216,7 @@ Use the editor when you want to:
 - Enable or disable individual profiles
 - Set the LLM `codec`
 - Edit `builtin` action settings such as `action`, `target_paths`,
-  `pattern`, `detector`, `replacement`, and masking fields
+  `target_path_globs`, `pattern`, `detector`, `replacement`, and masking fields
 - Edit `local.backend` for a runtime-provided future local-model backend
 
 The editor preserves unknown fields when it rewrites an existing
@@ -233,7 +233,8 @@ The `builtin` section contains:
 | Field | Purpose |
 | --- | --- |
 | `action` | Sanitization action. Current values are `remove`, `redact`, `regex_replace`, `hash`, and `mask`. |
-| `target_paths` | Exact JSON-pointer paths to sanitize. Empty means every matching string leaf. |
+| `target_paths` | Exact RFC 6901 JSON-pointer paths to sanitize. Empty together with `target_path_globs` means every matching string leaf. |
+| `target_path_globs` | Restricted JSON-pointer glob paths. A whole `*` segment matches exactly one object key or array index. |
 | `pattern` | Regex pattern used when `action = "regex_replace"` or `action = "redact"`. |
 | `detector` | Optional built-in matcher preset. Current values are `email`, `phone`, `api_key`, `ip_address`, `ipv6`, `url`, `uuid`, `bearer_token`, `jwt`, `credit_card`, `aws_access_key_id`, `aws_secret_access_key`, `gcp_api_key`, and `azure_storage_account_key`. |
 | `replacement` | Replacement text used when `action = "regex_replace"` or `action = "redact"`. Defaults to `[REDACTED]`. |
@@ -251,9 +252,9 @@ exporter can validate and export the mark.
 
 The plugin sanitizes optional text without invalidating the envelope:
 
-- With no `target_paths`, measurement descriptions and string-valued metric
+- With neither `target_paths` nor `target_path_globs`, measurement descriptions and string-valued metric
   attributes follow the configured built-in action.
-- With `target_paths`, those fields are sanitized only when their
+- With target selectors, those fields are sanitized only when their
   payload-relative JSON Pointer matches, such as
   `/measurements/0/description` or `/measurements/0/attributes/owner`.
 - With `action = "remove"`, targeting a whole string-array attribute removes
@@ -264,7 +265,7 @@ The plugin sanitizes optional text without invalidating the envelope:
 
 The `trajectory_context` preset replaces descriptions and string-valued
 attributes with its configured replacement while retaining the required metric
-fields. That preset does not accept `target_paths`. Its
+fields. That preset does not accept target selectors. Its
 `custom_mark_payload_policy` applies only to opaque marks in the `custom`
 category; it does not control Relay typed metric envelopes.
 
@@ -375,7 +376,29 @@ When `detector` is set and you do not specify `unmasked_prefix` or
 
 ## Path Semantics
 
-`target_paths` are exact JSON-pointer matches.
+`target_paths` are exact RFC 6901 JSON-pointer matches. `target_path_globs`
+adds a restricted, opt-in selector language: a whole `*` segment matches one
+object key or array index. Exact paths and glob paths are combined.
+Within `target_path_globs`, `*` is a wildcard only when it is the complete
+pointer segment. Segments such as `content*` and `foo*bar` match those literal
+object keys.
+
+For example, these selectors cover every message and provider-output text
+block without capping the number of array items:
+
+```toml
+target_path_globs = [
+  "/messages/*/content/*/text",
+  "/output/*/content/*/text",
+]
+```
+
+Globs are not recursive: `/output/*` selects only a direct child of `output`.
+It does not select `/output/0/content/0/text`; use
+`/output/*/content/*/text` for that shape. Relay does not support `**`,
+predicates, or arbitrary JSONPath expressions. `target_paths = ["/*"]`
+continues to select a literal `*` object key; use `target_path_globs = ["/*"]`
+when `*` should be a wildcard.
 
 Relay validates every configured path as RFC 6901 syntax before activating the
 component. The empty string selects the document root. Every other pointer must
@@ -408,7 +431,7 @@ the recommended contract for new configuration. If normalized paths are
 configured and Relay cannot resolve a request codec or cannot project a
 response through a recognized built-in or compatible fallback codec, the LLM
 event payload and its annotation are omitted rather than emitting unsanitized
-content. In particular, a manual LLM call with normalized `target_paths`, no
+content. In particular, a manual LLM call with normalized target selectors, no
 active codec, and no configured `codec` fallback omits both the payload and its
 annotation.
 
@@ -452,7 +475,7 @@ credential family.
 
 They are deterministic regex-backed helpers, not model inference.
 
-If `target_paths` is empty, the built-in backend sanitizes every matching
+If both target-selector lists are empty, the built-in backend sanitizes every matching
 string leaf in the selected payload boundary.
 
 ## Observability Semantics
