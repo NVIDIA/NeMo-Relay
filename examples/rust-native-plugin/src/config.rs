@@ -209,6 +209,18 @@ pub(crate) fn validate(plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnosti
                     ));
                 }
             }
+            if config.registration_control.enabled
+                && !config.registration_control.registration_name.is_empty()
+                && config.registration_control.registration_name
+                    == config.registration_control.allowed_registration_name
+            {
+                diagnostics.push(diagnostic(
+                    DiagnosticLevel::Error,
+                    "examples.rust_native_policy.invalid_registration_control",
+                    Some("registration_control.allowed_registration_name"),
+                    "registration_control.allowed_registration_name must differ from registration_control.registration_name when registration control is enabled",
+                ));
+            }
         }
         Err(error) => diagnostics.push(diagnostic(
             DiagnosticLevel::Error,

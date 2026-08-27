@@ -47,6 +47,7 @@ activation-owned gate. It defaults to `enabled: false`, `kinds: ["subscriber"]`,
 one callback that returns the reason for `registration_name` and another callback
 that returns `None` for `allowed_registration_name`. This demonstrates blocking and
 allowing decisions in the same activation. The kinds, effective target names, and
-reason must be nonempty. Refer to
+reason must be nonempty. When registration control is enabled, `registration_name`
+and `allowed_registration_name` must differ. Refer to
 [Conditional Middleware Guardrails](../../docs/about-nemo-relay/concepts/conditional-middleware-guardrails.mdx)
 before enabling it against a discovered runtime target.

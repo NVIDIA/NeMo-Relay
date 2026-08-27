@@ -39,6 +39,32 @@ fn shared_configuration_is_valid() {
 }
 
 #[test]
+fn enabled_registration_control_requires_distinct_targets() {
+    let diagnostics = validate_example_config(&object(json!({
+        "registration_control": {
+            "enabled": true,
+            "registration_name": "same-target",
+            "allowed_registration_name": "same-target"
+        }
+    })));
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "examples.rust_native_policy.invalid_registration_control"
+            && diagnostic.field.as_deref()
+                == Some("registration_control.allowed_registration_name")
+    }));
+
+    let disabled_diagnostics = validate_example_config(&object(json!({
+        "registration_control": {
+            "enabled": false,
+            "registration_name": "same-target",
+            "allowed_registration_name": "same-target"
+        }
+    })));
+    assert!(disabled_diagnostics.is_empty(), "{disabled_diagnostics:?}");
+}
+
+#[test]
 fn unsupported_mode_is_rejected() {
     let diagnostics = validate_example_config(&object(json!({
         "requests": { "mode": "maybe" }

@@ -4,9 +4,11 @@
 //! Tests for stable worker protocol helpers, structural tool results, and enum values.
 
 use nemo_relay_worker_proto::v1::{
-    EmitMarkRequest, GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, HandshakeRequest,
-    HealthRequest, InvokeRequest, JsonEnvelope, JsonValue, RegistrationSurface, RuntimeDiagnostic,
-    ScopeType, ToolExecutionResult as ProtoToolExecutionResult,
+    ConditionalMiddlewareGuardrailRegistration, ConditionalMiddlewareInvocation, EmitMarkRequest,
+    GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, HandshakeRequest, HealthRequest,
+    InvokeRequest, JsonEnvelope, JsonValue, RegisterConditionalMiddlewareGuardrailRequest,
+    RegistrationSurface, RuntimeDiagnostic, ScopeType,
+    ToolExecutionResult as ProtoToolExecutionResult, invoke_request,
 };
 use nemo_relay_worker_proto::{
     WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
@@ -118,6 +120,26 @@ fn request_field_numbers_are_stable() {
         InvokeRequest::decode(encoded.as_slice()).expect("decode invoke"),
         invoke
     );
+
+    let activation_gate = ConditionalMiddlewareGuardrailRegistration {
+        callback: true,
+        ..Default::default()
+    };
+    assert_eq!(activation_gate.encode_to_vec(), b"\x28\x01".to_vec());
+
+    let runtime_gate = RegisterConditionalMiddlewareGuardrailRequest {
+        callback: true,
+        ..Default::default()
+    };
+    assert_eq!(runtime_gate.encode_to_vec(), b"\x38\x01".to_vec());
+
+    let conditional_invoke = InvokeRequest {
+        payload: Some(invoke_request::Payload::ConditionalMiddleware(
+            ConditionalMiddlewareInvocation::default(),
+        )),
+        ..Default::default()
+    };
+    assert_eq!(conditional_invoke.encode_to_vec(), b"\x6a\x00".to_vec());
 }
 
 #[test]

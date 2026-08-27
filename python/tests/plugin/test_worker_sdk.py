@@ -562,6 +562,9 @@ class RecordingHostStub:
 class AllSurfacesPlugin(WorkerPlugin):
     plugin_id = "tests.python_worker"
 
+    def __init__(self) -> None:
+        self.conditional_middleware_calls: list[tuple[set[RuntimeRegistrationKind], str]] = []
+
     def validate(self, config: Json) -> list[ConfigDiagnostic | dict[str, Any]]:
         if isinstance(config, dict) and config.get("warn"):
             return [
@@ -638,12 +641,17 @@ class AllSurfacesPlugin(WorkerPlugin):
             async for chunk in stream:
                 yield _tag(chunk, "llm_stream_execution")
 
+        async def initial_gate(kinds: set[RuntimeRegistrationKind], name: str) -> str | None:
+            await asyncio.sleep(0)
+            self.conditional_middleware_calls.append((kinds, name))
+            return "initial gate" if name == "missing-target" else None
+
         ctx.register_subscriber("subscriber", subscriber)
         ctx.register_conditional_middleware_guardrail(
             "initial_gate",
             {RuntimeRegistrationKind.SUBSCRIBER},
             "missing-target",
-            lambda _kinds, name: "initial gate" if name == "missing-target" else None,
+            initial_gate,
         )
         ctx.register_event_metadata_injector("event_metadata", event_metadata, priority=1)
         ctx.register_mark_sanitize_guardrail("event_sanitize", mark_sanitize, priority=1)
@@ -1761,6 +1769,12 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
         AbortContext(),
     )
     assert allowed_conditional_middleware.guardrail.block_reason == ""
+    plugin = service._plugin
+    assert isinstance(plugin, AllSurfacesPlugin)
+    assert plugin.conditional_middleware_calls == [
+        ({RuntimeRegistrationKind.SUBSCRIBER}, "missing-target"),
+        ({RuntimeRegistrationKind.SUBSCRIBER}, "allowed-target"),
+    ]
 
     event_metadata = await service.Invoke(
         _invoke_request(
