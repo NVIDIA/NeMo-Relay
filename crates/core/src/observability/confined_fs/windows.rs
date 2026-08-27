@@ -13,19 +13,28 @@ use windows_sys::Wdk::Storage::FileSystem::{
     FILE_OPEN_REPARSE_POINT, FILE_OVERWRITE_IF, FILE_SYNCHRONOUS_IO_NONALERT, NtCreateFile,
 };
 use windows_sys::Win32::Foundation::{
-    HANDLE, INVALID_HANDLE_VALUE, OBJ_CASE_INSENSITIVE, RtlNtStatusToDosError, UNICODE_STRING,
+    HANDLE, INVALID_HANDLE_VALUE, LocalFree, OBJ_CASE_INSENSITIVE, RtlNtStatusToDosError,
+    UNICODE_STRING,
+};
+use windows_sys::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
+use windows_sys::Win32::Security::{
+    DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    SetKernelObjectSecurity,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CreateFileW, DELETE, FILE_APPEND_DATA, FILE_ATTRIBUTE_DIRECTORY,
     FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ,
-    FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, FileDispositionInfo, FileRenameInfo, GetFileInformationByHandle,
-    OPEN_EXISTING, SetFileInformationByHandle,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
+    FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo,
+    FileRenameInfo, GetFileInformationByHandle, OPEN_EXISTING, SYNCHRONIZE,
+    SetFileInformationByHandle, WRITE_DAC,
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
 const SHARE_ALL: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+const PRIVATE_SECURITY_SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;OW)";
 
 pub(in crate::observability) struct ConfinedDir(File);
 
@@ -40,7 +49,7 @@ impl ConfinedDir {
                 SHARE_ALL,
                 std::ptr::null(),
                 OPEN_EXISTING,
-                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                FILE_FLAG_BACKUP_SEMANTICS,
                 std::ptr::null_mut(),
             )
         };
@@ -61,8 +70,10 @@ impl ConfinedDir {
             FILE_OPEN_IF,
             FILE_DIRECTORY_FILE,
             FILE_ATTRIBUTE_DIRECTORY,
+            true,
         )?;
         validate_handle(&file, true)?;
+        restrict_private_handle(&file)?;
         Ok(Self(file))
     }
 
@@ -86,8 +97,10 @@ impl ConfinedDir {
             },
             FILE_NON_DIRECTORY_FILE,
             FILE_ATTRIBUTE_NORMAL,
+            true,
         )?;
         validate_handle(&file, false)?;
+        restrict_private_handle(&file)?;
         Ok(file)
     }
 
@@ -99,8 +112,10 @@ impl ConfinedDir {
             FILE_CREATE,
             FILE_NON_DIRECTORY_FILE,
             FILE_ATTRIBUTE_NORMAL,
+            true,
         )?;
         validate_handle(&file, false)?;
+        restrict_private_handle(&file)?;
         Ok(file)
     }
 
@@ -112,6 +127,7 @@ impl ConfinedDir {
             FILE_OPEN,
             FILE_NON_DIRECTORY_FILE,
             FILE_ATTRIBUTE_NORMAL,
+            false,
         ) {
             Ok(file) => validate_handle(&file, false),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -164,6 +180,7 @@ impl ConfinedDir {
             FILE_OPEN,
             FILE_NON_DIRECTORY_FILE,
             FILE_ATTRIBUTE_NORMAL,
+            false,
         )?;
         let delete = FILE_DISPOSITION_INFO { DeleteFile: true };
         // SAFETY: `delete` has the required layout and remains valid for the call.
@@ -189,6 +206,7 @@ fn open_relative(
     disposition: u32,
     type_option: u32,
     attributes: u32,
+    private: bool,
 ) -> io::Result<File> {
     let mut name = wide(name);
     let byte_len = name
@@ -201,12 +219,15 @@ fn open_relative(
         MaximumLength: byte_len,
         Buffer: name.as_mut_ptr(),
     };
+    let security_descriptor = private.then(PrivateSecurityDescriptor::new).transpose()?;
     let object = OBJECT_ATTRIBUTES {
         Length: std::mem::size_of::<OBJECT_ATTRIBUTES>() as u32,
         RootDirectory: parent.as_raw_handle(),
         ObjectName: &raw const unicode,
         Attributes: OBJ_CASE_INSENSITIVE,
-        SecurityDescriptor: std::ptr::null(),
+        SecurityDescriptor: security_descriptor
+            .as_ref()
+            .map_or(std::ptr::null(), |descriptor| descriptor.0.cast()),
         SecurityQualityOfService: std::ptr::null(),
     };
     let mut status = IO_STATUS_BLOCK::default();
@@ -215,7 +236,7 @@ fn open_relative(
     let result = unsafe {
         NtCreateFile(
             &mut handle,
-            desired_access,
+            desired_access | SYNCHRONIZE | if private { WRITE_DAC } else { 0 },
             &object,
             &mut status,
             std::ptr::null(),
@@ -234,6 +255,52 @@ fn open_relative(
     }
     // SAFETY: a successful NtCreateFile returns a newly owned handle.
     Ok(unsafe { File::from_raw_handle(handle) })
+}
+
+struct PrivateSecurityDescriptor(PSECURITY_DESCRIPTOR);
+
+impl PrivateSecurityDescriptor {
+    fn new() -> io::Result<Self> {
+        let sddl = wide_null(OsStr::new(PRIVATE_SECURITY_SDDL));
+        let mut descriptor = std::ptr::null_mut();
+        // SAFETY: `sddl` is NUL-terminated and `descriptor` is a valid output pointer.
+        if unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl.as_ptr(),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                std::ptr::null_mut(),
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self(descriptor))
+    }
+}
+
+impl Drop for PrivateSecurityDescriptor {
+    fn drop(&mut self) {
+        // SAFETY: the descriptor was allocated by
+        // `ConvertStringSecurityDescriptorToSecurityDescriptorW` and is freed once here.
+        unsafe { LocalFree(self.0) };
+    }
+}
+
+fn restrict_private_handle(file: &File) -> io::Result<()> {
+    let descriptor = PrivateSecurityDescriptor::new()?;
+    // SAFETY: the handle is valid and the descriptor remains allocated for the call.
+    if unsafe {
+        SetKernelObjectSecurity(
+            file.as_raw_handle(),
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            descriptor.0,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn validate_handle(file: &File, expect_directory: bool) -> io::Result<()> {

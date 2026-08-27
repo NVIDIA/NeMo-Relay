@@ -483,9 +483,9 @@ pub struct AtifSectionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_directory: Option<PathBuf>,
     /// Filename template. `{session_id}` is replaced with the top-level trajectory scope UUID, and
-    /// `{metadata.<path>:-fallback}` placeholders use path-safe strings from the top-level scope
-    /// metadata or the optional literal fallback. When [`storage`] is non-empty, the rendered
-    /// filename is appended to each backend's key prefix.
+    /// `{metadata.<path>:-fallback}` placeholders sanitize strings from the top-level scope
+    /// metadata into path-safe filename fragments or use the optional literal fallback. When
+    /// [`storage`] is non-empty, the rendered filename is appended to each backend's key prefix.
     ///
     /// [`storage`]: Self::storage
     #[serde(default = "default_atif_filename_template")]
@@ -2979,8 +2979,8 @@ fn render_atif_filename(
             };
         }
         let value = match resolved {
-            Some(Json::String(value)) => value.as_str(),
-            None | Some(Json::Null) => fallback.ok_or_else(|| {
+            Some(Json::String(value)) => sanitize_atif_metadata_fragment(value),
+            None | Some(Json::Null) => fallback.map(str::to_string).ok_or_else(|| {
                 format!(
                     "filename_template placeholder '{{metadata.{selector}}}' must resolve to a string"
                 )
@@ -2991,15 +2991,43 @@ fn render_atif_filename(
                 ));
             }
         };
-        if !is_safe_atif_metadata_path(value) {
+        if !is_safe_atif_metadata_path(&value) {
             return Err(format!(
                 "metadata path '{selector}' must be a path-safe relative fragment"
             ));
         }
-        rendered.replace_range(start..=end, value);
+        rendered.replace_range(start..=end, &value);
         cursor = start + value.len();
     }
     Ok(rendered)
+}
+
+fn sanitize_atif_metadata_fragment(value: &str) -> String {
+    let mut characters = value.chars().peekable();
+    let mut sanitized = String::with_capacity(value.len());
+    let mut replacing = false;
+
+    while let Some(character) = characters.next() {
+        let safe = if character == '.' {
+            let mut count = 1;
+            while characters.next_if_eq(&'.').is_some() {
+                count += 1;
+            }
+            count == 1 && !(sanitized.is_empty() && characters.peek().is_none())
+        } else {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '~')
+        };
+
+        if safe {
+            sanitized.push(character);
+            replacing = false;
+        } else if !replacing {
+            sanitized.push('-');
+            replacing = true;
+        }
+    }
+
+    sanitized
 }
 
 fn is_safe_atif_metadata_path(value: &str) -> bool {

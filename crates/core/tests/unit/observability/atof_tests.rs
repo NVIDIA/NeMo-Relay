@@ -1336,7 +1336,7 @@ fn missing_output_directory_is_created() {
 
 #[cfg(unix)]
 #[test]
-fn output_directory_rejects_symlinked_ancestor() {
+fn output_directory_resolves_symlinked_configured_root() {
     use std::os::unix::fs::symlink;
 
     let parent = temp_dir("atof-symlinked-output-parent");
@@ -1345,17 +1345,39 @@ fn output_directory_rejects_symlinked_ancestor() {
     symlink(&outside, &link).unwrap();
     let output_dir = link.join("atof");
 
-    let error = match AtofExporter::new(
+    let exporter = AtofExporter::new(
         AtofExporterConfig::new()
             .with_output_directory(&output_dir)
             .with_filename("events.jsonl"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        exporter.path(),
+        Some(output_dir.join("events.jsonl").as_path())
+    );
+    assert!(outside.join("atof/events.jsonl").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn existing_non_regular_output_is_rejected() {
+    use std::os::unix::net::UnixListener;
+
+    let temp = tempfile::tempdir_in("/tmp").unwrap();
+    let path = temp.path().join("events.jsonl");
+    let _listener = UnixListener::bind(&path).unwrap();
+
+    let error = match AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(temp.path())
+            .with_filename("events.jsonl"),
     ) {
-        Ok(_) => panic!("expected symlinked output ancestor to be rejected"),
+        Ok(_) => panic!("expected a non-regular output target to be rejected"),
         Err(error) => error,
     };
 
     assert!(matches!(error, AtofExporterError::OpenFile { .. }));
-    assert!(!outside.join("atof").exists());
 }
 
 #[test]

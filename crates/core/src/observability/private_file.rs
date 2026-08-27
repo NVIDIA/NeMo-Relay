@@ -3,7 +3,7 @@
 
 use super::confined_fs::ConfinedDir;
 use std::ffi::OsString;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 
@@ -18,25 +18,12 @@ fn open_or_create_private_dir(path: &Path) -> io::Result<ConfinedDir> {
         std::env::current_dir()?.join(path)
     };
     let mut anchor = PathBuf::new();
-    let mut current = None;
     for component in absolute.components() {
         match component {
-            Component::Prefix(_) | Component::RootDir if current.is_none() => {
+            Component::Prefix(_) | Component::RootDir if anchor.as_os_str().is_empty() => {
                 anchor.push(component.as_os_str());
             }
-            Component::Normal(name) => {
-                let parent = match current.take() {
-                    Some(parent) => parent,
-                    None if !anchor.as_os_str().is_empty() => ConfinedDir::open_anchor(&anchor)?,
-                    None => {
-                        return Err(io::Error::other(format!(
-                            "observability directory '{}' has no filesystem anchor",
-                            path.display()
-                        )));
-                    }
-                };
-                current = Some(parent.open_or_create_child(name)?);
-            }
+            Component::Normal(name) => anchor.push(name),
             Component::CurDir => {}
             Component::ParentDir | Component::Prefix(_) | Component::RootDir => {
                 return Err(io::Error::other(format!(
@@ -46,14 +33,40 @@ fn open_or_create_private_dir(path: &Path) -> io::Result<ConfinedDir> {
             }
         }
     }
-    match current {
-        Some(directory) => Ok(directory),
-        None if !anchor.as_os_str().is_empty() => ConfinedDir::open_anchor(&anchor),
-        None => Err(io::Error::other(format!(
+
+    if anchor.as_os_str().is_empty() {
+        return Err(io::Error::other(format!(
             "observability directory '{}' has no filesystem anchor",
             path.display()
-        ))),
+        )));
     }
+
+    let mut existing = anchor.as_path();
+    let mut missing = Vec::new();
+    while !fs::metadata(existing).is_ok_and(|metadata| metadata.is_dir()) {
+        let name = existing.file_name().ok_or_else(|| {
+            io::Error::other(format!(
+                "observability directory '{}' has no existing filesystem anchor",
+                path.display()
+            ))
+        })?;
+        missing.push(name.to_owned());
+        existing = existing.parent().ok_or_else(|| {
+            io::Error::other(format!(
+                "observability directory '{}' has no existing filesystem anchor",
+                path.display()
+            ))
+        })?;
+    }
+
+    // The configured root is trusted and may include platform filesystem aliases such as
+    // macOS `/var`. Descendants are still opened relative to this stable directory handle
+    // without following symlinks.
+    let mut current = ConfinedDir::open_anchor(existing)?;
+    for name in missing.into_iter().rev() {
+        current = current.open_or_create_child(&name)?;
+    }
+    Ok(current)
 }
 
 pub(super) fn open_private(root: &Path, path: &Path, append: bool) -> io::Result<File> {

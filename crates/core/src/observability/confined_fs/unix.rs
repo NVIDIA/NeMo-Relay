@@ -3,12 +3,12 @@
 
 use rustix::fd::OwnedFd;
 use rustix::fs::{
-    AtFlags, FileType, Mode, OFlags, fchmod, fstat, mkdirat, openat, renameat, statat, unlinkat,
+    AtFlags, FileType, Mode, OFlags, fchmod, fcntl_getfl, fcntl_setfl, fstat, mkdirat, openat,
+    renameat, statat, unlinkat,
 };
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io;
-use std::os::fd::{FromRawFd, IntoRawFd};
 use std::path::Path;
 
 pub(in crate::observability) struct ConfinedDir(OwnedFd);
@@ -18,7 +18,7 @@ impl ConfinedDir {
         Ok(Self(openat(
             rustix::fs::CWD,
             path,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
             Mode::empty(),
         )?))
     }
@@ -58,7 +58,9 @@ impl ConfinedDir {
         name: &OsStr,
         append: bool,
     ) -> io::Result<File> {
-        let mut flags = OFlags::WRONLY | OFlags::CREATE | OFlags::CLOEXEC | OFlags::NOFOLLOW;
+        self.reject_unsafe_target(name)?;
+        let mut flags =
+            OFlags::WRONLY | OFlags::CREATE | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK;
         flags |= if append {
             OFlags::APPEND
         } else {
@@ -66,9 +68,16 @@ impl ConfinedDir {
         };
         let descriptor = openat(&self.0, name, flags, Mode::RUSR | Mode::WUSR)?;
         let metadata = fstat(&descriptor)?;
-        if FileType::from_raw_mode(metadata.st_mode).is_file() {
-            fchmod(&descriptor, Mode::RUSR | Mode::WUSR)?;
+        if !FileType::from_raw_mode(metadata.st_mode).is_file() {
+            return Err(io::Error::other(format!(
+                "observability output '{}' is not a regular file",
+                name.to_string_lossy()
+            )));
         }
+        let mut status_flags = fcntl_getfl(&descriptor)?;
+        status_flags.remove(OFlags::NONBLOCK);
+        fcntl_setfl(&descriptor, status_flags)?;
+        fchmod(&descriptor, Mode::RUSR | Mode::WUSR)?;
         Ok(owned_fd_into_file(descriptor))
     }
 
@@ -118,6 +127,5 @@ impl ConfinedDir {
 }
 
 fn owned_fd_into_file(descriptor: OwnedFd) -> File {
-    // SAFETY: ownership of the valid descriptor is transferred from `OwnedFd` to `File`.
-    unsafe { File::from_raw_fd(descriptor.into_raw_fd()) }
+    File::from(descriptor)
 }

@@ -2809,7 +2809,7 @@ fn atif_defaults_create_one_file_per_top_level_agent() {
 }
 
 #[test]
-fn atif_filename_template_routes_by_metadata_and_skips_invalid_paths() {
+fn atif_filename_template_sanitizes_metadata_paths() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
     let dir = temp_dir("observability-atif-metadata-template");
@@ -2823,15 +2823,15 @@ fn atif_filename_template_routes_by_metadata_and_skips_invalid_paths() {
     }));
     futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
 
-    let invalid = crate::api::scope::push_scope(
+    let sanitized = crate::api::scope::push_scope(
         PushScopeParams::builder()
-            .name("invalid-metadata-path-agent")
+            .name("sanitized-metadata-path-agent")
             .scope_type(ScopeType::Agent)
             .metadata(json!({"routing": {"artifact_path": "../escape"}}))
             .build(),
     )
     .unwrap();
-    pop(&invalid);
+    pop(&sanitized);
 
     let valid = crate::api::scope::push_scope(
         PushScopeParams::builder()
@@ -2845,31 +2845,19 @@ fn atif_filename_template_routes_by_metadata_and_skips_invalid_paths() {
 
     flush_subscribers().unwrap();
     assert!(
-        crate::plugin::active_plugin_report()
-            .unwrap()
-            .runtime_diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "atif.destination_render_failed")
-    );
-    let teardown = clear_plugin_configuration().unwrap_err();
-    assert!(
-        teardown
-            .to_string()
-            .contains("atif.destination_render_failed")
-    );
-    let invalid_filename = format!("trajectory-{}.json", invalid.uuid);
-    assert!(
-        !dir.join(&invalid_filename).exists()
-            && !dir.join("../escape").join(&invalid_filename).exists(),
-        "unsafe metadata path should not produce a trajectory file"
+        dir.join(format!("-escape/trajectory-{}.json", sanitized.uuid))
+            .exists(),
+        "unsafe metadata groups should be replaced with a dash"
     );
     assert!(
         dir.join(format!(
-            "tenant-a/session-123/trajectory-{}.json",
+            "tenant-a-session-123/trajectory-{}.json",
             valid.uuid
         ))
         .exists()
     );
+
+    clear_plugin_configuration().unwrap();
 
     futures::executor::block_on(initialize_plugins_exact(plugin_config(json!({
         "atif": {
@@ -3430,7 +3418,7 @@ fn atif_local_write_replaces_regular_files_privately_and_rejects_symlinks() {
 
 #[cfg(unix)]
 #[test]
-fn atif_local_write_rejects_symlinked_output_root_ancestor() {
+fn atif_local_write_resolves_symlinked_configured_root() {
     use std::os::unix::fs::symlink;
 
     let parent = tempfile::tempdir().unwrap();
@@ -3442,8 +3430,29 @@ fn atif_local_write_rejects_symlinked_output_root_ancestor() {
     let root = link.join("atif");
     let path = root.join("trajectory.json");
 
-    assert!(write_atif_local(&root, &path, b"escape").is_err());
-    assert!(!outside_path.join("atif").exists());
+    write_atif_local(&root, &path, b"trajectory").unwrap();
+    assert_eq!(
+        fs::read(outside_path.join("atif/trajectory.json")).unwrap(),
+        b"trajectory"
+    );
+}
+
+#[test]
+fn atif_metadata_template_values_are_sanitized() {
+    assert_eq!(sanitize_atif_metadata_fragment("tenant-a"), "tenant-a");
+    assert_eq!(sanitize_atif_metadata_fragment("../tenant/a"), "-tenant-a");
+    assert_eq!(
+        sanitize_atif_metadata_fragment(r"tenant\project"),
+        "tenant-project"
+    );
+    assert_eq!(
+        sanitize_atif_metadata_fragment("tenant / : project"),
+        "tenant-project"
+    );
+    assert_eq!(sanitize_atif_metadata_fragment("run...name"), "run-name");
+    assert_eq!(sanitize_atif_metadata_fragment("ténant///项目"), "t-nant-");
+    assert_eq!(sanitize_atif_metadata_fragment("."), "-");
+    assert_eq!(sanitize_atif_metadata_fragment(".."), "-");
 }
 
 #[test]
@@ -3525,7 +3534,7 @@ fn atif_metadata_template_values_must_be_safe_path_fragments() {
     let destination = nested_dispatcher
         .prepare_destination("session-1", Some(&nested_string))
         .unwrap();
-    assert_eq!(destination.0, "tenant-a/team_1/trajectory-session-1.json");
+    assert_eq!(destination.0, "tenant-a-team_1/trajectory-session-1.json");
 
     for template in [
         "/tmp/trajectory-{session_id}.json",
