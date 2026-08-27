@@ -22,6 +22,7 @@ class TestPiiRedactionConfigHelpers:
         assert BuiltinConfig().to_dict() == {
             "action": "remove",
             "target_paths": [],
+            "target_path_globs": [],
         }
         assert ConfigPolicy().to_dict() == {
             "unknown_component": "warn",

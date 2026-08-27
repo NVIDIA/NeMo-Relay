@@ -14,6 +14,7 @@ export interface ConfigPolicy {
 export interface BuiltinConfig {
   action?: 'remove' | 'redact' | 'regex_replace' | 'hash' | 'mask' | string;
   target_paths?: string[];
+  target_path_globs?: string[];
   pattern?: string;
   detector?: string;
   replacement?: string;

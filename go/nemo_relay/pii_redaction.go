@@ -8,14 +8,15 @@ const PiiRedactionPluginKind = "pii_redaction"
 
 // PiiRedactionBuiltinConfig configures deterministic built-in redaction.
 type PiiRedactionBuiltinConfig struct {
-	Action         string   `json:"action,omitempty"`
-	TargetPaths    []string `json:"target_paths,omitempty"`
-	Pattern        string   `json:"pattern,omitempty"`
-	Detector       string   `json:"detector,omitempty"`
-	Replacement    string   `json:"replacement,omitempty"`
-	MaskChar       string   `json:"mask_char,omitempty"`
-	UnmaskedPrefix *int32   `json:"unmasked_prefix,omitempty"`
-	UnmaskedSuffix *int32   `json:"unmasked_suffix,omitempty"`
+	Action          string   `json:"action,omitempty"`
+	TargetPaths     []string `json:"target_paths,omitempty"`
+	TargetPathGlobs []string `json:"target_path_globs,omitempty"`
+	Pattern         string   `json:"pattern,omitempty"`
+	Detector        string   `json:"detector,omitempty"`
+	Replacement     string   `json:"replacement,omitempty"`
+	MaskChar        string   `json:"mask_char,omitempty"`
+	UnmaskedPrefix  *int32   `json:"unmasked_prefix,omitempty"`
+	UnmaskedSuffix  *int32   `json:"unmasked_suffix,omitempty"`
 }
 
 // PiiRedactionLocalModelConfig configures the future local-model redaction backend.
@@ -68,8 +69,9 @@ func NewPiiRedactionConfig() PiiRedactionConfig {
 // NewPiiRedactionBuiltinConfig returns default built-in redaction settings.
 func NewPiiRedactionBuiltinConfig() PiiRedactionBuiltinConfig {
 	return PiiRedactionBuiltinConfig{
-		Action:      "remove",
-		TargetPaths: []string{},
+		Action:          "remove",
+		TargetPaths:     []string{},
+		TargetPathGlobs: []string{},
 	}
 }
 

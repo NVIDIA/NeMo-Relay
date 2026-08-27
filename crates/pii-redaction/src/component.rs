@@ -187,9 +187,14 @@ pub struct BuiltinBackendConfig {
     )]
     #[cfg_attr(feature = "schema", schemars(schema_with = "builtin_action_schema"))]
     pub action: String,
-    /// Exact RFC 6901 JSON-pointer paths to sanitize. Empty means every string leaf.
+    /// Exact RFC 6901 JSON-pointer paths to sanitize. Empty together with
+    /// [`Self::target_path_globs`] means every string leaf.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_paths: Vec<String>,
+    /// JSON-pointer glob paths to sanitize. A whole `*` segment matches one
+    /// object key or array index; matching is not recursive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_path_globs: Vec<String>,
     /// Regex pattern used when `action = "regex_replace"` or `action = "redact"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
@@ -226,6 +231,7 @@ impl Default for BuiltinBackendConfig {
             preset: None,
             action: default_builtin_action(),
             target_paths: Vec::new(),
+            target_path_globs: Vec::new(),
             pattern: None,
             detector: None,
             replacement: None,
@@ -359,6 +365,7 @@ nemo_relay::editor_config! {
             values: ["remove", "redact", "regex_replace", "hash", "mask"],
         },
         target_paths => { label: "target_paths", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
+        target_path_globs => { label: "target_path_globs", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
         pattern => { label: "pattern", kind: String, optional: true },
         detector => {
             label: "detector",
@@ -651,6 +658,7 @@ fn validate_pii_redaction_plugin_config_with_policy(
             "preset",
             "action",
             "target_paths",
+            "target_path_globs",
             "pattern",
             "detector",
             "replacement",
@@ -753,6 +761,7 @@ fn validate_profile_configuration(
                 "preset",
                 "action",
                 "target_paths",
+                "target_path_globs",
                 "pattern",
                 "detector",
                 "replacement",
@@ -936,6 +945,19 @@ fn validate_builtin_action_requirements(
             );
         }
     }
+    for (index, target_path_glob) in builtin.target_path_globs.iter().enumerate() {
+        if !is_valid_json_pointer(target_path_glob) {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "pii_redaction.unsupported_value",
+                Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+                Some(format!("builtin.target_path_globs[{index}]")),
+                "builtin.target_path_globs entries must be valid RFC 6901 JSON pointers"
+                    .to_string(),
+            );
+        }
+    }
 
     if builtin.preset.is_some() {
         validate_builtin_preset_requirements(diagnostics, policy, plugin_config, builtin);
@@ -1083,6 +1105,7 @@ fn validate_builtin_preset_requirements(
         "detector",
         "pattern",
         "target_paths",
+        "target_path_globs",
         "mask_char",
         "unmasked_prefix",
         "unmasked_suffix",
