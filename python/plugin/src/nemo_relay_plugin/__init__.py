@@ -57,6 +57,7 @@ Public data types:
     WorkerSdkError: SDK, host-call, or worker protocol error.
 
 Public callback aliases:
+    ConditionalMiddlewareCallback: Runtime registration eligibility callback.
     SubscriberCallback: Event subscriber callback.
     EventMetadataInjectorCallback: Event metadata injector callback.
     EventSanitizeCallback: Mark or scope event sanitizer callback.
@@ -85,6 +86,7 @@ Public functions:
 
 from ._api import (
     AnnotatedLlmRequest,
+    ConditionalMiddlewareCallback,
     ConditionalMiddlewareGuardrailHandle,
     ConfigDiagnostic,
     DataSchema,
@@ -146,6 +148,7 @@ from ._api import (
 
 __all__ = [
     "AnnotatedLlmRequest",
+    "ConditionalMiddlewareCallback",
     "ConditionalMiddlewareGuardrailHandle",
     "ConfigDiagnostic",
     "DataSchema",

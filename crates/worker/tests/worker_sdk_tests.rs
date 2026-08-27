@@ -693,6 +693,50 @@ async fn worker_service_invokes_every_registration_surface() {
     let tool_exec = tool_outcome.result;
     assert_json_field(tool_exec.clone(), "next", "tool");
     assert_json_field(tool_exec, "phase", "tool_exec");
+    let conditional_middleware = client
+        .invoke(Request::new(InvokeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            invocation_id: "conditional-middleware".into(),
+            registration_name: "initial-gate".into(),
+            surface: RegistrationSurface::ConditionalMiddlewareGuardrail as i32,
+            continuation_id: String::new(),
+            scope: None,
+            auth_token: AUTH_TOKEN.into(),
+            payload: Some(
+                nemo_relay_worker_proto::v1::invoke_request::Payload::ConditionalMiddleware(
+                    nemo_relay_worker_proto::v1::ConditionalMiddlewareInvocation {
+                        kinds: vec![RegistrationSurface::Subscriber as i32],
+                        registration_name: "missing-target".into(),
+                    },
+                ),
+            ),
+        }))
+        .await
+        .expect("conditional middleware invoke")
+        .into_inner();
+    assert_eq!(guardrail_reason(conditional_middleware), "initial gate");
+    let allowed_conditional_middleware = client
+        .invoke(Request::new(InvokeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            invocation_id: "conditional-middleware-allowed".into(),
+            registration_name: "initial-gate".into(),
+            surface: RegistrationSurface::ConditionalMiddlewareGuardrail as i32,
+            continuation_id: String::new(),
+            scope: None,
+            auth_token: AUTH_TOKEN.into(),
+            payload: Some(
+                nemo_relay_worker_proto::v1::invoke_request::Payload::ConditionalMiddleware(
+                    nemo_relay_worker_proto::v1::ConditionalMiddlewareInvocation {
+                        kinds: vec![RegistrationSurface::Subscriber as i32],
+                        registration_name: "allowed-target".into(),
+                    },
+                ),
+            ),
+        }))
+        .await
+        .expect("allowed conditional middleware invoke")
+        .into_inner();
+    assert_eq!(guardrail_reason(allowed_conditional_middleware), "");
     assert!(
         invoke_json(
             &mut client,
@@ -884,10 +928,7 @@ async fn worker_service_invokes_every_registration_surface() {
         runtime_registration_requests.register[0].registration_name,
         "target-subscriber"
     );
-    assert_eq!(
-        runtime_registration_requests.register[0].reason,
-        "timer active"
-    );
+    assert!(runtime_registration_requests.register[0].callback);
     assert_eq!(runtime_registration_requests.deregister.len(), 1);
     assert_eq!(
         runtime_registration_requests.deregister[0].activation_id,
@@ -1823,14 +1864,14 @@ impl WorkerPlugin for InvalidInitialGatePlugin {
             "initial-gate",
             kinds.clone(),
             target,
-            "disabled",
+            |_, _| async { Ok(Some("disabled".into())) },
         );
         if matches!(self.0, InvalidInitialGate::Duplicate) {
             ctx.register_conditional_middleware_guardrail(
                 "initial-gate",
                 kinds,
                 target,
-                "also disabled",
+                |_, _| async { Ok(Some("also disabled".into())) },
             );
         }
         Ok(())
@@ -1972,7 +2013,11 @@ impl WorkerPlugin for SurfacePlugin {
             "initial-gate",
             BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
             "missing-target",
-            "initial gate",
+            |_, registration_name| {
+                let decision =
+                    (registration_name == "missing-target").then(|| "initial gate".to_string());
+                async move { Ok(decision) }
+            },
         );
         let events = self.events.clone();
         ctx.register_subscriber("subscriber", move |event| {
@@ -2054,7 +2099,7 @@ impl WorkerPlugin for SurfacePlugin {
                         "timer-gate",
                         BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
                         "target-subscriber",
-                        "timer active",
+                        |_, _| async { Ok(Some("timer active".into())) },
                     )
                     .await?;
                 if !runtime
@@ -3211,6 +3256,15 @@ async fn invoke_guardrail(
         .await
         .expect("invoke succeeds")
         .into_inner();
+    match response.result.expect("invoke result") {
+        nemo_relay_worker_proto::v1::invoke_response::Result::Guardrail(result) => {
+            result.block_reason
+        }
+        other => panic!("unexpected invoke result: {other:?}"),
+    }
+}
+
+fn guardrail_reason(response: InvokeResponse) -> String {
     match response.result.expect("invoke result") {
         nemo_relay_worker_proto::v1::invoke_response::Result::Guardrail(result) => {
             result.block_reason

@@ -643,7 +643,7 @@ class AllSurfacesPlugin(WorkerPlugin):
             "initial_gate",
             {RuntimeRegistrationKind.SUBSCRIBER},
             "missing-target",
-            "initial gate",
+            lambda _kinds, name: "initial gate" if name == "missing-target" else None,
         )
         ctx.register_event_metadata_injector("event_metadata", event_metadata, priority=1)
         ctx.register_mark_sanitize_guardrail("event_sanitize", mark_sanitize, priority=1)
@@ -679,7 +679,7 @@ async def test_register_returns_initial_conditional_middleware_guardrail(service
     assert gate.name == "initial_gate"
     assert list(gate.kinds) == [pb.SUBSCRIBER]
     assert gate.registration_name == "missing-target"
-    assert gate.reason == "initial gate"
+    assert gate.callback
 
 
 def test_generated_proto_matches_worker_contract():
@@ -705,6 +705,7 @@ def test_generated_proto_matches_worker_contract():
     assert pb.MARK_SANITIZE_GUARDRAIL == 30
     assert pb.SCOPE_SANITIZE_START_GUARDRAIL == 31
     assert pb.SCOPE_SANITIZE_END_GUARDRAIL == 32
+    assert pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL == 40
     assert pb.CUSTOM == 10
 
     host_runtime = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"]
@@ -1690,6 +1691,31 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     assert mark_request.scope.scope_stack_id == "invoke-stack"
     assert mark_request.scope.parent_scope_id == "parent-scope"
 
+    conditional_middleware = await service.Invoke(
+        _invoke_request(
+            "initial_gate",
+            pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL,
+            conditional_middleware=pb.ConditionalMiddlewareInvocation(
+                kinds=[pb.SUBSCRIBER],
+                registration_name="missing-target",
+            ),
+        ),
+        AbortContext(),
+    )
+    assert conditional_middleware.guardrail.block_reason == "initial gate"
+    allowed_conditional_middleware = await service.Invoke(
+        _invoke_request(
+            "initial_gate",
+            pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL,
+            conditional_middleware=pb.ConditionalMiddlewareInvocation(
+                kinds=[pb.SUBSCRIBER],
+                registration_name="allowed-target",
+            ),
+        ),
+        AbortContext(),
+    )
+    assert allowed_conditional_middleware.guardrail.block_reason == ""
+
     event_metadata = await service.Invoke(
         _invoke_request(
             "event_metadata",
@@ -2259,7 +2285,7 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         "pause-otel",
         {RuntimeRegistrationKind.SUBSCRIBER},
         registrations[0].effective_name,
-        "temporarily disabled",
+        lambda _kinds, _name: "temporarily disabled",
     )
     assert isinstance(gate, ConditionalMiddlewareGuardrailHandle)
     register_request = _last_request(host_stub, pb.RegisterConditionalMiddlewareGuardrailRequest)
@@ -2268,7 +2294,7 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
     assert register_request.name == "pause-otel"
     assert list(register_request.kinds) == [pb.SUBSCRIBER]
     assert register_request.registration_name == registrations[0].effective_name
-    assert register_request.reason == "temporarily disabled"
+    assert register_request.callback
     assert await runtime.deregister_conditional_middleware_guardrail(gate)
     deregister_request = _last_request(host_stub, pb.DeregisterConditionalMiddlewareGuardrailRequest)
     assert deregister_request.activation_id == ACTIVATION_ID
@@ -2409,12 +2435,14 @@ async def test_runtime_gate_operations_propagate_host_errors(host_stub: Recordin
             "gate",
             {RuntimeRegistrationKind.SUBSCRIBER},
             "target",
-            "disabled",
+            lambda _kinds, _name: "disabled",
         )
 
     host_stub.failures["DeregisterConditionalMiddlewareGuardrail"] = "error"
     with pytest.raises(WorkerSdkError, match="deregister failed"):
-        await runtime.deregister_conditional_middleware_guardrail(ConditionalMiddlewareGuardrailHandle("gate-1"))
+        await runtime.deregister_conditional_middleware_guardrail(
+            ConditionalMiddlewareGuardrailHandle("gate-1", "gate")
+        )
     with pytest.raises(TypeError, match="ConditionalMiddlewareGuardrailHandle"):
         await runtime.deregister_conditional_middleware_guardrail(
             "gate-1"  # type: ignore[arg-type] # ty: ignore[invalid-argument-type]
@@ -3364,4 +3392,5 @@ def _all_expected_surfaces() -> list[int]:
         pb.LLM_REQUEST_INTERCEPT,
         pb.LLM_EXECUTION_INTERCEPT,
         pb.LLM_STREAM_EXECUTION_INTERCEPT,
+        pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL,
     ]

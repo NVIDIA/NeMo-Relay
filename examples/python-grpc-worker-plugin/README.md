@@ -30,8 +30,9 @@ continuation, stream, mark, and scope behavior separately.
 The seventeenth surface is an optional activation-owned conditional middleware
 guardrail. `registration_control.enabled` defaults to `false`; its remaining defaults
 are `kinds: ["subscriber"]`, target `documentation-controlled-subscriber`, and reason
-`disabled by documentation plugin`. The kinds, effective target, and reason must be
-nonempty. Refer to
+`disabled by documentation plugin`. The callback returns that reason for targets
+whose names start with `documentation-controlled-` and returns `None` to leave other
+matching targets enabled. The kinds, effective target, and reason must be nonempty. Refer to
 [Conditional Middleware Guardrails](../../docs/about-nemo-relay/concepts/conditional-middleware-guardrails.mdx)
 for the full runtime and ownership contract.
 

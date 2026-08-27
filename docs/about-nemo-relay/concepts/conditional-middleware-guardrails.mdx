@@ -83,10 +83,10 @@ remove the gate while the process runs. The owner must retain the gate handle or
 provide an explicit cleanup path. Dynamic plugin hosts also enforce activation ownership
 so one plugin cannot remove another plugin's gate.
 
-Language-binding gates can evaluate a callback against current in-process state. Native
-and worker plugins instead install a host-resident constant reason. This distinction
-keeps snapshot construction in the host and avoids a native-library or worker round trip
-for every eligibility decision.
+Language-binding gates evaluate callbacks against current in-process state. Worker gates
+evaluate their callbacks through the authenticated `grpc-v1` invocation path and fail
+open on callback, transport, or timeout errors. Native plugins install a host-resident
+constant reason so snapshot construction never enters the dynamic library.
 
 ## Callback Safety
 
@@ -96,8 +96,7 @@ atomic timer flag or a cached health result.
 
 A callback must not make a reentrant Relay call that produces middleware, flushes
 subscribers, waits for an exporter, or clears plugins. A background task can update the
-state that the callback reads or can register and deregister a host-resident dynamic
-gate.
+state that the callback reads or can register and deregister a dynamic gate.
 
 ## Binding Support
 

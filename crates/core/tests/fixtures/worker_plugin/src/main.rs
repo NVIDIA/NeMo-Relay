@@ -146,8 +146,8 @@ impl WorkerPlugin for FixtureWorkerPlugin {
         ctx.register_conditional_middleware_guardrail(
             "fixture_initial_gate",
             BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
-            "missing-worker-target",
-            "fixture initial gate",
+            "fixture_worker_gate_target",
+            |_, _| async { Ok(Some("fixture initial gate".into())) },
         );
         register_fixture_tool_hooks(
             ctx,

@@ -228,6 +228,57 @@ async fn rust_worker_event_metadata_injector_enriches_events_and_is_removed_on_c
 }
 
 #[tokio::test]
+async fn rust_worker_conditional_middleware_callback_controls_target_and_cleans_up() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let target_name = "fixture_worker_gate_target";
+    let deliveries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let captured = Arc::clone(&deliveries);
+    register_subscriber(
+        target_name,
+        Arc::new(move |_| {
+            captured.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }),
+    )
+    .expect("gate target subscriber should register");
+
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let (activation, report) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [DynamicPluginActivationSpec {
+            plugin_id: "fixture_worker".into(),
+            kind: DynamicPluginKind::Worker,
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::new(),
+        }],
+    )
+    .await
+    .expect("worker plugin host should activate");
+    assert!(!report.has_errors());
+
+    event(
+        EmitMarkEventParams::builder()
+            .name("worker-gate-active")
+            .build(),
+    )
+    .expect("gated mark should emit");
+    flush_subscribers().expect("gated mark should flush");
+    assert_eq!(deliveries.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    activation.clear().expect("worker plugin host should clear");
+    event(
+        EmitMarkEventParams::builder()
+            .name("worker-gate-cleared")
+            .build(),
+    )
+    .expect("post-clear mark should emit");
+    flush_subscribers().expect("post-clear mark should flush");
+    assert_eq!(deliveries.load(std::sync::atomic::Ordering::SeqCst), 1);
+    deregister_subscriber(target_name).expect("gate target subscriber should deregister");
+}
+
+#[tokio::test]
 async fn rust_worker_event_metadata_injector_error_preserves_event_delivery() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();

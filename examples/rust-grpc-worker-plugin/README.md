@@ -20,9 +20,11 @@ with the lowercase hexadecimal digest of the built executable. The manifest valu
 keeps its `sha256:` prefix; omit the filename column printed by `shasum -a 256`,
 `sha256sum`, or `Get-FileHash`.
 
-The optional `registration_control` group installs one host-resident gate for the
+The optional `registration_control` group installs one callback-based gate for the
 worker activation. It defaults to disabled, with `kinds: ["subscriber"]`, target
 `documentation-controlled-subscriber`, and reason
-`disabled by documentation plugin`. All three values must be nonempty. Refer to
+`disabled by documentation plugin`. The callback returns that reason for targets
+whose names start with `documentation-controlled-` and returns `None` to leave
+other matching targets enabled. All three values must be nonempty. Refer to
 [Conditional Middleware Guardrails](../../docs/about-nemo-relay/concepts/conditional-middleware-guardrails.mdx)
 for effective-name discovery and automatic teardown behavior.

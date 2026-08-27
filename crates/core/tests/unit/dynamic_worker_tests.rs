@@ -55,6 +55,7 @@ fn worker_runtime_rejects_gate_registration_after_cleanup() {
             BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
             "target-subscriber".into(),
             "disabled".into(),
+            false,
         )
         .expect_err("gate registration after cleanup must fail");
 

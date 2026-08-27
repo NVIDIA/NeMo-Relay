@@ -72,7 +72,7 @@ the schema identifiers in the JSON envelope table later on this page.
 | `Health` | `activation_id` and `auth_token` | `ok`, `message`, `plugin_id`, `worker_protocol`, SDK name and version, and runtime name and version |
 | `Validate` | `activation_id`, `plugin_id`, `auth_token`, and component `config` | A `diagnostics` envelope or `error` |
 | `Register` | `activation_id`, `plugin_id`, `auth_token`, and validated component `config` | Repeated `registrations` or `error`; each registration contains `local_name`, `surface`, `priority`, and `break_chain` |
-| `Invoke` and `InvokeStream` | `activation_id`, `invocation_id`, `registration_name`, `surface`, optional `continuation_id`, captured `scope`, `auth_token`, and exactly one event, tool, or LLM payload | `Invoke` returns exactly one empty, JSON, guardrail, LLM request outcome, tool execution outcome, or error result. `InvokeStream` returns value chunks followed by clean stream closure or one terminal error chunk. |
+| `Invoke` and `InvokeStream` | `activation_id`, `invocation_id`, `registration_name`, `surface`, optional `continuation_id`, captured `scope`, `auth_token`, and exactly one event, tool, LLM, or conditional-middleware payload | `Invoke` returns exactly one empty, JSON, guardrail, LLM request outcome, tool execution outcome, or error result. `InvokeStream` returns value chunks followed by clean stream closure or one terminal error chunk. |
 | `CancelInvocation` | `activation_id`, `invocation_id`, `auth_token`, and `reason` | `accepted` and a human-readable `message` |
 | `Shutdown` | `activation_id`, `auth_token`, and `reason` | `accepted` and a human-readable `message` |
 
@@ -96,6 +96,7 @@ the schema identifiers in the JSON envelope table later on this page.
 | 30 | Mark sanitize guardrail | Replacement event sanitization fields. |
 | 31 | Scope-start sanitize guardrail | Replacement event sanitization fields. |
 | 32 | Scope-end sanitize guardrail | Replacement event sanitization fields. |
+| 40 | Conditional middleware guardrail callback | Optional disable reason. |
 
 The numeric values are part of the wire contract. Unknown value zero never represents
 a valid registration.

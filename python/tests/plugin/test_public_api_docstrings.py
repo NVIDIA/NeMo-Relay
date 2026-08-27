@@ -19,6 +19,7 @@ pytest.importorskip("grpc")
 import nemo_relay_plugin  # noqa: E402
 
 _TYPE_ALIASES = {
+    "ConditionalMiddlewareCallback",
     "AnnotatedLlmRequest",
     "Event",
     "EventMetadataInjectorCallback",
