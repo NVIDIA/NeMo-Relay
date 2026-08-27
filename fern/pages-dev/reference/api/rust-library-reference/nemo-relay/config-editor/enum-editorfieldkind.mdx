@@ -12,7 +12,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 ```rust
 pub enum EditorFieldKind {
-    Boolean,
+Show 13 variants    Boolean,
     String,
     Integer,
     Float,
@@ -21,7 +21,9 @@ pub enum EditorFieldKind {
     StringMap,
     Json,
     List,
+    Map,
     TaggedUnion,
+    DiscriminatedSection,
     Section,
 }
 ```
@@ -84,11 +86,23 @@ Arbitrary JSON value.
 
 A collection whose entries are edited recursively.
 
+### `Map`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Map"}} /></pre>
+
+A string-keyed map whose values are edited recursively.
+
 ### `TaggedUnion`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "TaggedUnion"}} /></pre>
 
 A tagged object whose variant is selected from a discriminator field.
+
+### `DiscriminatedSection`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "DiscriminatedSection"}} /></pre>
+
+A nested section selected by a discriminator field in its parent object.
 
 ### `Section`
 
