@@ -7,8 +7,8 @@
 use super::*;
 use crate::api::event::{
     BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, EventSanitizeFields,
-    METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MarkEvent, MetricEnvelope, ScopeCategory,
-    ScopeEvent,
+    METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MarkEvent, MetricEnvelope, MetricKind,
+    MetricMeasurement, MetricValueType, ScopeCategory, ScopeEvent,
 };
 use crate::api::llm::{
     LlmCallExecuteParams, LlmCallParams, LlmRequest, LlmStreamCallExecuteParams, llm_call,
@@ -20,7 +20,8 @@ use crate::api::runtime::{
     NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
 };
 use crate::api::scope::{
-    EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
+    EmitMarkEventParams, EmitMetricEventParams, PopScopeParams, PushScopeParams, ScopeType, event,
+    metric, pop_scope, push_scope,
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 use crate::api::tool::{
@@ -41,14 +42,22 @@ use futures::StreamExt;
 use nemo_relay::observability::OpenTelemetryType;
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
 use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig};
-use nemo_relay::observability::otel::OpenTelemetrySubscriber;
+use nemo_relay::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
+use nemo_relay::observability::otel_metrics::{
+    OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber,
+};
+use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_sdk::trace::{InMemorySpanExporterBuilder, SdkTracerProvider};
+use prost::Message;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::io::{Read, Write};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 static TEST_LOGGING: Once = Once::new();
 
@@ -78,6 +87,64 @@ fn plugin_config(config: Json) -> PluginConfig {
         components: vec![component(config)],
         policy: Default::default(),
     }
+}
+
+struct CapturedOtlpRequest {
+    path: String,
+    body: Vec<u8>,
+}
+
+fn capture_one_otlp_request(
+    listener: std::net::TcpListener,
+) -> std::sync::mpsc::Receiver<CapturedOtlpRequest> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("collector should accept request");
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4_096];
+        let (header_end, content_length) = loop {
+            let count = stream.read(&mut buffer).expect("collector should read");
+            assert!(count > 0, "collector closed before request headers");
+            bytes.extend_from_slice(&buffer[..count]);
+            if let Some(offset) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                let header_end = offset + 4;
+                let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                break (header_end, content_length);
+            }
+        };
+        while bytes.len() < header_end + content_length {
+            let count = stream
+                .read(&mut buffer)
+                .expect("collector should read body");
+            assert!(count > 0, "collector closed before request body");
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+        let path = String::from_utf8_lossy(&bytes[..header_end])
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .expect("request path")
+            .to_string();
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            .expect("collector should respond");
+        sender
+            .send(CapturedOtlpRequest {
+                path,
+                body: bytes[header_end..header_end + content_length].to_vec(),
+            })
+            .expect("capture receiver should remain available");
+    });
+    receiver
 }
 
 #[test]
@@ -1600,6 +1667,184 @@ async fn builtin_target_path_globs_sanitize_typed_metric_attributes() {
         .validate()
         .unwrap();
     assert_eq!(data["measurements"][0]["attributes"], json!({}));
+}
+
+#[tokio::test]
+async fn configured_target_path_globs_redact_otlp_content_and_preserve_typed_metrics() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [{
+            "mode": "builtin",
+            "priority": 90,
+            "builtin": {
+                "action": "redact",
+                "pattern": "synthetic-glob-secret",
+                "replacement": "[REDACTED]",
+                "target_paths": [
+                    "/prompt", "/response", "/message", "/content", "/input", "/output",
+                    "/result", "/stdout", "/stderr", "/command", "/description", "/arguments"
+                ],
+                "target_path_globs": [
+                    "/content/*/text",
+                    "/output/*/text",
+                    "/output/*/content/*/text",
+                    "/output/*/input",
+                    "/messages/*/content",
+                    "/messages/*/content/*/text"
+                ]
+            }
+        }]
+    })))
+    .await
+    .unwrap();
+
+    let trace_listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("trace capture listener should bind");
+    let trace_endpoint = format!("http://{}", trace_listener.local_addr().unwrap());
+    let trace_request = capture_one_otlp_request(trace_listener);
+    let trace_subscriber = OpenTelemetrySubscriber::new(OpenTelemetryConfig::new(
+        OpenTelemetryType::Full,
+        trace_endpoint,
+    ))
+    .unwrap();
+    trace_subscriber
+        .register("pii-target-glob-e2e-traces")
+        .unwrap();
+
+    let metric_listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("metric capture listener should bind");
+    let metric_endpoint = format!("http://{}", metric_listener.local_addr().unwrap());
+    let metric_request = capture_one_otlp_request(metric_listener);
+    let metric_subscriber =
+        OpenTelemetryMetricSubscriber::new(OpenTelemetryMetricConfig::new(metric_endpoint))
+            .unwrap();
+    metric_subscriber
+        .register("pii-target-glob-e2e-metrics")
+        .unwrap();
+
+    let agent = push_scope(
+        PushScopeParams::builder()
+            .name("target-glob-agent")
+            .scope_type(ScopeType::Agent)
+            .input(json!({
+                "prompt": "synthetic-glob-secret prompt",
+                "messages": [
+                    {"content": "synthetic-glob-secret message"},
+                    {"content": [{"text": "synthetic-glob-secret nested message"}]}
+                ]
+            }))
+            .metadata(json!({"nv.user.id": "opaque-user-id"}))
+            .build(),
+    )
+    .unwrap();
+    tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("target-glob-tool")
+            .args(json!({
+                "arguments": "synthetic-glob-secret arguments",
+                "messages": [{"content": [{"text": "synthetic-glob-secret tool input"}]}]
+            }))
+            .func(Arc::new(|_| {
+                Box::pin(async move {
+                    Ok(ToolExecutionResult::new(json!({
+                        "output": [{
+                            "content": [{"text": "synthetic-glob-secret tool output"}]
+                        }]
+                    })))
+                })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    event(
+        EmitMarkEventParams::builder()
+            .name("target-glob-mark")
+            .data(json!({
+                "output": [{"content": [{"text": "synthetic-glob-secret mark output"}]}]
+            }))
+            .build(),
+    )
+    .unwrap();
+    pop_scope(
+        PopScopeParams::builder()
+            .handle_uuid(&agent.uuid)
+            .output(json!({
+                "response": "synthetic-glob-secret response",
+                "content": [{"text": "synthetic-glob-secret final content"}]
+            }))
+            .build(),
+    )
+    .unwrap();
+    metric(
+        EmitMetricEventParams::builder()
+            .name("target_glob_cache_efficiency")
+            .measurements(vec![
+                MetricMeasurement::builder()
+                    .name("example.cache_efficiency")
+                    .kind(MetricKind::Gauge)
+                    .value_type(MetricValueType::U64)
+                    .value(json!(42_u64))
+                    .attributes(json!({"lane": "metrics"}))
+                    .build(),
+            ])
+            .build(),
+    )
+    .unwrap();
+
+    trace_subscriber.force_flush().unwrap();
+    trace_subscriber
+        .deregister("pii-target-glob-e2e-traces")
+        .unwrap();
+    metric_subscriber
+        .deregister("pii-target-glob-e2e-metrics")
+        .unwrap();
+    trace_subscriber.shutdown().unwrap();
+    metric_subscriber.shutdown().unwrap();
+    clear_plugin_configuration().unwrap();
+
+    let trace_request = trace_request
+        .recv_timeout(Duration::from_secs(5))
+        .expect("sanitized trace should reach the local OTLP collector");
+    assert_eq!(trace_request.path, "/v1/traces");
+    let trace = ExportTraceServiceRequest::decode(trace_request.body.as_slice()).unwrap();
+    let trace_debug = format!("{trace:#?}");
+    assert!(
+        !trace_debug.contains("synthetic-glob-secret"),
+        "{trace_debug}"
+    );
+    assert!(trace_debug.contains("[REDACTED]"), "{trace_debug}");
+    assert!(trace_debug.contains("opaque-user-id"), "{trace_debug}");
+
+    let metric_request = metric_request
+        .recv_timeout(Duration::from_secs(5))
+        .expect("typed metric should reach the local OTLP collector");
+    assert_eq!(metric_request.path, "/v1/metrics");
+    let metrics = ExportMetricsServiceRequest::decode(metric_request.body.as_slice()).unwrap();
+    let metric = metrics
+        .resource_metrics
+        .iter()
+        .flat_map(|resource| &resource.scope_metrics)
+        .flat_map(|scope| &scope.metrics)
+        .find(|metric| metric.name == "example.cache_efficiency")
+        .expect("typed metric should retain its name");
+    let Some(opentelemetry_proto::tonic::metrics::v1::metric::Data::Gauge(gauge)) = &metric.data
+    else {
+        panic!("typed metric should remain a gauge: {metric:#?}");
+    };
+    let Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsInt(value)) =
+        gauge
+            .data_points
+            .first()
+            .and_then(|point| point.value.as_ref())
+    else {
+        panic!("typed metric should retain its integer value: {metric:#?}");
+    };
+    assert_eq!(*value, 42);
 }
 
 #[tokio::test]
