@@ -2141,18 +2141,31 @@ async fn serve_listener_rejects_invalid_plugin_config() {
 }
 
 #[tokio::test]
-async fn serve_listener_with_dynamic_reports_native_load_errors() {
+async fn serve_listener_activates_static_plugins_before_dynamic_load_and_cleans_failure() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
+    let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
+    GENERIC_TEST_PLUGIN_REGISTRATIONS.store(0, Ordering::SeqCst);
+    GENERIC_TEST_PLUGIN_DEREGISTRATIONS.store(0, Ordering::SeqCst);
+    register_plugin(Arc::new(GenericTestPlugin)).unwrap();
 
     let temp = tempfile::tempdir().unwrap();
     let manifest_ref = write_missing_native_plugin_manifest(temp.path(), "cli.missing-native");
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [{
+            "kind": GENERIC_TEST_PLUGIN_KIND,
+            "enabled": true,
+            "config": {}
+        }]
+    }));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     drop(shutdown_tx);
     let error = serve_listener_with_dynamic(
         listener,
-        test_config(),
+        config,
         vec![ActiveDynamicPluginComponent {
             plugin_id: "cli.missing-native".into(),
             kind: DynamicPluginKind::RustDynamic,
@@ -2170,7 +2183,13 @@ async fn serve_listener_with_dynamic_reports_native_load_errors() {
     let error = error.to_string();
     assert!(error.contains("native plugin load failed"), "{error}");
     assert!(error.contains("does not exist"), "{error}");
+    assert_eq!(GENERIC_TEST_PLUGIN_REGISTRATIONS.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        GENERIC_TEST_PLUGIN_DEREGISTRATIONS.load(Ordering::SeqCst),
+        1
+    );
     assert!(nemo_relay::plugin::active_plugin_report().is_none());
+    assert!(deregister_plugin(GENERIC_TEST_PLUGIN_KIND));
 }
 
 #[tokio::test]

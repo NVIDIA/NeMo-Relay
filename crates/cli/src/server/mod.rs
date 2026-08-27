@@ -985,6 +985,7 @@ impl PluginActivation {
         ensure_builtin_plugins_registered().map_err(|error| {
             CliError::Config(format!("built-in plugin initialization failed: {error}"))
         })?;
+        let static_plugin_config = plugin_config.clone();
         plugin_config
             .components
             .extend(dynamic_plugins.iter().map(|plugin| PluginComponentSpec {
@@ -1050,36 +1051,52 @@ impl PluginActivation {
             .iter()
             .filter_map(|plugin| plugin.activation_snapshot.clone())
             .collect();
-        let native =
-            if native_specs.is_empty() {
+        initialize_plugins_exact(static_plugin_config)
+            .await
+            .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
+        let activation: Result<Self, CliError> = async {
+            let native = if native_specs.is_empty() {
                 None
             } else {
                 Some(load_native_plugins(native_specs).map_err(|error| {
                     CliError::Config(format!("native plugin load failed: {error}"))
                 })?)
             };
-        for plugin in &dynamic_plugins {
-            if let Some(snapshot) = plugin.activation_snapshot.as_ref() {
-                snapshot.verify_current()?;
+            for plugin in &dynamic_plugins {
+                if let Some(snapshot) = plugin.activation_snapshot.as_ref() {
+                    snapshot.verify_current()?;
+                }
             }
-        }
-        let worker =
-            if worker_specs.is_empty() {
+            let worker = if worker_specs.is_empty() {
                 None
             } else {
                 Some(load_worker_plugins(worker_specs).map_err(|error| {
                     CliError::Config(format!("worker plugin load failed: {error}"))
                 })?)
             };
-        initialize_plugins_exact(plugin_config)
-            .await
-            .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
-        Ok(Self {
-            active: true,
-            native,
-            worker,
-            _snapshots: snapshots,
-        })
+            clear_plugin_configuration().map_err(|error| {
+                CliError::Config(format!("static plugin teardown failed: {error}"))
+            })?;
+            initialize_plugins_exact(plugin_config)
+                .await
+                .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
+            Ok(Self {
+                active: true,
+                native,
+                worker,
+                _snapshots: snapshots,
+            })
+        }
+        .await;
+        if let Err(error) = activation {
+            return match clear_plugin_configuration() {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(CliError::Config(format!(
+                    "{error}; plugin activation cleanup failed: {cleanup_error}"
+                ))),
+            };
+        }
+        activation
     }
 
     fn clear(mut self) -> Result<(), CliError> {
