@@ -26,6 +26,8 @@ atof-streaming = [
     "tokio/time",
 ]
 schema = ["dep:schemars", "nemo-relay-types/schema"]
+# Private test hook for suppressing implicit user/system plugin discovery.
+__skip-implicit-config = []
 # Deprecated with the built-in NeMo Guardrails integration; scheduled for removal in 0.9.
 guardrails-remote = []
 object-store = [

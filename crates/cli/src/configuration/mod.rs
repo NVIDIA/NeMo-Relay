@@ -48,6 +48,9 @@ pub(crate) const DEFAULT_MAX_PASSTHROUGH_BODY_BYTES: usize = 100 * 1024 * 1024;
 pub(crate) const GATEWAY_URL_ENV: &str = "NEMO_RELAY_GATEWAY_URL";
 pub(crate) const TRANSPARENT_RUN_ENV: &str = "NEMO_RELAY_TRANSPARENT_RUN";
 
+#[cfg(feature = "__skip-implicit-config")]
+const TEST_SKIP_IMPLICIT_CONFIG_ENV: &str = "NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG";
+
 // TOML file shape grouped by user intent. Sections map 1:1 onto fields already present on
 // `GatewayConfig` / `AgentConfigs`; plugin configuration lives in `plugins.toml`.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1155,10 +1158,18 @@ pub(crate) fn any_config_file_exists() -> bool {
 // Returns the config search path from lowest to highest precedence. An explicit path replaces the
 // ambient user file; the system layer still applies.
 fn config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
     if let Some(path) = explicit {
-        paths.push(path.clone());
-    } else if let Some(user) = user_config_path() {
+        let mut paths = vec![path.clone()];
+        if !skip_implicit_config() {
+            paths.push(system_config_dir().join("config.toml"));
+        }
+        return paths;
+    }
+    if skip_implicit_config() {
+        return Vec::new();
+    }
+    let mut paths = Vec::new();
+    if let Some(user) = user_config_path() {
         paths.push(user);
     }
     paths.push(system_config_dir().join("config.toml"));
@@ -1204,9 +1215,19 @@ pub(crate) fn user_plugin_config_path() -> Option<PathBuf> {
 
 pub(crate) fn user_plugin_runtime_config() -> Result<Option<Value>, CliError> {
     Ok(
-        load_plugin_toml_config_from_paths(implicit_plugin_config_paths(user_config_dir()))?
+        load_plugin_toml_config_from_paths(plugin_config_paths(None, None))?
             .and_then(|config| config.value),
     )
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn skip_implicit_config() -> bool {
+    env::var(TEST_SKIP_IMPLICIT_CONFIG_ENV).ok().as_deref() == Some("1")
+}
+
+#[cfg(not(feature = "__skip-implicit-config"))]
+fn skip_implicit_config() -> bool {
+    false
 }
 
 pub(crate) fn global_plugin_config_path() -> PathBuf {

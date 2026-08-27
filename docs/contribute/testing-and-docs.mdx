@@ -27,6 +27,9 @@ just test-node
 just test-openclaw
 ```
 
+The Rust-backed test recipes use `cargo-nextest`; install it with
+`cargo install cargo-nextest --version 0.9.133 --locked` before running them.
+
 The Rust, Python, and Go recipes build the native and worker dynamic-plugin test
 fixtures once before starting their test runners. Before a focused raw test that
 uses those fixtures, prepare them explicitly:
@@ -60,8 +63,7 @@ Run the Rust validation loop when a change touches the core runtime or
 Rust-facing API surface.
 
 ```bash
-just build-test-plugin-fixtures
-cargo test --workspace
+just test-rust
 ```
 
 ### Python

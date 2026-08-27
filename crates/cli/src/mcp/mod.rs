@@ -106,22 +106,45 @@ pub(crate) async fn run(server_args: &GatewayOverrides) -> Result<ExitCode, CliE
 /// Builds the host-independent persistent MCP launch contract.
 ///
 /// Host adapters add only schema-specific activation and environment-forwarding fields. Keeping
-/// the command, arguments, fixed gateway bind, and generation fence here ensures Codex and Claude
-/// Code launch the same process.
+/// the command, arguments, persistent gateway bind, and generation fence here ensures Codex and
+/// Claude Code launch the same process.
 pub(crate) fn persistent_server(
     relay: &Path,
     generation_file: &Path,
     generation_token: &str,
-) -> Value {
-    json!({
+) -> Result<Value, CliError> {
+    #[cfg(feature = "__test-cli-port-override")]
+    let bind = persistent_gateway_bind()?;
+    #[cfg(not(feature = "__test-cli-port-override"))]
+    let bind = crate::bootstrap::DEFAULT_BIND;
+    Ok(json!({
         "command": relay,
         "args": LAUNCH_ARGS,
         "env": {
-            "NEMO_RELAY_GATEWAY_BIND": crate::bootstrap::DEFAULT_BIND,
+            "NEMO_RELAY_GATEWAY_BIND": bind,
             (GENERATION_FILE_ENV): generation_file,
             (GENERATION_TOKEN_ENV): generation_token
         }
-    })
+    }))
+}
+
+#[cfg(feature = "__test-cli-port-override")]
+fn persistent_gateway_bind() -> Result<String, CliError> {
+    let Some(value) = std::env::var_os("NEMO_RELAY_TEST_GATEWAY_BIND") else {
+        return Ok(crate::bootstrap::DEFAULT_BIND.into());
+    };
+    let value = value.to_string_lossy();
+    let address: SocketAddr = value.parse().map_err(|error| {
+        CliError::Config(format!(
+            "NEMO_RELAY_TEST_GATEWAY_BIND must be a loopback address with a nonzero port: {error}"
+        ))
+    })?;
+    if !address.ip().is_loopback() || address.port() == 0 {
+        return Err(CliError::Config(
+            "NEMO_RELAY_TEST_GATEWAY_BIND must be a loopback address with a nonzero port".into(),
+        ));
+    }
+    Ok(address.to_string())
 }
 
 fn transparent_run_active() -> bool {

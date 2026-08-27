@@ -5,6 +5,8 @@
 
 use super::*;
 use std::collections::BTreeMap;
+#[cfg(feature = "__skip-implicit-config")]
+use std::ffi::{OsStr, OsString};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -62,6 +64,47 @@ static PARTIAL_FAIL_ROLLBACKS: AtomicUsize = AtomicUsize::new(0);
 static RESTORE_FAIL_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static RESTORE_BREAK_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static REPLACEMENT_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "__skip-implicit-config")]
+static TEST_CONFIG_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+#[cfg(feature = "__skip-implicit-config")]
+struct TestConfigEnvironment {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    previous: Option<OsString>,
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+impl TestConfigEnvironment {
+    fn set(value: Option<&OsStr>) -> Self {
+        let guard = TEST_CONFIG_ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let previous = std::env::var_os("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG");
+        unsafe {
+            match value {
+                Some(value) => std::env::set_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", value),
+                None => std::env::remove_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG"),
+            }
+        }
+        Self {
+            _guard: guard,
+            previous,
+        }
+    }
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+impl Drop for TestConfigEnvironment {
+    fn drop(&mut self) {
+        unsafe {
+            match self.previous.take() {
+                Some(value) => std::env::set_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", value),
+                None => std::env::remove_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG"),
+            }
+        }
+    }
+}
 
 fn recorded_names() -> &'static Mutex<Vec<String>> {
     RECORDED_NAMES.get_or_init(|| Mutex::new(Vec::new()))
@@ -3165,6 +3208,9 @@ fn test_plugin_config_loading_reports_read_parse_and_version_type_errors() {
 
 #[test]
 fn test_default_plugin_config_paths_order_user_system() {
+    #[cfg(feature = "__skip-implicit-config")]
+    let _environment = TestConfigEnvironment::set(None);
+
     let dir = tempfile::tempdir().unwrap();
     let user = dir.path().join("user");
 
@@ -3175,6 +3221,14 @@ fn test_default_plugin_config_paths_order_user_system() {
             system_config_dir().join("plugins.toml"),
         ]
     );
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn test_hook_skips_implicit_plugin_config_paths() {
+    let _environment = TestConfigEnvironment::set(Some(OsStr::new("1")));
+
+    assert!(default_plugin_config_paths(Some(PathBuf::from("/test/user"))).is_empty());
 }
 
 #[test]

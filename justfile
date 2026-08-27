@@ -1241,6 +1241,7 @@ test-rust:
     xdg_config_home="$test_config_root/xdg"
     mkdir -p "$xdg_config_home"
     export XDG_CONFIG_HOME="$(native_test_config_path "$xdg_config_home")"
+    export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
     if [[ "$is_windows" == true ]]; then
         appdata_home="$test_config_root/AppData/Roaming"
         localappdata_home="$test_config_root/AppData/Local"
@@ -1258,7 +1259,7 @@ test-rust:
             prepare_llvm_cov_workspace
         fi
         prepare_test_plugin_fixtures
-        cargo nextest run --locked --workspace --profile ci --no-fail-fast
+        cargo nextest run --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
         cp "$NEMO_RELAY_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
         if rust_source_coverage_supported; then
             cargo llvm-cov report \
@@ -1268,12 +1269,11 @@ test-rust:
         fi
     else
         prepare_test_plugin_fixtures
-        cargo test --workspace --exclude nemo-relay-ffi
-        cargo test -p nemo-relay-ffi -- --test-threads=1
+        cargo nextest run --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
     fi
-    cargo test --manifest-path examples/rust-native-plugin/Cargo.toml
-    cargo test --manifest-path examples/rust-grpc-worker-plugin/Cargo.toml
-    cargo test --manifest-path examples/language-binding-plugin/rust/Cargo.toml
+    cargo nextest run --manifest-path examples/rust-native-plugin/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
+    cargo nextest run --manifest-path examples/rust-grpc-worker-plugin/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
+    cargo nextest run --manifest-path examples/language-binding-plugin/rust/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
 
 # --set [output_dir=<path>] [ci=true|false]
 test-python:
@@ -1288,18 +1288,19 @@ test-python:
     test_config_home="$(mktemp -d)"
     trap 'rm -rf "$test_config_home"' EXIT
     export XDG_CONFIG_HOME="$test_config_home"
+    export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
+    export_uv_python_runtime
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact python-coverage.xml)"
         junit_out="$(prepare_artifact python-junit.xml)"
         pytest_cmd+=(--cov=nemo_relay --cov=nemo_relay_plugin --cov-report term-missing --cov-report "xml:$coverage_out")
         pytest_cmd+=(--junit-xml "$junit_out")
-        export_uv_python_runtime
         if rust_source_coverage_supported; then
             rust_coverage_out="$(prepare_artifact python-rust.xml)"
             prepare_llvm_cov_workspace
         fi
-        cargo test -p nemo-relay-python --lib
     fi
+    cargo nextest run --locked -p nemo-relay-python --features __skip-implicit-config --lib --profile ci
     python_executable="$(uv_python_executable)"
     sync_args=(--inexact --all-packages --no-install-project --no-install-package nemo-relay)
     if python_plugin_grpc_dependencies_supported "$python_executable"; then
@@ -1317,7 +1318,7 @@ test-python:
         pytest_cmd+=(--ignore=python/tests/plugin)
     fi
     use_project_python_source "$python_executable"
-    "$python_executable" -m maturin develop --skip-install
+    "$python_executable" -m maturin develop --features __skip-implicit-config --skip-install
     prepare_test_plugin_fixtures
     pytest_cmd+=(--durations=25)
     "$python_executable" -m "${pytest_cmd[@]}" --ignore=python/tests/integrations
@@ -1432,10 +1433,11 @@ test-python-plugin-e2e:
         exit 1
     fi
     NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT="$environment_ref" \
-        cargo test -p nemo-relay --features worker-grpc \
+        cargo nextest run --locked -p nemo-relay --features worker-grpc \
         --test worker_plugin_integration \
-        python_worker_host_runtime_mark_and_mutated_request_round_trip \
-        -- --nocapture
+        -E 'test(python_worker_host_runtime_mark_and_mutated_request_round_trip)' \
+        --no-capture \
+        --profile ci
     kill "$gateway_pid" 2>/dev/null || true
     wait "$gateway_pid" 2>/dev/null || true
     gateway_pid=""
@@ -1447,12 +1449,13 @@ test-python-langchain:
     {{ bash_helpers }}
     pytest_cmd=(pytest)
     cd "$NEMO_RELAY_REPO_ROOT"
+    export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
     uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langchain-nvidia --extra langgraph --extra deepagents
     activate_project_venv
     export_uv_python_runtime
     python_executable="$(project_python_executable)"
     use_project_python_source "$python_executable"
-    "$python_executable" -m maturin develop --skip-install
+    "$python_executable" -m maturin develop --features __skip-implicit-config --skip-install
     "$python_executable" -m "${pytest_cmd[@]}" \
         python/tests/integrations/deepagents_tests \
         python/tests/integrations/langchain_tests \
@@ -1483,7 +1486,8 @@ test-go:
             ;;
     esac
     cd "$NEMO_RELAY_REPO_ROOT"
-    cargo build $flag -p nemo-relay-ffi
+    export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
+    cargo build $flag -p nemo-relay-ffi --features __skip-implicit-config
     prepare_test_plugin_fixtures
 
     if [[ "$is_windows" == true ]]; then
@@ -1546,6 +1550,7 @@ test-node:
     test_config_home="$(mktemp -d)"
     trap 'rm -rf "$test_config_home"' EXIT
     export XDG_CONFIG_HOME="$test_config_home"
+    export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact node-coverage.xml)"
         junit_out="$(prepare_artifact node-junit.xml)"
@@ -1553,8 +1558,8 @@ test-node:
             rust_coverage_out="$(prepare_artifact node-rust.xml)"
             prepare_llvm_cov_workspace
         fi
-        cargo test -p nemo-relay-node --lib
     fi
+    cargo nextest run --locked -p nemo-relay-node --features __skip-implicit-config --lib --profile ci
     npm install --workspace=nemo-relay-node --ignore-scripts
     if is_true "{{ ci }}"; then
         npm run coverage --workspace=nemo-relay-node
@@ -1575,9 +1580,9 @@ test-node:
 
 # run each checked plugin authoring example from its own project directory
 test-plugin-examples:
-    (cd examples/rust-native-plugin && cargo test)
-    (cd examples/rust-grpc-worker-plugin && cargo test)
-    (cd examples/language-binding-plugin/rust && cargo test)
+    (cd examples/rust-native-plugin && cargo nextest run --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci)
+    (cd examples/rust-grpc-worker-plugin && cargo nextest run --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci)
+    (cd examples/language-binding-plugin/rust && cargo nextest run --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci)
     (cd examples/python-grpc-worker-plugin && uv run --locked --group test --reinstall-package nemo-relay-plugin pytest)
     (cd examples/language-binding-plugin/python && uv run --locked --group test --reinstall-package nemo-relay pytest)
     npm test --workspace=nemo-relay-node-language-binding-plugin-example

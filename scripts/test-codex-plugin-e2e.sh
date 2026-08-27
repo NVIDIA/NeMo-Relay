@@ -11,7 +11,7 @@ if ! command -v codex >/dev/null 2>&1; then
     exit 0
 fi
 
-cargo build -p nemo-relay-cli --bin nemo-relay
+cargo build -p nemo-relay-cli --bin nemo-relay --features __test-cli-port-override
 
 work="$(mktemp -d)"
 provider_pid=""
@@ -112,6 +112,8 @@ export TMPDIR="$work/tmp"
 export PATH="$repo_root/target/debug:$PATH"
 export OPENAI_API_KEY="relay-e2e-key"
 export NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS=1
+gateway_port="$(python3 -c 'import socket; sock = socket.socket(); sock.bind(("127.0.0.1", 0)); print(sock.getsockname()[1]); sock.close()')"
+export NEMO_RELAY_TEST_GATEWAY_BIND="127.0.0.1:$gateway_port"
 mkdir -p "$HOME" "$CODEX_HOME" "$XDG_CONFIG_HOME/nemo-relay" "$XDG_DATA_HOME" "$TMPDIR"
 
 provider_ready="$work/provider-ready.json"
@@ -156,18 +158,20 @@ mode = "append"
 EOF
 
 wait_for_relay_port_release() {
-    python3 - <<'PY'
+    python3 - "$gateway_port" <<'PY'
 import socket
+import sys
 import time
 
+port = int(sys.argv[1])
 deadline = time.monotonic() + 6
 while time.monotonic() < deadline:
     with socket.socket() as sock:
         sock.settimeout(0.2)
-        if sock.connect_ex(("127.0.0.1", 47632)) != 0:
+        if sock.connect_ex(("127.0.0.1", port)) != 0:
             raise SystemExit(0)
     time.sleep(0.1)
-raise SystemExit("Relay port 47632 did not become free")
+raise SystemExit(f"Relay port {port} did not become free")
 PY
 }
 
@@ -617,12 +621,14 @@ wait "$second_pid"
 background_pids=("")
 [[ "$(read_sidecar_pid "$sidecar_pid_file")" == "$shared_sidecar_pid" ]]
 kill -0 "$shared_sidecar_pid"
-python3 - <<'PY'
+python3 - "$gateway_port" <<'PY'
 import socket
+import sys
 
+port = int(sys.argv[1])
 with socket.socket() as sock:
     sock.settimeout(0.2)
-    assert sock.connect_ex(("127.0.0.1", 47632)) == 0, "shared Relay gateway stopped early"
+    assert sock.connect_ex(("127.0.0.1", port)) == 0, "shared Relay gateway stopped early"
 PY
 
 owner_file="$(find_sidecar_file 'sidecar-*.owner.json')"
