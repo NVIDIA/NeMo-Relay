@@ -143,6 +143,14 @@ impl Drop for RequestInterceptCleanup {
     }
 }
 
+struct PluginKindCleanup(&'static str);
+
+impl Drop for PluginKindCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_plugin(self.0);
+    }
+}
+
 fn test_http_client() -> reqwest::Client {
     reqwest::Client::new()
 }
@@ -2148,6 +2156,7 @@ async fn serve_listener_activates_static_plugins_before_dynamic_load_and_cleans_
     GENERIC_TEST_PLUGIN_REGISTRATIONS.store(0, Ordering::SeqCst);
     GENERIC_TEST_PLUGIN_DEREGISTRATIONS.store(0, Ordering::SeqCst);
     register_plugin(Arc::new(GenericTestPlugin)).unwrap();
+    let _plugin_cleanup = PluginKindCleanup(GENERIC_TEST_PLUGIN_KIND);
 
     let temp = tempfile::tempdir().unwrap();
     let manifest_ref = write_missing_native_plugin_manifest(temp.path(), "cli.missing-native");
