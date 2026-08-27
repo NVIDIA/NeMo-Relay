@@ -151,7 +151,6 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
     let state = schema.field("state").unwrap().schema().unwrap();
     let backend = state.field("backend").unwrap().schema().unwrap();
     assert_eq!(backend.field("kind").unwrap().kind, EditorFieldKind::Enum);
-    assert_eq!(backend.field("config").unwrap().kind, EditorFieldKind::Json);
 
     let telemetry = schema.field("telemetry").unwrap().schema().unwrap();
     let learners = telemetry.field("learners").unwrap();
@@ -220,6 +219,38 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
         tools.field("default").unwrap().kind,
         EditorFieldKind::Section
     );
+}
+
+#[test]
+fn adaptive_editor_schema_describes_structured_collections() {
+    let schema = AdaptiveConfig::editor_schema();
+    let backend = schema
+        .field("state")
+        .unwrap()
+        .schema()
+        .unwrap()
+        .field("backend")
+        .unwrap()
+        .schema()
+        .unwrap();
+    let backend_config = backend.field("config").unwrap();
+    assert_eq!(backend_config.kind, EditorFieldKind::DiscriminatedSection);
+    assert_eq!(backend_config.tagged_union.unwrap().discriminator, "kind");
+
+    let response_cache = schema.field("response_cache").unwrap().schema().unwrap();
+    let header_allowlist = response_cache.field("header_allowlist").unwrap();
+    assert_eq!(header_allowlist.kind, EditorFieldKind::List);
+    assert_eq!(
+        header_allowlist.list_item.unwrap().kind,
+        EditorFieldKind::String
+    );
+
+    let tools = response_cache.field("tools").unwrap().schema().unwrap();
+    for field_name in ["classes", "overrides"] {
+        let field = tools.field(field_name).unwrap();
+        assert_eq!(field.kind, EditorFieldKind::Map);
+        assert_eq!(field.list_item.unwrap().kind, EditorFieldKind::Section);
+    }
 }
 
 #[test]

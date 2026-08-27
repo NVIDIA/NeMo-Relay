@@ -662,7 +662,7 @@ fn assert_native_host_api_versions() {
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV4>(), 8);
-        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV4>(), 584);
+        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV4>(), 600);
         assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV4, v3), 0);
         assert_eq!(
             std::mem::offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2),
@@ -679,11 +679,25 @@ fn assert_native_host_api_versions() {
             ),
             576
         );
+        assert_eq!(
+            std::mem::offset_of!(
+                NemoRelayNativeHostApiV4,
+                plugin_runtime_register_conditional_middleware_guardrail_callback
+            ),
+            584
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                NemoRelayNativeHostApiV4,
+                plugin_context_register_conditional_middleware_guardrail_callback
+            ),
+            592
+        );
     }
     #[cfg(target_pointer_width = "32")]
     {
         assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV4>(), 4);
-        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV4>(), 288);
+        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV4>(), 296);
         assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV4, v3), 0);
         assert_eq!(
             std::mem::offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2),
@@ -699,6 +713,20 @@ fn assert_native_host_api_versions() {
                 plugin_context_register_conditional_middleware_guardrail
             ),
             284
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                NemoRelayNativeHostApiV4,
+                plugin_runtime_register_conditional_middleware_guardrail_callback
+            ),
+            288
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                NemoRelayNativeHostApiV4,
+                plugin_context_register_conditional_middleware_guardrail_callback
+            ),
+            292
         );
     }
 }
@@ -6285,6 +6313,76 @@ unsafe extern "C" fn count_user_data_free(user_data: *mut c_void) {
     count.fetch_add(1, Ordering::SeqCst);
 }
 
+#[derive(Default)]
+struct ConditionalCallbackTestState {
+    calls: Mutex<Vec<(BTreeSet<RuntimeRegistrationKind>, String)>>,
+    frees: AtomicUsize,
+}
+
+struct ConditionalCallbackTestUserData {
+    state: Arc<ConditionalCallbackTestState>,
+}
+
+unsafe extern "C" fn free_conditional_callback_test_user_data(user_data: *mut c_void) {
+    let user_data = unsafe { Box::from_raw(user_data.cast::<ConditionalCallbackTestUserData>()) };
+    user_data.state.frees.fetch_add(1, Ordering::SeqCst);
+}
+
+unsafe extern "C" fn exercise_native_conditional_callback(
+    user_data: *mut c_void,
+    kinds_json: *const NemoRelayNativeString,
+    registration_name: *const NemoRelayNativeString,
+    out_reason: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    if user_data.is_null() || out_reason.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out_reason = ptr::null_mut() };
+    let user_data = unsafe { &*user_data.cast::<ConditionalCallbackTestUserData>() };
+    let kinds = match read_native_string(kinds_json)
+        .ok()
+        .and_then(|kinds| serde_json::from_str(&kinds).ok())
+    {
+        Some(kinds) => kinds,
+        None => return NemoRelayStatus::InvalidJson,
+    };
+    let registration_name = match read_native_string(registration_name) {
+        Ok(registration_name) => registration_name,
+        Err(_) => return NemoRelayStatus::InvalidUtf8,
+    };
+    user_data
+        .state
+        .calls
+        .lock()
+        .unwrap()
+        .push((kinds, registration_name.clone()));
+    match registration_name.as_str() {
+        "blocked" => {
+            unsafe { *out_reason = native_string("disabled") };
+            NemoRelayStatus::Ok
+        }
+        "error-with-output" => {
+            unsafe { *out_reason = native_string("ignored") };
+            set_native_last_error("injected callback error");
+            NemoRelayStatus::Internal
+        }
+        "invalid-output" => {
+            unsafe { *out_reason = Box::into_raw(Box::new(NativeHostString(vec![0xff]))).cast() };
+            NemoRelayStatus::Ok
+        }
+        _ => NemoRelayStatus::Ok,
+    }
+}
+
+unsafe extern "C" fn unreachable_native_conditional_callback(
+    _user_data: *mut c_void,
+    _kinds_json: *const NemoRelayNativeString,
+    _registration_name: *const NemoRelayNativeString,
+    _out_reason: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::Internal
+}
+
 #[test]
 fn native_async_registration_user_data_guard_frees_or_transfers_exactly_once() {
     let frees = AtomicUsize::new(0);
@@ -6304,6 +6402,202 @@ fn native_async_registration_user_data_guard_frees_or_transfers_exactly_once() {
     assert_eq!(frees.load(Ordering::SeqCst), 1);
     unsafe { transferred.1.unwrap()(transferred.0) };
     assert_eq!(frees.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn native_conditional_callback_wrapper_blocks_allows_fails_open_and_releases_state() {
+    let state = Arc::new(ConditionalCallbackTestState::default());
+    let user_data = Box::into_raw(Box::new(ConditionalCallbackTestUserData {
+        state: Arc::clone(&state),
+    }))
+    .cast();
+    let user_data = Arc::new(NativeCallbackUserData {
+        ptr: user_data,
+        free_fn: Some(free_conditional_callback_test_user_data),
+        _instance: None,
+    });
+    let callback = wrap_conditional_middleware_guardrail_callback(
+        "fixture_native".into(),
+        exercise_native_conditional_callback,
+        user_data,
+    );
+    let kinds = BTreeSet::from([RuntimeRegistrationKind::Subscriber]);
+    let live_before = native_string_live_allocations();
+
+    assert_eq!(callback(&kinds, "blocked"), Some("disabled".into()));
+    assert_eq!(callback(&kinds, "allowed"), None);
+    assert_eq!(callback(&kinds, "error-with-output"), None);
+    assert_eq!(callback(&kinds, "invalid-output"), None);
+    assert_eq!(native_string_live_allocations(), live_before);
+
+    let calls_before_allocation_failures = state.calls.lock().unwrap().len();
+    fail_native_string_allocation_after(0);
+    assert_eq!(callback(&kinds, "input-allocation-failure"), None);
+    fail_native_string_allocation_after(1);
+    assert_eq!(callback(&kinds, "name-allocation-failure"), None);
+    assert_eq!(
+        state.calls.lock().unwrap().len(),
+        calls_before_allocation_failures,
+        "the plugin callback must not run when host input allocation fails"
+    );
+    assert_eq!(native_string_live_allocations(), live_before);
+
+    let calls = state.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 4);
+    assert!(calls.iter().all(|(actual_kinds, _)| actual_kinds == &kinds));
+    drop(calls);
+    drop(callback);
+    assert_eq!(state.frees.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn native_conditional_callback_registration_consumes_state_on_every_rejected_path() {
+    let frees = AtomicUsize::new(0);
+    let user_data = || (&frees as *const AtomicUsize).cast_mut().cast();
+    let free_fn = Some(count_user_data_free as unsafe extern "C" fn(*mut c_void));
+    let mut out = ptr::null_mut();
+
+    assert_eq!(
+        unsafe {
+            native_plugin_runtime_register_conditional_middleware_guardrail_callback(
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                unreachable_native_conditional_callback,
+                user_data(),
+                free_fn,
+                ptr::null_mut(),
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(frees.load(Ordering::SeqCst), 1);
+
+    assert_eq!(
+        unsafe {
+            native_plugin_context_register_conditional_middleware_guardrail_callback(
+                ptr::null_mut(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                unreachable_native_conditional_callback,
+                user_data(),
+                free_fn,
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(frees.load(Ordering::SeqCst), 2);
+
+    let inactive_runtime = NativeHostPluginRuntime {
+        namespace: "test:".into(),
+        encode_local_names: false,
+        instance: Weak::new(),
+        active: AtomicBool::new(false),
+        gates: Mutex::new(HashMap::new()),
+    };
+    assert_eq!(
+        unsafe {
+            native_plugin_runtime_register_conditional_middleware_guardrail_callback(
+                (&inactive_runtime as *const NativeHostPluginRuntime).cast(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                unreachable_native_conditional_callback,
+                user_data(),
+                free_fn,
+                &mut out,
+            )
+        },
+        NemoRelayStatus::NotFound
+    );
+    assert_eq!(frees.load(Ordering::SeqCst), 3);
+
+    let active_runtime = NativeHostPluginRuntime {
+        namespace: "test:".into(),
+        encode_local_names: false,
+        instance: Weak::new(),
+        active: AtomicBool::new(true),
+        gates: Mutex::new(HashMap::new()),
+    };
+    let name = native_string("gate");
+    let kinds = native_string(r#"["subscriber"]"#);
+    let malformed_kinds = native_string("not-json");
+    let registration_name = native_string("target");
+    assert_eq!(
+        unsafe {
+            native_plugin_runtime_register_conditional_middleware_guardrail_callback(
+                (&active_runtime as *const NativeHostPluginRuntime).cast(),
+                ptr::null(),
+                kinds,
+                registration_name,
+                unreachable_native_conditional_callback,
+                user_data(),
+                free_fn,
+                &mut out,
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(frees.load(Ordering::SeqCst), 4);
+
+    assert_eq!(
+        unsafe {
+            native_plugin_runtime_register_conditional_middleware_guardrail_callback(
+                (&active_runtime as *const NativeHostPluginRuntime).cast(),
+                name,
+                kinds,
+                ptr::null(),
+                unreachable_native_conditional_callback,
+                user_data(),
+                free_fn,
+                &mut out,
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(frees.load(Ordering::SeqCst), 5);
+
+    assert_eq!(
+        unsafe {
+            native_plugin_runtime_register_conditional_middleware_guardrail_callback(
+                (&active_runtime as *const NativeHostPluginRuntime).cast(),
+                name,
+                malformed_kinds,
+                registration_name,
+                unreachable_native_conditional_callback,
+                user_data(),
+                free_fn,
+                &mut out,
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+    assert_eq!(frees.load(Ordering::SeqCst), 6);
+
+    assert_eq!(
+        unsafe {
+            native_plugin_runtime_register_conditional_middleware_guardrail_callback(
+                (&active_runtime as *const NativeHostPluginRuntime).cast(),
+                name,
+                kinds,
+                registration_name,
+                unreachable_native_conditional_callback,
+                user_data(),
+                free_fn,
+                &mut out,
+            )
+        },
+        NemoRelayStatus::NotFound
+    );
+    assert_eq!(frees.load(Ordering::SeqCst), 7);
+    unsafe {
+        native_string_free(name);
+        native_string_free(malformed_kinds);
+        native_string_free(registration_name);
+        native_string_free(kinds);
+    }
 }
 
 #[test]

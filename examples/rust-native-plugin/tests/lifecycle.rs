@@ -23,6 +23,7 @@ static TEST_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
 const PLUGIN_ID: &str = "examples.rust_native_policy";
 const SUBSCRIBER: &str = "rust_native_example_lifecycle_events";
 const CONTROLLED_SUBSCRIBER: &str = "documentation-controlled-subscriber";
+const ALLOWED_SUBSCRIBER: &str = "documentation-observed-subscriber";
 
 #[tokio::test]
 async fn built_cdylib_validates_activates_runs_and_unloads() {
@@ -51,6 +52,15 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
         }),
     )
     .expect("controlled subscriber should register");
+    let allowed_events = Arc::new(AtomicUsize::new(0));
+    let captured_allowed_events = Arc::clone(&allowed_events);
+    register_subscriber(
+        ALLOWED_SUBSCRIBER,
+        Arc::new(move |_| {
+            captured_allowed_events.fetch_add(1, Ordering::SeqCst);
+        }),
+    )
+    .expect("allowed subscriber should register");
 
     let config = documented_config();
     let (activation, report) = PluginHostActivation::activate(
@@ -68,6 +78,7 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
     assert!(report.diagnostics.is_empty(), "{report:?}");
     flush_subscribers().expect("activation events should flush");
     let controlled_baseline = controlled_events.load(Ordering::SeqCst);
+    let allowed_baseline = allowed_events.load(Ordering::SeqCst);
 
     let result = tool_call_execute(
         ToolCallExecuteParams::builder()
@@ -94,6 +105,10 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
         controlled_events.load(Ordering::SeqCst),
         controlled_baseline,
         "the activation-owned gate should suppress future subscriber snapshots"
+    );
+    assert!(
+        allowed_events.load(Ordering::SeqCst) > allowed_baseline,
+        "a None gate decision should leave the matching subscriber enabled"
     );
     assert!(
         events
@@ -125,6 +140,7 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
     assert!(controlled_events.load(Ordering::SeqCst) > controlled_baseline);
     deregister_subscriber(CONTROLLED_SUBSCRIBER)
         .expect("controlled subscriber should deregister");
+    deregister_subscriber(ALLOWED_SUBSCRIBER).expect("allowed subscriber should deregister");
     deregister_subscriber(SUBSCRIBER).expect("test subscriber should deregister");
     assert!(!list_plugin_kinds().contains(&PLUGIN_ID.to_owned()));
 }
@@ -149,6 +165,7 @@ fn documented_config() -> Map<String, serde_json::Value> {
             "enabled": true,
             "kinds": ["subscriber"],
             "registration_name": "documentation-controlled-subscriber",
+            "allowed_registration_name": "documentation-observed-subscriber",
             "reason": "disabled by documentation plugin"
         },
         "executor": { "worker_threads": 2 }

@@ -145,6 +145,16 @@ impl Drop for FixtureNativeRegistrationCleanup {
     }
 }
 
+struct SubscriberRegistrations(Vec<&'static str>);
+
+impl Drop for SubscriberRegistrations {
+    fn drop(&mut self) {
+        for name in self.0.drain(..) {
+            let _ = deregister_subscriber(name);
+        }
+    }
+}
+
 struct ThreadScopeStackRestore(Option<ThreadScopeStackBinding>);
 
 impl ThreadScopeStackRestore {
@@ -1517,6 +1527,72 @@ async fn plugin_host_activation_owns_configuration_until_clear() {
         .await
         .expect("cleared intercept chain should be empty");
     assert_eq!(unchanged, json!({ "input": true }));
+}
+
+#[tokio::test]
+async fn native_conditional_callbacks_block_allow_fail_open_and_clear() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+    let registrations = [
+        (
+            "fixture-native-blocked-subscriber",
+            Arc::new(AtomicUsize::new(0)),
+        ),
+        (
+            "fixture-native-allowed-subscriber",
+            Arc::new(AtomicUsize::new(0)),
+        ),
+        (
+            "fixture-native-failed-open-subscriber",
+            Arc::new(AtomicUsize::new(0)),
+        ),
+    ];
+    let _subscriber_cleanup =
+        SubscriberRegistrations(registrations.iter().map(|(name, _)| *name).collect());
+    for (name, calls) in &registrations {
+        let calls = Arc::clone(calls);
+        register_subscriber(
+            name,
+            Arc::new(move |_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+            }),
+        )
+        .expect("test subscriber should register");
+    }
+
+    let mut spec = host_spec("fixture_native", &manifest_ref);
+    spec.config = Map::from_iter([("conditional_gate_test".into(), json!(true))]);
+    let (activation, report) = PluginHostActivation::activate(PluginConfig::default(), [spec])
+        .await
+        .expect("native plugin host should activate callback gates");
+    assert!(!report.has_errors());
+    flush_subscribers().expect("activation events should flush");
+    let baselines = registrations
+        .iter()
+        .map(|(_, calls)| calls.load(Ordering::SeqCst))
+        .collect::<Vec<_>>();
+
+    emit_scope_mark(
+        EmitMarkEventParams::builder()
+            .name("native-conditional-callback-active")
+            .build(),
+    )
+    .expect("active callback mark should emit");
+    flush_subscribers().expect("active callback mark should flush");
+    assert_eq!(registrations[0].1.load(Ordering::SeqCst), baselines[0]);
+    assert!(registrations[1].1.load(Ordering::SeqCst) > baselines[1]);
+    assert!(registrations[2].1.load(Ordering::SeqCst) > baselines[2]);
+
+    activation.clear().expect("native plugin host should clear");
+    emit_scope_mark(
+        EmitMarkEventParams::builder()
+            .name("native-conditional-callback-cleared")
+            .build(),
+    )
+    .expect("post-clear mark should emit");
+    flush_subscribers().expect("post-clear mark should flush");
+    assert!(registrations[0].1.load(Ordering::SeqCst) > baselines[0]);
 }
 
 #[tokio::test]

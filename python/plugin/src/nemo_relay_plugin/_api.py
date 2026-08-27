@@ -40,6 +40,7 @@ Public authoring types:
     LlmStreamNext: Continuation for a streaming LLM execution intercept.
 
 Public callback aliases used in registration annotations:
+    ConditionalMiddlewareCallback: Runtime registration eligibility callback.
     SubscriberCallback: Event subscriber callback.
     EventMetadataInjectorCallback: Event metadata injector callback.
     ToolSanitizeCallback: Tool request or response sanitizer callback.
@@ -175,6 +176,7 @@ class ConditionalMiddlewareGuardrailHandle:
     """Opaque activation-owned key for removing a worker-created gate."""
 
     _value: str = field(repr=False)
+    _callback_name: str = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -1019,6 +1021,9 @@ EventSanitizeCallback: TypeAlias = Callable[
 ]
 ToolSanitizeCallback: TypeAlias = Callable[[str, Json], Json | Awaitable[Json]]
 ToolConditionalCallback: TypeAlias = Callable[[str, Json], str | None | Awaitable[str | None]]
+ConditionalMiddlewareCallback: TypeAlias = Callable[
+    [set[RuntimeRegistrationKind], str], str | None | Awaitable[str | None]
+]
 ToolRequestCallback: TypeAlias = Callable[[str, Json], Json | Awaitable[Json]]
 ToolExecutionCallback: TypeAlias = Callable[
     [str, Json, "ToolNext"],
@@ -1046,6 +1051,7 @@ LlmStreamExecutionCallback: TypeAlias = Callable[
 class _Handlers:
     registrations: list[Any]
     conditional_middleware_guardrails: list[Any]
+    conditional_middleware_callbacks: dict[str, ConditionalMiddlewareCallback]
     subscribers: dict[str, SubscriberCallback]
     event_metadata_injectors: dict[str, EventMetadataInjectorCallback]
     mark_sanitizers: dict[str, EventSanitizeCallback]
@@ -1068,6 +1074,7 @@ class _Handlers:
         return cls(
             registrations=[],
             conditional_middleware_guardrails=[],
+            conditional_middleware_callbacks={},
             subscribers={},
             event_metadata_injectors={},
             mark_sanitizers={},
@@ -1157,17 +1164,18 @@ class PluginContext:
         name: str,
         kinds: set[RuntimeRegistrationKind],
         registration_name: str,
-        reason: str,
+        callback: ConditionalMiddlewareCallback,
     ) -> None:
-        """Declare a host-resident gate installed with this activation."""
+        """Declare a callback-based gate installed with this activation."""
         self._handlers.conditional_middleware_guardrails.append(
             pb.ConditionalMiddlewareGuardrailRegistration(
                 name=name,
                 kinds=[_runtime_registration_surface(kind) for kind in kinds],
                 registration_name=registration_name,
-                reason=reason,
+                callback=True,
             )
         )
+        self._handlers.conditional_middleware_callbacks[name] = callback
 
     def register_event_metadata_injector(
         self,
@@ -1539,6 +1547,7 @@ class PluginRuntime:
         self._activation_id = activation_id
         self._auth_token = auth_token
         self._host_stub = host_stub
+        self._conditional_middleware_callbacks: dict[str, ConditionalMiddlewareCallback] = {}
 
     async def list_runtime_registrations(
         self, kinds: Iterable[RuntimeRegistrationKind] | None = None
@@ -1579,25 +1588,33 @@ class PluginRuntime:
         name: str,
         kinds: set[RuntimeRegistrationKind],
         registration_name: str,
-        reason: str,
+        callback: ConditionalMiddlewareCallback,
     ) -> ConditionalMiddlewareGuardrailHandle:
-        """Register a host-resident gate owned by this worker activation."""
-        response = await self._host_stub.RegisterConditionalMiddlewareGuardrail(
-            pb.RegisterConditionalMiddlewareGuardrailRequest(
-                activation_id=self._activation_id,
-                auth_token=self._auth_token,
-                name=name,
-                kinds=[_runtime_registration_surface(kind) for kind in kinds],
-                registration_name=registration_name,
-                reason=reason,
+        """Register a callback-based gate owned by this worker activation."""
+        if name in self._conditional_middleware_callbacks:
+            raise WorkerSdkError(f"conditional middleware callback {name!r} is already registered")
+        self._conditional_middleware_callbacks[name] = callback
+        try:
+            response = await self._host_stub.RegisterConditionalMiddlewareGuardrail(
+                pb.RegisterConditionalMiddlewareGuardrailRequest(
+                    activation_id=self._activation_id,
+                    auth_token=self._auth_token,
+                    name=name,
+                    kinds=[_runtime_registration_surface(kind) for kind in kinds],
+                    registration_name=registration_name,
+                    callback=True,
+                )
             )
-        )
+        except Exception:
+            self._conditional_middleware_callbacks.pop(name, None)
+            raise
         if response.HasField("error"):
+            self._conditional_middleware_callbacks.pop(name, None)
             raise _worker_error_to_sdk(response.error)
-        return ConditionalMiddlewareGuardrailHandle(response.handle)
+        return ConditionalMiddlewareGuardrailHandle(response.handle, name)
 
     async def deregister_conditional_middleware_guardrail(self, handle: ConditionalMiddlewareGuardrailHandle) -> bool:
-        """Remove a host-resident gate owned by this worker activation."""
+        """Remove a callback-based gate owned by this worker activation."""
         if not isinstance(handle, ConditionalMiddlewareGuardrailHandle):
             raise TypeError("handle must be a ConditionalMiddlewareGuardrailHandle")
         response = await self._host_stub.DeregisterConditionalMiddlewareGuardrail(
@@ -1609,6 +1626,8 @@ class PluginRuntime:
         )
         if response.HasField("error"):
             raise _worker_error_to_sdk(response.error)
+        if response.removed:
+            self._conditional_middleware_callbacks.pop(handle._callback_name, None)
         return response.removed
 
     async def _decode_llm_codec_request(
@@ -2295,6 +2314,16 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 registered_config = copy.deepcopy(config)
                 ctx = PluginContext(runtime=self._runtime)
                 await _maybe_await(self._plugin.register(ctx, config))
+                previous_callbacks = self._handlers.conditional_middleware_callbacks
+                collisions = ctx._handlers.conditional_middleware_callbacks.keys() & (
+                    self._runtime._conditional_middleware_callbacks.keys() - previous_callbacks.keys()
+                )
+                if collisions:
+                    name = min(collisions)
+                    raise WorkerSdkError(f"conditional middleware callback {name!r} is already registered")
+                for name in previous_callbacks:
+                    self._runtime._conditional_middleware_callbacks.pop(name, None)
+                self._runtime._conditional_middleware_callbacks.update(ctx._handlers.conditional_middleware_callbacks)
                 self._handlers = ctx._handlers
                 self._registered_config = registered_config
                 return pb.RegisterResponse(
@@ -2400,6 +2429,15 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
 
     async def _invoke_result(self, request: Any) -> Any:
         with _bind_invocation_scope(request):
+            if request.surface == pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL:
+                callback = self._runtime._conditional_middleware_callbacks.get(request.registration_name)
+                if callback is None:
+                    raise WorkerSdkError(
+                        f"conditional middleware callback {request.registration_name!r} is not registered"
+                    )
+                kinds = {_runtime_registration_kind(kind) for kind in request.conditional_middleware.kinds}
+                result = await _maybe_await(callback(kinds, request.conditional_middleware.registration_name))
+                return pb.InvokeResponse(guardrail=pb.GuardrailResult(block_reason=result or ""))
             if request.surface in PluginContext._LLM_HANDLER_ATTRIBUTES:
                 return await self._invoke_llm_result(request)
             if request.surface == pb.SUBSCRIBER:
@@ -2613,6 +2651,7 @@ def _all_surfaces() -> list[int]:
         pb.LLM_REQUEST_INTERCEPT,
         pb.LLM_EXECUTION_INTERCEPT,
         pb.LLM_STREAM_EXECUTION_INTERCEPT,
+        pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL,
     ]
 
 

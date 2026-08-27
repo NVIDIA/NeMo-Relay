@@ -727,6 +727,24 @@ const fn otel_editor_field(
     }
 }
 
+const fn otel_list_editor_field(
+    name: &'static str,
+    optional: bool,
+    item: &'static EditorListItemSpec,
+) -> EditorFieldSpec {
+    EditorFieldSpec {
+        name,
+        label: name,
+        kind: EditorFieldKind::List,
+        enum_values: &[],
+        optional,
+        nested_schema: None,
+        nested_default: None,
+        list_item: Some(item),
+        tagged_union: None,
+    }
+}
+
 impl EditorConfig for OpenTelemetryEndpointConfig {
     fn editor_schema() -> &'static EditorSchema {
         static SCHEMA: EditorSchema = EditorSchema {
@@ -744,7 +762,11 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
                     &["inherit", "event", "tool"],
                     false,
                 ),
-                otel_editor_field("mark_exclude_names", EditorFieldKind::Json, &[], false),
+                otel_list_editor_field(
+                    "mark_exclude_names",
+                    false,
+                    &crate::config_editor::STRING_LIST_ITEM,
+                ),
                 otel_editor_field("attribute_mappings", EditorFieldKind::List, &[], false),
                 otel_editor_field(
                     "promote_metadata_prefixes",
@@ -892,16 +914,74 @@ crate::editor_config! {
 }
 
 crate::editor_config! {
+    impl HttpStorageConfig {
+        endpoint => { label: "endpoint", kind: String },
+        headers => { label: "headers", kind: StringMap },
+        header_env => { label: "header_env", kind: StringMap },
+        timeout_millis => { label: "timeout_millis", kind: Integer },
+    }
+}
+
+crate::editor_config! {
+    impl S3StorageConfig {
+        bucket => { label: "bucket", kind: String },
+        key_prefix => { label: "key_prefix", kind: String, optional: true },
+        access_key_id => { label: "access_key_id", kind: String, optional: true },
+        secret_access_key_var => { label: "secret_access_key_var", kind: String, optional: true },
+        session_token_var => { label: "session_token_var", kind: String, optional: true },
+        region => { label: "region", kind: String, optional: true },
+        endpoint_url => { label: "endpoint_url", kind: String, optional: true },
+        allow_http => { label: "allow_http", kind: Boolean, optional: true },
+    }
+}
+
+fn default_http_storage_editor_value() -> Json {
+    serde_json::json!({"type": "http", "endpoint": "", "headers": {}, "header_env": {}, "timeout_millis": 3000})
+}
+
+fn default_s3_storage_editor_value() -> Json {
+    serde_json::json!({"type": "s3", "bucket": ""})
+}
+
+static ATIF_STORAGE_VARIANTS: [EditorVariantSpec; 2] = [
+    EditorVariantSpec {
+        label: "HTTP",
+        tag: "http",
+        schema: <HttpStorageConfig as EditorConfig>::editor_schema,
+        default: default_http_storage_editor_value,
+    },
+    EditorVariantSpec {
+        label: "S3",
+        tag: "s3",
+        schema: <S3StorageConfig as EditorConfig>::editor_schema,
+        default: default_s3_storage_editor_value,
+    },
+];
+
+static ATIF_STORAGE_TAGGED_UNION: EditorTaggedUnionSpec = EditorTaggedUnionSpec {
+    discriminator: "type",
+    variants: &ATIF_STORAGE_VARIANTS,
+};
+
+static ATIF_STORAGE_LIST: EditorListItemSpec = EditorListItemSpec {
+    kind: EditorFieldKind::Section,
+    schema: None,
+    default: None,
+    tagged_union: Some(&ATIF_STORAGE_TAGGED_UNION),
+    list_item: None,
+};
+
+crate::editor_config! {
     impl AtifSectionConfig {
         enabled => { label: "enabled", kind: Boolean },
         agent_name => { label: "agent_name", kind: String },
         agent_version => { label: "agent_version", kind: String },
         model_name => { label: "model_name", kind: String },
-        tool_definitions => { label: "tool_definitions", kind: Json, optional: true },
+        tool_definitions => { label: "tool_definitions", kind: List, optional: true, list: &crate::config_editor::JSON_LIST_ITEM },
         extra => { label: "extra", kind: Json, optional: true },
         output_directory => { label: "output_directory", kind: String, optional: true },
         filename_template => { label: "filename_template", kind: String },
-        storage => { label: "storage", kind: Json, optional: true },
+        storage => { label: "storage", kind: List, optional: true, list: &ATIF_STORAGE_LIST },
     }
 }
 

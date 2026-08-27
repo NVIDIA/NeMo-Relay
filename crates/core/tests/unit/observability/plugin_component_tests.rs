@@ -5008,11 +5008,25 @@ fn atif_storage_http_header_env_present_env_is_accepted() {
 }
 
 #[test]
-fn atif_storage_editor_field_is_optional_json() {
+fn atif_storage_editor_field_is_optional_typed_list() {
     let schema = AtifSectionConfig::editor_schema();
     let storage = schema.field("storage").expect("storage editor field");
-    assert_eq!(storage.kind, EditorFieldKind::Json);
+    assert_eq!(storage.kind, EditorFieldKind::List);
     assert!(storage.optional);
+    let tagged_union = storage
+        .list_item
+        .expect("storage list metadata")
+        .tagged_union
+        .expect("storage tagged-union metadata");
+    assert_eq!(tagged_union.discriminator, "type");
+    assert_eq!(
+        tagged_union
+            .variants
+            .iter()
+            .map(|variant| variant.tag)
+            .collect::<Vec<_>>(),
+        vec!["http", "s3"]
+    );
 }
 
 #[test]

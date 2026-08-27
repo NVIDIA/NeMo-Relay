@@ -454,6 +454,20 @@ pub type NemoRelayNativeToolConditionalCb = unsafe extern "C" fn(
     out_reason: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus;
 
+/// Native callback deciding whether a matching runtime registration is eligible.
+///
+/// `kinds_json` contains a JSON set of configured registration kinds and
+/// `registration_name` is the target's effective name. Return a host-allocated
+/// reason through `out_reason` to disable the target, or leave it null to keep
+/// the target enabled. The input strings are borrowed for the callback only.
+/// Relay treats a non-OK status or invalid output as an allow decision.
+pub type NemoRelayNativeConditionalMiddlewareCb = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    kinds_json: *const NemoRelayNativeString,
+    registration_name: *const NemoRelayNativeString,
+    out_reason: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus;
+
 /// Native tool execution intercept callback.
 ///
 /// A successful callback must set `out_outcome_json` to canonical
@@ -1236,7 +1250,7 @@ pub struct NemoRelayNativeHostApiV4 {
         kinds_json: *const NemoRelayNativeString,
         out_json: *mut *mut NemoRelayNativeString,
     ) -> NemoRelayStatus,
-    /// Registers an activation-owned host-resident gate and returns its handle.
+    /// Legacy constant-reason gate registration retained for v4 compatibility.
     pub plugin_runtime_register_conditional_middleware_guardrail:
         unsafe extern "C" fn(
             runtime: *const NemoRelayNativePluginRuntime,
@@ -1253,7 +1267,7 @@ pub struct NemoRelayNativeHostApiV4 {
             handle: *const NemoRelayNativeString,
             out_removed: *mut bool,
         ) -> NemoRelayStatus,
-    /// Declares a host-resident gate during component registration.
+    /// Legacy constant-reason component gate retained for v4 compatibility.
     pub plugin_context_register_conditional_middleware_guardrail:
         unsafe extern "C" fn(
             ctx: *mut NemoRelayNativePluginContext,
@@ -1261,6 +1275,35 @@ pub struct NemoRelayNativeHostApiV4 {
             kinds_json: *const NemoRelayNativeString,
             registration_name: *const NemoRelayNativeString,
             reason: *const NemoRelayNativeString,
+        ) -> NemoRelayStatus,
+    /// Registers an activation-owned callback gate and returns its handle.
+    ///
+    /// Relay invokes `cb` synchronously and consumes `user_data` on every return
+    /// path. A null callback reason leaves the target enabled.
+    pub plugin_runtime_register_conditional_middleware_guardrail_callback:
+        unsafe extern "C" fn(
+            runtime: *const NemoRelayNativePluginRuntime,
+            name: *const NemoRelayNativeString,
+            kinds_json: *const NemoRelayNativeString,
+            registration_name: *const NemoRelayNativeString,
+            cb: NemoRelayNativeConditionalMiddlewareCb,
+            user_data: *mut c_void,
+            free_fn: NemoRelayNativeFreeFn,
+            out_handle: *mut *mut NemoRelayNativeString,
+        ) -> NemoRelayStatus,
+    /// Declares a callback gate during component registration.
+    ///
+    /// Relay invokes `cb` synchronously and consumes `user_data` on every return
+    /// path. A null callback reason leaves the target enabled.
+    pub plugin_context_register_conditional_middleware_guardrail_callback:
+        unsafe extern "C" fn(
+            ctx: *mut NemoRelayNativePluginContext,
+            name: *const NemoRelayNativeString,
+            kinds_json: *const NemoRelayNativeString,
+            registration_name: *const NemoRelayNativeString,
+            cb: NemoRelayNativeConditionalMiddlewareCb,
+            user_data: *mut c_void,
+            free_fn: NemoRelayNativeFreeFn,
         ) -> NemoRelayStatus,
 }
 
@@ -1452,14 +1495,23 @@ impl PluginRuntime {
         take_host_json(&self.host, out)
     }
 
-    /// Registers an activation-owned host-resident eligibility gate.
-    pub fn register_conditional_middleware_guardrail(
+    /// Registers an activation-owned callback eligibility gate.
+    ///
+    /// Return `Some(reason)` to disable the matching target or `None` to leave
+    /// it enabled.
+    pub fn register_conditional_middleware_guardrail<F>(
         &self,
         name: &str,
         kinds: &std::collections::BTreeSet<RuntimeRegistrationKind>,
         registration_name: &str,
-        reason: &str,
-    ) -> Result<ConditionalMiddlewareGuardrailHandle> {
+        callback: F,
+    ) -> Result<ConditionalMiddlewareGuardrailHandle>
+    where
+        F: Fn(&std::collections::BTreeSet<RuntimeRegistrationKind>, &str) -> Option<String>
+            + Send
+            + Sync
+            + 'static,
+    {
         let v4 = self.runtime_v4()?;
         let name = HostString::new(&self.host, name)
             .ok_or_else(|| "failed to allocate gate name".to_string())?;
@@ -1467,22 +1519,24 @@ impl PluginRuntime {
             .ok_or_else(|| "failed to serialize runtime registration kinds".to_string())?;
         let registration_name = HostString::new(&self.host, registration_name)
             .ok_or_else(|| "failed to allocate target name".to_string())?;
-        let reason = HostString::new(&self.host, reason)
-            .ok_or_else(|| "failed to allocate gate reason".to_string())?;
+        let user_data = typed_callback_user_data(&self.host, callback);
         let mut out = ptr::null_mut();
         let status = unsafe {
-            (v4.plugin_runtime_register_conditional_middleware_guardrail)(
+            (v4.plugin_runtime_register_conditional_middleware_guardrail_callback)(
                 self.capability,
                 name.as_ptr(),
                 kinds.as_ptr(),
                 registration_name.as_ptr(),
-                reason.as_ptr(),
+                typed_conditional_middleware_trampoline::<F>,
+                user_data,
+                Some(drop_typed_callback::<F>),
                 &mut out,
             )
         };
-        status_result(
+        finish_typed_registration(
             &self.host,
             status,
+            user_data,
             "register conditional middleware guardrail",
         )?;
         take_host_string(&self.host, out).map(ConditionalMiddlewareGuardrailHandle)
@@ -2292,14 +2346,23 @@ impl<'a> PluginContext<'a> {
         PluginRuntime::from_context(self.host, self.raw)
     }
 
-    /// Declares a host-resident conditional middleware guardrail for activation.
-    pub fn register_conditional_middleware_guardrail(
+    /// Declares a callback conditional middleware guardrail for activation.
+    ///
+    /// Return `Some(reason)` to disable the matching target or `None` to leave
+    /// it enabled.
+    pub fn register_conditional_middleware_guardrail<F>(
         &mut self,
         name: &str,
         kinds: &std::collections::BTreeSet<RuntimeRegistrationKind>,
         registration_name: &str,
-        reason: &str,
-    ) -> Result<()> {
+        callback: F,
+    ) -> Result<()>
+    where
+        F: Fn(&std::collections::BTreeSet<RuntimeRegistrationKind>, &str) -> Option<String>
+            + Send
+            + Sync
+            + 'static,
+    {
         if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION
             || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV4>()
         {
@@ -2312,20 +2375,22 @@ impl<'a> PluginContext<'a> {
             .ok_or_else(|| "failed to serialize runtime registration kinds".to_string())?;
         let registration_name = HostString::new(self.host, registration_name)
             .ok_or_else(|| "failed to allocate target name".to_string())?;
-        let reason = HostString::new(self.host, reason)
-            .ok_or_else(|| "failed to allocate gate reason".to_string())?;
+        let user_data = typed_callback_user_data(self.host, callback);
         let status = unsafe {
-            (v4.plugin_context_register_conditional_middleware_guardrail)(
+            (v4.plugin_context_register_conditional_middleware_guardrail_callback)(
                 self.raw,
                 name.as_ptr(),
                 kinds.as_ptr(),
                 registration_name.as_ptr(),
-                reason.as_ptr(),
+                typed_conditional_middleware_trampoline::<F>,
+                user_data,
+                Some(drop_typed_callback::<F>),
             )
         };
-        status_result(
+        finish_typed_registration(
             self.host,
             status,
+            user_data,
             "register conditional middleware guardrail",
         )
     }
@@ -2854,6 +2919,40 @@ where
         Ok(Ok(())) => NemoRelayStatus::Ok,
         Ok(Err(status)) => status,
         Err(_) => callback_panic(&state.host, "subscriber callback"),
+    }
+}
+
+unsafe extern "C" fn typed_conditional_middleware_trampoline<F>(
+    user_data: *mut c_void,
+    kinds_json: *const NemoRelayNativeString,
+    registration_name: *const NemoRelayNativeString,
+    out_reason: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus
+where
+    F: Fn(&std::collections::BTreeSet<RuntimeRegistrationKind>, &str) -> Option<String>
+        + Send
+        + Sync
+        + 'static,
+{
+    if user_data.is_null() || out_reason.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out_reason = ptr::null_mut() };
+    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let kinds = read_json_value(&state.host, kinds_json, "runtime registration kinds")?;
+        let registration_name =
+            read_required_host_string(&state.host, registration_name, "registration name")?;
+        let Some(reason) = (state.callback)(&kinds, &registration_name) else {
+            return Ok(NemoRelayStatus::Ok);
+        };
+        let status = unsafe { (state.host.string_new)(reason.as_ptr(), reason.len(), out_reason) };
+        Ok(status)
+    }));
+    match result {
+        Ok(Ok(status)) => status,
+        Ok(Err(status)) => status,
+        Err(_) => callback_panic(&state.host, "conditional middleware callback"),
     }
 }
 

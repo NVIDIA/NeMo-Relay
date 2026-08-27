@@ -105,7 +105,10 @@ pub struct RuntimeDiagnostic {
 
 /// Opaque activation-owned key for removing a worker-created gate.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConditionalMiddlewareGuardrailHandle(String);
+pub struct ConditionalMiddlewareGuardrailHandle {
+    handle: String,
+    callback_name: String,
+}
 
 /// Bounded snapshot of active host runtime diagnostics.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -302,6 +305,11 @@ impl WorkerResponseCodec {
     }
 }
 type LlmConditionalFn = Arc<dyn Fn(LlmRequest) -> BoxFutureResult<Option<String>> + Send + Sync>;
+type ConditionalMiddlewareFn = Arc<
+    dyn Fn(BTreeSet<RuntimeRegistrationKind>, String) -> BoxFutureResult<Option<String>>
+        + Send
+        + Sync,
+>;
 type LlmRequestFn = Arc<
     dyn Fn(
             String,
@@ -319,6 +327,7 @@ type LlmStreamExecutionFn =
 struct WorkerHandlers {
     registrations: Vec<Registration>,
     conditional_middleware_guardrails: Vec<ConditionalMiddlewareGuardrailRegistration>,
+    conditional_middleware_callbacks: HashMap<String, ConditionalMiddlewareFn>,
     subscribers: HashMap<String, SubscriberFn>,
     event_metadata_injectors: HashMap<String, EventMetadataInjectorFn>,
     mark_sanitizers: HashMap<String, EventSanitizeFn>,
@@ -365,14 +374,17 @@ impl PluginContext {
         self.runtime.clone()
     }
 
-    /// Declares a host-resident gate installed with this component activation.
-    pub fn register_conditional_middleware_guardrail(
+    /// Declares a callback-based gate installed with this component activation.
+    pub fn register_conditional_middleware_guardrail<F, Fut>(
         &mut self,
         name: &str,
         kinds: BTreeSet<RuntimeRegistrationKind>,
         registration_name: &str,
-        reason: &str,
-    ) {
+        callback: F,
+    ) where
+        F: Fn(BTreeSet<RuntimeRegistrationKind>, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Option<String>>> + Send + 'static,
+    {
         self.handlers.conditional_middleware_guardrails.push(
             ConditionalMiddlewareGuardrailRegistration {
                 name: name.into(),
@@ -382,8 +394,13 @@ impl PluginContext {
                     .map(|surface| surface as i32)
                     .collect(),
                 registration_name: registration_name.into(),
-                reason: reason.into(),
+                reason: String::new(),
+                callback: true,
             },
+        );
+        self.handlers.conditional_middleware_callbacks.insert(
+            name.into(),
+            Arc::new(move |kinds, registration_name| Box::pin(callback(kinds, registration_name))),
         );
     }
 
@@ -792,6 +809,7 @@ pub struct PluginRuntime {
     auth_token: String,
     host_endpoint: String,
     host_channel: Arc<OnceCell<Channel>>,
+    conditional_middleware_callbacks: Arc<Mutex<HashMap<String, ConditionalMiddlewareFn>>>,
 }
 
 impl PluginRuntime {
@@ -862,16 +880,27 @@ impl PluginRuntime {
             .collect()
     }
 
-    /// Register a host-resident gate owned by this worker activation.
-    pub async fn register_conditional_middleware_guardrail(
+    /// Register a callback-based gate owned by this worker activation.
+    pub async fn register_conditional_middleware_guardrail<F, Fut>(
         &self,
         name: &str,
         kinds: BTreeSet<RuntimeRegistrationKind>,
         registration_name: &str,
-        reason: &str,
-    ) -> Result<ConditionalMiddlewareGuardrailHandle> {
-        let mut client = self.host_client().await?;
-        let response = client
+        callback: F,
+    ) -> Result<ConditionalMiddlewareGuardrailHandle>
+    where
+        F: Fn(BTreeSet<RuntimeRegistrationKind>, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Option<String>>> + Send + 'static,
+    {
+        self.try_insert_conditional_middleware_callback(name, callback)?;
+        let mut client = match self.host_client().await {
+            Ok(client) => client,
+            Err(error) => {
+                self.remove_conditional_middleware_callback(name);
+                return Err(error);
+            }
+        };
+        let response = match client
             .register_conditional_middleware_guardrail(Request::new(
                 RegisterConditionalMiddlewareGuardrailRequest {
                     activation_id: self.activation_id.clone(),
@@ -882,19 +911,29 @@ impl PluginRuntime {
                         .map(|kind| registration_surface(kind) as i32)
                         .collect(),
                     registration_name: registration_name.into(),
-                    reason: reason.into(),
+                    reason: String::new(),
+                    callback: true,
                 },
             ))
             .await
-            .map_err(|error| WorkerSdkError::Transport(error.to_string()))?
-            .into_inner();
+        {
+            Ok(response) => response.into_inner(),
+            Err(error) => {
+                self.remove_conditional_middleware_callback(name);
+                return Err(WorkerSdkError::Transport(error.to_string()));
+            }
+        };
         if let Some(error) = response.error {
+            self.remove_conditional_middleware_callback(name);
             return Err(worker_error_to_sdk(error));
         }
-        Ok(ConditionalMiddlewareGuardrailHandle(response.handle))
+        Ok(ConditionalMiddlewareGuardrailHandle {
+            handle: response.handle,
+            callback_name: name.into(),
+        })
     }
 
-    /// Deregister a host-resident gate owned by this worker activation.
+    /// Deregister a callback-based gate owned by this worker activation.
     pub async fn deregister_conditional_middleware_guardrail(
         &self,
         handle: &ConditionalMiddlewareGuardrailHandle,
@@ -905,7 +944,7 @@ impl PluginRuntime {
                 DeregisterConditionalMiddlewareGuardrailRequest {
                     activation_id: self.activation_id.clone(),
                     auth_token: self.auth_token.clone(),
-                    handle: handle.0.clone(),
+                    handle: handle.handle.clone(),
                 },
             ))
             .await
@@ -914,7 +953,42 @@ impl PluginRuntime {
         if let Some(error) = response.error {
             return Err(worker_error_to_sdk(error));
         }
+        if response.removed {
+            self.remove_conditional_middleware_callback(&handle.callback_name);
+        }
         Ok(response.removed)
+    }
+
+    fn try_insert_conditional_middleware_callback<F, Fut>(
+        &self,
+        name: &str,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: Fn(BTreeSet<RuntimeRegistrationKind>, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Option<String>>> + Send + 'static,
+    {
+        let mut callbacks = self
+            .conditional_middleware_callbacks
+            .lock()
+            .map_err(|error| WorkerSdkError::Callback(error.to_string()))?;
+        if callbacks.contains_key(name) {
+            return Err(WorkerSdkError::InvalidInput(format!(
+                "conditional middleware callback '{name}' is already registered"
+            )));
+        }
+        callbacks.insert(
+            name.into(),
+            Arc::new(move |kinds, registration_name| Box::pin(callback(kinds, registration_name))),
+        );
+        Ok(())
+    }
+
+    fn remove_conditional_middleware_callback(&self, name: &str) {
+        self.conditional_middleware_callbacks
+            .lock()
+            .expect("conditional middleware callback lock")
+            .remove(name);
     }
 
     async fn decode_llm_codec_request(
@@ -1423,6 +1497,7 @@ async fn serve_plugin_arc_with_endpoint_file(
         auth_token: config.auth_token,
         host_endpoint: config.host_endpoint,
         host_channel: Arc::new(OnceCell::new()),
+        conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     };
     let service = WorkerService {
         plugin,
@@ -1661,11 +1736,45 @@ impl PluginWorker for WorkerService {
         let registrations = ctx.handlers.registrations.clone();
         let conditional_middleware_guardrails =
             ctx.handlers.conditional_middleware_guardrails.clone();
-        *self
-            .handlers
-            .lock()
-            .map_err(|err| Status::internal(format!("handler lock poisoned: {err}")))? =
-            ctx.handlers;
+        {
+            let mut callbacks = self
+                .runtime
+                .conditional_middleware_callbacks
+                .lock()
+                .map_err(|err| {
+                    Status::internal(format!(
+                        "conditional middleware callback lock poisoned: {err}"
+                    ))
+                })?;
+            let mut handlers = self
+                .handlers
+                .lock()
+                .map_err(|err| Status::internal(format!("handler lock poisoned: {err}")))?;
+            if let Some(name) = ctx
+                .handlers
+                .conditional_middleware_callbacks
+                .keys()
+                .find(|name| {
+                    callbacks.contains_key(*name)
+                        && !handlers
+                            .conditional_middleware_callbacks
+                            .contains_key(*name)
+                })
+            {
+                return Ok(Response::new(RegisterResponse {
+                    registrations: Vec::new(),
+                    error: Some(sdk_error_to_worker(WorkerSdkError::InvalidInput(format!(
+                        "conditional middleware callback '{name}' is already registered"
+                    )))),
+                    conditional_middleware_guardrails: Vec::new(),
+                }));
+            }
+            for name in handlers.conditional_middleware_callbacks.keys() {
+                callbacks.remove(name);
+            }
+            callbacks.extend(ctx.handlers.conditional_middleware_callbacks.clone());
+            *handlers = ctx.handlers;
+        }
         Ok(Response::new(RegisterResponse {
             registrations,
             error: None,
@@ -2060,6 +2169,10 @@ impl WorkerService {
         let surface = RegistrationSurface::try_from(request.surface)
             .map_err(|_| WorkerSdkError::InvalidInput("unknown registration surface".into()))?;
         match surface {
+            RegistrationSurface::ConditionalMiddlewareGuardrail => {
+                self.invoke_conditional_middleware_response(request, &scope)
+                    .await
+            }
             RegistrationSurface::Subscriber => self.invoke_subscriber_response(request, &scope),
             RegistrationSurface::EventMetadataInjector => {
                 self.invoke_event_metadata_injector_response(request, &scope)
@@ -2091,6 +2204,49 @@ impl WorkerService {
                 ))
             }
         }
+    }
+
+    async fn invoke_conditional_middleware_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+    ) -> Result<InvokeResponse> {
+        let payload = match request.payload {
+            Some(nemo_relay_worker_proto::v1::invoke_request::Payload::ConditionalMiddleware(
+                payload,
+            )) => payload,
+            _ => {
+                return Err(WorkerSdkError::InvalidInput(
+                    "conditional middleware payload is missing".into(),
+                ));
+            }
+        };
+        let kinds = payload
+            .kinds
+            .into_iter()
+            .map(|kind| {
+                RegistrationSurface::try_from(kind)
+                    .map_err(|_| {
+                        WorkerSdkError::InvalidInput("unknown runtime registration kind".into())
+                    })
+                    .and_then(runtime_registration_kind)
+            })
+            .collect::<Result<BTreeSet<_>>>()?;
+        let handler = self
+            .runtime
+            .conditional_middleware_callbacks
+            .lock()
+            .map_err(|error| WorkerSdkError::Callback(error.to_string()))?
+            .get(&request.registration_name)
+            .cloned()
+            .ok_or_else(|| {
+                WorkerSdkError::InvalidInput(format!(
+                    "conditional middleware callback '{}' is not registered",
+                    request.registration_name
+                ))
+            })?;
+        let future = with_thread_scope(scope, || handler(kinds, payload.registration_name));
+        Ok(guardrail_response(future.await?))
     }
 
     fn invoke_subscriber_response(
@@ -3064,9 +3220,11 @@ fn runtime_registration_kind(surface: RegistrationSurface) -> Result<RuntimeRegi
         RegistrationSurface::LlmStreamExecutionIntercept => {
             Ok(RuntimeRegistrationKind::LlmStreamExecutionIntercept)
         }
-        RegistrationSurface::Unspecified => Err(WorkerSdkError::Callback(
-            "runtime registration kind is unspecified".into(),
-        )),
+        RegistrationSurface::ConditionalMiddlewareGuardrail | RegistrationSurface::Unspecified => {
+            Err(WorkerSdkError::Callback(
+                "surface is not a runtime registration kind".into(),
+            ))
+        }
     }
 }
 
@@ -3104,6 +3262,7 @@ fn all_surfaces() -> Vec<RegistrationSurface> {
         RegistrationSurface::MarkSanitizeGuardrail,
         RegistrationSurface::ScopeSanitizeStartGuardrail,
         RegistrationSurface::ScopeSanitizeEndGuardrail,
+        RegistrationSurface::ConditionalMiddlewareGuardrail,
     ]
 }
 

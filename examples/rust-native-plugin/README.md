@@ -39,10 +39,15 @@ the `sha256:` prefix. The same relative artifact path must appear in
 The strict schema documents every feature group and the SDK-owned
 `executor.worker_threads` override.
 
-The optional `registration_control` group demonstrates a host-resident,
+The optional `registration_control` group demonstrates a callback-based,
 activation-owned gate. It defaults to `enabled: false`, `kinds: ["subscriber"]`,
-`registration_name: "documentation-controlled-subscriber"`, and
-`reason: "disabled by documentation plugin"`. The kinds, effective target name,
-and reason must be nonempty. Refer to
+`registration_name: "documentation-controlled-subscriber"`,
+`allowed_registration_name: "documentation-observed-subscriber"`, and
+`reason: "disabled by documentation plugin"`. When enabled, the example registers
+one callback that returns the reason for `registration_name` and another callback
+that returns `None` for `allowed_registration_name`. This demonstrates blocking and
+allowing decisions in the same activation. The kinds, effective target names, and
+reason must be nonempty. When registration control is enabled, `registration_name`
+and `allowed_registration_name` must differ. Refer to
 [Conditional Middleware Guardrails](../../docs/about-nemo-relay/concepts/conditional-middleware-guardrails.mdx)
 before enabling it against a discovered runtime target.

@@ -28,12 +28,12 @@ use crate::api::registry::{
     list_runtime_registrations, register_conditional_middleware_guardrail,
 };
 use crate::api::runtime::{
-    EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity,
-    LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
-    LlmSanitizeRequestContext, LlmSanitizeRequestFn, LlmSanitizeResponseContext,
-    LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn,
-    MiddlewareContinuationContext, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    ConditionalMiddlewareGuardrailFn, EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn,
+    LlmCodecIdentity, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream,
+    LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
+    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    LlmStreamExecutionNextFn, MiddlewareContinuationContext, ToolConditionalFn, ToolExecutionFn,
+    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{
     ScopeStackHandle, ThreadScopeStackBinding, capture_thread_scope_stack, create_scope_stack,
@@ -61,19 +61,20 @@ use nemo_relay_plugin::{
     NemoRelayNativeAsyncLlmStreamOpenCb, NemoRelayNativeAsyncLlmStreamPullCb,
     NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
     NemoRelayNativeAsyncNextResultCb, NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
-    NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeEventSanitizeCb,
-    NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
-    NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4, NemoRelayNativeLlmAsyncStream,
-    NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
-    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestInterceptCb,
-    NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
-    NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
-    NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
-    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginEntry,
-    NemoRelayNativePluginRuntime, NemoRelayNativePluginV1, NemoRelayNativeScopeHandle,
-    NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType,
-    NemoRelayNativeString, NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb,
-    NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
+    NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeConditionalMiddlewareCb,
+    NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
+    NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4,
+    NemoRelayNativeLlmAsyncStream, NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb,
+    NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCodec,
+    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
+    NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeRequestContext,
+    NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmSanitizeResponseContext,
+    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
+    NemoRelayNativePluginEntry, NemoRelayNativePluginRuntime, NemoRelayNativePluginV1,
+    NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
+    NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
+    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb,
+    NemoRelayStatus,
 };
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
@@ -530,6 +531,7 @@ struct NativeHostPluginContext {
 struct NativeHostPluginRuntime {
     namespace: String,
     encode_local_names: bool,
+    instance: Weak<NativePluginInstance>,
     active: AtomicBool,
     gates: Mutex<HashMap<String, NativeOwnedGate>>,
 }
@@ -985,6 +987,10 @@ fn build_native_host_api_v4() -> NemoRelayNativeHostApiV4 {
             native_plugin_runtime_deregister_conditional_middleware_guardrail,
         plugin_context_register_conditional_middleware_guardrail:
             native_plugin_context_register_conditional_middleware_guardrail,
+        plugin_runtime_register_conditional_middleware_guardrail_callback:
+            native_plugin_runtime_register_conditional_middleware_guardrail_callback,
+        plugin_context_register_conditional_middleware_guardrail_callback:
+            native_plugin_context_register_conditional_middleware_guardrail_callback,
     }
 }
 
@@ -3941,6 +3947,7 @@ unsafe extern "C" fn native_plugin_context_runtime(
     let runtime = Arc::new(NativeHostPluginRuntime {
         namespace,
         encode_local_names: context.uses_plugin_component_namespace(),
+        instance: Arc::downgrade(&host_ctx.instance),
         active: AtomicBool::new(true),
         gates: Mutex::new(HashMap::new()),
     });
@@ -4045,6 +4052,73 @@ unsafe extern "C" fn native_plugin_runtime_register_conditional_middleware_guard
         Ok(reason) => reason,
         Err(status) => return status,
     };
+    register_native_owned_gate(
+        runtime,
+        local_name,
+        kinds,
+        registration_name,
+        Arc::new(move |_, _| Some(reason.clone())),
+        out_handle,
+    )
+}
+
+unsafe extern "C" fn native_plugin_runtime_register_conditional_middleware_guardrail_callback(
+    runtime: *const NemoRelayNativePluginRuntime,
+    name: *const NemoRelayNativeString,
+    kinds_json: *const NemoRelayNativeString,
+    registration_name: *const NemoRelayNativeString,
+    cb: NemoRelayNativeConditionalMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+    out_handle: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    clear_native_last_error();
+    let user_data_guard = NativeCallbackUserDataGuard::new(user_data, free_fn);
+    if out_handle.is_null() {
+        set_native_last_error("conditional middleware guardrail handle output is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out_handle = ptr::null_mut() };
+    let runtime = match native_runtime_ref(runtime) {
+        Ok(runtime) => runtime,
+        Err(status) => return status,
+    };
+    let local_name = match read_name(name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    let kinds = match read_runtime_registration_kinds(kinds_json) {
+        Ok(kinds) => kinds,
+        Err(status) => return status,
+    };
+    let registration_name = match read_name(registration_name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    let Some(instance) = runtime.instance.upgrade() else {
+        set_native_last_error("native plugin instance is no longer active");
+        return NemoRelayStatus::NotFound;
+    };
+    let (user_data, free_fn) = user_data_guard.transfer();
+    let guardrail = wrap_conditional_middleware_guardrail(instance, cb, user_data, free_fn);
+    register_native_owned_gate(
+        runtime,
+        local_name,
+        kinds,
+        registration_name,
+        guardrail,
+        out_handle,
+    )
+}
+
+fn register_native_owned_gate(
+    runtime: &NativeHostPluginRuntime,
+    local_name: String,
+    kinds: BTreeSet<RuntimeRegistrationKind>,
+    registration_name: String,
+    guardrail: ConditionalMiddlewareGuardrailFn,
+    out_handle: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
     let mut gates = match runtime.gates.lock() {
         Ok(gates) => gates,
         Err(error) => {
@@ -4076,7 +4150,7 @@ unsafe extern "C" fn native_plugin_runtime_register_conditional_middleware_guard
         &qualified_name,
         kinds,
         &registration_name,
-        Arc::new(move |_, _| Some(reason.clone())),
+        guardrail,
     ) {
         return status_from_flow_error(error);
     }
@@ -4183,7 +4257,52 @@ unsafe extern "C" fn native_plugin_context_register_conditional_middleware_guard
     }
 }
 
+unsafe extern "C" fn native_plugin_context_register_conditional_middleware_guardrail_callback(
+    ctx: *mut NemoRelayNativePluginContext,
+    name: *const NemoRelayNativeString,
+    kinds_json: *const NemoRelayNativeString,
+    registration_name: *const NemoRelayNativeString,
+    cb: NemoRelayNativeConditionalMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> NemoRelayStatus {
+    clear_native_last_error();
+    let user_data_guard = NativeCallbackUserDataGuard::new(user_data, free_fn);
+    let host_ctx = match host_ctx_mut(ctx) {
+        Ok(ctx) => ctx,
+        Err(status) => return status,
+    };
+    let name = match read_name(name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    let kinds = match read_runtime_registration_kinds(kinds_json) {
+        Ok(kinds) => kinds,
+        Err(status) => return status,
+    };
+    let registration_name = match read_name(registration_name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    let (user_data, free_fn) = user_data_guard.transfer();
+    let guardrail =
+        wrap_conditional_middleware_guardrail(host_ctx.instance.clone(), cb, user_data, free_fn);
+    match unsafe { &mut *host_ctx.ctx }.register_conditional_middleware_guardrail(
+        &name,
+        kinds,
+        &registration_name,
+        guardrail,
+    ) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_plugin_error(error),
+    }
+}
+
 fn read_name(name: *const NemoRelayNativeString) -> Result<String, NemoRelayStatus> {
+    if name.is_null() {
+        set_native_last_error("required native string is null");
+        return Err(NemoRelayStatus::NullPointer);
+    }
     read_native_string(name).map_err(|err| {
         set_native_last_error(err.to_string());
         NemoRelayStatus::InvalidUtf8
@@ -4575,6 +4694,92 @@ native_event_sanitize_context_register!(
     native_plugin_context_register_scope_sanitize_end_guardrail,
     register_scope_sanitize_end_guardrail
 );
+
+fn wrap_conditional_middleware_guardrail(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeConditionalMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> ConditionalMiddlewareGuardrailFn {
+    let plugin_kind = instance.plugin_kind.clone();
+    let user_data = make_user_data(instance, user_data, free_fn);
+    wrap_conditional_middleware_guardrail_callback(plugin_kind, cb, user_data)
+}
+
+fn wrap_conditional_middleware_guardrail_callback(
+    plugin_kind: String,
+    cb: NemoRelayNativeConditionalMiddlewareCb,
+    user_data: Arc<NativeCallbackUserData>,
+) -> ConditionalMiddlewareGuardrailFn {
+    Arc::new(move |kinds, registration_name| {
+        clear_native_last_error();
+        let kinds_value = serde_json::to_value(kinds).unwrap_or(Json::Null);
+        let Some(kinds_json) = native_string_from_json(&kinds_value) else {
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "native_conditional_middleware_guardrail_failed",
+                plugin_id = plugin_kind.as_str(),
+                registration_name;
+                "Native conditional middleware guardrail failed open: failed to allocate kinds"
+            );
+            return None;
+        };
+        let Some(registration_name_string) = native_string_from_str(registration_name) else {
+            unsafe { native_string_free(kinds_json) };
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "native_conditional_middleware_guardrail_failed",
+                plugin_id = plugin_kind.as_str(),
+                registration_name;
+                "Native conditional middleware guardrail failed open: failed to allocate registration name"
+            );
+            return None;
+        };
+        let mut out = ptr::null_mut();
+        let status = unsafe {
+            cb(
+                user_data.ptr,
+                kinds_json,
+                registration_name_string,
+                &mut out,
+            )
+        };
+        unsafe {
+            native_string_free(kinds_json);
+            native_string_free(registration_name_string);
+        }
+        if status != NemoRelayStatus::Ok {
+            if !out.is_null() {
+                unsafe { native_string_free(out) };
+            }
+            let error = native_last_error_message().unwrap_or_else(|| format!("{status:?}"));
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "native_conditional_middleware_guardrail_failed",
+                plugin_id = plugin_kind.as_str(),
+                registration_name;
+                "Native conditional middleware guardrail failed open: {error}"
+            );
+            return None;
+        }
+        if out.is_null() {
+            return None;
+        }
+        match take_native_string(out) {
+            Ok(reason) => Some(reason),
+            Err(error) => {
+                log::warn!(
+                    target: "nemo_relay.plugin",
+                    event = "native_conditional_middleware_guardrail_failed",
+                    plugin_id = plugin_kind.as_str(),
+                    registration_name;
+                    "Native conditional middleware guardrail failed open: {error}"
+                );
+                None
+            }
+        }
+    })
+}
 
 fn wrap_event_subscriber(
     instance: Arc<NativePluginInstance>,

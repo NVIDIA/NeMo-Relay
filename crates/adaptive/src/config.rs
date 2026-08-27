@@ -343,10 +343,103 @@ nemo_relay::editor_config! {
     }
 }
 
+fn default_backend_editor_config() -> Json {
+    Json::Object(Map::new())
+}
+
+#[cfg(feature = "redis-backend")]
+fn default_redis_backend_editor_config() -> Json {
+    serde_json::json!({"url": "", "key_prefix": "nemo_relay:"})
+}
+
+static IN_MEMORY_BACKEND_EDITOR_SCHEMA: nemo_relay::config_editor::EditorSchema =
+    nemo_relay::config_editor::EditorSchema { fields: &[] };
+
+#[cfg(feature = "redis-backend")]
+static REDIS_BACKEND_EDITOR_FIELDS: [nemo_relay::config_editor::EditorFieldSpec; 2] = [
+    nemo_relay::config_editor::EditorFieldSpec {
+        name: "url",
+        label: "url",
+        kind: nemo_relay::config_editor::EditorFieldKind::String,
+        enum_values: &[],
+        optional: false,
+        nested_schema: None,
+        nested_default: None,
+        list_item: None,
+        tagged_union: None,
+    },
+    nemo_relay::config_editor::EditorFieldSpec {
+        name: "key_prefix",
+        label: "key_prefix",
+        kind: nemo_relay::config_editor::EditorFieldKind::String,
+        enum_values: &[],
+        optional: true,
+        nested_schema: None,
+        nested_default: None,
+        list_item: None,
+        tagged_union: None,
+    },
+];
+
+#[cfg(feature = "redis-backend")]
+static REDIS_BACKEND_EDITOR_SCHEMA: nemo_relay::config_editor::EditorSchema =
+    nemo_relay::config_editor::EditorSchema {
+        fields: &REDIS_BACKEND_EDITOR_FIELDS,
+    };
+
+fn in_memory_backend_editor_schema() -> &'static nemo_relay::config_editor::EditorSchema {
+    &IN_MEMORY_BACKEND_EDITOR_SCHEMA
+}
+
+#[cfg(feature = "redis-backend")]
+fn redis_backend_editor_schema() -> &'static nemo_relay::config_editor::EditorSchema {
+    &REDIS_BACKEND_EDITOR_SCHEMA
+}
+
+#[cfg(not(feature = "redis-backend"))]
+static BACKEND_EDITOR_VARIANTS: [nemo_relay::config_editor::EditorVariantSpec; 1] =
+    [nemo_relay::config_editor::EditorVariantSpec {
+        label: "In memory",
+        tag: "in_memory",
+        schema: in_memory_backend_editor_schema,
+        default: default_backend_editor_config,
+    }];
+
+#[cfg(feature = "redis-backend")]
+static BACKEND_EDITOR_VARIANTS: [nemo_relay::config_editor::EditorVariantSpec; 2] = [
+    nemo_relay::config_editor::EditorVariantSpec {
+        label: "In memory",
+        tag: "in_memory",
+        schema: in_memory_backend_editor_schema,
+        default: default_backend_editor_config,
+    },
+    nemo_relay::config_editor::EditorVariantSpec {
+        label: "Redis",
+        tag: "redis",
+        schema: redis_backend_editor_schema,
+        default: default_redis_backend_editor_config,
+    },
+];
+
+static BACKEND_EDITOR_CONFIG: nemo_relay::config_editor::EditorTaggedUnionSpec =
+    nemo_relay::config_editor::EditorTaggedUnionSpec {
+        discriminator: "kind",
+        variants: &BACKEND_EDITOR_VARIANTS,
+    };
+
+#[cfg(not(feature = "redis-backend"))]
+nemo_relay::editor_config! {
+    impl BackendSpec {
+        kind => { label: "kind", kind: Enum, values: ["in_memory"] },
+        config => { label: "config", kind: DiscriminatedSection, tagged_union: &BACKEND_EDITOR_CONFIG },
+    }
+}
+
+#[cfg(feature = "redis-backend")]
 nemo_relay::editor_config! {
     impl BackendSpec {
         kind => { label: "kind", kind: Enum, values: ["in_memory", "redis"] },
-        config => { label: "config", kind: Json },
+        config => { label: "config", kind: DiscriminatedSection, tagged_union: &BACKEND_EDITOR_CONFIG },
     }
 }
 
@@ -403,7 +496,7 @@ nemo_relay::editor_config! {
         bypass_rate => { label: "bypass_rate", kind: Float },
         cache_nondeterministic => { label: "cache_nondeterministic", kind: Boolean },
         key_strategy => { label: "key_strategy", kind: String },
-        header_allowlist => { label: "header_allowlist", kind: Json },
+        header_allowlist => { label: "header_allowlist", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
         backend => {
             label: "backend",
             kind: Section,

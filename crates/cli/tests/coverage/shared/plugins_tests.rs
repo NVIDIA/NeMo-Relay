@@ -298,11 +298,17 @@ fn typed_editor_model_contains_adaptive_options() {
 
     let state = schema.field("state").unwrap().schema().unwrap();
     let backend = state.field("backend").unwrap().schema().unwrap();
-    assert_eq!(
-        backend.field("kind").unwrap().enum_values,
-        &["in_memory", "redis"]
+    assert!(
+        backend
+            .field("kind")
+            .unwrap()
+            .enum_values
+            .contains(&"in_memory")
     );
-    assert_eq!(backend.field("config").unwrap().kind, EditorFieldKind::Json);
+    assert_eq!(
+        backend.field("config").unwrap().kind,
+        EditorFieldKind::DiscriminatedSection
+    );
 
     let telemetry = schema.field("telemetry").unwrap().schema().unwrap();
     assert_eq!(

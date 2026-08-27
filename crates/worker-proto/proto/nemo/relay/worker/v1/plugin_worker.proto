@@ -65,6 +65,7 @@ enum RegistrationSurface {
   MARK_SANITIZE_GUARDRAIL = 30;
   SCOPE_SANITIZE_START_GUARDRAIL = 31;
   SCOPE_SANITIZE_END_GUARDRAIL = 32;
+  CONDITIONAL_MIDDLEWARE_GUARDRAIL = 40;
 }
 
 enum RuntimeRegistrationOwnerKind {
@@ -105,6 +106,7 @@ message RegisterConditionalMiddlewareGuardrailRequest {
   repeated RegistrationSurface kinds = 4;
   string registration_name = 5;
   string reason = 6;
+  bool callback = 7;
 }
 
 message RegisterConditionalMiddlewareGuardrailResponse {
@@ -212,6 +214,7 @@ message ConditionalMiddlewareGuardrailRegistration {
   repeated RegistrationSurface kinds = 2;
   string registration_name = 3;
   string reason = 4;
+  bool callback = 5;
 }
 
 message Registration {
@@ -235,7 +238,13 @@ message InvokeRequest {
     JsonEnvelope event = 10;
     ToolInvocation tool = 11;
     LlmInvocation llm = 12;
+    ConditionalMiddlewareInvocation conditional_middleware = 13;
   }
+}
+
+message ConditionalMiddlewareInvocation {
+  repeated RegistrationSurface kinds = 1;
+  string registration_name = 2;
 }
 
 message ToolInvocation {

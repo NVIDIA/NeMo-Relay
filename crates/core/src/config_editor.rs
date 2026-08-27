@@ -30,8 +30,12 @@ pub enum EditorFieldKind {
     Json,
     /// A collection whose entries are edited recursively.
     List,
+    /// A string-keyed map whose values are edited recursively.
+    Map,
     /// A tagged object whose variant is selected from a discriminator field.
     TaggedUnion,
+    /// A nested section selected by a discriminator field in its parent object.
+    DiscriminatedSection,
     /// Nested configuration section.
     Section,
 }
@@ -53,9 +57,11 @@ pub struct EditorFieldSpec {
     pub nested_schema: Option<fn() -> &'static EditorSchema>,
     /// Default value for a nested section.
     pub nested_default: Option<fn() -> Json>,
-    /// Description of list entries, when [`EditorFieldKind::List`] is used.
+    /// Description of collection entries, when [`EditorFieldKind::List`] or
+    /// [`EditorFieldKind::Map`] is used.
     pub list_item: Option<&'static EditorListItemSpec>,
-    /// Variant metadata, when [`EditorFieldKind::TaggedUnion`] is used.
+    /// Variant metadata, when [`EditorFieldKind::TaggedUnion`] or
+    /// [`EditorFieldKind::DiscriminatedSection`] is used.
     pub tagged_union: Option<&'static EditorTaggedUnionSpec>,
 }
 
@@ -175,6 +181,7 @@ macro_rules! editor_config {
                     $(, nested: $nested:ty)?
                     $(, default: $default:ty)?
                     $(, list: $list:expr)?
+                    $(, map: $map:expr)?
                     $(, tagged_union: $tagged_union:expr)?
                     $(,)?
                 }
@@ -200,7 +207,7 @@ macro_rules! editor_config {
                                 optional: $crate::editor_config!(@optional $($optional)?),
                                 nested_schema: $crate::editor_config!(@nested $($nested)?),
                                 nested_default: $crate::editor_config!(@default $($default)?),
-                                list_item: $crate::editor_config!(@list $($list)?),
+                                list_item: $crate::editor_config!(@collection $($list)? $($map)?),
                                 tagged_union: $crate::editor_config!(@tagged_union $($tagged_union)?),
                             }
                         ),*
@@ -223,7 +230,9 @@ macro_rules! editor_config {
     (@kind StringMap) => { $crate::config_editor::EditorFieldKind::StringMap };
     (@kind Json) => { $crate::config_editor::EditorFieldKind::Json };
     (@kind List) => { $crate::config_editor::EditorFieldKind::List };
+    (@kind Map) => { $crate::config_editor::EditorFieldKind::Map };
     (@kind TaggedUnion) => { $crate::config_editor::EditorFieldKind::TaggedUnion };
+    (@kind DiscriminatedSection) => { $crate::config_editor::EditorFieldKind::DiscriminatedSection };
     (@kind Section) => { $crate::config_editor::EditorFieldKind::Section };
 
     (@values) => { &[] };
@@ -245,8 +254,8 @@ macro_rules! editor_config {
         })
     };
 
-    (@list) => { None };
-    (@list $list:expr) => { Some($list) };
+    (@collection) => { None };
+    (@collection $collection:expr) => { Some($collection) };
 
     (@tagged_union) => { None };
     (@tagged_union $tagged_union:expr) => { Some($tagged_union) };
