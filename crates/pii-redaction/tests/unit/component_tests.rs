@@ -98,52 +98,61 @@ struct CapturedOtlpRequest {
 fn capture_one_otlp_request(
     listener: std::net::TcpListener,
 ) -> std::sync::mpsc::Receiver<CapturedOtlpRequest> {
+    capture_otlp_requests(listener, 1)
+}
+
+fn capture_otlp_requests(
+    listener: std::net::TcpListener,
+    request_count: usize,
+) -> std::sync::mpsc::Receiver<CapturedOtlpRequest> {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("collector should accept request");
-        let mut bytes = Vec::new();
-        let mut buffer = [0_u8; 4_096];
-        let (header_end, content_length) = loop {
-            let count = stream.read(&mut buffer).expect("collector should read");
-            assert!(count > 0, "collector closed before request headers");
-            bytes.extend_from_slice(&buffer[..count]);
-            if let Some(offset) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
-                let header_end = offset + 4;
-                let headers = String::from_utf8_lossy(&bytes[..header_end]);
-                let content_length = headers
-                    .lines()
-                    .find_map(|line| {
-                        let (name, value) = line.split_once(':')?;
-                        name.eq_ignore_ascii_case("content-length")
-                            .then(|| value.trim().parse::<usize>().ok())
-                            .flatten()
-                    })
-                    .unwrap_or(0);
-                break (header_end, content_length);
+        for _ in 0..request_count {
+            let (mut stream, _) = listener.accept().expect("collector should accept request");
+            let mut bytes = Vec::new();
+            let mut buffer = [0_u8; 4_096];
+            let (header_end, content_length) = loop {
+                let count = stream.read(&mut buffer).expect("collector should read");
+                assert!(count > 0, "collector closed before request headers");
+                bytes.extend_from_slice(&buffer[..count]);
+                if let Some(offset) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                    let header_end = offset + 4;
+                    let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    break (header_end, content_length);
+                }
+            };
+            while bytes.len() < header_end + content_length {
+                let count = stream
+                    .read(&mut buffer)
+                    .expect("collector should read body");
+                assert!(count > 0, "collector closed before request body");
+                bytes.extend_from_slice(&buffer[..count]);
             }
-        };
-        while bytes.len() < header_end + content_length {
-            let count = stream
-                .read(&mut buffer)
-                .expect("collector should read body");
-            assert!(count > 0, "collector closed before request body");
-            bytes.extend_from_slice(&buffer[..count]);
+            let path = String::from_utf8_lossy(&bytes[..header_end])
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .expect("request path")
+                .to_string();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .expect("collector should respond");
+            sender
+                .send(CapturedOtlpRequest {
+                    path,
+                    body: bytes[header_end..header_end + content_length].to_vec(),
+                })
+                .expect("capture receiver should remain available");
         }
-        let path = String::from_utf8_lossy(&bytes[..header_end])
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().nth(1))
-            .expect("request path")
-            .to_string();
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
-            .expect("collector should respond");
-        sender
-            .send(CapturedOtlpRequest {
-                path,
-                body: bytes[header_end..header_end + content_length].to_vec(),
-            })
-            .expect("capture receiver should remain available");
     });
     receiver
 }
@@ -1630,6 +1639,45 @@ async fn builtin_target_path_globs_sanitize_nested_mark_payloads() {
 }
 
 #[tokio::test]
+async fn builtin_target_path_globs_treat_partial_asterisks_as_literal_segments() {
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("example.mark").build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(
+        crate::builtin::CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "redact".to_string(),
+                pattern: Some("sensitive".to_string()),
+                replacement: Some("[REDACTED]".to_string()),
+                target_path_globs: vec!["/content*".to_string()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(json!({
+                "content*": "sensitive literal key",
+                "content": "sensitive nonmatching key",
+            })),
+            category_profile: None,
+            metadata: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let data = sanitized.data.unwrap();
+    assert_eq!(data["content*"], "[REDACTED] literal key");
+    assert_eq!(data["content"], "sensitive nonmatching key");
+}
+
+#[tokio::test]
 async fn builtin_target_path_globs_sanitize_tool_payloads() {
     let callback = crate::builtin::tool_sanitize_callback(
         crate::builtin::CompiledBuiltinBackend::new(
@@ -1767,7 +1815,7 @@ async fn configured_target_path_globs_redact_otlp_content_and_preserve_typed_met
     let metric_listener =
         std::net::TcpListener::bind("127.0.0.1:0").expect("metric capture listener should bind");
     let metric_endpoint = format!("http://{}", metric_listener.local_addr().unwrap());
-    let metric_request = capture_one_otlp_request(metric_listener);
+    let metric_request = capture_otlp_requests(metric_listener, 2);
     let metric_subscriber =
         OpenTelemetryMetricSubscriber::new(OpenTelemetryMetricConfig::new(metric_endpoint))
             .unwrap();
@@ -1849,6 +1897,7 @@ async fn configured_target_path_globs_redact_otlp_content_and_preserve_typed_met
     trace_subscriber
         .deregister("pii-target-glob-e2e-traces")
         .unwrap();
+    metric_subscriber.force_flush().unwrap();
     metric_subscriber
         .deregister("pii-target-glob-e2e-metrics")
         .unwrap();
