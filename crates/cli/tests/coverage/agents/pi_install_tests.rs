@@ -427,26 +427,110 @@ fn uninstall_keeps_a_file_edited_into_something_unreadable() {
     assert_eq!(std::fs::read(&edited).unwrap(), [0xff, 0xfe, 0x00, 0x01]);
 }
 
-/// What uninstall leaves behind must not dead-end the next install.
+/// A symlinked parent escapes component validation, so removal resolves the real path.
 ///
-/// Keeping an edited file leaves a directory with no state file and no manifest. Reading
-/// that as somebody's extension refused every reinstall, `--force` included, while telling
-/// the user the copy already worked -- and it did not, because pi cannot load it.
+/// Both halves matter and each was reachable on its own: `remove_recorded` follows the
+/// symlink to delete a file, and `prune_empty_dirs` follows it to remove the directory. The
+/// second was missed the first time round because every recorded path was one level deep;
+/// a forged deeper path reaches it.
 #[test]
-fn leftovers_from_a_kept_edit_can_be_installed_over_with_force() {
+fn uninstall_does_not_follow_a_symlinked_parent_out_of_the_install() {
+    #[cfg(unix)]
+    {
+        let temp = tempfile::tempdir().unwrap();
+        let _scope = scoped(temp.path());
+        install(request(false, false)).unwrap();
+
+        let outside = temp.path().join("outside");
+        // Left *empty*, which is what makes the pruning half reachable: `remove_dir` fails
+        // on a non-empty directory, so a victim with a file in it hides the escape.
+        let victim_dir = outside.join("deep");
+        std::fs::create_dir_all(&victim_dir).unwrap();
+
+        // Replace the install's own `src` with a symlink pointing out of the tree.
+        let src = root().join("src");
+        std::fs::remove_dir_all(&src).unwrap();
+        std::os::unix::fs::symlink(&outside, &src).unwrap();
+        record_paths(&root(), &[("src/deep/x.ts", "sha256:0")]);
+
+        let code = uninstall(removal(false)).unwrap();
+
+        assert!(
+            victim_dir.exists(),
+            "pruning followed the symlink out of the install and removed {}",
+            victim_dir.display()
+        );
+        assert_ne!(
+            code,
+            ExitCode::SUCCESS,
+            "an uninstall that could not act on its own state must not report success"
+        );
+    }
+}
+
+/// A third-party extension at the install path is not Relay's to overwrite.
+///
+/// pi loads a package through its `package.json` when there is one and falls back to a bare
+/// `index.ts` when there is not, so "the manifest does not name Relay" is not "nothing of
+/// value here". Reading it that way let `--force` overwrite a manifest-less extension and
+/// somebody else's package alike, against the guarantee the guide makes.
+#[test]
+fn force_never_overwrites_an_extension_relay_did_not_write() {
+    for (label, write) in [
+        (
+            "someone else's package",
+            &(|dir: &Path| {
+                std::fs::create_dir_all(dir).unwrap();
+                std::fs::write(dir.join("package.json"), r#"{"name": "someone-elses-ext"}"#)
+                    .unwrap();
+                std::fs::write(dir.join("index.ts"), "export default 1").unwrap();
+            }) as &dyn Fn(&Path),
+        ),
+        (
+            "a manifest-less index.ts pi still loads",
+            &(|dir: &Path| {
+                std::fs::create_dir_all(dir).unwrap();
+                std::fs::write(dir.join("index.ts"), "export default 1").unwrap();
+            }) as &dyn Fn(&Path),
+        ),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let _scope = scoped(temp.path());
+        write(&root());
+        let before = std::fs::read_to_string(root().join("index.ts")).unwrap();
+
+        let error = install(request(true, false)).unwrap_err().to_string();
+
+        assert!(
+            error.contains("did not write"),
+            "{label} was overwritten rather than refused: {error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root().join("index.ts")).unwrap(),
+            before,
+            "{label} was modified"
+        );
+    }
+}
+
+/// Leftovers pi cannot load are still not Relay's to overwrite.
+#[test]
+fn force_never_overwrites_leftovers_either() {
     let temp = tempfile::tempdir().unwrap();
     let _scope = scoped(temp.path());
     install(request(false, false)).unwrap();
-    std::fs::write(root().join("index.ts"), "// mine").unwrap();
+    std::fs::write(root().join("src").join("user-bash.ts"), "// mine").unwrap();
     uninstall(removal(false)).unwrap();
 
-    let error = install(request(false, false)).unwrap_err().to_string();
+    let error = install(request(true, false)).unwrap_err().to_string();
+
+    assert!(error.contains("pi would not load it"), "{error}");
     assert!(
-        error.contains("is not a loadable pi extension"),
+        !error.contains("already"),
         "the refusal must not claim the leftovers work: {error}"
     );
-    assert!(!error.contains("already finds it"), "{error}");
-
-    assert_eq!(install(request(true, false)).unwrap(), ExitCode::SUCCESS);
-    assert!(is_installed());
+    assert_eq!(
+        std::fs::read_to_string(root().join("src").join("user-bash.ts")).unwrap(),
+        "// mine"
+    );
 }

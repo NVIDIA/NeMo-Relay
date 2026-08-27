@@ -9,9 +9,12 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Use this guide to observe local [pi](https://github.com/earendil-works/pi)
 sessions and to gate pi tool calls and model calls on a NeMo Relay policy. The pi
-integration is a proof of concept. Tool and turn activity reach Relay whenever
-the gateway is reachable — the extension defaults to failing **open**, so an
-unavailable gateway lets pi carry on and that activity is simply not recorded.
+integration is a proof of concept. Tool and turn activity reach Relay when two
+things hold: the gateway is reachable, and no other pi extension preempts the
+hook first. The extension defaults to failing **open**, so an unavailable gateway
+lets pi carry on with that activity unrecorded; and pi runs every extension's
+handler for a hook, so an extension registered ahead of this one can decide a
+tool call before Relay's gate ever sees it.
 Model traffic reaches Relay when the gateway forwards to the endpoint the
 selected model would otherwise call, which is what [Model
 Redirection](#model-redirection) explains.
@@ -126,7 +129,10 @@ from outside the project, none of the three sees the copy.
 Because the manual routes look exactly like the managed one, `nemo-relay install
 pi` never overwrites a directory it did not write, `--force` included, and
 `nemo-relay uninstall pi` never removes one. Every managed install records what
-it wrote.
+it wrote, and anything without that record is left alone — whether it is a
+package with its own `package.json`, a bare `index.ts` (which pi loads too), or
+leftovers pi would not load at all. The recovery in every case is to remove the
+directory yourself.
 
 <Warning>
 **Do not install from a git URL.** pi has no subdirectory syntax for a git

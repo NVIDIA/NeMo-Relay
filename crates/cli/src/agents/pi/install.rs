@@ -94,12 +94,14 @@ enum Occupant {
     FutureSchema(u64),
     /// A Relay extension Relay did not write -- the hand-placed `cp -r`, most likely.
     Foreign,
-    /// A directory with no install state that is not a loadable extension either.
+    /// A directory with no install state that pi would not load either.
     ///
-    /// Distinct from `Foreign` because there is nothing here to protect. It is what an
-    /// uninstall leaves behind when it keeps an edited file, and treating it as somebody's
-    /// extension dead-ended the user: reinstall refused, `--force` included, while telling
-    /// them the copy already worked -- and it did not, because the manifest was gone.
+    /// Separate from `Foreign` **only so the refusal can be accurate**. Telling a user
+    /// their leftovers "already work" when pi cannot load them was the defect; letting
+    /// `--force` overwrite them was the overcorrection, because "no manifest naming Relay"
+    /// is not "nothing of value" -- it is also every manifest-less extension pi loads from
+    /// a bare `index.ts`, and every third-party package. Both are refused, `--force`
+    /// included. The recovery is to remove the directory, which the message says.
     Residue,
     /// Install state naming a path this code will not act on.
     Tampered(String),
@@ -170,7 +172,7 @@ fn occupant(root: &Path) -> Occupant {
 
 /// What a directory without usable install state is: somebody's extension, or leftovers.
 fn unmanaged_occupant(root: &Path) -> Occupant {
-    if super::doctor::is_relay_extension_dir(root) {
+    if super::doctor::loadable_extension_dir(root) {
         Occupant::Foreign
     } else {
         Occupant::Residue
@@ -206,6 +208,18 @@ fn contained_target(root: &Path, relative: &Path) -> Option<PathBuf> {
     let real_root = std::fs::canonicalize(root).ok()?;
     let real_parent = std::fs::canonicalize(parent).ok()?;
     real_parent.starts_with(&real_root).then_some(target)
+}
+
+/// Resolve a recorded *directory* under the root, refusing anything that escapes it.
+///
+/// Separate from [`contained_target`], which checks the parent because the file it guards
+/// may legitimately not exist yet. A directory has to be resolved as itself: a symlinked
+/// `src` passes a parent check (its parent *is* the root) while pointing anywhere.
+fn contained_dir(root: &Path, relative: &Path) -> Option<PathBuf> {
+    let target = root.join(relative);
+    let real_root = std::fs::canonicalize(root).ok()?;
+    let real_target = std::fs::canonicalize(&target).ok()?;
+    real_target.starts_with(&real_root).then_some(target)
 }
 
 fn digest(contents: &[u8]) -> String {
@@ -367,20 +381,23 @@ fn plan_install(root: &Path, force: bool) -> Result<InstallAction, CliError> {
     match occupant(root) {
         Occupant::Vacant => Ok(InstallAction::Wrote),
         Occupant::Foreign => Err(CliError::Install(format!(
-            "{} is a working NeMo Relay pi extension that NeMo Relay did not write -- most \
-             likely the `cp -r` the pi guide documents. It is left alone, `--force` \
-             included, because Relay cannot tell an unmanaged copy from one you edited. \
-             `nemo-relay run --agent pi` already finds it. To replace it with a managed \
-             install, remove the directory yourself and run this again",
+            "{} holds a pi extension NeMo Relay did not write -- most likely the `cp -r` \
+             the pi guide documents, but pi also loads a bare `index.ts` and a directory \
+             may hold someone else's package entirely. It is left alone, `--force` \
+             included, because Relay cannot tell an unmanaged copy from one you edited. To \
+             replace it with a managed install, remove the directory yourself and run this \
+             again",
             root.display()
         ))),
-        Occupant::Residue if force => Ok(InstallAction::Wrote),
+        // Also refused, and also with `--force`. The variant exists so the message can say
+        // what is actually there, not so the directory can be overwritten.
         Occupant::Residue => Err(CliError::Install(format!(
-            "{} exists, holds no NeMo Relay install state, and is not a loadable pi \
-             extension either -- pi would not load it, so nothing there is working. It is \
+            "{} exists and holds no NeMo Relay install state. pi would not load it either \
+             -- there is no manifest and no `index.ts`/`index.js` entry point -- so it is \
              most likely what an earlier `nemo-relay uninstall pi` left behind when it kept \
-             a file you had edited. Re-run with `--force` to install over it, or remove the \
-             directory yourself",
+             a file you had edited. Relay will not write over it, `--force` included, \
+             because it cannot tell leftovers from anything else it did not create. Remove \
+             the directory yourself and run this again",
             root.display()
         ))),
         Occupant::Tampered(path) => Err(CliError::Install(format!(
@@ -539,9 +556,13 @@ pub(crate) fn uninstall(request: UninstallRequest) -> Result<ExitCode, CliError>
         print_uninstall_plan(&root, &state, &kept);
         return Ok(ExitCode::SUCCESS);
     }
-    remove_recorded(&root, &state, &kept)?;
-    report_uninstall(&root, &kept);
-    Ok(ExitCode::SUCCESS)
+    let refused = remove_recorded(&root, &state, &kept)?;
+    report_uninstall(&root, &kept, &refused);
+    Ok(if refused.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
 }
 
 fn print_uninstall_plan(root: &Path, state: &InstallState, kept: &[String]) {
@@ -560,18 +581,27 @@ fn print_uninstall_plan(root: &Path, state: &InstallState, kept: &[String]) {
     println!("  remove {}", root.join(STATE_FILE).display());
 }
 
-fn remove_recorded(root: &Path, state: &InstallState, kept: &[String]) -> Result<(), CliError> {
+fn remove_recorded(
+    root: &Path,
+    state: &InstallState,
+    kept: &[String],
+) -> Result<Vec<String>, CliError> {
+    let mut refused = Vec::new();
     for recorded in &state.files {
         if kept.contains(&recorded.path) {
             continue;
         }
         // Re-resolved rather than joined blind. `occupant` already rejected state naming a
         // path outside the tree, and this closes the remaining route: a recorded path whose
-        // parent is a symlink out of the directory.
+        // parent is a symlink out of the directory. Refusals are collected rather than
+        // skipped silently -- an uninstall that could not act on part of its own state must
+        // not report plain success.
         let Some(relative) = safe_relative(&recorded.path) else {
+            refused.push(recorded.path.clone());
             continue;
         };
         let Some(target) = contained_target(root, &relative) else {
+            refused.push(recorded.path.clone());
             continue;
         };
         match std::fs::remove_file(&target) {
@@ -595,7 +625,7 @@ fn remove_recorded(root: &Path, state: &InstallState, kept: &[String]) -> Result
         )));
     }
     prune_empty_dirs(root, state);
-    Ok(())
+    Ok(refused)
 }
 
 /// Remove directories the install created, but only while they are empty.
@@ -603,12 +633,23 @@ fn remove_recorded(root: &Path, state: &InstallState, kept: &[String]) -> Result
 /// `remove_dir` rather than `remove_dir_all` throughout: a non-empty directory holds
 /// something this install did not write, and that is the user's.
 fn prune_empty_dirs(root: &Path, state: &InstallState) {
+    // Resolved through the same two guards as the file removal above, and for the same
+    // reason: `state.files` is the untrusted input, and a parent directory derived from it
+    // is no more trustworthy than the path it came from. Hardening only the file removal
+    // left this reachable -- a recorded `src/deep/x.ts` with `src` symlinked out of the
+    // tree removed `<outside>/deep`. Bounded to empty directories, so it destroyed no data,
+    // but it escaped the root and then reported plain success.
     let mut nested: Vec<PathBuf> = state
         .files
         .iter()
-        .filter_map(|recorded| Path::new(&recorded.path).parent())
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .map(|parent| root.join(parent))
+        .filter_map(|recorded| safe_relative(&recorded.path))
+        .filter_map(|relative| {
+            let parent = relative.parent()?;
+            if parent.as_os_str().is_empty() {
+                return None;
+            }
+            contained_dir(root, parent)
+        })
         .collect();
     nested.sort();
     nested.dedup();
@@ -620,8 +661,8 @@ fn prune_empty_dirs(root: &Path, state: &InstallState) {
     let _ = std::fs::remove_dir(root);
 }
 
-fn report_uninstall(root: &Path, kept: &[String]) {
-    if kept.is_empty() {
+fn report_uninstall(root: &Path, kept: &[String], refused: &[String]) {
+    if kept.is_empty() && refused.is_empty() {
         println!(
             "Removed the NeMo Relay pi extension from {}",
             root.display()
@@ -629,11 +670,29 @@ fn report_uninstall(root: &Path, kept: &[String]) {
         return;
     }
     println!(
-        "Removed the NeMo Relay pi extension from {}, except for files edited since it was \
-         installed: {}",
-        root.display(),
-        kept.join(", ")
+        "Removed the NeMo Relay pi extension from {}, incompletely:",
+        root.display()
     );
+    if !kept.is_empty() {
+        println!(
+            "  kept, because they were edited since they were installed: {}",
+            kept.join(", ")
+        );
+    }
+    // Not merged with the line above. An edited file is an ordinary outcome the user asked
+    // for; a refused one means the install state named something this code will not act on,
+    // which is a broken install rather than a preserved edit.
+    if !refused.is_empty() {
+        println!(
+            "  NOT removed, because the recorded path does not resolve inside the install \
+             directory: {}",
+            refused.join(", ")
+        );
+        println!(
+            "  remove {} yourself, then remove the directory",
+            root.display()
+        );
+    }
     println!("  those files and their directories are left in place");
 }
 

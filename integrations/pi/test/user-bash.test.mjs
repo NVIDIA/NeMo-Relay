@@ -188,6 +188,33 @@ describe('inline shell gate', () => {
     assert.match(result.result.output, /infrastructure fault, not a judgment/);
   });
 
+  // A fail-open allow is not a policy allow, and the span has to say so. Recording both as
+  // `policy-allowed` made a session where enforcement never happened read exactly like one
+  // where it did -- the failure mode fail-open exists to hide from the *user*, not from the
+  // trace. Asserted against a reachable gateway that faults, because a dead one cannot
+  // receive the close event either.
+  it('marks a fail-open allow as a fault rather than a policy decision', async () => {
+    process.env.NEMO_RELAY_PI_FAIL = 'open';
+    gateway.replyWith({ status: 500, raw: 'upstream exploded' });
+    const fire = load();
+
+    const result = await fire('user_bash', {
+      command: 'ls',
+      excludeFromContext: false,
+      cwd: '/work',
+    });
+    assert.equal(result, undefined, 'fail-open must still let the command run');
+
+    await drain(fire);
+    // The last one: `gateway.posts` accumulates across the suite, so the first
+    // `user_bash_end` belongs to whichever test ran before this.
+    const closes = named(gateway.posts, 'user_bash_end');
+    const close = closes.at(-1);
+    assert.ok(close, 'the span must close even when nothing ruled on it');
+    assert.equal(close.status, 'fault-allowed');
+    assert.match(close.result.content, /without a policy decision/);
+  });
+
   it('forwards the !! form so a policy can see the output will bypass the model', async () => {
     const fire = load();
     await fire('user_bash', { command: 'cat .env', excludeFromContext: true, cwd: '/work' });

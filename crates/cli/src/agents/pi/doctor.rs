@@ -485,12 +485,22 @@ fn is_relay_extension(path: &Path) -> bool {
         .is_some_and(|parent| manifest_names_relay(&parent.join("package.json")))
 }
 
-/// Whether a directory is a loadable copy of *this* extension.
+/// Whether pi would load *anything* from this directory as an extension.
 ///
-/// The same manifest-name test pi's own discovery effectively applies, exposed so the
-/// installer can tell somebody's working extension from a directory that merely exists.
-pub(super) fn is_relay_extension_dir(dir: &Path) -> bool {
-    manifest_names_relay(&dir.join("package.json"))
+/// Deliberately wider than [`is_relay_extension`], and wider than the manifest test this
+/// started as. pi resolves a package directory through its `package.json` when there is
+/// one, and **falls back to a bare `index.ts`/`index.js` when there is not**
+/// (`collectAutoExtensionEntries`, pi `v0.84.0`, `core/package-manager.ts:496-566`). A
+/// check that asked only "does the manifest name Relay" answered "no" for somebody else's
+/// package and for a manifest-less extension alike, and the installer read that as
+/// "nothing of value here".
+///
+/// Any manifest counts, not just ours: a directory holding someone else's package is not
+/// Relay's to touch either.
+pub(super) fn loadable_extension_dir(dir: &Path) -> bool {
+    dir.join("package.json").is_file()
+        || dir.join("index.ts").is_file()
+        || dir.join("index.js").is_file()
 }
 
 fn manifest_names_relay(manifest: &Path) -> bool {

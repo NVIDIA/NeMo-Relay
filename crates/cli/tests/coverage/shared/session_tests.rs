@@ -5914,18 +5914,24 @@ async fn an_inline_shell_span_closes_even_when_its_end_never_arrives() {
          open. sequence: {sequence:?}"
     );
 
-    // And it must close *before* the scope that contains it, or the trace is still malformed.
+    // And it must close *strictly before* the scope that contains it.
+    //
+    // Named scopes on both sides, and `<`. The first version of this took the last `End` of
+    // any kind as the parent, which the shell's own `End` can satisfy -- so it compared a
+    // value against a maximum that included itself, could never fail, and still carried a
+    // comment claiming it enforced containment.
     let shell_end = sequence
         .iter()
         .position(|(name, category)| *name == "user_bash" && *category == Some(ScopeCategory::End))
         .expect("the inline shell span should close");
     let session_end = sequence
         .iter()
-        .rposition(|(_, category)| *category == Some(ScopeCategory::End))
-        .expect("the session scope should close");
+        .position(|(name, category)| *name == "pi" && *category == Some(ScopeCategory::End))
+        .expect("the pi session scope should close");
     assert!(
-        shell_end <= session_end,
-        "no span may outlive the scope that opened it. sequence: {sequence:?}"
+        shell_end < session_end,
+        "no span may outlive the scope that opened it; the shell span closed at index \
+         {shell_end} against a session scope closing at {session_end}. sequence: {sequence:?}"
     );
     drop(captured);
     deregister_subscriber(subscriber_name).unwrap();

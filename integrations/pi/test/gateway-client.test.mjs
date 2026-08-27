@@ -257,6 +257,17 @@ describe('configFromEnv', () => {
     assert.equal(configFromEnv('s1').timeoutMs, 5000);
   });
 
+  // Node holds a timer delay in a 32-bit int, so an unclamped value above 2^31-1 wraps to
+  // ~1 ms rather than to a long wait -- and a 1 ms timeout faults every gated call, which
+  // under the default fail-open policy stops enforcement without a word. A value too large
+  // to honor has to behave like "effectively never", not like "instantly".
+  it('clamps a timeout too large for a timer instead of letting it wrap to ~1ms', () => {
+    process.env.NEMO_RELAY_PI_TIMEOUT_MS = String(2 ** 31);
+    assert.equal(configFromEnv('s1').timeoutMs, 2_147_483_647);
+    process.env.NEMO_RELAY_PI_TIMEOUT_MS = String(Number.MAX_SAFE_INTEGER);
+    assert.equal(configFromEnv('s1').timeoutMs, 2_147_483_647);
+  });
+
   it('opts into fail-closed only on the exact value', () => {
     process.env.NEMO_RELAY_PI_FAIL = 'closed';
     assert.equal(configFromEnv('s1').onFault, 'closed');

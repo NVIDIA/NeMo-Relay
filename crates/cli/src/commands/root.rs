@@ -89,8 +89,9 @@ pub(crate) enum Command {
                       `nemo-relay doctor pi` to see which path it loads from. Model calls are \
                       routed through the gateway only when the selected model's provider already \
                       targets this gateway's upstream. Tool and turn activity reach Relay \
-                      whenever the gateway is reachable -- the extension fails open by \
-                      default, so an unavailable gateway lets pi carry on unrecorded. \
+                      when the gateway is reachable and no other pi extension preempts the \
+                      hook: the extension fails open by default, so an unavailable gateway \
+                      lets pi carry on unrecorded. \
                       First-time use launches the setup wizard so the `[agents.pi]` block lands \
                       in the XDG user `config.toml`.",
         after_help = "Examples:\n  \

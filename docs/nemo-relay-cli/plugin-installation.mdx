@@ -8,9 +8,16 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 
 Install a persistent integration when you want a coding agent to load NeMo
-Relay without a `nemo-relay` wrapper command. Claude Code and Codex use their
-normal plugin systems; pi has no plugin system, so Relay writes an extension into
-pi's own auto-discovery directory instead. See [pi](/nemo-relay-cli/pi).
+Relay without a `nemo-relay` wrapper command.
+
+**Two different mechanisms live under this one command.** Claude Code and Codex
+take a generated marketplace plugin whose MCP server carries the gateway; the
+sections below describe that path, and everything they say about marketplaces,
+MCP stdio, `--install-dir`, and version gating applies only to those two hosts.
+pi has an extension and package system of its own but no marketplace and no MCP
+client, so `nemo-relay install pi` writes an extension into pi's auto-discovery
+directory and that extension talks to the gateway over plain HTTP. See
+[pi](/nemo-relay-cli/pi) for the whole of the pi path.
 
 Each persistent integration forwards the lifecycle signals that its host
 exposes, including agent, subagent, tool, prompt, compaction, and stop events
@@ -249,6 +256,15 @@ nemo-relay doctor --plugin codex
 nemo-relay doctor --plugin all
 ```
 
+`--plugin` asks about marketplace plugin state, so it does not accept `pi` —
+there is no pi plugin to diagnose, and `--plugin all` covers the marketplace
+hosts only. Diagnose a pi install with its own command, which reports the
+extension's load path, whether pi will trust it, and whether it is up to date:
+
+```bash
+nemo-relay doctor pi
+```
+
 `nemo-relay doctor` includes every persistent integration it finds. It checks
 generated marketplace and plugin files where applicable, the Relay binary and
 hook support, agent version, registration, provider routing, hooks, and sidecar
@@ -285,8 +301,15 @@ Run the command for the installed integration that you want to remove:
 ```bash
 nemo-relay uninstall claude-code
 nemo-relay uninstall codex
+nemo-relay uninstall pi
 nemo-relay uninstall all
 ```
+
+`nemo-relay uninstall pi` removes only the files its install recorded, and only
+while they still match what was written; anything you edited is kept, and a
+directory Relay did not write is never touched. `uninstall all` includes it.
+`--install-dir` addresses the marketplace root, so it is ignored for pi under
+`all` and rejected when you name pi explicitly.
 
 Uninstall removes Codex provider configuration and trust for the exact plugin
 hooks before unregistering the plugin, while Codex can still report its hook

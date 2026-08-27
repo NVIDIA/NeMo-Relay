@@ -652,3 +652,36 @@ fn pricing_validate_dispatch_covers_success_read_and_parse_errors() {
     .to_string();
     assert!(invalid_error.contains("invalid model pricing catalog"));
 }
+
+/// `--install-dir` reaches the hosts it means something for, and no further.
+///
+/// Filtering pi out of `all` instead was the first attempt and it regressed three things:
+/// the exclusion was silent, the "no supported host was detected" error named pi as
+/// undetected when it had been detected and filtered, and `uninstall all --install-dir`
+/// exited 0 leaving a managed extension in place. Clearing the flag keeps every host in the
+/// run.
+#[test]
+fn install_dir_is_cleared_for_pi_under_all_and_kept_everywhere_else() {
+    let dir = std::path::PathBuf::from("/tmp/marketplace");
+    let all = install::InstallTarget::All;
+    let pi_only = install::InstallTarget::Pi;
+
+    assert_eq!(
+        install::scoped_for(CodingAgent::Pi, all, Some(dir.clone())),
+        None,
+        "pi has no marketplace root, so the flag has no meaning for it under `all`"
+    );
+    for agent in [CodingAgent::Codex, CodingAgent::ClaudeCode] {
+        assert_eq!(
+            install::scoped_for(agent, all, Some(dir.clone())),
+            Some(dir.clone()),
+            "{agent:?} still gets the directory the user named"
+        );
+    }
+    assert_eq!(
+        install::scoped_for(CodingAgent::Pi, pi_only, Some(dir.clone())),
+        Some(dir.clone()),
+        "named explicitly, the flag is the user's stated intent and must still error"
+    );
+    assert_eq!(install::scoped_for(CodingAgent::Pi, all, None), None);
+}
