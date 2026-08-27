@@ -1,0 +1,41 @@
+---
+title: "Module config_editor"
+sidebar-title: "config_editor"
+slug: "/reference/api/rust-library-reference/nemo-relay/config_editor"
+description: "Typed configuration editor metadata."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Typed configuration editor metadata.
+
+This module provides a small compile-time reflection surface for interactive configuration editors. Config structs use `editor_config!` to expose ordered field metadata without making editor UIs depend on JSON Schema.
+
+## Structs
+
+- [EditorFieldSpec](/reference/api/rust-library-reference/nemo-relay/config_editor/struct-editorfieldspec): Static editor metadata for one configuration field.
+- [EditorListItemSpec](/reference/api/rust-library-reference/nemo-relay/config_editor/struct-editorlistitemspec): Recursive metadata for one list entry.
+- [EditorSchema](/reference/api/rust-library-reference/nemo-relay/config_editor/struct-editorschema): Static editor metadata for one configuration struct.
+- [EditorTaggedUnionSpec](/reference/api/rust-library-reference/nemo-relay/config_editor/struct-editortaggedunionspec): Metadata used to edit a tagged union value.
+- [EditorVariantSpec](/reference/api/rust-library-reference/nemo-relay/config_editor/struct-editorvariantspec): One selectable variant of a tagged list entry.
+
+## Enums
+
+- [EditorFieldKind](/reference/api/rust-library-reference/nemo-relay/config_editor/enum-editorfieldkind): Editor control shape for one configuration field.
+
+## Statics
+
+- [JSON_LIST_ITEM](/reference/api/rust-library-reference/nemo-relay/config_editor/static-json-list-item): Reusable metadata for a list of arbitrary JSON values.
+- [STRING_LIST_ITEM](/reference/api/rust-library-reference/nemo-relay/config_editor/static-string-list-item): Reusable metadata for a list of strings.
+
+## Traits
+
+- [EditorConfig](/reference/api/rust-library-reference/nemo-relay/config_editor/trait-editorconfig): Trait implemented by configuration structs that expose editor metadata.
+
+## Functions
+
+- [default_json_list_item_value](/reference/api/rust-library-reference/nemo-relay/config_editor/fn-default-json-list-item-value): Default value for a newly added arbitrary JSON list item.
+- [default_string_list_item_value](/reference/api/rust-library-reference/nemo-relay/config_editor/fn-default-string-list-item-value): Default value for a newly added string list item.

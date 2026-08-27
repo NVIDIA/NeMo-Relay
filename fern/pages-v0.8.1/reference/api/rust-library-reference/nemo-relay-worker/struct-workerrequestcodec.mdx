@@ -1,0 +1,48 @@
+---
+title: "Struct Worker Request Codec"
+sidebar-title: "WorkerRequestCodec"
+description: "Invocation-scoped proxy for the active LLM request codec."
+position: 34
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct WorkerRequestCodec { /* private fields */ }
+```
+
+Invocation-scoped proxy for the active LLM request codec.
+
+## Implementations
+
+### `impl WorkerRequestCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-workerrequestcodec\">WorkerRequestCodec</a>"}} /></pre>
+
+#### `decode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn decode(&amp;self, request: &amp;<a href=\"struct-llmrequest\">LlmRequest</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;"}} /></pre>
+
+Decodes an opaque request into its normalized representation.
+
+#### `encode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn encode(\n    &amp;self,\n    annotated: &amp;<a href=\"struct-annotatedllmrequest\">AnnotatedLlmRequest</a>,\n    original: &amp;<a href=\"struct-llmrequest\">LlmRequest</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-llmrequest\">LlmRequest</a>&gt;"}} /></pre>
+
+Encodes normalized request changes onto the original opaque request.
+
+## Trait Implementations
+
+### `impl Clone for WorkerRequestCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-workerrequestcodec\">WorkerRequestCodec</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-workerrequestcodec\">WorkerRequestCodec</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

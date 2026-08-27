@@ -1,0 +1,33 @@
+---
+title: "nemo_relay.event_metadata"
+sidebar-title: "event_metadata"
+description: "Global event metadata injector registration."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/nemo_relay/event_metadata.py`.
+
+Module `nemo_relay.event_metadata`.
+
+Global event metadata injector registration.
+
+## Functions
+
+### `register_injector`
+
+```python
+def register_injector(name: str, priority: int, injector: EventMetadataInjectorCallback) -> None
+```
+
+Register a global event metadata injector.
+
+### `deregister_injector`
+
+```python
+def deregister_injector(name: str) -> bool
+```
+
+Remove a global event metadata injector by registration name.
+

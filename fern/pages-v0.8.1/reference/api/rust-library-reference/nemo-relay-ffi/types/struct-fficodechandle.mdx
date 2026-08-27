@@ -1,0 +1,18 @@
+---
+title: "Struct FfiCodec Handle"
+sidebar-title: "FfiCodecHandle"
+description: "Opaque handle carrying both request and response codec trait objects."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct FfiCodecHandle { /* private fields */ }
+```
+
+Opaque handle carrying both request and response codec trait objects.
+
+Created by `nemo_relay_openai_chat_codec_new` (and similar constructors). Freed by `nemo_relay_codec_free`. The handle carries two `Arc`s pointing to the same underlying codec instance: one for the `LlmCodec` trait and one for the `LlmResponseCodec` trait.

@@ -1,0 +1,81 @@
+---
+title: "Struct Open Telemetry Metric Subscriber"
+sidebar-title: "OpenTelemetryMetricSubscriber"
+slug: "/reference/api/rust-library-reference/nemo-relay/observability/otel_metrics/struct-opentelemetrymetricsubscriber"
+description: "OpenTelemetry metric-backed Relay event subscriber."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct OpenTelemetryMetricSubscriber { /* private fields */ }
+```
+
+OpenTelemetry metric-backed Relay event subscriber.
+
+## Implementations
+
+### `impl OpenTelemetryMetricSubscriber`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-opentelemetrymetricsubscriber\">OpenTelemetryMetricSubscriber</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(config: <a href=\"struct-opentelemetrymetricconfig\">OpenTelemetryMetricConfig</a>) -&gt; <a href=\"../otel/type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+Build an OTLP metric subscriber with an independently owned provider.
+
+#### `subscriber`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn subscriber(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-eventsubscriberfn\">EventSubscriberFn</a>"}} /></pre>
+
+Return the raw Relay subscriber callback.
+
+#### `runtime_diagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn runtime_diagnostics(&amp;self) -&gt; <a href=\"../struct-opentelemetryruntimediagnostics\">OpenTelemetryRuntimeDiagnostics</a>"}} /></pre>
+
+Return a bounded snapshot of runtime diagnostics for this subscriber.
+
+#### `register`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register(&amp;self, name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"../otel/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Register the subscriber globally.
+
+#### `deregister`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn deregister(&amp;self, name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"../otel/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
+
+Deregister a previously registered subscriber.
+
+#### `force_flush`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn force_flush(&amp;self) -&gt; <a href=\"../otel/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Collect and export current metric aggregates immediately.
+
+#### `shutdown`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn shutdown(&amp;self) -&gt; <a href=\"../otel/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Shut down the meter provider, including its final collection.
+
+Deregister this subscriber before calling shutdown.
+
+## Trait Implementations
+
+### `impl Clone for OpenTelemetryMetricSubscriber`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-opentelemetrymetricsubscriber\">OpenTelemetryMetricSubscriber</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-opentelemetrymetricsubscriber\">OpenTelemetryMetricSubscriber</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

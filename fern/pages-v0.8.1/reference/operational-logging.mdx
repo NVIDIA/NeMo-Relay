@@ -1,0 +1,163 @@
+---
+title: "Operational Logging"
+description: "Configure NeMo Relay operational logs through CLI options, environment variables, TOML, or Rust APIs."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Operational logging records diagnostics about the Relay process, including
+startup, configuration, plugins, gateway behavior, and runtime failures. It is
+separate from agent observability through ATOF, ATIF, OpenTelemetry, or
+OpenInference.
+
+Relay writes operational logs to stderr by default. Set `stderr_enabled` to
+`false` to disable that sink; optional file sinks continue receiving records.
+Each record includes a root Relay ID for correlation.
+
+## Defaults
+
+Without configuration, Relay uses:
+
+- `error` as the minimum log level
+- Human-readable stderr output
+- No file sinks
+
+## Choose a Configuration Source
+
+Use the source that matches how Relay is launched:
+
+| Use Case | Configuration Source |
+| --- | --- |
+| Run the Relay CLI with temporary settings | `--log-*` options |
+| Configure a language binding or CLI process | `NEMO_RELAY_LOG*` environment variables |
+| Reuse logging settings across runs | `[logging]` in TOML |
+| Embed Relay in a Rust application | `LoggingConfig` and `LoggingRuntime` |
+
+For CLI processes, Relay selects one source in this order:
+
+1. `--log-*` options or `--log-config-path`
+2. `NEMO_RELAY_LOG*` environment variables
+3. `[logging]` in the resolved Relay `config.toml`
+4. Built-in defaults
+
+Sources are selected rather than merged. Python, Node.js, and Go install a
+process-lifetime `LoggingRuntime` when the binding loads, using environment
+configuration or built-in defaults. Rust applications explicitly choose which
+`LoggingRuntime` initialization method to use and do not apply the CLI
+precedence rules.
+
+## CLI Options
+
+Configure the minimum level and stderr format directly:
+
+```bash
+nemo-relay --log-level debug --log-stderr-format jsonl
+```
+
+Use an absolute TOML path when file sinks or other logging settings are needed:
+
+```bash
+nemo-relay --log-config-path /absolute/path/to/logging.toml
+```
+
+Do not combine `--log-config-path` with `--log-level` or
+`--log-stderr-format`.
+
+## Environment Variables
+
+Set these variables for a Python, Node.js, or Go process, the CLI, or a Rust
+application that initializes logging with
+`LoggingRuntime::configure_from_environment()`:
+
+```bash
+export NEMO_RELAY_LOG=debug
+export NEMO_RELAY_LOG_STDERR=false
+export NEMO_RELAY_LOG_STDERR_FORMAT=jsonl
+```
+
+Supported values are:
+
+- `NEMO_RELAY_LOG`: `error`, `warn`, `info`, `debug`, or `trace`
+- `NEMO_RELAY_LOG_STDERR`: `true` (default) or `false`
+- `NEMO_RELAY_LOG_STDERR_FORMAT`: `human` or `jsonl`
+
+Alternatively, select an absolute TOML file:
+
+```bash
+export NEMO_RELAY_LOG_CONFIG_PATH=/absolute/path/to/logging.toml
+```
+
+`NEMO_RELAY_LOG_CONFIG_PATH` cannot be combined with the other logging
+environment variables.
+
+When none of these variables are set, Python, Node.js, and Go install Relay's
+built-in default logger unless the host already owns Rust's process-global
+`log` facade. They also preserve an existing Relay logger rather than replacing
+it. Records emitted before any logger is installed are discarded, and a host
+cannot install its own logger after Relay has claimed the facade. Set one of
+these variables when Relay must configure its own logging.
+
+This binding behavior differs from
+`LoggingRuntime::configure_from_environment()`, which always attempts to
+install Relay's built-in defaults when no variables are set.
+
+Python and Node.js drain pending file-sink records during normal runtime
+teardown. Go applications that configure file sinks must call
+`nemo_relay.ShutdownLogging` before `main` returns; defer it near the start of
+`main` so it runs after other Relay cleanup.
+
+## TOML Configuration
+
+Logging settings use a `[logging]` table:
+
+```toml
+[logging]
+level = "info"
+stderr_enabled = false
+stderr_format = "human"
+flush_interval_millis = 1000
+
+[[logging.sinks]]
+path = ".nemo-relay/logs/relay.log.jsonl"
+format = "jsonl"
+level = "debug"
+queue_capacity = 1024
+max_file_size_bytes = 10485760
+retained_files = 5
+```
+
+File sink paths are resolved relative to the process working directory. File
+sinks use asynchronous queues, and `queue_capacity` cannot exceed 8,192 entries
+per sink. Size-based rotation is optional; when enabled,
+`max_file_size_bytes` and `retained_files` must be configured together.
+`retained_files` counts backup files in addition to the active file and cannot
+exceed 9. A record larger than `max_file_size_bytes` remains intact rather
+than being split. File sinks remain append-only when rotation settings are
+omitted.
+
+When Relay layers `config.toml` files, the resolved destination `path` is the
+file sink identity. Distinct paths are emitted in highest-to-lowest precedence
+order: system, then explicit-or-user. For matching paths, higher-layer
+fields recursively overlay lower-layer fields, producing one effective sink.
+Path aliases such as `relay.log` and `./relay.log` resolve to one sink, using
+the higher-layer spelling and settings.
+
+## Rust Library API
+
+Initialize operational logging once during application startup by choosing one
+of these public APIs:
+
+- `LoggingRuntime::configure(config)` for a constructed `LoggingConfig`
+- `LoggingRuntime::configure_from_environment()` for environment configuration
+- `LoggingRuntime::configure_from_file_path(path)` for an absolute TOML path
+
+For example:
+
+```rust
+let _logging_runtime =
+    nemo_relay::logging::LoggingRuntime::configure_from_environment()?;
+```
+
+Keep the returned runtime alive until application shutdown so pending file
+records can be flushed.

@@ -1,0 +1,102 @@
+---
+title: "Enum Attribute Value"
+sidebar-title: "AttributeValue"
+description: "Typed OpenTelemetry attribute values, including homogeneous primitive arrays."
+position: 19
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum AttributeValue &#123;\n    String(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    Bool(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>),\n    I64(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i64.html\">i64</a>),\n    F64(<a href=\"struct-finitef64\">FiniteF64</a>),\n    StringArray(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;),\n    BoolArray(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;),\n    I64Array(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i64.html\">i64</a>&gt;),\n    F64Array(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-finitef64\">FiniteF64</a>&gt;),\n&#125;"}} /></pre>
+
+Typed OpenTelemetry attribute values, including homogeneous primitive arrays.
+
+## Variants
+
+### `String(String)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "String(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+
+String scalar.
+
+### `Bool(bool)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Bool(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>)"}} /></pre>
+
+Boolean scalar.
+
+### `I64(i64)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "I64(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i64.html\">i64</a>)"}} /></pre>
+
+Signed integer scalar.
+
+### `F64(FiniteF64)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "F64(<a href=\"struct-finitef64\">FiniteF64</a>)"}} /></pre>
+
+Finite floating-point scalar.
+
+### `StringArray(Vec<String>)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "StringArray(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;)"}} /></pre>
+
+String array.
+
+### `BoolArray(Vec<bool>)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "BoolArray(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;)"}} /></pre>
+
+Boolean array.
+
+### `I64Array(Vec<i64>)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "I64Array(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i64.html\">i64</a>&gt;)"}} /></pre>
+
+Signed integer array.
+
+### `F64Array(Vec<FiniteF64>)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "F64Array(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-finitef64\">FiniteF64</a>&gt;)"}} /></pre>
+
+Finite floating-point array.
+
+## Trait Implementations
+
+### `impl Clone for AttributeValue`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-attributevalue\">AttributeValue</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-attributevalue\">AttributeValue</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for AttributeValue`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-attributevalue\">AttributeValue</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
+
+### `impl PartialEq for AttributeValue`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-attributevalue\">AttributeValue</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-attributevalue\">AttributeValue</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl StructuralPartialEq for AttributeValue`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-attributevalue\">AttributeValue</a>"}} /></pre>

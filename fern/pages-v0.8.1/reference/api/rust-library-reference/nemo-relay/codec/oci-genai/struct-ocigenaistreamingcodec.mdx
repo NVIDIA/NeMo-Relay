@@ -1,0 +1,59 @@
+---
+title: "Struct OCIGenAI Streaming Codec"
+sidebar-title: "OCIGenAIStreamingCodec"
+slug: "/reference/api/rust-library-reference/nemo-relay/codec/oci_genai/struct-ocigenaistreamingcodec"
+description: "Streaming counterpart to `OCIGenAIChatCodec`."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct OCIGenAIStreamingCodec { /* private fields */ }
+```
+
+Streaming counterpart to [`OCIGenAIChatCodec`](/reference/api/rust-library-reference/nemo-relay/codec/oci_genai/struct-ocigenaichatcodec).
+
+Replays the OCI Generative AI SSE event sequence into the same JSON shape a non-streaming `ChatResult` carries (`{modelId, chatResponse: {apiFormat, ...}}`). Once finalized, the assembled JSON can be fed back through [`OCIGenAIChatCodec::decode_response`](/reference/api/rust-library-reference/nemo-relay/codec/oci_genai/struct-ocigenaichatcodec) to produce an [`AnnotatedLlmResponse`](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse) - meaning streaming and non-streaming OCI requests converge on the same observability output.
+
+## Strategy
+
+OCI streams untagged chat-response deltas. `GENERIC` events carry `{index, message: {role, content: [{type: "TEXT", text}], toolCalls}, finishReason}` fragments whose text and tool-call `arguments` accumulate per choice index; `COHERE` events carry incremental `{apiFormat: "COHERE", text}` fragments with `finishReason` on the terminal event. Events wrapped in a `chatResponse` envelope are unwrapped first, and `modelId`/`usage` are captured whenever a chunk supplies them.
+
+Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer closures share access. Each instance is single-use because [`LlmFinalizerFn`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-llmfinalizerfn) consumes the finalize step.
+
+## Implementations
+
+### `impl OCIGenAIStreamingCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-ocigenaistreamingcodec\">OCIGenAIStreamingCodec</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new() -&gt; Self"}} /></pre>
+
+Creates a fresh streaming codec with empty accumulator state.
+
+## Trait Implementations
+
+### `impl Default for OCIGenAIStreamingCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-ocigenaistreamingcodec\">OCIGenAIStreamingCodec</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>
+
+### `impl StreamingCodec for OCIGenAIStreamingCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../streaming/trait-streamingcodec\">StreamingCodec</a> for <a href=\"struct-ocigenaistreamingcodec\">OCIGenAIStreamingCodec</a>"}} /></pre>
+
+#### `collector`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../streaming/trait-streamingcodec\">collector</a>(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-llmcollectorfn\">LlmCollectorFn</a>"}} /></pre>
+
+#### `finalizer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../streaming/trait-streamingcodec\">finalizer</a>(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-llmfinalizerfn\">LlmFinalizerFn</a>"}} /></pre>
