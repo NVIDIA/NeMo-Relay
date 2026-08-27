@@ -57,9 +57,11 @@ pub struct EditorFieldSpec {
     pub nested_schema: Option<fn() -> &'static EditorSchema>,
     /// Default value for a nested section.
     pub nested_default: Option<fn() -> Json>,
-    /// Description of list entries, when [`EditorFieldKind::List`] is used.
+    /// Description of collection entries, when [`EditorFieldKind::List`] or
+    /// [`EditorFieldKind::Map`] is used.
     pub list_item: Option<&'static EditorListItemSpec>,
-    /// Variant metadata, when [`EditorFieldKind::TaggedUnion`] is used.
+    /// Variant metadata, when [`EditorFieldKind::TaggedUnion`] or
+    /// [`EditorFieldKind::DiscriminatedSection`] is used.
     pub tagged_union: Option<&'static EditorTaggedUnionSpec>,
 }
 

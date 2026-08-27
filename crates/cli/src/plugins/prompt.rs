@@ -524,16 +524,19 @@ fn edit_list_value(
         match selection {
             MenuResponse::Selected(0) => {
                 let mut entry = new_editor_item(theme, item)?;
+                let original_entry = entry.clone();
                 edit_editor_item(
                     theme,
                     &format!("{prompt}[{}]", entries.len()),
                     &mut entry,
                     item,
                 )?;
-                value
-                    .as_array_mut()
-                    .expect("list value is an array")
-                    .push(entry);
+                if entry != original_entry {
+                    value
+                        .as_array_mut()
+                        .expect("list value is an array")
+                        .push(entry);
+                }
             }
             MenuResponse::Selected(index) if index <= entries.len() => {
                 edit_existing_list_item(theme, prompt, value, index - 1, item)?;
@@ -1311,7 +1314,11 @@ fn edit_value_field(
         }
         MenuResponse::Selected(1)
         | MenuResponse::Shortcut(MenuShortcut::Reset | MenuShortcut::Clear, _) => {
-            reset_value_field(value, field, default)
+            let previous = value_field_value(value, field.name);
+            reset_value_field(value, field, default);
+            if value_field_value(value, field.name) != previous {
+                reset_discriminated_value_sections(value, schema, field.name);
+            }
         }
         MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
         MenuResponse::Shortcut(MenuShortcut::Preview | MenuShortcut::Save, _) => {
