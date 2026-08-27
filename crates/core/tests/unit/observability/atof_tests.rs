@@ -38,7 +38,7 @@ fn temp_dir(prefix: &str) -> PathBuf {
         .as_nanos();
     let path = std::env::temp_dir().join(format!("nemo-relay-{prefix}-{id}"));
     fs::create_dir_all(&path).unwrap();
-    path
+    path.canonicalize().unwrap()
 }
 
 fn reset_global() {
@@ -1332,6 +1332,30 @@ fn missing_output_directory_is_created() {
     assert_eq!(exporter.path(), Some(output_path.as_path()));
     assert!(output_dir.is_dir());
     assert!(output_path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn output_directory_rejects_symlinked_ancestor() {
+    use std::os::unix::fs::symlink;
+
+    let parent = temp_dir("atof-symlinked-output-parent");
+    let outside = temp_dir("atof-symlinked-output-outside");
+    let link = parent.join("linked");
+    symlink(&outside, &link).unwrap();
+    let output_dir = link.join("atof");
+
+    let error = match AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&output_dir)
+            .with_filename("events.jsonl"),
+    ) {
+        Ok(_) => panic!("expected symlinked output ancestor to be rejected"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(error, AtofExporterError::OpenFile { .. }));
+    assert!(!outside.join("atof").exists());
 }
 
 #[test]

@@ -60,7 +60,7 @@ fn temp_dir(prefix: &str) -> PathBuf {
         .as_nanos();
     let path = std::env::temp_dir().join(format!("nemo-relay-{prefix}-{id}"));
     fs::create_dir_all(&path).unwrap();
-    path
+    path.canonicalize().unwrap()
 }
 
 #[cfg(feature = "atof-streaming")]
@@ -3403,21 +3403,47 @@ fn atif_local_write_replaces_regular_files_privately_and_rejects_symlinks() {
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("trajectory.json");
-    write_atif_local(dir.path(), &path, b"first").unwrap();
-    write_atif_local(dir.path(), &path, b"second").unwrap();
+    let dir_path = dir.path().canonicalize().unwrap();
+    let path = dir_path.join("trajectory.json");
+    write_atif_local(&dir_path, &path, b"first").unwrap();
+    write_atif_local(&dir_path, &path, b"second").unwrap();
     assert_eq!(fs::read(&path).unwrap(), b"second");
     assert_eq!(
         fs::metadata(&path).unwrap().permissions().mode() & 0o777,
         0o600
     );
 
-    let target = dir.path().join("target.json");
+    let target = dir_path.join("target.json");
     fs::write(&target, b"preserve").unwrap();
-    let link = dir.path().join("link.json");
+    let link = dir_path.join("link.json");
     symlink(&target, &link).unwrap();
-    assert!(write_atif_local(dir.path(), &link, b"overwrite").is_err());
+    assert!(write_atif_local(&dir_path, &link, b"overwrite").is_err());
     assert_eq!(fs::read(target).unwrap(), b"preserve");
+
+    let outside = tempfile::tempdir().unwrap();
+    let outside_path = outside.path().canonicalize().unwrap();
+    let linked_parent = dir_path.join("linked-parent");
+    symlink(&outside_path, &linked_parent).unwrap();
+    assert!(write_atif_local(&dir_path, &linked_parent.join("escaped.json"), b"escape").is_err());
+    assert!(!outside_path.join("escaped.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn atif_local_write_rejects_symlinked_output_root_ancestor() {
+    use std::os::unix::fs::symlink;
+
+    let parent = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let parent_path = parent.path().canonicalize().unwrap();
+    let outside_path = outside.path().canonicalize().unwrap();
+    let link = parent_path.join("linked");
+    symlink(&outside_path, &link).unwrap();
+    let root = link.join("atif");
+    let path = root.join("trajectory.json");
+
+    assert!(write_atif_local(&root, &path, b"escape").is_err());
+    assert!(!outside_path.join("atif").exists());
 }
 
 #[test]
