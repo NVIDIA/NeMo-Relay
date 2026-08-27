@@ -200,6 +200,7 @@ fn register_codec_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAnthropicMessagesCodec>()?;
     m.add_class::<PyOCIGenAIChatCodec>()?;
     m.add_class::<PyGeminiGenerateContentCodec>()?;
+    m.add_class::<PyBedrockConverseCodec>()?;
     Ok(())
 }
 

@@ -11,7 +11,7 @@ export type LlmCodecIdentity =
   | { kind: 'none' }
   | {
       kind: 'builtin';
-      id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'oci_genai' | 'gemini_generate_content';
+      id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'oci_genai' | 'gemini_generate_content' | 'bedrock_converse';
     }
   | { kind: 'runtime'; id: string }
   | { kind: 'opaque' };

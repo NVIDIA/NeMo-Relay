@@ -15,7 +15,6 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
-use crate::codec::resolve::supported_codec_names;
 use crate::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
@@ -37,6 +36,16 @@ use remote::register_remote_backend;
     note = "the built-in NeMo Guardrails plugin is scheduled for removal in 0.9; no replacement is available in 0.8"
 )]
 pub const NEMO_GUARDRAILS_PLUGIN_KIND: &str = "nemo_guardrails";
+
+// Keep this list local to the deprecated integration. New core codecs must not
+// become Guardrails-supported merely because Relay can normalize them.
+const NEMO_GUARDRAILS_CODECS: &[&str] = &[
+    "openai_chat",
+    "openai_responses",
+    "anthropic_messages",
+    "oci_genai",
+    "gemini_generate_content",
+];
 
 /// Stable diagnostic code for the built-in plugin's deprecation warning.
 const NEMO_GUARDRAILS_DEPRECATION_CODE: &str = "nemo_guardrails.deprecated";
@@ -998,7 +1007,7 @@ fn validate_codec_requirements(
         return;
     };
 
-    if !supported_codec_names().contains(&codec) {
+    if !NEMO_GUARDRAILS_CODECS.contains(&codec) {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
@@ -1007,7 +1016,7 @@ fn validate_codec_requirements(
             Some("codec".to_string()),
             format!(
                 "codec must be one of: {}",
-                supported_codec_names().join(", ")
+                NEMO_GUARDRAILS_CODECS.join(", ")
             ),
         );
     }

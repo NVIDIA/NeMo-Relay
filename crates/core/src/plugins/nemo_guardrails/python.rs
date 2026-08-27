@@ -904,14 +904,15 @@ impl LocalGuardrailsCodec {
         }
     }
 
-    fn from_provider_surface(surface: ProviderSurface) -> Self {
-        match surface {
+    fn from_provider_surface(surface: ProviderSurface) -> Option<Self> {
+        Some(match surface {
             ProviderSurface::OpenAIChat => Self::OpenAIChat,
             ProviderSurface::OpenAIResponses => Self::OpenAIResponses,
             ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
             ProviderSurface::OCIGenAI => Self::OCIGenAI,
             ProviderSurface::GeminiGenerateContent => Self::GeminiGenerateContent,
-        }
+            ProviderSurface::BedrockConverse => return None,
+        })
     }
 
     fn decode(&self, request: &LlmRequest) -> FlowResult<AnnotatedLlmRequest> {
@@ -941,7 +942,13 @@ fn resolve_codec(config: &NeMoGuardrailsConfig) -> PluginResult<Option<LocalGuar
 
     match config.codec.as_deref() {
         Some(name) => match ProviderSurface::from_codec_name(name) {
-            Some(surface) => Ok(Some(LocalGuardrailsCodec::from_provider_surface(surface))),
+            Some(surface) => LocalGuardrailsCodec::from_provider_surface(surface)
+                .map(Some)
+                .ok_or_else(|| {
+                    PluginError::InvalidConfig(format!(
+                        "the deprecated local NeMo Guardrails plugin does not support codec '{name}'"
+                    ))
+                }),
             None => Err(PluginError::InvalidConfig(format!(
                 "unsupported local NeMo Guardrails codec '{name}'"
             ))),

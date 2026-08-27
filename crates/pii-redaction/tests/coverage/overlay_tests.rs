@@ -923,3 +923,62 @@ fn oci_genai_overlay_maps_every_finish_reason_variant() {
         assert_eq!(overlaid["chatResponse"]["finishReason"], json!(v2));
     }
 }
+
+#[test]
+fn bedrock_converse_overlay_rewrites_text_and_tool_calls_without_touching_native_blocks() {
+    let payload = json!({
+        "output": {"message": {"role": "assistant", "content": [
+            {"text": "Alex Example"},
+            {"reasoningContent": {"reasoningText": {"text": "native"}}},
+            {"toolUse": {
+                "toolUseId": "call-1",
+                "name": "lookup",
+                "input": {"email": "alex@example.com"}
+            }}
+        ]}},
+        "stopReason": "tool_use"
+    });
+    let annotated = AnnotatedLlmResponse {
+        message: Some(MessageContent::Parts(vec![ContentPart::Text {
+            text: "[REDACTED]".into(),
+            extra: Default::default(),
+        }])),
+        tool_calls: Some(vec![tool_call(
+            "call-1",
+            "lookup",
+            json!({"email": "[REDACTED]"}),
+        )]),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::BedrockConverse.overlay_response_payload(payload, &annotated);
+    let content = &overlaid["output"]["message"]["content"];
+    assert_eq!(content[0]["text"], "[REDACTED]");
+    assert_eq!(
+        content[1]["reasoningContent"]["reasoningText"]["text"],
+        "native"
+    );
+    assert_eq!(content[2]["toolUse"]["input"]["email"], "[REDACTED]");
+}
+
+#[test]
+fn bedrock_converse_overlay_drops_unmatched_tool_uses() {
+    let payload = json!({
+        "output": {"message": {"role": "assistant", "content": [
+            {"toolUse": {"toolUseId": "call-1", "name": "one", "input": {}}},
+            {"toolUse": {"toolUseId": "call-2", "name": "two", "input": {}}}
+        ]}}
+    });
+    let annotated = AnnotatedLlmResponse {
+        tool_calls: Some(vec![tool_call("call-1", "one", json!({}))]),
+        ..AnnotatedLlmResponse::default()
+    };
+    let overlaid = BuiltinCodecName::BedrockConverse.overlay_response_payload(payload, &annotated);
+    assert_eq!(
+        overlaid["output"]["message"]["content"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}

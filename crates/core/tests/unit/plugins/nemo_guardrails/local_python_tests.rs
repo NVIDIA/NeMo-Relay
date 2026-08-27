@@ -696,10 +696,15 @@ fn local_codec_and_rewrite_helpers_cover_all_provider_surfaces() {
     ] {
         assert_eq!(codec.provider_surface(), surface);
         assert_eq!(
-            LocalGuardrailsCodec::from_provider_surface(surface).provider_surface(),
+            LocalGuardrailsCodec::from_provider_surface(surface)
+                .expect("supported Guardrails surface")
+                .provider_surface(),
             surface
         );
     }
+    assert!(
+        LocalGuardrailsCodec::from_provider_surface(ProviderSurface::BedrockConverse).is_none()
+    );
 
     let mut config = NeMoGuardrailsConfig {
         input: false,

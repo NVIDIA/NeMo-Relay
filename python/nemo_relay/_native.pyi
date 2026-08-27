@@ -1443,6 +1443,22 @@ class GeminiGenerateContentCodec:
         """Decode a Gemini response into a normalized response view."""
         ...
 
+class BedrockConverseCodec:
+    """Built-in codec for Amazon Bedrock Converse requests and responses."""
+
+    def __init__(self) -> None:
+        """Create a Bedrock Converse codec."""
+        ...
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+        """Decode a JSON-compatible Converse SDK call envelope."""
+        ...
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+        """Merge normalized edits into the original Converse call envelope."""
+        ...
+    def decode_response(self, response: _Json) -> AnnotatedLLMResponse:
+        """Decode a buffered Converse response."""
+        ...
+
 class AdaptiveRuntime:
     """Hosted adaptive runtime bridge implemented by the native extension.
 

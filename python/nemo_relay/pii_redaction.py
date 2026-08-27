@@ -139,7 +139,14 @@ class PiiRedactionConfig:
     mark: bool = True
     priority: int = 100
     codec: (
-        Literal["openai_chat", "openai_responses", "anthropic_messages", "oci_genai", "gemini_generate_content"]
+        Literal[
+            "openai_chat",
+            "openai_responses",
+            "anthropic_messages",
+            "oci_genai",
+            "gemini_generate_content",
+            "bedrock_converse",
+        ]
         | str
         | None
     ) = None

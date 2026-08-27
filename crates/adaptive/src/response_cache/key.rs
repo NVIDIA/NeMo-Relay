@@ -60,7 +60,7 @@ pub fn build_cache_key(
     request: &LlmRequest,
     config: &ResponseCacheConfig,
 ) -> KeyOutcome {
-    if let Some(reason) = cache_bypass_reason(request, config) {
+    if let Some(reason) = cache_bypass_reason(provider, request, config) {
         return KeyOutcome::Bypass(reason);
     }
 
@@ -78,11 +78,11 @@ pub fn build_cache_key(
         normalize_tool_call_ids(object);
     }
 
-    if config.key_strategy == ResponseCacheKeyStrategy::Logical
-        && let Some(object) = body.as_object_mut()
-        && let Some(tools) = object.get("tools").cloned()
-    {
-        object.insert("tools".to_string(), structural_tool_schema(&tools));
+    if config.key_strategy == ResponseCacheKeyStrategy::Logical {
+        canonicalize_logical_tools(
+            &mut body,
+            detected_bedrock_converse(provider, &request.content),
+        );
     }
 
     let header_allowlist = normalized_header_allowlist(&config.header_allowlist);
@@ -117,7 +117,11 @@ pub fn build_cache_key(
     }
 }
 
-fn cache_bypass_reason(request: &LlmRequest, config: &ResponseCacheConfig) -> Option<CacheReason> {
+fn cache_bypass_reason(
+    provider: &str,
+    request: &LlmRequest,
+    config: &ResponseCacheConfig,
+) -> Option<CacheReason> {
     if request.content.is_null() {
         return Some(CacheReason::UnparseableBody);
     }
@@ -129,7 +133,8 @@ fn cache_bypass_reason(request: &LlmRequest, config: &ResponseCacheConfig) -> Op
         return Some(reason);
     }
     (!config.cache_nondeterministic
-        && request_temperature(&request.content).is_none_or(|temperature| temperature > 0.0))
+        && request_temperature(provider, &request.content)
+            .is_none_or(|temperature| temperature > 0.0))
     .then_some(CacheReason::NondeterministicTemperature)
 }
 
@@ -428,6 +433,9 @@ fn lossy_request_shape(surface: ProviderSurface, content: &Json) -> bool {
                     .and_then(Json::as_array)
                     .is_some_and(|items| items.iter().any(lossy_gemini_content_item))
         }
+        // Bedrock-only request fields are preserved through the codec rather
+        // than fully normalized, so keep cache keys on the raw request.
+        ProviderSurface::BedrockConverse => true,
     }
 }
 
@@ -598,7 +606,7 @@ fn raw_has_messages(request: &LlmRequest) -> bool {
     non_empty_array("messages") || non_empty_array("input")
 }
 
-fn request_temperature(content: &Json) -> Option<f64> {
+fn request_temperature(provider: &str, content: &Json) -> Option<f64> {
     content
         .get("temperature")
         .and_then(Json::as_f64)
@@ -607,6 +615,20 @@ fn request_temperature(content: &Json) -> Option<f64> {
                 .pointer("/params/temperature")
                 .and_then(Json::as_f64)
         })
+        .or_else(|| {
+            detected_bedrock_converse(provider, content)
+                .then(|| {
+                    content
+                        .pointer("/inferenceConfig/temperature")
+                        .and_then(Json::as_f64)
+                })
+                .flatten()
+        })
+}
+
+fn detected_bedrock_converse(provider: &str, content: &Json) -> bool {
+    detect_request_surface_with_hint(content, Some(provider))
+        == Some(ProviderSurface::BedrockConverse)
 }
 
 /// Keeps only allowlisted headers, matched case-insensitively and emitted with
@@ -719,6 +741,31 @@ fn structural_tool_schema(tools: &Json) -> Json {
     entries
         .sort_by_cached_key(|entry| serde_json_canonicalizer::to_string(entry).unwrap_or_default());
     Json::Array(entries)
+}
+
+/// Applies the `logical` tool projection to provider-native tool locations.
+///
+/// Most supported providers put their tool array at the request root. Bedrock
+/// Converse nests it under `toolConfig`; only that array is projected so
+/// sibling controls such as `toolChoice` remain part of the cache key.
+fn canonicalize_logical_tools(body: &mut Json, bedrock_converse: bool) {
+    let Some(object) = body.as_object_mut() else {
+        return;
+    };
+
+    if let Some(tools) = object.get("tools").cloned() {
+        object.insert("tools".to_string(), structural_tool_schema(&tools));
+    }
+
+    if !bedrock_converse {
+        return;
+    }
+
+    if let Some(tool_config) = object.get_mut("toolConfig").and_then(Json::as_object_mut)
+        && let Some(tools) = tool_config.get("tools").cloned()
+    {
+        tool_config.insert("tools".to_string(), structural_tool_schema(&tools));
+    }
 }
 
 /// Removes every string-valued `description` key, at any depth. A non-string

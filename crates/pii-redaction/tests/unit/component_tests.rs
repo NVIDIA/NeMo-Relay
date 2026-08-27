@@ -29,6 +29,7 @@ use crate::api::tool::{
     ToolCallEndParams, ToolCallExecuteParams, ToolCallParams, ToolExecutionResult, tool_call,
     tool_call_end, tool_call_execute,
 };
+use crate::codec::bedrock_converse::BedrockConverseCodec;
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::openai_responses::OpenAIResponsesCodec;
 use crate::codec::request::AnnotatedLlmRequest;
@@ -784,6 +785,91 @@ async fn normalized_llm_response_paths_use_the_active_oci_genai_codec_identity()
         sanitized["chatResponse"]["choices"][0]["message"]["content"][0]["text"],
         json!("[REDACTED]")
     );
+}
+
+#[tokio::test]
+async fn normalized_llm_paths_use_the_active_bedrock_converse_codec_capability() {
+    let backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "regex_replace".to_string(),
+            pattern: Some("sk-[A-Za-z0-9_-]+".to_string()),
+            replacement: Some("[REDACTED]".to_string()),
+            target_paths: vec![
+                "/messages/0/content/0/text".to_string(),
+                "/message/0/text".to_string(),
+            ],
+            ..BuiltinBackendConfig::default()
+        },
+        None,
+    )
+    .unwrap();
+    let sanitize_request = crate::builtin::llm_sanitize_request_callback(backend.clone());
+    let sanitize_response = crate::builtin::llm_sanitize_response_callback(backend);
+
+    let sanitized_request = sanitize_request(
+        LlmRequest {
+            headers: serde_json::Map::new(),
+            content: json!({
+                "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"text": "contact sk-bedrock-request"},
+                        {"image": {"format": "png", "source": {"bytes": "AAAA"}}}
+                    ]
+                }],
+                "inferenceConfig": {"temperature": 0.0},
+                "requestMetadata": {"tenant": "preserved"}
+            }),
+        },
+        LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(BedrockConverseCodec))),
+    )
+    .await
+    .expect("Bedrock request sanitizer should succeed")
+    .expect("Bedrock request sanitizer should retain the payload");
+    assert_eq!(
+        sanitized_request.content["messages"][0]["content"][0]["text"],
+        json!("contact [REDACTED]")
+    );
+    assert_eq!(
+        sanitized_request.content["messages"][0]["content"][1],
+        json!({"image": {"format": "png", "source": {"bytes": "AAAA"}}})
+    );
+    assert_eq!(
+        sanitized_request.content["requestMetadata"]["tenant"],
+        json!("preserved")
+    );
+
+    let sanitized_response = sanitize_response(
+        json!({
+            "output": {"message": {"role": "assistant", "content": [
+                {"text": "result sk-bedrock-response"},
+                {"reasoningContent": {"reasoningText": {"text": "provider-native"}}}
+            ]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 7, "outputTokens": 3, "totalTokens": 10},
+            "metrics": {"latencyMs": 25}
+        }),
+        LlmSanitizeResponseContext::for_response_codec(Some(Arc::new(BedrockConverseCodec))),
+    )
+    .await
+    .expect("Bedrock response sanitizer should succeed")
+    .expect("Bedrock response sanitizer should retain the payload");
+    assert_eq!(
+        sanitized_response["output"]["message"]["content"][0]["text"],
+        json!("result [REDACTED]")
+    );
+    assert_eq!(
+        sanitized_response["output"]["message"]["content"][1],
+        json!({"reasoningContent": {"reasoningText": {"text": "provider-native"}}})
+    );
+    assert_eq!(sanitized_response["usage"]["totalTokens"], json!(10));
+    assert_eq!(sanitized_response["metrics"]["latencyMs"], json!(25));
+
+    let serialized_request = serde_json::to_string(&sanitized_request).unwrap();
+    let serialized_response = serde_json::to_string(&sanitized_response).unwrap();
+    assert!(!serialized_request.contains("sk-bedrock-request"));
+    assert!(!serialized_response.contains("sk-bedrock-response"));
 }
 
 #[tokio::test]

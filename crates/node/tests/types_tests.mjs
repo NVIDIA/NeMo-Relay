@@ -27,6 +27,7 @@ describe('Type constants', () => {
     assert.equal(typeof lib.AnthropicMessagesCodec, 'function');
     assert.equal(typeof lib.OCIGenAIChatCodec, 'function');
     assert.equal(typeof lib.GeminiGenerateContentCodec, 'function');
+    assert.equal(typeof lib.BedrockConverseCodec, 'function');
   });
 
   it('scope type enum values', () => {
@@ -337,5 +338,44 @@ describe('GeminiGenerateContentCodec', () => {
       }),
       /parts.*text must be a string/,
     );
+  });
+});
+
+// ===========================================================================
+// BedrockConverseCodec
+// ===========================================================================
+
+describe('BedrockConverseCodec', () => {
+  const { BedrockConverseCodec } = lib;
+
+  it('round-trips a JSON-compatible SDK envelope', () => {
+    const codec = new BedrockConverseCodec();
+    const request = {
+      headers: {},
+      content: {
+        modelId: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+        messages: [{ role: 'user', content: [{ text: 'hello' }] }],
+        inferenceConfig: { temperature: 0.2, maxTokens: 128 },
+        requestMetadata: { tenant: 'example' },
+      },
+    };
+    const annotated = codec.decode(request);
+    assert.equal(annotated.model, request.content.modelId);
+    assert.equal(annotated.messages[0].role, 'user');
+    assert.deepEqual(codec.encode(annotated, request), request);
+  });
+
+  it('decodes response text, usage, and stop reason without inventing a model', () => {
+    const codec = new BedrockConverseCodec();
+    const response = codec.decodeResponse({
+      output: { message: { role: 'assistant', content: [{ text: 'hi' }] } },
+      stopReason: 'end_turn',
+      usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 },
+      metrics: { latencyMs: 12 },
+    });
+    assert.deepEqual(response.message, [{ type: 'text', text: 'hi' }]);
+    assert.equal(response.finish_reason, 'complete');
+    assert.equal(response.model, undefined);
+    assert.equal(response.usage?.prompt_tokens, 4);
   });
 });

@@ -32,6 +32,7 @@ use crate::api::scope::{COMPACTION_EVENT_NAME, EmitMarkEventParams, event};
 use crate::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use crate::codec::anthropic::AnthropicMessagesCodec;
+use crate::codec::bedrock_converse::BedrockConverseCodec;
 use crate::codec::oci_genai::OCIGenAIChatCodec;
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::openai_responses::OpenAIResponsesCodec;
@@ -1124,6 +1125,141 @@ fn request_projection_handles_history_edge_cases() {
     };
     project_llm_request_to_current_user_turn(&mut request, &mut annotated, Some(&OpenAIChatCodec));
     assert!(Arc::ptr_eq(annotated.as_ref().unwrap(), &original));
+}
+
+#[test]
+fn bedrock_tool_result_envelope_continues_the_current_user_turn() {
+    let codec = BedrockConverseCodec;
+    let mut request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "modelId": "amazon.nova-pro-v1:0",
+            "messages": [
+                {"role": "user", "content": [{"text": "earlier question"}]},
+                {"role": "assistant", "content": [{"text": "earlier answer"}]},
+                {"role": "user", "content": [{"text": "latest question"}]},
+                {"role": "assistant", "content": [{"toolUse": {
+                    "toolUseId": "call-1",
+                    "name": "search",
+                    "input": {"query": "latest"}
+                }}]},
+                {"role": "user", "content": [{"toolResult": {
+                    "toolUseId": "call-1",
+                    "content": [{"text": "latest result"}],
+                    "status": "success"
+                }}]}
+            ]
+        }),
+    };
+    let mut annotated = Some(Arc::new(codec.decode(&request).unwrap()));
+
+    project_llm_request_to_current_user_turn(&mut request, &mut annotated, Some(&codec));
+
+    let messages = request.content["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[0]["content"][0]["text"], "latest question");
+    assert!(messages[1]["content"][0].get("toolUse").is_some());
+    assert!(messages[2]["content"][0].get("toolResult").is_some());
+    assert_eq!(annotated.unwrap().messages.len(), 3);
+}
+
+#[test]
+fn managed_bedrock_events_retain_the_complete_tool_continuation() {
+    let _guard = lock_global_runtime();
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "managed-bedrock-tool-continuation",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "modelId": "amazon.nova-pro-v1:0",
+            "messages": [
+                {"role": "user", "content": [{"text": "earlier question"}]},
+                {"role": "assistant", "content": [{"text": "earlier answer"}]},
+                {"role": "user", "content": [{"text": "latest question"}]},
+                {"role": "assistant", "content": [{"toolUse": {
+                    "toolUseId": "call-1",
+                    "name": "search",
+                    "input": {"query": "latest"}
+                }}]},
+                {"role": "user", "content": [{"toolResult": {
+                    "toolUseId": "call-1",
+                    "content": [{"text": "latest result"}],
+                    "status": "success"
+                }}]}
+            ]
+        }),
+    };
+    let initial_request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "modelId": "amazon.nova-pro-v1:0",
+            "messages": [
+                {"role": "user", "content": [{"text": "earlier question"}]},
+                {"role": "assistant", "content": [{"text": "earlier answer"}]},
+                {"role": "user", "content": [{"text": "latest question"}]}
+            ]
+        }),
+    };
+    let codec: Arc<dyn LlmCodec> = Arc::new(BedrockConverseCodec);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        for (name, call_request, expected_messages) in [
+            ("bedrock-fresh", initial_request, 3),
+            ("bedrock-continuation", request, 5),
+        ] {
+            llm_call_execute(
+                LlmCallExecuteParams::builder()
+                    .name(name)
+                    .request(call_request)
+                    .func(Arc::new(move |request| {
+                        Box::pin(async move {
+                            assert_eq!(
+                                request.content["messages"].as_array().unwrap().len(),
+                                expected_messages
+                            );
+                            Ok(json!({"response": "ok"}))
+                        })
+                    }))
+                    .codec(codec.clone())
+                    .build(),
+            )
+            .await
+            .unwrap();
+        }
+    });
+
+    flush_subscribers().unwrap();
+    assert!(deregister_subscriber("managed-bedrock-tool-continuation").unwrap());
+    let events = events.lock().unwrap();
+    let start = events
+        .iter()
+        .find(|event| {
+            event.name() == "bedrock-continuation"
+                && event.scope_category() == Some(ScopeCategory::Start)
+        })
+        .expect("missing projected Bedrock LLM start event");
+    let messages = start.input().unwrap()["content"]["messages"]
+        .as_array()
+        .unwrap();
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[0]["content"][0]["text"], "latest question");
+    assert!(messages[1]["content"][0].get("toolUse").is_some());
+    assert!(messages[2]["content"][0].get("toolResult").is_some());
+    assert_eq!(start.annotated_request().unwrap().messages.len(), 3);
+    assert!(
+        !serde_json::to_string(start)
+            .unwrap()
+            .contains("earlier question")
+    );
 }
 
 #[test]

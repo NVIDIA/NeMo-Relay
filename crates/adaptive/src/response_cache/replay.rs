@@ -90,6 +90,9 @@ fn synthesize_replay_chunks(aggregate: &Json) -> Option<Vec<Json>> {
         // re-aggregates it and rejects shapes the streaming collector cannot
         // preserve exactly.
         ProviderSurface::GeminiGenerateContent => vec![aggregate.clone()],
+        // A Converse aggregate is not a valid ConverseStream event. Native
+        // replay requires event synthesis and is deliberately deferred.
+        ProviderSurface::BedrockConverse => return None,
     })
 }
 

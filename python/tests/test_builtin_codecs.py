@@ -5,8 +5,9 @@
 
 Covers:
 - Built-in codec construction for OpenAIChatCodec, OpenAIResponsesCodec,
-  AnthropicMessagesCodec, OCIGenAIChatCodec, and GeminiGenerateContentCodec
-- Built-in codec decode/encode/decode_response methods for all five providers
+  AnthropicMessagesCodec, OCIGenAIChatCodec, GeminiGenerateContentCodec, and
+  BedrockConverseCodec
+- Built-in codec decode/encode/decode_response methods for all six providers
 - LlmResponseCodec protocol
 - response_codec parameter accepts object (not string)
 """
@@ -25,6 +26,7 @@ from nemo_relay import (
 )
 from nemo_relay.codecs import (
     AnthropicMessagesCodec,
+    BedrockConverseCodec,
     GeminiGenerateContentCodec,
     OCIGenAIChatCodec,
     OpenAIChatCodec,
@@ -93,6 +95,12 @@ class TestBuiltinCodecConstruction:
     def test_gemini_codec_has_methods(self):
         """GeminiGenerateContentCodec has decode, encode, decode_response methods."""
         codec = GeminiGenerateContentCodec()
+        assert hasattr(codec, "decode")
+        assert hasattr(codec, "encode")
+        assert hasattr(codec, "decode_response")
+
+    def test_bedrock_converse_codec_constructable(self):
+        codec = BedrockConverseCodec()
         assert hasattr(codec, "decode")
         assert hasattr(codec, "encode")
         assert hasattr(codec, "decode_response")
@@ -475,6 +483,36 @@ class TestBuiltinCodecDecodeResponse:
         assert tool_calls[0]["id"] == "call_abc"
         assert tool_calls[0]["name"] == "get_weather"
 
+    def test_bedrock_converse_codec_round_trip_and_response(self):
+        codec = BedrockConverseCodec()
+        original = LLMRequest(
+            {},
+            {
+                "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+                "messages": [{"role": "user", "content": [{"text": "hello"}]}],
+                "inferenceConfig": {"temperature": 0.2, "maxTokens": 128},
+                "requestMetadata": {"tenant": "example"},
+            },
+        )
+        annotated = codec.decode(original)
+        assert annotated.model == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+        assert annotated.messages[0]["role"] == "user"
+        assert codec.encode(annotated, original).content == original.content
+
+        response = codec.decode_response(
+            {
+                "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 4, "outputTokens": 2, "totalTokens": 6},
+                "metrics": {"latencyMs": 12},
+            }
+        )
+        assert response.response_text() == "hi"
+        assert response.finish_reason == "complete"
+        assert response.model is None
+        assert response.usage is not None
+        assert response.usage["prompt_tokens"] == 4
+
 
 # ---------------------------------------------------------------------------
 # 4. LlmResponseCodec protocol
@@ -498,6 +536,7 @@ class TestLlmResponseCodecProtocol:
         assert isinstance(OCIGenAIChatCodec(), LlmResponseCodec)
 
         assert isinstance(GeminiGenerateContentCodec(), LlmResponseCodec)
+        assert isinstance(BedrockConverseCodec(), LlmResponseCodec)
 
 
 # ---------------------------------------------------------------------------
@@ -772,6 +811,7 @@ class TestBuiltinCodecImports:
         """Built-in codecs are importable from nemo_relay.codecs."""
         from nemo_relay.codecs import (
             AnthropicMessagesCodec,
+            BedrockConverseCodec,
             GeminiGenerateContentCodec,
             OpenAIChatCodec,
             OpenAIResponsesCodec,
@@ -781,6 +821,7 @@ class TestBuiltinCodecImports:
         assert OpenAIResponsesCodec is not None
         assert AnthropicMessagesCodec is not None
         assert GeminiGenerateContentCodec is not None
+        assert BedrockConverseCodec is not None
 
     def test_not_reexported_from_top_level(self):
         """Built-in codecs are not re-exported from nemo_relay."""
@@ -788,3 +829,4 @@ class TestBuiltinCodecImports:
         assert not hasattr(nemo_relay, "OpenAIResponsesCodec")
         assert not hasattr(nemo_relay, "AnthropicMessagesCodec")
         assert not hasattr(nemo_relay, "GeminiGenerateContentCodec")
+        assert not hasattr(nemo_relay, "BedrockConverseCodec")

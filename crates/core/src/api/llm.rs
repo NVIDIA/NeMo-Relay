@@ -36,8 +36,8 @@ use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle, metadata_with_log_severity};
 use crate::api::shared::{
     ensure_runtime_owner, inject_dynamo_session_ids, inject_traceparent, inject_traceparent_value,
-    metadata_with_otel_error, metadata_with_otel_status, resolve_parent_uuid,
-    run_request_intercepts_with_codec_and_recorder, snapshot_event_sanitizers,
+    message_starts_new_user_turn, metadata_with_otel_error, metadata_with_otel_status,
+    resolve_parent_uuid, run_request_intercepts_with_codec_and_recorder, snapshot_event_sanitizers,
     snapshot_event_subscribers,
 };
 use crate::codec::request::{AnnotatedLlmRequest, Message};
@@ -385,7 +385,7 @@ fn project_llm_request_to_current_user_turn(
     };
     if !request_turn_projection_needed(
         &annotation.messages,
-        &|message| matches!(message, Message::User { .. }),
+        &message_starts_new_user_turn,
         &|message| matches!(message, Message::System { .. }),
     ) {
         return;
@@ -416,7 +416,7 @@ fn limit_annotated_request_history_to_current_user_turn(
 ) -> bool {
     retain_current_request_turn(
         &mut annotated_request.messages,
-        |message| matches!(message, Message::User { .. }),
+        message_starts_new_user_turn,
         |message| matches!(message, Message::System { .. }),
     )
 }

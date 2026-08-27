@@ -245,6 +245,33 @@ fn legacy_skip_keys_cannot_collapse_raw_fallback_fields() {
 }
 
 #[test]
+fn bedrock_converse_keys_use_the_raw_envelope() {
+    let config = cache_all_config();
+    let make = |tenant: &str| {
+        request(json!({
+            "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "messages": [{"role": "user", "content": [{"text": "hi"}]}],
+            "requestMetadata": {"tenant": tenant}
+        }))
+    };
+    let first = make("alpha");
+    let second = make("beta");
+
+    for request in [&first, &second] {
+        assert_eq!(
+            resolved_body("aws.bedrock.converse", request).1,
+            None,
+            "Bedrock Converse cache keys must retain the complete raw request envelope"
+        );
+    }
+    assert_ne!(
+        key_of("aws.bedrock.converse", &first, &config),
+        key_of("aws.bedrock.converse", &second, &config),
+        "an unmodeled Bedrock request field can affect the answer and must partition cache entries"
+    );
+}
+
+#[test]
 fn namespace_and_provider_separate_keys() {
     let request = request(json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]}));
     let ns_a = ResponseCacheConfig {
@@ -576,6 +603,41 @@ fn nondeterministic_calls_bypass_only_when_disabled() {
         build_cache_key("openai", &sampled, &opt_in),
         KeyOutcome::Key(_)
     ));
+}
+
+#[test]
+fn bedrock_converse_uses_nested_temperature_for_cache_eligibility() {
+    let with_temperature = |temperature: f64| {
+        request(json!({
+            "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "messages": [{"role": "user", "content": [{"text": "hi"}]}],
+            "inferenceConfig": {"temperature": temperature}
+        }))
+    };
+    let config = ResponseCacheConfig::default();
+
+    assert!(matches!(
+        build_cache_key("aws.bedrock.converse", &with_temperature(0.0), &config),
+        KeyOutcome::Key(_)
+    ));
+    assert_eq!(
+        build_cache_key("aws.bedrock.converse", &with_temperature(0.7), &config),
+        KeyOutcome::Bypass(CacheReason::NondeterministicTemperature)
+    );
+}
+
+#[test]
+fn opaque_nested_temperature_does_not_change_cache_eligibility() {
+    let request = request(json!({
+        "prompt_text": "hi",
+        "inferenceConfig": {"temperature": 0.0}
+    }));
+
+    assert_eq!(
+        build_cache_key("custom-provider", &request, &ResponseCacheConfig::default()),
+        KeyOutcome::Bypass(CacheReason::NondeterministicTemperature),
+        "Bedrock's nested temperature must not change an opaque provider's cache policy"
+    );
 }
 
 #[test]
@@ -1323,6 +1385,22 @@ fn tool(name: &str, description: &str, param: &str, param_type: &str) -> Json {
     })
 }
 
+fn bedrock_tool(name: &str, description: &str, param: &str, param_type: &str) -> Json {
+    json!({
+        "toolSpec": {
+            "name": name,
+            "description": description,
+            "inputSchema": {"json": {
+                "type": "object",
+                "properties": {param: {
+                    "type": param_type,
+                    "description": "a param"
+                }}
+            }}
+        }
+    })
+}
+
 #[test]
 fn logical_ignores_tool_description_and_order() {
     let a = request(json!({
@@ -1346,6 +1424,119 @@ fn logical_ignores_tool_description_and_order() {
         key_of("openai", &a, &cache_all_config()),
         key_of("openai", &b, &cache_all_config()),
         "exact_request must not collapse reworded/reordered tools"
+    );
+}
+
+#[test]
+fn bedrock_logical_ignores_tool_description_and_order() {
+    let with_tools = |tools: Vec<Json>| {
+        request(json!({
+            "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "messages": [{"role": "user", "content": [{"text": "hi"}]}],
+            "inferenceConfig": {"temperature": 0.0},
+            "toolConfig": {
+                "tools": tools,
+                "toolChoice": {"auto": {}}
+            }
+        }))
+    };
+    let first = with_tools(vec![
+        bedrock_tool("get_weather", "Get the weather.", "city", "string"),
+        bedrock_tool("get_time", "Get the time.", "tz", "string"),
+    ]);
+    let second = with_tools(vec![
+        bedrock_tool("get_time", "Return the current time.", "tz", "string"),
+        bedrock_tool(
+            "get_weather",
+            "Look up weather, reworded.",
+            "city",
+            "string",
+        ),
+    ]);
+
+    assert_eq!(
+        key_of("aws.bedrock.converse", &first, &logical_config()),
+        key_of("aws.bedrock.converse", &second, &logical_config()),
+        "Bedrock logical keying must ignore tool description text and tool order"
+    );
+    assert_ne!(
+        key_of("aws.bedrock.converse", &first, &cache_all_config()),
+        key_of("aws.bedrock.converse", &second, &cache_all_config()),
+        "exact_request must preserve Bedrock tool descriptions and order"
+    );
+}
+
+#[test]
+fn bedrock_logical_keeps_tool_interface_and_tool_config_controls() {
+    let with_tool = |tool: Json, tool_choice: Json| {
+        request(json!({
+            "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "messages": [{"role": "user", "content": [{"text": "hi"}]}],
+            "inferenceConfig": {"temperature": 0.0},
+            "toolConfig": {
+                "tools": [tool],
+                "toolChoice": tool_choice
+            }
+        }))
+    };
+    let base = with_tool(
+        bedrock_tool("get_weather", "description", "city", "string"),
+        json!({"auto": {}}),
+    );
+    let renamed_parameter = with_tool(
+        bedrock_tool("get_weather", "description", "location", "string"),
+        json!({"auto": {}}),
+    );
+    let retyped_parameter = with_tool(
+        bedrock_tool("get_weather", "description", "city", "number"),
+        json!({"auto": {}}),
+    );
+    let forced_tool = with_tool(
+        bedrock_tool("get_weather", "description", "city", "string"),
+        json!({"tool": {"name": "get_weather"}}),
+    );
+    let config = logical_config();
+
+    assert_ne!(
+        key_of("aws.bedrock.converse", &base, &config),
+        key_of("aws.bedrock.converse", &renamed_parameter, &config),
+        "a renamed Bedrock tool parameter must change the key"
+    );
+    assert_ne!(
+        key_of("aws.bedrock.converse", &base, &config),
+        key_of("aws.bedrock.converse", &retyped_parameter, &config),
+        "a retyped Bedrock tool parameter must change the key"
+    );
+    assert_ne!(
+        key_of("aws.bedrock.converse", &base, &config),
+        key_of("aws.bedrock.converse", &forced_tool, &config),
+        "Bedrock toolConfig controls outside tools must remain in the key"
+    );
+}
+
+#[test]
+fn opaque_logical_keys_preserve_nested_tool_config() {
+    let with_description = |description: &str| {
+        request(json!({
+            "prompt_text": "hi",
+            "temperature": 0.0,
+            "toolConfig": {
+                "tools": [{
+                    "name": "get_weather",
+                    "description": description,
+                    "inputSchema": {"type": "object"}
+                }]
+            }
+        }))
+    };
+    let first = with_description("Get the weather.");
+    let second = with_description("Look up current conditions.");
+
+    assert_eq!(resolved_body("custom-provider", &first).1, None);
+    assert_ne!(
+        key_of("custom-provider", &first, &logical_config()),
+        key_of("custom-provider", &second, &logical_config()),
+        "Bedrock's nested tool projection must not change an opaque provider's cache keys"
     );
 }
 

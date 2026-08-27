@@ -6263,6 +6263,21 @@ fn native_llm_sanitize_context_preserves_all_codec_identity_states() {
             Some("anthropic_messages"),
         ),
         (
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent),
+            NemoRelayNativeLlmCodecKind::BuiltIn,
+            Some("gemini_generate_content"),
+        ),
+        (
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI),
+            NemoRelayNativeLlmCodecKind::BuiltIn,
+            Some("oci_genai"),
+        ),
+        (
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::BedrockConverse),
+            NemoRelayNativeLlmCodecKind::Opaque,
+            None,
+        ),
+        (
             LlmCodecIdentity::Runtime("com.example.chat.v1".into()),
             NemoRelayNativeLlmCodecKind::Runtime,
             Some("com.example.chat.v1"),
@@ -6297,6 +6312,23 @@ fn native_async_llm_sanitize_context_uses_stable_codec_envelope() {
     assert_eq!(
         native_async_codec_identity(&LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)),
         json!({"codec_kind": "builtin", "codec_id": "openai_chat"})
+    );
+    assert_eq!(
+        native_async_codec_identity(&LlmCodecIdentity::BuiltIn(
+            BuiltinLlmCodec::GeminiGenerateContent
+        )),
+        json!({"codec_kind": "builtin", "codec_id": "gemini_generate_content"}),
+        "ABI v4 plugins must keep receiving the Gemini ID they were compiled to understand"
+    );
+    assert_eq!(
+        native_async_codec_identity(&LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI)),
+        json!({"codec_kind": "builtin", "codec_id": "oci_genai"}),
+        "native plugins must keep receiving the already-released OCI built-in ID"
+    );
+    assert_eq!(
+        native_async_codec_identity(&LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::BedrockConverse)),
+        json!({"codec_kind": "opaque", "codec_id": null}),
+        "new hosts must not send a post-v4 Bedrock built-in ID to plugins compiled against ABI v4"
     );
     assert_eq!(
         native_async_codec_identity(&LlmCodecIdentity::Runtime("com.example.chat.v1".into())),

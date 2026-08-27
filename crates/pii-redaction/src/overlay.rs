@@ -14,6 +14,7 @@ pub(crate) enum BuiltinCodecName {
     AnthropicMessages,
     OCIGenAI,
     GeminiGenerateContent,
+    BedrockConverse,
 }
 
 impl BuiltinCodecName {
@@ -24,6 +25,7 @@ impl BuiltinCodecName {
             ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
             ProviderSurface::OCIGenAI => Self::OCIGenAI,
             ProviderSurface::GeminiGenerateContent => Self::GeminiGenerateContent,
+            ProviderSurface::BedrockConverse => Self::BedrockConverse,
         }
     }
 
@@ -38,8 +40,77 @@ impl BuiltinCodecName {
             Self::AnthropicMessages => overlay_anthropic_response(payload, annotated),
             Self::OCIGenAI => overlay_oci_genai_response(payload, annotated),
             Self::GeminiGenerateContent => overlay_gemini_response(payload, annotated),
+            Self::BedrockConverse => overlay_bedrock_converse_response(payload, annotated),
         }
     }
+}
+
+fn overlay_bedrock_converse_response(mut payload: Json, annotated: &AnnotatedLlmResponse) -> Json {
+    let Some(blocks) = payload
+        .get_mut("output")
+        .and_then(Json::as_object_mut)
+        .and_then(|output| output.get_mut("message"))
+        .and_then(Json::as_object_mut)
+        .and_then(|message| message.get_mut("content"))
+        .and_then(Json::as_array_mut)
+    else {
+        return payload;
+    };
+
+    let sanitized_parts = match annotated.message.as_ref() {
+        Some(MessageContent::Parts(parts)) => Some(
+            parts
+                .iter()
+                .filter_map(|part| match part {
+                    ContentPart::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+        ),
+        _ => None,
+    };
+    let sanitized_text = annotated_message_text(annotated.message.as_ref());
+    let mut sanitized_parts = sanitized_parts.as_ref().map(|parts| parts.iter());
+    let mut wrote_scalar_text = false;
+    blocks.retain_mut(|block| {
+        let Some(block) = block.as_object_mut() else {
+            return true;
+        };
+        if block.contains_key("text") {
+            let text = match sanitized_parts.as_mut() {
+                Some(parts) => parts.next().copied(),
+                None if !wrote_scalar_text => sanitized_text.as_deref(),
+                None => None,
+            };
+            let Some(text) = text else { return false };
+            block.insert("text".into(), Json::String(text.to_string()));
+            wrote_scalar_text = true;
+        }
+        true
+    });
+
+    let Some(tool_calls) = annotated.tool_calls.as_deref() else {
+        blocks.retain(|block| block.get("toolUse").is_none());
+        return payload;
+    };
+    let mut sanitized_calls = tool_calls.iter();
+    blocks.retain_mut(|block| {
+        let Some(tool_use) = block
+            .as_object_mut()
+            .and_then(|block| block.get_mut("toolUse"))
+            .and_then(Json::as_object_mut)
+        else {
+            return true;
+        };
+        let Some(call) = sanitized_calls.next() else {
+            return false;
+        };
+        set_optional_string_field(tool_use, "toolUseId", Some(call.id.as_str()));
+        set_optional_string_field(tool_use, "name", Some(call.name.as_str()));
+        tool_use.insert("input".into(), call.arguments.clone());
+        true
+    });
+    payload
 }
 
 fn gemini_message_parts_for_overlay(message: Option<&MessageContent>) -> Option<Vec<Json>> {

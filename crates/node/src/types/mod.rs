@@ -698,6 +698,71 @@ impl GeminiGenerateContentCodec {
     }
 }
 
+/// Built-in codec for Amazon Bedrock Converse JSON-compatible SDK call envelopes.
+///
+/// AWS credentials, request signing, retry policy, and EventStream decoding remain
+/// the responsibility of the AWS SDK integration.
+#[napi(js_name = "BedrockConverseCodec")]
+pub struct BedrockConverseCodec {
+    pub(crate) inner_codec: std::sync::Arc<dyn LlmCodec>,
+    pub(crate) inner_response_codec: std::sync::Arc<dyn LlmResponseCodec>,
+}
+
+#[napi]
+impl BedrockConverseCodec {
+    #[napi(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner_codec: std::sync::Arc::new(
+                nemo_relay::codec::bedrock_converse::BedrockConverseCodec,
+            ),
+            inner_response_codec: std::sync::Arc::new(
+                nemo_relay::codec::bedrock_converse::BedrockConverseCodec,
+            ),
+        }
+    }
+
+    /// Decode an opaque LLM request into structured form.
+    #[napi]
+    pub fn decode(&self, request: Json) -> napi::Result<Json> {
+        let request: CoreLlmRequest = serde_json::from_value(request)
+            .map_err(|error| napi::Error::from_reason(format!("invalid LlmRequest: {error}")))?;
+        let annotated = self
+            .inner_codec
+            .decode(&request)
+            .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        serde_json::to_value(&annotated)
+            .map_err(|error| napi::Error::from_reason(error.to_string()))
+    }
+
+    /// Merge structured edits into the original Converse call envelope.
+    #[napi]
+    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
+        let annotated: AnnotatedLlmRequest =
+            serde_json::from_value(annotated).map_err(|error| {
+                napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {error}"))
+            })?;
+        let original: CoreLlmRequest = serde_json::from_value(original)
+            .map_err(|error| napi::Error::from_reason(format!("invalid LlmRequest: {error}")))?;
+        let result = self
+            .inner_codec
+            .encode(&annotated, &original)
+            .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        serde_json::to_value(&result).map_err(|error| napi::Error::from_reason(error.to_string()))
+    }
+
+    /// Decode a buffered Converse response into structured form.
+    #[napi(js_name = "decodeResponse")]
+    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
+        let annotated = self
+            .inner_response_codec
+            .decode_response(&response)
+            .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        serde_json::to_value(&annotated)
+            .map_err(|error| napi::Error::from_reason(error.to_string()))
+    }
+}
+
 /// Built-in codec for the Anthropic Messages API.
 ///
 /// Implements both request codec (decode/encode) and response codec

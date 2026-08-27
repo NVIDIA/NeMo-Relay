@@ -285,7 +285,7 @@ nemo_relay::editor_config! {
         codec => {
             label: "codec",
             kind: Enum,
-            values: ["openai_chat", "openai_responses", "anthropic_messages", "oci_genai", "gemini_generate_content"],
+            values: ["openai_chat", "openai_responses", "anthropic_messages", "oci_genai", "gemini_generate_content", "bedrock_converse"],
             optional: true,
         },
         profiles => { label: "profiles", kind: List, list: &PII_REDACTION_PROFILE_LIST_ITEM },

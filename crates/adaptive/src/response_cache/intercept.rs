@@ -17,7 +17,9 @@ use nemo_relay::api::runtime::{
     LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionFn,
     LlmStreamExecutionNextFn, LlmStreamInner,
 };
-use nemo_relay::codec::resolve::{detect_request_surface_with_hint, streaming_codec};
+use nemo_relay::codec::resolve::{
+    ProviderSurface, detect_request_surface_with_hint, streaming_codec,
+};
 use nemo_relay::codec::streaming::StreamingCodec;
 use nemo_relay::error::Result as FlowResult;
 use serde_json::Value as Json;
@@ -222,8 +224,8 @@ async fn run_cache(
 /// single aggregate response (via the configured codec) and stores **that** — the
 /// same shape a buffered call stores — so buffered and streaming entries share
 /// one key. Replays the stored aggregate on a hit. Aggregation needs a codec,
-/// inferred from the request surface; only an unrecognized surface runs live
-/// (uncached). Fails open.
+/// inferred from the request surface. Unrecognized surfaces and surfaces with
+/// no faithful native replay run live (uncached). Fails open.
 async fn run_cache_stream(
     provider: String,
     request: LlmRequest,
@@ -249,6 +251,10 @@ async fn run_cache_stream(
             return next(request).await;
         }
     };
+    if let Some(reason) = stream_cache_bypass_reason(surface) {
+        emit_cache_mark(CacheMark::new(CacheMarkStatus::Bypass, backend).reason(reason));
+        return next(request).await;
+    }
     let codec = streaming_codec(surface);
 
     // As in `run_cache`, the decision mark is emitted before `next()`.
@@ -320,6 +326,13 @@ async fn run_cache_stream(
             next(request).await
         }
     }
+}
+
+fn stream_cache_bypass_reason(surface: ProviderSurface) -> Option<CacheReason> {
+    // A buffered Converse response is not a valid ConverseStream event. Until
+    // Relay can synthesize that event sequence, do not create an entry that a
+    // later streaming caller cannot consume faithfully.
+    matches!(surface, ProviderSurface::BedrockConverse).then_some(CacheReason::StreamNoReplay)
 }
 
 /// Tees a live stream: forwards each chunk to the consumer while feeding it to the
@@ -637,6 +650,7 @@ fn request_model(request: &LlmRequest) -> Option<String> {
         .content
         .get("model")
         .and_then(Json::as_str)
+        .or_else(|| request.content.get("modelId").and_then(Json::as_str))
         .map(str::to_string)
 }
 

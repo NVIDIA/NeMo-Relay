@@ -6420,20 +6420,22 @@ fn assert_annotated_turn_state_edge_shapes() {
         }),
         Some(RequestTurnState::Continuation)
     );
-    assert!(annotated_content_starts_new_turn(&MessageContent::Parts(
-        vec![ContentPart::Text {
+    assert!(message_starts_new_user_turn(&Message::User {
+        content: MessageContent::Parts(vec![ContentPart::Text {
             text: "hello".into(),
             extra: Default::default(),
-        },]
-    )));
-    assert!(!annotated_content_starts_new_turn(&MessageContent::Parts(
-        vec![ContentPart::ToolResult {
+        }]),
+        name: None,
+    }));
+    assert!(!message_starts_new_user_turn(&Message::User {
+        content: MessageContent::Parts(vec![ContentPart::ToolResult {
             tool_use_id: "call-1".into(),
             content: json!("done"),
             is_error: None,
             extra: Default::default(),
-        },]
-    )));
+        }]),
+        name: None,
+    }));
     assert_eq!(
         atif_message_from_annotated_response(&AnnotatedLlmResponse {
             message: Some(MessageContent::Parts(vec![])),

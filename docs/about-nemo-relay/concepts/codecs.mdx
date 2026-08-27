@@ -99,8 +99,8 @@ changing a key overlays it.
 
 `AnnotatedLlmRequest` separates portable and provider-specific data:
 
-- `instructions` represents Anthropic `system` and OpenAI Responses
-  `instructions`.
+- `instructions` represents Anthropic `system`, Bedrock Converse `system`, and
+  OpenAI Responses `instructions`.
 - `messages`, content parts, function calls and results, tools, and tool choice
   expose portable components when the provider formats have equivalent meaning.
 - `api_specific` is a tagged, mutable field for modeled Anthropic Messages,
@@ -171,8 +171,9 @@ reused without changing public binding APIs.
 ### Provider Schema Extraction
 
 Provider codecs extract provider schema fields. The built-in codecs for OpenAI
-Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini
-`generateContent` recognize their request and response payloads and map them
+Chat Completions, OpenAI Responses, Anthropic Messages, OCI Generative AI,
+Gemini `generateContent`, and Amazon Bedrock Converse recognize their request
+and response payloads and map them
 into `AnnotatedLlmRequest` or `AnnotatedLlmResponse`.
 
 When a managed LLM event already has an annotation, subscribers and exporters
@@ -215,14 +216,17 @@ Provider request extraction can also pass a narrow provider hint into codec
 normalization. For example, the recognized `anthropic` and `anthropic.messages`
 hints let Anthropic Messages requests without a top-level `system` field decode
 through the Anthropic codec instead of being inferred as OpenAI Chat payloads
-from their fields alone.
+from their fields alone. Bedrock Converse is identified by its provider-specific
+`modelId` field plus Converse request fields; `aws.bedrock.converse` and
+`bedrock.converse` can also identify a partially built envelope.
 
 The `nemo-relay` gateway always enables matching OpenAI Chat, OpenAI Responses,
 and Anthropic Messages request codecs for the provider generation routes it
 proxies: `/v1/messages`, `/v1/chat/completions`, and `/v1/responses`, for both
-buffered and streaming execution. Gemini `generateContent` does not yet have a
-gateway route, so `GeminiGenerateContentCodec` is available for direct framework
-use rather than gateway auto-selection. Count-token, model, probe, and non-LLM
+buffered and streaming execution. Gemini `generateContent`, OCI Generative AI,
+and Bedrock Converse do not yet have gateway routes, so their codecs are
+available for direct framework use rather than gateway auto-selection.
+Count-token, model, probe, and non-LLM
 passthrough routes do not enable request codecs automatically. Gateway request
 intercepts must therefore edit generation bodies through `annotated_request`;
 raw `request.content` remains writable on routes without a request codec.

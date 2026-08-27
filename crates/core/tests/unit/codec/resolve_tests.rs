@@ -23,12 +23,50 @@ fn builtin_provider_surface_registry_keeps_request_priority() {
     assert_eq!(
         surfaces,
         vec![
+            ProviderSurface::BedrockConverse,
             ProviderSurface::OpenAIResponses,
             ProviderSurface::AnthropicMessages,
             ProviderSurface::OCIGenAI,
             ProviderSurface::OpenAIChat,
             ProviderSurface::GeminiGenerateContent,
         ]
+    );
+}
+
+#[test]
+fn detect_request_bedrock_uses_model_id_as_a_strong_signal() {
+    let body = json!({
+        "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "messages": [{"role": "user", "content": [{"text": "hi"}]}]
+    });
+    assert_eq!(
+        detect_request_surface_with_hint(&body, Some("aws.bedrock.converse")),
+        Some(ProviderSurface::BedrockConverse)
+    );
+    assert_eq!(
+        detect_request_surface_with_hint(&body, Some("bedrock.converse")),
+        Some(ProviderSurface::BedrockConverse)
+    );
+    assert_eq!(
+        detect_request_surface(&body),
+        Some(ProviderSurface::BedrockConverse),
+        "modelId distinguishes Converse from otherwise overlapping message shapes"
+    );
+    assert_eq!(
+        detect_request_surface_with_hint(&json!({"messages": []}), Some("aws.bedrock.converse")),
+        Some(ProviderSurface::OpenAIChat),
+        "the Bedrock hint does not claim a call envelope without modelId"
+    );
+}
+
+#[test]
+fn detect_request_bedrock_prompt_arn_without_messages() {
+    assert_eq!(
+        detect_request_surface(&json!({
+            "modelId": "arn:aws:bedrock:us-east-1:123456789012:prompt/EXAMPLE",
+            "promptVariables": {"name": {"text": "Relay"}}
+        })),
+        Some(ProviderSurface::BedrockConverse)
     );
 }
 
@@ -121,6 +159,18 @@ fn detect_response_gemini_by_candidates() {
     assert_eq!(
         detect_response_surface(&json!({"candidates": "not-array"})),
         None
+    );
+}
+
+#[test]
+fn detect_response_bedrock_by_output_message_and_metadata() {
+    assert_eq!(
+        detect_response_surface(&json!({
+            "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}
+        })),
+        Some(ProviderSurface::BedrockConverse)
     );
 }
 
@@ -448,12 +498,13 @@ fn hint_does_not_classify_non_object_or_keyless() {
 // Provider-codec factory (name<->surface mapping + codec construction)
 // ---------------------------------------------------------------------------
 
-const ALL_SURFACES: [ProviderSurface; 5] = [
+const ALL_SURFACES: [ProviderSurface; 6] = [
     ProviderSurface::OpenAIChat,
     ProviderSurface::OpenAIResponses,
     ProviderSurface::AnthropicMessages,
     ProviderSurface::OCIGenAI,
     ProviderSurface::GeminiGenerateContent,
+    ProviderSurface::BedrockConverse,
 ];
 
 #[test]
@@ -483,6 +534,10 @@ fn codec_name_uses_canonical_spellings() {
         ProviderSurface::GeminiGenerateContent.codec_name(),
         "gemini_generate_content"
     );
+    assert_eq!(
+        ProviderSurface::BedrockConverse.codec_name(),
+        "bedrock_converse"
+    );
 }
 
 #[test]
@@ -511,6 +566,7 @@ fn supported_codec_names_track_the_builtin_registry() {
     assert_eq!(
         supported_codec_names(),
         vec![
+            "bedrock_converse",
             "openai_responses",
             "anthropic_messages",
             "oci_genai",
@@ -571,6 +627,18 @@ fn request_codec_decodes_each_surface() {
             .messages
             .is_empty()
     );
+
+    let bedrock = req(json!({
+        "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "messages": [{"role": "user", "content": [{"text": "hi"}]}]
+    }));
+    assert!(
+        !request_codec(ProviderSurface::BedrockConverse)
+            .decode(&bedrock)
+            .expect("Bedrock Converse request decodes")
+            .messages
+            .is_empty()
+    );
 }
 
 #[test]
@@ -621,6 +689,19 @@ fn response_codec_decodes_each_surface() {
             .expect("gemini response decodes")
             .response_text(),
         Some("hi gemini")
+    );
+
+    let bedrock = json!({
+        "output": {"message": {"role": "assistant", "content": [{"text": "hi bedrock"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}
+    });
+    assert_eq!(
+        response_codec(ProviderSurface::BedrockConverse)
+            .decode_response(&bedrock)
+            .expect("Bedrock Converse response decodes")
+            .response_text(),
+        Some("hi bedrock")
     );
 }
 

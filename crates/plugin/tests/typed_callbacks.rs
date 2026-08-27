@@ -4375,6 +4375,7 @@ fn typed_async_llm_sanitize_context_decodes_all_builtin_identities() {
         BuiltinLlmCodec::AnthropicMessages,
         BuiltinLlmCodec::OCIGenAI,
         BuiltinLlmCodec::GeminiGenerateContent,
+        BuiltinLlmCodec::BedrockConverse,
     ] {
         let host = test_host_v4();
         let mut ctx = test_context(&host.v3.v1);

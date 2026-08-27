@@ -47,6 +47,7 @@ from nemo_relay import Json
 from nemo_relay._native import (
     AnnotatedLLMRequest,
     AnthropicMessagesCodec,
+    BedrockConverseCodec,
     GeminiGenerateContentCodec,
     LLMRequest,
     OCIGenAIChatCodec,
@@ -163,6 +164,7 @@ class LlmResponseCodec(Protocol):
 __all__ = [
     "AnnotatedLLMRequest",
     "AnthropicMessagesCodec",
+    "BedrockConverseCodec",
     "GeminiGenerateContentCodec",
     "LlmCodec",
     "LlmResponseCodec",

@@ -1149,3 +1149,63 @@ impl PyGeminiGenerateContentCodec {
         "<GeminiGenerateContentCodec>"
     }
 }
+
+/// Built-in codec for the Amazon Bedrock Converse API.
+///
+/// Implements request decode/encode and buffered response decode for JSON-compatible
+/// SDK call envelopes. AWS credential, signing, retry, and transport behavior remains
+/// owned by the AWS SDK integration.
+#[pyclass(name = "BedrockConverseCodec")]
+pub struct PyBedrockConverseCodec {
+    pub(crate) inner_codec: Arc<dyn LlmCodec>,
+    pub(crate) inner_response_codec: Arc<dyn LlmResponseCodec>,
+}
+
+#[pymethods]
+impl PyBedrockConverseCodec {
+    #[new]
+    pub(crate) fn new() -> Self {
+        Self {
+            inner_codec: Arc::new(nemo_relay::codec::bedrock_converse::BedrockConverseCodec),
+            inner_response_codec: Arc::new(
+                nemo_relay::codec::bedrock_converse::BedrockConverseCodec,
+            ),
+        }
+    }
+
+    /// Parse an opaque ``LlmRequest`` into a structured ``AnnotatedLLMRequest``.
+    pub(crate) fn decode(&self, request: &PyLLMRequest) -> PyResult<PyAnnotatedLLMRequest> {
+        self.inner_codec
+            .decode(&request.inner)
+            .map(|inner| PyAnnotatedLLMRequest { inner })
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
+    }
+
+    /// Merge structured changes back into the original Converse call envelope.
+    pub(crate) fn encode(
+        &self,
+        annotated: &PyAnnotatedLLMRequest,
+        original: &PyLLMRequest,
+    ) -> PyResult<PyLLMRequest> {
+        self.inner_codec
+            .encode(&annotated.inner, &original.inner)
+            .map(|inner| PyLLMRequest { inner })
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
+    }
+
+    /// Parse a buffered Converse response into structured form.
+    pub(crate) fn decode_response(
+        &self,
+        response: &Bound<'_, PyAny>,
+    ) -> PyResult<PyAnnotatedLLMResponse> {
+        let response = py_to_json(response)?;
+        self.inner_response_codec
+            .decode_response(&response)
+            .map(|inner| PyAnnotatedLLMResponse { inner })
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
+    }
+
+    pub(crate) fn __repr__(&self) -> &'static str {
+        "<BedrockConverseCodec>"
+    }
+}

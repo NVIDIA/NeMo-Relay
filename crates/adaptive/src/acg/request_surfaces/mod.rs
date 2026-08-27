@@ -52,6 +52,8 @@ impl RequestSurface {
             ProviderSurface::OCIGenAI => None,
             // Gemini generateContent ACG request editing is intentionally unsupported.
             ProviderSurface::GeminiGenerateContent => None,
+            // Bedrock Converse ACG request editing is intentionally unsupported.
+            ProviderSurface::BedrockConverse => None,
         }
     }
 

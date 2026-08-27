@@ -419,15 +419,20 @@ response: (Json, LlmSanitizeResponseContext) -> Option<Json>
 
 `context.codec` is a binding-native codec identity, not a JSON payload.
 Python and Node.js expose `kind` and, when applicable, `id` properties.
-In-process Rust and the typed native Rust SDK expose enum variants. The raw
-native ABI exposes the same information through `codec_kind` and `codec_id`.
+In-process Rust exposes enum variants, and dynamic workers receive the built-in
+ID as an open string. The raw native ABI v4 and the typed native Rust SDK built
+on it expose the original v4 built-in IDs through `codec_kind` and `codec_id`.
+Newer built-ins cross that compatibility boundary as `opaque` while retaining
+a usable callback-scoped codec handle.
 
 `codec.kind` is `none` for a call with no codec, `builtin` for
-Relay's built-in `openai_chat`, `openai_responses`, `anthropic_messages`, `oci_genai`, and
-`gemini_generate_content`
+Relay's built-in `openai_chat`, `openai_responses`, `anthropic_messages`,
+`oci_genai`, `gemini_generate_content`, and `bedrock_converse`
 codecs, `runtime` for a named runtime-registered codec, and `opaque` for an
 active codec without a registered identity. `codec.id` is present only for
-`builtin` and `runtime`. Do not infer a provider from an opaque request shape.
+`builtin` and `runtime`. In the raw native ABI v4, `bedrock_converse` is
+reported as `opaque` because that identity was introduced after ABI v4.
+Do not infer a provider from an opaque request shape.
 
 Return a payload to continue the sanitizer chain. Return `None` (or `null` in
 JavaScript) only when observing the payload would be unsafe: Relay omits the

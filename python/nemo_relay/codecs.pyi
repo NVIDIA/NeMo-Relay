@@ -239,9 +239,24 @@ class GeminiGenerateContentCodec:
         """
         ...
 
+class BedrockConverseCodec:
+    """Built-in codec for Amazon Bedrock Converse requests and responses."""
+
+    def __init__(self) -> None: ...
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+        """Decode a JSON-compatible Converse SDK call envelope."""
+        ...
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+        """Merge normalized edits into the original Converse call envelope."""
+        ...
+    def decode_response(self, response: Json) -> AnnotatedLLMResponse:
+        """Decode a buffered Converse response."""
+        ...
+
 __all__ = [
     "AnnotatedLLMRequest",
     "AnthropicMessagesCodec",
+    "BedrockConverseCodec",
     "GeminiGenerateContentCodec",
     "LlmCodec",
     "LlmResponseCodec",

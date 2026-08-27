@@ -237,10 +237,10 @@ its qualification in the host registries.
 
 `LlmCodecKind` has four wire values: unspecified, built-in, runtime, and opaque. A built-in
 identity carries `openai_chat`, `openai_responses`, `anthropic_messages`, `oci_genai`,
-or `gemini_generate_content`; a runtime identity carries its registered ID. An opaque
-identity deliberately withholds an ID. The capability ID is optional and
-invocation-scoped. A worker must treat it as a secret and must not use it after the owner
-invocation ends.
+`gemini_generate_content`, or `bedrock_converse`; a runtime identity carries its
+registered ID. An opaque identity deliberately withholds an ID. The capability ID is
+optional and invocation-scoped. A worker must treat it as a secret and must not use it
+after the owner invocation ends.
 
 ## Host-Runtime Service
 

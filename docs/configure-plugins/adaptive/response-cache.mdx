@@ -305,7 +305,7 @@ Only complete, replayable LLM answers are stored:
   stored interaction (`previous_response_id`), or references server-side state
   (`conversation`, `container`). Their answers depend on state the cache key
   cannot see.
-- Streaming calls are cached too. On a miss the live chunks are forwarded to
+- Supported provider streams are cached too. On a miss the live chunks are forwarded to
   the consumer while being assembled into one aggregate response — the same
   shape a buffered call stores, so buffered and streaming calls share one
   keyspace. On a hit the stored answer is replayed as provider-native chunks
@@ -317,7 +317,9 @@ Only complete, replayable LLM answers are stored:
   Responses answers with `status = "incomplete"`, streams without a terminal
   event, and streams whose content cannot be replayed faithfully are never
   stored. A streaming request whose surface cannot be inferred runs live,
-  uncached.
+  uncached. Amazon Bedrock `ConverseStream` also runs live and uncached in this
+  release because Relay cannot yet synthesize a faithful native event stream
+  from a stored Converse response.
 
 Streaming publication is write-behind: Relay can report end-of-stream before
 the backend write finishes. `wait_for_idle()` does not wait for cache writes.
@@ -370,12 +372,14 @@ normalization:
 
 ### `logical`
 
-Everything keys exactly as `exact_request` except the `tools` array: each tool
-is keyed on its full definition with human-readable `description` text
-removed, and the array is sorted. Rewording a tool description or reordering
-the `tools` array no longer busts the cache; any other change to a tool
-definition — its name, its parameter schema (including constraints such as
-`enum` and `required`), its type, or its settings — still does.
+Everything keys exactly as `exact_request` except the provider's tool array
+(`tools`, or `toolConfig.tools` for Bedrock Converse): each tool is keyed on
+its full definition with human-readable `description` text removed, and the
+array is sorted. Rewording a tool description or reordering the tool array no
+longer busts the cache; any other change to a tool definition — its name, its
+parameter schema (including constraints such as `enum` and `required`), its
+type, or its settings — still does. Controls beside the array, such as Bedrock
+Converse `toolConfig.toolChoice`, remain in the key.
 
 ```toml
 [components.config.response_cache]
@@ -481,8 +485,8 @@ Tool marks use `surface = "tool"`. Unclassified tools that use the default
 policy and explicitly uncacheable tools emit a `bypass` mark with
 `reason = "uncacheable"` before Relay runs the tool.
 
-Other bypass reasons include `sampled`, `stateful_store`, and
-`stream_no_codec`. A failed cache-store operation produces a `miss` with
+Other bypass reasons include `sampled`, `stateful_store`, `stream_no_codec`,
+and `stream_no_replay`. A failed cache-store operation produces a `miss` with
 `reason = "store_error"`.
 
 Cache marks do not contain prompts, answers, or credentials. Treat `key_hash`
@@ -505,7 +509,7 @@ cacheable classes and cacheable overrides, plus the default policy.
 | `namespace` | `""` (unconfigured) | Required non-empty trust-domain partition folded into every key. Empty or whitespace-only values are rejected. |
 | `priority` | `50` | LLM execution intercept priority. Lower values run earlier. |
 | `bypass_rate` | `0.0` | Probability in `[0.0, 1.0]` of running a cacheable call live. A sampled call attempts to refresh the entry when its result is cacheable and the write succeeds. |
-| `cache_nondeterministic` | `false` | Only requests with an explicit numeric `temperature = 0` are eligible. Set `true` to cache and reuse sampled responses. |
+| `cache_nondeterministic` | `false` | Only requests with an explicit numeric `temperature = 0` in the provider's supported request location are eligible. Set `true` to cache and reuse sampled responses. |
 | `key_strategy` | `"exact_request"` | What counts as the same request: `"exact_request"` or `"logical"`. Refer to [Key Strategies](#key-strategies). |
 | `header_allowlist` | `[]` | Trusted, non-secret response-affecting headers folded into the key (case-insensitive). A non-empty normalized allowlist policy also partitions the key. Known auth headers are rejected. |
 | `backend.kind` | `"in_memory"` | `"in_memory"`, or `"redis"` (requires building with the `redis-backend` feature). |

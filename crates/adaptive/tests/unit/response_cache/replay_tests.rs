@@ -146,6 +146,34 @@ fn gemini_replay_rejects_multi_candidate_aggregates_as_lossy() {
 }
 
 #[test]
+fn bedrock_converse_aggregate_has_no_streaming_replay() {
+    let aggregate = json!({
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [{"text": "hello"}]
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 9, "outputTokens": 3, "totalTokens": 12}
+    });
+
+    assert_eq!(
+        detect_response_surface(&aggregate),
+        Some(ProviderSurface::BedrockConverse),
+        "the fixture must exercise the Bedrock response surface"
+    );
+    assert!(
+        synthesize_replay_chunks(&aggregate).is_none(),
+        "a buffered Converse response is not itself a native ConverseStream event"
+    );
+    assert!(
+        replay_is_lossy(&aggregate),
+        "the streaming cache must run live until native ConverseStream replay is implemented"
+    );
+}
+
+#[test]
 fn responses_replay_sequence_numbers_are_contiguous() {
     let aggregate = json!({
         "id": "r1",

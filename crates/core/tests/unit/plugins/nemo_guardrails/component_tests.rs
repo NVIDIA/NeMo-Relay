@@ -646,6 +646,7 @@ fn assert_invalid_local_config() {
     );
 }
 
+#[allow(clippy::cognitive_complexity)] // Keeps related invalid remote configuration cases together.
 fn assert_invalid_remote_identity_and_codec() {
     let remote_missing_identity = validate_plugin_config(&plugin_config(json!({
         "mode": "remote",
@@ -708,6 +709,18 @@ fn assert_invalid_remote_identity_and_codec() {
             ]
             .iter()
             .all(|name| diag.message.contains(name))
+    }));
+
+    let bedrock_codec = validate_plugin_config(&plugin_config(json!({
+        "mode": "local",
+        "codec": "bedrock_converse",
+        "config_path": "/tmp/guardrails"
+    })));
+    assert!(bedrock_codec.has_errors());
+    assert!(bedrock_codec.diagnostics.iter().any(|diag| {
+        diag.field.as_deref() == Some("codec")
+            && diag.message.contains("codec must be one of:")
+            && !diag.message.contains("bedrock_converse")
     }));
 
     let unsupported_remote_codec = validate_plugin_config(&plugin_config(json!({

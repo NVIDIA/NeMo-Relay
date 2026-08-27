@@ -14,6 +14,7 @@ fn known_builtin_codec_identities_decode_as_builtins() {
         BuiltinLlmCodec::AnthropicMessages,
         BuiltinLlmCodec::OCIGenAI,
         BuiltinLlmCodec::GeminiGenerateContent,
+        BuiltinLlmCodec::BedrockConverse,
     ] {
         let proto = ProtoIdentity {
             kind: LlmCodecKind::Builtin as i32,

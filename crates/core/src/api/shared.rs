@@ -16,7 +16,7 @@ use crate::api::runtime::{
 use crate::api::runtime::{current_scope_stack, task_scope_top};
 use crate::api::scope::ScopeHandle;
 use crate::api::scope::ScopeType;
-use crate::codec::request::AnnotatedLlmRequest;
+use crate::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
 use crate::codec::traits::LlmCodec;
 use crate::error::{FlowError, Result};
 use crate::json::{Json, merge_json};
@@ -289,6 +289,36 @@ pub(crate) fn metadata_with_otel_error(metadata: Option<Json>, error: &FlowError
         }
     }
     metadata
+}
+
+/// Whether a normalized message starts a fresh human turn rather than a
+/// provider-shaped tool continuation.
+pub(crate) fn message_starts_new_user_turn(message: &Message) -> bool {
+    let Message::User { content, .. } = message else {
+        return false;
+    };
+    match content {
+        MessageContent::Text(_) => true,
+        MessageContent::Parts(parts) => {
+            let has_user_input = parts.iter().any(|part| {
+                matches!(
+                    part,
+                    ContentPart::Text { .. }
+                        | ContentPart::ImageUrl { .. }
+                        | ContentPart::Image { .. }
+                        | ContentPart::Audio { .. }
+                        | ContentPart::File { .. }
+                )
+            });
+            has_user_input
+                || !parts.iter().any(|part| {
+                    matches!(
+                        part,
+                        ContentPart::ToolUse { .. } | ContentPart::ToolResult { .. }
+                    )
+                })
+        }
+    }
 }
 
 pub(crate) type InterceptedLlmRequest = (

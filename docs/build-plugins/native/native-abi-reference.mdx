@@ -194,7 +194,10 @@ because the host does not call it again.
 LLM sanitizer contexts report codec kind `None`, `BuiltIn`, `Runtime`, or `Opaque`, an
 optional codec ID, and a borrowed callback-lifetime handle. Built-in IDs are
 `openai_chat`, `openai_responses`, `anthropic_messages`, `oci_genai`, and
-`gemini_generate_content`. Runtime and opaque codecs can still have a usable handle.
+`gemini_generate_content`. The `bedrock_converse` identity was not part of the released
+ABI v4 named-ID contract, so an ABI v4 plugin receives it as `Opaque`; its callback-scoped
+codec handle remains usable.
+Runtime and opaque codecs can still have a usable handle.
 
 Request handles support decode to an annotated request and encode of normalized changes
 onto the original envelope. Response handles support decode to an annotated response.

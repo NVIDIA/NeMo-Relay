@@ -55,6 +55,8 @@ builtin_llm_codecs! {
     OCIGenAI => "oci_genai",
     /// Gemini generateContent request and response payloads.
     GeminiGenerateContent => "gemini_generate_content",
+    /// Amazon Bedrock Converse request and response payloads.
+    BedrockConverse => "bedrock_converse",
 }
 
 /// Per-call LLM codec identity supplied to sanitizer and SDK callbacks.

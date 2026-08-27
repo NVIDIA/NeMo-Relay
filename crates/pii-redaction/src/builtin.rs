@@ -571,6 +571,9 @@ impl CompiledBuiltinBackend {
             LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent) => {
                 Some(ProviderSurface::GeminiGenerateContent)
             }
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::BedrockConverse) => {
+                Some(ProviderSurface::BedrockConverse)
+            }
             LlmCodecIdentity::Runtime(_) | LlmCodecIdentity::Opaque => None,
         }
     }

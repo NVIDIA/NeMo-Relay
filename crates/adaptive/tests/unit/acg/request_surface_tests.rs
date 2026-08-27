@@ -286,6 +286,14 @@ fn test_request_surface_resolution_and_passthrough_support_cover_matrix() {
         headers: serde_json::Map::new(),
         content: json!({"model": "unknown"}),
     };
+    let bedrock_request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "system": [{"text": "helpful"}],
+            "messages": []
+        }),
+    };
 
     assert!(RequestSurface::OpenAIChat.supports_provider("passthrough"));
     assert!(!RequestSurface::OpenAIChat.supports_provider("unknown"));
@@ -310,6 +318,11 @@ fn test_request_surface_resolution_and_passthrough_support_cover_matrix() {
     };
     assert!(matches!(
         super::resolve_request_surface_from_request(&gemini_request),
+        Err(crate::acg::AcgError::Internal(message))
+            if message.contains("does not have an ACG applier")
+    ));
+    assert!(matches!(
+        super::resolve_request_surface_from_request(&bedrock_request),
         Err(crate::acg::AcgError::Internal(message))
             if message.contains("does not have an ACG applier")
     ));

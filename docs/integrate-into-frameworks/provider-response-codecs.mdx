@@ -349,7 +349,8 @@ No exporter emits a running cross-call total other than ATIF `final_metrics`.
 All normalized fields are optional. A provider can omit a field, while a codec can
 compute one (such as Anthropic's `total_tokens`) and configured pricing can
 synthesize `cost`. `Usage` has no catch-all field, so provider usage fields that
-Relay does not model are dropped.
+Relay does not model are absent from the normalized `Usage` value. A codec can
+still retain provider-specific details under `api_specific`.
 
 | Field | Meaning |
 |---|---|
@@ -362,21 +363,24 @@ Relay does not model are dropped.
 
 Built-in codecs normalize provider field names as follows:
 
-| Normalized Field | OpenAI Chat | OpenAI Responses | Anthropic Messages | OCI Generative AI | Gemini `generateContent` |
-|---|---|---|---|---|---|
-| `prompt_tokens` | `prompt_tokens` | `input_tokens` | `input_tokens` | `promptTokens` | `promptTokenCount` |
-| `completion_tokens` | `completion_tokens` | `output_tokens` | `output_tokens` | `completionTokens` | `candidatesTokenCount` |
-| `total_tokens` | `total_tokens` | `total_tokens` | computed | `totalTokens` | `totalTokenCount` (or computed as prompt + candidates + thinking) |
-| `cache_read_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` | `cache_read_input_tokens` | `promptTokensDetails.cachedTokens` | `cachedContentTokenCount` |
-| `cache_write_tokens` | — | — | `cache_creation_input_tokens` | — | — |
-| `cost` | `cost_usd`, structured `cost`, or scalar `cost` (OpenRouter; USD provider-reported total) | `cost_usd` or structured `cost` | `cost_usd` or structured `cost` | — | — |
+| Normalized Field | OpenAI Chat | OpenAI Responses | Anthropic Messages | OCI Generative AI | Gemini `generateContent` | Bedrock Converse |
+|---|---|---|---|---|---|---|
+| `prompt_tokens` | `prompt_tokens` | `input_tokens` | `input_tokens` | `promptTokens` | `promptTokenCount` | `inputTokens` |
+| `completion_tokens` | `completion_tokens` | `output_tokens` | `output_tokens` | `completionTokens` | `candidatesTokenCount` | `outputTokens` |
+| `total_tokens` | `total_tokens` | `total_tokens` | computed | `totalTokens` | `totalTokenCount` (or computed as prompt + candidates + thinking) | `totalTokens` |
+| `cache_read_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` | `cache_read_input_tokens` | `promptTokensDetails.cachedTokens` | `cachedContentTokenCount` | `cacheReadInputTokens` |
+| `cache_write_tokens` | — | — | `cache_creation_input_tokens` | — | — | `cacheWriteInputTokens` |
+| `cost` | `cost_usd`, structured `cost`, or scalar `cost` (OpenRouter; USD provider-reported total) | `cost_usd` or structured `cost` | `cost_usd` or structured `cost` | — | — | — |
 
 Gemini `generateContent` thinking tokens (`thoughtsTokenCount`) are stored in `api_specific.thoughts_tokens` rather than `completion_tokens`, because Google bills them as output tokens but reports them separately. The cost estimate folds them into the effective output-token count so that the pricing table reflects the real billing cost.
 
-Built-in codecs preserve only modeled provider-specific usage details under
-`api_specific`; other usage fields are dropped. For example, OpenAI Responses
-reasoning token counts are kept under `api_specific` (`output_tokens_details`),
-but OpenAI Chat `completion_tokens_details` is not.
+Most built-in codecs preserve only modeled provider-specific usage details
+under `api_specific`; other usage fields are dropped. For example, OpenAI
+Responses reasoning token counts are kept under `api_specific`
+(`output_tokens_details`), but OpenAI Chat `completion_tokens_details` is not.
+Bedrock Converse is the exception: it retains the complete provider `usage`
+object under `api_specific`, including fields such as `cacheDetails`, while
+also filling the portable normalized counters above.
 
 ### Cost Fields
 
@@ -449,6 +453,12 @@ The built-in provider codecs also implement response decoding:
 - `AnthropicMessagesCodec` — Anthropic Messages API
 - `OCIGenAIChatCodec` — OCI Generative AI chat API (`GENERIC`, `COHERE`, and `COHEREV2` formats)
 - `GeminiGenerateContentCodec` — Google Gemini `generateContent` API
+- `BedrockConverseCodec` — Amazon Bedrock Converse API (JSON-compatible SDK values)
+
+Bedrock stop reasons with a direct portable meaning are normalized. Provider-
+specific outcomes such as `model_context_window_exceeded` and
+`malformed_model_output` remain `Unknown` with their original string preserved;
+Relay does not misclassify them as an ordinary length or completion result.
 
 Choose the codec that matches the actual provider response shape. For example, do not use `OpenAIChatCodec` for an OpenAI Responses API payload only because both came from an OpenAI-compatible provider.
 

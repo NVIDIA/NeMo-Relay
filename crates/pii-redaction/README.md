@@ -34,7 +34,7 @@ NeMo Relay PII Redaction allows you to:
   structured secrets, and cloud credentials.
 - Handle codec-aware LLMs with overlay support for `openai_chat`,
   `openai_responses`, `anthropic_messages`, `oci_genai`, and
-  `gemini_generate_content`.
+  `gemini_generate_content`, and `bedrock_converse`.
 - Remove conversational trajectory content while preserving event structure,
   tool-call identity, model attribution, routing, usage, and cost analytics.
 - Use the `local_model` config contract and provider registration surface for

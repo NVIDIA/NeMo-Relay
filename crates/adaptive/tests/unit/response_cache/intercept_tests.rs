@@ -114,6 +114,43 @@ fn sampled_bypass_uses_a_unit_interval_rng() {
     assert_eq!(should_bypass(0.5), expected);
 }
 
+#[test]
+fn request_model_falls_back_to_bedrock_model_id() {
+    let bedrock = LlmRequest {
+        headers: Default::default(),
+        content: json!({
+            "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "messages": []
+        }),
+    };
+    assert_eq!(
+        request_model(&bedrock).as_deref(),
+        Some("anthropic.claude-3-5-sonnet-20241022-v2:0")
+    );
+
+    let explicit_model = LlmRequest {
+        headers: Default::default(),
+        content: json!({"model": "normalized-model", "modelId": "bedrock-model"}),
+    };
+    assert_eq!(
+        request_model(&explicit_model).as_deref(),
+        Some("normalized-model"),
+        "the existing model field remains authoritative when both spellings are present"
+    );
+}
+
+#[test]
+fn bedrock_streaming_cache_is_explicitly_bypassed_until_native_replay_exists() {
+    assert_eq!(
+        stream_cache_bypass_reason(ProviderSurface::BedrockConverse),
+        Some(CacheReason::StreamNoReplay)
+    );
+    assert_eq!(
+        stream_cache_bypass_reason(ProviderSurface::OpenAIChat),
+        None
+    );
+}
+
 #[tokio::test]
 async fn write_behind_returns_eof_before_cache_commit_completes() {
     let (tx, rx) = tokio::sync::mpsc::channel(1);

@@ -37,8 +37,9 @@ use uuid::Uuid;
 
 use crate::api::event::{Event, EventNormalizationExt};
 use crate::api::runtime::EventSubscriberFn;
+use crate::api::shared::message_starts_new_user_turn;
 use crate::api::subscriber::flush_subscribers;
-use crate::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
+use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use crate::codec::response::AnnotatedLlmResponse;
 use crate::error::Result;
 use crate::json::Json;
@@ -1270,7 +1271,7 @@ fn atif_message_from_annotated_request(request: &AnnotatedLlmRequest) -> Option<
 fn annotated_message_turn_state(message: &Message) -> Option<RequestTurnState> {
     match message {
         Message::System { .. } | Message::Developer { .. } => None,
-        Message::User { content, .. } => Some(if annotated_content_starts_new_turn(content) {
+        Message::User { .. } => Some(if message_starts_new_user_turn(message) {
             RequestTurnState::FreshUser
         } else {
             RequestTurnState::Continuation
@@ -1281,34 +1282,6 @@ fn annotated_message_turn_state(message: &Message) -> Option<RequestTurnState> {
         | Message::ToolCallItem { .. }
         | Message::ToolResultItem { .. } => Some(RequestTurnState::Continuation),
         Message::ProviderNative { value, .. } => provider_native_turn_state(value),
-    }
-}
-
-fn annotated_content_starts_new_turn(content: &MessageContent) -> bool {
-    match content {
-        MessageContent::Text(_) => true,
-        MessageContent::Parts(parts) => {
-            let has_user_input = parts.iter().any(|part| {
-                matches!(
-                    part,
-                    ContentPart::Text { .. }
-                        | ContentPart::ImageUrl { .. }
-                        | ContentPart::Image { .. }
-                        | ContentPart::Audio { .. }
-                        | ContentPart::File { .. }
-                )
-            });
-            if has_user_input {
-                return true;
-            }
-            let has_tool_continuation = parts.iter().any(|part| {
-                matches!(
-                    part,
-                    ContentPart::ToolUse { .. } | ContentPart::ToolResult { .. }
-                )
-            });
-            !has_tool_continuation
-        }
     }
 }
 

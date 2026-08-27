@@ -59,6 +59,10 @@ fn cache_mark_labels_have_stable_telemetry_values() {
         "stream_no_codec"
     );
     assert_eq!(
+        black_box(CacheReason::StreamNoReplay).as_str(),
+        "stream_no_replay"
+    );
+    assert_eq!(
         black_box(CacheReason::UnparseableBody).as_str(),
         "unparseable_body"
     );

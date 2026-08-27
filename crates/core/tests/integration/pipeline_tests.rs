@@ -35,6 +35,7 @@ use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::{EmitMarkEventParams, ScopeType, event};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
+use nemo_relay::codec::bedrock_converse::{BedrockConverseCodec, BedrockConverseStreamingCodec};
 use nemo_relay::codec::oci_genai::OCIGenAIChatCodec;
 use nemo_relay::codec::openai_chat::OpenAIChatCodec;
 use nemo_relay::codec::optimization::{
@@ -47,6 +48,7 @@ use nemo_relay::codec::response::{
     AnnotatedLlmResponse, CostEstimate, CostSource, PricingCatalog, PricingResolver, Usage,
     reset_active_pricing_resolver, set_active_pricing_resolver,
 };
+use nemo_relay::codec::streaming::StreamingCodec;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::{FlowError, Result};
 use nemo_relay::json::Json;
@@ -325,6 +327,25 @@ fn first_message_text(request: &AnnotatedLlmRequest) -> Option<&str> {
             content: Some(MessageContent::Text(text)),
             ..
         } => Some(text.as_str()),
+        Message::System {
+            content: MessageContent::Parts(parts),
+            ..
+        }
+        | Message::User {
+            content: MessageContent::Parts(parts),
+            ..
+        }
+        | Message::Tool {
+            content: MessageContent::Parts(parts),
+            ..
+        }
+        | Message::Assistant {
+            content: Some(MessageContent::Parts(parts)),
+            ..
+        } => parts.iter().find_map(|part| match part {
+            ContentPart::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        }),
         _ => None,
     }
 }
@@ -1601,6 +1622,247 @@ async fn test_oci_genai_response_codec_populates_annotated_response() {
     assert_eq!(usage.total_tokens, Some(640));
 
     deregister_subscriber("oci_resp_codec_sub").unwrap();
+}
+
+#[tokio::test]
+async fn test_bedrock_converse_codecs_populate_managed_pipeline_annotations() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let event_capture = Arc::clone(&events);
+    register_subscriber(
+        "bedrock_converse_pipeline_sub",
+        Arc::new(move |event: &Event| {
+            event_capture.lock().unwrap().push(event.clone());
+        }),
+    )
+    .unwrap();
+
+    let provider_request = Arc::new(Mutex::new(None));
+    let provider_request_capture = Arc::clone(&provider_request);
+    let provider: LlmExecutionNextFn = Arc::new(move |request| {
+        *provider_request_capture.lock().unwrap() = Some(request);
+        Box::pin(async move {
+            Ok(json!({
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"text": "The weather is clear."},
+                            {"toolUse": {
+                                "toolUseId": "tool-1",
+                                "name": "get_weather",
+                                "input": {"city": "Paris"}
+                            }}
+                        ]
+                    }
+                },
+                "stopReason": "tool_use",
+                "usage": {
+                    "inputTokens": 12,
+                    "outputTokens": 8,
+                    "totalTokens": 20,
+                    "cacheReadInputTokens": 2
+                },
+                "metrics": {"latencyMs": 42}
+            }))
+        })
+    });
+    let model_id = "anthropic.claude-3-5-sonnet-20241022-v2:0";
+    let request = make_llm_request(json!({
+        "modelId": model_id,
+        "messages": [{
+            "role": "user",
+            "content": [{"text": "What is the weather in Paris?"}]
+        }],
+        "inferenceConfig": {"temperature": 0.0, "maxTokens": 128},
+        "toolConfig": {"tools": [{"toolSpec": {
+            "name": "get_weather",
+            "description": "Get the weather",
+            "inputSchema": {"json": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"]
+            }}
+        }}]},
+        "requestMetadata": {"tenant": "pipeline-test"}
+    }));
+
+    llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("aws.bedrock.converse")
+            .request(request.clone())
+            .func(provider)
+            .model_name(model_id)
+            .codec(Arc::new(BedrockConverseCodec))
+            .response_codec(Arc::new(BedrockConverseCodec))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let captured_provider_request = provider_request
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("provider callback should receive the Converse request");
+    assert_eq!(captured_provider_request.content, request.content);
+
+    let captured = captured_events_snapshot(&events);
+    let start_event = captured
+        .iter()
+        .find(|event| is_scope_event(event, ScopeType::Llm, ScopeCategory::Start))
+        .expect("expected LlmStart event");
+    assert_eq!(start_event.model_name(), Some(model_id));
+    let annotated_request = start_event
+        .annotated_request()
+        .expect("Bedrock request codec should populate the start annotation");
+    assert_eq!(annotated_request.model.as_deref(), Some(model_id));
+    assert_eq!(
+        first_message_text(annotated_request),
+        Some("What is the weather in Paris?")
+    );
+    assert_eq!(
+        annotated_request
+            .params
+            .as_ref()
+            .and_then(|params| params.temperature),
+        Some(0.0)
+    );
+
+    let end_event = captured
+        .iter()
+        .find(|event| is_scope_event(event, ScopeType::Llm, ScopeCategory::End))
+        .expect("expected LlmEnd event");
+    assert_eq!(end_event.model_name(), Some(model_id));
+    let annotated_response = end_event
+        .annotated_response()
+        .expect("Bedrock response codec should populate the end annotation");
+    assert_eq!(
+        annotated_response.response_text(),
+        Some("The weather is clear.")
+    );
+    assert_eq!(
+        annotated_response.finish_reason,
+        Some(FinishReason::ToolUse)
+    );
+    let tool_calls = annotated_response
+        .tool_calls
+        .as_ref()
+        .expect("Bedrock tool call should be normalized");
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].id, "tool-1");
+    assert_eq!(tool_calls[0].name, "get_weather");
+    assert_eq!(tool_calls[0].arguments, json!({"city": "Paris"}));
+    let usage = annotated_response
+        .usage
+        .as_ref()
+        .expect("Bedrock token usage should be normalized");
+    assert_eq!(usage.prompt_tokens, Some(12));
+    assert_eq!(usage.completion_tokens, Some(8));
+    assert_eq!(usage.total_tokens, Some(20));
+    assert_eq!(usage.cache_read_tokens, Some(2));
+
+    deregister_subscriber("bedrock_converse_pipeline_sub").unwrap();
+}
+
+#[tokio::test]
+async fn test_bedrock_converse_stream_preserves_chunks_and_populates_annotation() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let event_capture = Arc::clone(&events);
+    register_subscriber(
+        "bedrock_converse_stream_pipeline_sub",
+        Arc::new(move |event: &Event| {
+            event_capture.lock().unwrap().push(event.clone());
+        }),
+    )
+    .unwrap();
+
+    let chunks = vec![
+        json!({"messageStart": {"role": "assistant"}}),
+        json!({"contentBlockDelta": {
+            "contentBlockIndex": 0,
+            "delta": {"text": "The weather is clear."}
+        }}),
+        json!({"contentBlockStop": {"contentBlockIndex": 0}}),
+        json!({"contentBlockStart": {
+            "contentBlockIndex": 1,
+            "start": {"toolUse": {"toolUseId": "tool-1", "name": "get_weather"}}
+        }}),
+        json!({"contentBlockDelta": {
+            "contentBlockIndex": 1,
+            "delta": {"toolUse": {"input": "{\"city\":\"Paris\"}"}}
+        }}),
+        json!({"contentBlockStop": {"contentBlockIndex": 1}}),
+        json!({"messageStop": {"stopReason": "tool_use"}}),
+        json!({"metadata": {
+            "usage": {"inputTokens": 12, "outputTokens": 8, "totalTokens": 20},
+            "metrics": {"latencyMs": 42}
+        }}),
+    ];
+    let provider_chunks = chunks.clone();
+    let provider: LlmStreamExecutionNextFn = Arc::new(move |_request| {
+        let provider_chunks = provider_chunks.clone();
+        Box::pin(async move {
+            Ok(LlmJsonStream::new(futures::stream::iter(
+                provider_chunks.into_iter().map(Ok),
+            )))
+        })
+    });
+    let stream_codec = BedrockConverseStreamingCodec::new();
+    let model_id = "amazon.nova-pro-v1:0";
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("aws.bedrock.converse")
+            .request(make_llm_request(json!({
+                "modelId": model_id,
+                "messages": [{"role": "user", "content": [{"text": "Weather?"}]}]
+            })))
+            .func(provider)
+            .model_name(model_id)
+            .codec(Arc::new(BedrockConverseCodec))
+            .collector(stream_codec.collector())
+            .finalizer(stream_codec.finalizer())
+            .response_codec(Arc::new(BedrockConverseCodec))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let mut client_chunks = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        client_chunks.push(chunk.unwrap());
+    }
+    stream.close().await.unwrap();
+    assert_eq!(client_chunks, chunks);
+
+    let captured = captured_events_snapshot(&events);
+    let end_event = captured
+        .iter()
+        .find(|event| is_scope_event(event, ScopeType::Llm, ScopeCategory::End))
+        .expect("expected LlmEnd event after ConverseStream drain");
+    let annotated = end_event
+        .annotated_response()
+        .expect("Bedrock stream should produce a normalized final response");
+    assert_eq!(annotated.response_text(), Some("The weather is clear."));
+    assert_eq!(annotated.finish_reason, Some(FinishReason::ToolUse));
+    let tool_calls = annotated.tool_calls.as_ref().expect("tool call decoded");
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].id, "tool-1");
+    assert_eq!(tool_calls[0].name, "get_weather");
+    assert_eq!(tool_calls[0].arguments, json!({"city": "Paris"}));
+    let usage = annotated.usage.as_ref().expect("usage decoded");
+    assert_eq!(usage.prompt_tokens, Some(12));
+    assert_eq!(usage.completion_tokens, Some(8));
+    assert_eq!(usage.total_tokens, Some(20));
+
+    deregister_subscriber("bedrock_converse_stream_pipeline_sub").unwrap();
 }
 
 #[tokio::test]

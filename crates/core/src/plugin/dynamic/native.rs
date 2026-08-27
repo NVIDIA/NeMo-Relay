@@ -28,9 +28,9 @@ use crate::api::registry::{
     list_runtime_registrations, register_conditional_middleware_guardrail,
 };
 use crate::api::runtime::{
-    ConditionalMiddlewareGuardrailFn, EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn,
-    LlmCodecIdentity, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream,
-    LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
+    BuiltinLlmCodec, ConditionalMiddlewareGuardrailFn, EventMetadataInjectorFn, EventSanitizeFn,
+    EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
+    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
     LlmStreamExecutionNextFn, MiddlewareContinuationContext, ToolConditionalFn, ToolExecutionFn,
     ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
@@ -3471,9 +3471,10 @@ fn native_async_codec_identity(identity: &LlmCodecIdentity) -> Json {
         LlmCodecIdentity::None => {
             serde_json::json!({"codec_kind": "none", "codec_id": Json::Null})
         }
-        LlmCodecIdentity::BuiltIn(codec) => {
-            serde_json::json!({"codec_kind": "builtin", "codec_id": codec.id()})
-        }
+        LlmCodecIdentity::BuiltIn(codec) => match native_v4_builtin_id(*codec) {
+            Some(id) => serde_json::json!({"codec_kind": "builtin", "codec_id": id}),
+            None => serde_json::json!({"codec_kind": "opaque", "codec_id": Json::Null}),
+        },
         LlmCodecIdentity::Runtime(id) => {
             serde_json::json!({"codec_kind": "runtime", "codec_id": id})
         }
@@ -5179,9 +5180,10 @@ fn native_llm_codec_identity(
 )> {
     let (codec_kind, codec_id) = match context {
         LlmCodecIdentity::None => (NemoRelayNativeLlmCodecKind::None, None),
-        LlmCodecIdentity::BuiltIn(codec) => {
-            (NemoRelayNativeLlmCodecKind::BuiltIn, Some(codec.id()))
-        }
+        LlmCodecIdentity::BuiltIn(codec) => match native_v4_builtin_id(*codec) {
+            Some(id) => (NemoRelayNativeLlmCodecKind::BuiltIn, Some(id)),
+            None => (NemoRelayNativeLlmCodecKind::Opaque, None),
+        },
         LlmCodecIdentity::Runtime(id) => (NemoRelayNativeLlmCodecKind::Runtime, Some(id.as_str())),
         LlmCodecIdentity::Opaque => (NemoRelayNativeLlmCodecKind::Opaque, None),
     };
@@ -5193,6 +5195,22 @@ fn native_llm_codec_identity(
             None => None,
         };
     Ok((codec_kind, codec_id))
+}
+
+/// Built-in IDs already exposed through the existing native codec-context ABI.
+/// Preserve those identities for compatibility. New identities travel as opaque
+/// until a versioned capability negotiation can prove that the loaded plugin
+/// understands them; the callback-scoped decode/encode capability remains
+/// available either way.
+fn native_v4_builtin_id(codec: BuiltinLlmCodec) -> Option<&'static str> {
+    match codec {
+        BuiltinLlmCodec::OpenAiChat
+        | BuiltinLlmCodec::OpenAiResponses
+        | BuiltinLlmCodec::AnthropicMessages
+        | BuiltinLlmCodec::OCIGenAI
+        | BuiltinLlmCodec::GeminiGenerateContent => Some(codec.id()),
+        BuiltinLlmCodec::BedrockConverse => None,
+    }
 }
 
 fn wrap_llm_conditional_fn(

@@ -14,7 +14,9 @@ use super::request::AnnotatedLlmRequest;
 use super::response::AnnotatedLlmResponse;
 use super::streaming::StreamingCodec;
 use super::traits::{LlmCodec, LlmResponseCodec};
-use super::{anthropic, gemini_generate_content, oci_genai, openai_chat, openai_responses};
+use super::{
+    anthropic, bedrock_converse, gemini_generate_content, oci_genai, openai_chat, openai_responses,
+};
 
 /// A built-in provider request/response surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +31,8 @@ pub enum ProviderSurface {
     OCIGenAI,
     /// Gemini generateContent.
     GeminiGenerateContent,
+    /// Amazon Bedrock Converse.
+    BedrockConverse,
 }
 
 /// Request shape detector; the optional `&str` is a provider hint a codec may use
@@ -68,6 +72,9 @@ pub(crate) struct ProviderSurfaceDescriptor {
 /// surface it could shadow. Response detection requires exactly one match
 /// before decoding.
 pub(crate) static BUILTIN_PROVIDER_SURFACES: &[ProviderSurfaceDescriptor] = &[
+    // Converse precedes the overlapping messages/system surfaces because modelId
+    // is a provider-specific discriminator.
+    bedrock_converse::PROVIDER_SURFACE,
     openai_responses::PROVIDER_SURFACE,
     anthropic::PROVIDER_SURFACE,
     // OCI GenAI must precede OpenAI Chat: a bare OCI GENERIC chatRequest body
@@ -80,21 +87,25 @@ pub(crate) static BUILTIN_PROVIDER_SURFACES: &[ProviderSurfaceDescriptor] = &[
 
 /// Detect the request surface from a raw request body by top-level key.
 ///
-/// Priority: OpenAI Responses (`input`/`instructions`) > Anthropic Messages
-/// (`system`) > OpenAI Chat (`messages`) > Gemini generateContent (`contents`).
-/// `None` when no key matches or `body` is not an object. This is a best-effort heuristic: an
-/// Anthropic request that omits the optional top-level `system` is
-/// indistinguishable from OpenAI Chat and classifies as `OpenAIChat`.
+/// Priority: Bedrock Converse (`modelId` plus a Converse field) > OpenAI
+/// Responses (`input`/`instructions`) > Anthropic Messages (`system`) > OCI
+/// Generative AI (`chatRequest`) > OpenAI Chat (`messages`) > Gemini
+/// generateContent (`contents`). `None` when no shape matches or `body` is not
+/// an object. This is a best-effort heuristic: an Anthropic request that omits
+/// the optional top-level `system` is indistinguishable from OpenAI Chat and
+/// classifies as `OpenAIChat` without a provider hint.
 #[must_use]
 pub fn detect_request_surface(body: &Json) -> Option<ProviderSurface> {
     detect_request_surface_with_hint(body, None)
 }
 
-/// Like [`detect_request_surface`], but a recognized `provider_hint` resolves the
-/// one ambiguous shape (an Anthropic request without a top-level `system`,
-/// otherwise read as OpenAI Chat). Today, only the exact hints `"anthropic"`
-/// and `"anthropic.messages"` change detection; `None` or any other value is
-/// ignored and detection stays shape-only.
+/// Like [`detect_request_surface`], but a recognized `provider_hint` resolves
+/// otherwise ambiguous request shapes. The exact hints `"anthropic"` and
+/// `"anthropic.messages"` disambiguate system-less Anthropic Messages.
+/// `"aws.bedrock.converse"` and `"bedrock.converse"` can select a Converse
+/// envelope containing `modelId` even before another Converse-specific field is
+/// present; ordinary Converse requests are already identified by `modelId` plus
+/// their request fields. Unknown hints do not override stronger shape signals.
 #[must_use]
 pub fn detect_request_surface_with_hint(
     body: &Json,
@@ -163,6 +174,7 @@ fn descriptor_for(surface: ProviderSurface) -> &'static ProviderSurfaceDescripto
         ProviderSurface::AnthropicMessages => &anthropic::PROVIDER_SURFACE,
         ProviderSurface::OCIGenAI => &oci_genai::PROVIDER_SURFACE,
         ProviderSurface::GeminiGenerateContent => &gemini_generate_content::PROVIDER_SURFACE,
+        ProviderSurface::BedrockConverse => &bedrock_converse::PROVIDER_SURFACE,
     }
 }
 
