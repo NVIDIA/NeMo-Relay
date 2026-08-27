@@ -139,9 +139,11 @@ Returns a cloneable high-level runtime handle.
 
 #### `register_conditional_middleware_guardrail`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_conditional_middleware_guardrail(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    kinds: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/collections/btree/set/struct.BTreeSet.html\">BTreeSet</a>&lt;<a href=\"enum-runtimeregistrationkind\">RuntimeRegistrationKind</a>&gt;,\n    registration_name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    reason: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_conditional_middleware_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    kinds: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/collections/btree/set/struct.BTreeSet.html\">BTreeSet</a>&lt;<a href=\"enum-runtimeregistrationkind\">RuntimeRegistrationKind</a>&gt;,\n    registration_name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/collections/btree/set/struct.BTreeSet.html\">BTreeSet</a>&lt;<a href=\"enum-runtimeregistrationkind\">RuntimeRegistrationKind</a>&gt;, &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
 
-Declares a host-resident conditional middleware guardrail for activation.
+Declares a callback conditional middleware guardrail for activation.
+
+Return `Some(reason)` to disable the matching target or `None` to leave it enabled.
 
 #### `register_subscriber`
 

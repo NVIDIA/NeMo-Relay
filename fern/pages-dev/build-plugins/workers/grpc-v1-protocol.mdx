@@ -72,7 +72,8 @@ the schema identifiers in the JSON envelope table later on this page.
 | `Health` | `activation_id` and `auth_token` | `ok`, `message`, `plugin_id`, `worker_protocol`, SDK name and version, and runtime name and version |
 | `Validate` | `activation_id`, `plugin_id`, `auth_token`, and component `config` | A `diagnostics` envelope or `error` |
 | `Register` | `activation_id`, `plugin_id`, `auth_token`, and validated component `config` | Repeated `registrations` or `error`; each registration contains `local_name`, `surface`, `priority`, and `break_chain` |
-| `Invoke` and `InvokeStream` | `activation_id`, `invocation_id`, `registration_name`, `surface`, optional `continuation_id`, captured `scope`, `auth_token`, and exactly one event, tool, or LLM payload | `Invoke` returns exactly one empty, JSON, guardrail, LLM request outcome, tool execution outcome, or error result. `InvokeStream` returns value chunks followed by clean stream closure or one terminal error chunk. |
+| `Invoke` | `activation_id`, `invocation_id`, `registration_name`, `surface`, optional `continuation_id`, captured `scope`, `auth_token`, and exactly one event, tool, LLM, or conditional-middleware payload | Exactly one empty, JSON, guardrail, LLM request outcome, tool execution outcome, or error result. |
+| `InvokeStream` | `activation_id`, `invocation_id`, `registration_name`, LLM stream execution `surface`, `continuation_id`, captured `scope`, `auth_token`, and one LLM payload | Value chunks followed by clean stream closure or one terminal error chunk. |
 | `CancelInvocation` | `activation_id`, `invocation_id`, `auth_token`, and `reason` | `accepted` and a human-readable `message` |
 | `Shutdown` | `activation_id`, `auth_token`, and `reason` | `accepted` and a human-readable `message` |
 
@@ -96,6 +97,7 @@ the schema identifiers in the JSON envelope table later on this page.
 | 30 | Mark sanitize guardrail | Replacement event sanitization fields. |
 | 31 | Scope-start sanitize guardrail | Replacement event sanitization fields. |
 | 32 | Scope-end sanitize guardrail | Replacement event sanitization fields. |
+| 40 | Conditional middleware guardrail callback | Optional disable reason. |
 
 The numeric values are part of the wire contract. Unknown value zero never represents
 a valid registration.
@@ -119,13 +121,15 @@ enum RegistrationSurface {
   MARK_SANITIZE_GUARDRAIL = 30;
   SCOPE_SANITIZE_START_GUARDRAIL = 31;
   SCOPE_SANITIZE_END_GUARDRAIL = 32;
+  CONDITIONAL_MIDDLEWARE_GUARDRAIL = 40;
 }
 ```
 
 An invocation names the activation, invocation, registration, surface, optional
 continuation, captured scope, and token. Its payload is exactly one event, tool
-invocation, or LLM invocation. LLM sanitizer invocations additionally carry codec
-identity and an opaque invocation-scoped codec capability.
+invocation, LLM invocation, or conditional middleware invocation. LLM sanitizer
+invocations additionally carry codec identity and an opaque invocation-scoped codec
+capability.
 
 For `EVENT_METADATA_INJECTOR`, Relay sends the immutable Event snapshot in
 `InvokeRequest.event`. The worker returns an `InvokeResponse.json` object containing
@@ -147,7 +151,13 @@ message InvokeRequest {
     JsonEnvelope event = 10;
     ToolInvocation tool = 11;
     LlmInvocation llm = 12;
+    ConditionalMiddlewareInvocation conditional_middleware = 13;
   }
+}
+
+message ConditionalMiddlewareInvocation {
+  repeated RegistrationSurface kinds = 1;
+  string registration_name = 2;
 }
 
 message LlmInvocation {

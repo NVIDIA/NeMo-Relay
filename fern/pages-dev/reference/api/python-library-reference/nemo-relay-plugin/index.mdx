@@ -440,10 +440,10 @@ Register a callback that receives Relay events.
 ##### `register_conditional_middleware_guardrail`
 
 ```python
-def register_conditional_middleware_guardrail(name: str, kinds: set[RuntimeRegistrationKind], registration_name: str, reason: str) -> None
+def register_conditional_middleware_guardrail(name: str, kinds: set[RuntimeRegistrationKind], registration_name: str, callback: ConditionalMiddlewareCallback) -> None
 ```
 
-Declare a host-resident gate installed with this activation.
+Declare a callback-based gate installed with this activation.
 
 ##### `register_event_metadata_injector`
 
@@ -590,10 +590,10 @@ List global gateable registrations known to the Relay host.
 ##### `register_conditional_middleware_guardrail`
 
 ```python
-async def register_conditional_middleware_guardrail(name: str, kinds: set[RuntimeRegistrationKind], registration_name: str, reason: str) -> ConditionalMiddlewareGuardrailHandle
+async def register_conditional_middleware_guardrail(name: str, kinds: set[RuntimeRegistrationKind], registration_name: str, callback: ConditionalMiddlewareCallback) -> ConditionalMiddlewareGuardrailHandle
 ```
 
-Register a host-resident gate owned by this worker activation.
+Register a callback-based gate owned by this worker activation.
 
 ##### `deregister_conditional_middleware_guardrail`
 
@@ -601,7 +601,7 @@ Register a host-resident gate owned by this worker activation.
 async def deregister_conditional_middleware_guardrail(handle: ConditionalMiddlewareGuardrailHandle) -> bool
 ```
 
-Remove a host-resident gate owned by this worker activation.
+Remove a callback-based gate owned by this worker activation.
 
 ##### `emit_mark`
 
@@ -771,6 +771,7 @@ Run a local `grpc-v1` worker until the Relay host shuts it down.
 
 - `ANNOTATED_LLM_REQUEST_SCHEMA`
 - `AnnotatedLlmRequest`
+- `ConditionalMiddlewareCallback`
 - `DATA_SCHEMA_SCHEMA`
 - `EVENT_SCHEMA`
 - `Event`

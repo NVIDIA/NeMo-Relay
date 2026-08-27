@@ -2,7 +2,7 @@
 title: "Enum Registration Surface"
 sidebar-title: "RegistrationSurface"
 description: "API documentation for the Rust `RegistrationSurface` enum in crate `nemo_relay_worker_proto`."
-position: 68
+position: 69
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -11,7 +11,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 ```rust
 #[repr(i32)]pub enum RegistrationSurface {
-Show 17 variants    Unspecified = 0,
+Show 18 variants    Unspecified = 0,
     Subscriber = 1,
     EventMetadataInjector = 2,
     ToolSanitizeRequestGuardrail = 10,
@@ -28,6 +28,7 @@ Show 17 variants    Unspecified = 0,
     MarkSanitizeGuardrail = 30,
     ScopeSanitizeStartGuardrail = 31,
     ScopeSanitizeEndGuardrail = 32,
+    ConditionalMiddlewareGuardrail = 40,
 }
 ```
 
@@ -100,6 +101,10 @@ Show 17 variants    Unspecified = 0,
 ### `ScopeSanitizeEndGuardrail = 32`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ScopeSanitizeEndGuardrail = 32"}} /></pre>
+
+### `ConditionalMiddlewareGuardrail = 40`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ConditionalMiddlewareGuardrail = 40"}} /></pre>
 
 ## Implementations
 

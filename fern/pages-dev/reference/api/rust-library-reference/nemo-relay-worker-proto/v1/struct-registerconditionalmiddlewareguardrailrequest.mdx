@@ -2,14 +2,14 @@
 title: "Struct Register Conditional Middleware Guardrail Request"
 sidebar-title: "RegisterConditionalMiddlewareGuardrailRequest"
 description: "API documentation for the Rust `RegisterConditionalMiddlewareGuardrailRequest` struct in crate `nemo_relay_worker_proto`."
-position: 46
+position: 47
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct RegisterConditionalMiddlewareGuardrailRequest &#123;\n    pub activation_id: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub auth_token: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub name: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub kinds: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;,\n    pub registration_name: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub reason: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct RegisterConditionalMiddlewareGuardrailRequest &#123;\n    pub activation_id: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub auth_token: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub name: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub kinds: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;,\n    pub registration_name: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub reason: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub callback: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n&#125;"}} /></pre>
 
 ## Fields
 
@@ -24,6 +24,8 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 ### `registration_name: String`
 
 ### `reason: String`
+
+### `callback: bool`
 
 ## Implementations
 

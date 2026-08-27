@@ -39,7 +39,7 @@ function signatures and field order are defined by the public
 |---|---|
 | Frozen v1/v2 prefix | Version and struct-size negotiation; host version; string allocation, access, and release; thread-local error reporting; callback-scoped LLM request decode and encode plus response decode; subscriber, five tool, six LLM, and three event-sanitizer registrations; current scope, scope push and pop, mark emission, isolated stack creation and release, thread-stack set, capture, and restore, captured-binding release, active-stack inspection, and scoped binding. |
 | Frozen v3 extension | Completion resolve, reject, cancellation inspection, and release; one-shot completion-coupled continuation invocation; continuation release; generic async middleware registration; bounded output-stream push, finish, reject, cancellation inspection, and release; downstream stream invocation; stream-middleware registration; and repeated or concurrent unary continuation invocation with independent result callbacks. |
-| Current v4 extension | Completion-scoped LLM request decode and encode plus response decode; pull-based downstream LLM stream open, pull, cancel, and release; completion retain for typed codec facades; output-stream backpressure inspection; extended mark emission; runtime diagnostics; activation-owned runtime capability creation, retain, and release; global runtime-registration discovery; owned conditional middleware guardrail registration and deregistration; and activation-time host-resident gate declaration. |
+| Current v4 extension | Completion-scoped LLM request decode and encode plus response decode; pull-based downstream LLM stream open, pull, cancel, and release; completion retain for typed codec facades; output-stream backpressure inspection; extended mark emission; runtime diagnostics; activation-owned runtime capability creation, retain, and release; global runtime-registration discovery; owned conditional middleware guardrail registration and deregistration; and activation-owned and runtime-discovered callback gate registration. The callback registration slots are appended after the original constant-reason slots. |
 
 The prefix and descriptor layout are explicit. A plugin fills the descriptor with its
 stable kind, component multiplicity, opaque state, callbacks, and destructor. The host
@@ -98,6 +98,18 @@ reference. Each successful `plugin_runtime_retain` call creates another owned re
 and the plugin must pass every owned reference to `plugin_runtime_release` exactly once.
 Activation teardown makes runtime operations unavailable, but it does not release
 references retained by plugin code; those references must still be released.
+
+The v4 conditional middleware callback receives the configured registration kinds as
+JSON and the target's effective registration name. It returns a host-allocated reason
+to disable the target or a null reason to leave the target enabled. Callback registration
+consumes `user_data` on every return path. Relay calls `free_fn` after deregistration,
+activation rollback, or teardown. The callback runs synchronously in the host process,
+must not unwind across the ABI, and must not make reentrant Relay calls. Callback errors
+and invalid reason strings fail open.
+
+The callback slots extend v4 through `struct_size`. Existing v4 binaries continue to use
+the original table prefix and constant-reason slots at unchanged offsets. A plugin must
+verify that `struct_size` includes a callback slot before reading or calling it.
 
 ```rust
 #[repr(i32)]

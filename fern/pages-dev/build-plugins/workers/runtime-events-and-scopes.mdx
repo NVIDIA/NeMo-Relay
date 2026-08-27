@@ -31,10 +31,9 @@ values identify a live local capability and expire with the activation or invoca
 
 ## Control a Registration from a Background Task
 
-Worker gates are host-resident. Relay does not call the worker while it resolves
-a middleware chain or publishes an event. A worker timer or health monitor can
-therefore register a constant-reason gate, retain its activation-owned handle,
-and deregister it later.
+Worker gates are callback-based. Relay invokes the callback through `grpc-v1` while it
+constructs a middleware or publication snapshot. Callback, transport, and timeout
+failures leave the target enabled. Keep callbacks fast and side-effect free.
 
 The following worker flows discover the observability plugin's OpenTelemetry subscriber
 and disable it for one timer interval:
@@ -65,7 +64,7 @@ gate = await ctx.runtime.register_conditional_middleware_guardrail(
     "pause-opentelemetry",
     {RuntimeRegistrationKind.SUBSCRIBER},
     opentelemetry.effective_name,
-    "worker timer active",
+    lambda _kinds, _name: "worker timer active",
 )
 try:
     await asyncio.sleep(30)
@@ -98,7 +97,7 @@ let gate = runtime
         "pause-opentelemetry",
         kinds,
         &opentelemetry.effective_name,
-        "worker timer active",
+        |_, _| async { Ok(Some("worker timer active".into())) },
     )
     .await?;
 tokio::time::sleep(Duration::from_secs(30)).await;
@@ -110,7 +109,7 @@ runtime.deregister_conditional_middleware_guardrail(&gate).await?;
 The worker can remove only gates owned by its activation. Relay removes any
 remaining owned gates during ordinary activation teardown. A worker can also
 call `PluginContext.register_conditional_middleware_guardrail` during
-registration to declare an initial host-resident gate; use `PluginRuntime` for
+registration to declare an initial callback-backed gate; use `PluginRuntime` for
 timer-controlled changes after activation.
 
 Refer to [Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
@@ -120,8 +119,7 @@ the distinction between activation-owned and runtime-discovered gates.
 ## Declare an Initial Gate
 
 Use the component context when the validated configuration requires the gate for the
-complete worker activation. The following examples install the same host-resident
-constant reason:
+complete worker activation. The following examples install equivalent callbacks:
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -130,7 +128,7 @@ ctx.register_conditional_middleware_guardrail(
     "documentation_registration_control",
     {RuntimeRegistrationKind.SUBSCRIBER},
     registration_name,
-    "disabled by documentation plugin",
+    lambda _kinds, _name: "disabled by documentation plugin",
 )
 ```
 </Tab>
@@ -141,7 +139,7 @@ ctx.register_conditional_middleware_guardrail(
     "documentation_registration_control",
     BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
     registration_name,
-    "disabled by documentation plugin",
+    |_, _| async { Ok(Some("disabled by documentation plugin".into())) },
 );
 ```
 </Tab>

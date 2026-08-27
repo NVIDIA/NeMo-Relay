@@ -1,51 +1,73 @@
 ---
-title: "Struct Empty Result"
-sidebar-title: "EmptyResult"
-description: "API documentation for the Rust `EmptyResult` struct in crate `nemo_relay_worker_proto`."
-position: 18
+title: "Struct Conditional Middleware Invocation"
+sidebar-title: "ConditionalMiddlewareInvocation"
+description: "API documentation for the Rust `ConditionalMiddlewareInvocation` struct in crate `nemo_relay_worker_proto`."
+position: 11
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-```rust
-pub struct EmptyResult {}
-```
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ConditionalMiddlewareInvocation &#123;\n    pub kinds: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;,\n    pub registration_name: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n&#125;"}} /></pre>
+
+## Fields
+
+### `kinds: Vec<i32>`
+
+### `registration_name: String`
+
+## Implementations
+
+### `impl ConditionalMiddlewareInvocation`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-conditionalmiddlewareinvocation\">ConditionalMiddlewareInvocation</a>"}} /></pre>
+
+#### `kinds`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn kinds(\n    &amp;self,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/adapters/filter_map/struct.FilterMap.html\">FilterMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/iter/adapters/cloned/struct.Cloned.html\">Cloned</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/slice/iter/struct.Iter.html\">Iter</a>&lt;'_, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;&gt;, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-registrationsurface\">RegistrationSurface</a>&gt;&gt;"}} /></pre>
+
+Returns an iterator which yields the valid enum values contained in `kinds`.
+
+#### `push_kinds`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn push_kinds(&amp;mut self, value: <a href=\"enum-registrationsurface\">RegistrationSurface</a>)"}} /></pre>
+
+Appends the provided enum value to `kinds`.
 
 ## Trait Implementations
 
-### `impl Clone for EmptyResult`
+### `impl Clone for ConditionalMiddlewareInvocation`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-emptyresult\">EmptyResult</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-conditionalmiddlewareinvocation\">ConditionalMiddlewareInvocation</a>"}} /></pre>
 
 #### `clone`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-emptyresult\">EmptyResult</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-conditionalmiddlewareinvocation\">ConditionalMiddlewareInvocation</a>"}} /></pre>
 
 #### `clone_from`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
 
-### `impl Debug for EmptyResult`
+### `impl Debug for ConditionalMiddlewareInvocation`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-emptyresult\">EmptyResult</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-conditionalmiddlewareinvocation\">ConditionalMiddlewareInvocation</a>"}} /></pre>
 
 #### `fmt`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
 
-### `impl Default for EmptyResult`
+### `impl Default for ConditionalMiddlewareInvocation`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-emptyresult\">EmptyResult</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-conditionalmiddlewareinvocation\">ConditionalMiddlewareInvocation</a>"}} /></pre>
 
 #### `default`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>
 
-### `impl Hash for EmptyResult`
+### `impl Hash for ConditionalMiddlewareInvocation`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html\">Hash</a> for <a href=\"struct-emptyresult\">EmptyResult</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html\">Hash</a> for <a href=\"struct-conditionalmiddlewareinvocation\">ConditionalMiddlewareInvocation</a>"}} /></pre>
 
 #### `hash`
 
@@ -55,9 +77,9 @@ pub struct EmptyResult {}
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html#method.hash_slice\">hash_slice</a>&lt;H&gt;(data: &amp;[Self], state: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;mut H</a>)where\n    H: <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hasher.html\">Hasher</a>,\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
 
-### `impl Message for EmptyResult`
+### `impl Message for ConditionalMiddlewareInvocation`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html\">Message</a> for <a href=\"struct-emptyresult\">EmptyResult</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html\">Message</a> for <a href=\"struct-conditionalmiddlewareinvocation\">ConditionalMiddlewareInvocation</a>"}} /></pre>
 
 #### `encoded_len`
 
@@ -99,26 +121,22 @@ pub struct EmptyResult {}
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html#method.merge_length_delimited\">merge_length_delimited</a>(&amp;mut self, buf: impl Buf) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://docs.rs/prost/0.14.3/prost/error/struct.DecodeError.html\">DecodeError</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
 
-### `impl PartialEq for EmptyResult`
+### `impl PartialEq for ConditionalMiddlewareInvocation`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-emptyresult\">EmptyResult</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-conditionalmiddlewareinvocation\">ConditionalMiddlewareInvocation</a>"}} /></pre>
 
 #### `eq`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-emptyresult\">EmptyResult</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-conditionalmiddlewareinvocation\">ConditionalMiddlewareInvocation</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
 
 #### `ne`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
 
-### `impl Copy for EmptyResult`
+### `impl Eq for ConditionalMiddlewareInvocation`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-emptyresult\">EmptyResult</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"struct-conditionalmiddlewareinvocation\">ConditionalMiddlewareInvocation</a>"}} /></pre>
 
-### `impl Eq for EmptyResult`
+### `impl StructuralPartialEq for ConditionalMiddlewareInvocation`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"struct-emptyresult\">EmptyResult</a>"}} /></pre>
-
-### `impl StructuralPartialEq for EmptyResult`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"struct-emptyresult\">EmptyResult</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"struct-conditionalmiddlewareinvocation\">ConditionalMiddlewareInvocation</a>"}} /></pre>

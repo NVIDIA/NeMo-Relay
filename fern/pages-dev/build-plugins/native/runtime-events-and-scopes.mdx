@@ -119,28 +119,45 @@ returns structured global identities. A background plugin task can call
 and call `deregister_conditional_middleware_guardrail` when the target should
 be eligible for future snapshots again.
 
-The host evaluates a constant reason callback locally. It does not enter the
-native library while resolving the target. The plugin can remove only gates
-owned by its activation, and Relay removes remaining gates during activation
-teardown. Use `PluginContext::register_conditional_middleware_guardrail` for a
-gate that must exist as part of the initial registration transaction.
+Relay evaluates the callback synchronously in the trusted in-process plugin and
+fails open if the callback reports an ABI error. The plugin can remove only gates
+owned by its activation, and Relay removes remaining gates and releases their
+callback state before unloading the library. Use
+`PluginContext::register_conditional_middleware_guardrail` for a gate that must
+exist as part of the initial registration transaction.
 
 The following registration uses the example's validated, disabled-by-default
 `registration_control` group:
 
 ```rust
 if config.registration_control.enabled {
+    let kinds = config.registration_control.kinds.iter().copied().collect();
+    let blocked_registration_name = config.registration_control.registration_name.clone();
+    let callback_registration_name = blocked_registration_name.clone();
+    let reason = config.registration_control.reason.clone();
     context.register_conditional_middleware_guardrail(
-        "documentation_registration_control",
-        &config.registration_control.kinds.iter().copied().collect(),
-        &config.registration_control.registration_name,
-        &config.registration_control.reason,
+        "documentation_registration_control_block",
+        &kinds,
+        &blocked_registration_name,
+        move |_, registration_name| {
+            (registration_name == callback_registration_name)
+                .then(|| reason.clone())
+        },
+    )?;
+    context.register_conditional_middleware_guardrail(
+        "documentation_registration_control_allow",
+        &kinds,
+        &config.registration_control.allowed_registration_name,
+        |_, _| None,
     )?;
 }
 ```
 
-The native SDK installs the constant reason in the host. Relay does not enter the native
-library while it evaluates future snapshots. Refer to
+The first callback returns a reason and disables its matching registration. The second
+callback returns `None` and leaves its matching registration enabled. The callback
+registration functions are an append-only native ABI v4 extension; the original
+constant-reason v4 slots remain at their existing offsets for binary compatibility.
+Refer to
 [Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
 for the complete discovery, ordering, snapshot, and cleanup contract.
 
