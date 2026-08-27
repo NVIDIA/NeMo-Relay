@@ -812,16 +812,18 @@ impl OpenTelemetrySubscriber {
                 OpenTelemetryError::TraceProvider("event processor lock poisoned".to_string())
             })?
             .dynamic_providers();
-        self.inner
-            .provider
-            .force_flush()
-            .map_err(|error| OpenTelemetryError::TraceProvider(error.to_string()))?;
-        for provider in dynamic_providers {
-            provider
-                .force_flush()
-                .map_err(|error| OpenTelemetryError::TraceProvider(error.to_string()))?;
+        let mut errors = Vec::new();
+        if let Err(error) = self.inner.provider.force_flush() {
+            errors.push(error.to_string());
         }
-        Ok(())
+        for provider in dynamic_providers {
+            if let Err(error) = provider.force_flush() {
+                errors.push(error.to_string());
+            }
+        }
+        errors.into_iter().next().map_or(Ok(()), |error| {
+            Err(OpenTelemetryError::TraceProvider(error))
+        })
     }
 
     /// Shuts down the underlying tracer provider.
@@ -846,10 +848,12 @@ impl OpenTelemetrySubscriber {
                 OpenTelemetryError::TraceProvider("event processor lock poisoned".to_string())
             })?
             .dynamic_providers();
-        let dynamic_result = dynamic_providers.into_iter().try_for_each(|provider| {
-            normalize_shutdown_result(provider.shutdown())
-                .map_err(|error| OpenTelemetryError::TraceProvider(error.to_string()))
-        });
+        let mut dynamic_errors = Vec::new();
+        for provider in dynamic_providers {
+            if let Err(error) = normalize_shutdown_result(provider.shutdown()) {
+                dynamic_errors.push(error.to_string());
+            }
+        }
         let provider_result = self.inner.provider.shutdown();
         if provider_result.is_ok() {
             log::info!(
@@ -861,7 +865,9 @@ impl OpenTelemetrySubscriber {
         }
         normalize_shutdown_result(provider_result)
             .map_err(|error| OpenTelemetryError::TraceProvider(error.to_string()))?;
-        dynamic_result
+        dynamic_errors.into_iter().next().map_or(Ok(()), |error| {
+            Err(OpenTelemetryError::TraceProvider(error))
+        })
     }
 }
 
@@ -1540,15 +1546,11 @@ impl OtelEventProcessor {
         }
 
         let mut attributes = configured_resource_attributes(config);
-        let protected_keys = attributes
-            .iter()
-            .map(|attribute| attribute.key.as_str().to_string())
-            .collect::<HashSet<_>>();
         let promotion = promote_event_metadata_attributes(
             &mut attributes,
             event,
             &config.promote_resource_metadata_prefixes,
-            &protected_keys,
+            &self.resource_metadata_protected_keys,
         );
         self.record_metadata_promotion_issues(promotion.issues, "resource_metadata");
         let key = canonical_resource_key(&attributes);
