@@ -267,6 +267,11 @@ fields. That preset does not accept `target_paths`. Its
 `custom_mark_payload_policy` applies only to opaque marks in the `custom`
 category; it does not control Relay typed metric envelopes.
 
+On every mark, the preset preserves the reserved `nemo_relay.log.severity`
+metadata field in canonical form when it contains a supported severity. For
+opaque custom marks using `redact_all_leaves`, unsupported severity values and
+all other string leaves remain redacted.
+
 ## Action Semantics
 
 ### `remove`

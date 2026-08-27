@@ -7,8 +7,8 @@
 use super::*;
 use crate::api::event::{
     BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, EventSanitizeFields,
-    METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MarkEvent, MetricEnvelope, ScopeCategory,
-    ScopeEvent,
+    LOG_SEVERITY_METADATA_KEY, LogSeverity, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION,
+    MarkEvent, MetricEnvelope, ScopeCategory, ScopeEvent,
 };
 use crate::api::llm::{
     LlmCallExecuteParams, LlmCallParams, LlmRequest, LlmStreamCallExecuteParams, llm_call,
@@ -1133,6 +1133,54 @@ async fn trajectory_custom_mark_policy_is_explicit_and_shape_preserving() {
     let profile = sanitized.category_profile.unwrap();
     assert_eq!(profile.subtype.as_deref(), Some("neutral.plugin"));
     assert_eq!(profile.extra["opaque"]["label"], "[REDACTED]");
+}
+
+#[tokio::test]
+async fn trajectory_custom_mark_preserves_only_valid_log_severity() {
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("neutral.plugin.log").build(),
+        Some(EventCategory::custom()),
+        None,
+    ));
+    let callback =
+        crate::builtin::event_sanitize_callback(trajectory_backend(None, "redact_all_leaves"));
+
+    let sanitized = callback(
+        Arc::new(event.clone()),
+        EventSanitizeFields {
+            data: Some(json!({"message": "private"})),
+            category_profile: None,
+            metadata: Some(json!({
+                LOG_SEVERITY_METADATA_KEY: "warning",
+                "owner": "private owner"
+            })),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(sanitized.data, Some(json!({"message": "[REDACTED]"})));
+    assert_eq!(
+        sanitized.metadata,
+        Some(json!({
+            LOG_SEVERITY_METADATA_KEY: "warn",
+            "owner": "[REDACTED]"
+        }))
+    );
+
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: None,
+            category_profile: None,
+            metadata: Some(json!({LOG_SEVERITY_METADATA_KEY: "private severity"})),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        sanitized.metadata,
+        Some(json!({LOG_SEVERITY_METADATA_KEY: "[REDACTED]"}))
+    );
 }
 
 #[tokio::test]
@@ -2708,6 +2756,7 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
             .name("hermes.checkpoint")
             .data(json!({"content": raw_context, "email": raw_pii, "score": 0.95}))
             .metadata(json!({"reviewer": raw_pii}))
+            .severity(LogSeverity::Warn)
             .build(),
     )
     .unwrap();
@@ -2786,6 +2835,13 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
         .unwrap();
     assert_eq!(custom_mark.data().unwrap()["content"], "[REDACTED]");
     assert_eq!(custom_mark.data().unwrap()["score"], 0);
+    assert_eq!(
+        custom_mark.metadata().unwrap(),
+        &json!({
+            LOG_SEVERITY_METADATA_KEY: "warn",
+            "reviewer": "[REDACTED]"
+        })
+    );
 
     deregister_subscriber("pii-regression-subscriber").unwrap();
     atof.deregister("pii-regression-atof").unwrap();

@@ -8,7 +8,8 @@ use std::sync::Arc;
 use serde_json::Value as Json;
 
 use nemo_relay::api::event::{
-    CategoryProfile, Event, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope,
+    CategoryProfile, Event, LOG_SEVERITY_METADATA_KEY, LogSeverity, METRIC_DATA_SCHEMA_NAME,
+    METRIC_DATA_SCHEMA_VERSION, MetricEnvelope,
 };
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse;
@@ -130,6 +131,7 @@ impl TrajectorySanitizer {
         event: &Event,
         mut fields: nemo_relay::api::event::EventSanitizeFields,
     ) -> nemo_relay::api::event::EventSanitizeFields {
+        let log_severity = valid_mark_log_severity(event, fields.metadata.as_ref());
         if is_relay_metric_mark(event) {
             fields.data = fields
                 .data
@@ -140,7 +142,7 @@ impl TrajectorySanitizer {
             fields.category_profile = fields
                 .category_profile
                 .and_then(|profile| sanitize_category_profile(profile, &self.replacement));
-            return fields;
+            return restore_log_severity(fields, log_severity);
         }
 
         let category = event.category().map(|category| category.as_str());
@@ -162,7 +164,7 @@ impl TrajectorySanitizer {
                     .category_profile
                     .and_then(|profile| redact_custom_category_profile(profile, self));
             }
-            return fields;
+            return restore_log_severity(fields, log_severity);
         }
 
         if !specialized_scope {
@@ -180,7 +182,7 @@ impl TrajectorySanitizer {
         fields.category_profile = fields
             .category_profile
             .and_then(|profile| sanitize_category_profile(profile, &self.replacement));
-        fields
+        restore_log_severity(fields, log_severity)
     }
 
     /// Redact optional metric text without modifying required export fields.
@@ -200,6 +202,30 @@ impl TrajectorySanitizer {
         envelope.validate().ok()?;
         serde_json::to_value(envelope).ok()
     }
+}
+
+fn valid_mark_log_severity(event: &Event, metadata: Option<&Json>) -> Option<LogSeverity> {
+    if !matches!(event, Event::Mark(_)) {
+        return None;
+    }
+    metadata
+        .and_then(Json::as_object)
+        .and_then(|metadata| metadata.get(LOG_SEVERITY_METADATA_KEY))
+        .and_then(Json::as_str)
+        .and_then(|value| value.parse::<LogSeverity>().ok())
+}
+
+fn restore_log_severity(
+    mut fields: nemo_relay::api::event::EventSanitizeFields,
+    severity: Option<LogSeverity>,
+) -> nemo_relay::api::event::EventSanitizeFields {
+    if let (Some(severity), Some(Json::Object(metadata))) = (severity, fields.metadata.as_mut()) {
+        metadata.insert(
+            LOG_SEVERITY_METADATA_KEY.to_string(),
+            Json::String(severity.as_str().to_string()),
+        );
+    }
+    fields
 }
 
 /// Return whether an event carries Relay's typed metric schema.
