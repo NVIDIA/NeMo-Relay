@@ -327,6 +327,7 @@ type LlmStreamExecutionFn =
 struct WorkerHandlers {
     registrations: Vec<Registration>,
     conditional_middleware_guardrails: Vec<ConditionalMiddlewareGuardrailRegistration>,
+    conditional_middleware_callbacks: HashMap<String, ConditionalMiddlewareFn>,
     subscribers: HashMap<String, SubscriberFn>,
     event_metadata_injectors: HashMap<String, EventMetadataInjectorFn>,
     mark_sanitizers: HashMap<String, EventSanitizeFn>,
@@ -397,9 +398,10 @@ impl PluginContext {
                 callback: true,
             },
         );
-        if let Some(runtime) = &self.runtime {
-            runtime.insert_conditional_middleware_callback(name, callback);
-        }
+        self.handlers.conditional_middleware_callbacks.insert(
+            name.into(),
+            Arc::new(move |kinds, registration_name| Box::pin(callback(kinds, registration_name))),
+        );
     }
 
     /// Registers an event subscriber.
@@ -890,18 +892,14 @@ impl PluginRuntime {
         F: Fn(BTreeSet<RuntimeRegistrationKind>, String) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Option<String>>> + Send + 'static,
     {
-        if self
-            .conditional_middleware_callbacks
-            .lock()
-            .map_err(|error| WorkerSdkError::Callback(error.to_string()))?
-            .contains_key(name)
-        {
-            return Err(WorkerSdkError::InvalidInput(format!(
-                "conditional middleware callback '{name}' is already registered"
-            )));
-        }
-        self.insert_conditional_middleware_callback(name, callback);
-        let mut client = self.host_client().await?;
+        self.try_insert_conditional_middleware_callback(name, callback)?;
+        let mut client = match self.host_client().await {
+            Ok(client) => client,
+            Err(error) => {
+                self.remove_conditional_middleware_callback(name);
+                return Err(error);
+            }
+        };
         let response = match client
             .register_conditional_middleware_guardrail(Request::new(
                 RegisterConditionalMiddlewareGuardrailRequest {
@@ -961,20 +959,29 @@ impl PluginRuntime {
         Ok(response.removed)
     }
 
-    fn insert_conditional_middleware_callback<F, Fut>(&self, name: &str, callback: F)
+    fn try_insert_conditional_middleware_callback<F, Fut>(
+        &self,
+        name: &str,
+        callback: F,
+    ) -> Result<()>
     where
         F: Fn(BTreeSet<RuntimeRegistrationKind>, String) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Option<String>>> + Send + 'static,
     {
-        self.conditional_middleware_callbacks
+        let mut callbacks = self
+            .conditional_middleware_callbacks
             .lock()
-            .expect("conditional middleware callback lock")
-            .insert(
-                name.into(),
-                Arc::new(move |kinds, registration_name| {
-                    Box::pin(callback(kinds, registration_name))
-                }),
-            );
+            .map_err(|error| WorkerSdkError::Callback(error.to_string()))?;
+        if callbacks.contains_key(name) {
+            return Err(WorkerSdkError::InvalidInput(format!(
+                "conditional middleware callback '{name}' is already registered"
+            )));
+        }
+        callbacks.insert(
+            name.into(),
+            Arc::new(move |kinds, registration_name| Box::pin(callback(kinds, registration_name))),
+        );
+        Ok(())
     }
 
     fn remove_conditional_middleware_callback(&self, name: &str) {
@@ -1729,11 +1736,45 @@ impl PluginWorker for WorkerService {
         let registrations = ctx.handlers.registrations.clone();
         let conditional_middleware_guardrails =
             ctx.handlers.conditional_middleware_guardrails.clone();
-        *self
-            .handlers
-            .lock()
-            .map_err(|err| Status::internal(format!("handler lock poisoned: {err}")))? =
-            ctx.handlers;
+        {
+            let mut callbacks = self
+                .runtime
+                .conditional_middleware_callbacks
+                .lock()
+                .map_err(|err| {
+                    Status::internal(format!(
+                        "conditional middleware callback lock poisoned: {err}"
+                    ))
+                })?;
+            let mut handlers = self
+                .handlers
+                .lock()
+                .map_err(|err| Status::internal(format!("handler lock poisoned: {err}")))?;
+            if let Some(name) = ctx
+                .handlers
+                .conditional_middleware_callbacks
+                .keys()
+                .find(|name| {
+                    callbacks.contains_key(*name)
+                        && !handlers
+                            .conditional_middleware_callbacks
+                            .contains_key(*name)
+                })
+            {
+                return Ok(Response::new(RegisterResponse {
+                    registrations: Vec::new(),
+                    error: Some(sdk_error_to_worker(WorkerSdkError::InvalidInput(format!(
+                        "conditional middleware callback '{name}' is already registered"
+                    )))),
+                    conditional_middleware_guardrails: Vec::new(),
+                }));
+            }
+            for name in handlers.conditional_middleware_callbacks.keys() {
+                callbacks.remove(name);
+            }
+            callbacks.extend(ctx.handlers.conditional_middleware_callbacks.clone());
+            *handlers = ctx.handlers;
+        }
         Ok(Response::new(RegisterResponse {
             registrations,
             error: None,

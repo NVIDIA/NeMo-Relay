@@ -94,6 +94,30 @@ impl NativePlugin for FixtureNativePlugin {
             "missing-initial-target",
             |_, _| Some("fixture initial gate".into()),
         )?;
+        if plugin_config
+            .get("conditional_gate_test")
+            .and_then(Json::as_bool)
+            .unwrap_or(false)
+        {
+            ctx.register_conditional_middleware_guardrail(
+                "fixture_blocking_callback_gate",
+                &subscriber_kinds,
+                "fixture-native-blocked-subscriber",
+                |_, _| Some("fixture callback blocked target".into()),
+            )?;
+            ctx.register_conditional_middleware_guardrail(
+                "fixture_allowing_callback_gate",
+                &subscriber_kinds,
+                "fixture-native-allowed-subscriber",
+                |_, _| None,
+            )?;
+            ctx.register_conditional_middleware_guardrail(
+                "fixture_failing_callback_gate",
+                &subscriber_kinds,
+                "fixture-native-failed-open-subscriber",
+                |_, _| panic!("fixture callback failure"),
+            )?;
+        }
         let dynamic_gate = runtime.register_conditional_middleware_guardrail(
             "fixture_dynamic_gate",
             &subscriber_kinds,

@@ -1176,8 +1176,6 @@ class PluginContext:
             )
         )
         self._handlers.conditional_middleware_callbacks[name] = callback
-        if self._runtime is not None:
-            self._runtime._conditional_middleware_callbacks[name] = callback
 
     def register_event_metadata_injector(
         self,
@@ -2316,6 +2314,16 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 registered_config = copy.deepcopy(config)
                 ctx = PluginContext(runtime=self._runtime)
                 await _maybe_await(self._plugin.register(ctx, config))
+                previous_callbacks = self._handlers.conditional_middleware_callbacks
+                collisions = ctx._handlers.conditional_middleware_callbacks.keys() & (
+                    self._runtime._conditional_middleware_callbacks.keys() - previous_callbacks.keys()
+                )
+                if collisions:
+                    name = min(collisions)
+                    raise WorkerSdkError(f"conditional middleware callback {name!r} is already registered")
+                for name in previous_callbacks:
+                    self._runtime._conditional_middleware_callbacks.pop(name, None)
+                self._runtime._conditional_middleware_callbacks.update(ctx._handlers.conditional_middleware_callbacks)
                 self._handlers = ctx._handlers
                 self._registered_config = registered_config
                 return pb.RegisterResponse(

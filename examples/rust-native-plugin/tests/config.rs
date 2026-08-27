@@ -29,6 +29,7 @@ fn shared_configuration_is_valid() {
             "enabled": false,
             "kinds": ["subscriber"],
             "registration_name": "documentation-controlled-subscriber",
+            "allowed_registration_name": "documentation-observed-subscriber",
             "reason": "disabled by documentation plugin"
         },
         "executor": { "worker_threads": 2 }
@@ -116,6 +117,11 @@ fn invalid_values_are_rejected_at_their_fields() {
             json!({ "registration_control": { "registration_name": "" } }),
             "examples.rust_native_policy.invalid_registration_control",
             "registration_control.registration_name",
+        ),
+        (
+            json!({ "registration_control": { "allowed_registration_name": "" } }),
+            "examples.rust_native_policy.invalid_registration_control",
+            "registration_control.allowed_registration_name",
         ),
         (
             json!({ "registration_control": { "reason": "" } }),

@@ -415,6 +415,7 @@ static SCOPE_STACK_RESTORE_THREAD_STATUS: Mutex<NemoRelayStatus> = Mutex::new(Ne
 static SCOPE_STACK_WITH_CURRENT_STATUS: Mutex<NemoRelayStatus> = Mutex::new(NemoRelayStatus::Ok);
 static STRING_LIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static RUNTIME_CALLS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static CONDITIONAL_CALLBACK_RESULTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static SCOPE_HANDLE_FREES: AtomicUsize = AtomicUsize::new(0);
 static SCOPE_STACK_FREES: AtomicUsize = AtomicUsize::new(0);
 static SCOPE_STACK_BINDING_FREES: AtomicUsize = AtomicUsize::new(0);
@@ -2523,6 +2524,113 @@ unsafe extern "C" fn capture_plugin_context_register_gate_callback(
     }
 }
 
+unsafe fn record_conditional_callback_result(
+    label: &str,
+    cb: NemoRelayNativeConditionalMiddlewareCb,
+    user_data: *mut c_void,
+    kinds_json: *const NemoRelayNativeString,
+    registration_name: *const NemoRelayNativeString,
+    out_reason: *mut *mut NemoRelayNativeString,
+) {
+    let host = test_host();
+    let status = unsafe { cb(user_data, kinds_json, registration_name, out_reason) };
+    let reason = if out_reason.is_null() || unsafe { *out_reason }.is_null() {
+        "none".to_string()
+    } else {
+        let reason =
+            read_host_string(&host, unsafe { *out_reason }).unwrap_or_else(|| "invalid".into());
+        unsafe { (host.string_free)(*out_reason) };
+        reason
+    };
+    CONDITIONAL_CALLBACK_RESULTS
+        .lock()
+        .unwrap()
+        .push(format!("{label}:{status:?}:{reason}"));
+}
+
+unsafe extern "C" fn exercise_plugin_context_register_gate_callback(
+    _ctx: *mut NemoRelayNativePluginContext,
+    _name: *const NemoRelayNativeString,
+    kinds_json: *const NemoRelayNativeString,
+    registration_name: *const NemoRelayNativeString,
+    cb: NemoRelayNativeConditionalMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> NemoRelayStatus {
+    let host = test_host();
+    let allowed_name = host_string(&host, "documentation-observed-subscriber");
+    let malformed_kinds = host_string(&host, "not-json");
+    let mut out = ptr::null_mut();
+    unsafe {
+        record_conditional_callback_result(
+            "blocked",
+            cb,
+            user_data,
+            kinds_json,
+            registration_name,
+            &mut out,
+        );
+        record_conditional_callback_result(
+            "allowed",
+            cb,
+            user_data,
+            kinds_json,
+            allowed_name,
+            &mut out,
+        );
+        record_conditional_callback_result(
+            "malformed-kinds",
+            cb,
+            user_data,
+            malformed_kinds,
+            registration_name,
+            &mut out,
+        );
+        record_conditional_callback_result(
+            "null-kinds",
+            cb,
+            user_data,
+            ptr::null(),
+            registration_name,
+            &mut out,
+        );
+        record_conditional_callback_result(
+            "null-name",
+            cb,
+            user_data,
+            kinds_json,
+            ptr::null(),
+            &mut out,
+        );
+        record_conditional_callback_result(
+            "null-output",
+            cb,
+            user_data,
+            kinds_json,
+            registration_name,
+            ptr::null_mut(),
+        );
+    }
+    *STRING_NEW_REMAINING_SUCCESSES.lock().unwrap() = Some(0);
+    unsafe {
+        record_conditional_callback_result(
+            "reason-allocation",
+            cb,
+            user_data,
+            kinds_json,
+            registration_name,
+            &mut out,
+        );
+        (host.string_free)(allowed_name);
+        (host.string_free)(malformed_kinds);
+    }
+    *STRING_NEW_REMAINING_SUCCESSES.lock().unwrap() = None;
+    if let Some(free_fn) = free_fn {
+        unsafe { free_fn(user_data) };
+    }
+    NemoRelayStatus::Ok
+}
+
 fn test_host_v4() -> NemoRelayNativeHostApiV4 {
     let mut v1 = test_host();
     v1.abi_version = 4;
@@ -2674,6 +2782,7 @@ fn reset_state() {
     *SCOPE_STACK_RESTORE_THREAD_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
     *SCOPE_STACK_WITH_CURRENT_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
     RUNTIME_CALLS.lock().unwrap().clear();
+    CONDITIONAL_CALLBACK_RESULTS.lock().unwrap().clear();
     SCOPE_HANDLE_FREES.store(0, Ordering::SeqCst);
     SCOPE_STACK_FREES.store(0, Ordering::SeqCst);
     SCOPE_STACK_BINDING_FREES.store(0, Ordering::SeqCst);
@@ -3273,6 +3382,91 @@ fn plugin_runtime_registration_controls_cover_success_and_lifecycle() {
             .any(|call| call == "decisions:startup disabled:none")
     );
     drop(calls);
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn conditional_middleware_callback_trampoline_covers_decisions_and_invalid_inputs() {
+    let _guard = begin_test();
+    let mut host = test_host_v4();
+    host.plugin_context_register_conditional_middleware_guardrail_callback =
+        exercise_plugin_context_register_gate_callback;
+    let mut context = test_context(&host.v3.v1);
+    use nemo_relay_plugin::RuntimeRegistrationKind as Kind;
+    let kinds = BTreeSet::from([
+        Kind::Subscriber,
+        Kind::EventMetadataInjector,
+        Kind::MarkSanitizeGuardrail,
+        Kind::ScopeSanitizeStartGuardrail,
+        Kind::ScopeSanitizeEndGuardrail,
+        Kind::ToolSanitizeRequestGuardrail,
+        Kind::ToolSanitizeResponseGuardrail,
+        Kind::ToolConditionalExecutionGuardrail,
+        Kind::ToolRequestIntercept,
+        Kind::ToolExecutionIntercept,
+        Kind::LlmSanitizeRequestGuardrail,
+        Kind::LlmSanitizeResponseGuardrail,
+        Kind::LlmConditionalExecutionGuardrail,
+        Kind::LlmRequestIntercept,
+        Kind::LlmExecutionIntercept,
+        Kind::LlmStreamExecutionIntercept,
+    ]);
+
+    context
+        .register_conditional_middleware_guardrail(
+            "startup-gate",
+            &kinds,
+            "documentation-controlled-subscriber",
+            |kinds, registration_name| {
+                (kinds.len() == 16
+                    && kinds.contains(&Kind::Subscriber)
+                    && kinds.contains(&Kind::LlmStreamExecutionIntercept)
+                    && registration_name == "documentation-controlled-subscriber")
+                    .then(|| "disabled".into())
+            },
+        )
+        .expect("the exercise host should accept callback registration");
+
+    assert_eq!(
+        *CONDITIONAL_CALLBACK_RESULTS.lock().unwrap(),
+        [
+            "blocked:Ok:disabled",
+            "allowed:Ok:none",
+            "malformed-kinds:InvalidJson:none",
+            "null-kinds:NullPointer:none",
+            "null-name:NullPointer:none",
+            "null-output:NullPointer:none",
+            "reason-allocation:Internal:none",
+        ]
+    );
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn conditional_middleware_callback_panics_are_caught_and_state_is_freed() {
+    let _guard = begin_test();
+    let mut host = test_host_v4();
+    host.plugin_context_register_conditional_middleware_guardrail_callback =
+        capture_plugin_context_register_gate_callback;
+    let mut context = test_context(&host.v3.v1);
+    let kinds = BTreeSet::from([nemo_relay_plugin::RuntimeRegistrationKind::Subscriber]);
+    let drops = Arc::new(AtomicUsize::new(0));
+    let drop_probe = CountDrop(Arc::clone(&drops));
+
+    let error = context
+        .register_conditional_middleware_guardrail(
+            "panic-gate",
+            &kinds,
+            "target-subscriber",
+            move |_, _| {
+                let _ = &drop_probe;
+                panic!("conditional callback panic")
+            },
+        )
+        .unwrap_err();
+
+    assert!(error.contains("Internal"), "{error}");
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
 }
 

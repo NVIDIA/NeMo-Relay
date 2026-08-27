@@ -363,6 +363,32 @@ async fn worker_service_validates_initial_conditional_middleware_guardrails() {
         assert!(response.registrations.is_empty());
         assert!(response.conditional_middleware_guardrails.is_empty());
         assert!(response.error.unwrap().message.contains(expected));
+        let invoke = client
+            .invoke(Request::new(InvokeRequest {
+                activation_id: ACTIVATION_ID.into(),
+                invocation_id: "invalid-initial-gate".into(),
+                registration_name: "initial-gate".into(),
+                surface: RegistrationSurface::ConditionalMiddlewareGuardrail as i32,
+                continuation_id: String::new(),
+                scope: None,
+                auth_token: AUTH_TOKEN.into(),
+                payload: Some(
+                    nemo_relay_worker_proto::v1::invoke_request::Payload::ConditionalMiddleware(
+                        nemo_relay_worker_proto::v1::ConditionalMiddlewareInvocation {
+                            kinds: vec![RegistrationSurface::Subscriber as i32],
+                            registration_name: "target-subscriber".into(),
+                        },
+                    ),
+                ),
+            }))
+            .await
+            .expect("failed registration callback lookup should return protocol data")
+            .into_inner();
+        let message = match invoke.result.expect("invoke result") {
+            nemo_relay_worker_proto::v1::invoke_response::Result::Error(error) => error.message,
+            other => panic!("unexpected invoke result after failed registration: {other:?}"),
+        };
+        assert!(message.contains("is not registered"), "{message}");
         handle.abort();
     }
 }
@@ -2093,6 +2119,20 @@ impl WorkerPlugin for SurfacePlugin {
                     return Err(WorkerSdkError::Callback(
                         "mock runtime registration discovery was not empty".into(),
                     ));
+                }
+                let duplicate_error = runtime
+                    .register_conditional_middleware_guardrail(
+                        "initial-gate",
+                        BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+                        "target-subscriber",
+                        |_, _| async { Ok(None) },
+                    )
+                    .await
+                    .expect_err("activation callback names must remain reserved");
+                if !matches!(duplicate_error, WorkerSdkError::InvalidInput(_)) {
+                    return Err(WorkerSdkError::Callback(format!(
+                        "unexpected duplicate callback error: {duplicate_error}"
+                    )));
                 }
                 let gate = runtime
                     .register_conditional_middleware_guardrail(

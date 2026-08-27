@@ -459,7 +459,8 @@ pub type NemoRelayNativeToolConditionalCb = unsafe extern "C" fn(
 /// `kinds_json` contains a JSON set of configured registration kinds and
 /// `registration_name` is the target's effective name. Return a host-allocated
 /// reason through `out_reason` to disable the target, or leave it null to keep
-/// the target enabled.
+/// the target enabled. The input strings are borrowed for the callback only.
+/// Relay treats a non-OK status or invalid output as an allow decision.
 pub type NemoRelayNativeConditionalMiddlewareCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     kinds_json: *const NemoRelayNativeString,
@@ -1249,7 +1250,7 @@ pub struct NemoRelayNativeHostApiV4 {
         kinds_json: *const NemoRelayNativeString,
         out_json: *mut *mut NemoRelayNativeString,
     ) -> NemoRelayStatus,
-    /// Registers an activation-owned host-resident gate and returns its handle.
+    /// Legacy constant-reason gate registration retained for v4 compatibility.
     pub plugin_runtime_register_conditional_middleware_guardrail:
         unsafe extern "C" fn(
             runtime: *const NemoRelayNativePluginRuntime,
@@ -1266,7 +1267,7 @@ pub struct NemoRelayNativeHostApiV4 {
             handle: *const NemoRelayNativeString,
             out_removed: *mut bool,
         ) -> NemoRelayStatus,
-    /// Declares a host-resident gate during component registration.
+    /// Legacy constant-reason component gate retained for v4 compatibility.
     pub plugin_context_register_conditional_middleware_guardrail:
         unsafe extern "C" fn(
             ctx: *mut NemoRelayNativePluginContext,
@@ -1277,7 +1278,8 @@ pub struct NemoRelayNativeHostApiV4 {
         ) -> NemoRelayStatus,
     /// Registers an activation-owned callback gate and returns its handle.
     ///
-    /// This append-only v4 extension consumes `user_data` on every return path.
+    /// Relay invokes `cb` synchronously and consumes `user_data` on every return
+    /// path. A null callback reason leaves the target enabled.
     pub plugin_runtime_register_conditional_middleware_guardrail_callback:
         unsafe extern "C" fn(
             runtime: *const NemoRelayNativePluginRuntime,
@@ -1291,7 +1293,8 @@ pub struct NemoRelayNativeHostApiV4 {
         ) -> NemoRelayStatus,
     /// Declares a callback gate during component registration.
     ///
-    /// This append-only v4 extension consumes `user_data` on every return path.
+    /// Relay invokes `cb` synchronously and consumes `user_data` on every return
+    /// path. A null callback reason leaves the target enabled.
     pub plugin_context_register_conditional_middleware_guardrail_callback:
         unsafe extern "C" fn(
             ctx: *mut NemoRelayNativePluginContext,
@@ -1493,6 +1496,9 @@ impl PluginRuntime {
     }
 
     /// Registers an activation-owned callback eligibility gate.
+    ///
+    /// Return `Some(reason)` to disable the matching target or `None` to leave
+    /// it enabled.
     pub fn register_conditional_middleware_guardrail<F>(
         &self,
         name: &str,
@@ -2341,6 +2347,9 @@ impl<'a> PluginContext<'a> {
     }
 
     /// Declares a callback conditional middleware guardrail for activation.
+    ///
+    /// Return `Some(reason)` to disable the matching target or `None` to leave
+    /// it enabled.
     pub fn register_conditional_middleware_guardrail<F>(
         &mut self,
         name: &str,

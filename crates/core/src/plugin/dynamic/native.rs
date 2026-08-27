@@ -4299,6 +4299,10 @@ unsafe extern "C" fn native_plugin_context_register_conditional_middleware_guard
 }
 
 fn read_name(name: *const NemoRelayNativeString) -> Result<String, NemoRelayStatus> {
+    if name.is_null() {
+        set_native_last_error("required native string is null");
+        return Err(NemoRelayStatus::NullPointer);
+    }
     read_native_string(name).map_err(|err| {
         set_native_last_error(err.to_string());
         NemoRelayStatus::InvalidUtf8
@@ -4699,6 +4703,14 @@ fn wrap_conditional_middleware_guardrail(
 ) -> ConditionalMiddlewareGuardrailFn {
     let plugin_kind = instance.plugin_kind.clone();
     let user_data = make_user_data(instance, user_data, free_fn);
+    wrap_conditional_middleware_guardrail_callback(plugin_kind, cb, user_data)
+}
+
+fn wrap_conditional_middleware_guardrail_callback(
+    plugin_kind: String,
+    cb: NemoRelayNativeConditionalMiddlewareCb,
+    user_data: Arc<NativeCallbackUserData>,
+) -> ConditionalMiddlewareGuardrailFn {
     Arc::new(move |kinds, registration_name| {
         clear_native_last_error();
         let kinds_value = serde_json::to_value(kinds).unwrap_or(Json::Null);

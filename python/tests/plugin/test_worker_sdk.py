@@ -682,6 +682,33 @@ async def test_register_returns_initial_conditional_middleware_guardrail(service
     assert gate.callback
 
 
+async def test_register_rejects_initial_callback_name_owned_by_runtime(service: _WorkerService):
+    service._runtime._conditional_middleware_callbacks["initial_gate"] = lambda _kinds, _name: "existing runtime gate"
+
+    response = await service.Register(
+        _register_request(plugin_id=plugin_api._plugin_id(service._plugin)),
+        AbortContext(),
+    )
+
+    assert response.HasField("error")
+    assert "already registered" in response.error.message
+    assert service._handlers.registrations == []
+    assert list(service._runtime._conditional_middleware_callbacks) == ["initial_gate"]
+    decision = await service.Invoke(
+        _invoke_request(
+            "initial_gate",
+            pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL,
+            conditional_middleware=pb.ConditionalMiddlewareInvocation(
+                kinds=[pb.SUBSCRIBER],
+                registration_name="target-subscriber",
+            ),
+        ),
+        AbortContext(),
+    )
+    assert decision.WhichOneof("result") == "guardrail"
+    assert decision.guardrail.block_reason == "existing runtime gate"
+
+
 def test_generated_proto_matches_worker_contract():
     assert WORKER_PROTOCOL == "grpc-v1"
     methods = {method.name for method in pb.DESCRIPTOR.services_by_name["PluginWorker"].methods}
@@ -1501,7 +1528,13 @@ async def test_validate_register_and_invoke_callback_errors_are_structured():
         plugin_id = "tests.failing_register"
 
         def register(self, ctx: PluginContext, config: Json) -> None:
-            del ctx, config
+            del config
+            ctx.register_conditional_middleware_guardrail(
+                "failed_gate",
+                {RuntimeRegistrationKind.SUBSCRIBER},
+                "target-subscriber",
+                lambda _kinds, _name: "must not survive",
+            )
             raise RuntimeError("register boom")
 
     class FailingInvokePlugin(WorkerPlugin):
@@ -1543,6 +1576,19 @@ async def test_validate_register_and_invoke_callback_errors_are_structured():
     )
     assert register.HasField("error")
     assert "register boom" in register.error.message
+    leaked_gate = await register_service.Invoke(
+        _invoke_request(
+            "failed_gate",
+            pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL,
+            conditional_middleware=pb.ConditionalMiddlewareInvocation(
+                kinds=[pb.SUBSCRIBER],
+                registration_name="target-subscriber",
+            ),
+        ),
+        AbortContext(),
+    )
+    assert leaked_gate.WhichOneof("result") == "error"
+    assert "is not registered" in leaked_gate.error.message
 
     invoke_service = _service(FailingInvokePlugin(), RecordingHostStub())
     await _register(invoke_service)

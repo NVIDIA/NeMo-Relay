@@ -78,6 +78,7 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
     assert!(report.diagnostics.is_empty(), "{report:?}");
     flush_subscribers().expect("activation events should flush");
     let controlled_baseline = controlled_events.load(Ordering::SeqCst);
+    let allowed_baseline = allowed_events.load(Ordering::SeqCst);
 
     let result = tool_call_execute(
         ToolCallExecuteParams::builder()
@@ -106,6 +107,10 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
         "the activation-owned gate should suppress future subscriber snapshots"
     );
     assert!(
+        allowed_events.load(Ordering::SeqCst) > allowed_baseline,
+        "a None gate decision should leave the matching subscriber enabled"
+    );
+    assert!(
         events
             .lock()
             .expect("event lock should not be poisoned")
@@ -122,37 +127,6 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
     activation
         .clear()
         .expect("callbacks should clear before the library unloads");
-
-    let (allowed_activation, report) = PluginHostActivation::activate(
-        PluginConfig::default(),
-        [DynamicPluginActivationSpec {
-            plugin_id: PLUGIN_ID.into(),
-            kind: DynamicPluginKind::RustDynamic,
-            manifest_ref: manifest.to_string_lossy().into_owned(),
-            environment_ref: None,
-            config: allowed_config(),
-        }],
-    )
-    .await
-    .expect("the allow-path native configuration should activate");
-    assert!(report.diagnostics.is_empty(), "{report:?}");
-    flush_subscribers().expect("allow-path activation events should flush");
-    let allowed_baseline = allowed_events.load(Ordering::SeqCst);
-    tool_call_execute(
-        ToolCallExecuteParams::builder()
-            .name("allowed_tool")
-            .args(json!({}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
-            .build(),
-    )
-    .await
-    .expect("a None gate decision should leave the matching subscriber enabled");
-    flush_subscribers().expect("allow-path subscriber events should flush");
-    assert!(allowed_events.load(Ordering::SeqCst) > allowed_baseline);
-    allowed_activation
-        .clear()
-        .expect("allow-path native plugin should unload cleanly");
-
     tool_call_execute(
         ToolCallExecuteParams::builder()
             .name("restored_tool")
@@ -191,6 +165,7 @@ fn documented_config() -> Map<String, serde_json::Value> {
             "enabled": true,
             "kinds": ["subscriber"],
             "registration_name": "documentation-controlled-subscriber",
+            "allowed_registration_name": "documentation-observed-subscriber",
             "reason": "disabled by documentation plugin"
         },
         "executor": { "worker_threads": 2 }
@@ -198,19 +173,6 @@ fn documented_config() -> Map<String, serde_json::Value> {
     .as_object()
     .expect("documented configuration is an object")
     .clone()
-}
-
-fn allowed_config() -> Map<String, serde_json::Value> {
-    let mut config = documented_config();
-    config
-        .get_mut("registration_control")
-        .and_then(serde_json::Value::as_object_mut)
-        .expect("registration control config should be an object")
-        .insert(
-            "registration_name".into(),
-            json!(ALLOWED_SUBSCRIBER),
-        );
-    config
 }
 
 fn build_cdylib() -> (TempDir, PathBuf) {

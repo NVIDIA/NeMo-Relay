@@ -131,23 +131,33 @@ The following registration uses the example's validated, disabled-by-default
 
 ```rust
 if config.registration_control.enabled {
+    let kinds = config.registration_control.kinds.iter().copied().collect();
+    let blocked_registration_name = config.registration_control.registration_name.clone();
+    let callback_registration_name = blocked_registration_name.clone();
     let reason = config.registration_control.reason.clone();
     context.register_conditional_middleware_guardrail(
-        "documentation_registration_control",
-        &config.registration_control.kinds.iter().copied().collect(),
-        &config.registration_control.registration_name,
+        "documentation_registration_control_block",
+        &kinds,
+        &blocked_registration_name,
         move |_, registration_name| {
-            registration_name
-                .starts_with("documentation-controlled-")
+            (registration_name == callback_registration_name)
                 .then(|| reason.clone())
         },
+    )?;
+    context.register_conditional_middleware_guardrail(
+        "documentation_registration_control_allow",
+        &kinds,
+        &config.registration_control.allowed_registration_name,
+        |_, _| None,
     )?;
 }
 ```
 
-The callback returns `None` to leave a matching registration enabled. The callback
+The first callback returns a reason and disables its matching registration. The second
+callback returns `None` and leaves its matching registration enabled. The callback
 registration functions are an append-only native ABI v4 extension; the original
-constant-reason v4 slots remain in place for existing binaries. Refer to
+constant-reason v4 slots remain at their existing offsets for binary compatibility.
+Refer to
 [Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
 for the complete discovery, ordering, snapshot, and cleanup contract.
 

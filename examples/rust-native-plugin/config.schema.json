@@ -145,6 +145,12 @@
           "minLength": 1,
           "default": "documentation-controlled-subscriber"
         },
+        "allowed_registration_name": {
+          "description": "Effective name of the global registration that the example's second callback explicitly leaves enabled.",
+          "type": "string",
+          "minLength": 1,
+          "default": "documentation-observed-subscriber"
+        },
         "reason": {
           "description": "Non-empty reason returned by the callback while the registration is suppressed.",
           "type": "string",
