@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use axum::http::{HeaderMap, HeaderValue, header};
+use ring::digest;
 use ring::rand::{SecureRandom, SystemRandom};
 use subtle::ConstantTimeEq;
 
@@ -39,6 +40,11 @@ impl TransparentProxyCredential {
 
     pub(crate) fn expose(&self) -> &str {
         &self.0
+    }
+
+    /// Stable non-secret identity for binding invocation-owned gateway state.
+    pub(crate) fn identity(&self) -> String {
+        credential_identity(&self.0)
     }
 
     /// Verify and consume this invocation's proxy credential without disturbing an independent
@@ -104,6 +110,18 @@ impl TransparentProxyCredential {
     pub(crate) fn from_static(value: &'static str) -> Self {
         Self(value.into())
     }
+}
+
+pub(crate) fn credential_identity(value: &str) -> String {
+    let digest = digest::digest(&digest::SHA256, value.as_bytes());
+    format!(
+        "sha256:{}",
+        digest
+            .as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

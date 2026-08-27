@@ -1849,8 +1849,10 @@ pub(crate) fn active_dynamic_plugin_components_for_identity(
     explicit_plugin_config: Option<&PathBuf>,
     resolved: &ResolvedConfig,
 ) -> Result<Vec<ActiveDynamicPluginComponent>, CliError> {
+    let mut resolved = resolved.clone();
+    crate::plugins::policy::apply_secure_runtime_defaults(&mut resolved.dynamic_plugin_policy);
     let scopes = load_scoped_registries(explicit_plugin_config)?;
-    active_dynamic_plugin_components_from_scopes(&scopes, resolved, false)
+    active_dynamic_plugin_components_from_scopes(&scopes, &resolved, false)
 }
 
 fn active_dynamic_plugin_components_inner(
@@ -1858,8 +1860,10 @@ fn active_dynamic_plugin_components_inner(
     resolved: &ResolvedConfig,
     create_activation_snapshots: bool,
 ) -> Result<Vec<ActiveDynamicPluginComponent>, CliError> {
-    let scopes = load_and_hydrate_scopes(explicit_plugin_config, resolved)?;
-    active_dynamic_plugin_components_from_scopes(&scopes, resolved, create_activation_snapshots)
+    let mut resolved = resolved.clone();
+    crate::plugins::policy::apply_secure_runtime_defaults(&mut resolved.dynamic_plugin_policy);
+    let scopes = load_and_hydrate_scopes(explicit_plugin_config, &resolved)?;
+    active_dynamic_plugin_components_from_scopes(&scopes, &resolved, create_activation_snapshots)
 }
 
 fn active_dynamic_plugin_components_from_scopes(

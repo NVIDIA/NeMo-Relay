@@ -4812,6 +4812,7 @@ fn cli_transparent_run_suppresses_persistent_hooks_and_rejects_a_foreign_gateway
         ])
         .env("NEMO_RELAY_TRANSPARENT_RUN", "1")
         .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .env("NEMO_RELAY_PROXY_CREDENTIAL", "nrp_foreign-test-credential")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

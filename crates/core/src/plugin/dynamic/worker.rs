@@ -1033,6 +1033,7 @@ fn spawn_worker_process(spec: WorkerProcessLaunch<'_>) -> crate::plugin::Result<
             (Command::new(entrypoint), command_display)
         }
     };
+    minimize_worker_environment(&mut command);
     command
         .current_dir(manifest_dir)
         .env("NEMO_RELAY_WORKER_ID", spec.activation_id)
@@ -1052,6 +1053,27 @@ fn spawn_worker_process(spec: WorkerProcessLaunch<'_>) -> crate::plugin::Result<
             spec.runtime, command_display
         ))
     })
+}
+
+fn minimize_worker_environment(command: &mut Command) {
+    const ALLOWLIST: &[&str] = &[
+        "PATH",
+        "SYSTEMROOT",
+        "WINDIR",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        // Test fixture handshake override; production workers should not use this namespace.
+        "FIXTURE_WORKER_PLUGIN_ID",
+    ];
+    let retained = ALLOWLIST
+        .iter()
+        .filter_map(|name| std::env::var_os(name).map(|value| (*name, value)))
+        .collect::<Vec<_>>();
+    command.env_clear();
+    command.envs(retained);
 }
 
 fn resolve_python_executable(

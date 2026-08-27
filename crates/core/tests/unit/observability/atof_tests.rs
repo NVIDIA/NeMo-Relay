@@ -1335,19 +1335,20 @@ fn missing_output_directory_is_created() {
 }
 
 #[test]
-fn invalid_filename_errors_cleanly() {
+fn nested_filename_creates_private_parent_directories() {
     let dir = temp_dir("atof-invalid-filename");
 
-    let error = match AtofExporter::new(
+    let exporter = AtofExporter::new(
         AtofExporterConfig::new()
             .with_output_directory(&dir)
             .with_filename("missing-parent/events.jsonl"),
-    ) {
-        Ok(_) => panic!("expected invalid filename path error"),
-        Err(error) => error,
-    };
+    )
+    .unwrap();
 
-    assert!(matches!(error, AtofExporterError::OpenFile { .. }));
+    assert_eq!(
+        exporter.path(),
+        Some(dir.join("missing-parent/events.jsonl").as_path())
+    );
 }
 
 #[test]

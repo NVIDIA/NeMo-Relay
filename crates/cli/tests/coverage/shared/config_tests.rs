@@ -2930,7 +2930,7 @@ fn persistent_hook_identity_authenticates_python_marker_without_rehashing_enviro
     std::fs::write(
         &plugins_toml,
         format!(
-            "version = 1\n\n[[plugins.dynamic]]\nmanifest = {:?}\n",
+            "version = 1\n\n[plugins.policy.defaults]\nstartup = \"optional\"\nattestation = \"integrity_only\"\n\n[[plugins.dynamic]]\nmanifest = {:?}\n",
             manifest_path.to_string_lossy()
         ),
     )

@@ -57,12 +57,22 @@ async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
         ..crate::configuration::GatewayConfig::default()
     };
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let proxy_credential = crate::provider_auth::TransparentProxyCredential::generate().unwrap();
+    let previous_proxy_credential =
+        std::env::var_os(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV);
+    // SAFETY: BootstrapConfigHome holds the process-wide environment lock for this test.
+    unsafe {
+        std::env::set_var(
+            crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV,
+            proxy_credential.expose(),
+        )
+    };
     let server = tokio::spawn(crate::server::serve_transparent_listener_with_dynamic(
         listener,
         config,
         Vec::new(),
         fingerprint.clone(),
-        crate::provider_auth::TransparentProxyCredential::generate().unwrap(),
+        proxy_credential,
         Some(shutdown_rx),
     ));
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -117,6 +127,16 @@ async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
         .expect("wrapper gateway did not stop")
         .unwrap()
         .unwrap();
+    // SAFETY: BootstrapConfigHome still holds the process-wide environment lock.
+    unsafe {
+        match previous_proxy_credential {
+            Some(value) => std::env::set_var(
+                crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV,
+                value,
+            ),
+            None => std::env::remove_var(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV),
+        }
+    }
 }
 
 #[test]

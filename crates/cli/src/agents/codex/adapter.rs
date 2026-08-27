@@ -5,7 +5,7 @@ use axum::http::HeaderMap;
 use serde_json::{Value, json};
 
 use crate::agents::shared::adapters::{
-    AdapterOutcome, CODEX_PAYLOAD_EXTRACTOR, ClassificationRules, classify,
+    AdapterOutcome, CODEX_PAYLOAD_EXTRACTOR, ClassificationRules, classify, permission_request,
 };
 use crate::events::AgentKind;
 
@@ -32,5 +32,11 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     AdapterOutcome {
         events,
         response: json!({}),
+        permission: permission_request(
+            &payload,
+            headers,
+            AgentKind::Codex,
+            &CODEX_PAYLOAD_EXTRACTOR,
+        ),
     }
 }

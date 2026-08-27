@@ -9,7 +9,7 @@
 //! one JSON object per JSONL line.
 
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions, create_dir_all};
+use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
@@ -23,6 +23,7 @@ use serde_json::Value as Json;
 #[cfg(feature = "atof-streaming")]
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
+use super::private_file::{create_private_dir_all, open_private};
 use crate::api::event::Event;
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
@@ -380,13 +381,13 @@ impl AtofExporter {
         let (path, writer, endpoints) = match config.sink {
             AtofSinkConfig::File(file_sink) => {
                 let path = file_sink.path();
-                create_dir_all(&file_sink.output_directory).map_err(|source| {
+                create_private_dir_all(&file_sink.output_directory).map_err(|source| {
                     AtofExporterError::OpenFile {
                         path: path.clone(),
                         source,
                     }
                 })?;
-                let file = open_file(&path, file_sink.mode)?;
+                let file = open_file(&file_sink.output_directory, &path, file_sink.mode)?;
                 log::info!(
                     target: "nemo_relay.observability",
                     event = "storage_access_validated",
@@ -588,23 +589,13 @@ fn default_endpoint_timeout_millis() -> u64 {
     3_000
 }
 
-fn open_file(path: &Path, mode: AtofExporterMode) -> Result<File> {
-    let mut options = OpenOptions::new();
-    options.create(true);
-    match mode {
-        AtofExporterMode::Append => {
-            options.append(true);
-        }
-        AtofExporterMode::Overwrite => {
-            options.write(true).truncate(true);
-        }
-    }
-    options
-        .open(path)
-        .map_err(|source| AtofExporterError::OpenFile {
+fn open_file(root: &Path, path: &Path, mode: AtofExporterMode) -> Result<File> {
+    open_private(root, path, matches!(mode, AtofExporterMode::Append)).map_err(|source| {
+        AtofExporterError::OpenFile {
             path: path.to_path_buf(),
             source,
-        })
+        }
+    })
 }
 
 fn write_json_value(writer: &mut BufWriter<File>, value: &Json) -> std::result::Result<(), String> {

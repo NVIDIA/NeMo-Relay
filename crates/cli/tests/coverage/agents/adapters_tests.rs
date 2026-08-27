@@ -581,6 +581,37 @@ fn keeps_codex_response_unwrapped() {
 }
 
 #[test]
+fn permission_requests_keep_hook_marks_and_require_exact_tool_identity() {
+    let outcome = claude_code::adapt(
+        json!({
+            "session_id": "claude-session",
+            "hook_event_name": "PermissionRequest",
+            "tool_use_id": "toolu-1",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "README.md"}
+        }),
+        &HeaderMap::new(),
+    );
+    assert!(matches!(outcome.events[0], NormalizedEvent::HookMark(_)));
+    let permission = outcome.permission.unwrap().unwrap();
+    assert_eq!(permission.session_id, "claude-session");
+    assert_eq!(permission.tool_call_id, "toolu-1");
+    assert_eq!(permission.tool_name, "Write");
+    assert_eq!(permission.arguments, json!({"file_path": "README.md"}));
+
+    let missing_id = codex::adapt(
+        json!({
+            "session_id": "codex-session",
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "shell",
+            "arguments": {"cmd": "pwd"}
+        }),
+        &HeaderMap::new(),
+    );
+    assert!(missing_id.permission.unwrap().is_err());
+}
+
+#[test]
 fn normalizes_mark_style_events_and_header_session_ids() {
     let mut headers = HeaderMap::new();
     headers.insert("x-nemo-relay-session-id", "header-session".parse().unwrap());

@@ -177,6 +177,17 @@ pub(crate) fn evaluate_dynamic_plugin_host_policy(
     }
 }
 
+pub(crate) fn apply_secure_runtime_defaults(policy: &mut DynamicPluginHostPolicy) {
+    policy
+        .defaults
+        .startup
+        .get_or_insert(DynamicPluginStartupClass::Required);
+    policy
+        .defaults
+        .attestation
+        .get_or_insert(DynamicPluginAttestationMode::SignatureRequired);
+}
+
 fn policy_rule_matches(
     rule: &DynamicPluginHostPolicyRule,
     manifest: &DynamicPluginManifest,

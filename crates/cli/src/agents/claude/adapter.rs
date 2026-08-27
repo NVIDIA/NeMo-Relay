@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::agents::shared::adapters::{
     AdapterOutcome, CLAUDE_CODE_PAYLOAD_EXTRACTOR, ClassificationRules, classify,
+    permission_request,
 };
 use crate::events::{AgentKind, NormalizedEvent};
 
@@ -52,5 +53,14 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
         }),
         _ => json!({ "continue": true }),
     };
-    AdapterOutcome { events, response }
+    AdapterOutcome {
+        events,
+        response,
+        permission: permission_request(
+            &payload,
+            headers,
+            AgentKind::ClaudeCode,
+            &CLAUDE_CODE_PAYLOAD_EXTRACTOR,
+        ),
+    }
 }

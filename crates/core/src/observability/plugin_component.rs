@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 use uuid::Uuid;
 
+use super::private_file::atomic_private_write;
 use crate::api::event::{Event, LogSeverity, ScopeCategory, ValidatedMetricMeasurement};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack, global_context};
 use crate::api::scope::ScopeType;
@@ -2428,6 +2429,7 @@ struct AtifDispatcher {
 struct ManagedAtifExporter {
     exporter: AtifExporter,
     filename: String,
+    local_root: Option<PathBuf>,
     local_path: Option<PathBuf>,
     correlation: AtifCorrelation,
     observed_events: Vec<Event>,
@@ -2443,6 +2445,7 @@ struct PendingAtifWrite {
     // object-store feature; without it, only the local sink reads `local_path`.
     #[cfg_attr(not(feature = "object-store"), allow(dead_code))]
     filename: String,
+    local_root: Option<PathBuf>,
     local_path: Option<PathBuf>,
     payload: Vec<u8>,
 }
@@ -2456,6 +2459,7 @@ struct PendingAtifExport {
     agent_uuid: Uuid,
     exporter: AtifExporter,
     filename: String,
+    local_root: Option<PathBuf>,
     local_path: Option<PathBuf>,
     correlation: AtifCorrelation,
 }
@@ -2550,26 +2554,27 @@ impl AtifDispatcher {
         // subscriber is attached after that start event has already been
         // emitted.
         let session_id = event.uuid().to_string();
-        let (filename, local_path) = match self.prepare_destination(&session_id, event.metadata()) {
-            Ok(destination) => destination,
-            Err(error) => {
-                self.record_runtime_failure(
-                    "atif.destination_render_failed",
-                    Some("filename_template".into()),
-                    error.clone(),
-                    Some(session_id.clone()),
-                );
-                log::warn!(
-                    target: "nemo_relay.observability",
-                    event = "atif_destination_render_failed",
-                    plugin_kind = OBSERVABILITY_PLUGIN_KIND,
-                    exporter = "atif",
-                    session_id = session_id.as_str();
-                    "ATIF destination rendering failed: {error}"
-                );
-                return None;
-            }
-        };
+        let (filename, local_root, local_path) =
+            match self.prepare_destination(&session_id, event.metadata()) {
+                Ok(destination) => destination,
+                Err(error) => {
+                    self.record_runtime_failure(
+                        "atif.destination_render_failed",
+                        Some("filename_template".into()),
+                        error.clone(),
+                        Some(session_id.clone()),
+                    );
+                    log::warn!(
+                        target: "nemo_relay.observability",
+                        event = "atif_destination_render_failed",
+                        plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+                        exporter = "atif",
+                        session_id = session_id.as_str();
+                        "ATIF destination rendering failed: {error}"
+                    );
+                    return None;
+                }
+            };
         let exporter = AtifExporter::new(session_id.clone(), self.agent_info());
         (exporter.subscriber())(event);
         let correlation = AtifCorrelation::from_event(event);
@@ -2579,6 +2584,7 @@ impl AtifDispatcher {
             ManagedAtifExporter {
                 exporter,
                 filename,
+                local_root,
                 local_path,
                 correlation,
                 observed_events: vec![event.clone()],
@@ -2746,6 +2752,7 @@ impl AtifDispatcher {
                     agent_uuid,
                     exporter: agent.exporter.clone(),
                     filename: agent.filename.clone(),
+                    local_root: agent.local_root.clone(),
                     local_path: agent.local_path.clone(),
                     correlation: agent.correlation.clone(),
                 });
@@ -2795,16 +2802,33 @@ impl AtifDispatcher {
         &self,
         session_id: &str,
         metadata: Option<&Json>,
-    ) -> Result<(String, Option<PathBuf>), String> {
+    ) -> Result<(String, Option<PathBuf>, Option<PathBuf>), String> {
         validate_atif_filename_template(&self.config.filename_template)?;
+        if !is_safe_atif_session_id(session_id) {
+            return Err("ATIF session_id must be a non-empty path-safe filename component".into());
+        }
         let filename = render_atif_filename(&self.config.filename_template, session_id, metadata)?;
+        let rendered_path = Path::new(&filename);
+        if rendered_path.is_absolute()
+            || rendered_path.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir
+                        | Component::CurDir
+                        | Component::RootDir
+                        | Component::Prefix(_)
+                )
+            })
+        {
+            return Err("rendered ATIF filename must remain a path-safe relative path".into());
+        }
         let directory = self
             .config
             .output_directory
             .clone()
             .unwrap_or_else(default_output_directory);
         let path = directory.join(&filename);
-        Ok((filename, Some(path)))
+        Ok((filename, Some(directory), Some(path)))
     }
 
     fn sink_targets(&self) -> Vec<SinkLabel> {
@@ -2845,6 +2869,13 @@ impl AtifDispatcher {
         }
         record_active_plugin_runtime_diagnostic(diagnostic);
     }
+}
+
+fn is_safe_atif_session_id(value: &str) -> bool {
+    !matches!(value, "" | "." | "..")
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~'))
 }
 
 fn is_valid_atif_metadata_selector(selector: &str) -> bool {
@@ -3055,6 +3086,7 @@ fn prepare_atif_file(
     prepare_atif_payload(
         agent_uuid,
         agent.filename.clone(),
+        agent.local_root.clone(),
         agent.local_path.clone(),
         trajectory,
         observed_events,
@@ -3079,6 +3111,7 @@ fn prepare_atif_shutdown_file(
     prepare_atif_payload(
         export.agent_uuid,
         export.filename.clone(),
+        export.local_root.clone(),
         export.local_path.clone(),
         trajectory,
         observed_events,
@@ -3089,6 +3122,7 @@ fn prepare_atif_shutdown_file(
 fn prepare_atif_payload(
     agent_uuid: Uuid,
     filename: String,
+    local_root: Option<PathBuf>,
     local_path: Option<PathBuf>,
     trajectory: crate::observability::atif::AtifTrajectory,
     observed_events: Vec<Event>,
@@ -3122,6 +3156,7 @@ fn prepare_atif_payload(
         agent_uuid,
         session_id: agent_uuid.to_string(),
         filename,
+        local_root,
         local_path,
         payload,
     })
@@ -3136,9 +3171,9 @@ fn write_atif(
         .iter()
         .map(|label| {
             let result = match label {
-                SinkLabel::Local => match &write.local_path {
-                    Some(path) => write_atif_local(path, &write.payload),
-                    None => Err(std::io::Error::other(
+                SinkLabel::Local => match (&write.local_root, &write.local_path) {
+                    (Some(root), Some(path)) => write_atif_local(root, path, &write.payload),
+                    _ => Err(std::io::Error::other(
                         "ATIF local destination has no output path",
                     )),
                 },
@@ -3153,9 +3188,9 @@ fn write_atif(
             .all(|label| matches!(label, SinkLabel::Remote(_)))
         && results.iter().all(|(_, result)| result.is_err())
     {
-        let fallback = match &write.local_path {
-            Some(path) => write_atif_local(path, &write.payload),
-            None => Err(std::io::Error::other(
+        let fallback = match (&write.local_root, &write.local_path) {
+            (Some(root), Some(path)) => write_atif_local(root, path, &write.payload),
+            _ => Err(std::io::Error::other(
                 "ATIF local fallback has no output path",
             )),
         };
@@ -3164,11 +3199,8 @@ fn write_atif(
     results
 }
 
-fn write_atif_local(path: &PathBuf, payload: &[u8]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, payload)
+fn write_atif_local(root: &Path, path: &Path, payload: &[u8]) -> std::io::Result<()> {
+    atomic_private_write(root, path, payload)
 }
 
 #[cfg(feature = "object-store")]

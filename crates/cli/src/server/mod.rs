@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -37,7 +37,8 @@ use tokio::sync::oneshot;
 
 use crate::agents::shared::adapters::{claude_code, codex};
 use crate::configuration::{
-    BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, GatewayConfig, ManagedBootstrapIdentity,
+    BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, GatewayConfig, HOOK_CLIENT_TOKEN_HEADER,
+    ManagedBootstrapIdentity,
 };
 use crate::error::CliError;
 use crate::gateway;
@@ -88,6 +89,12 @@ pub(crate) async fn serve_with_dynamic(
     ready_file: Option<&Path>,
     bootstrap_shutdown_token: Option<String>,
 ) -> Result<(), CliError> {
+    if !config.bind.ip().is_loopback() {
+        return Err(CliError::Config(format!(
+            "explicit Relay gateways require a loopback bind address, got {}",
+            config.bind
+        )));
+    }
     let bind = config.bind.to_string();
     log::info!(
         target: "nemo_relay.server",
@@ -265,6 +272,9 @@ async fn serve_listener_with_dynamic_inner(
         shutdown_token: bootstrap_shutdown_token,
         transparent_proxy_credential,
     } = bootstrap;
+    #[cfg(not(test))]
+    let bootstrap_challenge_key = Some(BootstrapChallengeKey::load()?);
+    #[cfg(test)]
     let bootstrap_challenge_key = bootstrap_fingerprint
         .as_ref()
         .map(|_| BootstrapChallengeKey::load())
@@ -277,7 +287,8 @@ async fn serve_listener_with_dynamic_inner(
         .map(|identity| identity.server_config())
         .transpose()
         .map_err(CliError::Launch)?;
-    let require_provider_client_token = managed_bootstrap.is_some();
+    let require_provider_client_token =
+        bootstrap_challenge_key.is_some() && transparent_proxy_credential.is_none();
     let plugin_activation =
         initialize_plugin_host(config.plugin_config.clone(), dynamic_plugins).await?;
     let (bootstrap_shutdown, bootstrap_shutdown_rx) =
@@ -536,6 +547,11 @@ impl AppState {
         &self,
         headers: &mut HeaderMap,
     ) -> Result<crate::provider_auth::ProviderRequestAuthorization, CliError> {
+        if headers.contains_key(header::ORIGIN) {
+            return Err(CliError::Unauthorized(
+                "browser-originated Relay provider requests are not accepted".into(),
+            ));
+        }
         if let Some(proxy) = &self.transparent_proxy_credential {
             let source_credential = proxy.consume(headers).inspect_err(|error| {
                 log::warn!(
@@ -569,6 +585,53 @@ impl AppState {
                 crate::provider_auth::SourceCredentialDisposition::from_provider_headers(headers),
             allow_environment_provider_auth,
         })
+    }
+
+    fn authorize_hook_request(&self, headers: &mut HeaderMap) -> Result<String, CliError> {
+        #[cfg(test)]
+        if self.bootstrap_challenge_key.is_none() && self.transparent_proxy_credential.is_none() {
+            return Ok("test-unauthenticated-hook-client".into());
+        }
+        if headers.contains_key(header::ORIGIN) {
+            return Err(CliError::Unauthorized(
+                "browser-originated Relay hook requests are not accepted".into(),
+            ));
+        }
+        if let Some(proxy) = &self.transparent_proxy_credential
+            && headers
+                .get(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER)
+                .is_some()
+        {
+            let identity = proxy.identity();
+            proxy.consume(headers)?;
+            headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
+            headers.remove(HOOK_CLIENT_TOKEN_HEADER);
+            return Ok(identity);
+        }
+        let token = headers
+            .get(BOOTSTRAP_CLIENT_TOKEN_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| {
+                CliError::Unauthorized(
+                    "Relay hook request did not present an internal client credential".into(),
+                )
+            })?;
+        let key = self.bootstrap_challenge_key.as_ref().ok_or_else(|| {
+            CliError::Unauthorized("Relay hook authentication is unavailable".into())
+        })?;
+        if !key.verify_client_token(token) {
+            return Err(CliError::Unauthorized(
+                "Relay hook client credential was invalid".into(),
+            ));
+        }
+        let identity = headers
+            .get(HOOK_CLIENT_TOKEN_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| key.verify_hook_client_token(value))
+            .unwrap_or_else(|| crate::provider_auth::credential_identity(token));
+        headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
+        headers.remove(HOOK_CLIENT_TOKEN_HEADER);
+        Ok(identity)
     }
 }
 
@@ -1127,16 +1190,33 @@ impl Drop for PluginActivation {
 // adapter's pass-through response body so hook delivery stays causally ordered with observability.
 async fn codex_hook(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    mut headers: HeaderMap,
     payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Json<Value>, CliError> {
     state.touch();
+    let owner = state.authorize_hook_request(&mut headers)?;
     let Json(payload) = payload.map_err(hook_payload_rejection)?;
     let outcome = codex::adapt(payload, &headers);
     state
         .sessions
-        .apply_events(&headers, outcome.events)
+        .apply_authenticated_events(&headers, outcome.events, &owner)
         .await?;
+    if let Some(permission) = outcome.permission {
+        let result = match permission {
+            Ok(permission) => state.sessions.authorize_tool_permission(&permission).await,
+            Err(reason) => Err(CliError::InvalidPayload(reason)),
+        };
+        if let Err(error) = result {
+            let reason = error
+                .guardrail_rejection_reason()
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| error.to_string());
+            return Ok(Json(serde_json::json!({
+                "decision": "deny",
+                "reason": reason,
+            })));
+        }
+    }
     Ok(Json(outcome.response))
 }
 
@@ -1144,16 +1224,37 @@ async fn codex_hook(
 // are committed before the response so Claude lifecycle hooks can close scopes deterministically.
 async fn claude_code_hook(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    mut headers: HeaderMap,
     payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Json<Value>, CliError> {
     state.touch();
+    let owner = state.authorize_hook_request(&mut headers)?;
     let Json(payload) = payload.map_err(hook_payload_rejection)?;
     let outcome = claude_code::adapt(payload, &headers);
     state
         .sessions
-        .apply_events(&headers, outcome.events)
+        .apply_authenticated_events(&headers, outcome.events, &owner)
         .await?;
+    if let Some(permission) = outcome.permission {
+        let result = match permission {
+            Ok(permission) => state.sessions.authorize_tool_permission(&permission).await,
+            Err(reason) => Err(CliError::InvalidPayload(reason)),
+        };
+        if let Err(error) = result {
+            let reason = error
+                .guardrail_rejection_reason()
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| error.to_string());
+            return Ok(Json(serde_json::json!({
+                "continue": true,
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                }
+            })));
+        }
+    }
     Ok(Json(outcome.response))
 }
 

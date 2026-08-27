@@ -3325,6 +3325,7 @@ fn write_atif_reports_missing_local_path_and_unregistered_remote_sink() {
         agent_uuid,
         session_id: agent_uuid.to_string(),
         filename: "trajectory.json".into(),
+        local_root: None,
         local_path: None,
         payload: b"{}".to_vec(),
     };
@@ -3356,6 +3357,7 @@ fn write_atif_spills_to_local_when_all_remote_sinks_fail() {
         agent_uuid,
         session_id: agent_uuid.to_string(),
         filename: "trajectory.json".into(),
+        local_root: Some(dir.clone()),
         local_path: Some(path.clone()),
         payload: b"{}".to_vec(),
     };
@@ -3372,14 +3374,50 @@ fn write_atif_spills_to_local_when_all_remote_sinks_fail() {
 #[test]
 fn atif_dispatcher_default_output_path_uses_current_directory() {
     let dispatcher = AtifDispatcher::new(AtifSectionConfig::default());
-    let (filename, local_path) = dispatcher.prepare_destination("session-1", None).unwrap();
+    let (filename, local_root, local_path) =
+        dispatcher.prepare_destination("session-1", None).unwrap();
     assert_eq!(filename, "nemo-relay-atif-session-1.json");
+    assert_eq!(local_root.unwrap(), std::env::current_dir().unwrap());
     assert_eq!(
         local_path.unwrap(),
         std::env::current_dir()
             .unwrap()
             .join("nemo-relay-atif-session-1.json")
     );
+}
+
+#[test]
+fn atif_session_id_cannot_escape_the_output_directory() {
+    let dispatcher = AtifDispatcher::new(AtifSectionConfig::default());
+    for session_id in ["../escape", "/absolute", "nested/../../escape"] {
+        assert!(
+            dispatcher.prepare_destination(session_id, None).is_err(),
+            "unsafe session id should be rejected: {session_id:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn atif_local_write_replaces_regular_files_privately_and_rejects_symlinks() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trajectory.json");
+    write_atif_local(dir.path(), &path, b"first").unwrap();
+    write_atif_local(dir.path(), &path, b"second").unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"second");
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    let target = dir.path().join("target.json");
+    fs::write(&target, b"preserve").unwrap();
+    let link = dir.path().join("link.json");
+    symlink(&target, &link).unwrap();
+    assert!(write_atif_local(dir.path(), &link, b"overwrite").is_err());
+    assert_eq!(fs::read(target).unwrap(), b"preserve");
 }
 
 #[test]
@@ -3519,6 +3557,7 @@ fn atif_payload_merges_correlation_with_existing_trajectory_extra() {
     let write = prepare_atif_payload(
         agent_uuid,
         format!("trajectory-{agent_uuid}.json"),
+        None,
         None,
         trajectory,
         Vec::new(),

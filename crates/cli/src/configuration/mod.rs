@@ -475,12 +475,14 @@ const BOOTSTRAP_HMAC_KEY_BYTES: usize = 32;
 const BOOTSTRAP_HMAC_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const BOOTSTRAP_CHALLENGE_DOMAIN: &[u8] = b"nemo-relay/bootstrap-health/v1\0";
 const BOOTSTRAP_CLIENT_TOKEN_DOMAIN: &[u8] = b"nemo-relay/bootstrap-client/v1\0";
+const HOOK_CLIENT_TOKEN_DOMAIN: &[u8] = b"nemo-relay/hook-client/v1\0";
 const TRANSPARENT_GATEWAY_DOMAIN: &[u8] = b"nemo-relay/transparent-gateway/v1\0";
 const PYTHON_ENVIRONMENT_ATTESTATION_DOMAIN: &[u8] =
     b"nemo-relay/python-environment-attestation/v1\0";
 
 /// Private proof installed into supported coding-agent provider configuration.
 pub(crate) const BOOTSTRAP_CLIENT_TOKEN_HEADER: &str = "x-nemo-relay-client-token";
+pub(crate) const HOOK_CLIENT_TOKEN_HEADER: &str = "x-nemo-relay-hook-client";
 
 /// Stable health-proof context shared by a transparent wrapper and plugin-owned MCP client.
 pub(crate) fn transparent_gateway_fingerprint(gateway_url: &str) -> String {
@@ -556,6 +558,33 @@ impl BootstrapChallengeKey {
             return false;
         };
         hmac::verify(&self.0, BOOTSTRAP_CLIENT_TOKEN_DOMAIN, &tag).is_ok()
+    }
+
+    pub(crate) fn hook_client_token(&self, identity: &str) -> String {
+        let identity = digest::digest(&digest::SHA256, identity.as_bytes())
+            .as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let mut context = hmac::Context::with_key(&self.0);
+        context.update(HOOK_CLIENT_TOKEN_DOMAIN);
+        context.update(identity.as_bytes());
+        format!("{identity}.{}", encode_hmac_tag(context.sign()))
+    }
+
+    pub(crate) fn verify_hook_client_token(&self, token: &str) -> Option<String> {
+        let (identity, signature) = token.split_once('.')?;
+        if identity.len() != 64 || !identity.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+        let encoded = signature.strip_prefix("hmac-sha256:")?;
+        let tag = decode_fixed_hex::<32>(encoded)?;
+        let mut message = Vec::with_capacity(HOOK_CLIENT_TOKEN_DOMAIN.len() + identity.len());
+        message.extend_from_slice(HOOK_CLIENT_TOKEN_DOMAIN);
+        message.extend_from_slice(identity.as_bytes());
+        hmac::verify(&self.0, &message, &tag)
+            .is_ok()
+            .then(|| format!("hook-client:{identity}"))
     }
 
     #[cfg(test)]

@@ -22,6 +22,13 @@ use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use sha2::{Digest, Sha256};
 
+fn allow_unsigned_test_plugins(resolved: &mut ResolvedConfig) {
+    resolved.dynamic_plugin_policy.defaults.startup =
+        Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Optional);
+    resolved.dynamic_plugin_policy.defaults.attestation =
+        Some(nemo_relay::plugin::dynamic::DynamicPluginAttestationMode::IntegrityOnly);
+}
+
 #[test]
 fn activation_snapshots_use_a_short_directory_prefix() {
     let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, None)]);
@@ -2190,7 +2197,8 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
         &server,
     )
     .unwrap();
-    let resolved = resolve_plugins_config(None).unwrap();
+    let mut resolved = resolve_plugins_config(None).unwrap();
+    allow_unsigned_test_plugins(&mut resolved);
     let active = active_dynamic_plugin_components(None, &resolved).unwrap();
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].environment_ref.as_deref(), Some(environment_ref));
@@ -2715,7 +2723,8 @@ fn active_dynamic_plugin_components_user_enabled_native_records_only() {
         &server,
     )
     .unwrap();
-    let resolved = resolve_plugins_config(None).unwrap();
+    let mut resolved = resolve_plugins_config(None).unwrap();
+    allow_unsigned_test_plugins(&mut resolved);
     let active = active_dynamic_plugin_components(None, &resolved).unwrap();
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].plugin_id, "acme.native");
@@ -2755,7 +2764,8 @@ fn active_dynamic_plugin_components_accept_enabled_worker_records() {
     )
     .unwrap();
 
-    let resolved = resolve_plugins_config(None).unwrap();
+    let mut resolved = resolve_plugins_config(None).unwrap();
+    allow_unsigned_test_plugins(&mut resolved);
     let active = active_dynamic_plugin_components(None, &resolved).unwrap();
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].plugin_id, "acme.worker");

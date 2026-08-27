@@ -20,6 +20,69 @@ use super::*;
 use crate::events::{LlmHintEvent, SessionEvent, ToolEvent};
 use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
 
+#[tokio::test]
+async fn authenticated_hook_clients_cannot_take_over_existing_sessions() {
+    let manager = SessionManager::new(session_test_config());
+    let event = || NormalizedEvent::AgentStarted(session_event("owned-session", "SessionStart"));
+    manager
+        .apply_authenticated_events(&HeaderMap::new(), vec![event()], "client-a")
+        .await
+        .unwrap();
+    manager
+        .apply_authenticated_events(&HeaderMap::new(), vec![event()], "client-a")
+        .await
+        .unwrap();
+    let error = manager
+        .apply_authenticated_events(&HeaderMap::new(), vec![event()], "client-b")
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CliError::Unauthorized(_)));
+}
+
+#[tokio::test]
+async fn permission_requests_require_an_exact_recorded_tool_call() {
+    let manager = SessionManager::new(session_test_config());
+    let mut session = Session::new(
+        "permission-session".into(),
+        AgentKind::ClaudeCode,
+        SessionConfig::default(),
+    );
+    session.pending_tool_hints.push(PendingToolHint {
+        hint: ToolHint {
+            tool_call_id: Some("call-1".into()),
+            tool_name: Some("Read".into()),
+            subagent_id: None,
+            arguments: json!({"path": "README.md"}),
+            source: "test".into(),
+        },
+        inserted_at: Instant::now(),
+    });
+    manager
+        .inner
+        .lock()
+        .await
+        .insert("permission-session".into(), session);
+
+    let request = ToolEvent {
+        session_id: "permission-session".into(),
+        agent_kind: AgentKind::ClaudeCode,
+        event_name: "PermissionRequest".into(),
+        tool_call_id: "call-1".into(),
+        tool_name: "Read".into(),
+        subagent_id: None,
+        arguments: json!({"path": "README.md"}),
+        result: Value::Null,
+        status: None,
+        payload: json!({}),
+        metadata: json!({}),
+    };
+    manager.authorize_tool_permission(&request).await.unwrap();
+
+    let mut changed = request;
+    changed.arguments = json!({"path": "secrets.txt"});
+    assert!(manager.authorize_tool_permission(&changed).await.is_err());
+}
+
 #[test]
 fn routing_identity_enrichment_replaces_untrusted_reserved_headers() {
     let mut request = LlmRequest {

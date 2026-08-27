@@ -48,6 +48,7 @@ pub mod otel_logs;
 pub mod otel_metrics;
 mod otel_signal;
 pub mod plugin_component;
+mod private_file;
 
 pub use otel_signal::{OpenTelemetryRuntimeDiagnostic, OpenTelemetryRuntimeDiagnostics};
 

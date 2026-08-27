@@ -551,6 +551,15 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
             .allow_environment_provider_auth
     );
 
+    let explicit_daemon =
+        AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), true, None, None);
+    assert!(
+        !explicit_daemon
+            .authorize_provider_request(&mut HeaderMap::new())
+            .unwrap()
+            .allow_environment_provider_auth
+    );
+
     let transparent = AppState::new_with_bootstrap(
         test_config(),
         Some("transparent-fingerprint".into()),
@@ -577,6 +586,34 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
         !transparent_headers
             .contains_key(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER)
     );
+}
+
+#[tokio::test]
+async fn hook_authentication_is_internal_and_rejects_origins_and_bad_tokens() {
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let state =
+        AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), true, None, None);
+    assert!(state.authorize_hook_request(&mut HeaderMap::new()).is_err());
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+        HeaderValue::from_str(&key.client_token()).unwrap(),
+    );
+    let owner = state.authorize_hook_request(&mut headers).unwrap();
+    assert!(owner.starts_with("sha256:"));
+    assert!(!headers.contains_key(crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER));
+
+    let mut browser_headers = HeaderMap::new();
+    browser_headers.insert(
+        header::ORIGIN,
+        HeaderValue::from_static("https://example.test"),
+    );
+    browser_headers.insert(
+        crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+        HeaderValue::from_str(&key.client_token()).unwrap(),
+    );
+    assert!(state.authorize_hook_request(&mut browser_headers).is_err());
 }
 
 #[tokio::test]

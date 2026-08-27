@@ -63,6 +63,7 @@ const ROUTING_IDENTITY_HEADERS: &[&str] = &[
 #[derive(Clone)]
 pub(crate) struct SessionManager {
     inner: Arc<Mutex<HashMap<String, Session>>>,
+    authenticated_owners: Arc<Mutex<HashMap<String, String>>>,
     // Cross-session alignment state owns child-session aliases and child-first SessionStart hooks.
     // Applies to Codex child threads today; the generic state lives in `alignment` so session code
     // only orchestrates when promotion is safe.
@@ -279,9 +280,66 @@ impl SessionManager {
     pub(crate) fn new(default_config: GatewayConfig) -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
+            authenticated_owners: Arc::new(Mutex::new(HashMap::new())),
             alignment: Arc::new(Mutex::new(SessionAlignmentState::default())),
             default_config,
         }
+    }
+
+    /// Applies authenticated hook events after binding every named session to its first client.
+    pub(crate) async fn apply_authenticated_events(
+        &self,
+        headers: &HeaderMap,
+        events: Vec<NormalizedEvent>,
+        owner: &str,
+    ) -> Result<(), CliError> {
+        let mut owners = self.authenticated_owners.lock().await;
+        for event in &events {
+            let session_id = event.session_id();
+            match owners.get(session_id) {
+                Some(existing) if existing != owner => {
+                    return Err(CliError::Unauthorized(format!(
+                        "Relay hook client does not own session '{session_id}'"
+                    )));
+                }
+                Some(_) => {}
+                None => {
+                    owners.insert(session_id.to_string(), owner.to_string());
+                }
+            }
+        }
+        drop(owners);
+        self.apply_events(headers, events).await
+    }
+
+    /// Evaluates a final host permission request inside its existing session scope.
+    pub(crate) async fn authorize_tool_permission(
+        &self,
+        event: &ToolEvent,
+    ) -> Result<(), CliError> {
+        let sessions = self.inner.lock().await;
+        let session = sessions.get(&event.session_id).ok_or_else(|| {
+            CliError::InvalidPayload(format!(
+                "permission request names unknown session '{}'",
+                event.session_id
+            ))
+        })?;
+        if !session.permission_request_matches(event) {
+            return Err(CliError::InvalidPayload(format!(
+                "permission request does not match the recorded tool call '{}'",
+                event.tool_call_id
+            )));
+        }
+        let stack = session.scope_stack.clone();
+        let name = event.tool_name.clone();
+        let arguments = normalize_tool_arguments(event.arguments.clone());
+        drop(sessions);
+        TASK_SCOPE_STACK
+            .scope(stack, async move {
+                tool_conditional_execution(&name, &arguments).await
+            })
+            .await
+            .map_err(CliError::from)
     }
 
     /// Starts the fail-safe idle closer used by the HTTP gateway.
@@ -724,6 +782,21 @@ impl Session {
             active_gateway_calls: 0,
             config,
         }
+    }
+
+    fn permission_request_matches(&self, event: &ToolEvent) -> bool {
+        let arguments = normalize_tool_arguments(event.arguments.clone());
+        let active_matches = self
+            .tools
+            .get(&event.tool_call_id)
+            .is_some_and(|active| active.name == event.tool_name && active.arguments == arguments);
+        active_matches
+            || self.pending_tool_hints.iter().any(|pending| {
+                pending.hint.tool_call_id.as_deref() == Some(event.tool_call_id.as_str())
+                    && pending.hint.tool_name.as_deref() == Some(event.tool_name.as_str())
+                    && !pending.hint.arguments.is_null()
+                    && pending.hint.arguments == arguments
+            })
     }
 
     // A child session can only be converted into a subagent before any real scope, LLM, or tool
