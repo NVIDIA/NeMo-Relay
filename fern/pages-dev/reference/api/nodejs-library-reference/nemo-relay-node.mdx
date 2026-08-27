@@ -118,6 +118,8 @@ export interface OpenTelemetryConfig {
   attributeMappings?: Json
   /** Literal Event metadata prefixes copied to top-level OTLP attributes. */
   promoteMetadataPrefixes?: Array<string>
+  /** Literal root-scope Event metadata prefixes copied to OTLP resource attributes. */
+  promoteResourceMetadataPrefixes?: Array<string>
 }
 ```
 
