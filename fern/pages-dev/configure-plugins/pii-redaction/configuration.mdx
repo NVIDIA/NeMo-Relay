@@ -240,6 +240,7 @@ The `builtin` section contains:
 | `mask_char` | Masking token used when `action = "mask"`. Defaults to `*`. |
 | `unmasked_prefix` | Leading character count to keep when `action = "mask"`. Defaults to `0`, unless a detector-specific masking preset is active. |
 | `unmasked_suffix` | Trailing character count to keep when `action = "mask"`. Defaults to `0`, unless a detector-specific masking preset is active. |
+| `metric_string_attribute_allowlist` | Exact typed metric attribute names and bounded string values that `trajectory_context` may preserve. Empty by default. |
 
 ## Typed Metric Marks
 
@@ -266,6 +267,33 @@ attributes with its configured replacement while retaining the required metric
 fields. That preset does not accept `target_paths`. Its
 `custom_mark_payload_policy` applies only to opaque marks in the `custom`
 category; it does not control Relay typed metric envelopes.
+
+To retain bounded string dimensions, configure exact attribute/value pairs on
+the trajectory preset:
+
+```toml
+[[components]]
+kind = "pii_redaction"
+
+[components.config]
+version = 1
+
+[[components.config.profiles]]
+mode = "builtin"
+
+[components.config.profiles.builtin]
+preset = "trajectory_context"
+
+[components.config.profiles.builtin.metric_string_attribute_allowlist]
+"gen_ai.operation.name" = ["chat", "text_completion"]
+```
+
+Matching is case-sensitive and requires both the attribute name and value. Each
+element of a string-array attribute is evaluated independently. Values under an
+unlisted key and unexpected values under a listed key remain redacted. This
+allowlist does not apply to descriptions, mark metadata, category profiles, or
+non-metric marks. Configure fixed constants or bounded enums only; do not list
+free-form identifiers or user-provided text.
 
 ## Action Semantics
 
