@@ -1,12 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt, ambient_authority};
-use cap_std::fs::{Dir, DirBuilder, OpenOptions};
-#[cfg(unix)]
-use cap_std::fs::{DirBuilderExt, OpenOptionsExt};
+use super::confined_fs::ConfinedDir;
 use std::ffi::OsString;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 
@@ -14,7 +11,7 @@ pub(super) fn create_private_dir_all(path: &Path) -> io::Result<()> {
     open_or_create_private_dir(path).map(drop)
 }
 
-fn open_or_create_private_dir(path: &Path) -> io::Result<Dir> {
+fn open_or_create_private_dir(path: &Path) -> io::Result<ConfinedDir> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -30,9 +27,7 @@ fn open_or_create_private_dir(path: &Path) -> io::Result<Dir> {
             Component::Normal(name) => {
                 let parent = match current.take() {
                     Some(parent) => parent,
-                    None if !anchor.as_os_str().is_empty() => {
-                        Dir::open_ambient_dir(&anchor, ambient_authority())?
-                    }
+                    None if !anchor.as_os_str().is_empty() => ConfinedDir::open_anchor(&anchor)?,
                     None => {
                         return Err(io::Error::other(format!(
                             "observability directory '{}' has no filesystem anchor",
@@ -40,7 +35,7 @@ fn open_or_create_private_dir(path: &Path) -> io::Result<Dir> {
                         )));
                     }
                 };
-                current = Some(open_or_create_private_child(&parent, name)?);
+                current = Some(parent.open_or_create_child(name)?);
             }
             Component::CurDir => {}
             Component::ParentDir | Component::Prefix(_) | Component::RootDir => {
@@ -53,9 +48,7 @@ fn open_or_create_private_dir(path: &Path) -> io::Result<Dir> {
     }
     match current {
         Some(directory) => Ok(directory),
-        None if !anchor.as_os_str().is_empty() => {
-            Dir::open_ambient_dir(&anchor, ambient_authority())
-        }
+        None if !anchor.as_os_str().is_empty() => ConfinedDir::open_anchor(&anchor),
         None => Err(io::Error::other(format!(
             "observability directory '{}' has no filesystem anchor",
             path.display()
@@ -63,78 +56,30 @@ fn open_or_create_private_dir(path: &Path) -> io::Result<Dir> {
     }
 }
 
-fn open_or_create_private_child(parent: &Dir, name: &std::ffi::OsStr) -> io::Result<Dir> {
-    match parent.open_dir_nofollow(name) {
-        Ok(directory) => Ok(directory),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            match parent.create_dir_with(name, &private_dir_builder()) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(error) => return Err(error),
-            }
-            parent.open_dir_nofollow(name)
-        }
-        Err(error) => Err(io::Error::new(
-            error.kind(),
-            format!(
-                "refusing unsafe observability directory component '{}': {error}",
-                name.to_string_lossy()
-            ),
-        )),
-    }
-}
-
-fn private_dir_builder() -> DirBuilder {
-    #[cfg(unix)]
-    {
-        let mut builder = DirBuilder::new();
-        builder.mode(0o700);
-        builder
-    }
-    #[cfg(not(unix))]
-    {
-        DirBuilder::new()
-    }
-}
-
 pub(super) fn open_private(root: &Path, path: &Path, append: bool) -> io::Result<File> {
     let (parent, filename) = prepare_confined_parent(root, path)?;
-    let mut options = OpenOptions::new();
-    options.create(true).write(true).follow(FollowSymlinks::No);
-    if append {
-        options.append(true);
-    } else {
-        options.truncate(true);
-    }
-    #[cfg(unix)]
-    {
-        options.mode(0o600);
-    }
-    let file = parent.open_with(&filename, &options)?.into_std();
-    restrict_file(&file)?;
-    Ok(file)
+    parent.open_private_file(&filename, append)
 }
 
 pub(super) fn atomic_private_write(root: &Path, path: &Path, payload: &[u8]) -> io::Result<()> {
     let (parent, filename) = prepare_confined_parent(root, path)?;
-    reject_unsafe_target(&parent, &filename)?;
+    parent.reject_unsafe_target(&filename)?;
     let filename_text = filename
         .to_str()
         .ok_or_else(|| io::Error::other("observability output filename is not valid text"))?;
     let mut last_collision = None;
     for _ in 0..16 {
         let temporary = format!(".{filename_text}.{}.tmp", uuid::Uuid::now_v7());
-        match create_private_new(&parent, &temporary) {
+        match parent.create_private_new(std::ffi::OsStr::new(&temporary)) {
             Ok(mut file) => {
                 let result = (|| {
                     file.write_all(payload)?;
                     file.sync_all()?;
-                    drop(file);
-                    reject_unsafe_target(&parent, &filename)?;
-                    parent.rename(&temporary, &parent, &filename)
+                    parent.reject_unsafe_target(&filename)?;
+                    parent.rename_file(&file, std::ffi::OsStr::new(&temporary), &filename)
                 })();
                 if result.is_err() {
-                    let _ = parent.remove_file(&temporary);
+                    let _ = parent.remove_file(std::ffi::OsStr::new(&temporary));
                 }
                 return result;
             }
@@ -149,7 +94,7 @@ pub(super) fn atomic_private_write(root: &Path, path: &Path, payload: &[u8]) -> 
     }))
 }
 
-fn prepare_confined_parent(root: &Path, path: &Path) -> io::Result<(Dir, OsString)> {
+fn prepare_confined_parent(root: &Path, path: &Path) -> io::Result<(ConfinedDir, OsString)> {
     let mut current = open_or_create_private_dir(root)?;
     let relative = path.strip_prefix(root).map_err(|_| {
         io::Error::other(format!(
@@ -180,47 +125,7 @@ fn prepare_confined_parent(root: &Path, path: &Path) -> io::Result<(Dir, OsStrin
     let relative_parent = relative.parent().unwrap_or_else(|| Path::new(""));
     for component in relative_parent.components() {
         let component = component.as_os_str();
-        current = open_or_create_private_child(&current, component)?;
+        current = current.open_or_create_child(component)?;
     }
     Ok((current, filename))
-}
-
-fn create_private_new(parent: &Dir, filename: &str) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options
-        .create_new(true)
-        .write(true)
-        .follow(FollowSymlinks::No);
-    #[cfg(unix)]
-    {
-        options.mode(0o600);
-    }
-    let file = parent.open_with(filename, &options)?.into_std();
-    restrict_file(&file)?;
-    Ok(file)
-}
-
-fn reject_unsafe_target(parent: &Dir, filename: &OsString) -> io::Result<()> {
-    match parent.symlink_metadata(filename) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(io::Error::other(format!(
-            "refusing symlinked observability file '{}'",
-            filename.to_string_lossy()
-        ))),
-        Ok(metadata) if !metadata.is_file() => Err(io::Error::other(format!(
-            "observability output '{}' is not a regular file",
-            filename.to_string_lossy()
-        ))),
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
-fn restrict_file(_file: &File) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        _file.set_permissions(fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
 }

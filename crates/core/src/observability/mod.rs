@@ -40,6 +40,7 @@ pub(crate) fn test_mutex() -> &'static Mutex<()> {
 
 pub mod atif;
 pub mod atof;
+mod confined_fs;
 pub(crate) mod manual;
 pub(crate) mod openinference;
 pub mod otel;
