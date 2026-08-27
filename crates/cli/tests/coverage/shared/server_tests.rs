@@ -600,9 +600,16 @@ async fn hook_authentication_is_internal_and_rejects_origins_and_bad_tokens() {
         crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
         HeaderValue::from_str(&key.client_token()).unwrap(),
     );
+    let hook_client_token = key.hook_client_token("test-hook-installation");
+    let expected_hook_owner = key.verify_hook_client_token(&hook_client_token).unwrap();
+    headers.insert(
+        crate::configuration::HOOK_CLIENT_TOKEN_HEADER,
+        HeaderValue::from_str(&hook_client_token).unwrap(),
+    );
     let owner = state.authorize_hook_request(&mut headers).unwrap();
-    assert!(owner.starts_with("sha256:"));
+    assert_eq!(owner, expected_hook_owner);
     assert!(!headers.contains_key(crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER));
+    assert!(!headers.contains_key(crate::configuration::HOOK_CLIENT_TOKEN_HEADER));
 
     let mut browser_headers = HeaderMap::new();
     browser_headers.insert(

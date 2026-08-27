@@ -1175,12 +1175,11 @@ async fn worker_invalid_registration_plan_fails_activation() {
 #[tokio::test]
 async fn worker_handshake_plugin_id_mismatch_reports_config_error() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
-    let _env = EnvVarGuard::set("FIXTURE_WORKER_PLUGIN_ID", "other_worker");
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
 
     let error = match load_worker_plugins([WorkerPluginLoadSpec {
-        plugin_id: "fixture_worker".into(),
+        plugin_id: "other_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
         environment_ref: None,
         config: Map::new(),
@@ -1191,7 +1190,10 @@ async fn worker_handshake_plugin_id_mismatch_reports_config_error() {
         }
         Err(error) => error.to_string(),
     };
-    assert!(error.contains("returned id 'other_worker'"), "{error}");
+    assert!(
+        error.contains("manifest id 'fixture_worker' does not match expected id 'other_worker'"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -1842,35 +1844,6 @@ fn assert_error_mentions_manifest_relative_entrypoint(
         error[manifest_dir_pos + manifest_dir_name.len()..].contains(entrypoint),
         "error did not mention entrypoint '{entrypoint}' after manifest dir '{manifest_dir_name}': {error}"
     );
-}
-
-struct EnvVarGuard {
-    key: &'static str,
-    previous: Option<String>,
-}
-
-impl EnvVarGuard {
-    fn set(key: &'static str, value: &str) -> Self {
-        let previous = std::env::var(key).ok();
-        // SAFETY: this module serializes worker tests with WORKER_PLUGIN_TEST_LOCK.
-        unsafe {
-            std::env::set_var(key, value);
-        }
-        Self { key, previous }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        // SAFETY: this module serializes worker tests with WORKER_PLUGIN_TEST_LOCK.
-        unsafe {
-            if let Some(previous) = &self.previous {
-                std::env::set_var(self.key, previous);
-            } else {
-                std::env::remove_var(self.key);
-            }
-        }
-    }
 }
 
 fn find_event<'a>(

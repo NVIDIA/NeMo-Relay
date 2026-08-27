@@ -1065,8 +1065,6 @@ fn minimize_worker_environment(command: &mut Command) {
         "TMP",
         "SSL_CERT_FILE",
         "SSL_CERT_DIR",
-        // Test fixture handshake override; production workers should not use this namespace.
-        "FIXTURE_WORKER_PLUGIN_ID",
     ];
     let retained = ALLOWLIST
         .iter()

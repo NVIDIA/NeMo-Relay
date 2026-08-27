@@ -40,6 +40,60 @@ async fn authenticated_hook_clients_cannot_take_over_existing_sessions() {
 }
 
 #[tokio::test]
+async fn rejected_authenticated_batch_does_not_claim_new_sessions() {
+    let manager = SessionManager::new(session_test_config());
+    let event =
+        |session_id| NormalizedEvent::AgentStarted(session_event(session_id, "SessionStart"));
+    manager
+        .apply_authenticated_events(&HeaderMap::new(), vec![event("owned-session")], "client-a")
+        .await
+        .unwrap();
+
+    let error = manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![event("new-session"), event("owned-session")],
+            "client-b",
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CliError::Unauthorized(_)));
+
+    manager
+        .apply_authenticated_events(&HeaderMap::new(), vec![event("new-session")], "client-a")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn ended_authenticated_sessions_can_be_reused_by_another_client() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("reused-session", "SessionStart")),
+                NormalizedEvent::AgentEnded(session_event("reused-session", "SessionEnd")),
+            ],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "reused-session",
+                "SessionStart",
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn permission_requests_require_an_exact_recorded_tool_call() {
     let manager = SessionManager::new(session_test_config());
     let mut session = Session::new(
@@ -76,11 +130,49 @@ async fn permission_requests_require_an_exact_recorded_tool_call() {
         payload: json!({}),
         metadata: json!({}),
     };
-    manager.authorize_tool_permission(&request).await.unwrap();
+    manager
+        .authenticated_owners
+        .lock()
+        .await
+        .insert("permission-session".into(), "client-a".into());
+    manager
+        .authorize_tool_permission(&request, "client-a")
+        .await
+        .unwrap();
+
+    assert!(
+        manager
+            .authorize_tool_permission(&request, "client-b")
+            .await
+            .is_err()
+    );
+
+    let mut changed = request.clone();
+    changed.arguments = json!({"path": "secrets.txt"});
+    assert!(
+        manager
+            .authorize_tool_permission(&changed, "client-a")
+            .await
+            .is_err()
+    );
+
+    let mut changed = request.clone();
+    changed.tool_call_id = "call-2".into();
+    assert!(
+        manager
+            .authorize_tool_permission(&changed, "client-a")
+            .await
+            .is_err()
+    );
 
     let mut changed = request;
-    changed.arguments = json!({"path": "secrets.txt"});
-    assert!(manager.authorize_tool_permission(&changed).await.is_err());
+    changed.tool_name = "Write".into();
+    assert!(
+        manager
+            .authorize_tool_permission(&changed, "client-a")
+            .await
+            .is_err()
+    );
 }
 
 #[test]

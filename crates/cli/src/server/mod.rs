@@ -272,9 +272,6 @@ async fn serve_listener_with_dynamic_inner(
         shutdown_token: bootstrap_shutdown_token,
         transparent_proxy_credential,
     } = bootstrap;
-    #[cfg(not(test))]
-    let bootstrap_challenge_key = Some(BootstrapChallengeKey::load()?);
-    #[cfg(test)]
     let bootstrap_challenge_key = bootstrap_fingerprint
         .as_ref()
         .map(|_| BootstrapChallengeKey::load())
@@ -1201,21 +1198,13 @@ async fn codex_hook(
         .sessions
         .apply_authenticated_events(&headers, outcome.events, &owner)
         .await?;
-    if let Some(permission) = outcome.permission {
-        let result = match permission {
-            Ok(permission) => state.sessions.authorize_tool_permission(&permission).await,
-            Err(reason) => Err(CliError::InvalidPayload(reason)),
-        };
-        if let Err(error) = result {
-            let reason = error
-                .guardrail_rejection_reason()
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| error.to_string());
-            return Ok(Json(serde_json::json!({
-                "decision": "deny",
-                "reason": reason,
-            })));
-        }
+    if let Some(permission) = outcome.permission
+        && let Err(error) = authorize_hook_permission(&state, permission, &owner).await
+    {
+        return Ok(Json(serde_json::json!({
+            "decision": "deny",
+            "reason": permission_denial_reason(error),
+        })));
     }
     Ok(Json(outcome.response))
 }
@@ -1236,10 +1225,7 @@ async fn claude_code_hook(
         .apply_authenticated_events(&headers, outcome.events, &owner)
         .await?;
     if let Some(permission) = outcome.permission {
-        let result = match permission {
-            Ok(permission) => state.sessions.authorize_tool_permission(&permission).await,
-            Err(reason) => Err(CliError::InvalidPayload(reason)),
-        };
+        let result = authorize_hook_permission(&state, permission, &owner).await;
         return Ok(Json(match result {
             Ok(()) => serde_json::json!({
                 "continue": true,
@@ -1251,17 +1237,13 @@ async fn claude_code_hook(
                 }
             }),
             Err(error) => {
-                let reason = error
-                    .guardrail_rejection_reason()
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| error.to_string());
                 serde_json::json!({
                     "continue": true,
                     "hookSpecificOutput": {
                         "hookEventName": "PermissionRequest",
                         "decision": {
                             "behavior": "deny",
-                            "message": reason,
+                            "message": permission_denial_reason(error),
                         }
                     }
                 })
@@ -1269,6 +1251,29 @@ async fn claude_code_hook(
         }));
     }
     Ok(Json(outcome.response))
+}
+
+async fn authorize_hook_permission(
+    state: &AppState,
+    permission: Result<crate::events::ToolEvent, String>,
+    owner: &str,
+) -> Result<(), CliError> {
+    match permission {
+        Ok(permission) => {
+            state
+                .sessions
+                .authorize_tool_permission(&permission, owner)
+                .await
+        }
+        Err(reason) => Err(CliError::InvalidPayload(reason)),
+    }
+}
+
+fn permission_denial_reason(error: CliError) -> String {
+    error
+        .guardrail_rejection_reason()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| error.to_string())
 }
 
 fn hook_payload_rejection(rejection: JsonRejection) -> CliError {

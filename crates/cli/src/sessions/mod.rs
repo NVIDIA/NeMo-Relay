@@ -296,27 +296,50 @@ impl SessionManager {
         let mut owners = self.authenticated_owners.lock().await;
         for event in &events {
             let session_id = event.session_id();
-            match owners.get(session_id) {
-                Some(existing) if existing != owner => {
-                    return Err(CliError::Unauthorized(format!(
-                        "Relay hook client does not own session '{session_id}'"
-                    )));
-                }
-                Some(_) => {}
-                None => {
-                    owners.insert(session_id.to_string(), owner.to_string());
-                }
+            if owners
+                .get(session_id)
+                .is_some_and(|existing| existing != owner)
+            {
+                return Err(CliError::Unauthorized(format!(
+                    "Relay hook client does not own session '{session_id}'"
+                )));
             }
         }
+        for event in &events {
+            owners
+                .entry(event.session_id().to_string())
+                .or_insert_with(|| owner.to_string());
+        }
         drop(owners);
-        self.apply_events(headers, events).await
+        let released_owner_ids = self.apply_events_inner(headers, events).await?;
+        release_closed_owner_ids(&self.inner, &self.authenticated_owners, &released_owner_ids)
+            .await;
+        Ok(())
     }
 
     /// Evaluates a final host permission request inside its existing session scope.
     pub(crate) async fn authorize_tool_permission(
         &self,
         event: &ToolEvent,
+        owner: &str,
     ) -> Result<(), CliError> {
+        let owners = self.authenticated_owners.lock().await;
+        match owners.get(&event.session_id) {
+            Some(existing) if existing == owner => {}
+            Some(_) => {
+                return Err(CliError::Unauthorized(format!(
+                    "Relay hook client does not own session '{}'",
+                    event.session_id
+                )));
+            }
+            None => {
+                return Err(CliError::InvalidPayload(format!(
+                    "permission request names unknown session '{}'",
+                    event.session_id
+                )));
+            }
+        }
+        drop(owners);
         let sessions = self.inner.lock().await;
         let session = sessions.get(&event.session_id).ok_or_else(|| {
             CliError::InvalidPayload(format!(
@@ -351,17 +374,23 @@ impl SessionManager {
     /// shutdown paths.
     pub(crate) fn start_idle_sweeper(&self) {
         let inner = Arc::downgrade(&self.inner);
+        let authenticated_owners = Arc::downgrade(&self.authenticated_owners);
         let alignment = Arc::downgrade(&self.alignment);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(AGENT_IDLE_SWEEP_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
-                let (Some(inner), Some(alignment)) = (inner.upgrade(), alignment.upgrade()) else {
+                let (Some(inner), Some(authenticated_owners), Some(alignment)) = (
+                    inner.upgrade(),
+                    authenticated_owners.upgrade(),
+                    alignment.upgrade(),
+                ) else {
                     break;
                 };
                 if let Err(error) = close_idle_sessions_from_parts(
                     &inner,
+                    &authenticated_owners,
                     &alignment,
                     Instant::now(),
                     AGENT_IDLE_TIMEOUT,
@@ -393,15 +422,27 @@ impl SessionManager {
     /// metadata reflects the actual agent. Note: agent-scope and observer identities are baked at
     /// scope-open time, so this upgrade applies to session metadata only — the
     /// provider-inferred kind set in `start_llm` is the primary defense.
+    #[cfg(test)]
     pub(crate) async fn apply_events(
         &self,
         headers: &HeaderMap,
         events: Vec<NormalizedEvent>,
     ) -> Result<(), CliError> {
+        self.apply_events_inner(headers, events).await.map(|_| ())
+    }
+
+    async fn apply_events_inner(
+        &self,
+        headers: &HeaderMap,
+        events: Vec<NormalizedEvent>,
+    ) -> Result<HashSet<String>, CliError> {
         let mut subscriber_deliveries = Vec::new();
+        let mut released_owner_ids = HashSet::new();
         let mut alignment_state = self.alignment.lock().await;
         let mut sessions = self.inner.lock().await;
         for event in events {
+            let original_session_id = event.session_id().to_string();
+            let original_was_terminal = event.is_terminal();
             let mut event = event;
             let config = self.default_config.session_config_from_headers(headers);
             if queue_or_promote_child_start(
@@ -418,8 +459,14 @@ impl SessionManager {
             let Some((event, session_id, is_agent_started)) =
                 route_event_for_session(event, &mut sessions, &mut alignment_state)
             else {
+                if original_was_terminal {
+                    released_owner_ids.insert(original_session_id);
+                }
                 continue;
             };
+            if original_was_terminal && original_session_id != session_id {
+                released_owner_ids.insert(original_session_id);
+            }
             let event_kind = event_agent_kind(&event);
             let (should_remove_session, subscriber_delivery) = apply_event_to_session(
                 &mut sessions,
@@ -446,6 +493,7 @@ impl SessionManager {
             }
             if should_remove_session {
                 sessions.remove(&session_id);
+                released_owner_ids.insert(session_id);
             }
         }
         drop(sessions);
@@ -453,7 +501,7 @@ impl SessionManager {
         for subscriber_delivery in subscriber_deliveries {
             subscriber_delivery.wait().await?;
         }
-        Ok(())
+        Ok(released_owner_ids)
     }
 
     /// Legacy manual-lifecycle entry point retained for tests that drive correlation behavior
@@ -571,6 +619,15 @@ impl SessionManager {
         });
         let mut closing = completed.then(|| sessions.remove(session_id)).flatten();
         drop(sessions);
+
+        if completed {
+            release_closed_owner_ids(
+                &self.inner,
+                &self.authenticated_owners,
+                &HashSet::from([session_id.to_string()]),
+            )
+            .await;
+        }
 
         if finish == GatewaySessionFinish::Close
             && let Some(session) = closing.as_mut()
@@ -696,6 +753,7 @@ impl SessionManager {
     /// observability plugins are still active. Applies to Codex transparent runs today.
     pub(crate) async fn close_all(&self, reason: &str) -> Result<(), CliError> {
         self.alignment.lock().await.clear();
+        self.authenticated_owners.lock().await.clear();
         let mut sessions = {
             let mut guard = self.inner.lock().await;
             guard
@@ -713,7 +771,15 @@ impl SessionManager {
         timeout: Duration,
         reason: &str,
     ) -> Result<usize, CliError> {
-        close_idle_sessions_from_parts(&self.inner, &self.alignment, now, timeout, reason).await
+        close_idle_sessions_from_parts(
+            &self.inner,
+            &self.authenticated_owners,
+            &self.alignment,
+            now,
+            timeout,
+            reason,
+        )
+        .await
     }
 
     // Applies known or pending child-session aliases before the gateway chooses a session. This is

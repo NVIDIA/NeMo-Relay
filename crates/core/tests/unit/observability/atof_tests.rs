@@ -1349,6 +1349,23 @@ fn nested_filename_creates_private_parent_directories() {
         exporter.path(),
         Some(dir.join("missing-parent/events.jsonl").as_path())
     );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let parent_mode = std::fs::metadata(dir.join("missing-parent"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        let file_mode = std::fs::metadata(dir.join("missing-parent/events.jsonl"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(parent_mode, 0o700);
+        assert_eq!(file_mode, 0o600);
+    }
 }
 
 #[test]

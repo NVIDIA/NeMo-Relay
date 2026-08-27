@@ -18,9 +18,6 @@ struct FixtureWorkerPlugin;
 
 impl WorkerPlugin for FixtureWorkerPlugin {
     fn plugin_id(&self) -> &str {
-        if std::env::var("FIXTURE_WORKER_PLUGIN_ID").as_deref() == Ok("other_worker") {
-            return "other_worker";
-        }
         "fixture_worker"
     }
 

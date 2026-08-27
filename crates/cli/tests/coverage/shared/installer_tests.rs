@@ -43,6 +43,32 @@ impl Drop for BootstrapConfigHome {
     }
 }
 
+struct ScopedEnvVar {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl ScopedEnvVar {
+    fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
+        let previous = std::env::var_os(key);
+        // SAFETY: The caller holds the process-wide environment mutex through BootstrapConfigHome.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, previous }
+    }
+}
+
+impl Drop for ScopedEnvVar {
+    fn drop(&mut self) {
+        // SAFETY: BootstrapConfigHome outlives this guard and still holds the environment mutex.
+        unsafe {
+            match self.previous.take() {
+                Some(previous) => std::env::set_var(self.key, previous),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
     let _plugin_guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
@@ -58,15 +84,10 @@ async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
     };
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let proxy_credential = crate::provider_auth::TransparentProxyCredential::generate().unwrap();
-    let previous_proxy_credential =
-        std::env::var_os(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV);
-    // SAFETY: BootstrapConfigHome holds the process-wide environment lock for this test.
-    unsafe {
-        std::env::set_var(
-            crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV,
-            proxy_credential.expose(),
-        )
-    };
+    let _proxy_credential = ScopedEnvVar::set(
+        crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV,
+        proxy_credential.expose().as_ref(),
+    );
     let server = tokio::spawn(crate::server::serve_transparent_listener_with_dynamic(
         listener,
         config,
@@ -127,16 +148,6 @@ async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
         .expect("wrapper gateway did not stop")
         .unwrap()
         .unwrap();
-    // SAFETY: BootstrapConfigHome still holds the process-wide environment lock.
-    unsafe {
-        match previous_proxy_credential {
-            Some(value) => std::env::set_var(
-                crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV,
-                value,
-            ),
-            None => std::env::remove_var(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV),
-        }
-    }
 }
 
 #[test]
