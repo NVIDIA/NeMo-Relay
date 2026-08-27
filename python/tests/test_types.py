@@ -751,6 +751,7 @@ class TestOpenTelemetryTypes:
         assert config.mark_exclude_names == ["llm.chunk"]
         assert config.attribute_mappings == []
         assert config.promote_metadata_prefixes == []
+        assert config.promote_resource_metadata_prefixes == []
 
         config.service_name = "py-agent"
         config.service_namespace = "agents"
@@ -763,6 +764,7 @@ class TestOpenTelemetryTypes:
         config.mark_exclude_names = ["custom.mark"]
         config.attribute_mappings = [{"key": "nemo_relay.model_name", "alias": "model.alias"}]
         config.promote_metadata_prefixes = ["nv."]
+        config.promote_resource_metadata_prefixes = ["deployment."]
 
         assert config.headers == {"authorization": "Bearer token"}
         assert config.resource_attributes == {"deployment.environment": "test"}
@@ -770,6 +772,7 @@ class TestOpenTelemetryTypes:
         assert config.mark_exclude_names == ["custom.mark"]
         assert config.attribute_mappings == [{"key": "nemo_relay.model_name", "alias": "model.alias"}]
         assert config.promote_metadata_prefixes == ["nv."]
+        assert config.promote_resource_metadata_prefixes == ["deployment."]
         assert "OpenTelemetryConfig" in repr(config)
 
     def test_config_rejects_invalid_map_values(self):
@@ -786,6 +789,11 @@ class TestOpenTelemetryTypes:
 
         config.attribute_mappings = []
         config.promote_metadata_prefixes = ["nv.*"]
+        with pytest.raises(ValueError, match="literal prefix, not a glob"):
+            OpenTelemetrySubscriber(config)
+
+        config.promote_metadata_prefixes = []
+        config.promote_resource_metadata_prefixes = ["deployment.*"]
         with pytest.raises(ValueError, match="literal prefix, not a glob"):
             OpenTelemetrySubscriber(config)
 

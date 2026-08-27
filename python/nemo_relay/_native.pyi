@@ -1154,6 +1154,7 @@ class OpenTelemetryConfig:
     mark_projection: Literal["inherit", "event", "tool"]
     mark_exclude_names: list[str]
     promote_metadata_prefixes: list[str]
+    promote_resource_metadata_prefixes: list[str]
 
     def __init__(
         self,

@@ -334,6 +334,9 @@ pub struct OpenTelemetryEndpointConfig {
     /// Literal Event metadata prefixes copied to top-level OTLP attributes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub promote_metadata_prefixes: Vec<String>,
+    /// Literal root-scope Event metadata prefixes copied to OTLP resource attributes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub promote_resource_metadata_prefixes: Vec<String>,
     /// OTLP transport: `http_binary` or `grpc`.
     #[serde(default = "default_otlp_transport")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "otlp_transport_schema"))]
@@ -770,6 +773,12 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
                 otel_editor_field("attribute_mappings", EditorFieldKind::List, &[], false),
                 otel_editor_field(
                     "promote_metadata_prefixes",
+                    EditorFieldKind::List,
+                    &[],
+                    true,
+                ),
+                otel_editor_field(
+                    "promote_resource_metadata_prefixes",
                     EditorFieldKind::List,
                     &[],
                     true,
@@ -3254,7 +3263,8 @@ fn build_otel_config(
         .with_mark_projection(section.mark_projection)
         .with_mark_exclude_names(section.mark_exclude_names)
         .with_attribute_mappings(section.attribute_mappings)
-        .with_promote_metadata_prefixes(section.promote_metadata_prefixes);
+        .with_promote_metadata_prefixes(section.promote_metadata_prefixes)
+        .with_promote_resource_metadata_prefixes(section.promote_resource_metadata_prefixes);
     if let Some(max_queue_size) = section.max_queue_size {
         config = config.with_max_queue_size(max_queue_size);
     }
@@ -3500,6 +3510,7 @@ fn validate_observability_section_fields(
             "mark_exclude_names",
             "attribute_mappings",
             "promote_metadata_prefixes",
+            "promote_resource_metadata_prefixes",
             "transport",
             "endpoint",
             "headers",
@@ -3520,6 +3531,7 @@ fn validate_observability_section_fields(
             "mark_exclude_names",
             "attribute_mappings",
             "promote_metadata_prefixes",
+            "promote_resource_metadata_prefixes",
             "transport",
             "endpoint",
             "headers",
@@ -3632,6 +3644,7 @@ fn validate_opentelemetry_endpoint_fields(
         "mark_exclude_names",
         "attribute_mappings",
         "promote_metadata_prefixes",
+        "promote_resource_metadata_prefixes",
         "transport",
         "headers",
         "header_env",
@@ -3862,6 +3875,20 @@ fn validate_opentelemetry_section(
                 "observability.unsupported_value",
                 Some("opentelemetry".to_string()),
                 Some(format!("endpoints[{index}].promote_metadata_prefixes")),
+                error,
+            );
+        }
+        if let Err(error) =
+            validate_metadata_promotion_prefixes(&endpoint.promote_resource_metadata_prefixes)
+        {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("opentelemetry".to_string()),
+                Some(format!(
+                    "endpoints[{index}].promote_resource_metadata_prefixes"
+                )),
                 error,
             );
         }

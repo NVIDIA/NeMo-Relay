@@ -772,8 +772,84 @@ fn promotes_final_scope_and_mark_metadata_without_duplicate_span_keys() {
             attributes.get("nemo_relay.scope_type"),
             Some(&"agent".to_string())
         );
+        assert!(
+            !attributes
+                .keys()
+                .any(|key| key.ends_with(".metadata.nv.source"))
+        );
         let mark_attributes = attr_map(&span.events.events[0].attributes);
         assert_eq!(mark_attributes.get("nv.source"), Some(&"mark".to_string()));
+        assert!(
+            !mark_attributes
+                .keys()
+                .any(|key| key.ends_with(".metadata.nv.source"))
+        );
+    }
+}
+
+#[test]
+fn removes_resource_promoted_metadata_from_all_otlp_event_projections() {
+    for otel_type in [OpenTelemetryType::Full, OpenTelemetryType::OpenInference] {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+                provider,
+                "resource-metadata-filter-test".into(),
+                otel_type,
+                MarkProjection::default(),
+                default_mark_exclude_names(),
+                Vec::new(),
+                Vec::new(),
+                SignalRuntimeDiagnostics::new(None),
+        );
+        processor.resource_metadata_prefixes = vec!["tenant.".to_string()];
+        processor.resource_metadata_protected_keys = HashSet::from(["tenant.region".to_string()]);
+        let uuid = Uuid::now_v7();
+        processor.process(&make_start_event_with_metadata(
+            uuid,
+            None,
+            "resource-metadata-filter-scope",
+            json!({"tenant.id": "root", "tenant.region": "metadata", "keep": "start"}),
+        ));
+        processor.process(&make_mark_event_with_metadata(
+            Some(uuid),
+            json!({"tenant.id": "mark", "tenant.region": "metadata", "keep": "mark"}),
+        ));
+        processor.process(&make_end_event_with_metadata(
+            uuid,
+            None,
+            "resource-metadata-filter-scope",
+            ScopeType::Agent,
+            json!({"tenant.id": "end", "tenant.region": "metadata", "keep": "end"}),
+        ));
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        let span = finished_span_named(&spans, "resource-metadata-filter-scope");
+        let serialized_attributes = span
+            .attributes
+            .iter()
+            .chain(
+                span.events
+                    .events
+                    .iter()
+                    .flat_map(|event| event.attributes.iter()),
+            )
+            .map(|attribute| format!("{}={}", attribute.key, attribute.value))
+            .collect::<Vec<_>>();
+        assert!(
+            serialized_attributes
+                .iter()
+                .any(|attribute| attribute.contains("keep"))
+        );
+        assert!(
+            serialized_attributes
+                .iter()
+                .any(|attribute| attribute.contains("tenant.region"))
+        );
+        assert!(serialized_attributes.iter().all(
+            |attribute| !attribute.contains("tenant.id") && !attribute.contains("tenant\":\"")
+        ));
     }
 }
 
@@ -3205,6 +3281,78 @@ fn http_config_exports_scope_push_pop_and_marks_without_tokio_runtime() {
     assert_eq!(request.path, "/v1/traces");
     assert_eq!(request.content_type, "application/x-protobuf");
     assert!(!request.body.is_empty());
+}
+
+#[test]
+fn root_metadata_promotes_to_a_shared_otlp_resource() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let (request_tx, request_rx) = mpsc::channel();
+    spawn_http_collector(listener, request_tx);
+
+    let subscriber = OpenTelemetrySubscriber::new(
+        OpenTelemetryConfig::http_binary("resource-test")
+            .with_endpoint(endpoint)
+            .with_resource_attribute("tenant.region", "configured")
+            .with_promote_resource_metadata_prefixes(["tenant."]),
+    )
+    .unwrap();
+    let callback = subscriber.subscriber();
+    let root_uuid = Uuid::now_v7();
+    let child_uuid = Uuid::now_v7();
+    callback(&make_start_event_with_metadata(
+        root_uuid,
+        None,
+        "resource-root",
+        json!({"tenant.id": "root-tenant", "tenant.region": "metadata"}),
+    ));
+    callback(&make_start_event_with_metadata(
+        child_uuid,
+        Some(root_uuid),
+        "resource-child",
+        json!({"tenant.id": "child-tenant"}),
+    ));
+    callback(&make_end_event(
+        child_uuid,
+        Some(root_uuid),
+        "resource-child",
+        ScopeType::Agent,
+        None,
+    ));
+    callback(&make_end_event(
+        root_uuid,
+        None,
+        "resource-root",
+        ScopeType::Agent,
+        None,
+    ));
+    {
+        let processor = subscriber.inner.processor.lock().unwrap();
+        assert_eq!(processor.dynamic_pipelines.len(), 1);
+        let key = processor.dynamic_pipelines.keys().next().unwrap();
+        assert!(key.contains("root-tenant"));
+        assert!(key.contains("configured"));
+        assert!(!key.contains("child-tenant"));
+        assert!(!key.contains("metadata"));
+    }
+    subscriber.force_flush().unwrap();
+
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("expected an OTLP request for the promoted root resource");
+    assert!(
+        request
+            .body
+            .windows(b"root-tenant".len())
+            .any(|window| window == b"root-tenant")
+    );
+    assert!(
+        request
+            .body
+            .windows(b"configured".len())
+            .any(|window| window == b"configured")
+    );
 }
 
 #[test]

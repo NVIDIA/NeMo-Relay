@@ -140,6 +140,7 @@ class TestObservabilityConfigHelpers:
             "mark_exclude_names": ["llm.chunk"],
             "attribute_mappings": [],
             "promote_metadata_prefixes": [],
+            "promote_resource_metadata_prefixes": [],
             "transport": "http_binary",
             "service_name": "unknown_service",
             "instrumentation_scope": "opentelemetry",
@@ -158,6 +159,8 @@ class TestObservabilityConfigHelpers:
             promote_metadata_prefixes=["nv."],
         )
         assert endpoint.to_dict()["promote_metadata_prefixes"] == ["nv."]
+        endpoint.promote_resource_metadata_prefixes = ["deployment."]
+        assert endpoint.to_dict()["promote_resource_metadata_prefixes"] == ["deployment."]
 
         wrapped = ComponentSpec(ObservabilityConfig(atof=AtofConfig())).to_dict()
         assert wrapped["kind"] == OBSERVABILITY_PLUGIN_KIND

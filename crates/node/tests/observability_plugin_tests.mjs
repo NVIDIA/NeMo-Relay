@@ -52,6 +52,7 @@ describe('observability plugin helpers', () => {
         header_env: { authorization: 'OTEL_AUTHORIZATION' },
         resource_attributes: {},
         promote_metadata_prefixes: [],
+        promote_resource_metadata_prefixes: [],
         service_name: 'unknown_service',
         instrumentation_scope: 'opentelemetry',
         timeout_millis: 3000,

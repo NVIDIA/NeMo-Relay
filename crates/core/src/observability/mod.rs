@@ -529,6 +529,13 @@ pub(crate) struct MetadataPromotionIssue {
     pub(crate) reason: &'static str,
 }
 
+/// The result of promoting Event metadata into typed OTLP attributes.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct MetadataPromotionResult {
+    pub(crate) issues: Vec<MetadataPromotionIssue>,
+    pub(crate) promoted_keys: std::collections::HashSet<String>,
+}
+
 const RESERVED_OTEL_ATTRIBUTE_NAMESPACES: &[&str] = &[
     "error.",
     "exception.",
@@ -563,25 +570,25 @@ pub(crate) fn promote_event_metadata_attributes(
     event: &crate::api::event::Event,
     prefixes: &[String],
     protected_keys: &std::collections::HashSet<String>,
-) -> Vec<MetadataPromotionIssue> {
+) -> MetadataPromotionResult {
     if prefixes.is_empty() {
-        return Vec::new();
+        return MetadataPromotionResult::default();
     }
     let Some(metadata) = event.metadata().and_then(crate::json::Json::as_object) else {
-        return Vec::new();
+        return MetadataPromotionResult::default();
     };
     let mut existing_keys = attributes
         .iter()
         .map(|attribute| attribute.key.as_str().to_string())
         .chain(protected_keys.iter().cloned())
         .collect::<std::collections::HashSet<_>>();
-    let mut issues = Vec::new();
+    let mut result = MetadataPromotionResult::default();
     for (key, value) in metadata {
         if !prefixes.iter().any(|prefix| key.starts_with(prefix)) {
             continue;
         }
         if is_reserved_otel_attribute_key(key) {
-            issues.push(MetadataPromotionIssue {
+            result.issues.push(MetadataPromotionIssue {
                 key: key.clone(),
                 reason: "attribute key is reserved by Relay or an OpenTelemetry projection",
             });
@@ -594,14 +601,15 @@ pub(crate) fn promote_event_metadata_attributes(
             Ok(value) => {
                 attributes.push(opentelemetry::KeyValue::new(key.clone(), value));
                 existing_keys.insert(key.clone());
+                result.promoted_keys.insert(key.clone());
             }
-            Err(reason) => issues.push(MetadataPromotionIssue {
+            Err(reason) => result.issues.push(MetadataPromotionIssue {
                 key: key.clone(),
                 reason,
             }),
         }
     }
-    issues
+    result
 }
 
 fn metadata_value_to_otel(
