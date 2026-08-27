@@ -244,6 +244,7 @@ pub(super) fn permission_request(
     let tool = extractor.tool_call(payload, headers, &event_name);
     let tool_call_id = match tool.tool_call_id {
         Some(value) if !value.trim().is_empty() => value,
+        None if kind == AgentKind::ClaudeCode => String::new(),
         _ => {
             return Some(Err(
                 "permission request is missing a tool-call identifier".into()

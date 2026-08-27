@@ -786,6 +786,14 @@ impl Session {
 
     fn permission_request_matches(&self, event: &ToolEvent) -> bool {
         let arguments = normalize_tool_arguments(event.arguments.clone());
+        if event.tool_call_id.is_empty() {
+            return self
+                .tools
+                .values()
+                .filter(|active| active.name == event.tool_name && active.arguments == arguments)
+                .count()
+                == 1;
+        }
         let active_matches = self
             .tools
             .get(&event.tool_call_id)

@@ -3957,7 +3957,7 @@ fn invocation_diagnostic_cli_warns_for_agent_shortcut() {
         .find(|line| line.starts_with("argv = "))
         .expect("dry run should print the resolved argv");
     assert!(
-        argv.ends_with(" claude -p private synthetic value"),
+        argv.ends_with(" claude -p private synthetic value --settings <temporary-claude-settings>"),
         "{argv}"
     );
 

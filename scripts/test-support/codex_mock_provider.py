@@ -126,6 +126,99 @@ def response_events(request: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def response_tool_events(request: dict[str, Any]) -> list[dict[str, Any]]:
+    response_id = f"resp_{uuid.uuid4().hex}"
+    item_id = f"fc_{uuid.uuid4().hex}"
+    call_id = f"call_{uuid.uuid4().hex}"
+    model = request.get("model", "gpt-5-codex")
+    created_at = int(time.time())
+    arguments = json.dumps(
+        {
+            "cmd": "printf relay-e2e-tool-ok",
+            "sandbox_permissions": "require_escalated",
+            "justification": "Verify Relay permission hook handling.",
+        },
+        separators=(",", ":"),
+    )
+    item = {
+        "id": item_id,
+        "type": "function_call",
+        "status": "completed",
+        "call_id": call_id,
+        "name": "exec_command",
+        "arguments": arguments,
+    }
+    response = {
+        "id": response_id,
+        "object": "response",
+        "created_at": created_at,
+        "completed_at": created_at,
+        "status": "completed",
+        "background": False,
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "max_output_tokens": None,
+        "max_tool_calls": None,
+        "model": model,
+        "output": [item],
+        "parallel_tool_calls": True,
+        "previous_response_id": None,
+        "prompt_cache_key": None,
+        "reasoning": {"effort": "medium", "summary": None},
+        "safety_identifier": None,
+        "service_tier": "default",
+        "store": False,
+        "temperature": None,
+        "text": {"format": {"type": "text"}, "verbosity": "medium"},
+        "tool_choice": "auto",
+        "tools": [],
+        "top_logprobs": 0,
+        "top_p": None,
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 1,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 1,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 2,
+        },
+        "user": None,
+        "metadata": {},
+    }
+    in_progress = {**response, "completed_at": None, "status": "in_progress", "output": []}
+    return [
+        {"type": "response.created", "response": in_progress},
+        {
+            "type": "response.output_item.added",
+            "response_id": response_id,
+            "output_index": 0,
+            "item": {**item, "status": "in_progress", "arguments": ""},
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "response_id": response_id,
+            "item_id": item_id,
+            "output_index": 0,
+            "delta": arguments,
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "response_id": response_id,
+            "item_id": item_id,
+            "output_index": 0,
+            "arguments": arguments,
+        },
+        {
+            "type": "response.output_item.done",
+            "response_id": response_id,
+            "output_index": 0,
+            "item": item,
+        },
+        {"type": "response.completed", "response": response},
+    ]
+
+
 def anthropic_events(request: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     message_id = f"msg_{uuid.uuid4().hex}"
     model = request.get("model", "claude-sonnet-4-5")
@@ -173,6 +266,83 @@ def anthropic_events(request: dict[str, Any]) -> list[tuple[str, dict[str, Any]]
         ),
         ("message_stop", {"type": "message_stop"}),
     ]
+
+
+def anthropic_tool_events(request: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    message_id = f"msg_{uuid.uuid4().hex}"
+    tool_use_id = f"toolu_{uuid.uuid4().hex}"
+    model = request.get("model", "claude-sonnet-4-5")
+    arguments = json.dumps(
+        {
+            "command": "printf relay-e2e-tool-ok > relay-e2e-permission.txt",
+            "description": "Verify Relay permission hooks",
+        },
+        separators=(",", ":"),
+    )
+    return [
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": message_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": model,
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 0},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": tool_use_id,
+                    "name": "Bash",
+                    "input": {},
+                },
+            },
+        ),
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": arguments},
+            },
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+                "usage": {"output_tokens": 1},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+
+
+def contains_type(value: Any, expected: set[str]) -> bool:
+    if isinstance(value, dict):
+        value_type = value.get("type")
+        if isinstance(value_type, str) and value_type in expected:
+            return True
+        return any(contains_type(child, expected) for child in value.values())
+    if isinstance(value, list):
+        return any(contains_type(child, expected) for child in value)
+    return False
+
+
+def requests_tool_scenario(request: dict[str, Any]) -> bool:
+    return "relay-e2e-tool" in json.dumps(request, sort_keys=True)
 
 
 def chat_completion_chunks(request: dict[str, Any]) -> list[dict[str, Any]]:
@@ -270,8 +440,18 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length)
         request = json.loads(raw or b"{}")
         path = urlparse(self.path).path
-        response_stream = response_events(request) if path.endswith("/responses") else None
-        anthropic_stream = anthropic_events(request) if path.endswith("/messages") else None
+        tool_scenario = requests_tool_scenario(request)
+        has_tool_result = contains_type(request, {"function_call_output", "tool_result"})
+        response_stream = (
+            (response_tool_events(request) if tool_scenario and not has_tool_result else response_events(request))
+            if path.endswith("/responses")
+            else None
+        )
+        anthropic_stream = (
+            (anthropic_tool_events(request) if tool_scenario and not has_tool_result else anthropic_events(request))
+            if path.endswith("/messages")
+            else None
+        )
         chat_stream = chat_completion_chunks(request) if path.endswith("/chat/completions") else None
         self.server.log_request_record(
             {
@@ -281,6 +461,12 @@ class Handler(BaseHTTPRequestHandler):
                 "x_api_key": self.headers.get("x-api-key"),
                 "relay_client_token": self.headers.get("x-nemo-relay-client-token"),
                 "model": request.get("model"),
+                "tools": [
+                    {"type": tool.get("type"), "name": tool.get("name")}
+                    for tool in request.get("tools", [])
+                    if isinstance(tool, dict)
+                ],
+                "has_tool_result": has_tool_result,
                 "response_id": (response_stream[-1]["response"]["id"] if response_stream else None),
             }
         )

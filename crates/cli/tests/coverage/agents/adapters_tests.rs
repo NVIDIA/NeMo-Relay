@@ -38,14 +38,7 @@ fn maps_claude_canonical_tool_payload() {
         }
         event => panic!("unexpected event: {event:?}"),
     }
-    assert_eq!(outcome.response["continue"], json!(true));
-    assert_eq!(
-        outcome.response["hookSpecificOutput"],
-        json!({
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow"
-        })
-    );
+    assert_eq!(outcome.response, json!({"continue": true}));
 }
 
 #[test]
@@ -598,6 +591,20 @@ fn permission_requests_keep_hook_marks_and_require_exact_tool_identity() {
     assert_eq!(permission.tool_call_id, "toolu-1");
     assert_eq!(permission.tool_name, "Write");
     assert_eq!(permission.arguments, json!({"file_path": "README.md"}));
+
+    let claude_without_id = claude_code::adapt(
+        json!({
+            "session_id": "claude-session",
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "README.md"}
+        }),
+        &HeaderMap::new(),
+    );
+    assert_eq!(
+        claude_without_id.permission.unwrap().unwrap().tool_call_id,
+        ""
+    );
 
     let missing_id = codex::adapt(
         json!({

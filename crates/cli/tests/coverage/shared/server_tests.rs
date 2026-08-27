@@ -2322,6 +2322,124 @@ async fn claude_code_hook_returns_continue_shape() {
 }
 
 #[tokio::test]
+async fn claude_permission_request_allows_an_exact_active_tool() {
+    let app = router(test_config());
+    let pre_tool = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/claude-code")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "claude-permission",
+                        "hook_event_name": "PreToolUse",
+                        "tool_use_id": "tool-1",
+                        "tool_name": "Read",
+                        "tool_input": {"file_path": "README.md"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pre_tool.status(), StatusCode::OK);
+    let bytes = pre_tool.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body, json!({"continue": true}));
+
+    let permission = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/claude-code")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "claude-permission",
+                        "hook_event_name": "PermissionRequest",
+                        "tool_name": "Read",
+                        "tool_input": {"file_path": "README.md"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(permission.status(), StatusCode::OK);
+    let bytes = permission.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body["hookSpecificOutput"]["hookEventName"],
+        json!("PermissionRequest")
+    );
+    assert_eq!(
+        body["hookSpecificOutput"]["decision"]["behavior"],
+        json!("allow")
+    );
+
+    let second_pre_tool = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/claude-code")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "claude-permission",
+                        "hook_event_name": "PreToolUse",
+                        "tool_use_id": "tool-2",
+                        "tool_name": "Read",
+                        "tool_input": {"file_path": "README.md"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_pre_tool.status(), StatusCode::OK);
+
+    let ambiguous = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/claude-code")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "claude-permission",
+                        "hook_event_name": "PermissionRequest",
+                        "tool_name": "Read",
+                        "tool_input": {"file_path": "README.md"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ambiguous.status(), StatusCode::OK);
+    let bytes = ambiguous.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body["hookSpecificOutput"]["decision"]["behavior"],
+        json!("deny")
+    );
+    assert!(
+        body["hookSpecificOutput"]["decision"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not match")
+    );
+}
+
+#[tokio::test]
 async fn pre_tool_hook_rejects_when_conditional_guardrail_blocks() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = deregister_tool_conditional_execution_guardrail("cli-pre-tool-blocker");

@@ -51,7 +51,7 @@ export XDG_DATA_HOME="$work/data"
 export XDG_RUNTIME_DIR="$work/runtime"
 export TMPDIR="$work/tmp"
 export PATH="$repo_root/target/debug:$PATH"
-export ANTHROPIC_API_KEY="relay-claude-e2e-key"
+export ANTHROPIC_AUTH_TOKEN="relay-claude-e2e-token"
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 export DISABLE_AUTOUPDATER=1
 export NEMO_RELAY_GATEWAY_URL="http://127.0.0.1:1"
@@ -68,6 +68,13 @@ mkdir -p \
     "$work/atof" \
     "$work/provider-barrier" \
     "$work/workspace"
+
+cat >"$HOME/.claude.json" <<'EOF'
+{
+  "hasCompletedOnboarding": true,
+  "theme": "dark"
+}
+EOF
 
 provider_ready="$work/provider-ready.json"
 provider_log="$work/provider-requests.jsonl"
@@ -97,7 +104,7 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 2
+version = 4
 
 [components.config.atof]
 enabled = true
@@ -190,36 +197,104 @@ PY
 }
 
 run_transparent_claude() {
-    output="$work/claude-transparent.json"
-    stderr="$work/claude-transparent.stderr"
+    output="$work/claude-transparent.terminal"
     debug="$work/claude-transparent.debug.log"
-    (
-        cd "$work/workspace"
-        nemo-relay run \
-            --config "$XDG_CONFIG_HOME/nemo-relay/config.toml" \
-            -- \
-            claude \
-            --settings "$work/claude-user-settings.json" \
-            -p "ping" \
-            --output-format json \
-            --no-session-persistence \
-            --tools "" \
-            --debug-file "$debug"
-    ) >"$output" 2>"$stderr"
-    python3 - "$output" "$stderr" "$debug" <<'PY'
-import json
+    python3 - \
+        "$output" \
+        "$debug" \
+        "$work/workspace" \
+        "$XDG_CONFIG_HOME/nemo-relay/config.toml" \
+        "$work/claude-user-settings.json" <<'PY'
+import os
+import pty
+import select
+import signal
+import shutil
+import subprocess
 import sys
+import termios
+import time
+import fcntl
 from pathlib import Path
 
-output, stderr, debug = map(Path, sys.argv[1:])
-result = json.loads(output.read_text())
-assert result["subtype"] == "success", (result, stderr.read_text())
-assert result["result"] == "pong", result
+output, debug, workspace, config, settings = map(Path, sys.argv[1:])
+relay = shutil.which("nemo-relay")
+claude = shutil.which("claude")
+assert relay and claude, (relay, claude)
+master, slave = pty.openpty()
+
+
+def make_controlling_terminal():
+    os.setsid()
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+
+
+process = subprocess.Popen(
+    [
+        relay,
+        "run",
+        "--config",
+        str(config),
+        "--",
+        claude,
+        "--settings",
+        str(settings),
+        "--permission-mode",
+        "manual",
+        "--debug-file",
+        str(debug),
+        "relay-e2e-tool",
+    ],
+    cwd=workspace,
+    stdin=slave,
+    stdout=slave,
+    stderr=slave,
+    preexec_fn=make_controlling_terminal,
+)
+os.close(slave)
+terminal = bytearray()
+deadline = time.monotonic() + 30
+sent_exit = False
+trusted_workspace = False
+confirmed_api_key = False
+try:
+    while process.poll() is None and time.monotonic() < deadline:
+        readable, _, _ = select.select([master], [], [], 0.2)
+        if readable:
+            try:
+                terminal.extend(os.read(master, 65536))
+            except OSError:
+                break
+        if not trusted_workspace and b"Accessing" in terminal and b"Quick" in terminal:
+            os.write(master, b"\r")
+            trusted_workspace = True
+        if not confirmed_api_key and b"Detected" in terminal and b"ANTHROPIC_API_KEY" in terminal:
+            os.write(master, b"\x1b[A\r")
+            confirmed_api_key = True
+        if not sent_exit and b"pong" in terminal.lower():
+            os.write(master, b"/exit\r")
+            sent_exit = True
+    if process.poll() is None:
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+finally:
+    os.close(master)
+    output.write_bytes(terminal)
+assert sent_exit, terminal.decode(errors="replace")
+assert process.returncode == 0, (process.returncode, terminal.decode(errors="replace"))
+
 log = debug.read_text()
 assert 1 <= log.count("Hook SessionStart:startup") <= 2, log
 assert 1 <= log.count("Hook UserPromptSubmit") <= 2, log
 assert 1 <= log.count('Hook Stop (Stop) success') <= 2, log
-assert 1 <= log.count("SessionEnd:other") <= 2, log
+assert 1 <= log.count("SessionEnd:") <= 2, log
+assert "Hook PreToolUse" in log, log
+assert "Hook PermissionRequest" in log, log
+assert "Hook PostToolUse" in log, log
 assert log.count('MCP server "plugin:nemo-relay-plugin:nemo-relay": Successfully connected') == 1, log
 PY
     return 0
@@ -251,9 +326,15 @@ import sys
 from urllib.parse import urlparse
 
 requests = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
-messages = [row for row in requests if urlparse(row["path"]).path.endswith("/messages")]
-assert len(messages) == 1, requests
+messages = [
+    row
+    for row in requests
+    if urlparse(row["path"]).path.endswith("/messages") and row["tools"]
+]
+assert len(messages) == 2, requests
 assert messages[0]["model"] == "claude-haiku-4-5", messages
+assert [message["has_tool_result"] for message in messages] == [False, True], messages
+assert any(tool["name"] == "Bash" for tool in messages[0]["tools"]), messages
 events = [json.loads(line) for line in open(sys.argv[2], encoding="utf-8") if line.strip()]
 turn_starts = [
     event for event in events
@@ -268,8 +349,25 @@ turn_ends = [
     and event.get("scope_category") == "end"
 ]
 assert len(turn_starts) == len(turn_ends) == 1, (turn_starts, turn_ends)
+tool_starts = [
+    event for event in events
+    if event.get("kind") == "scope"
+    and event.get("category") == "tool"
+    and event.get("scope_category") == "start"
+]
+tool_ends = [
+    event for event in events
+    if event.get("kind") == "scope"
+    and event.get("category") == "tool"
+    and event.get("scope_category") == "end"
+]
+assert len(tool_starts) == len(tool_ends) == 1, (tool_starts, tool_ends)
 PY
 nemo-relay doctor --plugin claude-code --install-dir "$work/install"
+
+if [[ "${RELAY_E2E_TRANSPARENT_ONLY:-0}" == "1" ]]; then
+    exit 0
+fi
 
 wait_for_relay_port_release
 : >"$provider_log"

@@ -1240,20 +1240,33 @@ async fn claude_code_hook(
             Ok(permission) => state.sessions.authorize_tool_permission(&permission).await,
             Err(reason) => Err(CliError::InvalidPayload(reason)),
         };
-        if let Err(error) = result {
-            let reason = error
-                .guardrail_rejection_reason()
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| error.to_string());
-            return Ok(Json(serde_json::json!({
+        return Ok(Json(match result {
+            Ok(()) => serde_json::json!({
                 "continue": true,
                 "hookSpecificOutput": {
                     "hookEventName": "PermissionRequest",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": reason,
+                    "decision": {
+                        "behavior": "allow",
+                    }
                 }
-            })));
-        }
+            }),
+            Err(error) => {
+                let reason = error
+                    .guardrail_rejection_reason()
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| error.to_string());
+                serde_json::json!({
+                    "continue": true,
+                    "hookSpecificOutput": {
+                        "hookEventName": "PermissionRequest",
+                        "decision": {
+                            "behavior": "deny",
+                            "message": reason,
+                        }
+                    }
+                })
+            }
+        }));
     }
     Ok(Json(outcome.response))
 }

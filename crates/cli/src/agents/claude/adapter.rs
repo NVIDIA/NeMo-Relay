@@ -8,15 +8,14 @@ use crate::agents::shared::adapters::{
     AdapterOutcome, CLAUDE_CODE_PAYLOAD_EXTRACTOR, ClassificationRules, classify,
     permission_request,
 };
-use crate::events::{AgentKind, NormalizedEvent};
+use crate::events::AgentKind;
 
 /// Normalizes Claude Code hook payloads and returns the hook response Claude expects.
 ///
-/// Claude Code uses permission-bearing tool hooks, so pre-tool events are explicitly allowed
-/// instead of returning the generic `{ continue: true }` shape. All other hooks acknowledge with
-/// `{ continue: true }` so the gateway remains observational and never blocks Claude's lifecycle
-/// by default. Note: Claude's hook output schema rejects `null` for optional string fields like
-/// `stopReason`; omit them entirely instead.
+/// Claude Code uses permission-bearing tool hooks. Pre-tool events acknowledge guardrail success
+/// without granting host permission; the later `PermissionRequest` receives the final decision.
+/// Note: Claude's hook output schema rejects `null` for optional string fields like `stopReason`;
+/// omit them entirely instead.
 pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     let events = classify(
         &payload,
@@ -41,18 +40,7 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
             ],
         },
     );
-    // Response shape is decided by the primary event (first in the vec); secondary events like
-    // `TurnEnded` are observability-only and don't influence the hook response Claude gets back.
-    let response = match events.first() {
-        Some(NormalizedEvent::ToolStarted(_)) => json!({
-            "continue": true,
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow"
-            }
-        }),
-        _ => json!({ "continue": true }),
-    };
+    let response = json!({ "continue": true });
     AdapterOutcome {
         events,
         response,

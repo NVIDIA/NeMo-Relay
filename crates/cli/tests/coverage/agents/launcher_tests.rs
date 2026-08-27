@@ -906,7 +906,21 @@ fn prepares_claude_dry_inserts_plugin_dir_after_authoritative_agent_executable()
         prepared.argv[plugin_index + 1],
         "<temporary-claude-plugin-dir>"
     );
-    assert_eq!(prepared.argv.last().map(String::as_str), Some("--resume"));
+    let resume_index = prepared
+        .argv
+        .iter()
+        .position(|argument| argument == "--resume")
+        .unwrap();
+    let settings_index = prepared
+        .argv
+        .iter()
+        .rposition(|argument| argument == "--settings")
+        .unwrap();
+    assert!(settings_index > resume_index);
+    assert_eq!(
+        prepared.argv[settings_index + 1],
+        "<temporary-claude-settings>"
+    );
     assert!(prepared.temp_dirs.is_empty());
 }
 
@@ -994,9 +1008,14 @@ fn claude_transparent_run_preserves_user_settings_and_prompt_boundary() {
     .unwrap();
 
     assert_eq!(prepared.argv[1], "--plugin-dir");
-    assert_eq!(prepared.argv[3], "--settings");
+    let separator = prepared.argv.iter().position(|arg| arg == "--").unwrap();
+    let settings_index = prepared.argv[..separator]
+        .iter()
+        .rposition(|arg| arg == "--settings")
+        .unwrap();
     let overlay: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&prepared.argv[4]).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(&prepared.argv[settings_index + 1]).unwrap())
+            .unwrap();
     assert_eq!(overlay["model"], "claude-user-setting-sentinel");
     assert_eq!(overlay["enabledPlugins"]["other@market"], true);
     assert_eq!(
@@ -1021,7 +1040,6 @@ fn claude_transparent_run_preserves_user_settings_and_prompt_boundary() {
             .iter()
             .any(|arg| arg.contains("ignored-second-source"))
     );
-    let separator = prepared.argv.iter().position(|arg| arg == "--").unwrap();
     assert_eq!(
         &prepared.argv[separator..],
         &["--", "--settings", "literal-prompt-value"]
