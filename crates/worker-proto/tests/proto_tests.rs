@@ -135,11 +135,17 @@ fn request_field_numbers_are_stable() {
 
     let conditional_invoke = InvokeRequest {
         payload: Some(invoke_request::Payload::ConditionalMiddleware(
-            ConditionalMiddlewareInvocation::default(),
+            ConditionalMiddlewareInvocation {
+                kinds: vec![RegistrationSurface::ConditionalMiddlewareGuardrail as i32],
+                registration_name: "target".into(),
+            },
         )),
         ..Default::default()
     };
-    assert_eq!(conditional_invoke.encode_to_vec(), b"\x6a\x00".to_vec());
+    assert_eq!(
+        conditional_invoke.encode_to_vec(),
+        b"\x6a\x0b\x0a\x01\x28\x12\x06target".to_vec()
+    );
 }
 
 #[test]
