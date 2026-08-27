@@ -3332,8 +3332,9 @@ fn root_metadata_promotes_to_a_shared_otlp_resource() {
     ));
     {
         let processor = subscriber.inner.processor.lock().unwrap();
-        assert_eq!(processor.dynamic_pipelines.len(), 1);
-        let key = processor.dynamic_pipelines.keys().next().unwrap();
+        let pipelines = processor.dynamic_pipelines.lock().unwrap();
+        assert_eq!(pipelines.len(), 1);
+        let key = pipelines.keys().next().unwrap();
         assert!(key.contains("root-tenant"));
         assert!(key.contains("configured"));
         assert!(!key.contains("child-tenant"));

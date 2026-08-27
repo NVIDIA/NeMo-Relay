@@ -726,6 +726,7 @@ impl OpenTelemetrySubscriber {
             .as_ref()
             .map(|runtime| runtime.runtime_diagnostics.clone())
             .unwrap_or_else(|| SignalRuntimeDiagnostics::new(None));
+        let dynamic_pipelines = Arc::new(Mutex::new(HashMap::new()));
         let processor = Arc::new(Mutex::new(
             OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics_with_ttl(
                 provider.clone(),
@@ -738,16 +739,26 @@ impl OpenTelemetrySubscriber {
                 completed_span_context_ttl,
                 runtime_diagnostics.clone(),
                 owned_config,
+                Arc::clone(&dynamic_pipelines),
             ),
         ));
         let processor_for_callback = Arc::clone(&processor);
+        let pipelines_for_callback = Arc::clone(&dynamic_pipelines);
         let subscriber: EventSubscriberFn = Arc::new(move |event: &Event| {
+            let request = processor_for_callback
+                .lock()
+                .ok()
+                .and_then(|guard| guard.resource_pipeline_request(event));
+            let root_tracer = request.map(|request| {
+                let fallback = request.fallback_tracer.clone();
+                ensure_dynamic_pipeline(&pipelines_for_callback, request).unwrap_or(fallback)
+            });
             let Ok(mut guard) = processor_for_callback.lock() else {
                 // Observability should not take down the host process if the
                 // subscriber state was previously poisoned.
                 return;
             };
-            guard.process(event);
+            guard.process_with_root_tracer(event, root_tracer);
         });
 
         Self {
@@ -1328,7 +1339,7 @@ pub(super) struct OtelEventProcessor {
     resource_metadata_prefixes: Vec<String>,
     resource_metadata_protected_keys: HashSet<String>,
     owned_config: Option<OpenTelemetryConfig>,
-    dynamic_pipelines: HashMap<String, DynamicTracePipeline>,
+    dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicTracePipeline>>>,
     invalid_metric_count: u64,
     completed_span_context_ttl: Duration,
     runtime_diagnostics: SignalRuntimeDiagnostics,
@@ -1345,6 +1356,53 @@ struct DynamicTracePipeline {
     provider: SdkTracerProvider,
     tracer: SdkTracer,
     _runtime: ExporterRuntime,
+}
+
+struct ResourcePipelineRequest {
+    key: String,
+    config: OpenTelemetryConfig,
+    attributes: Vec<KeyValue>,
+    instrumentation_scope: String,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+    fallback_tracer: SdkTracer,
+}
+
+fn ensure_dynamic_pipeline(
+    pipelines: &Mutex<HashMap<String, DynamicTracePipeline>>,
+    request: ResourcePipelineRequest,
+) -> Option<SdkTracer> {
+    let mut pipelines = pipelines.lock().ok()?;
+    if let Some(pipeline) = pipelines.get(&request.key) {
+        return Some(pipeline.tracer.clone());
+    }
+    let (provider, runtime) = match build_owned_tracer_provider_with_resource(
+        request.config,
+        request.runtime_diagnostics.clone(),
+        request.attributes,
+    ) {
+        Ok(pipeline) => pipeline,
+        Err(error) => {
+            let count = request.runtime_diagnostics.record(
+                "otel.resource_metadata_pipeline_build_failed",
+                format!("OpenTelemetry resource metadata pipeline was not created: {error}"),
+                1,
+            );
+            if should_relog_runtime_diagnostic(count) {
+                log::warn!(target: "nemo_relay.observability", event = "otel_resource_metadata_pipeline_build_failed"; "OpenTelemetry resource metadata pipeline was not created");
+            }
+            return None;
+        }
+    };
+    let tracer = provider.tracer(request.instrumentation_scope);
+    pipelines.insert(
+        request.key,
+        DynamicTracePipeline {
+            provider,
+            tracer: tracer.clone(),
+            _runtime: runtime,
+        },
+    );
+    Some(tracer)
 }
 
 impl OtelEventProcessor {
@@ -1476,6 +1534,7 @@ impl OtelEventProcessor {
             DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
             runtime_diagnostics,
             None,
+            Arc::new(Mutex::new(HashMap::new())),
         )
     }
 
@@ -1491,6 +1550,7 @@ impl OtelEventProcessor {
         completed_span_context_ttl: Duration,
         runtime_diagnostics: SignalRuntimeDiagnostics,
         owned_config: Option<OpenTelemetryConfig>,
+        dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicTracePipeline>>>,
     ) -> Self {
         let tracer = provider.tracer(instrumentation_scope.clone());
         let (resource_metadata_prefixes, resource_metadata_protected_keys) = owned_config
@@ -1521,20 +1581,57 @@ impl OtelEventProcessor {
             resource_metadata_prefixes,
             resource_metadata_protected_keys,
             owned_config,
-            dynamic_pipelines: HashMap::new(),
+            dynamic_pipelines,
             invalid_metric_count: 0,
             completed_span_context_ttl,
             runtime_diagnostics,
         }
     }
 
+    #[cfg(test)]
     pub(super) fn process(&mut self, event: &Event) {
+        self.process_with_root_tracer(event, None);
+    }
+
+    fn process_with_root_tracer(&mut self, event: &Event, root_tracer: Option<SdkTracer>) {
         self.expire_completed_span_contexts(*event.timestamp());
         match event.scope_category() {
-            Some(ScopeCategory::Start) => self.process_start(event),
+            Some(ScopeCategory::Start) => self.process_start(event, root_tracer),
             Some(ScopeCategory::End) => self.process_end(event),
             None => self.process_mark(event),
         }
+    }
+
+    fn resource_pipeline_request(&self, event: &Event) -> Option<ResourcePipelineRequest> {
+        if event.scope_category() != Some(ScopeCategory::Start)
+            || self.parent_context(event).span().span_context().is_valid()
+        {
+            return None;
+        }
+        let config = self.owned_config.as_ref()?;
+        if config.promote_resource_metadata_prefixes.is_empty() {
+            return None;
+        }
+        let mut attributes = configured_resource_attributes(config);
+        let promotion = promote_event_metadata_attributes(
+            &mut attributes,
+            event,
+            &config.promote_resource_metadata_prefixes,
+            &self.resource_metadata_protected_keys,
+        );
+        self.record_metadata_promotion_issues(promotion.issues, "resource_metadata");
+        let key = canonical_resource_key(&attributes);
+        if key == canonical_resource_key(&configured_resource_attributes(config)) {
+            return None;
+        }
+        Some(ResourcePipelineRequest {
+            key,
+            config: config.clone(),
+            attributes,
+            instrumentation_scope: self.instrumentation_scope.clone(),
+            runtime_diagnostics: self.runtime_diagnostics.clone(),
+            fallback_tracer: self.tracer.clone(),
+        })
     }
 
     fn tracer_for_root(&mut self, event: &Event) -> SdkTracer {
@@ -1546,54 +1643,22 @@ impl OtelEventProcessor {
         }
 
         let mut attributes = configured_resource_attributes(config);
-        let promotion = promote_event_metadata_attributes(
+        promote_event_metadata_attributes(
             &mut attributes,
             event,
             &config.promote_resource_metadata_prefixes,
             &self.resource_metadata_protected_keys,
         );
-        self.record_metadata_promotion_issues(promotion.issues, "resource_metadata");
         let key = canonical_resource_key(&attributes);
         let base_key = canonical_resource_key(&configured_resource_attributes(config));
         if key == base_key {
             return self.tracer.clone();
         }
-        if !self.dynamic_pipelines.contains_key(&key) {
-            let (provider, runtime) = match build_owned_tracer_provider_with_resource(
-                config.clone(),
-                self.runtime_diagnostics.clone(),
-                attributes,
-            ) {
-                Ok(pipeline) => pipeline,
-                Err(error) => {
-                    let count = self.runtime_diagnostics.record(
-                        "otel.resource_metadata_pipeline_build_failed",
-                        format!(
-                            "OpenTelemetry resource metadata pipeline was not created: {error}"
-                        ),
-                        1,
-                    );
-                    if should_relog_runtime_diagnostic(count) {
-                        log::warn!(target: "nemo_relay.observability", event = "otel_resource_metadata_pipeline_build_failed"; "OpenTelemetry resource metadata pipeline was not created");
-                    }
-                    return self.tracer.clone();
-                }
-            };
-            let tracer = provider.tracer(self.instrumentation_scope.clone());
-            self.dynamic_pipelines.insert(
-                key.clone(),
-                DynamicTracePipeline {
-                    provider,
-                    tracer,
-                    _runtime: runtime,
-                },
-            );
-        }
         self.dynamic_pipelines
-            .get(&key)
-            .expect("new dynamic resource pipeline was inserted")
-            .tracer
-            .clone()
+            .lock()
+            .ok()
+            .and_then(|pipelines| pipelines.get(&key).map(|pipeline| pipeline.tracer.clone()))
+            .unwrap_or_else(|| self.tracer.clone())
     }
 
     fn tracer_for_start(&mut self, event: &Event, is_trace_root: bool) -> SdkTracer {
@@ -1634,16 +1699,23 @@ impl OtelEventProcessor {
 
     fn dynamic_providers(&self) -> Vec<SdkTracerProvider> {
         self.dynamic_pipelines
-            .values()
-            .map(|pipeline| pipeline.provider.clone())
-            .collect()
+            .lock()
+            .map(|pipelines| {
+                pipelines
+                    .values()
+                    .map(|pipeline| pipeline.provider.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
-    fn process_start(&mut self, event: &Event) {
+    fn process_start(&mut self, event: &Event, prepared_root_tracer: Option<SdkTracer>) {
         self.remove_completed_span_context(event.uuid());
         let parent_context = self.parent_context(event);
         let is_trace_root = !parent_context.span().span_context().is_valid();
-        let tracer = self.tracer_for_start(event, is_trace_root);
+        let tracer = prepared_root_tracer
+            .filter(|_| is_trace_root)
+            .unwrap_or_else(|| self.tracer_for_start(event, is_trace_root));
         let start_model_name = model_name_for_llm_event(event);
         let span_name = match self.otel_type {
             OpenTelemetryType::Full => span_name(event),
