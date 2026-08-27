@@ -27,7 +27,7 @@ use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, regi
 use nemo_relay::plugin::dynamic::DynamicPluginKind;
 use nemo_relay::plugin::{
     ConfigDiagnostic, Plugin, PluginRegistration, PluginRegistrationContext, deregister_plugin,
-    register_plugin,
+    ensure_builtin_plugins_registered, register_plugin,
 };
 use serde_json::{Map, Value, json};
 use tokio::net::TcpListener;
@@ -148,6 +148,26 @@ fn test_http_client() -> reqwest::Client {
 }
 
 struct GenericTestPlugin;
+
+struct PreclaimedBuiltinPlugin;
+
+impl Plugin for PreclaimedBuiltinPlugin {
+    fn plugin_kind(&self) -> &str {
+        "observability"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Value>) -> Vec<ConfigDiagnostic> {
+        vec![]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Value>,
+        _ctx: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = nemo_relay::plugin::Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
 
 impl Plugin for GenericTestPlugin {
     fn plugin_kind(&self) -> &str {
@@ -1952,6 +1972,40 @@ async fn plugin_activation_covers_empty_invalid_and_missing_manifest_paths() {
     .err()
     .expect("worker plugin without a manifest should fail activation");
     assert!(worker.to_string().contains("worker dynamic plugin"));
+}
+
+#[tokio::test]
+async fn dynamic_cli_activation_initializes_builtins_before_loading_dynamic_plugins() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+    ensure_builtin_plugins_registered().expect("builtin registration must be available");
+    assert!(deregister_plugin("observability"));
+    register_plugin(Arc::new(PreclaimedBuiltinPlugin))
+        .expect("fixture must claim the builtin kind");
+
+    let error = match PluginActivation::initialize(
+        None,
+        vec![dynamic_component_without_manifest(
+            "fixture.missing",
+            DynamicPluginKind::RustDynamic,
+        )],
+    )
+    .await
+    {
+        Ok(_) => panic!("builtin ownership conflict must stop dynamic loading"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(
+        error.contains("built-in plugin initialization failed"),
+        "{error}"
+    );
+    assert!(
+        error.contains("reserved builtin plugin 'observability'"),
+        "{error}"
+    );
+    assert!(deregister_plugin("observability"));
+    ensure_builtin_plugins_registered().expect("builtin registration must recover");
 }
 
 #[tokio::test]

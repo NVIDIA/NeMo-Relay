@@ -24,7 +24,8 @@ use nemo_relay::plugin::dynamic::{
     WorkerPluginLoadSpec, load_native_plugins, load_worker_plugins,
 };
 use nemo_relay::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
+    PluginComponentSpec, PluginConfig, clear_plugin_configuration,
+    ensure_builtin_plugins_registered, initialize_plugins_exact,
 };
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
@@ -978,6 +979,12 @@ impl PluginActivation {
         {
             return Err(CliError::Config(error.to_string()));
         }
+        // Reserve and register Relay's built-in plugin kinds before loading
+        // untrusted dynamic plugin code. This keeps the CLI activation path
+        // consistent with the runtime-owned dynamic plugin host.
+        ensure_builtin_plugins_registered().map_err(|error| {
+            CliError::Config(format!("built-in plugin initialization failed: {error}"))
+        })?;
         plugin_config
             .components
             .extend(dynamic_plugins.iter().map(|plugin| PluginComponentSpec {
