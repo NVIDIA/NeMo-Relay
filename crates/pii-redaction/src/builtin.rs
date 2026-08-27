@@ -23,7 +23,7 @@ use nemo_relay::codec::resolve::{
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::plugin::{PluginError, Result as PluginResult};
 
-use super::component::BuiltinBackendConfig;
+use super::component::{BuiltinBackendConfig, validate_metric_string_attribute_allowlist};
 use super::detectors::BuiltinDetector;
 use super::overlay::BuiltinCodecName;
 use super::trajectory::{CustomMarkPayloadPolicy, TrajectorySanitizer, is_relay_metric_mark};
@@ -83,6 +83,10 @@ impl CompiledBuiltinBackend {
         }
         let trajectory = match config.preset.as_deref() {
             Some("trajectory_context") => {
+                validate_metric_string_attribute_allowlist(
+                    &config.metric_string_attribute_allowlist,
+                )
+                .map_err(PluginError::InvalidConfig)?;
                 if config.detector.is_some()
                     || config.pattern.is_some()
                     || !config.target_paths.is_empty()
@@ -108,12 +112,19 @@ impl CompiledBuiltinBackend {
                         .clone()
                         .unwrap_or_else(|| "[REDACTED]".to_string()),
                     policy,
+                    config.metric_string_attribute_allowlist.clone(),
                 ))
             }
             Some(other) => {
                 return Err(PluginError::InvalidConfig(format!(
                     "unsupported builtin preset '{other}'"
                 )));
+            }
+            None if !config.metric_string_attribute_allowlist.is_empty() => {
+                return Err(PluginError::InvalidConfig(
+                    "builtin.metric_string_attribute_allowlist requires builtin.preset = 'trajectory_context'"
+                        .to_string(),
+                ));
             }
             None => None,
         };

@@ -3,6 +3,7 @@
 
 //! Structure-preserving removal of conversational trajectory content.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use serde_json::Value as Json;
@@ -54,13 +55,24 @@ impl CustomMarkPayloadPolicy {
 pub(super) struct TrajectorySanitizer {
     replacement: Arc<String>,
     custom_mark_payload_policy: CustomMarkPayloadPolicy,
+    metric_string_attribute_allowlist: Arc<BTreeMap<String, BTreeSet<String>>>,
 }
 
 impl TrajectorySanitizer {
-    pub(super) fn new(replacement: String, policy: CustomMarkPayloadPolicy) -> Self {
+    pub(super) fn new(
+        replacement: String,
+        policy: CustomMarkPayloadPolicy,
+        metric_string_attribute_allowlist: BTreeMap<String, Vec<String>>,
+    ) -> Self {
         Self {
             replacement: Arc::new(replacement),
             custom_mark_payload_policy: policy,
+            metric_string_attribute_allowlist: Arc::new(
+                metric_string_attribute_allowlist
+                    .into_iter()
+                    .map(|(attribute, values)| (attribute, values.into_iter().collect()))
+                    .collect(),
+            ),
         }
     }
 
@@ -192,10 +204,13 @@ impl TrajectorySanitizer {
                 .description
                 .take()
                 .map(|_| (*self.replacement).clone());
-            measurement.attributes = measurement
-                .attributes
-                .take()
-                .map(|attributes| redact_metric_string_attributes(attributes, &self.replacement));
+            measurement.attributes = measurement.attributes.take().map(|attributes| {
+                redact_metric_string_attributes(
+                    attributes,
+                    &self.replacement,
+                    &self.metric_string_attribute_allowlist,
+                )
+            });
         }
         envelope.validate().ok()?;
         serde_json::to_value(envelope).ok()
@@ -211,12 +226,19 @@ pub(crate) fn is_relay_metric_mark(event: &Event) -> bool {
 }
 
 /// Redact strings in a typed metric attribute object.
-fn redact_metric_string_attributes(value: Json, replacement: &str) -> Json {
+fn redact_metric_string_attributes(
+    value: Json,
+    replacement: &str,
+    allowlist: &BTreeMap<String, BTreeSet<String>>,
+) -> Json {
     match value {
         Json::Object(values) => Json::Object(
             values
                 .into_iter()
-                .map(|(key, value)| (key, redact_metric_string_attribute(value, replacement)))
+                .map(|(key, value)| {
+                    let value = redact_metric_string_attribute(&key, value, replacement, allowlist);
+                    (key, value)
+                })
                 .collect(),
         ),
         value => value,
@@ -224,17 +246,49 @@ fn redact_metric_string_attributes(value: Json, replacement: &str) -> Json {
 }
 
 /// Redact an individual typed metric attribute when it contains text.
-fn redact_metric_string_attribute(value: Json, replacement: &str) -> Json {
+fn redact_metric_string_attribute(
+    attribute: &str,
+    value: Json,
+    replacement: &str,
+    allowlist: &BTreeMap<String, BTreeSet<String>>,
+) -> Json {
     match value {
-        Json::String(_) => Json::String(replacement.to_string()),
+        Json::String(value) => Json::String(
+            if metric_string_value_is_allowed(allowlist, attribute, &value) {
+                value
+            } else {
+                replacement.to_string()
+            },
+        ),
         Json::Array(values) if values.iter().all(Json::is_string) => Json::Array(
             values
                 .into_iter()
-                .map(|_| Json::String(replacement.to_string()))
+                .map(|value| {
+                    let Json::String(value) = value else {
+                        unreachable!("checked that every metric attribute value is a string");
+                    };
+                    Json::String(
+                        if metric_string_value_is_allowed(allowlist, attribute, &value) {
+                            value
+                        } else {
+                            replacement.to_string()
+                        },
+                    )
+                })
                 .collect(),
         ),
         value => value,
     }
+}
+
+fn metric_string_value_is_allowed(
+    allowlist: &BTreeMap<String, BTreeSet<String>>,
+    attribute: &str,
+    value: &str,
+) -> bool {
+    allowlist
+        .get(attribute)
+        .is_some_and(|values| values.contains(value))
 }
 
 fn sanitize_scope_metadata(value: Json, replacement: &str) -> Json {
@@ -276,14 +330,22 @@ fn sanitize_category_profile(
     replacement: &str,
 ) -> Option<CategoryProfile> {
     profile.annotated_request = profile.annotated_request.as_ref().and_then(|request| {
-        TrajectorySanitizer::new(replacement.to_string(), CustomMarkPayloadPolicy::Preserve)
-            .sanitize_annotated_request((**request).clone())
-            .map(Arc::new)
+        TrajectorySanitizer::new(
+            replacement.to_string(),
+            CustomMarkPayloadPolicy::Preserve,
+            BTreeMap::new(),
+        )
+        .sanitize_annotated_request((**request).clone())
+        .map(Arc::new)
     });
     profile.annotated_response = profile.annotated_response.as_ref().and_then(|response| {
-        TrajectorySanitizer::new(replacement.to_string(), CustomMarkPayloadPolicy::Preserve)
-            .sanitize_annotated_response((**response).clone())
-            .map(Arc::new)
+        TrajectorySanitizer::new(
+            replacement.to_string(),
+            CustomMarkPayloadPolicy::Preserve,
+            BTreeMap::new(),
+        )
+        .sanitize_annotated_response((**response).clone())
+        .map(Arc::new)
     });
     profile.extra = profile
         .extra

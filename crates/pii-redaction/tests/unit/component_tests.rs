@@ -201,9 +201,19 @@ fn builtin_backend_config_default_matches_documented_action_default() {
     assert!(config.preset.is_none());
     assert_eq!(config.action, "remove");
     assert_eq!(config.custom_mark_payload_policy, "preserve");
+    assert!(config.metric_string_attribute_allowlist.is_empty());
     assert!(config.target_paths.is_empty());
     assert!(config.pattern.is_none());
     assert!(config.detector.is_none());
+}
+
+#[test]
+fn builtin_backend_editor_exposes_metric_string_allowlist_as_json() {
+    let schema = <BuiltinBackendConfig as nemo_relay::config_editor::EditorConfig>::editor_schema();
+    let field = schema
+        .field("metric_string_attribute_allowlist")
+        .expect("metric string allowlist should be editable");
+    assert_eq!(field.kind, nemo_relay::config_editor::EditorFieldKind::Json);
 }
 
 #[test]
@@ -278,6 +288,122 @@ fn trajectory_preset_validates_without_an_action_and_rejects_matcher_fields() {
     }));
 }
 
+#[test]
+fn trajectory_metric_string_allowlist_validation_is_fail_closed() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    ensure_builtin_plugins_registered().unwrap();
+
+    let valid = validate_plugin_config(&plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [{
+            "mode": "builtin",
+            "builtin": {
+                "preset": "trajectory_context",
+                "metric_string_attribute_allowlist": {
+                    "query.source": ["main", "subagent"]
+                }
+            }
+        }]
+    })));
+    assert!(!valid.has_errors(), "{:#?}", valid.diagnostics);
+
+    let valid_legacy = validate_plugin_config(&plugin_config(json!({
+        "codec": "openai_chat",
+        "mode": "builtin",
+        "builtin": {
+            "preset": "trajectory_context",
+            "metric_string_attribute_allowlist": {"query.source": ["main"]}
+        }
+    })));
+    assert!(
+        !valid_legacy.has_errors(),
+        "{:#?}",
+        valid_legacy.diagnostics
+    );
+
+    let without_preset = validate_plugin_config(&plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [{
+            "mode": "builtin",
+            "builtin": {
+                "metric_string_attribute_allowlist": {"query.source": ["main"]}
+            }
+        }]
+    })));
+    assert!(
+        without_preset.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref()
+                == Some("profiles[0].builtin.metric_string_attribute_allowlist")
+                && diagnostic.message.contains("requires builtin.preset")
+        }),
+        "{:#?}",
+        without_preset.diagnostics
+    );
+
+    for (allowlist, expected_message) in [
+        (json!({" ": ["main"]}), "keys must not be blank"),
+        (
+            json!({"query.source": []}),
+            "must contain at least one value",
+        ),
+        (json!({"query.source": [" "]}), "must not be blank"),
+        (
+            json!({"query.source": ["main", "main"]}),
+            "contains duplicate value",
+        ),
+    ] {
+        let report = validate_plugin_config(&plugin_config(json!({
+            "codec": "openai_chat",
+            "profiles": [{
+                "mode": "builtin",
+                "builtin": {
+                    "preset": "trajectory_context",
+                    "metric_string_attribute_allowlist": allowlist
+                }
+            }]
+        })));
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref()
+                == Some("profiles[0].builtin.metric_string_attribute_allowlist")
+                && diagnostic.message.contains(expected_message)
+        }));
+    }
+
+    let runtime_error = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            metric_string_attribute_allowlist: BTreeMap::from([(
+                "query.source".into(),
+                vec!["main".into()],
+            )]),
+            ..BuiltinBackendConfig::default()
+        },
+        None,
+    )
+    .err()
+    .expect("runtime construction must reject an allowlist without the trajectory preset");
+    assert!(
+        runtime_error
+            .to_string()
+            .contains("requires builtin.preset")
+    );
+
+    let runtime_error = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            preset: Some("trajectory_context".into()),
+            metric_string_attribute_allowlist: BTreeMap::from([(
+                "query.source".into(),
+                vec!["main".into(), "main".into()],
+            )]),
+            ..BuiltinBackendConfig::default()
+        },
+        None,
+    )
+    .err()
+    .expect("runtime construction must reject invalid allowlist entries");
+    assert!(runtime_error.to_string().contains("duplicate value"));
+}
+
 fn trajectory_backend(codec: Option<&str>, policy: &str) -> crate::builtin::CompiledBuiltinBackend {
     crate::builtin::CompiledBuiltinBackend::new(
         BuiltinBackendConfig {
@@ -286,6 +412,20 @@ fn trajectory_backend(codec: Option<&str>, policy: &str) -> crate::builtin::Comp
             ..BuiltinBackendConfig::default()
         },
         codec.map(str::to_string),
+    )
+    .unwrap()
+}
+
+fn trajectory_backend_with_metric_allowlist(
+    allowlist: BTreeMap<String, Vec<String>>,
+) -> crate::builtin::CompiledBuiltinBackend {
+    crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            preset: Some("trajectory_context".into()),
+            metric_string_attribute_allowlist: allowlist,
+            ..BuiltinBackendConfig::default()
+        },
+        None,
     )
     .unwrap()
 }
@@ -1222,6 +1362,78 @@ async fn trajectory_metric_marks_preserve_typed_measurements_and_redact_text() {
 }
 
 #[tokio::test]
+async fn trajectory_metric_string_allowlist_requires_exact_key_and_value() {
+    let data = json!({
+        "measurements": [{
+            "name": "example.request_count",
+            "kind": "counter",
+            "value_type": "u64",
+            "value": 1,
+            "description": "private request count",
+            "attributes": {
+                "query.source": "main",
+                "operation": "private operation",
+                "unapproved.key": "main",
+                "execution.modes": ["main", "private mode"],
+                "attempt": 2,
+                "sampled": true
+            }
+        }]
+    });
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("example.metrics")
+            .data(data.clone())
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(
+        trajectory_backend_with_metric_allowlist(BTreeMap::from([
+            ("query.source".into(), vec!["main".into()]),
+            ("operation".into(), vec!["chat".into()]),
+            ("execution.modes".into(), vec!["main".into()]),
+        ])),
+    );
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(data),
+            category_profile: Some(CategoryProfile {
+                extra: BTreeMap::from([("query.source".into(), json!("main"))]),
+                ..CategoryProfile::default()
+            }),
+            metadata: Some(json!({"query.source": "main"})),
+        },
+    )
+    .await
+    .unwrap();
+
+    let data = sanitized.data.unwrap();
+    let envelope = serde_json::from_value::<MetricEnvelope>(data.clone()).unwrap();
+    envelope.validate().unwrap();
+    let attributes = &data["measurements"][0]["attributes"];
+    assert_eq!(attributes["query.source"], "main");
+    assert_eq!(attributes["operation"], "[REDACTED]");
+    assert_eq!(attributes["unapproved.key"], "[REDACTED]");
+    assert_eq!(attributes["execution.modes"], json!(["main", "[REDACTED]"]));
+    assert_eq!(attributes["attempt"], 2);
+    assert_eq!(attributes["sampled"], true);
+    assert_eq!(data["measurements"][0]["description"], "[REDACTED]");
+    assert_eq!(sanitized.metadata.unwrap()["query.source"], "[REDACTED]");
+    assert_eq!(
+        sanitized.category_profile.unwrap().extra["query.source"],
+        "[REDACTED]"
+    );
+}
+
+#[tokio::test]
 async fn builtin_metric_marks_preserve_typed_measurements() {
     let data = json!({
         "measurements": [{
@@ -1651,6 +1863,11 @@ fn typed_trajectory_preset_omits_the_legacy_default_action() {
     assert_eq!(serialized["preset"], "trajectory_context");
     assert!(serialized.get("action").is_none());
     assert!(serialized.get("custom_mark_payload_policy").is_none());
+    assert!(
+        serialized
+            .get("metric_string_attribute_allowlist")
+            .is_none()
+    );
 }
 
 #[test]

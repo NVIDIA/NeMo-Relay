@@ -149,6 +149,22 @@ profile fields are replaced while typed category identity remains valid. Relay
 metric-schema marks use schema-aware sanitization instead: required measurement
 fields and numeric analytics remain valid for metric export, while descriptions
 and string attribute values are redacted.
+
+The preset can preserve explicitly approved, bounded string metric dimensions
+without exposing arbitrary text:
+
+```toml
+[components.config.profiles.builtin.metric_string_attribute_allowlist]
+"gen_ai.operation.name" = ["chat", "text_completion"]
+```
+
+Relay compares both the attribute name and value exactly and case-sensitively.
+For string arrays, each element is checked separately. Unlisted attributes and
+unexpected values remain redacted. The allowlist is empty by default and does
+not apply to descriptions, mark metadata, category profiles, or non-metric
+marks. Configure only fixed constants or bounded enum values; do not add
+free-form identifiers or user-provided text.
+
 Strings become `[REDACTED]`, numbers become `0`, booleans become `false`, and
 nulls, keys, arrays, and object shape are retained.
 Known Relay marks are sanitized semantically so their structural and analytical

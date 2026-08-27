@@ -3,6 +3,7 @@
 
 //! PII redaction plugin component contract.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -218,6 +219,9 @@ pub struct BuiltinBackendConfig {
         schemars(schema_with = "custom_mark_payload_policy_schema")
     )]
     pub custom_mark_payload_policy: String,
+    /// Exact string values that the trajectory preset may preserve for each typed metric attribute.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metric_string_attribute_allowlist: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for BuiltinBackendConfig {
@@ -233,6 +237,7 @@ impl Default for BuiltinBackendConfig {
             unmasked_prefix: None,
             unmasked_suffix: None,
             custom_mark_payload_policy: default_custom_mark_payload_policy(),
+            metric_string_attribute_allowlist: BTreeMap::new(),
         }
     }
 }
@@ -389,6 +394,10 @@ nemo_relay::editor_config! {
             label: "custom_mark_payload_policy",
             kind: Enum,
             values: ["preserve", "redact_all_leaves"],
+        },
+        metric_string_attribute_allowlist => {
+            label: "metric_string_attribute_allowlist",
+            kind: Json,
         },
     }
 }
@@ -658,6 +667,7 @@ fn validate_pii_redaction_plugin_config_with_policy(
             "unmasked_prefix",
             "unmasked_suffix",
             "custom_mark_payload_policy",
+            "metric_string_attribute_allowlist",
         ],
     );
     validate_section_fields(
@@ -760,6 +770,7 @@ fn validate_profile_configuration(
                 "unmasked_prefix",
                 "unmasked_suffix",
                 "custom_mark_payload_policy",
+                "metric_string_attribute_allowlist",
             ],
         );
         validate_section_fields(
@@ -958,6 +969,22 @@ fn validate_builtin_action_requirements(
         );
     }
 
+    let metric_allowlist_configured = plugin_config
+        .get("builtin")
+        .and_then(Json::as_object)
+        .is_some_and(|builtin| builtin.contains_key("metric_string_attribute_allowlist"));
+    if metric_allowlist_configured {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "pii_redaction.unsupported_value",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some("builtin.metric_string_attribute_allowlist".to_string()),
+            "builtin.metric_string_attribute_allowlist requires builtin.preset = 'trajectory_context'"
+                .to_string(),
+        );
+    }
+
     if !matches!(
         builtin.action.as_str(),
         "remove" | "redact" | "regex_replace" | "hash" | "mask"
@@ -1077,6 +1104,18 @@ fn validate_builtin_preset_requirements(
                 .to_string(),
         );
     }
+    if let Err(message) =
+        validate_metric_string_attribute_allowlist(&builtin.metric_string_attribute_allowlist)
+    {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "pii_redaction.unsupported_value",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some("builtin.metric_string_attribute_allowlist".to_string()),
+            message,
+        );
+    }
     let raw_builtin = plugin_config.get("builtin").and_then(Json::as_object);
     for field in [
         "action",
@@ -1098,6 +1137,38 @@ fn validate_builtin_preset_requirements(
             );
         }
     }
+}
+
+pub(super) fn validate_metric_string_attribute_allowlist(
+    allowlist: &BTreeMap<String, Vec<String>>,
+) -> Result<(), String> {
+    for (attribute, values) in allowlist {
+        if attribute.trim().is_empty() {
+            return Err(
+                "builtin.metric_string_attribute_allowlist keys must not be blank".to_string(),
+            );
+        }
+        if values.is_empty() {
+            return Err(format!(
+                "builtin.metric_string_attribute_allowlist['{attribute}'] must contain at least one value"
+            ));
+        }
+
+        let mut seen = BTreeSet::new();
+        for (index, value) in values.iter().enumerate() {
+            if value.trim().is_empty() {
+                return Err(format!(
+                    "builtin.metric_string_attribute_allowlist['{attribute}'][{index}] must not be blank"
+                ));
+            }
+            if !seen.insert(value) {
+                return Err(format!(
+                    "builtin.metric_string_attribute_allowlist['{attribute}'] contains duplicate value '{value}'"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_version(diagnostics: &mut Vec<ConfigDiagnostic>, policy: &ConfigPolicy, version: u32) {
