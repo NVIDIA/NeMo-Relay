@@ -1762,6 +1762,7 @@ async fn plugin_host_activation_layers_discovered_static_base_with_dynamic_compo
             .current_dir(environment.path())
             .env("XDG_CONFIG_HOME", &xdg_config_home)
             .env(PLUGIN_DISCOVERY_TEST_CHILD, "1")
+            .env_remove("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG")
             .output()
             .expect("plugin discovery child process should run");
         assert!(

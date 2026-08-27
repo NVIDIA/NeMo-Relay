@@ -583,6 +583,7 @@ func TestNilPluginActivationCloseIsSafe(t *testing.T) {
 }
 
 func TestInitializeWithDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
+	t.Setenv("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "")
 	if err := ClearPluginConfiguration(); err != nil {
 		t.Fatalf(clearConfigurationErrorFmt, err)
 	}

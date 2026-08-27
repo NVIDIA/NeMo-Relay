@@ -11,7 +11,7 @@ if ! command -v claude >/dev/null 2>&1; then
     exit 0
 fi
 
-cargo build -p nemo-relay-cli --bin nemo-relay
+cargo build -p nemo-relay-cli --bin nemo-relay --features __test-cli-port-override
 
 work="$(mktemp -d)"
 provider_pid=""
@@ -56,6 +56,8 @@ export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 export DISABLE_AUTOUPDATER=1
 export NEMO_RELAY_GATEWAY_URL="http://127.0.0.1:1"
 export NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS=1
+gateway_port="$(python3 -c 'import socket; sock = socket.socket(); sock.bind(("127.0.0.1", 0)); print(sock.getsockname()[1]); sock.close()')"
+export NEMO_RELAY_TEST_GATEWAY_BIND="127.0.0.1:$gateway_port"
 
 mkdir -p \
     "$HOME" \
@@ -114,6 +116,7 @@ nemo-relay doctor --plugin claude-code --install-dir "$work/install"
 
 python3 - "$plugin_root" <<'PY'
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -124,7 +127,7 @@ relay = [item for item in plugins if item.get("id") == "nemo-relay-plugin@nemo-r
 assert len(relay) == 1, relay
 server = relay[0]["mcpServers"]["nemo-relay"]
 assert server["args"] == ["mcp"], server
-assert server["env"]["NEMO_RELAY_GATEWAY_BIND"] == "127.0.0.1:47632", server
+assert server["env"]["NEMO_RELAY_GATEWAY_BIND"] == os.environ["NEMO_RELAY_TEST_GATEWAY_BIND"], server
 generation = Path(server["env"]["NEMO_RELAY_MCP_GENERATION_FILE"])
 assert generation == plugin_root / ".nemo-relay-generation", generation
 assert generation.is_file(), generation
@@ -134,18 +137,20 @@ assert server["alwaysLoad"] is True, server
 PY
 
 wait_for_relay_port_release() {
-    python3 - <<'PY'
+    python3 - "$gateway_port" <<'PY'
 import socket
+import sys
 import time
 
+port = int(sys.argv[1])
 deadline = time.monotonic() + 8
 while time.monotonic() < deadline:
     with socket.socket() as sock:
         sock.settimeout(0.2)
-        if sock.connect_ex(("127.0.0.1", 47632)) != 0:
+        if sock.connect_ex(("127.0.0.1", port)) != 0:
             raise SystemExit(0)
     time.sleep(0.1)
-raise SystemExit("Relay port 47632 did not become free")
+raise SystemExit(f"Relay port {port} did not become free")
 PY
     return 0
 }

@@ -500,6 +500,7 @@ async def test_dynamic_activation_layers_plugins_toml_static_components(
         )
     )
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(isolated_user_config))
 
     plugin.register(static_kind, cast(plugin.Plugin, FileStaticPlugin()))

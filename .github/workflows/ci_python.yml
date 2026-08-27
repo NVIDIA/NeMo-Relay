@@ -97,7 +97,7 @@ jobs:
 
       - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
-          tool: cargo-llvm-cov@${{ steps.ci-config.outputs.cargo_llvm_cov_version }},just@${{ steps.ci-config.outputs.just_version }}
+          tool: cargo-llvm-cov@${{ steps.ci-config.outputs.cargo_llvm_cov_version }},cargo-nextest@${{ steps.ci-config.outputs.cargo_nextest_version }},just@${{ steps.ci-config.outputs.just_version }}
 
       - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
         with:

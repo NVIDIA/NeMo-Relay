@@ -361,6 +361,7 @@ impl EnvScope {
         Self::set(&[
             ("HOME", Some(temp.path().as_os_str())),
             ("XDG_CONFIG_HOME", Some(xdg.as_os_str())),
+            ("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", None),
             ("NEMO_RELAY_PYTHON", None),
             (ACTIVATION_SNAPSHOT_DIR_ENV, None),
         ])

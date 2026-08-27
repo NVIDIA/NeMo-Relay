@@ -784,11 +784,14 @@ fn default_mcp_gateway_uses_plugin_provider_port() {
 
 #[test]
 fn persistent_mcp_server_contract_is_host_neutral_and_generation_fenced() {
+    let _environment =
+        crate::test_support::EnvScope::set(&[("NEMO_RELAY_TEST_GATEWAY_BIND", None)]);
     let server = persistent_server(
         std::path::Path::new("/opt/nemo relay/bin/nemo-relay"),
         std::path::Path::new("/tmp/plugin/.nemo-relay-generation"),
         "generation-token",
-    );
+    )
+    .unwrap();
 
     assert_eq!(server["command"], "/opt/nemo relay/bin/nemo-relay");
     assert_eq!(server["args"], json!(["mcp"]));
@@ -804,4 +807,38 @@ fn persistent_mcp_server_contract_is_host_neutral_and_generation_fenced() {
         server["env"]["NEMO_RELAY_MCP_GENERATION"],
         "generation-token"
     );
+}
+
+#[cfg(feature = "__test-cli-port-override")]
+#[test]
+fn persistent_mcp_server_uses_valid_test_gateway_bind_override() {
+    let _environment = crate::test_support::EnvScope::set(&[(
+        "NEMO_RELAY_TEST_GATEWAY_BIND",
+        Some(std::ffi::OsStr::new("127.0.0.1:47633")),
+    )]);
+    let server = persistent_server(
+        std::path::Path::new("/opt/nemo-relay"),
+        std::path::Path::new("/tmp/plugin/.nemo-relay-generation"),
+        "generation-token",
+    )
+    .unwrap();
+    assert_eq!(server["env"]["NEMO_RELAY_GATEWAY_BIND"], "127.0.0.1:47633");
+}
+
+#[cfg(feature = "__test-cli-port-override")]
+#[test]
+fn persistent_mcp_server_rejects_invalid_test_gateway_bind_override() {
+    for value in ["invalid", "0.0.0.0:47633", "127.0.0.1:0"] {
+        let _environment = crate::test_support::EnvScope::set(&[(
+            "NEMO_RELAY_TEST_GATEWAY_BIND",
+            Some(std::ffi::OsStr::new(value)),
+        )]);
+        let error = persistent_server(
+            std::path::Path::new("/opt/nemo-relay"),
+            std::path::Path::new("/tmp/plugin/.nemo-relay-generation"),
+            "generation-token",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("NEMO_RELAY_TEST_GATEWAY_BIND"));
+    }
 }
