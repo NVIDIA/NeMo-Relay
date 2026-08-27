@@ -2277,12 +2277,28 @@ fn validate_unique_component_kinds(path: &Path, document: &Json) -> Result<()> {
 /// by the gateway.
 #[doc(hidden)]
 pub fn default_plugin_config_paths(user_dir: Option<PathBuf>) -> Vec<PathBuf> {
+    if skip_implicit_plugin_config() {
+        return Vec::new();
+    }
     let mut paths = Vec::new();
     if let Some(dir) = user_dir {
         paths.push(dir.join("plugins.toml"));
     }
     paths.push(system_config_dir().join("plugins.toml"));
     paths
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn skip_implicit_plugin_config() -> bool {
+    std::env::var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
+#[cfg(not(feature = "__skip-implicit-config"))]
+fn skip_implicit_plugin_config() -> bool {
+    false
 }
 
 /// Resolves the platform system configuration directory.

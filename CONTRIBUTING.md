@@ -32,6 +32,7 @@ Install these tools before you start:
 - **just** -- `cargo install just --locked`
 - **Go** >= 1.21
 - **Node.js** (LTS)
+- **cargo-nextest** 0.9.133 -- `cargo install cargo-nextest --version 0.9.133 --locked`
 - **cargo-deny** -- `cargo install cargo-deny`
 - **cargo-about** 0.9.1 -- `cargo install cargo-about --version 0.9.1 --locked --features cli`
 
@@ -45,6 +46,7 @@ git clone <repo-url> && cd NeMo-Relay
 
 uv sync
 cargo install just --locked
+cargo install cargo-nextest --version 0.9.133 --locked
 cargo install cargo-about --version 0.9.1 --locked --features cli
 uv run pre-commit install
 just build-rust

@@ -93,7 +93,8 @@ pub(super) fn plugin_mcp_config(
     generation_token: &str,
 ) -> Result<Value, String> {
     let generation_fence = absolute_or_self(generation_fence)?;
-    let server = crate::mcp::persistent_server(relay, &generation_fence, generation_token);
+    let server = crate::mcp::persistent_server(relay, &generation_fence, generation_token)
+        .map_err(|error| error.to_string())?;
     host.plugin_mcp_config(server)
 }
 

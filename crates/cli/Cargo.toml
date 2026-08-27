@@ -23,6 +23,9 @@ workspace = true
 [features]
 default = ["atof-streaming"]
 atof-streaming = ["nemo-relay/atof-streaming"]
+# Private test hooks; never enable for distributed CLI artifacts.
+__test-cli-port-override = []
+__skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
 
 [dependencies]
 nemo-relay = { workspace = true, features = ["guardrails-remote", "object-store", "worker-grpc"] }

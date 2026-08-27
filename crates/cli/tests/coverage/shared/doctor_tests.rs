@@ -387,7 +387,10 @@ async fn agents_report_surfaces_merged_config_resolution_errors() {
     let config = config_home.join("nemo-relay").join("config.toml");
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
     std::fs::write(&config, "[upstream\n").unwrap();
-    let _env = EnvScope::set(&[("XDG_CONFIG_HOME", Some(config_home.as_os_str()))]);
+    let _env = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(config_home.as_os_str())),
+        ("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", None),
+    ]);
 
     let error = agents_report().await.unwrap_err().to_string();
 

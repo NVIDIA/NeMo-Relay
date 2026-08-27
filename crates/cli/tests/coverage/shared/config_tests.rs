@@ -229,6 +229,7 @@ struct PluginConfigDiscoveryScope {
     previous_anthropic_auth_header: Option<OsString>,
     previous_bootstrap_fingerprint: Option<OsString>,
     previous_plugin_idle_timeout: Option<OsString>,
+    previous_test_skip_implicit_config: Option<OsString>,
 }
 
 impl PluginConfigDiscoveryScope {
@@ -246,6 +247,8 @@ impl PluginConfigDiscoveryScope {
         let previous_anthropic_auth_header = std::env::var_os("NEMO_RELAY_ANTHROPIC_AUTH_HEADER");
         let previous_bootstrap_fingerprint = std::env::var_os(BOOTSTRAP_FINGERPRINT_ENV);
         let previous_plugin_idle_timeout = std::env::var_os(PLUGIN_IDLE_TIMEOUT_ENV);
+        let previous_test_skip_implicit_config =
+            std::env::var_os("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG");
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", xdg_config_home);
             std::env::remove_var("OPENAI_API_KEY");
@@ -255,6 +258,7 @@ impl PluginConfigDiscoveryScope {
             std::env::remove_var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER");
             std::env::remove_var(BOOTSTRAP_FINGERPRINT_ENV);
             std::env::remove_var(PLUGIN_IDLE_TIMEOUT_ENV);
+            std::env::remove_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG");
         }
         std::env::set_current_dir(cwd).unwrap();
         Self {
@@ -269,6 +273,7 @@ impl PluginConfigDiscoveryScope {
             previous_anthropic_auth_header,
             previous_bootstrap_fingerprint,
             previous_plugin_idle_timeout,
+            previous_test_skip_implicit_config,
         }
     }
 
@@ -292,6 +297,14 @@ impl PluginConfigDiscoveryScope {
         unsafe {
             std::env::set_var("NEMO_RELAY_OPENAI_BASE_URL", openai);
             std::env::set_var("NEMO_RELAY_ANTHROPIC_BASE_URL", anthropic);
+        }
+    }
+
+    #[cfg(feature = "__skip-implicit-config")]
+    fn skip_implicit_config(&self) {
+        // SAFETY: This scope holds the process-wide environment mutex.
+        unsafe {
+            std::env::set_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1");
         }
     }
 }
@@ -332,8 +345,77 @@ impl Drop for PluginConfigDiscoveryScope {
                 Some(value) => std::env::set_var(PLUGIN_IDLE_TIMEOUT_ENV, value),
                 None => std::env::remove_var(PLUGIN_IDLE_TIMEOUT_ENV),
             }
+            match self.previous_test_skip_implicit_config.take() {
+                Some(value) => std::env::set_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", value),
+                None => std::env::remove_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG"),
+            }
         }
     }
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn test_hook_skips_implicit_config_but_retains_explicit_config_and_environment() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let user_config = xdg.join("nemo-relay/config.toml");
+    let user_plugins = xdg.join("nemo-relay").join(PLUGINS_TOML);
+    let explicit_config = temp.path().join("explicit/config.toml");
+    let explicit_plugins = explicit_config.parent().unwrap().join(PLUGINS_TOML);
+    std::fs::create_dir_all(user_config.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(explicit_config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &user_config,
+        "[upstream]\nopenai_base_url = 'http://user'\n",
+    )
+    .unwrap();
+    std::fs::write(&user_plugins, "not valid TOML = [").unwrap();
+    std::fs::write(
+        &explicit_config,
+        "[upstream]\nopenai_base_url = 'http://explicit'\n",
+    )
+    .unwrap();
+    let explicit_plugin_dir = explicit_config.parent().unwrap().join("plugins/acme");
+    std::fs::create_dir_all(&explicit_plugin_dir).unwrap();
+    let explicit_manifest = write_dynamic_manifest(&explicit_plugin_dir, "acme.explicit");
+    std::fs::write(
+        &explicit_plugins,
+        r#"
+version = 1
+components = []
+
+[[plugins.dynamic]]
+manifest = "plugins/acme/relay-plugin.toml"
+"#,
+    )
+    .unwrap();
+
+    let scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    scope.set_base_urls("http://environment", "http://environment-anthropic");
+    scope.skip_implicit_config();
+
+    assert!(config_paths(None).is_empty());
+    assert!(plugin_config_paths(None, None).is_empty());
+    assert!(!any_config_file_exists());
+    assert_eq!(
+        config_paths(Some(&explicit_config)),
+        vec![explicit_config.clone()]
+    );
+    assert_eq!(
+        plugin_config_paths(Some(&explicit_config), None),
+        vec![explicit_plugins.clone()]
+    );
+
+    let implicit = load_shared_config(None, None).unwrap();
+    assert_eq!(implicit.gateway.openai_base_url, "http://environment");
+    let explicit = load_shared_config(Some(&explicit_config), None).unwrap();
+    assert_eq!(explicit.gateway.openai_base_url, "http://environment");
+    let explicit_plugin_config = load_shared_config(None, Some(&explicit_plugins)).unwrap();
+    assert_eq!(explicit_plugin_config.dynamic_plugins.len(), 1);
+    assert_eq!(
+        explicit_plugin_config.dynamic_plugins[0].manifest_ref,
+        explicit_manifest.canonicalize().unwrap().to_string_lossy()
+    );
 }
 
 fn config() -> GatewayConfig {

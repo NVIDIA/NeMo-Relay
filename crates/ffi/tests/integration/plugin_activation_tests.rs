@@ -63,6 +63,7 @@ fn ffi_activation_layers_discovered_static_and_explicit_dynamic_plugins() {
         )
         .arg("--nocapture")
         .env(DISCOVERY_CHILD_ENV, "1")
+        .env_remove("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG")
         .output()
         .expect("discovery child test should start");
     assert!(

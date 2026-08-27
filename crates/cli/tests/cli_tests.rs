@@ -28,6 +28,30 @@ const BOOTSTRAP_PROTOCOL_VERSION: u64 = 3;
 const CHILD_PROCESS_TIMEOUT_SECONDS: u64 = 5;
 const SIDECAR_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(5);
 
+struct ImplicitConfigEnvScope(Option<std::ffi::OsString>);
+
+impl ImplicitConfigEnvScope {
+    fn without_test_hook() -> Self {
+        let previous = std::env::var_os("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG");
+        // SAFETY: Nextest runs this integration test in its own process, and Drop restores the
+        // inherited value before the test exits.
+        unsafe { std::env::remove_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG") };
+        Self(previous)
+    }
+}
+
+impl Drop for ImplicitConfigEnvScope {
+    fn drop(&mut self) {
+        // SAFETY: see ImplicitConfigEnvScope::without_test_hook.
+        unsafe {
+            match self.0.take() {
+                Some(value) => std::env::set_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", value),
+                None => std::env::remove_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG"),
+            }
+        }
+    }
+}
+
 fn write_active_generation(temp: &std::path::Path) -> std::path::PathBuf {
     let generation = temp.join("plugin/.nemo-relay-generation");
     std::fs::create_dir_all(generation.parent().unwrap()).unwrap();
@@ -1796,6 +1820,30 @@ fn cli_agents_json_emits_supported_agent_shapes() {
     assert!(agents.iter().all(|agent| agent["status"].is_string()));
 }
 
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn cli_test_hook_ignores_ambient_user_configuration() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("xdg/nemo-relay/config.toml");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "this is not valid TOML = [").unwrap();
+
+    let output = Command::new(gateway_bin())
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+        .args(["agents", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "test hook should bypass ambient configuration: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap();
+}
+
 #[test]
 fn cli_doctor_json_emits_versioned_report() {
     let temp = tempfile::tempdir().unwrap();
@@ -1851,6 +1899,7 @@ fn cli_plugins_validate_json_emits_versioned_success_output() {
 
 #[test]
 fn cli_plugins_validate_rejects_malformed_python_entrypoints_by_path_and_id() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workdir");
     let plugin_dir = cwd.join("plugins").join("acme");
@@ -2012,6 +2061,7 @@ fn cli_plugins_list_all_json_includes_tombstoned_records() {
 
 #[test]
 fn cli_plugins_validate_json_reports_blocked_policy_for_path_target() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins").join("acme");
     let xdg = temp.path().join("xdg");
@@ -2059,6 +2109,7 @@ allowed = false
 
 #[test]
 fn cli_plugins_validate_json_reports_verified_signature_for_path_target() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins").join("acme");
     let xdg = temp.path().join("xdg");
@@ -2107,6 +2158,7 @@ fn cli_plugins_validate_json_reports_verified_signature_for_path_target() {
 
 #[test]
 fn cli_plugins_validate_json_reports_invalid_signature_for_wrong_trusted_key() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins").join("acme");
     let xdg = temp.path().join("xdg");
@@ -2166,6 +2218,7 @@ fn cli_plugins_validate_json_reports_invalid_signature_for_wrong_trusted_key() {
 
 #[test]
 fn cli_plugins_list_json_reports_blocked_policy_for_installed_plugin() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workdir");
     let plugin_dir = cwd.join("plugins").join("acme");
@@ -2241,6 +2294,7 @@ fn cli_plugins_list_json_reports_blocked_policy_for_installed_plugin() {
 
 #[test]
 fn cli_plugins_list_json_reports_invalid_trust_in_validation_state() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workdir");
     let plugin_dir = cwd.join("plugins").join("acme");
@@ -2302,6 +2356,7 @@ fn cli_plugins_list_json_reports_invalid_trust_in_validation_state() {
 
 #[test]
 fn cli_plugins_validate_json_reports_blocked_policy_for_installed_id_target() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workdir");
     let plugin_dir = cwd.join("plugins").join("acme");
@@ -2421,6 +2476,7 @@ fn cli_plugins_inspect_json_emits_installed_plugin_details() {
 
 #[test]
 fn cli_plugins_inspect_json_reports_blocked_policy_for_installed_plugin() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workdir");
     let plugin_dir = cwd.join("plugins").join("acme");
@@ -2807,6 +2863,7 @@ fn cli_model_pricing_add_source_validates_and_updates_user_plugin_config() {
 
 #[test]
 fn cli_model_pricing_resolve_reports_source_match_and_estimate() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
     let temp = tempfile::tempdir().unwrap();
     let catalog = temp.path().join("pricing.json");
     let xdg = temp.path().join("xdg/nemo-relay");
@@ -3122,6 +3179,7 @@ fn cli_bare_invocation_invokes_setup_when_no_config_found() {
 
 #[test]
 fn cli_bare_invocation_runs_doctor_when_config_exists() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
     std::fs::create_dir_all(&xdg).unwrap();
@@ -3150,6 +3208,7 @@ fn cli_bare_invocation_runs_doctor_when_config_exists() {
 
 #[test]
 fn cli_bare_invocation_reports_invalid_config_resolution() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
     std::fs::create_dir_all(&xdg).unwrap();
@@ -3406,6 +3465,7 @@ fn cli_doctor_reports_unsupported_ancestor_project_config() {
 
 #[test]
 fn cli_doctor_json_reports_effective_upstream_auth_presence() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("workspace");
     let nested = project.join("nested");
@@ -4017,6 +4077,7 @@ mode = "append"
 
 #[test]
 fn cli_run_dry_run_reports_effective_upstream_auth_presence() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let nested = project.join("nested");
