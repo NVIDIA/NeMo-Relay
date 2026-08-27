@@ -468,6 +468,11 @@ impl OpenTelemetryConfig {
         self.promote_resource_metadata_prefixes = prefixes.into_iter().map(Into::into).collect();
         self
     }
+
+    #[cfg(test)]
+    pub(crate) fn promote_resource_metadata_prefixes(&self) -> &[String] {
+        &self.promote_resource_metadata_prefixes
+    }
 }
 
 #[cfg(test)]
@@ -798,6 +803,7 @@ impl OpenTelemetrySubscriber {
     /// After a successful flush, runtime diagnostics include queue drops observed so far.
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
+        // Keep the processor lock guard temporary: subscriber callbacks also use it.
         let dynamic_providers = self
             .inner
             .processor
@@ -831,6 +837,7 @@ impl OpenTelemetrySubscriber {
     }
 
     pub(crate) fn shutdown_provider(&self) -> Result<()> {
+        // Keep the processor lock guard temporary: subscriber callbacks also use it.
         let dynamic_providers = self
             .inner
             .processor

@@ -1192,6 +1192,19 @@ fn build_otel_config_carries_endpoint_batch_overrides() {
 }
 
 #[test]
+fn build_otel_config_carries_resource_metadata_promotion_prefixes() {
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.promote_resource_metadata_prefixes = vec!["deployment.".to_string()];
+
+    let config = build_otel_config(0, endpoint).unwrap();
+
+    assert_eq!(
+        config.promote_resource_metadata_prefixes(),
+        ["deployment.".to_string()]
+    );
+}
+
+#[test]
 fn validate_opentelemetry_section_reports_empty_and_malformed_endpoints() {
     let policy = ConfigPolicy::default();
     let mut diagnostics = Vec::new();

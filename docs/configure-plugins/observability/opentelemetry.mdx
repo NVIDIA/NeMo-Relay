@@ -190,7 +190,7 @@ key. The diagnostic code is
 `otel.metadata_promotion_value_unsupported.<metadata-key>`, its message contains
 the key and rejection reason, and its count is the number of occurrences for
 that key. Relay does not record the rejected value or stop trace export. Match
-the `otel.metadata_promotion_value_unsupported.` prefix to monitor all rejected
+the `otel.metadata_promotion_value_unsupported.` prefix to monitor rejected span
 metadata keys.
 
 Projection-owned attributes take precedence over promoted metadata with the
@@ -220,11 +220,20 @@ mark in that trace uses the same resource; child metadata and later root
 metadata changes do not modify it. The prefixes and supported value types match
 `promote_metadata_prefixes`.
 
-Configured `service_name`, service namespace/version, and explicit
+Configured `service_name`, `service_namespace`, `service_version`, and explicit
 `resource_attributes` take precedence over promoted metadata with the same key.
 Each distinct effective resource creates a retained OTLP trace pipeline, so use
 only controlled, low-cardinality values such as deployment, region, or cluster
 identity. Do not promote request, tenant, or user identifiers.
+
+Relay records two bounded runtime diagnostics for this setting. A rejected value
+produces `otel.resource_metadata_promotion_value_unsupported.<metadata-key>`.
+A failed resource-pipeline construction produces
+`otel.resource_metadata_pipeline_build_failed`; Relay then exports the trace
+through the endpoint's configured resource instead. Match both the
+`otel.metadata_promotion_value_unsupported.` and
+`otel.resource_metadata_promotion_value_unsupported.` prefixes to monitor all
+rejected metadata keys.
 
 ## Log and Metric Endpoint Resolution
 

@@ -30,7 +30,10 @@ use crate::observability::otel_metrics::{
 };
 use crate::observability::{relay_span_id, relay_trace_id};
 use opentelemetry::trace::TraceContextExt;
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+use opentelemetry_proto::tonic::common::v1::{KeyValue as OtlpKeyValue, any_value};
 use opentelemetry_sdk::trace::{BatchConfigBuilder, InMemorySpanExporterBuilder};
+use prost::Message;
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -3341,18 +3344,58 @@ fn root_metadata_promotes_to_a_shared_otlp_resource() {
     let request = request_rx
         .recv_timeout(Duration::from_secs(5))
         .expect("expected an OTLP request for the promoted root resource");
-    assert!(
-        request
-            .body
-            .windows(b"root-tenant".len())
-            .any(|window| window == b"root-tenant")
+    let request = ExportTraceServiceRequest::decode(request.body.as_slice()).unwrap();
+    assert_eq!(request.resource_spans.len(), 1);
+    let resource_spans = request.resource_spans.first().unwrap();
+    let resource = resource_spans.resource.as_ref().unwrap();
+    assert_eq!(
+        otlp_string_attribute(&resource.attributes, "tenant.id"),
+        Some("root-tenant")
     );
-    assert!(
-        request
-            .body
-            .windows(b"configured".len())
-            .any(|window| window == b"configured")
+    assert_eq!(
+        otlp_string_attribute(&resource.attributes, "tenant.region"),
+        Some("configured")
     );
+
+    let spans = resource_spans
+        .scope_spans
+        .iter()
+        .flat_map(|scope_spans| &scope_spans.spans)
+        .collect::<Vec<_>>();
+    assert_eq!(spans.len(), 2);
+    for span in spans {
+        assert!(!has_promoted_resource_metadata(&span.attributes));
+        assert!(
+            span.events
+                .iter()
+                .all(|event| !has_promoted_resource_metadata(&event.attributes))
+        );
+    }
+}
+
+fn otlp_string_attribute<'a>(attributes: &'a [OtlpKeyValue], key: &str) -> Option<&'a str> {
+    attributes
+        .iter()
+        .find(|attribute| attribute.key == key)
+        .and_then(|attribute| attribute.value.as_ref())
+        .and_then(|value| match value.value.as_ref() {
+            Some(any_value::Value::StringValue(value)) => Some(value.as_str()),
+            _ => None,
+        })
+}
+
+fn has_promoted_resource_metadata(attributes: &[OtlpKeyValue]) -> bool {
+    attributes.iter().any(|attribute| {
+        attribute.key.ends_with(".metadata.tenant.id")
+            || attribute.key == "tenant.id"
+            || matches!(
+                attribute
+                    .value
+                    .as_ref()
+                    .and_then(|value| value.value.as_ref()),
+                Some(any_value::Value::StringValue(value)) if value == "child-tenant"
+            )
+    })
 }
 
 #[test]
