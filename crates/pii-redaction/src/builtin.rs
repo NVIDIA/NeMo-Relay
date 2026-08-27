@@ -43,13 +43,13 @@ struct TargetPathMatcher {
     selectors: Vec<TargetPathSelector>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
 enum TargetPathSelector {
     Exact(Vec<String>),
     Glob(Vec<TargetPathSegment>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
 enum TargetPathSegment {
     Exact(String),
     Any,
@@ -65,23 +65,32 @@ impl TargetPathMatcher {
             .iter()
             .map(|path| {
                 json_pointer_segments(path).map(|segments| {
-                    TargetPathSelector::Glob(
-                        segments
-                            .into_iter()
-                            .map(|segment| {
-                                if segment == "*" {
-                                    TargetPathSegment::Any
-                                } else {
-                                    TargetPathSegment::Exact(segment)
-                                }
-                            })
-                            .collect(),
-                    )
+                    if segments.iter().all(|segment| segment != "*") {
+                        TargetPathSelector::Exact(segments)
+                    } else {
+                        TargetPathSelector::Glob(
+                            segments
+                                .into_iter()
+                                .map(|segment| {
+                                    if segment == "*" {
+                                        TargetPathSegment::Any
+                                    } else {
+                                        TargetPathSegment::Exact(segment)
+                                    }
+                                })
+                                .collect(),
+                        )
+                    }
                 })
             })
             .collect::<Option<Vec<_>>>()?;
+        let mut seen = BTreeSet::new();
         Some(Self {
-            selectors: exact.into_iter().chain(globs).collect(),
+            selectors: exact
+                .into_iter()
+                .chain(globs)
+                .filter(|selector| seen.insert(selector.clone()))
+                .collect(),
         })
     }
 
@@ -1138,4 +1147,30 @@ where
             "failed to deserialize sanitized value for PII redaction: {err}"
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_path_matcher_deduplicates_equivalent_selectors() {
+        let matcher = TargetPathMatcher::new(
+            &["/prompt".to_string(), "/prompt".to_string()],
+            &[
+                "/prompt".to_string(),
+                "/messages/*/content".to_string(),
+                "/messages/*/content".to_string(),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(matcher.selectors.len(), 2);
+        assert!(matcher.matches(&["prompt".to_string()]));
+        assert!(matcher.matches(&[
+            "messages".to_string(),
+            "0".to_string(),
+            "content".to_string(),
+        ]));
+    }
 }

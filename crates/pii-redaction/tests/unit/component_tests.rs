@@ -1791,6 +1791,7 @@ async fn configured_target_path_globs_redact_otlp_content_and_preserve_typed_met
                     "/output/*/content/*/text",
                     "/output/*/input",
                     "/messages/*/content",
+                    "/messages/*/content/*/text",
                     "/messages/*/content/*/text"
                 ]
             }
