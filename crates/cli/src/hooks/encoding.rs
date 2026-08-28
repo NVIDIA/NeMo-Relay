@@ -189,7 +189,7 @@ pub(super) fn hook_command_for_platform(
 fn render_hook_command(relay: &Path, arguments: &[String], windows: bool) -> String {
     std::iter::once(relay.display().to_string())
         .chain(arguments.iter().cloned())
-        .map(|argument| crate::agents::shell_quote_arg_for_platform(&argument, windows))
+        .map(|argument| crate::process::shell_quote_arg_for_platform(&argument, windows))
         .collect::<Vec<_>>()
         .join(" ")
 }

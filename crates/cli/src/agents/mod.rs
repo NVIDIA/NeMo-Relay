@@ -688,7 +688,7 @@ fn failed_integration_readiness(
 }
 
 pub(crate) use crate::process::portable_executable_path;
-#[cfg(any(not(windows), test))]
+#[cfg(test)]
 pub(crate) use crate::process::shell_quote_arg_for_platform;
 #[cfg(test)]
 pub(crate) use crate::process::strip_windows_verbatim_prefix;
