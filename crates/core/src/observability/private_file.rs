@@ -20,7 +20,16 @@ fn open_or_create_private_dir(path: &Path) -> io::Result<ConfinedDir> {
     let mut anchor = PathBuf::new();
     for component in absolute.components() {
         match component {
-            Component::Prefix(_) | Component::RootDir if anchor.as_os_str().is_empty() => {
+            Component::Prefix(_) if anchor.as_os_str().is_empty() => {
+                anchor.push(component.as_os_str());
+            }
+            // Windows absolute paths are represented as a drive prefix followed by a root
+            // component (`C:` then `\\`). Both components make up the trusted filesystem anchor.
+            Component::RootDir
+                if anchor.as_os_str().is_empty()
+                    || matches!(anchor.components().next(), Some(Component::Prefix(_)))
+                        && anchor.components().nth(1).is_none() =>
+            {
                 anchor.push(component.as_os_str());
             }
             Component::Normal(name) => anchor.push(name),
@@ -67,6 +76,21 @@ fn open_or_create_private_dir(path: &Path) -> io::Result<ConfinedDir> {
         current = current.open_or_create_child(&name)?;
     }
     Ok(current)
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::create_private_dir_all;
+
+    #[test]
+    fn absolute_temp_directory_is_accepted() {
+        let temporary = tempfile::tempdir().expect("temporary directory should be created");
+        let output = temporary.path().join("atof");
+
+        create_private_dir_all(&output).expect("absolute Windows output directory should open");
+
+        assert!(output.is_dir());
+    }
 }
 
 pub(super) fn open_private(root: &Path, path: &Path, append: bool) -> io::Result<File> {
