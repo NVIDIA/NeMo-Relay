@@ -729,7 +729,8 @@ fn start_mcp_client_with_generation(
         .env("XDG_CONFIG_HOME", temp.join("xdg"))
         .env("XDG_RUNTIME_DIR", temp.join("runtime"))
         .env("TMPDIR", temp)
-        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", idle_timeout_secs);
+        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", idle_timeout_secs)
+        .env("NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS", "1");
     if let Some(generation) = generation {
         let token = std::fs::read_to_string(generation).unwrap();
         command

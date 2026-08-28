@@ -3,6 +3,8 @@
 
 use clap::Parser;
 use std::ffi::OsString;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
 
 use super::completions::CompletionsCommand;
@@ -89,6 +91,81 @@ fn operational_command_names_cover_logging_exempt_commands() {
         let cli = Cli::try_parse_from(args).unwrap();
         assert_eq!(cli.command.unwrap().log_name(), expected);
     }
+}
+
+#[tokio::test]
+async fn gateway_lifecycle_commands_use_the_requested_bind_and_verify_ownership() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let bootstrap_state = xdg.join("nemo-relay/bootstrap");
+    let _environment = EnvScope::set_with_cwd_guard(
+        &[
+            ("HOME", Some(temp.path().as_os_str())),
+            ("XDG_CONFIG_HOME", Some(xdg.as_os_str())),
+            (
+                crate::bootstrap::state::BOOTSTRAP_STATE_DIR_ENV,
+                Some(bootstrap_state.as_os_str()),
+            ),
+            (
+                crate::configuration::BOOTSTRAP_FINGERPRINT_ENV,
+                Some(std::ffi::OsStr::new("test-fingerprint")),
+            ),
+        ],
+        Some(crate::test_support::CwdTestScope::locked()),
+    );
+
+    let occupied = TcpListener::bind("127.0.0.1:0").unwrap();
+    let occupied_address = occupied.local_addr().unwrap();
+    let start = Cli::try_parse_from([
+        "nemo-relay",
+        "--bind",
+        &occupied_address.to_string(),
+        "gateway",
+        "start",
+    ])
+    .unwrap();
+    assert!(
+        run_command(start.command.unwrap(), &start.server, None, None)
+            .await
+            .is_err(),
+        "gateway start should attempt to serve on the requested bind"
+    );
+    drop(occupied);
+
+    let foreign = TcpListener::bind("127.0.0.1:0").unwrap();
+    let foreign_address = foreign.local_addr().unwrap();
+    let foreign_server = std::thread::spawn(move || {
+        let (mut stream, _) = foreign.accept().unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = stream.read(&mut request);
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+            .unwrap();
+    });
+    let _owner = crate::bootstrap::state::publish_owner_from_env(
+        foreign_address,
+        Some("test-shutdown-token"),
+    )
+    .unwrap()
+    .unwrap();
+    let stop = Cli::try_parse_from([
+        "nemo-relay",
+        "--bind",
+        &foreign_address.to_string(),
+        "gateway",
+        "stop",
+    ])
+    .unwrap();
+    let error = run_command(stop.command.unwrap(), &stop.server, None, None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("refusing to stop an unverified process"),
+        "{error}"
+    );
+    foreign_server.join().unwrap();
 }
 
 #[test]
