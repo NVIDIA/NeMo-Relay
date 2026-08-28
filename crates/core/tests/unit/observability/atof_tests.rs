@@ -1792,13 +1792,12 @@ fn atof_config_helpers_cover_file_path_and_replace_dots_policy() {
 #[cfg(target_os = "linux")]
 #[test]
 fn atof_file_sink_rejects_dev_full_as_an_unsafe_output_target() {
-    let error = AtofExporter::new(
+    let result = AtofExporter::new(
         AtofExporterConfig::new()
             .with_output_directory("/dev")
             .with_filename("full"),
-    )
-    .expect_err("/dev/full must not be opened as a trace output file");
-    assert!(matches!(error, AtofExporterError::OpenFile { .. }));
+    );
+    assert!(matches!(result, Err(AtofExporterError::OpenFile { .. })));
 }
 
 #[test]
