@@ -521,6 +521,7 @@ pub(crate) fn detected_install_integrations(candidates: &[CodingAgent]) -> Vec<C
         .collect()
 }
 
+/// Returns hosts with persisted state, optionally including stale local marketplace trees.
 pub(crate) fn installed_integrations(
     candidates: &[CodingAgent],
     install_dir: Option<&Path>,

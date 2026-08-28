@@ -282,6 +282,7 @@ pub(crate) fn default_marketplace_install_dir() -> PathBuf {
     default_install_dir().canonicalize_or_self()
 }
 
+/// Returns whether the host's deterministic Relay marketplace tree still exists.
 pub(crate) fn local_install_exists(host: impl MarketplaceHost, install_dir: &Path) -> bool {
     PluginLayout::new(host, install_dir)
         .marketplace_root
@@ -932,6 +933,7 @@ fn uninstall_host_locked(
     result
 }
 
+/// Attempts every deterministic Relay-owned cleanup step and reports all failures together.
 fn force_uninstall_host_locked(
     host: impl MarketplaceHost,
     options: &PluginInstallOptions,
@@ -964,7 +966,14 @@ fn force_uninstall_host_locked(
         errors.push(error);
     }
     if !options.dry_run {
-        remove_generation_lock_best_effort(&layout.generation_lock);
+        match fs::remove_file(&layout.generation_lock) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => errors.push(format!(
+                "failed to remove MCP generation lock {}: {error}",
+                layout.generation_lock.display()
+            )),
+        }
     }
 
     if errors.is_empty() {

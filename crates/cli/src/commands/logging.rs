@@ -56,6 +56,7 @@ impl LoggingArgs {
         Ok(self.resolve_explicit()?.unwrap_or_default())
     }
 
+    /// Resolves only command-line, log-file, and environment logging sources.
     fn resolve_explicit(&self) -> Result<Option<LoggingConfig>, CliError> {
         if let Some(path) = &self.config_path {
             return LoggingConfig::from_file_path(path)

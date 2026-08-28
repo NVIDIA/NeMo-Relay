@@ -4369,6 +4369,26 @@ fn force_uninstall_continues_after_setup_failure_and_removes_local_state() {
 }
 
 #[test]
+fn force_uninstall_reports_a_generation_lock_cleanup_failure() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default().with_executable("codex", "/bin/codex");
+    let setup_runner = MockSetupRunner::default();
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    write_installed_state(CodingAgent::Codex, dir.path());
+    std::fs::remove_file(&layout.generation_lock).unwrap();
+    std::fs::create_dir(&layout.generation_lock).unwrap();
+    let mut options = options(dir.path());
+    options.force = true;
+
+    let error = uninstall_host(CodingAgent::Codex, &options, &runner, &setup_runner).unwrap_err();
+
+    assert!(error.contains("failed to remove MCP generation lock"));
+    assert!(layout.generation_lock.is_dir());
+    assert!(!layout.marketplace_root.exists());
+    assert!(!layout.state_path.exists());
+}
+
+#[test]
 fn doctor_json_uses_quiet_plugin_report() {
     let dir = tempdir().unwrap();
     let runner = MockRunner::default()
