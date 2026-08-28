@@ -3124,6 +3124,8 @@ fn windows_shell_argument_quoting_and_hook_encoding_preserve_paths() {
 #[cfg(windows)]
 #[test]
 fn generated_windows_hook_command_executes_exact_arguments() {
+    use std::os::windows::process::CommandExt;
+
     let temp = tempfile::tempdir().unwrap();
     let bin = temp.path().join("Relay & %USERPROFILE% !^ Tools");
     std::fs::create_dir(&bin).unwrap();
@@ -3138,7 +3140,7 @@ fn generated_windows_hook_command_executes_exact_arguments() {
         .to_owned();
     let mut child = std::process::Command::new("cmd.exe")
         .arg("/C")
-        .arg(&command)
+        .raw_arg(&command)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -3171,6 +3173,8 @@ fn generated_windows_hook_command_executes_exact_arguments() {
 #[cfg(windows)]
 #[test]
 fn generated_windows_hook_command_propagates_the_relay_exit_code() {
+    use std::os::windows::process::CommandExt;
+
     let temp = tempfile::tempdir().unwrap();
     let relay = temp.path().join("relay failure.exe");
     compile_windows_hook_test_relay(&relay);
@@ -3182,7 +3186,7 @@ fn generated_windows_hook_command_propagates_the_relay_exit_code() {
 
     let status = std::process::Command::new("cmd.exe")
         .arg("/C")
-        .arg(&command)
+        .raw_arg(&command)
         .env(
             "NEMO_RELAY_HOOK_CONFIG",
             generation.with_file_name(".nemo-relay-hook-config.json"),
