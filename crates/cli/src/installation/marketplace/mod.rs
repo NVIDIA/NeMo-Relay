@@ -994,6 +994,14 @@ fn force_uninstall_host_locked(
     if host_setup_removed && let Err(error) = remove_path(&layout.state_path, options) {
         errors.push(error);
     }
+    if !host_setup_removed
+        && !layout.state_path.exists()
+        && let Err(error) = write_state(&layout, options)
+    {
+        errors.push(format!(
+            "failed to preserve Relay cleanup retry state: {error}"
+        ));
+    }
     if !options.dry_run {
         match fs::remove_file(&layout.generation_lock) {
             Ok(()) => {}

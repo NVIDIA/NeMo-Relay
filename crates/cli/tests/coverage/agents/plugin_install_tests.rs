@@ -4409,6 +4409,35 @@ fn force_uninstall_preserves_state_after_setup_failure_for_retry() {
 }
 
 #[test]
+fn force_uninstall_creates_state_after_setup_failure_without_prior_state() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("codex", "/bin/codex")
+        .with_codex_registration_sequence(&[(true, false), (false, false)]);
+    let setup_runner = MockSetupRunner {
+        failing_call: Some(format!("uninstall codex {DEFAULT_GATEWAY_URL}")),
+        ..MockSetupRunner::default()
+    };
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    let mut options = options(dir.path());
+    options.force = true;
+
+    assert!(force_cleanup_target_exists_with_runner(
+        CodingAgent::Codex,
+        dir.path(),
+        &runner
+    ));
+    let error = uninstall_host(CodingAgent::Codex, &options, &runner, &setup_runner).unwrap_err();
+
+    assert!(error.contains("failed to remove Relay host setup"));
+    assert!(layout.state_path.exists());
+    assert_eq!(
+        crate::agents::installed_integrations(&[CodingAgent::Codex], Some(dir.path()), true),
+        vec![CodingAgent::Codex]
+    );
+}
+
+#[test]
 fn force_uninstall_reports_a_generation_lock_cleanup_failure() {
     let dir = tempdir().unwrap();
     let runner = MockRunner::default().with_executable("codex", "/bin/codex");
