@@ -841,6 +841,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
             mark_exclude_names: default_mark_exclude_names(),
             attribute_mappings: Vec::new(),
             promote_metadata_prefixes: Vec::new(),
+            promote_resource_metadata_prefixes: Vec::new(),
         }],
         logs: None,
         metrics: None,
@@ -1030,6 +1031,7 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
             mark_exclude_names: default_mark_exclude_names(),
             attribute_mappings: Vec::new(),
             promote_metadata_prefixes: Vec::new(),
+            promote_resource_metadata_prefixes: Vec::new(),
         },
     )
     .unwrap();
@@ -1059,6 +1061,7 @@ fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
         mark_exclude_names: default_mark_exclude_names(),
         attribute_mappings: Vec::new(),
         promote_metadata_prefixes: Vec::new(),
+        promote_resource_metadata_prefixes: Vec::new(),
     }
 }
 
@@ -1186,6 +1189,19 @@ fn build_otel_config_carries_endpoint_batch_overrides() {
 
     let config = build_otel_config(1, test_opentelemetry_endpoint()).unwrap();
     assert_eq!(config.batch_overrides(), (None, None, None));
+}
+
+#[test]
+fn build_otel_config_carries_resource_metadata_promotion_prefixes() {
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.promote_resource_metadata_prefixes = vec!["deployment.".to_string()];
+
+    let config = build_otel_config(0, endpoint).unwrap();
+
+    assert_eq!(
+        config.promote_resource_metadata_prefixes(),
+        ["deployment.".to_string()]
+    );
 }
 
 #[test]
