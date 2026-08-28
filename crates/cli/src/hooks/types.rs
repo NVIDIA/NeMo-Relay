@@ -8,6 +8,7 @@ use crate::agents::CodingAgent;
 #[derive(Debug, Clone)]
 pub(crate) struct HookForwardRequest {
     pub(crate) agent: CodingAgent,
+    pub(crate) hook_config: Option<PathBuf>,
     pub(crate) gateway_url: Option<String>,
     pub(crate) generation_file: Option<PathBuf>,
     pub(crate) generation_token: Option<String>,
@@ -17,6 +18,19 @@ pub(crate) struct HookForwardRequest {
     pub(crate) session_metadata: Option<String>,
     pub(crate) gateway_mode: Option<GatewayMode>,
     pub(crate) failure_policy: HookFailurePolicy,
+}
+
+impl HookForwardRequest {
+    pub(crate) fn has_inline_configuration(&self) -> bool {
+        self.gateway_url.is_some()
+            || self.generation_file.is_some()
+            || self.generation_token.is_some()
+            || self.forward_only
+            || self.transparent_run
+            || self.profile.is_some()
+            || self.session_metadata.is_some()
+            || self.gateway_mode.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,7 +50,8 @@ impl HookFailurePolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum GatewayMode {
     HookOnly,
     Passthrough,

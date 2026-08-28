@@ -47,6 +47,7 @@ pub(super) fn write_plugin_marketplace_for_generation(
         println!("write {}", layout.plugin_manifest.display());
         println!("write {}", layout.mcp_config.display());
         println!("write {}", layout.generation_fence.display());
+        println!("write {}", layout.hook_config.display());
         println!("write {}", layout.hooks_path.display());
         return Ok(());
     }
@@ -67,13 +68,17 @@ pub(super) fn write_plugin_marketplace_for_generation(
     } else {
         write_staged_generation_with_token(&layout.generation_fence, active_generation_lock)
     }?;
+    let generation_fence = absolute_or_self(active_generation_fence)?;
+    let hook_config = absolute_or_self(&layout.hook_config)?;
+    host.persistent_hook_config(&generation_fence, &generation_token)
+        .write(&hook_config)?;
     write_json(
         &layout.mcp_config,
-        &plugin_mcp_config(host, relay, active_generation_fence, &generation_token)?,
+        &plugin_mcp_config(host, relay, &generation_fence, &generation_token)?,
     )?;
     write_json(
         &layout.hooks_path,
-        &plugin_hooks(host, relay, active_generation_fence, &generation_token)?,
+        &plugin_hooks(host, relay, &generation_fence, &generation_token)?,
     )?;
     Ok(())
 }
@@ -113,6 +118,6 @@ pub(super) fn plugin_hooks(
     generation_fence: &Path,
     generation_token: &str,
 ) -> Result<Value, String> {
-    let generation_fence = absolute_or_self(generation_fence)?;
-    host.plugin_hooks(relay, &generation_fence, generation_token)
+    let hook_config = generation_fence.with_file_name(".nemo-relay-hook-config.json");
+    host.plugin_hooks(relay, generation_fence, generation_token, &hook_config)
 }

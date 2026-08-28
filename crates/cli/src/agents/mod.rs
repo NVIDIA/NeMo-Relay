@@ -181,11 +181,25 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
         plugin_mcp_config(self, server)
     }
 
+    fn persistent_hook_config(
+        self,
+        generation_fence: &std::path::Path,
+        generation_token: &str,
+    ) -> crate::hooks::HookCommandConfig {
+        crate::hooks::HookCommandConfig::persistent(
+            self,
+            crate::bootstrap::DEFAULT_URL,
+            generation_fence.to_owned(),
+            generation_token,
+        )
+    }
+
     fn plugin_hooks(
         self,
         relay: &std::path::Path,
         generation_fence: &std::path::Path,
         generation_token: &str,
+        _hook_config: &std::path::Path,
     ) -> Result<serde_json::Value, String> {
         let commands = crate::hooks::persistent_hook_forward_commands(
             relay,

@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::agents::CodingAgent;
 use crate::configuration::{RELAY_PLUGIN_ID, RELAY_SOURCE_PLUGIN_ID};
 use crate::error::CliError;
-use crate::hooks::{generated_policy_hooks, transparent_hook_forward_commands};
+use crate::hooks::{generated_policy_hooks, transparent_hook_forward_commands_with_config};
 use crate::process::{PreparedAgentLaunch, insert_after_host};
 
 pub(crate) fn prepare(launch: &mut PreparedAgentLaunch, gateway_url: &str) -> Result<(), CliError> {
@@ -26,10 +26,16 @@ pub(crate) fn prepare(launch: &mut PreparedAgentLaunch, gateway_url: &str) -> Re
              or pass `--openai-base-url` to an upstream that needs no key."
         );
     }
-    let hook_commands = transparent_hook_forward_commands(
+    let hook_root = temp_dir("nemo-relay-codex-hooks")?;
+    let hook_config = hook_root.join(".nemo-relay-hook-config.json");
+    crate::hooks::HookCommandConfig::transparent(CodingAgent::Codex, gateway_url)
+        .write(&hook_config)
+        .map_err(CliError::Launch)?;
+    launch.temp_dirs.push(hook_root);
+    let hook_commands = transparent_hook_forward_commands_with_config(
         &transparent_hook_executable(),
         CodingAgent::Codex,
-        gateway_url,
+        &hook_config,
     )
     .map_err(CliError::Launch)?;
     let hook_groups = generated_policy_hooks(CodingAgent::Codex, &hook_commands);
@@ -232,4 +238,10 @@ fn transparent_hook_executable() -> PathBuf {
         .map(|path| path.canonicalize().unwrap_or(path))
         .map(crate::agents::portable_executable_path)
         .unwrap_or_else(|_| PathBuf::from("nemo-relay"))
+}
+
+fn temp_dir(prefix: &str) -> Result<PathBuf, CliError> {
+    let path = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&path)?;
+    Ok(path)
 }
