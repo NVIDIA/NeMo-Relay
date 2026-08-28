@@ -4042,6 +4042,7 @@ fn logging_parses_global_settings_and_file_sinks() {
             r#"
 [logging]
 level = "debug"
+stderr_enabled = false
 stderr_format = "human"
 flush_interval_millis = 250
 
@@ -4068,6 +4069,7 @@ format = "human"
     let resolved = resolve_server_config(&args).unwrap();
 
     assert_eq!(resolved.logging.level, LogLevel::Debug);
+    assert!(!resolved.logging.stderr_enabled);
     assert_eq!(resolved.logging.stderr_format, LogFormat::Human);
     assert_eq!(resolved.logging.flush_interval_millis, 250);
     assert_eq!(resolved.logging.sinks.len(), 2);

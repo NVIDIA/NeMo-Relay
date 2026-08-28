@@ -19,6 +19,7 @@ use super::CliError;
 #[serde(deny_unknown_fields)]
 pub(super) struct FileLoggingConfig {
     level: Option<String>,
+    stderr_enabled: Option<bool>,
     stderr_format: Option<String>,
     /// Optional advanced: periodic flush interval in ms applied to all file sinks (default
     /// [`DEFAULT_FILE_FLUSH_INTERVAL_MILLIS`]). `0` means flush only on shutdown.
@@ -50,6 +51,9 @@ pub(super) fn apply_file_logging_config(
     };
     if let Some(level) = config.level.as_deref() {
         logging.level = LogLevel::parse(level).map_err(logging_parse_error)?;
+    }
+    if let Some(stderr_enabled) = config.stderr_enabled {
+        logging.stderr_enabled = stderr_enabled;
     }
     if let Some(stderr_format) = config.stderr_format.as_deref() {
         logging.stderr_format = LogFormat::parse(stderr_format).map_err(logging_parse_error)?;

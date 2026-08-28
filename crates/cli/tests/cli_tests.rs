@@ -1866,6 +1866,37 @@ fn cli_doctor_json_emits_versioned_report() {
 }
 
 #[test]
+fn cli_doctor_accepts_discovered_stderr_logging_opt_out() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(xdg.join("nemo-relay")).unwrap();
+    std::fs::write(
+        xdg.join("nemo-relay/config.toml"),
+        "[logging]\nstderr_enabled = false\n",
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["configuration"]["resolution"]["status"], "pass");
+}
+
+#[test]
 fn cli_plugins_validate_json_emits_versioned_success_output() {
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins").join("acme");
