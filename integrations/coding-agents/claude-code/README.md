@@ -329,4 +329,5 @@ nemo-relay uninstall claude-code
 If stale Relay install state prevents normal removal, use
 `nemo-relay uninstall claude-code --force`. It attempts the Claude Code
 settings, registration, marketplace, and deterministic local Relay cleanup
-independently, then reports any steps that could not complete.
+independently, then reports any steps that could not complete. If settings
+cleanup fails, Relay keeps its state so a later forced uninstall can retry.

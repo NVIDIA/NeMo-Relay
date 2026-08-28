@@ -972,9 +972,14 @@ fn force_uninstall_host_locked(
     {
         errors.push(format!("failed to stop the Relay-owned gateway: {error}"));
     }
-    if let Err(error) = run_plugin_uninstall(host, &layout.plugin_root, options, setup_runner) {
-        errors.push(format!("failed to remove Relay host setup: {error}"));
-    }
+    let host_setup_removed =
+        match run_plugin_uninstall(host, &layout.plugin_root, options, setup_runner) {
+            Ok(()) => true,
+            Err(error) => {
+                errors.push(format!("failed to remove Relay host setup: {error}"));
+                false
+            }
+        };
     if let Err(error) = run_host_plugin_removal(host, options, runner) {
         errors.push(format!("failed to unregister the host plugin: {error}"));
     }
@@ -986,7 +991,7 @@ fn force_uninstall_host_locked(
     if let Err(error) = remove_path(&layout.marketplace_root, options) {
         errors.push(error);
     }
-    if let Err(error) = remove_path(&layout.state_path, options) {
+    if host_setup_removed && let Err(error) = remove_path(&layout.state_path, options) {
         errors.push(error);
     }
     if !options.dry_run {

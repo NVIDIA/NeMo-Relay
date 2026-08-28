@@ -4375,7 +4375,7 @@ fn uninstall_continues_when_relay_is_missing() {
 }
 
 #[test]
-fn force_uninstall_continues_after_setup_failure_and_removes_local_state() {
+fn force_uninstall_preserves_state_after_setup_failure_for_retry() {
     let dir = tempdir().unwrap();
     let runner = MockRunner::default().with_executable("codex", "/bin/codex");
     let setup_runner = MockSetupRunner {
@@ -4391,7 +4391,11 @@ fn force_uninstall_continues_after_setup_failure_and_removes_local_state() {
 
     assert!(error.contains("failed to remove Relay host setup"));
     assert!(!layout.marketplace_root.exists());
-    assert!(!layout.state_path.exists());
+    assert!(layout.state_path.exists());
+    assert_eq!(
+        crate::agents::installed_integrations(&[CodingAgent::Codex], Some(dir.path()), true),
+        vec![CodingAgent::Codex]
+    );
     assert!(runner
         .commands()
         .iter()
