@@ -2032,6 +2032,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
         crate::agents::installed_integrations(
             &CodingAgent::ALL,
             Some(&dir.path().join("install")),
+            false,
         )
         .is_empty()
     );
@@ -2068,6 +2069,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
             CodingAgent::Codex,
             crate::installation::UninstallRequest {
                 install_dir: Some(dir.path().join("dry-run-uninstall")),
+                force: false,
                 dry_run: true,
             },
         )
@@ -2091,6 +2093,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
         CodingAgent::Codex,
         crate::installation::UninstallRequest {
             install_dir: Some(dir.path().join("failed-uninstall")),
+            force: false,
             dry_run: false,
         },
     )
@@ -2108,8 +2111,25 @@ fn installed_selection_uses_persisted_integration_state() {
         r#"{"marketplaceRoot":"/tmp/m","pluginRoot":"/tmp/p"}"#,
     )
     .unwrap();
-    let selected = crate::agents::installed_integrations(&CodingAgent::ALL, Some(dir.path()));
+    let selected =
+        crate::agents::installed_integrations(&CodingAgent::ALL, Some(dir.path()), false);
     assert_eq!(selected, vec![CodingAgent::ClaudeCode]);
+}
+
+#[test]
+fn force_selection_includes_a_stale_local_install_without_state() {
+    let dir = tempdir().unwrap();
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    std::fs::create_dir_all(&layout.marketplace_root).unwrap();
+
+    assert!(
+        crate::agents::installed_integrations(&CodingAgent::ALL, Some(dir.path()), false)
+            .is_empty()
+    );
+    assert_eq!(
+        crate::agents::installed_integrations(&CodingAgent::ALL, Some(dir.path()), true),
+        vec![CodingAgent::Codex]
+    );
 }
 
 #[test]
@@ -4315,6 +4335,36 @@ fn uninstall_continues_when_relay_is_missing() {
             .calls()
             .iter()
             .any(|call| call == &format!("uninstall codex {DEFAULT_GATEWAY_URL}"))
+    );
+}
+
+#[test]
+fn force_uninstall_continues_after_setup_failure_and_removes_local_state() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default().with_executable("codex", "/bin/codex");
+    let setup_runner = MockSetupRunner {
+        failing_call: Some(format!("uninstall codex {DEFAULT_GATEWAY_URL}")),
+        ..MockSetupRunner::default()
+    };
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    write_installed_state(CodingAgent::Codex, dir.path());
+    let mut options = options(dir.path());
+    options.force = true;
+
+    let error = uninstall_host(CodingAgent::Codex, &options, &runner, &setup_runner).unwrap_err();
+
+    assert!(error.contains("failed to remove Relay host setup"));
+    assert!(!layout.marketplace_root.exists());
+    assert!(!layout.state_path.exists());
+    assert!(runner
+        .commands()
+        .iter()
+        .any(|command| command == "/bin/codex plugin remove nemo-relay-plugin@nemo-relay-local"));
+    assert!(
+        runner
+            .commands()
+            .iter()
+            .any(|command| command == "/bin/codex plugin marketplace remove nemo-relay-local")
     );
 }
 

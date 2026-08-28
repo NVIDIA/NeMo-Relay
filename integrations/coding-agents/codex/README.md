@@ -438,6 +438,11 @@ directory:
 nemo-relay uninstall codex
 ```
 
+If stale Relay state or MCP generation metadata prevents normal removal, use
+`nemo-relay uninstall codex --force`. It attempts the Codex configuration,
+registration, marketplace, and deterministic local Relay cleanup independently,
+then reports any steps that could not complete.
+
 Codex can request `/models` during provider discovery before it launches plugin
 MCP servers. A cold start can produce transient connection failures that
 Codex retries. Because the MCP server is required, Codex does not begin the

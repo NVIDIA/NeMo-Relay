@@ -73,13 +73,18 @@ fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
         });
     }
 
-    let explicit_config = match cli.command.as_ref() {
-        Some(Command::Mcp) => None,
-        Some(Command::Run(command)) => command.config.as_deref().or(cli.server.config.as_deref()),
-        _ => cli.server.config.as_deref(),
-    };
     let mut fallback_error = None;
-    let config = match cli.logging.resolve(explicit_config) {
+    let config = match cli.command.as_ref() {
+        // Uninstall uses persisted integration state, not Relay runtime configuration. Preserve
+        // direct logging settings while avoiding ambient config discovery that could block cleanup.
+        Some(Command::Uninstall(_)) => cli.logging.resolve_without_ambient_config(),
+        Some(Command::Mcp) => cli.logging.resolve(None),
+        Some(Command::Run(command)) => cli
+            .logging
+            .resolve(command.config.as_deref().or(cli.server.config.as_deref())),
+        _ => cli.logging.resolve(cli.server.config.as_deref()),
+    };
+    let config = match config {
         Ok(config) => config,
         Err(error) if matches!(cli.command.as_ref(), Some(Command::Doctor(_))) => {
             fallback_error = Some(error);

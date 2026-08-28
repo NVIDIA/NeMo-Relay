@@ -20,5 +20,6 @@ pub(crate) struct InstallRequest {
 #[derive(Debug, Clone)]
 pub(crate) struct UninstallRequest {
     pub(crate) install_dir: Option<PathBuf>,
+    pub(crate) force: bool,
     pub(crate) dry_run: bool,
 }

@@ -282,6 +282,62 @@ fn command_logging_policy_excludes_only_configuration_editors() {
 }
 
 #[test]
+fn uninstall_logging_ignores_malformed_ambient_relay_config() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let config_path = xdg.join("nemo-relay/config.toml");
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    std::fs::write(&config_path, "[logging\n").unwrap();
+    let _environment = crate::test_support::EnvScope::set(&[
+        ("NEMO_RELAY_LOG", None),
+        ("NEMO_RELAY_LOG_STDERR", None),
+        ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
+        ("NEMO_RELAY_LOG_CONFIG_PATH", None),
+        ("XDG_CONFIG_HOME", Some(xdg.as_os_str())),
+        ("HOME", Some(temp.path().as_os_str())),
+    ]);
+    let cli = Cli::try_parse_from(["nemo-relay", "uninstall", "all"]).unwrap();
+
+    let config = cli.logging.resolve_without_ambient_config().unwrap();
+
+    assert_eq!(config, nemo_relay::logging::LoggingConfig::default());
+}
+
+#[test]
+fn uninstall_logging_rejects_an_explicit_malformed_logging_config() {
+    let _environment = crate::test_support::EnvScope::set(&[
+        ("NEMO_RELAY_LOG", None),
+        ("NEMO_RELAY_LOG_STDERR", None),
+        ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
+        ("NEMO_RELAY_LOG_CONFIG_PATH", None),
+    ]);
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("logging.toml");
+    std::fs::write(&config_path, "[logging\n").unwrap();
+    let cli = Cli::try_parse_from(vec![
+        OsString::from("nemo-relay"),
+        OsString::from("--log-config-path"),
+        config_path.into_os_string(),
+        OsString::from("uninstall"),
+        OsString::from("all"),
+    ])
+    .unwrap();
+
+    cli.logging.resolve_without_ambient_config().unwrap_err();
+}
+
+#[test]
+fn cli_parses_force_uninstall() {
+    let cli = Cli::try_parse_from(["nemo-relay", "uninstall", "all", "--force"]).unwrap();
+
+    let Command::Uninstall(command) = cli.command.unwrap() else {
+        panic!("expected uninstall command");
+    };
+    assert!(command.force);
+}
+
+#[test]
 fn cli_parses_config_edit_scopes_and_rejects_conflicts() {
     let legacy = Cli::try_parse_from(["nemo-relay", "config", "codex"]).unwrap();
     let Command::Config(command) = legacy.command.unwrap() else {
