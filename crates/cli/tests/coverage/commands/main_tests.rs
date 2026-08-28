@@ -83,6 +83,8 @@ fn operational_command_names_cover_logging_exempt_commands() {
     for (args, expected) in [
         (vec!["nemo-relay", "codex"], "codex"),
         (vec!["nemo-relay", "config"], "config"),
+        (vec!["nemo-relay", "gateway", "start"], "gateway"),
+        (vec!["nemo-relay", "gateway", "stop"], "gateway"),
     ] {
         let cli = Cli::try_parse_from(args).unwrap();
         assert_eq!(cli.command.unwrap().log_name(), expected);
@@ -580,7 +582,7 @@ async fn run_command_dispatches_safe_plugin_and_install_paths() {
     ])
     .unwrap();
     assert_eq!(
-        run_command(cli.command.unwrap(), &cli.server, None)
+        run_command(cli.command.unwrap(), &cli.server, None, None)
             .await
             .unwrap(),
         ExitCode::SUCCESS
@@ -596,7 +598,7 @@ async fn run_command_dispatches_safe_plugin_and_install_paths() {
     ])
     .unwrap();
     assert_eq!(
-        run_command(cli.command.unwrap(), &cli.server, None)
+        run_command(cli.command.unwrap(), &cli.server, None, None)
             .await
             .unwrap(),
         ExitCode::SUCCESS
@@ -624,7 +626,7 @@ async fn run_command_install_requires_a_valid_bootstrap_key_except_dry_runs() {
         "--skip-doctor",
     ])
     .unwrap();
-    let error = run_command(cli.command.unwrap(), &cli.server, None)
+    let error = run_command(cli.command.unwrap(), &cli.server, None, None)
         .await
         .unwrap_err()
         .to_string();
@@ -643,7 +645,7 @@ async fn run_command_install_requires_a_valid_bootstrap_key_except_dry_runs() {
     ])
     .unwrap();
     assert_eq!(
-        run_command(cli.command.unwrap(), &cli.server, None)
+        run_command(cli.command.unwrap(), &cli.server, None, None)
             .await
             .unwrap(),
         ExitCode::SUCCESS

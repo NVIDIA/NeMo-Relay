@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use super::completions::CompletionsCommand;
 use super::configure::ConfigCommand;
 use super::diagnostics::{AgentsCommand, DoctorCommand};
+use super::gateway::GatewayCommand;
 use super::hook_forward::HookForwardCommand;
 use super::install::{InstallCommand, UninstallCommand};
 use super::logging::LoggingArgs;
@@ -88,6 +89,8 @@ pub(crate) enum Command {
                       nemo-relay --bind 127.0.0.1:4041 mcp  # explicit standalone/test bind"
     )]
     Mcp,
+    /// Manage the persistent shared Relay gateway.
+    Gateway(GatewayCommand),
     /// Run the interactive setup (writes the XDG user `config.toml`)
     Config(ConfigCommand),
     /// Create or edit plugin configuration (writes `plugins.toml`)
@@ -117,6 +120,7 @@ impl Command {
             Self::Claude(_) => "claude",
             Self::Codex(_) => "codex",
             Self::Mcp => "mcp",
+            Self::Gateway(_) => "gateway",
             Self::Config(_) => "config",
             Self::Plugins(_) => "plugins",
             Self::Install(_) => "install",
@@ -134,6 +138,7 @@ impl Command {
     /// invalid, so users can repair their configuration.
     pub(crate) fn skips_logging(&self) -> bool {
         matches!(self, Self::Config(_))
+            || matches!(self, Self::Gateway(command) if command.is_stop())
             || matches!(self, Self::Plugins(command) if command.is_edit())
             || matches!(self, Self::HookForward(command) if transparent_hook_is_inert(command))
     }

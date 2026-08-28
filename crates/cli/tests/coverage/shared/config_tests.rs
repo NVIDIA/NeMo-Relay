@@ -229,6 +229,7 @@ struct PluginConfigDiscoveryScope {
     previous_anthropic_auth_header: Option<OsString>,
     previous_bootstrap_fingerprint: Option<OsString>,
     previous_plugin_idle_timeout: Option<OsString>,
+    previous_plugin_heartbeat_interval: Option<OsString>,
     previous_test_skip_implicit_config: Option<OsString>,
 }
 
@@ -247,6 +248,7 @@ impl PluginConfigDiscoveryScope {
         let previous_anthropic_auth_header = std::env::var_os("NEMO_RELAY_ANTHROPIC_AUTH_HEADER");
         let previous_bootstrap_fingerprint = std::env::var_os(BOOTSTRAP_FINGERPRINT_ENV);
         let previous_plugin_idle_timeout = std::env::var_os(PLUGIN_IDLE_TIMEOUT_ENV);
+        let previous_plugin_heartbeat_interval = std::env::var_os(PLUGIN_HEARTBEAT_INTERVAL_ENV);
         let previous_test_skip_implicit_config =
             std::env::var_os("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG");
         unsafe {
@@ -258,6 +260,7 @@ impl PluginConfigDiscoveryScope {
             std::env::remove_var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER");
             std::env::remove_var(BOOTSTRAP_FINGERPRINT_ENV);
             std::env::remove_var(PLUGIN_IDLE_TIMEOUT_ENV);
+            std::env::remove_var(PLUGIN_HEARTBEAT_INTERVAL_ENV);
             std::env::remove_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG");
         }
         std::env::set_current_dir(cwd).unwrap();
@@ -273,6 +276,7 @@ impl PluginConfigDiscoveryScope {
             previous_anthropic_auth_header,
             previous_bootstrap_fingerprint,
             previous_plugin_idle_timeout,
+            previous_plugin_heartbeat_interval,
             previous_test_skip_implicit_config,
         }
     }
@@ -344,6 +348,10 @@ impl Drop for PluginConfigDiscoveryScope {
             match self.previous_plugin_idle_timeout.take() {
                 Some(value) => std::env::set_var(PLUGIN_IDLE_TIMEOUT_ENV, value),
                 None => std::env::remove_var(PLUGIN_IDLE_TIMEOUT_ENV),
+            }
+            match self.previous_plugin_heartbeat_interval.take() {
+                Some(value) => std::env::set_var(PLUGIN_HEARTBEAT_INTERVAL_ENV, value),
+                None => std::env::remove_var(PLUGIN_HEARTBEAT_INTERVAL_ENV),
             }
             match self.previous_test_skip_implicit_config.take() {
                 Some(value) => std::env::set_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", value),

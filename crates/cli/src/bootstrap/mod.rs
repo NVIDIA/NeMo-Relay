@@ -572,7 +572,21 @@ pub(crate) fn plugin_idle_timeout() -> Result<Duration, String> {
 }
 
 pub(crate) fn plugin_heartbeat_interval() -> Result<Duration, String> {
-    Ok((plugin_idle_timeout()? / 3).clamp(Duration::from_millis(100), Duration::from_secs(30)))
+    let raw = env::var(crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV)
+        .unwrap_or_else(|_| "3".into());
+    let seconds = raw.parse::<u64>().map_err(|error| {
+        format!(
+            "{} must be a positive integer: {error}",
+            crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV
+        )
+    })?;
+    if seconds == 0 {
+        return Err(format!(
+            "{} must be greater than 0",
+            crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV
+        ));
+    }
+    Ok(Duration::from_secs(seconds))
 }
 
 #[cfg(test)]

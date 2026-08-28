@@ -6,6 +6,7 @@
 mod completions;
 mod configure;
 mod diagnostics;
+mod gateway;
 mod hook_forward;
 mod install;
 mod logging;
@@ -60,6 +61,10 @@ struct LoggingSetup {
 
 fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
     let initialize = match cli.command.as_ref() {
+        Some(Command::Gateway(command)) if !command.is_stop() => {
+            cli.server.to_runtime().requested_daemon_mode()
+                || runtime_configuration::any_config_file_exists()
+        }
         Some(command) => !command.skips_logging(),
         None => {
             cli.server.to_runtime().requested_daemon_mode()
@@ -78,6 +83,9 @@ fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
         // Uninstall uses persisted integration state, not Relay runtime configuration. Preserve
         // direct logging settings while avoiding ambient config discovery that could block cleanup.
         Some(Command::Uninstall(_)) => cli.logging.resolve_without_ambient_config(),
+        Some(Command::Gateway(command)) if command.is_stop() => {
+            cli.logging.resolve_without_ambient_config()
+        }
         Some(Command::Mcp) => cli.logging.resolve(None),
         Some(Command::Run(command)) => cli
             .logging
@@ -125,7 +133,15 @@ async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, 
     );
 
     let result = match cli.command {
-        Some(command) => run_command(command, &cli.server, logging.fallback_error.as_ref()).await,
+        Some(command) => {
+            run_command(
+                command,
+                &cli.server,
+                logging.fallback_error.as_ref(),
+                bootstrap_shutdown_token,
+            )
+            .await
+        }
         None => run_default(&cli.server, bootstrap_shutdown_token).await,
     };
     match &result {
@@ -165,6 +181,7 @@ async fn run_command(
     command: Command,
     server: &ServerArgs,
     logging_fallback_error: Option<&error::CliError>,
+    bootstrap_shutdown_token: Option<String>,
 ) -> Result<ExitCode, error::CliError> {
     match command {
         Command::HookForward(command) => {
@@ -177,6 +194,9 @@ async fn run_command(
         Command::Claude(command) => run::easy_path(CodingAgent::ClaudeCode, command, server).await,
         Command::Codex(command) => run::easy_path(CodingAgent::Codex, command, server).await,
         Command::Mcp => mcp::execute(server).await,
+        Command::Gateway(command) => {
+            gateway::execute(command, server, bootstrap_shutdown_token).await
+        }
         Command::Config(command) => configure::execute(command, server).await,
         Command::Plugins(command) => plugins::execute(command, server),
         Command::ModelPricing(command) => model_pricing::execute(command),
