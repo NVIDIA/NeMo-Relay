@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use base64::Engine;
 use std::path::Path;
 use std::time::Duration;
 
@@ -306,27 +305,6 @@ fn hook_response_statuses_preserve_guardrail_rejections_and_fail_closed_errors()
     .unwrap_err()
     .to_string();
     assert!(error.contains("HTTP 502"), "{error}");
-}
-
-#[test]
-fn windows_hook_decoder_rejects_unsafe_odd_and_trailing_argument_envelopes() {
-    const SEPARATOR: &str = " -NoLogo -NoProfile -NonInteractive -EncodedCommand ";
-    #[cfg(windows)]
-    let launcher = windows_powershell_path().unwrap();
-    #[cfg(not(windows))]
-    let launcher = "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe".to_string();
-
-    assert!(decode_windows_hook_command(&format!("powershell.exe{SEPARATOR}QQ==")).is_none());
-    assert!(decode_windows_hook_command(&format!("{launcher}{SEPARATOR}QQ==")).is_none());
-
-    let script = "$ErrorActionPreference='Stop'; & 'relay' ; if ($null -eq $LASTEXITCODE) { exit 1 }; exit $LASTEXITCODE";
-    let encoded = base64::engine::general_purpose::STANDARD.encode(
-        script
-            .encode_utf16()
-            .flat_map(u16::to_le_bytes)
-            .collect::<Vec<_>>(),
-    );
-    assert!(decode_windows_hook_command(&format!("{launcher}{SEPARATOR}{encoded}")).is_none());
 }
 
 #[test]

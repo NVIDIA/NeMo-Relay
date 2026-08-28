@@ -3097,7 +3097,7 @@ fn windows_shell_argument_quoting_and_hook_encoding_preserve_paths() {
         r#""C:\Program Files\NeMo 100%%cd:~,%\bin\nemo-relay.exe""#
     );
     assert_eq!(
-        crate::hooks::decode_windows_hook_command(
+        crate::hook_assertions::decode_windows_hook_command(
             codex_plugin_hook_command_for_platform(&relay, &generation, "test-generation", true,)
                 .for_event("PreToolUse")
         )
@@ -3106,12 +3106,11 @@ fn windows_shell_argument_quoting_and_hook_encoding_preserve_paths() {
             relay.display().to_string(),
             "hook-forward".into(),
             "codex".into(),
-            "--gateway-url".into(),
-            DEFAULT_URL.into(),
-            "--generation-file".into(),
-            generation.display().to_string(),
-            "--generation-token".into(),
-            "test-generation".into(),
+            "--hook-config".into(),
+            generation
+                .with_file_name(".nemo-relay-hook-config.json")
+                .display()
+                .to_string(),
             "--fail-closed".into(),
         ]
     );
@@ -3145,7 +3144,10 @@ fn generated_windows_hook_command_executes_exact_arguments() {
         .stderr(std::process::Stdio::piped())
         .env("NEMO_RELAY_HOOK_MARKER", &marker)
         .env("NEMO_RELAY_HOOK_INPUT_MARKER", &input_marker)
-        .env("NEMO_RELAY_HOOK_GENERATION", &generation)
+        .env(
+            "NEMO_RELAY_HOOK_CONFIG",
+            generation.with_file_name(".nemo-relay-hook-config.json"),
+        )
         .env("NEMO_RELAY_HOOK_EMIT_OUTPUT", "1")
         .spawn()
         .unwrap();
@@ -3181,7 +3183,10 @@ fn generated_windows_hook_command_propagates_the_relay_exit_code() {
     let status = std::process::Command::new("cmd.exe")
         .arg("/C")
         .arg(&command)
-        .env("NEMO_RELAY_HOOK_GENERATION", &generation)
+        .env(
+            "NEMO_RELAY_HOOK_CONFIG",
+            generation.with_file_name(".nemo-relay-hook-config.json"),
+        )
         .env("NEMO_RELAY_HOOK_EXIT_CODE", "23")
         .status()
         .unwrap();
@@ -3218,7 +3223,7 @@ fn posix_shell_argument_quoting_and_hook_encoding_preserve_paths() {
     assert_eq!(
         codex_plugin_hook_command_for_platform(&relay, &generation, "test-generation", false)
             .for_event("SessionStart"),
-        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward codex --gateway-url http://127.0.0.1:47632 --generation-file '/tmp/NeMo $Relay`test'\\''/plugin/.nemo-relay-generation' --generation-token test-generation --fail-open"
+        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward codex --hook-config '/tmp/NeMo $Relay`test'\\''/plugin/.nemo-relay-hook-config.json' --fail-open"
     );
     assert_eq!(shell_quote_arg_for_platform("", false), "''");
     assert_eq!(

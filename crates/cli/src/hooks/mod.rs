@@ -30,7 +30,7 @@ pub(crate) use encoding::{
 };
 #[cfg(test)]
 pub(crate) use encoding::{
-    decode_windows_hook_command, event_matches_tools, event_requires_fail_closed, generated_hooks,
+    event_matches_tools, event_requires_fail_closed, generated_hooks,
     persistent_hook_forward_commands_for_platform, transparent_hook_forward_commands_for_platform,
 };
 #[cfg(test)]

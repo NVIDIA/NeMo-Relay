@@ -112,11 +112,6 @@ fn config_path(generation_file: &Path) -> std::path::PathBuf {
     generation_file.with_file_name(".nemo-relay-hook-config.json")
 }
 
-#[cfg(test)]
-pub(crate) fn decode_windows_hook_command(_command: &str) -> Option<Vec<String>> {
-    None
-}
-
 pub(super) fn hook_config_arguments(agent: CodingAgent, hook_config: &Path) -> Vec<String> {
     vec![
         "hook-forward".into(),
