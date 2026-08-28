@@ -24,12 +24,12 @@ use windows_sys::Win32::Security::{
     SetKernelObjectSecurity,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, CreateFileW, DELETE, FILE_APPEND_DATA, FILE_ATTRIBUTE_DIRECTORY,
-    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
-    FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo,
-    FileRenameInfo, GetFileInformationByHandle, OPEN_EXISTING, SYNCHRONIZE,
-    SetFileInformationByHandle, WRITE_DAC,
+    BY_HANDLE_FILE_INFORMATION, CreateFileW, DELETE, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY,
+    FILE_APPEND_DATA, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo, FileRenameInfo,
+    GetFileInformationByHandle, OPEN_EXISTING, SYNCHRONIZE, SetFileInformationByHandle, WRITE_DAC,
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
@@ -45,7 +45,7 @@ impl ConfinedDir {
         let handle = unsafe {
             CreateFileW(
                 path.as_ptr(),
-                FILE_GENERIC_READ,
+                FILE_GENERIC_READ | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY,
                 SHARE_ALL,
                 std::ptr::null(),
                 OPEN_EXISTING,
@@ -66,7 +66,7 @@ impl ConfinedDir {
         let file = open_relative(
             &self.0,
             name,
-            FILE_GENERIC_READ,
+            FILE_GENERIC_READ | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY,
             FILE_OPEN_IF,
             FILE_DIRECTORY_FILE,
             FILE_ATTRIBUTE_DIRECTORY,
