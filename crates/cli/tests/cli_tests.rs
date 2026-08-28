@@ -1892,6 +1892,11 @@ fn cli_doctor_accepts_discovered_stderr_logging_opt_out() {
         "stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert!(
+        output.stderr.is_empty(),
+        "doctor emitted unexpected stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["configuration"]["resolution"]["status"], "pass");
 }
