@@ -3140,7 +3140,7 @@ fn generated_windows_hook_command_executes_exact_arguments() {
         .to_owned();
     let mut child = std::process::Command::new("cmd.exe")
         .arg("/C")
-        .raw_arg(&command)
+        .raw_arg(format!(" {command}"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -3186,7 +3186,7 @@ fn generated_windows_hook_command_propagates_the_relay_exit_code() {
 
     let status = std::process::Command::new("cmd.exe")
         .arg("/C")
-        .raw_arg(&command)
+        .raw_arg(format!(" {command}"))
         .env(
             "NEMO_RELAY_HOOK_CONFIG",
             generation.with_file_name(".nemo-relay-hook-config.json"),
