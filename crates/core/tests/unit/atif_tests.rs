@@ -1989,6 +1989,93 @@ fn test_exporter_preserves_extras_for_interleaved_llm_ends() {
     }
 }
 
+fn atof_fixture_events(contents: &str) -> Vec<Event> {
+    contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("fixture line should be a valid ATOF event"))
+        .collect()
+}
+
+fn agent_step_by_response_id<'a>(
+    trajectory: &'a AtifTrajectory,
+    response_id: &str,
+) -> Option<&'a AtifStep> {
+    trajectory
+        .steps
+        .iter()
+        .find(|step| {
+            step.extra
+                .as_ref()
+                .and_then(|extra| extra.get("llm_response"))
+                .and_then(|response| response.get("id"))
+                .and_then(Json::as_str)
+                == Some(response_id)
+        })
+        .or_else(|| {
+            trajectory
+                .subagent_trajectories
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .find_map(|child| agent_step_by_response_id(child, response_id))
+        })
+}
+
+#[test]
+fn test_filtered_flat_interleaving_fixture_preserves_final_answer_extra() {
+    let events = atof_fixture_events(include_str!(
+        "../fixtures/atif/filtered_flat_interleaved_llm_ends.atof.jsonl"
+    ));
+    let trajectory = events_to_trajectory(
+        "00000000-0000-7000-8000-000000000001",
+        make_agent_info(),
+        &events.iter().collect::<Vec<_>>(),
+    );
+
+    assert!(trajectory.subagent_trajectories.is_none());
+    let step = agent_step_by_response_id(&trajectory, "resp_child")
+        .expect("filtered final answer should retain its response metadata");
+    assert_eq!(step.message, json!("Child task complete."));
+    let extra: AtifStepExtra = serde_json::from_value(step.extra.clone().unwrap()).unwrap();
+    assert_eq!(
+        extra.ancestry.parent_id.as_deref(),
+        Some("00000000-0000-7000-8000-000000000210")
+    );
+    let response = extra.llm_response.unwrap();
+    assert_eq!(response["output"][0]["id"], json!("msg_child"));
+    assert_eq!(response["output"][0]["phase"], json!("final_answer"));
+    assert_eq!(
+        extra.invocation.unwrap().invocation_id.as_deref(),
+        Some("00000000-0000-7000-8000-000000000211")
+    );
+}
+
+#[test]
+fn test_synthetic_agent_scoped_fixture_isolates_interleaved_responses() {
+    let events = atof_fixture_events(include_str!(
+        "../fixtures/atif/synthetic_agent_scoped_interleaving.atof.jsonl"
+    ));
+    let trajectory = events_to_trajectory(
+        "00000000-0000-7000-8000-000000000010",
+        make_agent_info(),
+        &events.iter().collect::<Vec<_>>(),
+    );
+
+    let children = trajectory.subagent_trajectories.as_ref().unwrap();
+    assert_eq!(children.len(), 2);
+    let child_step = agent_step_by_response_id(&trajectory, "resp_child").unwrap();
+    let parent_step = agent_step_by_response_id(&trajectory, "resp_parent").unwrap();
+    assert_eq!(
+        child_step.extra.as_ref().unwrap()["ancestry"]["parent_id"],
+        json!("00000000-0000-7000-8000-000000000210")
+    );
+    assert_eq!(
+        parent_step.extra.as_ref().unwrap()["ancestry"]["parent_id"],
+        json!("00000000-0000-7000-8000-000000000110")
+    );
+}
+
 #[test]
 fn test_exporter_anthropic_messages_lifecycle_promotes_tool_use_blocks() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
