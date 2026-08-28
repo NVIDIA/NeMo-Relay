@@ -509,11 +509,11 @@ agent skills under `skills/` and keep examples aligned with the public docs.
 
 Choose the smallest validation set that covers the touched surface:
 
-- Rust core or adaptive changes: `cargo test --workspace` or focused crate tests.
-- Python binding changes: `just build-test-plugin-fixtures && uv run pytest`.
-- Node.js binding changes: `npm test --workspace=nemo-relay-node`.
-- Go binding changes: build the release FFI library first, then run Go tests under `go/nemo_relay`.
-- Documentation changes: run `./scripts/build-docs.sh html`.
+- Rust core or adaptive changes: `just test-rust`.
+- Python binding changes: `just test-python`.
+- Node.js binding changes: `just test-node`.
+- Go binding changes: `just test-go`.
+- Documentation changes: `just docs`; also run `just docs-linkcheck` when links change.
 
 Refer to [Testing and Documentation](/contribute/testing-and-docs) for the
 current contribution workflow.

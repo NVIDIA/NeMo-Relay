@@ -29,6 +29,7 @@ Install these tools before you start:
 - `just`
 - Go 1.21 or newer
 - Node.js LTS
+- `cargo-nextest` 0.9.133
 - `cargo-deny`
 - `cargo-about` 0.9.1
 
@@ -41,6 +42,7 @@ Clone the repository and build the workspace:
 git clone <repo-url> && cd NeMo-Relay
 uv sync
 cargo install just --locked
+cargo install cargo-nextest --version 0.9.133 --locked
 cargo install cargo-about --version 0.9.1 --locked --features cli
 uv run pre-commit install
 just build-rust

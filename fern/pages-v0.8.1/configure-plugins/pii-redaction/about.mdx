@@ -90,7 +90,7 @@ The current built-in backend supports five actions:
 The current backend boundary is intentional:
 
 - Managed tool surfaces are sanitized as JSON payloads with exact JSON-pointer
-  targeting.
+  targeting or restricted single-segment glob selectors.
 - Managed LLM requests use the active resolved codec for each call, including
   built-in, runtime, and opaque codecs. Normalized response projection requires
   a recognized built-in codec because response codec capabilities are
@@ -133,8 +133,9 @@ In particular:
 - `local_model` is an extension point, not a complete backend implementation
   today.
 - The plugin does not mutate the real callback arguments or return values.
-- The plugin does not add a subtree or prefix selector language beyond exact
-  JSON-pointer matching.
+- The plugin supports exact JSON Pointer targeting plus a restricted,
+  single-segment JSON Pointer glob selector. It does not support recursive
+  selectors, predicates, or arbitrary JSONPath expressions.
 
 ## Pages
 

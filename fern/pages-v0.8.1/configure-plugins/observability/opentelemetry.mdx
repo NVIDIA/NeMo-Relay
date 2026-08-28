@@ -92,6 +92,7 @@ endpoint = "http://localhost:4318/v1/traces"
 transport = "http_binary"
 service_name = "agent-service"
 promote_metadata_prefixes = ["app."]
+promote_resource_metadata_prefixes = ["deployment."]
 max_queue_size = 4096
 max_export_batch_size = 512
 scheduled_delay_millis = 1000
@@ -149,6 +150,7 @@ not stop application work or delivery to the other exporters.
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
 | `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
+| `promote_resource_metadata_prefixes` | `[]` | Literal prefixes that select root Scope-start metadata to copy to OTLP resource attributes. Each unique effective resource retains an exporter pipeline for the subscriber lifetime. |
 
 ## Event Metadata Promotion
 
@@ -188,7 +190,7 @@ key. The diagnostic code is
 `otel.metadata_promotion_value_unsupported.<metadata-key>`, its message contains
 the key and rejection reason, and its count is the number of occurrences for
 that key. Relay does not record the rejected value or stop trace export. Match
-the `otel.metadata_promotion_value_unsupported.` prefix to monitor all rejected
+the `otel.metadata_promotion_value_unsupported.` prefix to monitor rejected span
 metadata keys.
 
 Projection-owned attributes take precedence over promoted metadata with the
@@ -200,8 +202,38 @@ keys in namespaces owned by Relay or supported semantic projections:
 `user.`. Relay omits the bare `metadata` key as well. Rejected keys produce a
 rate-limited operational diagnostic without dropping the Event or span.
 
-Promotion does not modify the Event or ATOF payload. Use `resource_attributes`
-instead for static values that must be attached to every span from an endpoint.
+Promotion does not modify the Event or ATOF payload. In OTLP trace output only,
+Relay removes successfully promoted keys from serialized Relay metadata
+attributes. This applies to every Scope-start, Scope-end, and Mark event, and
+also to OpenInference's `metadata` JSON attribute. Resource-promotion prefixes
+participate in that filtering for every event even though only a trace root's
+Scope-start metadata can create resource attributes. Keys that cannot be
+promoted, including values overridden by configured resource attributes, remain
+in serialized metadata. Use `resource_attributes` instead for static values
+that must be attached to every span from an endpoint.
+
+## Root Resource Metadata Promotion
+
+Set `promote_resource_metadata_prefixes` to derive resource attributes from the
+sanitized metadata on a trace root's Scope-start Event. Every span and scoped
+mark in that trace uses the same resource; child metadata and later root
+metadata changes do not modify it. The prefixes and supported value types match
+`promote_metadata_prefixes`.
+
+Configured `service_name`, `service_namespace`, `service_version`, and explicit
+`resource_attributes` take precedence over promoted metadata with the same key.
+Each distinct effective resource creates a retained OTLP trace pipeline, so use
+only controlled, low-cardinality values such as deployment, region, or cluster
+identity. Do not promote request, tenant, or user identifiers.
+
+Relay records two bounded runtime diagnostics for this setting. A rejected value
+produces `otel.resource_metadata_promotion_value_unsupported.<metadata-key>`.
+A failed resource-pipeline construction produces
+`otel.resource_metadata_pipeline_build_failed`; Relay then exports the trace
+through the endpoint's configured resource instead. Match both the
+`otel.metadata_promotion_value_unsupported.` and
+`otel.resource_metadata_promotion_value_unsupported.` prefixes to monitor all
+rejected metadata keys.
 
 ## Log and Metric Endpoint Resolution
 
