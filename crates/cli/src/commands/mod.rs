@@ -230,29 +230,7 @@ async fn run_default(
     //   exists. Once configured, bare `nemo-relay` becomes a quick health check; explicit
     //   `nemo-relay config` remains the reconfiguration path.
     if runtime_args.requested_daemon_mode() {
-        let resolved = runtime_configuration::resolve_server_config(&runtime_args)?;
-        let explicit_plugin_config = crate::configuration::explicit_plugin_config_path(
-            runtime_args.config.as_ref(),
-            runtime_args.plugin_config_path.as_ref(),
-        );
-        let dynamic_plugins = crate::plugins::lifecycle::active_dynamic_plugin_components(
-            explicit_plugin_config.as_ref(),
-            &resolved,
-        )?;
-        let managed_bootstrap = runtime_configuration::managed_bootstrap_identity(
-            &runtime_args,
-            &resolved,
-            &dynamic_plugins,
-        )?;
-        server::serve_with_dynamic(
-            resolved.gateway,
-            dynamic_plugins,
-            managed_bootstrap,
-            runtime_args.ready_file.as_deref(),
-            bootstrap_shutdown_token,
-        )
-        .await?;
-        Ok(ExitCode::SUCCESS)
+        serve_gateway(server_args, bootstrap_shutdown_token).await
     } else if runtime_configuration::any_config_file_exists() {
         runtime_diagnostics::run_doctor(
             None,
@@ -266,6 +244,37 @@ async fn run_default(
         configure::run(None, None).await?;
         Ok(ExitCode::SUCCESS)
     }
+}
+
+/// Resolves and serves the configured gateway until it shuts down.
+async fn serve_gateway(
+    server_args: &ServerArgs,
+    bootstrap_shutdown_token: Option<String>,
+) -> Result<ExitCode, error::CliError> {
+    let runtime_args = server_args.to_runtime();
+    let resolved = runtime_configuration::resolve_server_config(&runtime_args)?;
+    let explicit_plugin_config = crate::configuration::explicit_plugin_config_path(
+        runtime_args.config.as_ref(),
+        runtime_args.plugin_config_path.as_ref(),
+    );
+    let dynamic_plugins = crate::plugins::lifecycle::active_dynamic_plugin_components(
+        explicit_plugin_config.as_ref(),
+        &resolved,
+    )?;
+    let managed_bootstrap = runtime_configuration::managed_bootstrap_identity(
+        &runtime_args,
+        &resolved,
+        &dynamic_plugins,
+    )?;
+    server::serve_with_dynamic(
+        resolved.gateway,
+        dynamic_plugins,
+        managed_bootstrap,
+        runtime_args.ready_file.as_deref(),
+        bootstrap_shutdown_token,
+    )
+    .await?;
+    Ok(ExitCode::SUCCESS)
 }
 
 #[cfg(test)]

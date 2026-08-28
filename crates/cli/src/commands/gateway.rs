@@ -17,25 +17,27 @@ pub(crate) struct GatewayCommand {
 
 #[derive(Debug, Clone, Subcommand)]
 enum GatewaySubcommand {
-    /// Run the same gateway startup behavior as a bare `nemo-relay` invocation.
+    /// Start the gateway with the same server configuration as a bare daemon invocation.
     Start,
     /// Stop the managed shared gateway at the configured loopback endpoint.
     Stop,
 }
 
 impl GatewayCommand {
+    /// Returns whether this command only stops an existing managed gateway.
     pub(crate) fn is_stop(&self) -> bool {
         matches!(self.command, GatewaySubcommand::Stop)
     }
 }
 
+/// Executes a gateway lifecycle command.
 pub(crate) async fn execute(
     command: GatewayCommand,
     server: &ServerArgs,
     bootstrap_shutdown_token: Option<String>,
 ) -> Result<ExitCode, CliError> {
     match command.command {
-        GatewaySubcommand::Start => super::run_default(server, bootstrap_shutdown_token).await,
+        GatewaySubcommand::Start => super::serve_gateway(server, bootstrap_shutdown_token).await,
         GatewaySubcommand::Stop => crate::mcp::stop(&server.to_runtime()),
     }
 }

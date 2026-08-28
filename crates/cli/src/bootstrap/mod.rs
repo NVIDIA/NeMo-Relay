@@ -571,6 +571,7 @@ pub(crate) fn plugin_idle_timeout() -> Result<Duration, String> {
     Ok(Duration::from_secs(seconds))
 }
 
+/// Returns the persistent MCP gateway heartbeat interval.
 pub(crate) fn plugin_heartbeat_interval() -> Result<Duration, String> {
     let raw = env::var(crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV)
         .unwrap_or_else(|_| "3".into());
