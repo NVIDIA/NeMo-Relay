@@ -1890,6 +1890,106 @@ fn test_exporter_openai_responses_lifecycle_extracts_messages() {
 }
 
 #[test]
+fn test_exporter_preserves_extras_for_interleaved_llm_ends() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let first_llm_uuid = Uuid::now_v7();
+    let second_llm_uuid = Uuid::now_v7();
+    let first_agent_uuid = Uuid::now_v7();
+    let second_agent_uuid = Uuid::now_v7();
+    let base = base_timestamp();
+
+    let mut first_start = event_builder(first_llm_uuid, EventType::Start)
+        .name("openai.responses")
+        .parent_uuid(first_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .input(json!({"input": "first request"}))
+        .build();
+    let mut second_start = event_builder(second_llm_uuid, EventType::Start)
+        .name("openai.responses")
+        .parent_uuid(second_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .input(json!({"input": "second request"}))
+        .build();
+    let mut first_end = event_builder(first_llm_uuid, EventType::End)
+        .name("openai.responses")
+        .parent_uuid(first_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "id": "resp_first",
+            "output": [{
+                "type": "message",
+                "id": "msg_first",
+                "phase": "final_answer",
+                "content": [{"type": "output_text", "text": "first response"}]
+            }]
+        }))
+        .build();
+    let mut first_agent_end = event_builder(first_agent_uuid, EventType::End)
+        .name("first-agent")
+        .scope_type(ScopeType::Agent)
+        .build();
+    let mut second_end = event_builder(second_llm_uuid, EventType::End)
+        .name("openai.responses")
+        .parent_uuid(second_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "id": "resp_second",
+            "output": [{
+                "type": "function_call",
+                "call_id": "call_second",
+                "name": "wait_agent",
+                "arguments": "{}"
+            }]
+        }))
+        .build();
+    set_sequential_event_timestamps(
+        &mut [
+            &mut first_start,
+            &mut second_start,
+            &mut first_end,
+            &mut first_agent_end,
+            &mut second_end,
+        ],
+        base,
+        chrono::Duration::milliseconds(1),
+    );
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.extend([
+            first_start,
+            second_start,
+            first_end,
+            first_agent_end,
+            second_end,
+        ]);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let agent_steps = trajectory
+        .steps
+        .iter()
+        .filter(|step| step.source == "agent")
+        .collect::<Vec<_>>();
+    assert_eq!(agent_steps.len(), 2);
+
+    for (step, response_id, invocation_id) in [
+        (agent_steps[0], "resp_first", first_llm_uuid),
+        (agent_steps[1], "resp_second", second_llm_uuid),
+    ] {
+        let invocation_id = invocation_id.to_string();
+        let extra: AtifStepExtra =
+            serde_json::from_value(step.extra.clone().expect("agent step should retain extra"))
+                .unwrap();
+        assert_eq!(extra.llm_response.unwrap()["id"], json!(response_id));
+        assert_eq!(
+            extra.invocation.unwrap().invocation_id.as_deref(),
+            Some(invocation_id.as_str())
+        );
+    }
+}
+
+#[test]
 fn test_exporter_anthropic_messages_lifecycle_promotes_tool_use_blocks() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let llm_uuid = Uuid::now_v7();

@@ -2587,6 +2587,7 @@ impl StepConversionState {
 
     fn handle_llm_end(&mut self, event: &Event, lookups: &EventLookupMaps) {
         self.flush_observations();
+        self.finalize_agent_extra();
 
         let Some(output) = event.data() else {
             return;
