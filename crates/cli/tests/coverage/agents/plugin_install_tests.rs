@@ -2133,6 +2133,22 @@ fn force_selection_includes_a_stale_local_install_without_state() {
 }
 
 #[test]
+fn force_selection_includes_a_generation_lock_without_other_install_artifacts() {
+    let dir = tempdir().unwrap();
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    std::fs::write(&layout.generation_lock, "lock").unwrap();
+
+    assert!(
+        crate::agents::installed_integrations(&CodingAgent::ALL, Some(dir.path()), false)
+            .is_empty()
+    );
+    assert_eq!(
+        crate::agents::installed_integrations(&CodingAgent::ALL, Some(dir.path()), true),
+        vec![CodingAgent::Codex]
+    );
+}
+
+#[test]
 fn install_codex_generates_marketplace_and_runs_setup() {
     let dir = tempdir().unwrap();
     let runner = MockRunner::default()

@@ -282,11 +282,10 @@ pub(crate) fn default_marketplace_install_dir() -> PathBuf {
     default_install_dir().canonicalize_or_self()
 }
 
-/// Returns whether the host's deterministic Relay marketplace tree still exists.
+/// Returns whether deterministic Relay artifacts for the host still exist locally.
 pub(crate) fn local_install_exists(host: impl MarketplaceHost, install_dir: &Path) -> bool {
-    PluginLayout::new(host, install_dir)
-        .marketplace_root
-        .exists()
+    let layout = PluginLayout::new(host, install_dir);
+    layout.marketplace_root.exists() || layout.generation_lock.exists()
 }
 
 pub(crate) fn persisted_state_exists(host: impl MarketplaceHost, install_dir: &Path) -> bool {
