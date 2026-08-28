@@ -72,6 +72,41 @@ pub(crate) fn portable_executable_path(path: PathBuf) -> PathBuf {
         .unwrap_or(path)
 }
 
+#[cfg(windows)]
+pub(crate) fn short_windows_path(path: &Path) -> Option<PathBuf> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    let source = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: `source` is NUL-terminated and the null output buffer is explicitly supported
+    // for querying the required output length.
+    let required = unsafe {
+        windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(
+            source.as_ptr(),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if required == 0 {
+        return None;
+    }
+    let mut destination = vec![0_u16; required as usize + 1];
+    // SAFETY: both buffers are valid for the supplied lengths and `destination` has room for
+    // the documented terminating NUL.
+    let written = unsafe {
+        windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(
+            source.as_ptr(),
+            destination.as_mut_ptr(),
+            destination.len() as u32,
+        )
+    };
+    (written > 0 && written <= required)
+        .then(|| PathBuf::from(OsString::from_wide(&destination[..written as usize])))
+}
+
 #[cfg(not(windows))]
 pub(crate) fn portable_executable_path(path: PathBuf) -> PathBuf {
     path

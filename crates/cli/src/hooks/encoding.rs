@@ -182,6 +182,7 @@ pub(super) fn hook_command_for_platform(
 }
 
 fn render_hook_command(relay: &Path, arguments: &[String], windows: bool) -> String {
+    let relay = relay_for_command(relay, windows);
     let command = std::iter::once(relay.display().to_string())
         .chain(arguments.iter().cloned())
         .map(|argument| crate::process::shell_quote_arg_for_platform(&argument, windows))
@@ -192,6 +193,20 @@ fn render_hook_command(relay: &Path, arguments: &[String], windows: bool) -> Str
     } else {
         command
     }
+}
+
+#[cfg(windows)]
+fn relay_for_command(relay: &Path, windows: bool) -> std::path::PathBuf {
+    if windows {
+        crate::process::short_windows_path(relay).unwrap_or_else(|| relay.to_path_buf())
+    } else {
+        relay.to_path_buf()
+    }
+}
+
+#[cfg(not(windows))]
+fn relay_for_command(relay: &Path, _windows: bool) -> std::path::PathBuf {
+    relay.to_path_buf()
 }
 
 // `cmd.exe` accepts at most 8,191 characters. Leave room for `/C` and host-added text.
