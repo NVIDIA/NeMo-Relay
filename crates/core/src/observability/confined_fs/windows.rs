@@ -142,8 +142,11 @@ impl ConfinedDir {
         target: &OsStr,
     ) -> io::Result<()> {
         let target = wide(target);
-        let header_size = std::mem::size_of::<FILE_RENAME_INFO>() - std::mem::size_of::<u16>();
-        let byte_len = header_size + target.len() * std::mem::size_of::<u16>();
+        // `SetFileInformationByHandle` expects the complete fixed-size record plus the
+        // UTF-16 target name. The one-element `FileName` array remains part of the
+        // fixed-size Rust representation.
+        let byte_len =
+            std::mem::size_of::<FILE_RENAME_INFO>() + target.len() * std::mem::size_of::<u16>();
         let mut storage = vec![0usize; byte_len.div_ceil(std::mem::size_of::<usize>())];
         let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
         // SAFETY: `storage` is aligned and sized for the header plus the complete UTF-16 name.
