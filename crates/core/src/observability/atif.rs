@@ -2589,13 +2589,13 @@ impl StepConversionState {
 
     fn handle_llm_end(&mut self, event: &Event, lookups: &EventLookupMaps) {
         self.flush_observations();
-        self.finalize_agent_extra();
-        let llm_request = self.pending_llm_requests.remove(&event.uuid());
-        let reasoning_effort = self.pending_reasoning_efforts.remove(&event.uuid());
-
         let Some(output) = event.data() else {
             return;
         };
+
+        self.finalize_agent_extra();
+        let llm_request = self.pending_llm_requests.remove(&event.uuid());
+        let reasoning_effort = self.pending_reasoning_efforts.remove(&event.uuid());
         let tool_calls = extract_tool_calls(output);
         let tool_call_order = refresh_tool_call_lookup(&mut self.last_tool_call_map, &tool_calls);
         let reasoning_content = extract_reasoning_content(output);
