@@ -216,6 +216,7 @@ impl ProviderRequestExtractor for AnthropicCountTokensRequestExtractor {
 pub(crate) struct SessionAlias {
     pub(crate) parent_session_id: String,
     pub(crate) subagent_id: String,
+    authenticated_owner: Option<String>,
     // Metadata explains why this alias exists and is stamped on rewritten events. Phoenix traces
     // then stay filterable/debuggable even after the event has been moved under its parent scope.
     metadata: Value,
@@ -228,6 +229,7 @@ impl SessionAlias {
         Self {
             parent_session_id,
             subagent_id,
+            authenticated_owner: None,
             metadata,
         }
     }
@@ -237,6 +239,14 @@ impl SessionAlias {
     pub(crate) fn metadata(&self) -> Value {
         self.metadata.clone()
     }
+
+    pub(crate) fn set_authenticated_owner(&mut self, owner: Option<String>) {
+        self.authenticated_owner = owner;
+    }
+
+    pub(crate) fn authenticated_owner(&self) -> Option<&str> {
+        self.authenticated_owner.as_deref()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -245,6 +255,7 @@ pub(crate) struct PendingSubagentStart {
     // hook or gateway request, after this hook request has already returned.
     pub(crate) event: SessionEvent,
     context: SubagentSessionContext,
+    authenticated_owner: Option<String>,
 }
 
 impl PendingSubagentStart {
@@ -258,6 +269,14 @@ impl PendingSubagentStart {
 
     pub(crate) fn alias_for_child_session(&self, child_session_id: String) -> SessionAlias {
         alias_for_child_session(child_session_id, &self.context)
+    }
+
+    pub(crate) fn set_authenticated_owner(&mut self, owner: Option<String>) {
+        self.authenticated_owner = owner;
+    }
+
+    pub(crate) fn authenticated_owner(&self) -> Option<&str> {
+        self.authenticated_owner.as_deref()
     }
 }
 
@@ -551,6 +570,7 @@ pub(crate) async fn pending_subagent_start(
         PendingSubagentStart {
             event: session_event.clone(),
             context,
+            authenticated_owner: None,
         },
     ))
 }

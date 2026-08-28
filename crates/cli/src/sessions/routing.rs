@@ -28,10 +28,14 @@ pub(super) async fn queue_or_promote_child_start(
     sessions: &mut HashMap<String, Session>,
     alignment_state: &mut SessionAlignmentState,
     config: SessionConfig,
+    authenticated_owners: Option<&HashMap<String, String>>,
+    authenticated_owner: Option<&str>,
 ) -> Result<bool, CliError> {
-    let Some((child_session_id, pending)) = alignment::pending_subagent_start(event).await else {
+    let Some((child_session_id, mut pending)) = alignment::pending_subagent_start(event).await
+    else {
         return Ok(false);
     };
+    pending.set_authenticated_owner(authenticated_owner.map(ToOwned::to_owned));
     if sessions
         .get(&child_session_id)
         .is_some_and(|session| !session.can_reparent_as_subagent_alias())
@@ -39,9 +43,26 @@ pub(super) async fn queue_or_promote_child_start(
         return Ok(false);
     }
     if sessions.contains_key(pending.parent_session_id()) {
+        if !parent_owner_matches(
+            authenticated_owners,
+            pending.parent_session_id(),
+            pending.authenticated_owner(),
+        ) {
+            return Err(CliError::Unauthorized(format!(
+                "Relay hook client does not own session '{}'",
+                pending.parent_session_id()
+            )));
+        }
         alignment_state.remove_pending(&child_session_id);
-        promote_pending_subagent(sessions, alignment_state, child_session_id, pending, config)
-            .await?;
+        promote_pending_subagent(
+            sessions,
+            alignment_state,
+            child_session_id,
+            pending,
+            config,
+            authenticated_owners,
+        )
+        .await?;
     } else {
         sessions.remove(&child_session_id);
         alignment_state.insert_pending(child_session_id, pending);
@@ -75,14 +96,23 @@ pub(super) async fn promote_pending_subagents_for_parent(
     alignment_state: &mut SessionAlignmentState,
     parent_session_id: &str,
     config: SessionConfig,
+    authenticated_owners: Option<&HashMap<String, String>>,
 ) -> Result<(), CliError> {
     for (child_session_id, pending) in alignment_state.pending_for_parent(parent_session_id) {
+        if !parent_owner_matches(
+            authenticated_owners,
+            parent_session_id,
+            pending.authenticated_owner(),
+        ) {
+            continue;
+        }
         promote_pending_subagent(
             sessions,
             alignment_state,
             child_session_id,
             pending,
             config.clone(),
+            authenticated_owners,
         )
         .await?;
     }
@@ -95,6 +125,7 @@ pub(super) async fn promote_pending_subagent(
     child_session_id: String,
     pending: PendingSubagentStart,
     config: SessionConfig,
+    authenticated_owners: Option<&HashMap<String, String>>,
 ) -> Result<Option<SessionAlias>, CliError> {
     if sessions
         .get(&child_session_id)
@@ -104,6 +135,13 @@ pub(super) async fn promote_pending_subagent(
     }
     sessions.remove(&child_session_id);
     let parent_session_id = pending.parent_session_id().to_string();
+    if !parent_owner_matches(
+        authenticated_owners,
+        &parent_session_id,
+        pending.authenticated_owner(),
+    ) {
+        return Ok(None);
+    }
     let parent_session = sessions
         .entry(parent_session_id.clone())
         .or_insert_with(|| {
@@ -125,9 +163,23 @@ pub(super) async fn promote_pending_subagent(
             pending.subagent_start_event(),
         ))
         .await?;
-    let alias = pending.alias_for_child_session(child_session_id.clone());
+    let mut alias = pending.alias_for_child_session(child_session_id.clone());
+    alias.set_authenticated_owner(pending.authenticated_owner().map(ToOwned::to_owned));
     alignment_state.insert_alias(child_session_id, alias.clone());
     Ok(Some(alias))
+}
+
+fn parent_owner_matches(
+    authenticated_owners: Option<&HashMap<String, String>>,
+    parent_session_id: &str,
+    pending_owner: Option<&str>,
+) -> bool {
+    match (authenticated_owners, pending_owner) {
+        (Some(owners), Some(owner)) => owners
+            .get(parent_session_id)
+            .is_some_and(|existing| existing == owner),
+        _ => true,
+    }
 }
 
 pub(super) fn route_event_for_session(

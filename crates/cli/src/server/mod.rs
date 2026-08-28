@@ -272,10 +272,7 @@ async fn serve_listener_with_dynamic_inner(
         shutdown_token: bootstrap_shutdown_token,
         transparent_proxy_credential,
     } = bootstrap;
-    let bootstrap_challenge_key = bootstrap_fingerprint
-        .as_ref()
-        .map(|_| BootstrapChallengeKey::load())
-        .transpose()?;
+    let bootstrap_challenge_key = Some(BootstrapChallengeKey::load()?);
     let bootstrap_tls = bootstrap_fingerprint
         .as_ref()
         .map(|_| crate::gateway::tls::RelayTlsIdentity::load_or_create())
@@ -285,7 +282,7 @@ async fn serve_listener_with_dynamic_inner(
         .transpose()
         .map_err(CliError::Launch)?;
     let require_provider_client_token =
-        bootstrap_challenge_key.is_some() && transparent_proxy_credential.is_none();
+        bootstrap_fingerprint.is_some() && transparent_proxy_credential.is_none();
     let plugin_activation =
         initialize_plugin_host(config.plugin_config.clone(), dynamic_plugins).await?;
     let (bootstrap_shutdown, bootstrap_shutdown_rx) =

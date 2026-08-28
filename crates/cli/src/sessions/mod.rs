@@ -294,9 +294,10 @@ impl SessionManager {
         owner: &str,
     ) -> Result<(), CliError> {
         let mut owners = self.authenticated_owners.lock().await;
+        let mut prospective_owners = owners.clone();
         for event in &events {
             let session_id = event.session_id();
-            if owners
+            if prospective_owners
                 .get(session_id)
                 .is_some_and(|existing| existing != owner)
             {
@@ -306,12 +307,15 @@ impl SessionManager {
             }
         }
         for event in &events {
-            owners
+            prospective_owners
                 .entry(event.session_id().to_string())
                 .or_insert_with(|| owner.to_string());
         }
+        let released_owner_ids = self
+            .apply_events_inner(headers, events, Some(&prospective_owners), Some(owner))
+            .await?;
+        *owners = prospective_owners;
         drop(owners);
-        let released_owner_ids = self.apply_events_inner(headers, events).await?;
         release_closed_owner_ids(&self.inner, &self.authenticated_owners, &released_owner_ids)
             .await;
         Ok(())
@@ -428,13 +432,17 @@ impl SessionManager {
         headers: &HeaderMap,
         events: Vec<NormalizedEvent>,
     ) -> Result<(), CliError> {
-        self.apply_events_inner(headers, events).await.map(|_| ())
+        self.apply_events_inner(headers, events, None, None)
+            .await
+            .map(|_| ())
     }
 
     async fn apply_events_inner(
         &self,
         headers: &HeaderMap,
         events: Vec<NormalizedEvent>,
+        authenticated_owners: Option<&HashMap<String, String>>,
+        authenticated_owner: Option<&str>,
     ) -> Result<HashSet<String>, CliError> {
         let mut subscriber_deliveries = Vec::new();
         let mut released_owner_ids = HashSet::new();
@@ -450,10 +458,25 @@ impl SessionManager {
                 &mut sessions,
                 &mut alignment_state,
                 config.clone(),
+                authenticated_owners,
+                authenticated_owner,
             )
             .await?
             {
                 continue;
+            }
+
+            if let Some(owners) = authenticated_owners
+                && let Some(alias) = alignment_state.alias_for_session(&original_session_id)
+                && let Some(alias_owner) = alias.authenticated_owner()
+                && owners
+                    .get(&alias.parent_session_id)
+                    .is_none_or(|existing| existing != alias_owner)
+            {
+                return Err(CliError::Unauthorized(format!(
+                    "Relay hook client does not own session '{}'",
+                    alias.parent_session_id
+                )));
             }
 
             let Some((event, session_id, is_agent_started)) =
@@ -488,6 +511,7 @@ impl SessionManager {
                     &mut alignment_state,
                     &session_id,
                     config.clone(),
+                    authenticated_owners,
                 )
                 .await?;
             }
@@ -794,14 +818,39 @@ impl SessionManager {
         let Some(session_id) = start.session_id.clone() else {
             return Ok(None);
         };
+        let mut owners = self.authenticated_owners.lock().await;
         let mut alignment_state = self.alignment.lock().await;
         if let Some(alias) = alignment_state.alias_for_session(&session_id) {
+            if let Some(alias_owner) = alias.authenticated_owner()
+                && owners
+                    .get(&alias.parent_session_id)
+                    .is_none_or(|existing| existing != alias_owner)
+            {
+                return Err(CliError::Unauthorized(format!(
+                    "Relay gateway request does not own session '{}'",
+                    alias.parent_session_id
+                )));
+            }
             apply_start_alias(start, &alias);
             return Ok(Some(alias));
         }
         let Some(pending) = alignment_state.pending_for_session(&session_id) else {
             return Ok(None);
         };
+        if let Some(owner) = pending.authenticated_owner() {
+            match owners.get(pending.parent_session_id()) {
+                Some(existing) if existing != owner => {
+                    return Err(CliError::Unauthorized(format!(
+                        "Relay gateway request does not own session '{}'",
+                        pending.parent_session_id()
+                    )));
+                }
+                Some(_) => {}
+                None => {
+                    owners.insert(pending.parent_session_id().to_string(), owner.to_string());
+                }
+            }
+        }
         let mut sessions = self.inner.lock().await;
         let alias = promote_pending_subagent(
             &mut sessions,
@@ -809,6 +858,7 @@ impl SessionManager {
             session_id,
             pending,
             config,
+            Some(&owners),
         )
         .await?;
         if let Some(alias) = alias.as_ref() {

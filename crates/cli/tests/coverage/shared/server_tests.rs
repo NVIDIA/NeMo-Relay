@@ -152,7 +152,17 @@ impl Drop for PluginKindCleanup {
 }
 
 fn test_http_client() -> reqwest::Client {
-    reqwest::Client::new()
+    let key = BootstrapChallengeKey::load().expect("test hook credential should load");
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+        reqwest::header::HeaderValue::from_str(&key.client_token())
+            .expect("test hook credential should be a valid header"),
+    );
+    reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .expect("test HTTP client should build")
 }
 
 struct GenericTestPlugin;
@@ -552,9 +562,9 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
     );
 
     let explicit_daemon =
-        AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), true, None, None);
+        AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), false, None, None);
     assert!(
-        !explicit_daemon
+        explicit_daemon
             .authorize_provider_request(&mut HeaderMap::new())
             .unwrap()
             .allow_environment_provider_auth
@@ -589,7 +599,7 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
 }
 
 #[tokio::test]
-async fn hook_authentication_is_internal_and_rejects_origins_and_bad_tokens() {
+async fn explicit_daemon_hook_authentication_is_internal_and_rejects_bad_tokens() {
     let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
     let state =
         AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), true, None, None);
