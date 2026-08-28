@@ -288,6 +288,31 @@ pub(crate) fn local_install_exists(host: impl MarketplaceHost, install_dir: &Pat
     layout.marketplace_root.exists() || layout.generation_lock.exists()
 }
 
+/// Returns whether force cleanup has a local artifact or live host registration to remove.
+pub(crate) fn force_cleanup_target_exists(host: impl MarketplaceHost, install_dir: &Path) -> bool {
+    force_cleanup_target_exists_with_runner(host, install_dir, &RealCommandRunner)
+}
+
+fn force_cleanup_target_exists_with_runner(
+    host: impl MarketplaceHost,
+    install_dir: &Path,
+    runner: &dyn CommandRunner,
+) -> bool {
+    if local_install_exists(host, install_dir) {
+        return true;
+    }
+    let options = PluginInstallOptions {
+        install_dir: install_dir.to_path_buf(),
+        operation_lock_dir: PathBuf::new(),
+        force: true,
+        dry_run: false,
+        skip_doctor: true,
+    };
+    host_registration_report(host, &options, runner).is_ok_and(|registration| {
+        registration.host_plugin_registered || registration.host_marketplace_registered
+    })
+}
+
 pub(crate) fn persisted_state_exists(host: impl MarketplaceHost, install_dir: &Path) -> bool {
     state_path(host, install_dir).exists()
 }
