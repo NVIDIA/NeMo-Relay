@@ -499,3 +499,7 @@ fn state_for_plugin(
         environment_ref: record.source.environment_ref,
     }))
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/plugin_dynamic_configuration_tests.rs"]
+mod tests;

@@ -95,3 +95,7 @@ pub fn stream_bounded_regular_file(
         consume(&buffer[..count]);
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/plugin_dynamic_bounded_tests.rs"]
+mod tests;

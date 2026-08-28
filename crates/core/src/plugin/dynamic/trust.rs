@@ -361,3 +361,7 @@ fn sha256_file(path: &Path) -> Result<String, String> {
             .collect::<String>()
     ))
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/plugin_dynamic_trust_tests.rs"]
+mod tests;

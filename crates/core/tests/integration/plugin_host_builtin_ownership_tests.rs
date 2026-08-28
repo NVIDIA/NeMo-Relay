@@ -13,7 +13,7 @@ use nemo_relay::plugin::dynamic::{
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig,
     PluginRegistrationContext, Result, deregister_plugin, list_plugin_kinds, lookup_plugin,
-    register_plugin, test_validate_static_plugin_config,
+    register_plugin, validate_static_plugin_config,
 };
 use serde_json::{Map, Value as Json};
 
@@ -46,7 +46,7 @@ async fn host_rejects_a_builtin_kind_preclaimed_before_first_ensure() {
         components: vec![PluginComponentSpec::new("observability")],
         ..PluginConfig::default()
     };
-    let report = test_validate_static_plugin_config(&config);
+    let report = validate_static_plugin_config(&config);
     let diagnostic = report
         .diagnostics
         .iter()
@@ -92,7 +92,7 @@ async fn host_rejects_a_builtin_kind_preclaimed_before_first_ensure() {
     assert!(error.contains("already registered"), "{error}");
     assert!(deregister_plugin("observability"));
 
-    let report = test_validate_static_plugin_config(&config);
+    let report = validate_static_plugin_config(&config);
     assert!(!report.has_errors(), "{:#?}", report.diagnostics);
     assert!(lookup_plugin("observability").is_some());
     assert!(

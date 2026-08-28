@@ -115,3 +115,7 @@ fn reject_nonlocal_references(plugin_id: &str, path: &Path, value: &Json) -> Res
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/plugin_dynamic_schema_tests.rs"]
+mod tests;
