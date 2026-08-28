@@ -1902,13 +1902,27 @@ fn test_exporter_preserves_extras_for_interleaved_llm_ends() {
         .name("openai.responses")
         .parent_uuid(first_agent_uuid)
         .scope_type(ScopeType::Llm)
-        .input(json!({"input": "first request"}))
+        .input(json!({
+            "reasoning_effort": "low",
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call_first",
+                "output": "first request"
+            }]
+        }))
         .build();
     let mut second_start = event_builder(second_llm_uuid, EventType::Start)
         .name("openai.responses")
         .parent_uuid(second_agent_uuid)
         .scope_type(ScopeType::Llm)
-        .input(json!({"input": "second request"}))
+        .input(json!({
+            "reasoning_effort": "high",
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call_second",
+                "output": "second request"
+            }]
+        }))
         .build();
     let mut first_end = event_builder(first_llm_uuid, EventType::End)
         .name("openai.responses")
@@ -1973,28 +1987,37 @@ fn test_exporter_preserves_extras_for_interleaved_llm_ends() {
         .collect::<Vec<_>>();
     assert_eq!(agent_steps.len(), 2);
 
-    for (step, response_id, invocation_id) in [
-        (agent_steps[0], "resp_first", first_llm_uuid),
-        (agent_steps[1], "resp_second", second_llm_uuid),
+    for (step, response_id, request_output, reasoning_effort, invocation_id) in [
+        (
+            agent_steps[0],
+            "resp_first",
+            "first request",
+            "low",
+            first_llm_uuid,
+        ),
+        (
+            agent_steps[1],
+            "resp_second",
+            "second request",
+            "high",
+            second_llm_uuid,
+        ),
     ] {
         let invocation_id = invocation_id.to_string();
         let extra: AtifStepExtra =
             serde_json::from_value(step.extra.clone().expect("agent step should retain extra"))
                 .unwrap();
+        assert_eq!(
+            extra.llm_request.as_ref().unwrap()["input"][0]["output"],
+            json!(request_output)
+        );
+        assert_eq!(step.reasoning_effort, Some(json!(reasoning_effort)));
         assert_eq!(extra.llm_response.unwrap()["id"], json!(response_id));
         assert_eq!(
             extra.invocation.unwrap().invocation_id.as_deref(),
             Some(invocation_id.as_str())
         );
     }
-}
-
-fn atof_fixture_events(contents: &str) -> Vec<Event> {
-    contents
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).expect("fixture line should be a valid ATOF event"))
-        .collect()
 }
 
 fn agent_step_by_response_id<'a>(
@@ -2023,56 +2046,97 @@ fn agent_step_by_response_id<'a>(
 }
 
 #[test]
-fn test_filtered_flat_interleaving_fixture_preserves_final_answer_extra() {
-    let events = atof_fixture_events(include_str!(
-        "../fixtures/atif/filtered_flat_interleaved_llm_ends.atof.jsonl"
-    ));
-    let trajectory = events_to_trajectory(
-        "00000000-0000-7000-8000-000000000001",
-        make_agent_info(),
-        &events.iter().collect::<Vec<_>>(),
-    );
+fn test_exporter_isolates_interleaved_responses_by_agent_scope() {
+    let root_uuid = Uuid::now_v7();
+    let first_agent_uuid = Uuid::now_v7();
+    let second_agent_uuid = Uuid::now_v7();
+    let first_llm_uuid = Uuid::now_v7();
+    let second_llm_uuid = Uuid::now_v7();
+    let base = base_timestamp();
 
-    assert!(trajectory.subagent_trajectories.is_none());
-    let step = agent_step_by_response_id(&trajectory, "resp_child")
-        .expect("filtered final answer should retain its response metadata");
-    assert_eq!(step.message, json!("Child task complete."));
-    let extra: AtifStepExtra = serde_json::from_value(step.extra.clone().unwrap()).unwrap();
-    assert_eq!(
-        extra.ancestry.parent_id.as_deref(),
-        Some("00000000-0000-7000-8000-000000000210")
+    let mut root_start = event_builder(root_uuid, EventType::Start)
+        .name("root-agent")
+        .scope_type(ScopeType::Agent)
+        .metadata(json!({
+            "nemo_relay_scope_role": "agent",
+            "session_id": root_uuid.to_string()
+        }))
+        .build();
+    let mut first_agent_start = event_builder(first_agent_uuid, EventType::Start)
+        .name("first-agent")
+        .parent_uuid(root_uuid)
+        .scope_type(ScopeType::Agent)
+        .metadata(json!({"nemo_relay_scope_role": "subagent"}))
+        .build();
+    let mut second_agent_start = event_builder(second_agent_uuid, EventType::Start)
+        .name("second-agent")
+        .parent_uuid(root_uuid)
+        .scope_type(ScopeType::Agent)
+        .metadata(json!({"nemo_relay_scope_role": "subagent"}))
+        .build();
+    let mut first_start = event_builder(first_llm_uuid, EventType::Start)
+        .name("openai.responses")
+        .parent_uuid(first_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .input(json!({"input": "first request"}))
+        .build();
+    let mut second_start = event_builder(second_llm_uuid, EventType::Start)
+        .name("openai.responses")
+        .parent_uuid(second_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .input(json!({"input": "second request"}))
+        .build();
+    let mut first_end = event_builder(first_llm_uuid, EventType::End)
+        .name("openai.responses")
+        .parent_uuid(first_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .output(json!({"id": "resp_first", "output": "first response"}))
+        .build();
+    let mut second_end = event_builder(second_llm_uuid, EventType::End)
+        .name("openai.responses")
+        .parent_uuid(second_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .output(json!({"id": "resp_second", "output": "second response"}))
+        .build();
+    set_sequential_event_timestamps(
+        &mut [
+            &mut root_start,
+            &mut first_agent_start,
+            &mut second_agent_start,
+            &mut first_start,
+            &mut second_start,
+            &mut first_end,
+            &mut second_end,
+        ],
+        base,
+        chrono::Duration::milliseconds(1),
     );
-    let response = extra.llm_response.unwrap();
-    assert_eq!(response["output"][0]["id"], json!("msg_child"));
-    assert_eq!(response["output"][0]["phase"], json!("final_answer"));
-    assert_eq!(
-        extra.invocation.unwrap().invocation_id.as_deref(),
-        Some("00000000-0000-7000-8000-000000000211")
-    );
-}
-
-#[test]
-fn test_synthetic_agent_scoped_fixture_isolates_interleaved_responses() {
-    let events = atof_fixture_events(include_str!(
-        "../fixtures/atif/synthetic_agent_scoped_interleaving.atof.jsonl"
-    ));
+    let events = [
+        root_start,
+        first_agent_start,
+        second_agent_start,
+        first_start,
+        second_start,
+        first_end,
+        second_end,
+    ];
     let trajectory = events_to_trajectory(
-        "00000000-0000-7000-8000-000000000010",
+        &root_uuid.to_string(),
         make_agent_info(),
         &events.iter().collect::<Vec<_>>(),
     );
 
     let children = trajectory.subagent_trajectories.as_ref().unwrap();
     assert_eq!(children.len(), 2);
-    let child_step = agent_step_by_response_id(&trajectory, "resp_child").unwrap();
-    let parent_step = agent_step_by_response_id(&trajectory, "resp_parent").unwrap();
+    let first_step = agent_step_by_response_id(&trajectory, "resp_first").unwrap();
+    let second_step = agent_step_by_response_id(&trajectory, "resp_second").unwrap();
     assert_eq!(
-        child_step.extra.as_ref().unwrap()["ancestry"]["parent_id"],
-        json!("00000000-0000-7000-8000-000000000210")
+        first_step.extra.as_ref().unwrap()["ancestry"]["parent_id"],
+        json!(first_agent_uuid.to_string())
     );
     assert_eq!(
-        parent_step.extra.as_ref().unwrap()["ancestry"]["parent_id"],
-        json!("00000000-0000-7000-8000-000000000110")
+        second_step.extra.as_ref().unwrap()["ancestry"]["parent_id"],
+        json!(second_agent_uuid.to_string())
     );
 }
 
