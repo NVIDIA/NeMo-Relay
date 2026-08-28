@@ -25,11 +25,12 @@ type NemoRelayRuntimeKeys =
   | 'toolCallEnd'
   | 'toolConditionalExecution';
 
-type NemoRelayPluginHostKeys = 'defaultConfig' | 'validate' | 'initialize' | 'clear';
+type NemoRelayPluginHostKeys = 'defaultConfig' | 'validate' | 'initialize';
 type NemoRelayAdaptiveKeys = 'ADAPTIVE_PLUGIN_KIND' | 'ComponentSpec';
 
 export type ConfigDiagnostic = NemoRelayPluginHost.ConfigDiagnostic;
 export type ConfigReport = NemoRelayPluginHost.ConfigReport;
+export type PluginHostActivation = NemoRelayPluginHost.PluginHostActivation;
 
 /**
  * @internal Package-owned subset of the dynamically imported `nemo-relay-node`

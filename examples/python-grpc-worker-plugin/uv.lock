@@ -73,7 +73,7 @@ wheels = [
 
 [[package]]
 name = "nemo-relay-plugin"
-version = "0.8.0"
+version = "0.9.0"
 source = { directory = "../../python/plugin" }
 dependencies = [
     { name = "grpcio" },

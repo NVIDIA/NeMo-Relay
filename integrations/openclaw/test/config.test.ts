@@ -700,6 +700,7 @@ describe('nemo-relay OpenClaw plugin shell', () => {
 
     await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
     assert.equal(process.listenerCount('beforeExit'), before);
+    assert.equal(modules.pluginHost.calls.close, 1);
   });
 
   it('does not statically import nemo-relay-node or OpenClaw private src paths', () => {
@@ -818,7 +819,7 @@ type TestPluginHost = NemoRelayModules['pluginHost'] & {
   calls: {
     validate: unknown[];
     initialize: unknown[];
-    clear: number;
+    close: number;
   };
 };
 
@@ -842,7 +843,7 @@ function createModules(
   } = {},
 ): TestModules {
   const nf = createNemoRelayRuntime();
-  const calls: TestPluginHost['calls'] = { validate: [], initialize: [], clear: 0 };
+  const calls: TestPluginHost['calls'] = { validate: [], initialize: [], close: 0 };
   const adaptive: TestModules['adaptive'] = {
     ADAPTIVE_PLUGIN_KIND: 'adaptive',
     ComponentSpec: (
@@ -865,14 +866,27 @@ function createModules(
         if (params.validateThrows) {
           throw params.validateThrows;
         }
-        return { diagnostics: params.validateDiagnostics ?? [] };
+        return {
+          config: { diagnostics: params.validateDiagnostics ?? [] },
+          dynamic_plugins: [],
+        };
       },
       initialize: async (config) => {
         calls.initialize.push(config);
-        return { diagnostics: params.initializeDiagnostics ?? [] };
-      },
-      clear: () => {
-        calls.clear += 1;
+        const activation = {
+          report: {
+            config: { diagnostics: params.initializeDiagnostics ?? [] },
+            dynamic_plugins: [],
+          },
+          isActive: true,
+          close: async () => {
+            calls.close += 1;
+          },
+          [Symbol.asyncDispose]: async () => {
+            await activation.close();
+          },
+        };
+        return activation;
       },
     },
   };

@@ -3,6 +3,8 @@
 
 //! Integration coverage for SDK-built native dynamic plugins.
 
+mod plugin_host_test_support;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -33,7 +35,9 @@ use nemo_relay::plugin::dynamic::{
 use nemo_relay::plugin::{
     ConfigDiagnostic, Plugin, PluginComponentSpec, PluginConfig, PluginRegistrationContext,
     Result as PluginResult, deregister_plugin, list_plugin_kinds, lookup_plugin, register_plugin,
-    test_close_plugin_host, test_initialize_plugin_host_exact,
+};
+use plugin_host_test_support::{
+    test_close_plugin_host, test_initialize_plugin_host_exact, test_plugin_host_report,
 };
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
@@ -1914,9 +1918,7 @@ async fn plugin_host_activation_cleans_up_after_caller_cancellation() {
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            if nemo_relay::plugin::test_plugin_host_report().is_none()
-                && lookup_plugin("fixture_native").is_none()
-            {
+            if test_plugin_host_report().is_none() && lookup_plugin("fixture_native").is_none() {
                 break;
             }
             tokio::task::yield_now().await;

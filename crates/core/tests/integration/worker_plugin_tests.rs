@@ -3,6 +3,8 @@
 
 //! Integration coverage for gRPC worker dynamic plugins.
 
+mod plugin_host_test_support;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -31,11 +33,9 @@ use nemo_relay::plugin::dynamic::{
     DynamicPluginKind, PluginHostActivation, VerifiedDynamicPluginSpec, WorkerPluginActivation,
     WorkerPluginLoadSpec, load_worker_plugins,
 };
-use nemo_relay::plugin::{
-    PluginComponentSpec, PluginConfig, list_plugin_kinds, test_close_plugin_host,
-    test_initialize_plugin_host_exact,
-};
+use nemo_relay::plugin::{PluginComponentSpec, PluginConfig, list_plugin_kinds};
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+use plugin_host_test_support::{test_close_plugin_host, test_initialize_plugin_host_exact};
 use prost::Message;
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
