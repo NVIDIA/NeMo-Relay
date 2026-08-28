@@ -4,10 +4,14 @@
 use serde_json::Value;
 
 pub(crate) fn decode_windows_hook_command(command: &str) -> Option<Vec<String>> {
+    let command = command
+        .strip_prefix('"')
+        .and_then(|command| command.strip_suffix('"'))
+        .unwrap_or(command);
     shell_words::split(command).ok().map(|arguments| {
         arguments
             .into_iter()
-            .map(|argument| argument.replace("%%cd:~,%", "%"))
+            .map(|argument| argument.replace("^%", "%"))
             .collect()
     })
 }

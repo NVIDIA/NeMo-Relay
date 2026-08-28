@@ -51,7 +51,7 @@ fn cmd_quote_arg(raw: &str) -> String {
     let mut escaped = String::new();
     for ch in raw.chars() {
         match ch {
-            '%' => escaped.push_str("%%cd:~,%"),
+            '%' => escaped.push_str("^%"),
             '"' => escaped.push_str("\"\""),
             _ => escaped.push(ch),
         }

@@ -3094,7 +3094,7 @@ fn windows_shell_argument_quoting_and_hook_encoding_preserve_paths() {
         std::path::PathBuf::from(r"C:\Program Files\NeMo 100%\plugin\.nemo-relay-generation");
     assert_eq!(
         shell_quote_arg_for_platform(relay.to_str().unwrap(), true),
-        r#""C:\Program Files\NeMo 100%%cd:~,%\bin\nemo-relay.exe""#
+        r#""C:\Program Files\NeMo 100^%\bin\nemo-relay.exe""#
     );
     assert_eq!(
         crate::hook_assertions::decode_windows_hook_command(
@@ -3220,10 +3220,16 @@ fn posix_shell_argument_quoting_and_hook_encoding_preserve_paths() {
         shell_quote_arg_for_platform(relay.to_str().unwrap(), false),
         "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay'"
     );
+    let hook_config = generation.with_file_name(".nemo-relay-hook-config.json");
+    let expected = format!(
+        "{} hook-forward codex --hook-config {} --fail-open",
+        shell_quote_arg_for_platform(relay.to_str().unwrap(), false),
+        shell_quote_arg_for_platform(hook_config.to_str().unwrap(), false),
+    );
     assert_eq!(
         codex_plugin_hook_command_for_platform(&relay, &generation, "test-generation", false)
             .for_event("SessionStart"),
-        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward codex --hook-config '/tmp/NeMo $Relay`test'\\''/plugin/.nemo-relay-hook-config.json' --fail-open"
+        expected
     );
     assert_eq!(shell_quote_arg_for_platform("", false), "''");
     assert_eq!(
