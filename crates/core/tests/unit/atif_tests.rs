@@ -1889,6 +1889,7 @@ fn test_exporter_openai_responses_lifecycle_extracts_messages() {
     assert_eq!(agent_extra.llm_response.unwrap()["id"], json!("resp_1"));
 }
 
+/// Asserts that overlapping LLM lifecycles retain their matching request metadata.
 fn assert_exporter_preserves_extras_for_interleaved_llm_ends(reverse_ends: bool) {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let first_llm_uuid = Uuid::now_v7();
@@ -2005,16 +2006,19 @@ fn assert_exporter_preserves_extras_for_interleaved_llm_ends(reverse_ends: bool)
     }
 }
 
+/// Verifies request metadata when overlapping LLM calls finish in start order.
 #[test]
 fn test_exporter_preserves_extras_for_interleaved_llm_ends() {
     assert_exporter_preserves_extras_for_interleaved_llm_ends(false);
 }
 
+/// Verifies request metadata when overlapping LLM calls finish in reverse order.
 #[test]
 fn test_exporter_preserves_extras_for_reverse_interleaved_llm_ends() {
     assert_exporter_preserves_extras_for_interleaved_llm_ends(true);
 }
 
+/// Finds a response in the specified trajectory without searching child trajectories.
 fn direct_agent_step_by_response_id<'a>(
     trajectory: &'a AtifTrajectory,
     response_id: &str,
@@ -2029,6 +2033,7 @@ fn direct_agent_step_by_response_id<'a>(
     })
 }
 
+/// Verifies that overlapping responses remain isolated to their owning subagent.
 #[test]
 fn test_exporter_isolates_interleaved_responses_by_agent_scope() {
     let root_uuid = Uuid::now_v7();
@@ -2134,6 +2139,7 @@ fn test_exporter_isolates_interleaved_responses_by_agent_scope() {
     );
 }
 
+/// Verifies that an empty LLM end does not detach a subsequent tool result.
 #[test]
 fn test_payloadless_interleaved_llm_end_preserves_late_tool_result() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
