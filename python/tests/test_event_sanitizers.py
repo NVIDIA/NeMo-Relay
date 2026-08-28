@@ -27,11 +27,7 @@ def capture_events_fixture() -> Iterator[tuple[str, list[nemo_relay.Event]]]:
     subscribers.deregister(name)
 
 
-def test_plugin_clear_remains_available_without_running_event_loop():
-    plugin.clear()
-
-
-def test_plugin_clear_is_asyncio_safe_with_pending_sanitizer(tmp_path):
+def test_plugin_host_close_is_asyncio_safe_with_pending_sanitizer(tmp_path):
     script = textwrap.dedent(
         """
         import asyncio
@@ -61,18 +57,12 @@ def test_plugin_clear_is_asyncio_safe_with_pending_sanitizer(tmp_path):
             kind = "python.test_async_clear"
             plugin.register(kind, SanitizedSubscriberPlugin())
             try:
-                await plugin.initialize(
+                activation = await plugin.initialize(
                     plugin.PluginConfig(components=[plugin.ComponentSpec(kind=kind)])
                 )
                 scope.event("pending-clear", data={"raw": True})
-                try:
-                    plugin.clear()
-                except RuntimeError as error:
-                    assert "await plugin.clear_async()" in str(error)
-                else:
-                    raise AssertionError("plugin.clear() did not reject a running event loop")
 
-                first_clear = asyncio.create_task(plugin.clear_async())
+                first_clear = asyncio.create_task(activation.close())
                 await asyncio.wait_for(teardown_started.wait(), timeout=2)
                 first_clear.cancel()
                 try:
@@ -80,26 +70,26 @@ def test_plugin_clear_is_asyncio_safe_with_pending_sanitizer(tmp_path):
                 except asyncio.CancelledError:
                     pass
                 else:
-                    raise AssertionError("plugin.clear_async() did not propagate cancellation")
+                    raise AssertionError("activation.close() did not propagate cancellation")
 
-                second_clear = asyncio.create_task(plugin.clear_async())
+                second_clear = asyncio.create_task(activation.close())
                 await asyncio.sleep(0.05)
                 assert not second_clear.done()
 
                 allow_teardown.set()
                 await asyncio.wait_for(second_clear, timeout=2)
-                assert plugin.report() is None
+                assert not activation.is_active
                 assert len(delivered) == 1
                 assert delivered[0].data == {"sanitized": True}
 
-                await plugin.initialize(plugin.PluginConfig())
-                assert plugin.report() is not None
-                await plugin.clear_async()
-                assert plugin.report() is None
+                replacement = await plugin.initialize(plugin.PluginConfig())
+                assert replacement.is_active
+                await replacement.close()
+                assert not replacement.is_active
             finally:
                 allow_teardown.set()
-                if plugin.report() is not None:
-                    await plugin.clear_async()
+                if "activation" in locals():
+                    await activation.close()
                 plugin.deregister(kind)
 
         asyncio.run(main())
@@ -516,15 +506,17 @@ async def test_in_process_plugin_event_sanitizers_are_removed_on_clear(capture_e
     kind = "python.test_event_sanitizer"
     _capture_name, events = capture_events
     plugin.register(kind, cast(plugin.Plugin, EventPlugin()))
+    activation: plugin.PluginHostActivation | None = None
     try:
-        await plugin.initialize(plugin.PluginConfig(components=[plugin.ComponentSpec(kind=kind)]))
+        activation = await plugin.initialize(plugin.PluginConfig(components=[plugin.ComponentSpec(kind=kind)]))
         scope.event("configured", data={"raw": True})
         await subscribers.flush_async()
-        await plugin.clear_async()
+        await activation.close()
         scope.event("cleared", data={"raw": True})
         await subscribers.flush_async()
     finally:
-        await plugin.clear_async()
+        if activation is not None:
+            await activation.close()
         plugin.deregister(kind)
 
     marks = {event.name: event for event in events if event.kind == "mark"}
@@ -558,5 +550,4 @@ async def test_in_process_plugin_rolls_back_event_sanitizer_when_registration_fa
         await subscribers.flush_async()
         assert events[-1].data == {"raw": True}
     finally:
-        await plugin.clear_async()
         plugin.deregister(kind)

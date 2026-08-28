@@ -138,11 +138,11 @@ plugin_config = nemo_relay.plugin.PluginConfig(
     components=[nemo_relay.adaptive.ComponentSpec(adaptive_config)]
 )
 
-report = nemo_relay.plugin.validate(plugin_config)
+report = nemo_relay.plugin.validate(plugin_config)["config"]
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
-active = asyncio.run(nemo_relay.plugin.initialize(plugin_config))
+activation = asyncio.run(nemo_relay.plugin.initialize(plugin_config))
 ```
 </Tab>
 
@@ -167,7 +167,7 @@ adaptiveConfig.acg = adaptive.acgConfig({ provider: "passthrough" });
 const pluginConfig = plugin.defaultConfig();
 pluginConfig.components = [adaptive.ComponentSpec(adaptiveConfig)];
 
-const report = plugin.validate(pluginConfig);
+const report = plugin.validate(pluginConfig).config;
 if (report.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
   throw new Error(JSON.stringify(report.diagnostics));
 }
@@ -183,9 +183,8 @@ plugin.initialize(pluginConfig).catch((error) => {
 ```rust
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-use nemo_relay::plugin::{
-    clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
-};
+use nemo_relay::plugin::PluginConfig;
+use nemo_relay::plugin::dynamic::{initialize, validate};
 use nemo_relay_adaptive::plugin_component::{register_adaptive_component, ComponentSpec};
 use nemo_relay_adaptive::{
     AdaptiveConfig,
@@ -220,14 +219,14 @@ let mut plugin_config = PluginConfig::default();
 plugin_config.components.push(ComponentSpec::new(adaptive).into());
 
 register_adaptive_component()?;
-let report = validate_plugin_config(&plugin_config);
-assert!(!report.has_errors());
+let report = validate(plugin_config.clone(), None)?;
+assert!(!report.config.has_errors());
 
-let _active = initialize_plugins(plugin_config).await?;
+let activation = initialize(plugin_config, None).await?;
 
 // Run instrumented application work here.
 
-clear_plugin_configuration()?;
+activation.close()?;
 Ok(())
 }
 ```
@@ -323,9 +322,9 @@ Ok(())
 
 ## Validation and Teardown
 
-Validate plugin configuration before initialization. Disabled adaptive
-components are still validated, which lets operators prepare a rollout before
-setting `enabled = true`.
+Validate plugin configuration before initialization. Disabled components are
+excluded from the effective host; validate their component-local configuration
+before enabling them when preparing a rollout.
 
 Common validation failures include:
 

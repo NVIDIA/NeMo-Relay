@@ -33,7 +33,7 @@ use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::traits::LlmResponseCodec;
 #[cfg(unix)]
 use crate::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins,
+    PluginComponentSpec, PluginConfig, test_close_plugin_host, test_initialize_plugin_host_exact,
 };
 use crate::plugins::nemo_guardrails::component::LocalBackendConfig;
 
@@ -1194,7 +1194,7 @@ async fn install_local_plugin(config: &NeMoGuardrailsConfig) {
         .as_object()
         .unwrap()
         .clone();
-    initialize_plugins(PluginConfig {
+    test_initialize_plugin_host_exact(PluginConfig {
         version: 1,
         components: vec![PluginComponentSpec {
             kind: crate::plugins::nemo_guardrails::component::NEMO_GUARDRAILS_PLUGIN_KIND
@@ -1216,7 +1216,7 @@ struct PluginRuntimeResetGuard {
 #[cfg(unix)]
 impl Drop for PluginRuntimeResetGuard {
     fn drop(&mut self) {
-        let _ = clear_plugin_configuration();
+        let _ = test_close_plugin_host();
         crate::shared_runtime::reset_runtime_owner_for_tests();
         *global_context().write().unwrap() = NemoRelayContextState::new();
         restore_thread_scope_stack(self.previous_scope_stack.clone());
@@ -1226,7 +1226,7 @@ impl Drop for PluginRuntimeResetGuard {
 #[cfg(unix)]
 fn reset_plugin_runtime() -> PluginRuntimeResetGuard {
     let previous_scope_stack = capture_thread_scope_stack();
-    let _ = clear_plugin_configuration();
+    let _ = test_close_plugin_host();
     crate::shared_runtime::reset_runtime_owner_for_tests();
     *global_context().write().unwrap() = NemoRelayContextState::new();
     set_thread_scope_stack(create_scope_stack());

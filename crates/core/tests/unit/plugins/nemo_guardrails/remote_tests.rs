@@ -43,7 +43,7 @@ async fn remote_initialization_installs_non_streaming_execution_intercept() {
     .into_bytes();
     spawn_http_responder(listener, http_response, request_tx);
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {
@@ -194,7 +194,7 @@ async fn remote_request_uses_config_ids_when_config_id_is_not_set() {
     .into_bytes();
     spawn_http_responder(listener, http_response, request_tx);
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {
@@ -260,7 +260,7 @@ async fn remote_llm_request_disables_input_rails_when_surface_is_off() {
     .into_bytes();
     spawn_http_responder(listener, http_response, request_tx);
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "input": false,
@@ -342,7 +342,7 @@ async fn remote_llm_request_disables_output_rails_when_surface_is_off() {
     .into_bytes();
     spawn_http_responder(listener, http_response, request_tx);
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "input": true,
@@ -418,7 +418,7 @@ async fn remote_initialization_installs_stream_execution_intercept() {
     .into_bytes();
     spawn_http_responder(listener, http_response, request_tx);
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {
@@ -517,7 +517,7 @@ async fn remote_non_streaming_http_errors_are_reported_and_marked() {
     .into_bytes();
     spawn_http_responder(listener, http_response, request_tx);
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {
@@ -599,7 +599,7 @@ async fn remote_streaming_http_errors_are_reported_and_marked() {
     .into_bytes();
     spawn_http_responder(listener, http_response, request_tx);
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {
@@ -694,7 +694,7 @@ async fn remote_non_streaming_invalid_json_is_reported_and_marked() {
     .into_bytes();
     spawn_http_responder(listener, http_response, request_tx);
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {
@@ -759,7 +759,7 @@ async fn remote_streaming_malformed_chunk_is_reported_and_marked() {
     .into_bytes();
     spawn_http_responder(listener, http_response, request_tx);
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {
@@ -828,7 +828,7 @@ async fn remote_preflight_tool_choice_failure_is_reported_and_marked() {
     setup_isolated_thread();
     let events = capture_events("nemo-guardrails-remote-preflight-error-events");
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {
@@ -906,7 +906,7 @@ async fn remote_transport_failure_is_reported_and_marked() {
     setup_isolated_thread();
     let events = capture_events("nemo-guardrails-remote-transport-error-events");
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {
@@ -982,7 +982,7 @@ async fn remote_success_without_guardrails_payload_is_allowed() {
     .into_bytes();
     spawn_http_responder(listener, http_response, request_tx);
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {
@@ -1054,7 +1054,7 @@ async fn remote_tool_output_can_rewrite_tool_result() {
     .into_bytes();
     spawn_http_responder(listener, http_response, request_tx);
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "input": false,
         "output": false,
@@ -1141,7 +1141,7 @@ async fn remote_tool_output_rejects_when_remote_rail_refuses_without_stop_flag()
     .into_bytes();
     spawn_http_responder(listener, http_response, request_tx);
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "input": false,
         "output": false,
@@ -1215,7 +1215,7 @@ async fn remote_tool_output_preserves_named_rail_selectors() {
     .into_bytes();
     spawn_http_responder(listener, http_response, request_tx);
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "input": false,
         "output": false,
@@ -1297,7 +1297,7 @@ async fn remote_tool_output_unrecognized_non_blocking_response_falls_back_to_ori
     .into_bytes();
     spawn_http_responder(listener, http_response, request_tx);
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "input": false,
         "output": false,
@@ -1333,7 +1333,7 @@ async fn remote_tool_output_does_not_run_when_tool_callback_errors() {
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "input": false,
         "output": false,
@@ -1412,7 +1412,7 @@ async fn remote_tool_checks_forward_context_state_and_thread_id() {
     .into_bytes();
     spawn_http_responder(listener, http_response, request_tx);
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "input": false,
         "output": false,
@@ -1465,7 +1465,7 @@ async fn remote_tool_only_configuration_does_not_intercept_llm_calls() {
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "remote",
         "input": false,
         "output": false,

@@ -35,9 +35,9 @@ use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::plugin::{
     ConfigPolicy, DiagnosticLevel, PluginComponentSpec, PluginConfig, PluginError,
-    PluginRegistrationContext, UnsupportedBehavior, clear_plugin_configuration,
-    ensure_builtin_plugins_registered, initialize_plugins_exact as initialize_plugins,
-    list_plugin_kinds, rollback_registrations, validate_plugin_config,
+    PluginRegistrationContext, UnsupportedBehavior, ensure_builtin_plugins_registered,
+    list_plugin_kinds, rollback_registrations, test_close_plugin_host,
+    test_initialize_plugin_host_exact, test_validate_static_plugin_config,
 };
 use futures::StreamExt;
 use nemo_relay::observability::OpenTelemetryType;
@@ -178,7 +178,7 @@ fn top_level_policy_controls_component_diagnostics() {
         unsupported_value: UnsupportedBehavior::Warn,
         ..ConfigPolicy::default()
     };
-    let warn_report = validate_plugin_config(&warn_config);
+    let warn_report = test_validate_static_plugin_config(&warn_config);
     assert!(warn_report.diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "pii_redaction.unsupported_value"
             && diagnostic.field.as_deref() == Some("builtin.action")
@@ -190,7 +190,7 @@ fn top_level_policy_controls_component_diagnostics() {
         unsupported_value: UnsupportedBehavior::Ignore,
         ..ConfigPolicy::default()
     };
-    let ignored_report = validate_plugin_config(&ignored_config);
+    let ignored_report = test_validate_static_plugin_config(&ignored_config);
     assert!(
         !ignored_report
             .diagnostics
@@ -210,7 +210,7 @@ fn top_level_policy_controls_component_diagnostics() {
         unknown_field: UnsupportedBehavior::Error,
         ..ConfigPolicy::default()
     };
-    let unknown_field_report = validate_plugin_config(&unknown_field_config);
+    let unknown_field_report = test_validate_static_plugin_config(&unknown_field_config);
     assert!(unknown_field_report.diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "pii_redaction.unknown_field"
             && diagnostic.field.as_deref() == Some("unexpected")
@@ -220,7 +220,7 @@ fn top_level_policy_controls_component_diagnostics() {
 
 fn reset_runtime() {
     enable_operational_logs();
-    let _ = clear_plugin_configuration();
+    let _ = test_close_plugin_host();
     crate::plugins::pii_redaction::component::clear_local_backend_provider().unwrap();
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
@@ -319,7 +319,7 @@ fn component_spec_and_plugin_contract_preserve_the_public_configuration_shape() 
 fn trajectory_preset_validates_without_an_action_and_rejects_matcher_fields() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
-    let valid = validate_plugin_config(&plugin_config(json!({
+    let valid = test_validate_static_plugin_config(&plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [{
             "mode": "builtin",
@@ -331,7 +331,7 @@ fn trajectory_preset_validates_without_an_action_and_rejects_matcher_fields() {
     })));
     assert!(!valid.has_errors(), "{:#?}", valid.diagnostics);
 
-    let invalid = validate_plugin_config(&plugin_config(json!({
+    let invalid = test_validate_static_plugin_config(&plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [{
             "mode": "builtin",
@@ -358,7 +358,7 @@ fn trajectory_preset_validates_without_an_action_and_rejects_matcher_fields() {
         diagnostic.field.as_deref() == Some("profiles[0].builtin.target_path_globs")
     }));
 
-    let policy_without_preset = validate_plugin_config(&plugin_config(json!({
+    let policy_without_preset = test_validate_static_plugin_config(&plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [{
             "mode": "builtin",
@@ -376,7 +376,7 @@ fn trajectory_metric_string_allowlist_validation_is_fail_closed() {
     reset_runtime();
     ensure_builtin_plugins_registered().unwrap();
 
-    let valid = validate_plugin_config(&plugin_config(json!({
+    let valid = test_validate_static_plugin_config(&plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [{
             "mode": "builtin",
@@ -390,7 +390,7 @@ fn trajectory_metric_string_allowlist_validation_is_fail_closed() {
     })));
     assert!(!valid.has_errors(), "{:#?}", valid.diagnostics);
 
-    let valid_legacy = validate_plugin_config(&plugin_config(json!({
+    let valid_legacy = test_validate_static_plugin_config(&plugin_config(json!({
         "codec": "openai_chat",
         "mode": "builtin",
         "builtin": {
@@ -404,7 +404,7 @@ fn trajectory_metric_string_allowlist_validation_is_fail_closed() {
         valid_legacy.diagnostics
     );
 
-    let without_preset = validate_plugin_config(&plugin_config(json!({
+    let without_preset = test_validate_static_plugin_config(&plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [{
             "mode": "builtin",
@@ -435,7 +435,7 @@ fn trajectory_metric_string_allowlist_validation_is_fail_closed() {
             "contains duplicate value",
         ),
     ] {
-        let report = validate_plugin_config(&plugin_config(json!({
+        let report = test_validate_static_plugin_config(&plugin_config(json!({
             "codec": "openai_chat",
             "profiles": [{
                 "mode": "builtin",
@@ -1984,7 +1984,7 @@ async fn configured_target_path_globs_redact_otlp_content_and_preserve_typed_met
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [{
             "mode": "builtin",
@@ -2116,7 +2116,7 @@ async fn configured_target_path_globs_redact_otlp_content_and_preserve_typed_met
         .unwrap();
     trace_subscriber.shutdown().unwrap();
     metric_subscriber.shutdown().unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 
     let trace_request = trace_request
         .recv_timeout(Duration::from_secs(5))
@@ -2461,7 +2461,7 @@ fn typed_profile_config_serializes_without_conflicting_legacy_defaults() {
         assert!(!object.contains_key(legacy_field), "{legacy_field}");
     }
 
-    let report = validate_plugin_config(&plugin_config(serialized));
+    let report = test_validate_static_plugin_config(&plugin_config(serialized));
     assert!(!report.has_errors(), "{:?}", report.diagnostics);
 }
 
@@ -2488,7 +2488,7 @@ fn profile_array_executes_every_profile_in_stable_array_order() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [
             {
@@ -2525,7 +2525,7 @@ fn profile_array_executes_every_profile_in_stable_array_order() {
     assert_eq!(captured[0].data().unwrap()["value"], "gamma");
 
     deregister_subscriber("pii-profile-order").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -2533,7 +2533,7 @@ fn profile_array_rejects_legacy_fields_and_reports_profile_paths() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "codec": "openai_chat",
         "mark": true,
         "profiles": [{
@@ -2569,7 +2569,7 @@ fn profile_array_requires_at_least_one_profile_and_matching_local_settings() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let empty = validate_plugin_config(&plugin_config(json!({
+    let empty = test_validate_static_plugin_config(&plugin_config(json!({
         "codec": "openai_chat",
         "profiles": []
     })));
@@ -2578,7 +2578,7 @@ fn profile_array_requires_at_least_one_profile_and_matching_local_settings() {
             && diagnostic.message.contains("at least one")
     }));
 
-    let all_disabled = validate_plugin_config(&plugin_config(json!({
+    let all_disabled = test_validate_static_plugin_config(&plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [{
             "enabled": false,
@@ -2592,7 +2592,7 @@ fn profile_array_requires_at_least_one_profile_and_matching_local_settings() {
             && diagnostic.message.contains("at least one enabled")
     }));
 
-    let missing_local = validate_plugin_config(&plugin_config(json!({
+    let missing_local = test_validate_static_plugin_config(&plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [{"mode": "local_model"}]
     })));
@@ -2607,7 +2607,7 @@ fn disabled_profiles_are_validated_when_an_enabled_profile_exists() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [
             {
@@ -2677,19 +2677,20 @@ fn failed_later_profile_rolls_back_earlier_profile_registrations() {
         ))
     }))
     .unwrap();
-    let activation = futures::executor::block_on(initialize_plugins(plugin_config(json!({
-        "codec": "openai_chat",
-        "profiles": [
-            {
-                "mode": "builtin",
-                "builtin": {"action": "redact", "detector": "email"}
-            },
-            {
-                "mode": "local_model",
-                "local": {"backend": "failing"}
-            }
-        ]
-    }))));
+    let activation =
+        futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
+            "codec": "openai_chat",
+            "profiles": [
+                {
+                    "mode": "builtin",
+                    "builtin": {"action": "redact", "detector": "email"}
+                },
+                {
+                    "mode": "local_model",
+                    "local": {"backend": "failing"}
+                }
+            ]
+        }))));
     assert!(activation.is_err());
 
     let events = capture_events("pii-profile-rollback");
@@ -2886,7 +2887,7 @@ fn validate_rejects_config_with_no_enabled_surfaces() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "builtin": {
@@ -2912,7 +2913,7 @@ fn validate_allows_documented_policy_unknown_component_field() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "builtin",
         "tool_input": true,
         "tool_output": false,
@@ -2939,7 +2940,7 @@ fn validate_rejects_unsupported_config_version() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "version": 2,
         "mode": "builtin",
         "tool_input": true,
@@ -2963,7 +2964,7 @@ fn validate_rejects_local_section_outside_local_mode() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "builtin": {
@@ -2984,7 +2985,7 @@ fn validate_rejects_builtin_mode_without_builtin_section() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "builtin"
     })));
 
@@ -2999,7 +3000,7 @@ fn validate_allows_llm_surfaces_without_codec() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "builtin",
         "builtin": {
             "action": "remove"
@@ -3016,7 +3017,7 @@ fn validate_rejects_ambiguous_gemini_codec_name() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "builtin",
         "codec": "gemini",
         "input": true,
@@ -3042,7 +3043,7 @@ fn validate_rejects_regex_replace_without_pattern() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "builtin",
         "builtin": {
             "action": "regex_replace"
@@ -3062,7 +3063,7 @@ fn validate_rejects_invalid_builtin_pattern_regex() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "builtin",
         "builtin": {
             "action": "regex_replace",
@@ -3081,7 +3082,7 @@ fn validate_rejects_malformed_builtin_target_paths() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "builtin": {
@@ -3108,7 +3109,7 @@ fn validate_accepts_valid_builtin_target_paths() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "builtin": {
@@ -3132,7 +3133,7 @@ fn validate_builtin_target_path_globs_as_json_pointers() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "builtin": {
@@ -3146,7 +3147,7 @@ fn validate_builtin_target_path_globs_as_json_pointers() {
     })));
     assert!(!report.has_errors(), "{:#?}", report.diagnostics);
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "builtin": {
@@ -3168,7 +3169,7 @@ fn profile_validation_reports_malformed_target_path_index() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [{
             "mode": "builtin",
@@ -3191,17 +3192,18 @@ fn activation_rejects_malformed_target_path_when_diagnostic_is_downgraded() {
     reset_runtime();
     setup_isolated_thread();
 
-    let activation = futures::executor::block_on(initialize_plugins(plugin_config(json!({
-        "mode": "builtin",
-        "codec": "openai_chat",
-        "builtin": {
-            "action": "remove",
-            "target_paths": ["messages/0/content"]
-        },
-        "policy": {
-            "unsupported_value": "warn"
-        }
-    }))));
+    let activation =
+        futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
+            "mode": "builtin",
+            "codec": "openai_chat",
+            "builtin": {
+                "action": "remove",
+                "target_paths": ["messages/0/content"]
+            },
+            "policy": {
+                "unsupported_value": "warn"
+            }
+        }))));
 
     let error = activation.expect_err("malformed target path must fail plugin activation");
     assert!(error.to_string().contains("builtin.target_paths[0]"));
@@ -3223,14 +3225,15 @@ fn preset_does_not_bypass_malformed_target_path_validation() {
             "unsupported_value": "warn"
         }
     });
-    let report = validate_plugin_config(&plugin_config(config.clone()));
+    let report = test_validate_static_plugin_config(&plugin_config(config.clone()));
     assert!(report.diagnostics.iter().any(|diagnostic| {
         diagnostic.field.as_deref() == Some("builtin.target_paths[0]")
             && diagnostic.message.contains("RFC 6901")
     }));
 
     setup_isolated_thread();
-    let activation = futures::executor::block_on(initialize_plugins(plugin_config(config)));
+    let activation =
+        futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(config)));
     let error = activation.expect_err("preset must not bypass malformed target path validation");
     assert!(error.to_string().contains("builtin.target_paths[0]"));
 }
@@ -3240,7 +3243,7 @@ fn validate_rejects_mask_with_empty_mask_char() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "builtin",
         "builtin": {
             "action": "mask",
@@ -3259,7 +3262,7 @@ fn validate_rejects_builtin_detector_and_pattern_together() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "builtin",
         "builtin": {
             "action": "mask",
@@ -3279,7 +3282,7 @@ fn validate_rejects_unknown_builtin_detector() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
-    let report = validate_plugin_config(&plugin_config(json!({
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "builtin",
         "builtin": {
             "action": "mask",
@@ -3361,7 +3364,7 @@ fn builtin_backend_sanitizes_mark_and_generic_scope_observability_fields() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": true,
@@ -3430,7 +3433,7 @@ fn builtin_backend_sanitizes_mark_and_generic_scope_observability_fields() {
     assert_eq!(end.metadata().unwrap()["reviewer"], "[REDACTED]");
 
     deregister_subscriber("pii-redaction-event-fields").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -3439,7 +3442,7 @@ fn mark_false_preserves_mark_fields() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": true,
@@ -3467,7 +3470,7 @@ fn mark_false_preserves_mark_fields() {
     assert_eq!(captured[0].data().unwrap()["email"], "person@example.com");
 
     deregister_subscriber("pii-redaction-mark-opt-out").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -3476,7 +3479,7 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [
             {
@@ -3667,7 +3670,7 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
     openinference
         .deregister("pii-regression-openinference")
         .unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -3676,7 +3679,7 @@ async fn trajectory_preset_sanitizes_stream_finalization_without_changing_client
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "codec": "openai_chat",
         "profiles": [{
             "mode": "builtin",
@@ -3761,7 +3764,7 @@ async fn trajectory_preset_sanitizes_stream_finalization_without_changing_client
     assert_eq!(end.output().unwrap()["usage"]["total_tokens"], 11);
 
     deregister_subscriber("pii-trajectory-stream").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -3770,7 +3773,7 @@ async fn normalized_paths_use_the_active_codec_for_stream_finalization() {
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_responses",
         "input": false,
@@ -3848,7 +3851,7 @@ async fn normalized_paths_use_the_active_codec_for_stream_finalization() {
     );
 
     deregister_subscriber("pii-active-codec-stream-finalization").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -3857,7 +3860,7 @@ fn builtin_backend_sanitizes_tool_start_and_end_payloads_with_preorder_targets()
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -3936,7 +3939,7 @@ fn builtin_backend_sanitizes_tool_start_and_end_payloads_with_preorder_targets()
     );
 
     deregister_subscriber("pii-redaction-tool-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -3945,7 +3948,7 @@ fn builtin_remove_deletes_object_fields_and_nulls_array_or_root_targets() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4011,7 +4014,7 @@ fn builtin_remove_deletes_object_fields_and_nulls_array_or_root_targets() {
     );
 
     deregister_subscriber("pii-redaction-remove-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4020,7 +4023,7 @@ fn builtin_remove_with_empty_target_paths_only_removes_string_leaves() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "input": false,
         "output": false,
@@ -4063,7 +4066,7 @@ fn builtin_remove_with_empty_target_paths_only_removes_string_leaves() {
     );
 
     deregister_subscriber("pii-redaction-remove-empty-targets-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4072,7 +4075,7 @@ fn builtin_remove_deletes_targeted_object_and_array_container_fields() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "input": false,
         "output": false,
@@ -4111,7 +4114,7 @@ fn builtin_remove_deletes_targeted_object_and_array_container_fields() {
     );
 
     deregister_subscriber("pii-redaction-remove-container-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4120,7 +4123,7 @@ fn builtin_redact_replaces_matching_tool_payload_substrings_with_default_token()
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "tool_input": true,
         "tool_output": true,
@@ -4179,7 +4182,7 @@ fn builtin_redact_replaces_matching_tool_payload_substrings_with_default_token()
     );
 
     deregister_subscriber("pii-redaction-redact-tool-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4188,7 +4191,7 @@ fn builtin_mask_preserves_configured_prefix_and_suffix() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4252,7 +4255,7 @@ fn builtin_mask_preserves_configured_prefix_and_suffix() {
     );
 
     deregister_subscriber("pii-redaction-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4261,7 +4264,7 @@ fn builtin_mask_with_detector_masks_only_matching_substrings() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4300,7 +4303,7 @@ fn builtin_mask_with_detector_masks_only_matching_substrings() {
     );
 
     deregister_subscriber("pii-redaction-detector-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4309,7 +4312,7 @@ fn builtin_mask_with_email_detector_preserves_domain_by_default() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4347,7 +4350,7 @@ fn builtin_mask_with_email_detector_preserves_domain_by_default() {
     );
 
     deregister_subscriber("pii-redaction-email-default-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4356,7 +4359,7 @@ fn builtin_mask_with_phone_detector_preserves_last_four_digits_by_default() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4394,7 +4397,7 @@ fn builtin_mask_with_phone_detector_preserves_last_four_digits_by_default() {
     );
 
     deregister_subscriber("pii-redaction-phone-default-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4403,7 +4406,7 @@ fn builtin_mask_with_api_key_detector_preserves_prefix_and_last_four_by_default(
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4441,7 +4444,7 @@ fn builtin_mask_with_api_key_detector_preserves_prefix_and_last_four_by_default(
     );
 
     deregister_subscriber("pii-redaction-api-key-default-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4450,7 +4453,7 @@ fn builtin_mask_with_detector_uses_explicit_prefix_suffix_over_defaults() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4490,7 +4493,7 @@ fn builtin_mask_with_detector_uses_explicit_prefix_suffix_over_defaults() {
     );
 
     deregister_subscriber("pii-redaction-detector-explicit-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4499,7 +4502,7 @@ fn builtin_mask_with_ip_address_detector_preserves_last_octet_by_default() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4537,7 +4540,7 @@ fn builtin_mask_with_ip_address_detector_preserves_last_octet_by_default() {
     );
 
     deregister_subscriber("pii-redaction-ip-default-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4546,7 +4549,7 @@ fn builtin_mask_with_url_detector_preserves_scheme_and_host_by_default() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4584,7 +4587,7 @@ fn builtin_mask_with_url_detector_preserves_scheme_and_host_by_default() {
     );
 
     deregister_subscriber("pii-redaction-url-default-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4593,7 +4596,7 @@ fn builtin_mask_with_ipv6_detector_preserves_last_segment_by_default() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4631,7 +4634,7 @@ fn builtin_mask_with_ipv6_detector_preserves_last_segment_by_default() {
     );
 
     deregister_subscriber("pii-redaction-ipv6-default-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4640,7 +4643,7 @@ fn builtin_mask_with_ipv6_detector_supports_compressed_addresses() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4678,7 +4681,7 @@ fn builtin_mask_with_ipv6_detector_supports_compressed_addresses() {
     );
 
     deregister_subscriber("pii-redaction-ipv6-compressed-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4693,7 +4696,7 @@ fn builtin_mask_with_bearer_token_detector_preserves_scheme_and_last_four() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4731,7 +4734,7 @@ fn builtin_mask_with_bearer_token_detector_preserves_scheme_and_last_four() {
     );
 
     deregister_subscriber("pii-redaction-bearer-default-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4740,7 +4743,7 @@ fn builtin_bearer_token_detector_ignores_short_benign_values() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4778,7 +4781,7 @@ fn builtin_bearer_token_detector_ignores_short_benign_values() {
     );
 
     deregister_subscriber("pii-redaction-bearer-short-benign-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4787,7 +4790,7 @@ fn builtin_mask_with_credit_card_detector_preserves_last_four_digits() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4826,7 +4829,7 @@ fn builtin_mask_with_credit_card_detector_preserves_last_four_digits() {
     );
 
     deregister_subscriber("pii-redaction-credit-card-default-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4835,7 +4838,7 @@ fn builtin_mask_with_ip_detector_honors_custom_mask_char() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "input": false,
         "output": false,
@@ -4869,7 +4872,7 @@ fn builtin_mask_with_ip_detector_honors_custom_mask_char() {
     );
 
     deregister_subscriber("pii-redaction-ip-custom-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4888,7 +4891,7 @@ fn builtin_mask_with_jwt_detector_preserves_header_and_signature_tail() {
             mask_text(parts[2], "*", 0, 6)
         )
     };
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4926,7 +4929,7 @@ fn builtin_mask_with_jwt_detector_preserves_header_and_signature_tail() {
     );
 
     deregister_subscriber("pii-redaction-jwt-default-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -4935,7 +4938,7 @@ fn builtin_mask_with_cloud_key_detectors_preserves_expected_segments() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4963,11 +4966,11 @@ fn builtin_mask_with_cloud_key_detectors_preserves_expected_segments() {
         Some(&json!({"key": mask_text(aws_access_key, "*", 4, 4)}))
     );
     deregister_subscriber("pii-redaction-aws-access-key-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 
     reset_runtime();
     setup_isolated_thread();
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -4995,11 +4998,11 @@ fn builtin_mask_with_cloud_key_detectors_preserves_expected_segments() {
         Some(&json!({"key": mask_text(&gcp_key, "*", 6, 4)}))
     );
     deregister_subscriber("pii-redaction-gcp-key-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 
     reset_runtime();
     setup_isolated_thread();
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -5027,7 +5030,7 @@ fn builtin_mask_with_cloud_key_detectors_preserves_expected_segments() {
         Some(&json!({"key": mask_text(&azure_key, "*", 0, 4)}))
     );
     deregister_subscriber("pii-redaction-azure-storage-key-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -5036,7 +5039,7 @@ fn builtin_hash_with_detector_hashes_only_matching_substrings() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -5077,7 +5080,7 @@ fn builtin_hash_with_detector_hashes_only_matching_substrings() {
     );
 
     deregister_subscriber("pii-redaction-detector-hash-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -5086,7 +5089,7 @@ fn builtin_mask_with_short_detector_match_leaves_value_unchanged() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -5124,7 +5127,7 @@ fn builtin_mask_with_short_detector_match_leaves_value_unchanged() {
     );
 
     deregister_subscriber("pii-redaction-short-detector-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -5133,7 +5136,7 @@ fn builtin_mask_with_empty_target_paths_sanitizes_all_matching_string_leaves() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -5178,7 +5181,7 @@ fn builtin_mask_with_empty_target_paths_sanitizes_all_matching_string_leaves() {
     );
 
     deregister_subscriber("pii-redaction-empty-target-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -5187,7 +5190,7 @@ fn builtin_mask_with_malformed_ip_or_url_detector_input_leaves_value_unchanged()
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -5227,7 +5230,7 @@ fn builtin_mask_with_malformed_ip_or_url_detector_input_leaves_value_unchanged()
     );
 
     deregister_subscriber("pii-redaction-malformed-detector-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -5236,7 +5239,7 @@ async fn builtin_mask_with_detector_sanitizes_llm_response_from_normalized_messa
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -5292,7 +5295,7 @@ async fn builtin_mask_with_detector_sanitizes_llm_response_from_normalized_messa
     );
 
     deregister_subscriber("pii-redaction-detector-llm-response-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -5301,7 +5304,7 @@ fn builtin_hash_with_detector_hashes_multiple_matches_in_one_string() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -5343,7 +5346,7 @@ fn builtin_hash_with_detector_hashes_multiple_matches_in_one_string() {
     );
 
     deregister_subscriber("pii-redaction-multi-detector-hash-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -5352,7 +5355,7 @@ fn builtin_mask_with_empty_target_paths_handles_arrays_and_multiple_detector_typ
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -5399,7 +5402,7 @@ fn builtin_mask_with_empty_target_paths_handles_arrays_and_multiple_detector_typ
     );
 
     deregister_subscriber("pii-redaction-array-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -5408,7 +5411,7 @@ fn builtin_mask_with_detector_sanitizes_tool_output_payloads() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -5460,7 +5463,7 @@ fn builtin_mask_with_detector_sanitizes_tool_output_payloads() {
     );
 
     deregister_subscriber("pii-redaction-tool-output-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -5469,7 +5472,7 @@ fn builtin_tool_output_sanitizes_annotation_as_an_independent_json_boundary() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "input": false,
         "output": false,
@@ -5537,7 +5540,7 @@ fn builtin_tool_output_sanitizes_annotation_as_an_independent_json_boundary() {
     );
 
     deregister_subscriber("pii-redaction-tool-annotation-mask-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -5546,7 +5549,7 @@ fn builtin_disabled_tool_output_preserves_tool_result_annotation() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "input": false,
         "output": true,
@@ -5588,7 +5591,7 @@ fn builtin_disabled_tool_output_preserves_tool_result_annotation() {
     );
 
     deregister_subscriber("pii-redaction-disabled-tool-annotation-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -5597,7 +5600,7 @@ fn builtin_root_remove_drops_tool_result_annotation() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "input": false,
         "output": false,
@@ -5636,7 +5639,7 @@ fn builtin_root_remove_drops_tool_result_annotation() {
     assert!(captured_events[1].tool_result_annotation().is_none());
 
     deregister_subscriber("pii-redaction-remove-tool-annotation-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -5645,7 +5648,7 @@ fn builtin_mask_with_phone_detector_ignores_non_matching_digit_shapes() {
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -5683,7 +5686,7 @@ fn builtin_mask_with_phone_detector_ignores_non_matching_digit_shapes() {
     );
 
     deregister_subscriber("pii-redaction-phone-false-positive-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[test]
@@ -5692,7 +5695,7 @@ fn builtin_backend_sanitizes_llm_start_payload_via_codec_and_reencodes_provider_
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": true,
@@ -5752,7 +5755,7 @@ fn builtin_backend_sanitizes_llm_start_payload_via_codec_and_reencodes_provider_
     );
 
     deregister_subscriber("pii-redaction-llm-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -5761,7 +5764,7 @@ async fn builtin_backend_removes_targeted_message_names_and_ignores_missing_norm
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": true,
@@ -5822,7 +5825,7 @@ async fn builtin_backend_removes_targeted_message_names_and_ignores_missing_norm
     );
 
     deregister_subscriber("pii-redaction-remove-message-names").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -5831,7 +5834,7 @@ async fn builtin_backend_sanitizes_gemini_generate_content_via_codec() {
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "gemini_generate_content",
         "input": true,
@@ -5877,7 +5880,7 @@ async fn builtin_backend_sanitizes_gemini_generate_content_via_codec() {
     );
 
     deregister_subscriber("pii-redaction-gemini-generate-content").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -5886,7 +5889,7 @@ async fn builtin_backend_sanitizes_gemini_provider_native_tools_via_codec() {
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "gemini_generate_content",
         "input": true,
@@ -5940,7 +5943,7 @@ async fn builtin_backend_sanitizes_gemini_provider_native_tools_via_codec() {
     );
 
     deregister_subscriber("pii-redaction-gemini-native-tools").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -5949,7 +5952,7 @@ async fn builtin_backend_sanitizes_gemini_provider_native_request_content_via_co
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "gemini_generate_content",
         "input": true,
@@ -6006,7 +6009,7 @@ async fn builtin_backend_sanitizes_gemini_provider_native_request_content_via_co
     );
 
     deregister_subscriber("pii-redaction-gemini-native-request-content").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -6015,7 +6018,7 @@ async fn builtin_backend_sanitizes_gemini_function_response_nested_parts_via_cod
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "gemini_generate_content",
         "input": true,
@@ -6082,7 +6085,7 @@ async fn builtin_backend_sanitizes_gemini_function_response_nested_parts_via_cod
     );
 
     deregister_subscriber("pii-redaction-gemini-function-response-parts").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -6092,7 +6095,7 @@ async fn builtin_backend_sanitizes_gemini_provider_native_response_content_via_c
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "gemini_generate_content",
         "input": false,
@@ -6154,7 +6157,7 @@ async fn builtin_backend_sanitizes_gemini_provider_native_response_content_via_c
     );
 
     deregister_subscriber("pii-redaction-gemini-native-response-content").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -6163,7 +6166,7 @@ async fn builtin_backend_omits_request_and_annotation_for_unsafe_normalized_arra
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_responses",
         "input": true,
@@ -6211,7 +6214,7 @@ async fn builtin_backend_omits_request_and_annotation_for_unsafe_normalized_arra
     );
 
     deregister_subscriber("pii-redaction-unsafe-normalized-array-removal").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -6220,7 +6223,7 @@ async fn builtin_backend_sanitizes_observable_llm_request_headers() {
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "input": true,
         "output": false,
@@ -6266,7 +6269,7 @@ async fn builtin_backend_sanitizes_observable_llm_request_headers() {
     );
 
     deregister_subscriber("pii-redaction-llm-request-headers").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -6275,7 +6278,7 @@ async fn trajectory_preset_redacts_opaque_llm_request_header_values() {
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "input": true,
         "output": false,
@@ -6320,7 +6323,7 @@ async fn trajectory_preset_redacts_opaque_llm_request_header_values() {
     );
 
     deregister_subscriber("pii-trajectory-llm-request-headers").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -6329,7 +6332,7 @@ async fn builtin_backend_sanitizes_llm_end_payload_and_response_codec_decodes_sa
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -6427,7 +6430,7 @@ async fn builtin_backend_sanitizes_llm_end_payload_and_response_codec_decodes_sa
     );
 
     deregister_subscriber("pii-redaction-llm-end-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -6436,7 +6439,7 @@ async fn builtin_backend_sanitizes_openai_chat_response_from_normalized_message_
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -6493,7 +6496,7 @@ async fn builtin_backend_sanitizes_openai_chat_response_from_normalized_message_
     );
 
     deregister_subscriber("pii-redaction-openai-chat-normalized-response").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -6502,7 +6505,7 @@ async fn builtin_backend_omits_unprojectable_openai_chat_api_specific_response()
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -6558,7 +6561,7 @@ async fn builtin_backend_omits_unprojectable_openai_chat_api_specific_response()
     );
 
     deregister_subscriber("pii-redaction-openai-chat-api-specific-response").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -6567,7 +6570,7 @@ async fn builtin_backend_omits_multi_choice_openai_chat_normalized_response() {
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -6629,7 +6632,7 @@ async fn builtin_backend_omits_multi_choice_openai_chat_normalized_response() {
     assert!(!serialized_end.contains("sk-second-secret"));
 
     deregister_subscriber("pii-redaction-openai-chat-multi-choice-response").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -6638,7 +6641,7 @@ async fn builtin_redact_sanitizes_openai_chat_response_from_detector_path() {
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -6694,7 +6697,7 @@ async fn builtin_redact_sanitizes_openai_chat_response_from_detector_path() {
     );
 
     deregister_subscriber("pii-redaction-openai-chat-redact-response").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -6703,7 +6706,7 @@ async fn builtin_backend_sanitizes_anthropic_response_from_normalized_message_pa
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "anthropic_messages",
         "input": false,
@@ -6758,7 +6761,7 @@ async fn builtin_backend_sanitizes_anthropic_response_from_normalized_message_pa
     );
 
     deregister_subscriber("pii-redaction-anthropic-normalized-response").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -6767,7 +6770,7 @@ async fn builtin_backend_omits_unprojectable_anthropic_normalized_usage_response
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "anthropic_messages",
         "input": false,
@@ -6817,7 +6820,7 @@ async fn builtin_backend_omits_unprojectable_anthropic_normalized_usage_response
     assert!(captured_events[1].annotated_response().is_none());
 
     deregister_subscriber("pii-redaction-anthropic-normalized-usage-response").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -6826,7 +6829,7 @@ async fn builtin_backend_sanitizes_openai_responses_response_from_normalized_mes
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "openai_chat",
         "input": false,
@@ -6896,7 +6899,7 @@ async fn builtin_backend_sanitizes_openai_responses_response_from_normalized_mes
     );
 
     deregister_subscriber("pii-redaction-openai-responses-normalized-response").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -6905,7 +6908,7 @@ async fn builtin_backend_sanitizes_openai_responses_output_text_alias_on_stream_
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "input": false,
         "output": true,
@@ -6990,7 +6993,7 @@ async fn builtin_backend_sanitizes_openai_responses_output_text_alias_on_stream_
     assert!(!end.to_json_string().unwrap().contains("sk-stream-secret"));
 
     deregister_subscriber("pii-redaction-openai-responses-output-text-stream").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -7000,7 +7003,7 @@ async fn builtin_backend_omits_multi_candidate_gemini_normalized_response() {
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "gemini_generate_content",
         "input": false,
@@ -7064,7 +7067,7 @@ async fn builtin_backend_omits_multi_candidate_gemini_normalized_response() {
     assert!(!serialized_end.contains("sk-second-secret"));
 
     deregister_subscriber("pii-redaction-gemini-multi-candidate-response").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }
 
 #[tokio::test]
@@ -7074,7 +7077,7 @@ async fn builtin_backend_sanitizes_raw_multi_candidate_gemini_response() {
     reset_runtime();
     setup_isolated_thread();
 
-    initialize_plugins(plugin_config(json!({
+    test_initialize_plugin_host_exact(plugin_config(json!({
         "mode": "builtin",
         "codec": "gemini_generate_content",
         "input": false,
@@ -7143,5 +7146,5 @@ async fn builtin_backend_sanitizes_raw_multi_candidate_gemini_response() {
     assert!(captured_events[1].annotated_response().is_some());
 
     deregister_subscriber("pii-redaction-gemini-raw-multi-candidate-response").unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 }

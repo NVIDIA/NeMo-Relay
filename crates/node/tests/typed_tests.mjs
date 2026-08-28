@@ -4,6 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import * as pluginHost from './plugin_host_test_helper.mjs';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
@@ -231,7 +232,7 @@ describe('adaptive typed helpers', () => {
     config.tool_parallelism = adaptive.toolParallelismConfig();
     config.acg = adaptive.acgConfig();
 
-    const report = plugin.validate({
+    const report = pluginHost.validate({
       version: 1,
       components: [adaptive.ComponentSpec(config)],
     });
@@ -239,7 +240,7 @@ describe('adaptive typed helpers', () => {
   });
 
   it('configures adaptive through the core plugin system', async () => {
-    const report = await plugin.initialize({
+    const report = await pluginHost.initialize({
       version: 1,
       components: [
         adaptive.ComponentSpec({
@@ -260,7 +261,7 @@ describe('adaptive typed helpers', () => {
     });
 
     assert.deepEqual(report.diagnostics, []);
-    plugin.clear();
+    await pluginHost.close();
   });
 });
 

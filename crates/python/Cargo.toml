@@ -33,3 +33,6 @@ uuid = { workspace = true, features = ["v7"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 chrono = "0.4"
+
+[dev-dependencies]
+nemo-relay = { workspace = true, features = ["__test-plugin-host"] }

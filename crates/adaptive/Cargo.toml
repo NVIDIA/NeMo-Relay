@@ -36,6 +36,7 @@ redis-backend = ["redis"]
 __skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
 
 [dev-dependencies]
+nemo-relay = { workspace = true, features = ["__test-plugin-host"] }
 tokio = { version = "1", default-features = false, features = ["rt", "macros", "sync", "time", "test-util", "rt-multi-thread"] }
 
 [[test]]

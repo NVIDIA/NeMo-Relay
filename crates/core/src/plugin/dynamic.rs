@@ -23,17 +23,30 @@ pub type DynamicPluginId = String;
 /// Canonical filename for authored Relay plugin manifests.
 pub const DYNAMIC_PLUGIN_MANIFEST_FILENAME: &str = "relay-plugin.toml";
 
+mod bounded;
+mod configuration;
 mod host;
 mod manifest;
 mod native;
+mod policy;
 mod registry;
+mod schema;
+mod trust;
 #[cfg(feature = "worker-grpc")]
 mod worker;
 
+pub use bounded::*;
+pub(crate) use configuration::resolve_plugin_host_config;
+pub use configuration::{DynamicPluginValidationReport, PluginHostReport, validate};
+#[cfg(test)]
+pub(crate) use configuration::{PluginHostValidationRequest, PluginHostValidationTarget};
 pub use host::*;
 pub use manifest::*;
 pub use native::*;
+pub use policy::*;
 pub use registry::*;
+pub use schema::*;
+pub use trust::*;
 #[cfg(feature = "worker-grpc")]
 pub use worker::*;
 

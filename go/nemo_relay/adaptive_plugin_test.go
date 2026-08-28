@@ -320,7 +320,7 @@ func testTopLevelPluginValidationAndLifecycle(t *testing.T) {
 		t.Fatalf(registerPluginFailed, err)
 	}
 	defer func() {
-		_ = ClearPluginConfiguration()
+		_ = closeTestPluginHost()
 		_ = DeregisterPlugin(pluginKind)
 		_ = DeregisterPlugin(streamPluginKind)
 	}()
@@ -336,7 +336,7 @@ func testTopLevelPluginValidationAndLifecycle(t *testing.T) {
 
 func validateLifecyclePluginConfig(t *testing.T, pluginKind string) {
 	t.Helper()
-	report, err := ValidatePluginConfig(PluginConfig{
+	report, err := validateTestPluginConfig(PluginConfig{
 		Version: 1,
 		Components: []PluginComponentSpec{
 			{
@@ -347,7 +347,7 @@ func validateLifecyclePluginConfig(t *testing.T, pluginKind string) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("ValidatePluginConfig failed: %v", err)
+		t.Fatalf("validateTestPluginConfig failed: %v", err)
 	}
 	if len(report.Diagnostics) != 1 {
 		t.Fatalf("expected 1 diagnostic, got %#v", report.Diagnostics)
@@ -366,7 +366,7 @@ func initializeLifecyclePlugins(t *testing.T, pluginKind, streamPluginKind strin
 		InjectBodyPath: "nvext.agent_hints",
 	}
 
-	_, err := InitializePlugins(PluginConfig{
+	_, err := initializeTestPluginHost(PluginConfig{
 		Version: 1,
 		Components: []PluginComponentSpec{
 			AdaptiveComponent(config),
@@ -382,7 +382,7 @@ func initializeLifecyclePlugins(t *testing.T, pluginKind, streamPluginKind strin
 		},
 	})
 	if err != nil {
-		t.Fatalf("InitializePlugins failed: %v", err)
+		t.Fatalf("initializeTestPluginHost failed: %v", err)
 	}
 	if *registerCalls != 1 {
 		t.Fatalf("expected plugin register to be called once, got %d", *registerCalls)
@@ -411,8 +411,8 @@ func exercisePluginEventSanitizers(t *testing.T) {
 	if err := PopScope(handle); err != nil {
 		t.Fatalf("PopScope failed: %v", err)
 	}
-	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf("ClearPluginConfiguration failed: %v", err)
+	if err := closeTestPluginHost(); err != nil {
+		t.Fatalf("closeTestPluginHost failed: %v", err)
 	}
 	if err := EmitEvent("plugin-mark-after-clear", WithEventData(json.RawMessage(`{"raw":true}`))); err != nil {
 		t.Fatalf("EmitEvent failed: %v", err)
@@ -498,12 +498,12 @@ func TestPluginFuncsAndClosedContextBranches(t *testing.T) {
 		t.Fatalf("Register should allow nil callback: %v", err)
 	}
 
-	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf("ClearPluginConfiguration failed: %v", err)
+	if err := closeTestPluginHost(); err != nil {
+		t.Fatalf("closeTestPluginHost failed: %v", err)
 	}
-	report, err := ActivePluginReport()
+	report, err := testPluginHostReport()
 	if err != nil {
-		t.Fatalf("ActivePluginReport failed: %v", err)
+		t.Fatalf("testPluginHostReport failed: %v", err)
 	}
 	if report != nil {
 		t.Fatalf("expected nil active plugin report, got %#v", report)

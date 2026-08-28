@@ -168,7 +168,7 @@ function validateConfig(config) {
   return plugin.validate({
     version: 1,
     components: [ComponentSpec(config)],
-  });
+  }).config;
 }
 
 module.exports = {

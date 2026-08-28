@@ -122,9 +122,7 @@ describe('OCIGenAIChatCodec', () => {
       servingMode: { servingType: 'ON_DEMAND', modelId: 'meta.llama-3.3-70b-instruct' },
       chatRequest: {
         apiFormat: 'GENERIC',
-        messages: [
-          { role: 'USER', content: [{ type: 'TEXT', text: 'My SSN is 111-22-3333.' }] },
-        ],
+        messages: [{ role: 'USER', content: [{ type: 'TEXT', text: 'My SSN is 111-22-3333.' }] }],
         maxTokens: 600,
         seed: 7,
       },
@@ -172,11 +170,13 @@ describe('OCIGenAIChatCodec', () => {
       modelId: 'meta.llama-3.3-70b-instruct',
       chatResponse: {
         apiFormat: 'GENERIC',
-        choices: [{
-          index: 0,
-          message: { role: 'ASSISTANT', content: [{ type: 'TEXT', text: 'Hello!' }] },
-          finishReason: 'stop',
-        }],
+        choices: [
+          {
+            index: 0,
+            message: { role: 'ASSISTANT', content: [{ type: 'TEXT', text: 'Hello!' }] },
+            finishReason: 'stop',
+          },
+        ],
         usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
       },
     };
@@ -248,20 +248,19 @@ describe('GeminiGenerateContentCodec', () => {
     };
     const annotated = codec.decode(req);
     const reEncoded = codec.encode(annotated, req);
-    assert.ok(
-      Array.isArray(reEncoded.content.safetySettings),
-      'safetySettings must survive encode round-trip',
-    );
+    assert.ok(Array.isArray(reEncoded.content.safetySettings), 'safetySettings must survive encode round-trip');
   });
 
   it('decodeResponse extracts text and finish reason', () => {
     const codec = new GeminiGenerateContentCodec();
     const raw = {
-      candidates: [{
-        content: { role: 'model', parts: [{ text: 'Hello!' }] },
-        finishReason: 'STOP',
-        index: 0,
-      }],
+      candidates: [
+        {
+          content: { role: 'model', parts: [{ text: 'Hello!' }] },
+          finishReason: 'STOP',
+          index: 0,
+        },
+      ],
       usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 2, totalTokenCount: 7 },
       modelVersion: 'gemini-2.0-flash',
     };
@@ -278,14 +277,16 @@ describe('GeminiGenerateContentCodec', () => {
   it('decodeResponse maps functionCall id correctly', () => {
     const codec = new GeminiGenerateContentCodec();
     const raw = {
-      candidates: [{
-        content: {
-          role: 'model',
-          parts: [{ functionCall: { id: 'call_xyz', name: 'my_fn', args: { x: 1 } } }],
+      candidates: [
+        {
+          content: {
+            role: 'model',
+            parts: [{ functionCall: { id: 'call_xyz', name: 'my_fn', args: { x: 1 } } }],
+          },
+          finishReason: 'STOP',
+          index: 0,
         },
-        finishReason: 'STOP',
-        index: 0,
-      }],
+      ],
       usageMetadata: {},
     };
     const resp = codec.decodeResponse(raw);
@@ -313,28 +314,25 @@ describe('GeminiGenerateContentCodec', () => {
         contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
       },
     };
-    assert.throws(
-      () => codec.encode({ messages: 'not an array' }, original),
-      /invalid AnnotatedLlmRequest/,
-    );
+    assert.throws(() => codec.encode({ messages: 'not an array' }, original), /invalid AnnotatedLlmRequest/);
 
     const annotated = codec.decode(original);
     annotated.messages.push({ role: 'developer', content: 'unsupported role' });
-    assert.throws(
-      () => codec.encode(annotated, original),
-      /no Gemini equivalent/,
-    );
+    assert.throws(() => codec.encode(annotated, original), /no Gemini equivalent/);
   });
 
   it('decodeResponse throws for malformed Gemini responses', () => {
     const codec = new GeminiGenerateContentCodec();
     assert.throws(
-      () => codec.decodeResponse({
-        candidates: [{
-          content: { role: 'model', parts: [{ text: 42 }] },
-          finishReason: 'STOP',
-        }],
-      }),
+      () =>
+        codec.decodeResponse({
+          candidates: [
+            {
+              content: { role: 'model', parts: [{ text: 42 }] },
+              finishReason: 'STOP',
+            },
+          ],
+        }),
       /parts.*text must be a string/,
     );
   });

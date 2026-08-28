@@ -14,8 +14,8 @@ use crate::codec::model_pricing::pricing_test_mutex;
 use crate::error::FlowError;
 use crate::json::Json;
 use crate::plugin::{
-    DiagnosticLevel, PluginComponentSpec, PluginConfig, clear_plugin_configuration,
-    initialize_plugins_exact, validate_plugin_config,
+    DiagnosticLevel, PluginComponentSpec, PluginConfig, test_close_plugin_host,
+    test_initialize_plugin_host_exact, test_validate_static_plugin_config,
 };
 use crate::plugins::model_pricing::register_pricing_component;
 
@@ -31,7 +31,7 @@ struct ClearPluginConfigurationGuard;
 
 impl Drop for ClearPluginConfigurationGuard {
     fn drop(&mut self) {
-        let _ = clear_plugin_configuration();
+        let _ = test_close_plugin_host();
     }
 }
 
@@ -883,7 +883,7 @@ fn test_pricing_plugin_configures_process_resolver_and_clears_to_default() {
 
     tokio::runtime::Runtime::new()
         .unwrap()
-        .block_on(async { initialize_plugins_exact(config).await.unwrap() });
+        .block_on(async { test_initialize_plugin_host_exact(config).await.unwrap() });
     let _clear_guard = ClearPluginConfigurationGuard;
     let usage = Usage {
         prompt_tokens: Some(1_000),
@@ -895,7 +895,7 @@ fn test_pricing_plugin_configures_process_resolver_and_clears_to_default() {
     assert_eq!(configured.total, Some(0.002));
     assert!(estimate_cost("gpt-4o-mini", &usage).is_none());
 
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 
     assert!(estimate_cost("plugin-model", &usage).is_none());
     assert!(estimate_cost("gpt-4o-mini", &usage).is_none());
@@ -915,7 +915,7 @@ fn test_pricing_plugin_validation_reports_invalid_json_and_catalog_errors() {
         "unexpected": true
     }))
     .unwrap();
-    let report = validate_plugin_config(&PluginConfig {
+    let report = test_validate_static_plugin_config(&PluginConfig {
         components: vec![malformed],
         ..PluginConfig::default()
     });
@@ -941,7 +941,7 @@ fn test_pricing_plugin_validation_reports_invalid_json_and_catalog_errors() {
         ]
     }))
     .unwrap();
-    let report = validate_plugin_config(&PluginConfig {
+    let report = test_validate_static_plugin_config(&PluginConfig {
         components: vec![invalid_catalog],
         ..PluginConfig::default()
     });
@@ -952,7 +952,7 @@ fn test_pricing_plugin_validation_reports_invalid_json_and_catalog_errors() {
             .contains("unsupported model pricing catalog version 2")
     );
 
-    let duplicate = validate_plugin_config(&PluginConfig {
+    let duplicate = test_validate_static_plugin_config(&PluginConfig {
         components: vec![
             PluginComponentSpec::new("pricing"),
             PluginComponentSpec::new("pricing"),

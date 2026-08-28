@@ -17,177 +17,10 @@ unsafe extern "C" fn plugin_event_metadata_injector_cb(
 }
 
 #[test]
-fn test_ffi_dynamic_plugin_activation_rejects_empty_specs_without_outputs() {
-    let _guard = TEST_MUTEX.lock().unwrap();
-    reset_globals();
-    let _ = nemo_relay_clear_plugin_configuration();
-
-    let config = cstring(r#"{"version":1,"components":[]}"#);
-    let specs = cstring("[]");
-    for _ in 0..2 {
-        let mut activation = std::ptr::dangling_mut::<FfiPluginActivation>();
-        let mut report_json = std::ptr::dangling_mut::<c_char>();
-        unsafe {
-            assert_status!(
-                nemo_relay_initialize_with_dynamic_plugins(
-                    config.as_ptr(),
-                    specs.as_ptr(),
-                    &mut activation,
-                    &mut report_json,
-                ),
-                NemoRelayStatus::InvalidArg
-            );
-            assert!(activation.is_null());
-            assert!(report_json.is_null());
-            assert!(
-                read_last_error()
-                    .unwrap_or_default()
-                    .contains("at least one dynamic plugin")
-            );
-        }
-    }
-}
-
-#[test]
-fn test_ffi_dynamic_plugin_activation_rejects_invalid_inputs_without_outputs() {
-    let _guard = TEST_MUTEX.lock().unwrap();
-    reset_globals();
-    let _ = nemo_relay_clear_plugin_configuration();
-
-    let config = cstring(r#"{"version":1,"components":[]}"#);
-    let specs = cstring("[]");
-    let invalid = cstring("not-json");
-    unsafe {
-        let mut report = std::ptr::dangling_mut::<c_char>();
-        assert_status!(
-            nemo_relay_initialize_with_dynamic_plugins(
-                config.as_ptr(),
-                specs.as_ptr(),
-                ptr::null_mut(),
-                &mut report,
-            ),
-            NemoRelayStatus::NullPointer
-        );
-        assert!(report.is_null());
-
-        let mut activation = std::ptr::dangling_mut::<FfiPluginActivation>();
-        assert_status!(
-            nemo_relay_initialize_with_dynamic_plugins(
-                config.as_ptr(),
-                specs.as_ptr(),
-                &mut activation,
-                ptr::null_mut(),
-            ),
-            NemoRelayStatus::NullPointer
-        );
-        assert!(activation.is_null());
-
-        for (config_json, specs_json, expected_error) in [
-            (invalid.as_ptr(), specs.as_ptr(), "invalid JSON"),
-            (config.as_ptr(), invalid.as_ptr(), "invalid JSON"),
-        ] {
-            let mut activation = std::ptr::dangling_mut::<FfiPluginActivation>();
-            let mut report = std::ptr::dangling_mut::<c_char>();
-            assert_status!(
-                nemo_relay_initialize_with_dynamic_plugins(
-                    config_json,
-                    specs_json,
-                    &mut activation,
-                    &mut report,
-                ),
-                NemoRelayStatus::InvalidJson
-            );
-            assert!(activation.is_null());
-            assert!(report.is_null());
-            assert!(
-                read_last_error()
-                    .unwrap_or_default()
-                    .contains(expected_error)
-            );
-        }
-
-        let invalid_shape = cstring(r#"{"plugin_id":"not-an-array"}"#);
-        let mut activation = ptr::null_mut();
-        let mut report = ptr::null_mut();
-        assert_status!(
-            nemo_relay_initialize_with_dynamic_plugins(
-                config.as_ptr(),
-                invalid_shape.as_ptr(),
-                &mut activation,
-                &mut report,
-            ),
-            NemoRelayStatus::InvalidJson
-        );
-        assert!(
-            read_last_error()
-                .unwrap_or_default()
-                .contains("invalid dynamic plugin specifications")
-        );
-    }
-}
-
-#[test]
-fn test_ffi_dynamic_plugin_activation_surfaces_load_failures_and_releases_owner() {
-    let _guard = TEST_MUTEX.lock().unwrap();
-    reset_globals();
-    let _ = nemo_relay_clear_plugin_configuration();
-
-    let config = cstring(r#"{"version":1,"components":[]}"#);
-    let missing_manifest = std::env::temp_dir()
-        .join(format!("missing-relay-plugin-{}.toml", Uuid::now_v7()))
-        .to_string_lossy()
-        .into_owned();
-    let specs = cstring(
-        &json!([{
-            "plugin_id": "fixture_missing",
-            "kind": "rust_dynamic",
-            "manifest_ref": missing_manifest,
-            "config": {}
-        }])
-        .to_string(),
-    );
-
-    unsafe {
-        let mut activation = ptr::null_mut();
-        let mut report = ptr::null_mut();
-        assert_status!(
-            nemo_relay_initialize_with_dynamic_plugins(
-                config.as_ptr(),
-                specs.as_ptr(),
-                &mut activation,
-                &mut report,
-            ),
-            NemoRelayStatus::NotFound
-        );
-        assert!(activation.is_null());
-        assert!(report.is_null());
-        assert!(
-            read_last_error()
-                .unwrap_or_default()
-                .contains("native plugin load failed")
-        );
-
-        let mut retry_activation = ptr::null_mut();
-        let mut retry_report = ptr::null_mut();
-        assert_status!(
-            nemo_relay_initialize_with_dynamic_plugins(
-                config.as_ptr(),
-                specs.as_ptr(),
-                &mut retry_activation,
-                &mut retry_report,
-            ),
-            NemoRelayStatus::NotFound
-        );
-        assert!(retry_activation.is_null());
-        assert!(retry_report.is_null());
-    }
-}
-
-#[test]
 fn test_ffi_plugin_registration_validation_and_cleanup() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_globals();
-    let _ = nemo_relay_clear_plugin_configuration();
+    let _ = close_test_plugin_host();
 
     let plugin_kind = unique_name("ffi_plugin");
     let plugin_kind_c = cstring(&plugin_kind);
@@ -218,7 +51,7 @@ fn test_ffi_plugin_registration_validation_and_cleanup() {
 
         let mut report_json = ptr::null_mut();
         assert_status!(
-            nemo_relay_validate_plugin_config(config.as_ptr(), &mut report_json),
+            validate_test_plugin_config(config.as_ptr(), &mut report_json),
             NemoRelayStatus::Ok
         );
         let report = returned_json(report_json);
@@ -232,7 +65,7 @@ fn test_ffi_plugin_registration_validation_and_cleanup() {
 
         let mut init_json = ptr::null_mut();
         assert_status!(
-            nemo_relay_initialize_plugins(config.as_ptr(), &mut init_json),
+            activate_test_plugin_config(config.as_ptr(), &mut init_json),
             NemoRelayStatus::Ok
         );
         let initialized = returned_json(init_json);
@@ -246,13 +79,13 @@ fn test_ffi_plugin_registration_validation_and_cleanup() {
 
         let mut active_json = ptr::null_mut();
         assert_status!(
-            nemo_relay_active_plugin_report_json(&mut active_json),
+            test_plugin_host_report_json(&mut active_json),
             NemoRelayStatus::Ok
         );
         let active = returned_json(active_json);
         assert_eq!(active["diagnostics"], initialized["diagnostics"]);
 
-        assert_status!(nemo_relay_clear_plugin_configuration(), NemoRelayStatus::Ok);
+        assert_status!(close_test_plugin_host(), NemoRelayStatus::Ok);
         assert_status!(
             nemo_relay_deregister_plugin(plugin_kind_c.as_ptr()),
             NemoRelayStatus::Ok
@@ -379,7 +212,7 @@ fn test_ffi_plugin_context_event_metadata_injector_rejects_null_callback() {
 fn test_ffi_plugin_validation_failure_modes_are_reported() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_globals();
-    let _ = nemo_relay_clear_plugin_configuration();
+    let _ = close_test_plugin_host();
 
     for (suffix, validate_cb, expected_fragment) in [
         (
@@ -422,7 +255,7 @@ fn test_ffi_plugin_validation_failure_modes_are_reported() {
 
             let mut report_json = ptr::null_mut();
             assert_status!(
-                nemo_relay_validate_plugin_config(config.as_ptr(), &mut report_json),
+                validate_test_plugin_config(config.as_ptr(), &mut report_json),
                 NemoRelayStatus::Ok
             );
             let report = returned_json(report_json);
@@ -451,7 +284,7 @@ fn test_ffi_plugin_validation_failure_modes_are_reported() {
 fn test_ffi_plugin_without_validate_callback_uses_registration_fallback_error() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_globals();
-    let _ = nemo_relay_clear_plugin_configuration();
+    let _ = close_test_plugin_host();
 
     let plugin_kind = unique_name("ffi_plugin_no_validate");
     let plugin_kind_c = cstring(&plugin_kind);
@@ -482,7 +315,7 @@ fn test_ffi_plugin_without_validate_callback_uses_registration_fallback_error() 
 
         let mut report_json = ptr::null_mut();
         assert_status!(
-            nemo_relay_validate_plugin_config(config.as_ptr(), &mut report_json),
+            validate_test_plugin_config(config.as_ptr(), &mut report_json),
             NemoRelayStatus::Ok
         );
         let report = returned_json(report_json);
@@ -490,7 +323,7 @@ fn test_ffi_plugin_without_validate_callback_uses_registration_fallback_error() 
 
         let mut init_json = ptr::null_mut();
         assert_status!(
-            nemo_relay_initialize_plugins(config.as_ptr(), &mut init_json),
+            activate_test_plugin_config(config.as_ptr(), &mut init_json),
             NemoRelayStatus::Internal
         );
         let err = read_last_error().expect("expected plugin registration failure message");
@@ -498,7 +331,7 @@ fn test_ffi_plugin_without_validate_callback_uses_registration_fallback_error() 
 
         let mut active_json = ptr::null_mut();
         assert_status!(
-            nemo_relay_active_plugin_report_json(&mut active_json),
+            test_plugin_host_report_json(&mut active_json),
             NemoRelayStatus::Ok
         );
         assert_eq!(returned_json(active_json), Json::Null);
@@ -516,7 +349,7 @@ fn test_ffi_plugin_without_validate_callback_uses_registration_fallback_error() 
 fn test_ffi_plugin_registration_failure_prefers_last_error_message() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_globals();
-    let _ = nemo_relay_clear_plugin_configuration();
+    let _ = close_test_plugin_host();
 
     let plugin_kind = unique_name("ffi_plugin_last_error");
     let plugin_kind_c = cstring(&plugin_kind);
@@ -547,7 +380,7 @@ fn test_ffi_plugin_registration_failure_prefers_last_error_message() {
 
         let mut init_json = ptr::null_mut();
         assert_status!(
-            nemo_relay_initialize_plugins(config.as_ptr(), &mut init_json),
+            activate_test_plugin_config(config.as_ptr(), &mut init_json),
             NemoRelayStatus::Internal
         );
         assert!(

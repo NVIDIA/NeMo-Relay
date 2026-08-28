@@ -177,8 +177,9 @@ async def test_in_process_python_plugin_registers_configured_injector_and_cleans
 
     kind = f"python.test_event_metadata.{uuid4()}"
     plugin.register(kind, cast(plugin.Plugin, ConfiguredMetadataPlugin()))
+    activation: plugin.PluginHostActivation | None = None
     try:
-        await plugin.initialize(
+        activation = await plugin.initialize(
             plugin.PluginConfig(
                 components=[
                     plugin.ComponentSpec(
@@ -191,11 +192,12 @@ async def test_in_process_python_plugin_registers_configured_injector_and_cleans
         scope.event("python-plugin-configured")
         await subscribers.flush_async()
 
-        await plugin.clear_async()
+        await activation.close()
         scope.event("python-plugin-cleared")
         await subscribers.flush_async()
     finally:
-        await plugin.clear_async()
+        if activation is not None:
+            await activation.close()
         plugin.deregister(kind)
 
     events = {event.name: event for event in subscribed_events}

@@ -73,11 +73,11 @@ pub struct FfiOpenTelemetryMetricSubscriber(
 );
 /// Opaque owned adaptive runtime handle.
 pub struct FfiAdaptiveRuntime(pub std::sync::Mutex<Option<AdaptiveRuntime>>);
-/// Opaque owned dynamic plugin host activation.
+/// Opaque owned static and dynamic plugin host activation.
 ///
 /// The inner option allows explicit activation cleanup to be idempotent while
 /// retaining a stable allocation until the foreign caller frees the handle.
-pub struct FfiPluginActivation(pub std::sync::Mutex<Option<PluginHostActivation>>);
+pub struct FfiPluginHostActivation(pub std::sync::Mutex<Option<PluginHostActivation>>);
 /// Opaque plugin registration context.
 ///
 /// This wrapper contains a borrowed raw pointer to an
@@ -440,7 +440,7 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_free(ptr: *mut FfiAdaptiveR
 }
 
 /// Free a dynamic plugin activation handle previously returned by
-/// `nemo_relay_initialize_with_dynamic_plugins`.
+/// `nemo_relay_plugin_initialize`.
 ///
 /// Any activation that has not already been explicitly cleared is cleaned up
 /// best-effort by its Rust destructor before the allocation is released. The
@@ -449,13 +449,15 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_free(ptr: *mut FfiAdaptiveR
 ///
 /// # Safety
 /// `ptr` must be null or point to a writable activation-handle variable whose
-/// value is null or was returned by `nemo_relay_initialize_with_dynamic_plugins`. The
+/// value is null or was returned by `nemo_relay_plugin_initialize`. The
 /// caller must ensure that no operation, including
-/// `nemo_relay_plugin_activation_clear`, accesses the activation concurrently
+/// `nemo_relay_plugin_host_activation_close`, accesses the activation concurrently
 /// with this call and that no operation can use the handle after this call
 /// begins.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_plugin_activation_free(ptr: *mut *mut FfiPluginActivation) {
+pub unsafe extern "C" fn nemo_relay_plugin_host_activation_free(
+    ptr: *mut *mut FfiPluginHostActivation,
+) {
     if ptr.is_null() {
         return;
     }

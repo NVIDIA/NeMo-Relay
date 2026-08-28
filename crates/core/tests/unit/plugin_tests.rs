@@ -31,9 +31,6 @@ struct PolicyAwarePlugin;
 struct SingletonPlugin;
 struct RecordingPlugin;
 struct DiscoverablePlugin;
-struct ReplacementPlugin;
-struct RestoreFailPlugin;
-struct RestoreBreakPlugin;
 struct PartialFailPlugin;
 struct VanishingPlugin;
 struct BlockingPlugin {
@@ -45,25 +42,10 @@ struct BackgroundTaskPlugin {
     release: Arc<Notify>,
     completed: Arc<Notify>,
 }
-struct PanickingPlugin;
-struct FailingDeregisterPlugin;
 struct EventMetadataPlugin;
-struct PluginMutationOwnerCleanup;
-
-impl Drop for PluginMutationOwnerCleanup {
-    fn drop(&mut self) {
-        let mut owner = PLUGIN_MUTATION_OWNER
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        *owner = PluginMutationOwner::Idle;
-    }
-}
 
 static RECORDED_NAMES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 static PARTIAL_FAIL_ROLLBACKS: AtomicUsize = AtomicUsize::new(0);
-static RESTORE_FAIL_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
-static RESTORE_BREAK_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
-static REPLACEMENT_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "__skip-implicit-config")]
 static TEST_CONFIG_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -371,97 +353,6 @@ impl Plugin for DiscoverablePlugin {
     }
 }
 
-impl Plugin for ReplacementPlugin {
-    fn plugin_kind(&self) -> &str {
-        "replacement.plugin"
-    }
-
-    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
-        vec![ConfigDiagnostic {
-            level: DiagnosticLevel::Warning,
-            code: "replacement.warning".into(),
-            component: Some("replacement.plugin".into()),
-            field: None,
-            message: "replacement validated".into(),
-        }]
-    }
-
-    fn register<'a>(
-        &'a self,
-        _plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
-        Box::pin(async move {
-            REPLACEMENT_REGISTRATIONS.fetch_add(1, Ordering::SeqCst);
-            ctx.add_registration(PluginRegistration::new(
-                "plugin",
-                ctx.qualify_name("replacement"),
-                Box::new(|| Ok(())),
-            ));
-            Ok(())
-        })
-    }
-}
-
-impl Plugin for RestoreFailPlugin {
-    fn plugin_kind(&self) -> &str {
-        "restore.fail.plugin"
-    }
-
-    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
-        vec![]
-    }
-
-    fn register<'a>(
-        &'a self,
-        _plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
-        Box::pin(async move {
-            RESTORE_FAIL_REGISTRATIONS.fetch_add(1, Ordering::SeqCst);
-            ctx.add_registration(PluginRegistration::new(
-                "plugin",
-                ctx.qualify_name("restore-fail"),
-                Box::new(|| Ok(())),
-            ));
-            Err(PluginError::RegistrationFailed(
-                "restore.fail.plugin refused to initialize".into(),
-            ))
-        })
-    }
-}
-
-impl Plugin for RestoreBreakPlugin {
-    fn plugin_kind(&self) -> &str {
-        "restore.break.plugin"
-    }
-
-    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
-        vec![]
-    }
-
-    fn register<'a>(
-        &'a self,
-        _plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
-        Box::pin(async move {
-            if RESTORE_BREAK_REGISTRATIONS.fetch_add(1, Ordering::SeqCst) == 0 {
-                ctx.add_registration(PluginRegistration::new(
-                    "plugin",
-                    ctx.qualify_name("restore-break"),
-                    Box::new(|| Ok(())),
-                ));
-                Ok(())
-            } else {
-                Err(PluginError::RegistrationFailed(
-                    "restore.break.plugin refused to restore".into(),
-                ))
-            }
-        })
-    }
-}
-
 impl Plugin for PartialFailPlugin {
     fn plugin_kind(&self) -> &str {
         "partial.fail.plugin"
@@ -574,53 +465,6 @@ impl Plugin for BackgroundTaskPlugin {
     }
 }
 
-impl Plugin for PanickingPlugin {
-    fn plugin_kind(&self) -> &str {
-        "panicking.plugin"
-    }
-
-    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
-        vec![]
-    }
-
-    fn register<'a>(
-        &'a self,
-        _plugin_config: &Map<String, Json>,
-        _ctx: &'a mut PluginRegistrationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
-        Box::pin(async { panic!("fixture plugin panicked during registration") })
-    }
-}
-
-impl Plugin for FailingDeregisterPlugin {
-    fn plugin_kind(&self) -> &str {
-        "failing.deregister.plugin"
-    }
-
-    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
-        vec![]
-    }
-
-    fn register<'a>(
-        &'a self,
-        _plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
-        Box::pin(async move {
-            ctx.add_registration(PluginRegistration::new(
-                "fixture",
-                ctx.qualify_name("refuses-deregistration"),
-                Box::new(|| {
-                    Err(PluginError::RegistrationFailed(
-                        "fixture deregistration refused".into(),
-                    ))
-                }),
-            ));
-            Ok(())
-        })
-    }
-}
-
 fn reset_global() {
     let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
@@ -628,23 +472,16 @@ fn reset_global() {
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
     *state = NemoRelayContextState::new();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
     recorded_names().lock().unwrap().clear();
     PARTIAL_FAIL_ROLLBACKS.store(0, Ordering::SeqCst);
-    RESTORE_FAIL_REGISTRATIONS.store(0, Ordering::SeqCst);
-    RESTORE_BREAK_REGISTRATIONS.store(0, Ordering::SeqCst);
-    REPLACEMENT_REGISTRATIONS.store(0, Ordering::SeqCst);
     let _ = deregister_plugin("test.plugin");
     let _ = deregister_plugin("singleton.plugin");
     let _ = deregister_plugin("recording.plugin");
-    let _ = deregister_plugin("replacement.plugin");
-    let _ = deregister_plugin("restore.fail.plugin");
-    let _ = deregister_plugin("restore.break.plugin");
     let _ = deregister_plugin("partial.fail.plugin");
     let _ = deregister_plugin("vanishing.plugin");
     let _ = deregister_plugin("blocking.plugin");
     let _ = deregister_plugin("background.task.plugin");
-    let _ = deregister_plugin("panicking.plugin");
     let _ = deregister_plugin("failing.deregister.plugin");
     let _ = deregister_plugin("event-metadata.plugin");
 }
@@ -1011,8 +848,8 @@ fn test_register_and_deregister_plugin() {
     assert!(lookup_plugin("test.plugin").is_some());
     assert!(deregister_plugin("test.plugin"));
     assert!(!deregister_plugin("missing.plugin"));
-    assert!(clear_plugin_configuration().is_ok());
-    assert!(active_plugin_report().is_none());
+    assert!(test_close_plugin_host().is_ok());
+    assert!(test_plugin_host_report().is_none());
     reset_global();
 }
 
@@ -1068,13 +905,13 @@ fn test_initialize_plugins_registers_and_clears_components() {
         .build()
         .unwrap();
     let report = runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("test.plugin")],
             ..PluginConfig::default()
         }))
         .unwrap();
     assert!(!report.has_errors());
-    assert!(active_plugin_report().is_some());
+    assert!(test_plugin_host_report().is_some());
 
     let request = runtime
         .block_on(llm_request_intercepts(
@@ -1087,7 +924,7 @@ fn test_initialize_plugins_registers_and_clears_components() {
         .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), Some(&json!(true)));
 
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
     let request = runtime
         .block_on(llm_request_intercepts(
             "model",
@@ -1117,7 +954,7 @@ fn test_plugin_configuration_registers_event_metadata_injector() {
         .build()
         .unwrap();
     runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
             components: vec![component],
             ..PluginConfig::default()
         }))
@@ -1141,7 +978,7 @@ fn test_plugin_configuration_registers_event_metadata_injector() {
         Some(&json!("configured"))
     );
 
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
     assert!(
         global_context()
             .read()
@@ -1159,7 +996,7 @@ fn test_validate_plugin_config_honors_policy_and_duplicate_singletons() {
     reset_global();
     register_plugin(Arc::new(SingletonPlugin)).unwrap();
 
-    let report = validate_plugin_config(&PluginConfig {
+    let report = test_validate_static_plugin_config(&PluginConfig {
         components: vec![
             PluginComponentSpec::new("singleton.plugin"),
             PluginComponentSpec::new("singleton.plugin"),
@@ -1187,7 +1024,7 @@ fn test_validate_plugin_config_honors_policy_and_duplicate_singletons() {
                 && diag.level == DiagnosticLevel::Warning)
     );
 
-    let ignored = validate_plugin_config(&PluginConfig {
+    let ignored = test_validate_static_plugin_config(&PluginConfig {
         components: vec![PluginComponentSpec::new("still.missing")],
         policy: ConfigPolicy {
             unknown_component: UnsupportedBehavior::Ignore,
@@ -1206,7 +1043,7 @@ fn test_validate_plugin_config_passes_top_level_policy_to_plugins() {
     reset_global();
     register_plugin(Arc::new(PolicyAwarePlugin)).unwrap();
 
-    let warning = validate_plugin_config(&PluginConfig {
+    let warning = test_validate_static_plugin_config(&PluginConfig {
         components: vec![PluginComponentSpec::new("policy-aware.plugin")],
         policy: ConfigPolicy {
             unsupported_value: UnsupportedBehavior::Warn,
@@ -1219,7 +1056,7 @@ fn test_validate_plugin_config_passes_top_level_policy_to_plugins() {
             && diagnostic.level == DiagnosticLevel::Warning
     }));
 
-    let ignored = validate_plugin_config(&PluginConfig {
+    let ignored = test_validate_static_plugin_config(&PluginConfig {
         components: vec![PluginComponentSpec::new("policy-aware.plugin")],
         policy: ConfigPolicy {
             unsupported_value: UnsupportedBehavior::Ignore,
@@ -1261,7 +1098,7 @@ fn test_plugin_config_defaults_debug_and_invalid_config_messages() {
         .build()
         .unwrap();
     let error = runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
             version: 2,
             components: vec![PluginComponentSpec::new("missing.plugin")],
             policy: ConfigPolicy {
@@ -1626,113 +1463,6 @@ fn test_rollback_registrations_runs_in_reverse_and_ignores_failures() {
 }
 
 #[test]
-fn test_initialize_plugins_restores_previous_configuration_after_failed_replacement() {
-    let _guard = lock_runtime_owner();
-    reset_global();
-    register_plugin(Arc::new(RecordingPlugin)).unwrap();
-    register_plugin(Arc::new(RestoreFailPlugin)).unwrap();
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
-            components: vec![PluginComponentSpec::new("recording.plugin")],
-            ..PluginConfig::default()
-        }))
-        .unwrap();
-    record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
-        code: "atif.remote_delivery_failed".into(),
-        component: "observability".into(),
-        field: Some("storage[0]".into()),
-        message: "HTTP 500".into(),
-        session_id: Some("session-123".into()),
-        count: 1,
-    });
-
-    let err = runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
-            components: vec![PluginComponentSpec::new("restore.fail.plugin")],
-            ..PluginConfig::default()
-        }))
-        .unwrap_err();
-    match err {
-        PluginError::RegistrationFailed(message) => {
-            assert!(message.contains("restore.fail.plugin refused to initialize"));
-        }
-        other => panic!("unexpected replacement failure: {other}"),
-    }
-
-    assert_eq!(RESTORE_FAIL_REGISTRATIONS.load(Ordering::SeqCst), 1);
-    let restored_report = active_plugin_report().expect("previous config should be restored");
-    assert!(restored_report.diagnostics.is_empty());
-    assert_eq!(restored_report.runtime_diagnostics.len(), 1);
-    let restored = &restored_report.runtime_diagnostics[0];
-    assert_eq!(restored.code, "atif.remote_delivery_failed");
-    assert_eq!(restored.component, "observability");
-    assert_eq!(restored.field.as_deref(), Some("storage[0]"));
-    assert_eq!(restored.message, "HTTP 500");
-    assert_eq!(restored.session_id.as_deref(), Some("session-123"));
-    assert_eq!(restored.count, 1);
-    let diagnostics = active_runtime_diagnostics_snapshot();
-    assert_eq!(diagnostics.len(), 1);
-    assert_eq!(diagnostics[0].code, "atif.remote_delivery_failed");
-    assert_eq!(diagnostics[0].message, "HTTP 500");
-    assert_eq!(diagnostics[0].count, 1);
-    let names = recorded_names().lock().unwrap().clone();
-    assert_eq!(
-        names,
-        vec![
-            "nemo-relay-plugin.v1.recording.plugin:1:subscriber",
-            "nemo-relay-plugin.v1.recording.plugin:1:subscriber",
-        ]
-    );
-    reset_global();
-}
-
-#[test]
-fn test_initialize_plugins_restores_previous_configuration_after_replacement_panic() {
-    let _guard = lock_runtime_owner();
-    reset_global();
-    register_plugin(Arc::new(RecordingPlugin)).unwrap();
-    register_plugin(Arc::new(PanickingPlugin)).unwrap();
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
-            components: vec![PluginComponentSpec::new("recording.plugin")],
-            ..PluginConfig::default()
-        }))
-        .unwrap();
-
-    let error = runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
-            components: vec![PluginComponentSpec::new("panicking.plugin")],
-            ..PluginConfig::default()
-        }))
-        .unwrap_err();
-    assert!(
-        error.to_string().contains("fixture plugin panicked"),
-        "{error}"
-    );
-    assert!(active_plugin_report().is_some());
-    assert_eq!(
-        recorded_names().lock().unwrap().as_slice(),
-        [
-            "nemo-relay-plugin.v1.recording.plugin:1:subscriber",
-            "nemo-relay-plugin.v1.recording.plugin:1:subscriber",
-        ]
-    );
-
-    reset_global();
-}
-
-#[test]
 fn test_initialize_plugins_rolls_back_partial_component_registration_on_failure() {
     let _guard = lock_runtime_owner();
     reset_global();
@@ -1743,7 +1473,7 @@ fn test_initialize_plugins_rolls_back_partial_component_registration_on_failure(
         .build()
         .unwrap();
     let err = runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("partial.fail.plugin")],
             ..PluginConfig::default()
         }))
@@ -1757,7 +1487,7 @@ fn test_initialize_plugins_rolls_back_partial_component_registration_on_failure(
     }
 
     assert_eq!(PARTIAL_FAIL_ROLLBACKS.load(Ordering::SeqCst), 1);
-    assert!(active_plugin_report().is_none());
+    assert!(test_plugin_host_report().is_none());
     reset_global();
 }
 
@@ -1765,7 +1495,6 @@ fn test_initialize_plugins_rolls_back_partial_component_registration_on_failure(
 fn test_initialize_plugins_transaction_finishes_after_caller_cancellation() {
     let _guard = lock_runtime_owner();
     reset_global();
-    register_plugin(Arc::new(RecordingPlugin)).unwrap();
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let registered = Arc::new(Notify::new());
@@ -1781,38 +1510,31 @@ fn test_initialize_plugins_transaction_finishes_after_caller_cancellation() {
         .build()
         .unwrap();
     runtime.block_on(async {
-        initialize_plugins_exact(PluginConfig {
-            components: vec![PluginComponentSpec::new("recording.plugin")],
-            ..PluginConfig::default()
-        })
-        .await
-        .unwrap();
-
-        let caller = tokio::spawn(initialize_plugins_exact(PluginConfig {
-            components: vec![PluginComponentSpec::new("blocking.plugin")],
-            ..PluginConfig::default()
-        }));
+        let caller = tokio::spawn(
+            crate::plugin::dynamic::PluginHostActivation::initialize_exact(PluginConfig {
+                components: vec![PluginComponentSpec::new("blocking.plugin")],
+                ..PluginConfig::default()
+            }),
+        );
         started.notified().await;
         caller.abort();
-        assert!(caller.await.unwrap_err().is_cancelled());
+        match caller.await {
+            Err(error) => assert!(error.is_cancelled()),
+            Ok(_) => panic!("cancelled host initializer unexpectedly returned"),
+        }
         release.notify_one();
         registered.notified().await;
 
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             loop {
-                if active_plugin_report().is_some_and(|report| {
-                    report
-                        .diagnostics
-                        .iter()
-                        .any(|diagnostic| diagnostic.code == "blocking.warning")
-                }) {
+                if !plugin_configuration_is_active().unwrap() {
                     break;
                 }
                 tokio::task::yield_now().await;
             }
         })
         .await
-        .expect("owned initialization transaction did not finish after caller cancellation");
+        .expect("orphaned activation did not close after caller cancellation");
 
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             loop {
@@ -1846,7 +1568,7 @@ fn test_plugin_runtime_continues_driving_background_tasks_after_initialization()
         .build()
         .unwrap();
     runtime.block_on(async {
-        initialize_plugins_exact(PluginConfig {
+        test_initialize_plugin_host_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("background.task.plugin")],
             ..PluginConfig::default()
         })
@@ -1939,7 +1661,7 @@ fn test_checked_teardown_reports_unremoved_registrations() {
     let error = outcome.result.unwrap_err().to_string();
     assert!(error.contains("stale-callback"), "{error}");
     assert!(error.contains("deregistration refused"), "{error}");
-    assert!(active_plugin_report().is_none());
+    assert!(test_plugin_host_report().is_none());
     reset_global();
 }
 
@@ -2005,7 +1727,9 @@ fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
     let error = outcome.result.unwrap_err().to_string();
     assert!(error.contains("atif.remote_delivery_failed"), "{error}");
     assert!(!error.contains("could not be removed"), "{error}");
-    let report = active_plugin_report().expect("failed teardown should retain its report");
+    let report = outcome
+        .report
+        .expect("failed teardown should return its report to the owning handle");
     assert_eq!(report.runtime_diagnostics.len(), 1);
     let diagnostic = &report.runtime_diagnostics[0];
     assert_eq!(diagnostic.code, "atif.remote_delivery_failed");
@@ -2014,7 +1738,7 @@ fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
     assert_eq!(diagnostic.session_id.as_deref(), Some("session-123"));
 
     clear_plugin_configuration_inner();
-    assert!(active_plugin_report().is_none());
+    assert!(test_plugin_host_report().is_none());
     reset_global();
 }
 
@@ -2166,149 +1890,6 @@ fn test_mixed_opentelemetry_shutdown_failure_blocks_later_configuration() {
 }
 
 #[test]
-fn test_replacement_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
-    let _guard = lock_runtime_owner();
-    reset_global();
-    store_active_plugin_configuration(
-        PluginConfig::default(),
-        ConfigReport::default(),
-        vec![PluginRegistration::new_with_outcome(
-            "fixture",
-            "atif-shutdown",
-            Box::new(|| {
-                record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
-                    code: "atif.remote_delivery_failed".into(),
-                    component: "observability".into(),
-                    field: Some("storage[0]".into()),
-                    message: "HTTP 500".into(),
-                    session_id: Some("session-123".into()),
-                    count: 1,
-                });
-                PluginRegistrationCleanupOutcome::RemovedWithError(PluginError::RegistrationFailed(
-                    "ATIF delivery failed".into(),
-                ))
-            }),
-        )],
-    )
-    .unwrap();
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let error = runtime
-        .block_on(initialize_plugins_exact(PluginConfig::default()))
-        .unwrap_err();
-    assert!(
-        error.to_string().contains("ATIF delivery failed"),
-        "{error}"
-    );
-    assert!(
-        error
-            .to_string()
-            .contains("fixture registration 'atif-shutdown' reported a delivery failure"),
-        "{error}"
-    );
-    assert!(
-        !plugin_configuration_is_active().unwrap(),
-        "a replacement aborted by delivery failure must not leave a configuration active"
-    );
-    let report = active_plugin_report().expect("failed replacement should retain its report");
-    assert_eq!(report.runtime_diagnostics.len(), 1);
-    assert_eq!(
-        report.runtime_diagnostics[0].code,
-        "atif.remote_delivery_failed"
-    );
-    assert_eq!(
-        report.runtime_diagnostics[0].field.as_deref(),
-        Some("storage[0]")
-    );
-    assert_eq!(report.runtime_diagnostics[0].count, 1);
-
-    runtime
-        .block_on(initialize_plugins_exact(PluginConfig::default()))
-        .expect("delivery-only teardown errors must not block a later initialization");
-    reset_global();
-}
-
-#[test]
-fn test_legacy_clear_retains_mutation_owner_after_incomplete_teardown() {
-    let _guard = lock_runtime_owner();
-    let owner_cleanup = PluginMutationOwnerCleanup;
-    reset_global();
-    store_active_plugin_configuration(
-        PluginConfig::default(),
-        ConfigReport::default(),
-        vec![PluginRegistration::new(
-            "fixture",
-            "stale-callback",
-            Box::new(|| panic!("fixture deregistration panicked")),
-        )],
-    )
-    .unwrap();
-
-    let error = clear_plugin_configuration().unwrap_err();
-    assert!(error.to_string().contains("stale-callback"), "{error}");
-    assert!(
-        error
-            .to_string()
-            .contains("fixture deregistration panicked"),
-        "{error}"
-    );
-    assert_eq!(
-        *PLUGIN_MUTATION_OWNER.lock().unwrap(),
-        PluginMutationOwner::Legacy
-    );
-    assert!(matches!(
-        clear_plugin_configuration(),
-        Err(PluginError::Conflict(_))
-    ));
-
-    drop(owner_cleanup);
-    reset_global();
-}
-
-#[test]
-fn test_legacy_replace_retains_mutation_owner_after_incomplete_teardown() {
-    let _guard = lock_runtime_owner();
-    let owner_cleanup = PluginMutationOwnerCleanup;
-    reset_global();
-    register_plugin(Arc::new(FailingDeregisterPlugin)).unwrap();
-    register_plugin(Arc::new(ReplacementPlugin)).unwrap();
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
-            components: vec![PluginComponentSpec::new("failing.deregister.plugin")],
-            ..PluginConfig::default()
-        }))
-        .unwrap();
-
-    let error = runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
-            components: vec![PluginComponentSpec::new("replacement.plugin")],
-            ..PluginConfig::default()
-        }))
-        .unwrap_err();
-    assert!(
-        error.to_string().contains("fixture deregistration refused"),
-        "{error}"
-    );
-    assert_eq!(REPLACEMENT_REGISTRATIONS.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        *PLUGIN_MUTATION_OWNER.lock().unwrap(),
-        PluginMutationOwner::Legacy
-    );
-    assert!(active_plugin_report().is_none());
-
-    drop(owner_cleanup);
-    reset_global();
-}
-
-#[test]
 fn test_initialize_plugins_skips_disabled_components_and_namespaces_multiple_instances() {
     let _guard = lock_runtime_owner();
     reset_global();
@@ -2319,7 +1900,7 @@ fn test_initialize_plugins_skips_disabled_components_and_namespaces_multiple_ins
         .build()
         .unwrap();
     runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
             components: vec![
                 PluginComponentSpec::new("recording.plugin"),
                 PluginComponentSpec {
@@ -2354,7 +1935,7 @@ fn test_initialize_plugins_assigns_ordinal_to_lone_enabled_component() {
         .build()
         .unwrap();
     runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
             components: vec![
                 PluginComponentSpec::new("recording.plugin"),
                 PluginComponentSpec {
@@ -2384,7 +1965,7 @@ fn test_singleton_plugin_registration_discovers_ordinal() {
         .build()
         .unwrap();
     runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("discoverable.plugin")],
             ..PluginConfig::default()
         }))
@@ -2407,7 +1988,7 @@ fn test_singleton_plugin_registration_discovers_ordinal() {
     );
     assert_eq!(registration.owner.component_ordinal, Some(1));
 
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
     reset_global();
 }
 
@@ -2422,7 +2003,7 @@ fn test_initialize_plugins_reports_missing_component_during_activation() {
         .build()
         .unwrap();
     let error = runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("vanishing.plugin")],
             ..PluginConfig::default()
         }))
@@ -2431,7 +2012,7 @@ fn test_initialize_plugins_reports_missing_component_during_activation() {
     match error {
         PluginError::NotFound(message) => {
             assert!(message.contains("vanishing.plugin"));
-            assert!(active_plugin_report().is_none());
+            assert!(test_plugin_host_report().is_none());
         }
         other => panic!("unexpected activation failure: {other}"),
     }
@@ -2919,118 +2500,6 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
         }
     }
 
-    reset_global();
-}
-
-#[test]
-fn test_initialize_plugins_replaces_previous_configuration_on_success() {
-    let _guard = lock_runtime_owner();
-    reset_global();
-    register_plugin(Arc::new(RecordingPlugin)).unwrap();
-    register_plugin(Arc::new(ReplacementPlugin)).unwrap();
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
-            components: vec![PluginComponentSpec::new("recording.plugin")],
-            ..PluginConfig::default()
-        }))
-        .unwrap();
-
-    let report = runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
-            components: vec![PluginComponentSpec::new("replacement.plugin")],
-            ..PluginConfig::default()
-        }))
-        .unwrap();
-
-    assert!(
-        report
-            .diagnostics
-            .iter()
-            .any(|diag| diag.code == "replacement.warning")
-    );
-    assert_eq!(active_plugin_report().unwrap().diagnostics.len(), 1);
-    assert_eq!(REPLACEMENT_REGISTRATIONS.load(Ordering::SeqCst), 1);
-
-    reset_global();
-}
-
-#[test]
-fn test_initialize_plugins_preserves_resolution_diagnostics() {
-    let _guard = lock_runtime_owner();
-    reset_global();
-    register_plugin(Arc::new(RecordingPlugin)).unwrap();
-
-    let diagnostic = ConfigDiagnostic {
-        level: DiagnosticLevel::Warning,
-        code: "plugin.component_reenabled".to_string(),
-        component: Some("recording.plugin".to_string()),
-        field: Some("enabled".to_string()),
-        message: "programmatic configuration re-enabled the component".to_string(),
-    };
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let report = runtime
-        .block_on(initialize_plugins_with_diagnostics(
-            PluginConfig {
-                components: vec![PluginComponentSpec::new("recording.plugin")],
-                ..PluginConfig::default()
-            },
-            vec![diagnostic.clone()],
-        ))
-        .unwrap();
-
-    assert_eq!(report.diagnostics, vec![diagnostic.clone()]);
-    assert_eq!(
-        active_plugin_report().unwrap().diagnostics,
-        vec![diagnostic]
-    );
-    reset_global();
-}
-
-#[test]
-fn test_initialize_plugins_reports_failed_restore_when_previous_configuration_cannot_be_restored() {
-    let _guard = lock_runtime_owner();
-    reset_global();
-    register_plugin(Arc::new(RestoreBreakPlugin)).unwrap();
-    register_plugin(Arc::new(RestoreFailPlugin)).unwrap();
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
-            components: vec![PluginComponentSpec::new("restore.break.plugin")],
-            ..PluginConfig::default()
-        }))
-        .unwrap();
-
-    let error = runtime
-        .block_on(initialize_plugins_exact(PluginConfig {
-            components: vec![PluginComponentSpec::new("restore.fail.plugin")],
-            ..PluginConfig::default()
-        }))
-        .unwrap_err();
-
-    match error {
-        PluginError::RegistrationFailed(message) => {
-            assert!(message.contains("restore.fail.plugin refused to initialize"));
-            assert!(message.contains("previous plugin configuration could not be restored"));
-            assert!(message.contains("restore.break.plugin refused to restore"));
-        }
-        other => panic!("unexpected failed-restore error: {other}"),
-    }
-
-    assert!(active_plugin_report().is_none());
     reset_global();
 }
 

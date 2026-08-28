@@ -49,14 +49,14 @@ function runSubscriberFailureChild({ callback, registration = 'global' }) {
       "    context.registerSubscriber('bad', () => { " + callback + ' });',
       '  },',
       '});',
-      "await plugin.initialize({ version: 1, components: [plugin.ComponentSpec('observability', { version: 3 }), plugin.ComponentSpec(pluginKind)] });",
+      "globalThis.pluginHost = await plugin.initialize({ version: 1, components: [plugin.ComponentSpec('observability', { version: 3 }), plugin.ComponentSpec(pluginKind)] });",
     ].join('\n'),
   }[registration];
   const scopeEvent = registration === 'scope' ? 'scope' : 'null';
   const cleanup = {
     global: "deregisterSubscriber('bad');",
     scope: "scopeDeregisterSubscriber(scope.uuid, 'bad'); popScope(scope);",
-    plugin: 'plugin.clear(); plugin.deregister(pluginKind);',
+    plugin: 'await pluginHost.close(); plugin.deregister(pluginKind);',
   }[registration];
   const script = `
     const lib = require(${JSON.stringify(path.join(nodeDir, 'index.js'))});

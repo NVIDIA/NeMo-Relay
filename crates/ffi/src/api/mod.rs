@@ -39,9 +39,9 @@ use crate::error::{
 use crate::types::{
     FfiAtifExporter, FfiAtofExporter, FfiCodecHandle, FfiLLMHandle, FfiLLMRequest,
     FfiLlmSanitizeRequestCodec, FfiLlmSanitizeResponseCodec, FfiOpenTelemetryLogSubscriber,
-    FfiOpenTelemetryMetricSubscriber, FfiOpenTelemetrySubscriber, FfiPluginActivation,
-    FfiPluginContext, FfiScopeHandle, FfiScopeStack, FfiThreadScopeStackBinding, FfiToolHandle,
-    NemoRelayLogSeverity, NemoRelayMetricMeasurement, NemoRelayScopeType,
+    FfiOpenTelemetryMetricSubscriber, FfiOpenTelemetrySubscriber, FfiPluginContext,
+    FfiPluginHostActivation, FfiScopeHandle, FfiScopeStack, FfiThreadScopeStackBinding,
+    FfiToolHandle, NemoRelayLogSeverity, NemoRelayMetricMeasurement, NemoRelayScopeType,
 };
 pub use crate::types::{
     nemo_relay_otel_log_subscriber_free, nemo_relay_otel_metric_subscriber_free,
@@ -62,11 +62,10 @@ use nemo_relay::api::subscriber as core_subscriber_api;
 use nemo_relay::api::tool as core_tool_api;
 use nemo_relay::api::tool::ToolAttributes;
 use nemo_relay::error::{FlowError, Result as FlowResult};
-use nemo_relay::plugin::dynamic::{DynamicPluginActivationSpec, PluginHostActivation};
+use nemo_relay::plugin::dynamic::PluginHostActivation;
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError,
-    PluginRegistrationContext, active_plugin_report, clear_plugin_configuration, deregister_plugin,
-    initialize_plugins, list_plugin_kinds, register_plugin, validate_plugin_config,
+    PluginRegistrationContext, deregister_plugin, list_plugin_kinds, register_plugin,
 };
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use tokio::runtime::Runtime;

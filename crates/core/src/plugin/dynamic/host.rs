@@ -10,6 +10,7 @@
 //! affinity; the lifecycle executor remains available for the process lifetime.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -18,22 +19,46 @@ use serde_json::{Map, Value as Json};
 use crate::plugin::{
     ConfigReport, PluginComponentSpec, PluginConfig, PluginHostLease, Result,
     acquire_plugin_host_lease, clear_plugin_configuration_for_host,
-    ensure_builtin_plugins_registered, initialize_plugins_exact_for_host, resolve_plugin_config,
-    run_owned_plugin_mutation,
+    ensure_builtin_plugins_registered, initialize_plugins_exact_for_host,
+    plugin_configuration_report_for_host, run_owned_plugin_mutation,
 };
 
 use super::{
     DynamicPluginKind, DynamicPluginTeardownOutcome, NativePluginActivation, NativePluginLoadSpec,
-    load_native_plugins,
+    PluginHostReport, load_native_plugins, resolve_plugin_host_config,
 };
 
 #[cfg(feature = "worker-grpc")]
 use super::{WorkerPluginActivation, WorkerPluginLoadSpec, load_worker_plugins};
 
+/// Initializes the process-wide static and dynamic plugin host.
+///
+/// The returned handle must remain alive while any plugin-provided callback can
+/// run. Closing or dropping it unregisters components before unloading dynamic
+/// runtimes.
+pub async fn initialize(
+    config: PluginConfig,
+    additional_plugins_toml: Option<PathBuf>,
+) -> Result<PluginHostActivation> {
+    let resolved = resolve_plugin_host_config(config, additional_plugins_toml.as_deref())?;
+    let dynamic_reports = resolved.dynamic_reports;
+    let (mut activation, config_report) = PluginHostActivation::activate_validated(
+        resolved.config,
+        resolved.dynamic_plugins,
+        resolved.diagnostics,
+    )
+    .await?;
+    activation.report = PluginHostReport {
+        config: config_report,
+        dynamic_plugins: dynamic_reports,
+    };
+    Ok(activation)
+}
+
 /// One dynamic plugin component to load and activate in an embedding host.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct DynamicPluginActivationSpec {
+pub struct VerifiedDynamicPluginSpec {
     /// Expected plugin identifier from the authored manifest.
     pub plugin_id: String,
     /// Plugin execution lane.
@@ -56,6 +81,7 @@ pub struct DynamicPluginActivationSpec {
 #[must_use = "dropping the activation clears and unloads its dynamic plugins"]
 pub struct PluginHostActivation {
     active: bool,
+    report: PluginHostReport,
     native: Option<NativePluginActivation>,
     #[cfg(feature = "worker-grpc")]
     worker: Option<WorkerPluginActivation>,
@@ -63,47 +89,50 @@ pub struct PluginHostActivation {
 }
 
 impl PluginHostActivation {
-    /// Load dynamic plugins and activate them with `config` as one transaction.
+    /// Activates an already-resolved static configuration under the same owned
+    /// process-wide lease as dynamic hosts.
     ///
-    /// The supplied base configuration may contain statically registered
-    /// components. Dynamic components are appended after them in specification
-    /// order. At least one dynamic plugin is required; static-only callers
-    /// should use the regular plugin initialization API. The returned activation
-    /// must remain alive for as long as code may invoke plugin-provided callbacks.
-    pub async fn activate<I>(
-        config: PluginConfig,
-        dynamic_plugins: I,
-    ) -> Result<(Self, ConfigReport)>
-    where
-        I: IntoIterator<Item = DynamicPluginActivationSpec>,
-    {
-        let dynamic_plugins = dynamic_plugins.into_iter().collect::<Vec<_>>();
-        validate_dynamic_plugin_specs(&dynamic_plugins)?;
-        Self::activate_validated(config, dynamic_plugins, Vec::new()).await
+    /// This is for callers that deliberately resolved their own configuration
+    /// layers before entering core. Normal embeddings should use
+    /// [`initialize`] so core owns discovery and policy resolution.
+    #[doc(hidden)]
+    pub async fn initialize_exact(config: PluginConfig) -> Result<Self> {
+        let (mut activation, report) =
+            Self::activate_validated(config, Vec::new(), Vec::new()).await?;
+        activation.report = PluginHostReport {
+            config: report,
+            dynamic_plugins: Vec::new(),
+        };
+        Ok(activation)
     }
 
-    /// Load dynamic plugins after layering `config` over discovered `plugins.toml` files.
+    /// Activates CLI-verified runtime artifacts under the core-owned lease.
     ///
-    /// This is the harness-native entrypoint for language and FFI bindings. File
-    /// discovery and merging happen once before activation, and the explicit
-    /// `config` has higher precedence. Hosts such as the Relay CLI that already
-    /// resolved plugin configuration should call [`Self::activate`] instead.
-    pub async fn activate_with_discovered_config<I>(
+    /// This internal integration hook exists solely for the CLI's managed
+    /// Python-environment attestation. Bindings and embedding applications use
+    /// [`initialize`].
+    #[doc(hidden)]
+    pub async fn initialize_with_verified_specs<I>(
         config: PluginConfig,
         dynamic_plugins: I,
     ) -> Result<(Self, ConfigReport)>
     where
-        I: IntoIterator<Item = DynamicPluginActivationSpec>,
+        I: IntoIterator<Item = VerifiedDynamicPluginSpec>,
     {
         let dynamic_plugins = dynamic_plugins.into_iter().collect::<Vec<_>>();
         validate_dynamic_plugin_specs(&dynamic_plugins)?;
-        let resolved = resolve_plugin_config(config)?;
-        Self::activate_validated(resolved.config, dynamic_plugins, resolved.diagnostics).await
+        let (mut activation, report) =
+            Self::activate_validated(config, dynamic_plugins, Vec::new()).await?;
+        activation.report = PluginHostReport {
+            config: report.clone(),
+            dynamic_plugins: Vec::new(),
+        };
+        Ok((activation, report))
     }
 
     async fn activate_validated(
         config: PluginConfig,
-        dynamic_plugins: Vec<DynamicPluginActivationSpec>,
+        dynamic_plugins: Vec<VerifiedDynamicPluginSpec>,
         diagnostics: Vec<crate::plugin::ConfigDiagnostic>,
     ) -> Result<(Self, ConfigReport)> {
         run_owned_plugin_mutation("dynamic plugin activation", move || async move {
@@ -114,7 +143,7 @@ impl PluginHostActivation {
 
     async fn activate_inner(
         mut config: PluginConfig,
-        dynamic_plugins: Vec<DynamicPluginActivationSpec>,
+        dynamic_plugins: Vec<VerifiedDynamicPluginSpec>,
         diagnostics: Vec<crate::plugin::ConfigDiagnostic>,
     ) -> Result<(Self, ConfigReport)> {
         let dynamic_plugin_count = dynamic_plugins.len();
@@ -247,6 +276,7 @@ impl PluginHostActivation {
         Ok((
             Self {
                 active: true,
+                report: PluginHostReport::default(),
                 native,
                 #[cfg(feature = "worker-grpc")]
                 worker,
@@ -265,8 +295,21 @@ impl PluginHostActivation {
         self.active
     }
 
-    /// Clear registered callbacks before unloading libraries and workers.
-    pub fn clear(mut self) -> Result<()> {
+    /// Returns the host report, including runtime and teardown diagnostics
+    /// observed so far.
+    pub fn report(&self) -> PluginHostReport {
+        let mut report = self.report.clone();
+        if self.active
+            && let Some(claim) = &self.claim
+            && let Ok(Some(config)) = plugin_configuration_report_for_host(claim.owner_id())
+        {
+            report.config = config;
+        }
+        report
+    }
+
+    /// Deterministically tears down static registrations and dynamic runtimes.
+    pub fn close(&mut self) -> Result<()> {
         self.clear_inner()
     }
 
@@ -282,7 +325,11 @@ impl PluginHostActivation {
             .unwrap_or(crate::plugin::PluginHostClearOutcome {
                 result: Ok(()),
                 callbacks_cleared: true,
+                report: None,
             });
+        if let Some(report) = outcome.report {
+            self.report.config = report;
+        }
         let mut errors = outcome
             .result
             .err()
@@ -358,7 +405,7 @@ impl PluginHostActivation {
     }
 }
 
-fn validate_dynamic_plugin_specs(dynamic_plugins: &[DynamicPluginActivationSpec]) -> Result<()> {
+fn validate_dynamic_plugin_specs(dynamic_plugins: &[VerifiedDynamicPluginSpec]) -> Result<()> {
     if dynamic_plugins.is_empty() {
         return Err(crate::plugin::PluginError::InvalidConfig(
             concat!(

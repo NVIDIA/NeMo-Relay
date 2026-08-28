@@ -99,7 +99,7 @@ digits, `-`, `_`, `.`, and `~`. Relay rejects empty segments, `.` and `..`
 segments, absolute paths, backslashes, spaces, and other characters. If a
 placeholder is missing without a fallback, is present but non-string, or
 resolves to an unsafe value, Relay skips that trajectory. It records a runtime
-diagnostic in `plugin.report()` and causes plugin teardown to fail. Literal
+diagnostic and causes `activation.close()` to fail. Literal
 template text must also be a relative, traversal-free path. The rendered
 filename applies to local, S3, and HTTP storage in the same way as a static
 filename.
@@ -247,8 +247,7 @@ delivery diagnostic and retries that destination for each later trajectory.
 Other destinations continue to receive writes. When every remote destination
 fails for one trajectory, Relay writes a local recovery copy under
 `output_directory`; a successful remote destination does not create that copy.
-The diagnostic becomes visible in `plugin.report()` after subscriber delivery
-is flushed and is retained there after a failed teardown. Teardown also reports
+The diagnostic is logged after subscriber delivery is flushed. Teardown also reports
 the degraded delivery, even when the local recovery write succeeds. This error
 reports delivery degradation, not a registration leak; callbacks have already
 been removed. If the failure is still pending when initialization replaces the
@@ -333,17 +332,17 @@ config = plugin.PluginConfig(
     ]
 )
 
-report = plugin.validate(config)
+report = plugin.validate(config)["config"]
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
 async def main():
-    await plugin.initialize(config)
+    activation = await plugin.initialize(config)
     try:
         # Run instrumented application work here.
         pass
     finally:
-        await plugin.clear_async()
+        await activation.close()
 
 asyncio.run(main())
 ```
@@ -356,7 +355,7 @@ const plugin = require("nemo-relay-node/plugin");
 const observability = require("nemo-relay-node/observability");
 
 void (async () => {
-  await plugin.initialize({
+  const activation = await plugin.initialize({
     version: 1,
     components: [
       observability.ComponentSpec({
@@ -376,7 +375,7 @@ void (async () => {
   try {
     // Run instrumented application work here.
   } finally {
-    plugin.clear();
+    await activation.close();
   }
 })().catch((error) => {
   console.error(error);
@@ -393,9 +392,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use nemo_relay::observability::plugin_component::{
     AtifSectionConfig, ComponentSpec, ObservabilityConfig,
 };
-use nemo_relay::plugin::{
-    clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
-};
+use nemo_relay::plugin::PluginConfig;
+use nemo_relay::plugin::dynamic::{initialize, validate};
 
 let component = ComponentSpec::new(ObservabilityConfig {
     atif: Some(AtifSectionConfig {
@@ -416,14 +414,14 @@ let config = PluginConfig {
     policy: Default::default(),
 };
 
-let report = validate_plugin_config(&config);
-assert!(!report.has_errors());
+let report = validate(config.clone(), None)?;
+assert!(!report.config.has_errors());
 
-let _active = initialize_plugins(config).await?;
+let activation = initialize(config, None).await?;
 
 // Run instrumented application work here.
 
-clear_plugin_configuration()?;
+activation.close()?;
 Ok(())
 }
 ```

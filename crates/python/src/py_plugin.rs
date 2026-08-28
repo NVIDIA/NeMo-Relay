@@ -4,11 +4,11 @@
 //! Python-facing generic plugin configuration and registration helpers.
 
 use std::collections::BTreeSet;
-#[cfg(test)]
-use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, LazyLock, Mutex};
+#[cfg(test)]
+use std::sync::LazyLock;
+use std::sync::{Arc, Mutex};
 
 use pyo3::prelude::*;
 use pyo3::types::PySet;
@@ -35,11 +35,11 @@ use nemo_relay::api::registry::{
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay::error::Result as FlowResult;
+use nemo_relay::plugin::dynamic::{PluginHostReport, initialize, validate};
 use nemo_relay::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, DynamicPluginActivationSpec, Plugin, PluginConfig,
-    PluginError, PluginHostActivation, PluginRegistration, PluginRegistrationContext,
-    active_plugin_report, clear_plugin_configuration, deregister_plugin, initialize_plugins,
-    list_plugin_kinds, register_plugin, rollback_registrations, validate_plugin_config,
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginHostActivation,
+    PluginRegistration, PluginRegistrationContext, deregister_plugin, list_plugin_kinds,
+    register_plugin, rollback_registrations,
 };
 
 use crate::convert::{json_to_py, py_to_json};
@@ -52,71 +52,7 @@ use crate::py_callable::{
 };
 
 #[cfg(test)]
-static FORCE_VALIDATE_CONFIG_TO_PY_ERROR: LazyLock<Mutex<HashSet<String>>> =
-    LazyLock::new(|| Mutex::new(HashSet::new()));
-#[cfg(test)]
-static FORCE_PLUGIN_CONTEXT_NEW_ERROR: LazyLock<Mutex<HashSet<String>>> =
-    LazyLock::new(|| Mutex::new(HashSet::new()));
-#[cfg(test)]
 static PLUGIN_TEST_STATE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
-#[cfg(test)]
-enum ForcedPluginTestFlagKind {
-    ValidateConfigToPyError,
-    PluginContextNewError,
-}
-
-#[cfg(test)]
-pub(crate) struct ForcedPluginTestFlagGuard {
-    kind: ForcedPluginTestFlagKind,
-    plugin_kind: String,
-}
-
-#[cfg(test)]
-impl Drop for ForcedPluginTestFlagGuard {
-    fn drop(&mut self) {
-        match self.kind {
-            ForcedPluginTestFlagKind::ValidateConfigToPyError => {
-                if let Ok(mut forced_kinds) = FORCE_VALIDATE_CONFIG_TO_PY_ERROR.lock() {
-                    forced_kinds.remove(&self.plugin_kind);
-                }
-            }
-            ForcedPluginTestFlagKind::PluginContextNewError => {
-                if let Ok(mut forced_kinds) = FORCE_PLUGIN_CONTEXT_NEW_ERROR.lock() {
-                    forced_kinds.remove(&self.plugin_kind);
-                }
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn force_validate_config_to_py_error_for_tests(
-    plugin_kind: &str,
-) -> ForcedPluginTestFlagGuard {
-    FORCE_VALIDATE_CONFIG_TO_PY_ERROR
-        .lock()
-        .expect("forced validate hook mutex poisoned")
-        .insert(plugin_kind.to_string());
-    ForcedPluginTestFlagGuard {
-        kind: ForcedPluginTestFlagKind::ValidateConfigToPyError,
-        plugin_kind: plugin_kind.to_string(),
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn force_plugin_context_new_error_for_tests(
-    plugin_kind: &str,
-) -> ForcedPluginTestFlagGuard {
-    FORCE_PLUGIN_CONTEXT_NEW_ERROR
-        .lock()
-        .expect("forced plugin context hook mutex poisoned")
-        .insert(plugin_kind.to_string());
-    ForcedPluginTestFlagGuard {
-        kind: ForcedPluginTestFlagKind::PluginContextNewError,
-        plugin_kind: plugin_kind.to_string(),
-    }
-}
 
 #[cfg(test)]
 pub(crate) fn lock_plugin_test_state_for_tests() -> std::sync::MutexGuard<'static, ()> {
@@ -130,17 +66,6 @@ fn plugin_config_to_py(
     _plugin_kind: &str,
     plugin_config: &Map<String, Json>,
 ) -> PyResult<Py<PyAny>> {
-    #[cfg(test)]
-    if FORCE_VALIDATE_CONFIG_TO_PY_ERROR
-        .lock()
-        .map(|forced_kinds| forced_kinds.contains(_plugin_kind))
-        .unwrap_or(false)
-    {
-        return Err(pyo3::exceptions::PyRuntimeError::new_err(
-            "forced plugin config conversion failure",
-        ));
-    }
-
     json_to_py(py, &Json::Object(plugin_config.clone()))
 }
 
@@ -150,17 +75,6 @@ fn new_py_plugin_context(
     registrations: Arc<Mutex<Vec<PluginRegistration>>>,
     namespace_prefix: String,
 ) -> PyResult<Py<PyPluginContext>> {
-    #[cfg(test)]
-    if FORCE_PLUGIN_CONTEXT_NEW_ERROR
-        .lock()
-        .map(|forced_kinds| forced_kinds.contains(_plugin_kind))
-        .unwrap_or(false)
-    {
-        return Err(pyo3::exceptions::PyRuntimeError::new_err(
-            "forced plugin context allocation failure",
-        ));
-    }
-
     Py::new(
         py,
         PyPluginContext {
@@ -745,38 +659,6 @@ impl Plugin for PyPlugin {
     }
 }
 
-#[pyfunction(name = "validate_plugin_config")]
-#[pyo3(signature = (config: "object") -> "object", text_signature = "(config: object) -> object")]
-fn validate_plugin_config_py(py: Python<'_>, config: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-    let config_json = py_to_json(config)?;
-    let config: PluginConfig = serde_json::from_value(config_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-    let report = validate_plugin_config(&config);
-    let report = serde_json::to_value(&report)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-    json_to_py(py, &report)
-}
-
-#[pyfunction(name = "initialize_plugins")]
-#[pyo3(signature = (config: "object") -> "object", text_signature = "(config: object) -> object")]
-fn initialize_plugins_py<'py>(
-    py: Python<'py>,
-    config: &Bound<'_, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
-    let config_json = py_to_json(config)?;
-    let config: PluginConfig = serde_json::from_value(config_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let report = initialize_plugins(config).await.map_err(to_py_err)?;
-        reset_plugin_configuration_clear_state();
-        Python::attach(|py| {
-            let report = serde_json::to_value(&report)
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            json_to_py(py, &report)
-        })
-    })
-}
-
 /// Owned dynamic plugin host activation.
 ///
 /// The public Python wrapper retains this object until ``close()`` or context
@@ -785,7 +667,6 @@ fn initialize_plugins_py<'py>(
 #[pyclass(name = "_PluginHostActivation")]
 struct PyPluginHostActivation {
     close_state: Arc<PluginHostCloseState>,
-    report: nemo_relay::plugin::ConfigReport,
 }
 
 #[derive(Clone, Copy)]
@@ -877,15 +758,41 @@ enum PluginHostCloseStatus {
 
 struct PluginHostCloseState {
     status: Mutex<PluginHostCloseStatus>,
+    report: Mutex<PluginHostReport>,
     completion: PluginTeardownCompletion,
 }
 
 impl PluginHostCloseState {
     fn new(activation: PluginHostActivation) -> Self {
+        let report = activation.report();
         Self {
             status: Mutex::new(PluginHostCloseStatus::Active(Some(activation))),
+            report: Mutex::new(report),
             completion: PluginTeardownCompletion::new(),
         }
+    }
+
+    fn report(&self) -> PluginHostReport {
+        let latest = {
+            let status = self
+                .status
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match &*status {
+                PluginHostCloseStatus::Active(Some(activation)) => Some(activation.report()),
+                PluginHostCloseStatus::Active(None)
+                | PluginHostCloseStatus::Closing
+                | PluginHostCloseStatus::Closed => None,
+            }
+        };
+        let mut report = self
+            .report
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(latest) = latest {
+            *report = latest;
+        }
+        report.clone()
     }
 
     fn is_active(&self) -> bool {
@@ -909,6 +816,12 @@ impl PluginHostCloseState {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             match &mut *status {
                 PluginHostCloseStatus::Active(activation) => {
+                    if let Some(current) = activation.as_ref() {
+                        *self
+                            .report
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()) = current.report();
+                    }
                     let activation = activation.take();
                     *status = PluginHostCloseStatus::Closing;
                     activation
@@ -933,14 +846,19 @@ impl PluginHostCloseState {
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .take();
                 let result = match activation {
-                    Some(activation) => {
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            activation.clear()
+                    Some(mut activation) => {
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            activation.close()
                         }))
                         .map_err(|_| {
                             PluginTeardownError::runtime("dynamic plugin teardown task panicked")
                         })
-                        .and_then(|result| result.map_err(PluginTeardownError::from_plugin_error))
+                        .and_then(|result| result.map_err(PluginTeardownError::from_plugin_error));
+                        *close_state
+                            .report
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()) = activation.report();
+                        result
                     }
                     None => Err(PluginTeardownError::runtime(
                         "dynamic plugin teardown task lost its activation",
@@ -970,7 +888,6 @@ impl PluginHostCloseState {
             .status
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = PluginHostCloseStatus::Closed;
-        reset_plugin_configuration_clear_state();
         self.completion.finish(result);
     }
 
@@ -979,94 +896,12 @@ impl PluginHostCloseState {
     }
 }
 
-struct PluginConfigurationClearState {
-    started: Mutex<bool>,
-    completion: PluginTeardownCompletion,
-}
-
-impl PluginConfigurationClearState {
-    fn new() -> Self {
-        Self {
-            started: Mutex::new(false),
-            completion: PluginTeardownCompletion::new(),
-        }
-    }
-
-    fn begin_clear(self: &Arc<Self>) {
-        let should_start = {
-            let mut started = self
-                .started
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if *started {
-                false
-            } else {
-                *started = true;
-                true
-            }
-        };
-        if !should_start {
-            return;
-        }
-
-        let clear_state = Arc::clone(self);
-        let spawn = std::thread::Builder::new()
-            .name("nemo-relay-python-plugin-clear".into())
-            .spawn(move || {
-                let result = std::panic::catch_unwind(clear_plugin_configuration)
-                    .map_err(|_| PluginTeardownError::runtime("plugin teardown task panicked"))
-                    .and_then(|result| result.map_err(PluginTeardownError::from_plugin_error));
-                clear_state.finish(result);
-            });
-        if let Err(error) = spawn {
-            self.finish(Err(PluginTeardownError::runtime(format!(
-                "failed to start plugin teardown task: {error}"
-            ))));
-        }
-    }
-
-    fn finish(self: &Arc<Self>, result: PluginTeardownResult) {
-        reset_plugin_configuration_clear_state_if(self);
-        self.completion.finish(result);
-    }
-
-    async fn wait_for_clear(&self) -> PluginTeardownResult {
-        self.completion.wait("plugin teardown").await
-    }
-}
-
-static PLUGIN_CONFIGURATION_CLEAR_STATE: LazyLock<Mutex<Arc<PluginConfigurationClearState>>> =
-    LazyLock::new(|| Mutex::new(Arc::new(PluginConfigurationClearState::new())));
-
-fn plugin_configuration_clear_state() -> Arc<PluginConfigurationClearState> {
-    PLUGIN_CONFIGURATION_CLEAR_STATE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone()
-}
-
-fn reset_plugin_configuration_clear_state() {
-    *PLUGIN_CONFIGURATION_CLEAR_STATE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-        Arc::new(PluginConfigurationClearState::new());
-}
-
-fn reset_plugin_configuration_clear_state_if(completed: &Arc<PluginConfigurationClearState>) {
-    let mut current = PLUGIN_CONFIGURATION_CLEAR_STATE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if Arc::ptr_eq(&current, completed) {
-        *current = Arc::new(PluginConfigurationClearState::new());
-    }
-}
-
 #[pymethods]
 impl PyPluginHostActivation {
     /// Return the activation report captured during initialization.
     #[getter]
     fn report(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let report = serde_json::to_value(&self.report)
+        let report = serde_json::to_value(self.close_state.report())
             .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
         json_to_py(py, &report)
     }
@@ -1100,69 +935,47 @@ impl Drop for PyPluginHostActivation {
     }
 }
 
-/// Initialize registered components with an owned dynamic plugin host.
-#[pyfunction(name = "initialize_with_dynamic_plugins")]
-#[pyo3(signature = (config: "object", dynamic_plugins: "object") -> "object", text_signature = "(config: object, dynamic_plugins: object) -> object")]
-fn initialize_with_dynamic_plugins_py<'py>(
+/// Validate the complete plugin host without activating it.
+#[pyfunction(name = "validate")]
+#[pyo3(signature = (config: "object", additional_plugins_toml: "str | None" = None) -> "object", text_signature = "(config: object, additional_plugins_toml: str | None = None) -> object")]
+fn validate_py(
+    py: Python<'_>,
+    config: &Bound<'_, PyAny>,
+    additional_plugins_toml: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    let config: PluginConfig = serde_json::from_value(py_to_json(config)?)
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+    let report = py
+        .detach(|| validate(config, additional_plugins_toml.map(Into::into)))
+        .map_err(plugin_error_to_py_err)?;
+    let report = serde_json::to_value(report)
+        .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+    json_to_py(py, &report)
+}
+
+/// Initialize the core-owned static and dynamic plugin host.
+#[pyfunction(name = "initialize")]
+#[pyo3(signature = (config: "object", additional_plugins_toml: "str | None" = None) -> "object", text_signature = "(config: object, additional_plugins_toml: str | None = None) -> object")]
+fn initialize_py<'py>(
     py: Python<'py>,
     config: &Bound<'_, PyAny>,
-    dynamic_plugins: &Bound<'_, PyAny>,
+    additional_plugins_toml: Option<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let config_json = py_to_json(config)?;
-    let config: PluginConfig = serde_json::from_value(config_json)
+    let config: PluginConfig = serde_json::from_value(py_to_json(config)?)
         .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-    let dynamic_plugins_json = py_to_json(dynamic_plugins)?;
-    let dynamic_plugins: Vec<DynamicPluginActivationSpec> =
-        serde_json::from_value(dynamic_plugins_json)
-            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let (activation, report) =
-            PluginHostActivation::activate_with_discovered_config(config, dynamic_plugins)
-                .await
-                .map_err(plugin_error_to_py_err)?;
-        reset_plugin_configuration_clear_state();
+        let activation = initialize(config, additional_plugins_toml.map(Into::into))
+            .await
+            .map_err(plugin_error_to_py_err)?;
         Python::attach(|py| {
             Py::new(
                 py,
                 PyPluginHostActivation {
                     close_state: Arc::new(PluginHostCloseState::new(activation)),
-                    report,
                 },
             )
         })
     })
-}
-
-#[pyfunction(name = "clear_plugin_configuration")]
-#[pyo3(signature = () -> "None", text_signature = "() -> None")]
-fn clear_plugin_configuration_py(py: Python<'_>) -> PyResult<()> {
-    py.detach(clear_plugin_configuration).map_err(to_py_err)
-}
-
-#[pyfunction(name = "clear_plugin_configuration_async")]
-#[pyo3(signature = () -> "object", text_signature = "() -> object")]
-fn clear_plugin_configuration_async_py<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-    let clear_state = plugin_configuration_clear_state();
-    clear_state.begin_clear();
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        clear_state
-            .wait_for_clear()
-            .await
-            .map_err(|error| error.to_py_err())
-    })
-}
-
-#[pyfunction(name = "active_plugin_report")]
-#[pyo3(signature = () -> "object", text_signature = "() -> object")]
-fn active_plugin_report_py(py: Python<'_>) -> PyResult<Py<PyAny>> {
-    match active_plugin_report() {
-        Some(report) => {
-            let report = serde_json::to_value(&report)
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            json_to_py(py, &report)
-        }
-        None => Ok(py.None()),
-    }
 }
 
 #[pyfunction(name = "list_plugin_kinds")]
@@ -1192,12 +1005,8 @@ fn deregister_plugin_py(plugin_kind: &str) -> bool {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPluginContext>()?;
     m.add_class::<PyPluginHostActivation>()?;
-    m.add_function(wrap_pyfunction!(validate_plugin_config_py, m)?)?;
-    m.add_function(wrap_pyfunction!(initialize_plugins_py, m)?)?;
-    m.add_function(wrap_pyfunction!(initialize_with_dynamic_plugins_py, m)?)?;
-    m.add_function(wrap_pyfunction!(clear_plugin_configuration_py, m)?)?;
-    m.add_function(wrap_pyfunction!(clear_plugin_configuration_async_py, m)?)?;
-    m.add_function(wrap_pyfunction!(active_plugin_report_py, m)?)?;
+    m.add_function(wrap_pyfunction!(initialize_py, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_py, m)?)?;
     m.add_function(wrap_pyfunction!(list_plugin_kinds_py, m)?)?;
     m.add_function(wrap_pyfunction!(register_plugin_py, m)?)?;
     m.add_function(wrap_pyfunction!(deregister_plugin_py, m)?)?;

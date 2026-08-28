@@ -8,7 +8,7 @@ use std::ptr;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nemo_relay_ffi::types::{FfiPluginActivation, nemo_relay_plugin_activation_free};
+use nemo_relay_ffi::types::{FfiPluginHostActivation, nemo_relay_plugin_host_activation_free};
 use tempfile::TempDir;
 
 const DISCOVERY_CHILD_ENV: &str = "NEMO_RELAY_FFI_DISCOVERY_CHILD";
@@ -75,7 +75,6 @@ fn ffi_activation_layers_discovered_static_and_explicit_dynamic_plugins() {
 }
 
 fn run_discovered_config_activation_test() {
-    let _ = nemo_relay_clear_plugin_configuration();
     DISCOVERED_STATIC_REGISTRATIONS.store(0, Ordering::SeqCst);
     DISCOVERED_STATIC_CALLBACKS.store(0, Ordering::SeqCst);
     *DISCOVERED_STATIC_CONFIG.lock().unwrap() = None;
@@ -91,13 +90,6 @@ fn run_discovered_config_activation_test() {
         .expect("write ignored project plugin config");
     std::fs::write(&plugins_toml, "invalid = [").expect("write invalid user plugin config");
     let _environment = PluginDiscoveryTestEnv::enter(environment.path(), &xdg_config_home);
-
-    // Empty specifications fail before discovery or ownership. The malformed
-    // file would otherwise produce a TOML error, and the successful activation
-    // below proves this attempt did not retain the process-wide host claim.
-    let config = cstring(r#"{"version":1,"components":[]}"#);
-    let empty_specs = cstring("[]");
-    assert_empty_dynamic_specs_rejected(&config, &empty_specs);
 
     std::fs::write(
         &plugins_toml,
@@ -131,21 +123,33 @@ source = "user-file"
 
     let manifest_dir = TempDir::new().expect("native manifest tempdir");
     let manifest = write_native_manifest(manifest_dir.path(), build_native_fixture());
-    let (mut activation, report) = initialize_with_dynamic_plugins(json!([{
+    let (mut activation, report) = initialize_test_plugin_host_from_declarations(json!([{
         "plugin_id": "fixture_native",
         "kind": "rust_dynamic",
         "manifest_ref": manifest,
         "config": {}
     }]));
 
+    let mut active = false;
+    assert_eq!(
+        unsafe { api::nemo_relay_plugin_host_activation_is_active(activation, &mut active) },
+        NemoRelayStatus::Ok
+    );
+    assert!(active);
+
     write_and_assert_discovered_activation(&report, &plugins_toml);
 
     unsafe {
         assert_eq!(
-            api::nemo_relay_plugin_activation_clear(activation),
+            api::nemo_relay_plugin_host_activation_close(activation),
             NemoRelayStatus::Ok
         );
-        nemo_relay_plugin_activation_free(&mut activation);
+        assert_eq!(
+            api::nemo_relay_plugin_host_activation_is_active(activation, &mut active),
+            NemoRelayStatus::Ok
+        );
+        assert!(!active);
+        nemo_relay_plugin_host_activation_free(&mut activation);
     }
     assert!(!plugin_kinds().iter().any(|kind| kind == "fixture_native"));
     assert_eq!(
@@ -160,44 +164,23 @@ source = "user-file"
 }
 
 #[track_caller]
-fn assert_empty_dynamic_specs_rejected(config: &CString, empty_specs: &CString) {
-    let mut empty_activation = ptr::null_mut();
-    let mut empty_report = ptr::null_mut();
-    assert_eq!(
-        unsafe {
-            api::nemo_relay_initialize_with_dynamic_plugins(
-                config.as_ptr(),
-                empty_specs.as_ptr(),
-                &mut empty_activation,
-                &mut empty_report,
-            )
-        },
-        NemoRelayStatus::InvalidArg
-    );
-    assert!(empty_activation.is_null());
-    assert!(empty_report.is_null());
-    assert!(
-        unsafe { read_last_error() }
-            .unwrap_or_default()
-            .contains("at least one dynamic plugin")
-    );
-}
-
-#[track_caller]
 fn write_and_assert_discovered_activation(report: &Json, plugins_toml: &Path) {
     // The file-only component and its config must survive the merge.
-    let diagnostics = report["diagnostics"].as_array().expect("diagnostics array");
-    assert_eq!(diagnostics.len(), 1);
-    let diagnostic = &diagnostics[0];
-    assert_eq!(diagnostic["level"], "warning");
-    assert_eq!(diagnostic["code"], "plugin.configuration_inherited");
-    assert!(diagnostic.get("component").is_none());
-    assert!(diagnostic.get("field").is_none());
-    assert!(
+    let diagnostics = report["config"]["diagnostics"]
+        .as_array()
+        .expect("diagnostics array");
+    assert_eq!(diagnostics.len(), 2);
+    assert!(diagnostics.iter().all(|diagnostic| {
+        diagnostic["level"] == "warning"
+            && diagnostic["code"] == "plugin.configuration_inherited"
+            && diagnostic.get("component").is_none()
+            && diagnostic.get("field").is_none()
+    }));
+    assert!(diagnostics.iter().any(|diagnostic| {
         diagnostic["message"]
             .as_str()
             .is_some_and(|message| message.contains(&plugins_toml.display().to_string()))
-    );
+    }));
     assert_eq!(DISCOVERED_STATIC_REGISTRATIONS.load(Ordering::SeqCst), 1);
     assert_eq!(
         DISCOVERED_STATIC_CONFIG.lock().unwrap().as_ref(),
@@ -259,17 +242,20 @@ unsafe extern "C" fn discovered_static_tool_request(
 #[test]
 fn ffi_activation_loads_native_callbacks_and_removes_them_before_free() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let _ = nemo_relay_clear_plugin_configuration();
 
     let manifest_dir = TempDir::new().expect("native manifest tempdir");
     let manifest = write_native_manifest(manifest_dir.path(), build_native_fixture());
-    let (mut activation, report) = initialize_with_dynamic_plugins(json!([{
+    let (mut activation, report) = initialize_test_plugin_host_from_declarations(json!([{
         "plugin_id": "fixture_native",
         "kind": "rust_dynamic",
         "manifest_ref": manifest,
         "config": {}
     }]));
-    assert_eq!(report["diagnostics"], json!([]));
+    assert_eq!(
+        report["config"]["diagnostics"][0]["code"],
+        "plugin.configuration_inherited"
+    );
+    assert_eq!(report["dynamic_plugins"][0]["plugin_id"], "fixture_native");
     assert!(plugin_kinds().iter().any(|kind| kind == "fixture_native"));
 
     assert_eq!(
@@ -279,14 +265,14 @@ fn ffi_activation_loads_native_callbacks_and_removes_them_before_free() {
 
     unsafe {
         assert_eq!(
-            api::nemo_relay_plugin_activation_clear(activation),
+            api::nemo_relay_plugin_host_activation_close(activation),
             NemoRelayStatus::Ok
         );
         assert_eq!(
-            api::nemo_relay_plugin_activation_clear(activation),
+            api::nemo_relay_plugin_host_activation_close(activation),
             NemoRelayStatus::Ok
         );
-        nemo_relay_plugin_activation_free(&mut activation);
+        nemo_relay_plugin_host_activation_free(&mut activation);
     }
     assert!(!plugin_kinds().iter().any(|kind| kind == "fixture_native"));
     assert_eq!(
@@ -294,7 +280,7 @@ fn ffi_activation_loads_native_callbacks_and_removes_them_before_free() {
         json!({"input": true})
     );
 
-    let (mut drop_activation, _) = initialize_with_dynamic_plugins(json!([{
+    let (mut drop_activation, _) = initialize_test_plugin_host_from_declarations(json!([{
         "plugin_id": "fixture_native",
         "kind": "rust_dynamic",
         "manifest_ref": manifest,
@@ -304,7 +290,7 @@ fn ffi_activation_loads_native_callbacks_and_removes_them_before_free() {
         tool_request_intercepts("ffi-native-tool", json!({"input": true}))["native_plugin"],
         true
     );
-    unsafe { nemo_relay_plugin_activation_free(&mut drop_activation) };
+    unsafe { nemo_relay_plugin_host_activation_free(&mut drop_activation) };
     assert_eq!(
         tool_request_intercepts("ffi-native-tool", json!({"input": true})),
         json!({"input": true})
@@ -312,62 +298,22 @@ fn ffi_activation_loads_native_callbacks_and_removes_them_before_free() {
 }
 
 #[test]
-fn ffi_activation_rejects_overlapping_outputs_without_claiming_host() {
-    let _guard = TEST_MUTEX.lock().unwrap();
-    let _ = nemo_relay_clear_plugin_configuration();
-
-    let manifest_dir = TempDir::new().expect("native manifest tempdir");
-    let manifest = write_native_manifest(manifest_dir.path(), build_native_fixture());
-    let config = cstring(r#"{"version":1,"components":[]}"#);
-    let specs_value = json!([{
-        "plugin_id": "fixture_native",
-        "kind": "rust_dynamic",
-        "manifest_ref": manifest,
-        "config": {}
-    }]);
-    let specs = cstring(&specs_value.to_string());
-    let mut aliased_output = std::ptr::dangling_mut::<std::ffi::c_void>();
-    let output_slot = &mut aliased_output as *mut *mut std::ffi::c_void;
-    let status = unsafe {
-        api::nemo_relay_initialize_with_dynamic_plugins(
-            config.as_ptr(),
-            specs.as_ptr(),
-            output_slot.cast::<*mut FfiPluginActivation>(),
-            output_slot.cast::<*mut c_char>(),
-        )
-    };
-    assert_eq!(status, NemoRelayStatus::InvalidArg);
-    assert!(aliased_output.is_null());
-    assert!(
-        unsafe { read_last_error() }
-            .unwrap_or_default()
-            .contains("must not overlap")
-    );
-
-    let (mut activation, _) = initialize_with_dynamic_plugins(specs_value);
-    unsafe {
-        assert_eq!(
-            api::nemo_relay_plugin_activation_clear(activation),
-            NemoRelayStatus::Ok
-        );
-        nemo_relay_plugin_activation_free(&mut activation);
-    }
-}
-
-#[test]
 fn ffi_activation_loads_worker_callbacks_and_stops_worker_on_clear() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let _ = nemo_relay_clear_plugin_configuration();
 
     let manifest_dir = TempDir::new().expect("worker manifest tempdir");
     let manifest = write_worker_manifest(manifest_dir.path(), build_worker_fixture());
-    let (mut activation, report) = initialize_with_dynamic_plugins(json!([{
+    let (mut activation, report) = initialize_test_plugin_host_from_declarations(json!([{
         "plugin_id": "fixture_worker",
         "kind": "worker",
         "manifest_ref": manifest,
         "config": {}
     }]));
-    assert_eq!(report["diagnostics"], json!([]));
+    assert_eq!(
+        report["config"]["diagnostics"][0]["code"],
+        "plugin.configuration_inherited"
+    );
+    assert_eq!(report["dynamic_plugins"][0]["plugin_id"], "fixture_worker");
     assert!(plugin_kinds().iter().any(|kind| kind == "fixture_worker"));
     assert_eq!(
         tool_request_intercepts("ffi-worker-tool", json!({"input": true}))["worker_plugin"],
@@ -376,10 +322,10 @@ fn ffi_activation_loads_worker_callbacks_and_stops_worker_on_clear() {
 
     unsafe {
         assert_eq!(
-            api::nemo_relay_plugin_activation_clear(activation),
+            api::nemo_relay_plugin_host_activation_close(activation),
             NemoRelayStatus::Ok
         );
-        nemo_relay_plugin_activation_free(&mut activation);
+        nemo_relay_plugin_host_activation_free(&mut activation);
     }
     assert!(!plugin_kinds().iter().any(|kind| kind == "fixture_worker"));
     assert_eq!(
@@ -391,35 +337,33 @@ fn ffi_activation_loads_worker_callbacks_and_stops_worker_on_clear() {
 #[test]
 fn ffi_activation_rolls_back_an_earlier_native_load_when_a_later_load_fails() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let _ = nemo_relay_clear_plugin_configuration();
 
     let manifest_dir = TempDir::new().expect("native manifest tempdir");
     let manifest = write_native_manifest(manifest_dir.path(), build_native_fixture());
     let missing_manifest = manifest_dir.path().join("missing-relay-plugin.toml");
+    let declarations = json!([
+        {
+            "plugin_id": "fixture_native",
+            "kind": "rust_dynamic",
+            "manifest_ref": manifest,
+            "config": {}
+        },
+        {
+            "plugin_id": "fixture_missing",
+            "kind": "rust_dynamic",
+            "manifest_ref": missing_manifest,
+            "config": {}
+        }
+    ]);
+    let (_config_dir, plugins_toml) = write_test_plugin_host_config(&declarations);
     let config = cstring(r#"{"version":1,"components":[]}"#);
-    let specs = cstring(
-        &json!([
-            {
-                "plugin_id": "fixture_native",
-                "kind": "rust_dynamic",
-                "manifest_ref": manifest,
-                "config": {}
-            },
-            {
-                "plugin_id": "fixture_missing",
-                "kind": "rust_dynamic",
-                "manifest_ref": missing_manifest,
-                "config": {}
-            }
-        ])
-        .to_string(),
-    );
+    let plugins_toml = cstring(&plugins_toml.to_string_lossy());
     let mut activation = ptr::null_mut();
     let mut report = ptr::null_mut();
     let status = unsafe {
-        api::nemo_relay_initialize_with_dynamic_plugins(
+        api::nemo_relay_plugin_initialize(
             config.as_ptr(),
-            specs.as_ptr(),
+            plugins_toml.as_ptr(),
             &mut activation,
             &mut report,
         )
@@ -433,7 +377,7 @@ fn ffi_activation_rolls_back_an_earlier_native_load_when_a_later_load_fails() {
         json!({"input": true})
     );
 
-    let (mut activation, _) = initialize_with_dynamic_plugins(json!([{
+    let (mut activation, _) = initialize_test_plugin_host_from_declarations(json!([{
         "plugin_id": "fixture_native",
         "kind": "rust_dynamic",
         "manifest_ref": manifest,
@@ -441,22 +385,25 @@ fn ffi_activation_rolls_back_an_earlier_native_load_when_a_later_load_fails() {
     }]));
     unsafe {
         assert_eq!(
-            api::nemo_relay_plugin_activation_clear(activation),
+            api::nemo_relay_plugin_host_activation_close(activation),
             NemoRelayStatus::Ok
         );
-        nemo_relay_plugin_activation_free(&mut activation);
+        nemo_relay_plugin_host_activation_free(&mut activation);
     }
 }
 
-fn initialize_with_dynamic_plugins(specs: Json) -> (*mut FfiPluginActivation, Json) {
+fn initialize_test_plugin_host_from_declarations(
+    specs: Json,
+) -> (*mut FfiPluginHostActivation, Json) {
+    let (_config_dir, plugins_toml) = write_test_plugin_host_config(&specs);
     let config = cstring(r#"{"version":1,"components":[]}"#);
-    let specs = cstring(&specs.to_string());
+    let plugins_toml = cstring(&plugins_toml.to_string_lossy());
     let mut activation = ptr::null_mut();
     let mut report = ptr::null_mut();
     let status = unsafe {
-        api::nemo_relay_initialize_with_dynamic_plugins(
+        api::nemo_relay_plugin_initialize(
             config.as_ptr(),
-            specs.as_ptr(),
+            plugins_toml.as_ptr(),
             &mut activation,
             &mut report,
         )
@@ -469,6 +416,32 @@ fn initialize_with_dynamic_plugins(specs: Json) -> (*mut FfiPluginActivation, Js
     );
     assert!(!activation.is_null());
     (activation, unsafe { returned_json(report) })
+}
+
+fn write_test_plugin_host_config(specs: &Json) -> (TempDir, PathBuf) {
+    let directory = TempDir::new().expect("plugin host config tempdir");
+    let path = directory.path().join("plugins.toml");
+    let declarations = specs
+        .as_array()
+        .expect("dynamic plugin declarations")
+        .iter()
+        .map(|spec| {
+            let manifest = spec["manifest_ref"].as_str().expect("manifest_ref string");
+            format!(
+                "[[plugins.dynamic]]\nmanifest = {}\n",
+                serde_json::to_string(manifest).expect("manifest path JSON string")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(
+        &path,
+        format!(
+            "version = 1\n\n[plugins.policy.defaults]\nattestation = \"integrity_only\"\n\n{declarations}"
+        ),
+    )
+    .expect("write plugin host config");
+    (directory, path)
 }
 
 fn cstring(value: &str) -> CString {
@@ -578,12 +551,19 @@ enabled = false
 [capabilities]
 items = ["plugin_native"]
 
+[source]
+artifact = {library:?}
+
+[integrity]
+sha256 = "sha256:{digest}"
+
 [load]
 library = {library:?}
 symbol = "nemo_relay_fixture_native_plugin"
 "#,
             version = env!("CARGO_PKG_VERSION"),
             library = library.to_string_lossy(),
+            digest = sha256_file(library),
         ),
     )
     .expect("write native fixture manifest");
@@ -612,14 +592,30 @@ enabled = false
 [capabilities]
 items = ["plugin_worker"]
 
+[source]
+artifact = {entrypoint:?}
+
+[integrity]
+sha256 = "sha256:{digest}"
+
 [load]
 runtime = "rust"
 entrypoint = {entrypoint:?}
 "#,
             version = env!("CARGO_PKG_VERSION"),
             entrypoint = binary.to_string_lossy(),
+            digest = sha256_file(binary),
         ),
     )
     .expect("write worker fixture manifest");
     manifest
+}
+
+fn sha256_file(path: &Path) -> String {
+    use sha2::{Digest, Sha256};
+
+    Sha256::digest(std::fs::read(path).expect("read plugin fixture"))
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }

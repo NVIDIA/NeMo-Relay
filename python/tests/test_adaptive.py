@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 from async_helpers import resolve_async_result
+from plugin_host_test_helper import activated_plugin_host, validate_plugin_config
 
 from nemo_relay import (
     AnnotatedLLMRequest,
@@ -81,7 +82,7 @@ class TestAdaptiveConfigHelpers:
         assert wrapped["kind"] == ADAPTIVE_PLUGIN_KIND
 
     def test_validate_adaptive_plugin_component_warns_missing_state(self):
-        report = plugin.validate(
+        report = validate_plugin_config(
             plugin.PluginConfig(components=[ComponentSpec(AdaptiveConfig(telemetry=TelemetryConfig()))])
         )
         assert any(diag["code"] == "adaptive.section_disabled_missing_state" for diag in report["diagnostics"])
@@ -238,7 +239,7 @@ class TestAdaptivePluginConfiguration:
             await runtime.shutdown()
 
     async def test_configure_report_and_clear(self):
-        report = await plugin.initialize(
+        activation = await plugin.initialize(
             plugin.PluginConfig(
                 components=[
                     ComponentSpec(
@@ -253,13 +254,16 @@ class TestAdaptivePluginConfiguration:
             )
         )
         try:
+            report = activation.report["config"]
             assert report["diagnostics"] == []
-            assert plugin.report() == report
+            assert activation.report["config"] == report
+            assert activation.is_active
         finally:
-            await plugin.clear_async()
+            await activation.close()
+        assert not activation.is_active
 
     async def test_configure_allows_normal_llm_call(self):
-        await plugin.initialize(
+        async with activated_plugin_host(
             plugin.PluginConfig(
                 components=[
                     ComponentSpec(
@@ -272,8 +276,7 @@ class TestAdaptivePluginConfiguration:
                     )
                 ]
             )
-        )
-        try:
+        ):
 
             def my_llm(_request: LLMRequest):
                 return {"response": "ok"}
@@ -281,8 +284,6 @@ class TestAdaptivePluginConfiguration:
             request = LLMRequest({}, {"messages": []})
             result = await llm.execute("test-model", request, my_llm)
             assert result["response"] == "ok"
-        finally:
-            await plugin.clear_async()
 
     async def test_python_plugin_is_called_from_core_plugin_system(self):
         class HeaderPlugin:
@@ -356,55 +357,54 @@ class TestAdaptivePluginConfiguration:
             ]
         )
         try:
-            report = plugin.validate(wrapped_config)
+            report = validate_plugin_config(wrapped_config)
             assert any(diag["code"] == "plugin.python_validate_called" for diag in report["diagnostics"])
 
-            await plugin.initialize(wrapped_config)
+            async with activated_plugin_host(wrapped_config):
 
-            def my_llm(request: LLMRequest):
-                return {
-                    "seen_header": request.headers["x-python-plugin"],
-                    "seen_exec": request.headers.get("x-missing", "base"),
-                }
+                def my_llm(request: LLMRequest):
+                    return {
+                        "seen_header": request.headers["x-python-plugin"],
+                        "seen_exec": request.headers.get("x-missing", "base"),
+                    }
 
-            request = LLMRequest({}, {"messages": []})
-            result = await llm.execute("test-model", request, my_llm)
-            assert result["seen_header"] == "priority:17"
-            assert result["x-python-llm-exec"] == "priority:17"
+                request = LLMRequest({}, {"messages": []})
+                result = await llm.execute("test-model", request, my_llm)
+                assert result["seen_header"] == "priority:17"
+                assert result["x-python-llm-exec"] == "priority:17"
 
-            def my_tool(args):
-                return ToolExecutionResult(args)
+                def my_tool(args):
+                    return ToolExecutionResult(args)
 
-            tool_result = await tools.execute("search", {"query": "test"}, my_tool)
-            assert tool_result.result["x-python-tool-plugin"] == "priority:17"
+                tool_result = await tools.execute("search", {"query": "test"}, my_tool)
+                assert tool_result.result["x-python-tool-plugin"] == "priority:17"
 
-            def my_stream_llm(_request: LLMRequest):
-                async def gen():
-                    yield {"token": "hello"}
+                def my_stream_llm(_request: LLMRequest):
+                    async def gen():
+                        yield {"token": "hello"}
 
-                return gen()
+                    return gen()
 
-            collected: list[JsonObject] = []
+                collected: list[JsonObject] = []
 
-            def collector(chunk):
-                collected.append(cast(JsonObject, chunk))
+                def collector(chunk):
+                    collected.append(cast(JsonObject, chunk))
 
-            def finalizer():
-                return {"count": len(collected)}
+                def finalizer():
+                    return {"count": len(collected)}
 
-            stream = await llm.stream_execute(
-                "test-model-stream",
-                request,
-                my_stream_llm,
-                collector,
-                finalizer,
-            )
-            async for chunk in stream:
-                assert isinstance(chunk, dict)
-                assert chunk["x-python-llm-stream-exec"] == "priority:17"
-            assert collected[0]["x-python-llm-stream-exec"] == "priority:17"
+                stream = await llm.stream_execute(
+                    "test-model-stream",
+                    request,
+                    my_stream_llm,
+                    collector,
+                    finalizer,
+                )
+                async for chunk in stream:
+                    assert isinstance(chunk, dict)
+                    assert chunk["x-python-llm-stream-exec"] == "priority:17"
+                assert collected[0]["x-python-llm-stream-exec"] == "priority:17"
         finally:
-            await plugin.clear_async()
             plugin.deregister("python.test_plugin")
 
     def test_list_kinds_includes_registered_plugin(self):
@@ -447,19 +447,21 @@ async def test_plugin_context_conditional_gate_fails_open_and_clears():
 
     subscribers.register(target, lambda event: observed.append(event.name))
     plugin.register(kind, GatePlugin())
+    activation: plugin.PluginHostActivation | None = None
     try:
-        await plugin.initialize(plugin.PluginConfig(components=[plugin.ComponentSpec(kind=kind)]))
+        activation = await plugin.initialize(plugin.PluginConfig(components=[plugin.ComponentSpec(kind=kind)]))
         scope.event("python-context-gate-fail-open")
         await subscribers.flush_async()
         assert observed[-1] == "python-context-gate-fail-open"
         assert observed_kinds[-1] == {RuntimeRegistrationKind.SUBSCRIBER}
         assert all(type(kind) is RuntimeRegistrationKind for kind in observed_kinds[-1])
-        await plugin.clear_async()
+        await activation.close()
         scope.event("python-context-gate-cleared")
         await subscribers.flush_async()
         assert observed[-1] == "python-context-gate-cleared"
     finally:
-        await plugin.clear_async()
+        if activation is not None:
+            await activation.close()
         plugin.deregister(kind)
         subscribers.deregister(target)
 
@@ -492,6 +494,5 @@ async def test_failed_plugin_activation_rolls_back_conditional_gate():
         await subscribers.flush_async()
         assert observed[-1] == "python-context-gate-rolled-back"
     finally:
-        await plugin.clear_async()
         plugin.deregister(kind)
         subscribers.deregister(target)

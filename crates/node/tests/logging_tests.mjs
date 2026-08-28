@@ -10,7 +10,12 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const packageDirectory = fileURLToPath(new URL('..', import.meta.url));
-const loggingEnvironmentNames = ['NEMO_RELAY_LOG', 'NEMO_RELAY_LOG_STDERR', 'NEMO_RELAY_LOG_STDERR_FORMAT', 'NEMO_RELAY_LOG_CONFIG_PATH'];
+const loggingEnvironmentNames = [
+  'NEMO_RELAY_LOG',
+  'NEMO_RELAY_LOG_STDERR',
+  'NEMO_RELAY_LOG_STDERR_FORMAT',
+  'NEMO_RELAY_LOG_CONFIG_PATH',
+];
 
 function requireBinding(loggingEnvironment, source = "require('./index.js')") {
   const environment = { ...process.env };

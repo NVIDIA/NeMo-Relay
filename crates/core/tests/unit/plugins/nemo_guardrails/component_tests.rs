@@ -32,8 +32,8 @@ use crate::config_editor::{EditorConfig, EditorFieldKind};
 #[cfg(feature = "schema")]
 use crate::plugin::plugin_config_schema;
 use crate::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins,
-    list_plugin_kinds, lookup_plugin, validate_plugin_config,
+    PluginComponentSpec, PluginConfig, list_plugin_kinds, lookup_plugin, test_close_plugin_host,
+    test_initialize_plugin_host_exact, test_validate_static_plugin_config,
 };
 use futures::StreamExt;
 use serde_json::json;
@@ -43,7 +43,7 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 fn reset_runtime() {
     let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
-    let _ = clear_plugin_configuration();
+    let _ = test_close_plugin_host();
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
@@ -469,7 +469,7 @@ fn configured_component_reports_deprecation_warning() {
         component(remote_valid_config()),
         disabled_component(remote_valid_config()),
     ] {
-        let report = validate_plugin_config(&PluginConfig {
+        let report = test_validate_static_plugin_config(&PluginConfig {
             version: 1,
             components: vec![component],
             policy: Default::default(),
@@ -516,8 +516,8 @@ fn disabled_component_validates_and_initializes_without_runtime_work() {
         components: vec![disabled_component(remote_valid_config())],
         policy: Default::default(),
     };
-    assert!(!validate_plugin_config(&config).has_errors());
-    let report = futures::executor::block_on(initialize_plugins(config)).unwrap();
+    assert!(!test_validate_static_plugin_config(&config).has_errors());
+    let report = futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
     assert!(
         report
             .diagnostics
@@ -541,7 +541,7 @@ fn duplicate_component_is_rejected_as_singleton() {
         ],
         policy: Default::default(),
     };
-    let report = validate_plugin_config(&config);
+    let report = test_validate_static_plugin_config(&config);
     assert!(report.has_errors());
     assert!(
         report
@@ -566,7 +566,7 @@ fn invalid_shapes_and_values_are_reported() {
 }
 
 fn assert_invalid_shape_and_mode() {
-    let invalid_shape = validate_plugin_config(&plugin_config(json!({
+    let invalid_shape = test_validate_static_plugin_config(&plugin_config(json!({
         "version": "one",
     })));
     assert!(invalid_shape.has_errors());
@@ -577,7 +577,7 @@ fn assert_invalid_shape_and_mode() {
             .any(|diag| diag.code == "nemo_guardrails.invalid_plugin_config")
     );
 
-    let unsupported_version_and_mode = validate_plugin_config(&plugin_config(json!({
+    let unsupported_version_and_mode = test_validate_static_plugin_config(&plugin_config(json!({
         "version": 2,
         "mode": "hybrid",
         "codec": "openai_chat",
@@ -603,7 +603,7 @@ fn assert_invalid_shape_and_mode() {
 }
 
 fn assert_invalid_local_config() {
-    let local_missing_source = validate_plugin_config(&plugin_config(json!({
+    let local_missing_source = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "local",
         "codec": "openai_chat",
     })));
@@ -613,7 +613,7 @@ fn assert_invalid_local_config() {
             .contains("exactly one of config_path or config_yaml is required in local mode")
     }));
 
-    let local_bad_colang = validate_plugin_config(&plugin_config(json!({
+    let local_bad_colang = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "local",
         "config_path": "./rails",
         "colang_content": "define flow x",
@@ -627,7 +627,7 @@ fn assert_invalid_local_config() {
             .any(|diag| diag.message.contains("colang_content can only be used"))
     );
 
-    let local_rejects_remote_section = validate_plugin_config(&plugin_config(json!({
+    let local_rejects_remote_section = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "local",
         "config_yaml": "rails:\n  input: []\n",
         "codec": "openai_chat",
@@ -647,7 +647,7 @@ fn assert_invalid_local_config() {
 }
 
 fn assert_invalid_remote_identity_and_codec() {
-    let remote_missing_identity = validate_plugin_config(&plugin_config(json!({
+    let remote_missing_identity = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {"endpoint": "http://localhost:8000"},
@@ -658,7 +658,7 @@ fn assert_invalid_remote_identity_and_codec() {
             .contains("remote mode requires remote.config_id or remote.config_ids")
     }));
 
-    let remote_conflicting_ids = validate_plugin_config(&plugin_config(json!({
+    let remote_conflicting_ids = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {
@@ -673,7 +673,7 @@ fn assert_invalid_remote_identity_and_codec() {
             .contains("remote.config_id and remote.config_ids cannot be used together")
     }));
 
-    let missing_codec = validate_plugin_config(&plugin_config(json!({
+    let missing_codec = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "remote": {
             "endpoint": "http://localhost:8000",
@@ -688,7 +688,7 @@ fn assert_invalid_remote_identity_and_codec() {
             .any(|diag| diag.field.as_deref() == Some("codec"))
     );
 
-    let bad_codec = validate_plugin_config(&plugin_config(json!({
+    let bad_codec = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "openai_agents",
         "remote": {
@@ -710,7 +710,7 @@ fn assert_invalid_remote_identity_and_codec() {
             .all(|name| diag.message.contains(name))
     }));
 
-    let unsupported_remote_codec = validate_plugin_config(&plugin_config(json!({
+    let unsupported_remote_codec = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "openai_responses",
         "remote": {
@@ -724,14 +724,15 @@ fn assert_invalid_remote_identity_and_codec() {
             .contains("remote mode currently supports only codec = 'openai_chat'")
     }));
 
-    let unsupported_remote_anthropic_codec = validate_plugin_config(&plugin_config(json!({
-        "mode": "remote",
-        "codec": "anthropic_messages",
-        "remote": {
-            "endpoint": "http://localhost:8000",
-            "config_id": "default"
-        }
-    })));
+    let unsupported_remote_anthropic_codec =
+        test_validate_static_plugin_config(&plugin_config(json!({
+            "mode": "remote",
+            "codec": "anthropic_messages",
+            "remote": {
+                "endpoint": "http://localhost:8000",
+                "config_id": "default"
+            }
+        })));
     assert!(unsupported_remote_anthropic_codec.has_errors());
     assert!(
         unsupported_remote_anthropic_codec
@@ -743,7 +744,7 @@ fn assert_invalid_remote_identity_and_codec() {
             })
     );
 
-    let unsupported_remote_oci_codec = validate_plugin_config(&plugin_config(json!({
+    let unsupported_remote_oci_codec = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "oci_genai",
         "remote": {
@@ -757,14 +758,15 @@ fn assert_invalid_remote_identity_and_codec() {
             .contains("remote mode currently supports only codec = 'openai_chat'")
     }));
 
-    let unsupported_remote_gemini_codec = validate_plugin_config(&plugin_config(json!({
-        "mode": "remote",
-        "codec": "gemini_generate_content",
-        "remote": {
-            "endpoint": "http://localhost:8000",
-            "config_id": "default"
-        }
-    })));
+    let unsupported_remote_gemini_codec =
+        test_validate_static_plugin_config(&plugin_config(json!({
+            "mode": "remote",
+            "codec": "gemini_generate_content",
+            "remote": {
+                "endpoint": "http://localhost:8000",
+                "config_id": "default"
+            }
+        })));
     assert!(unsupported_remote_gemini_codec.has_errors());
     assert!(
         unsupported_remote_gemini_codec
@@ -778,7 +780,7 @@ fn assert_invalid_remote_identity_and_codec() {
 }
 
 fn assert_remote_tool_surface_validation() {
-    let unsupported_remote_tool_input = validate_plugin_config(&plugin_config(json!({
+    let unsupported_remote_tool_input = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "tool_input": true,
@@ -800,7 +802,7 @@ fn assert_remote_tool_surface_validation() {
             })
     );
 
-    let supported_remote_tool_output = validate_plugin_config(&plugin_config(json!({
+    let supported_remote_tool_output = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "tool_output": true,
@@ -813,7 +815,7 @@ fn assert_remote_tool_surface_validation() {
 }
 
 fn assert_empty_and_mixed_config_values() {
-    let remote_empty_fields = validate_plugin_config(&plugin_config(json!({
+    let remote_empty_fields = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {
@@ -842,7 +844,7 @@ fn assert_empty_and_mixed_config_values() {
             .any(|diag| diag.field.as_deref() == Some("remote.config_ids[1]"))
     );
 
-    let remote_local_mix = validate_plugin_config(&plugin_config(json!({
+    let remote_local_mix = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "config_path": "./rails",
         "codec": "openai_chat",
@@ -864,7 +866,7 @@ fn assert_empty_and_mixed_config_values() {
             .contains("remote mode uses remote config identity")
     }));
 
-    let no_surfaces = validate_plugin_config(&plugin_config(json!({
+    let no_surfaces = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "local",
         "config_path": "./rails",
         "input": false,
@@ -880,7 +882,7 @@ fn assert_empty_and_mixed_config_values() {
             .any(|diag| diag.message.contains("at least one Guardrails surface"))
     );
 
-    let local_empty_fields = validate_plugin_config(&plugin_config(json!({
+    let local_empty_fields = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "local",
         "config_path": "",
         "config_yaml": "",
@@ -928,7 +930,7 @@ fn assert_empty_and_mixed_config_values() {
 }
 
 fn assert_request_defaults_validation() {
-    let local_request_defaults = validate_plugin_config(&plugin_config(json!({
+    let local_request_defaults = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "local",
         "codec": "openai_chat",
         "config_path": "./rails",
@@ -944,7 +946,7 @@ fn assert_request_defaults_validation() {
                 .contains("local mode does not currently support request_defaults")
     }));
 
-    let invalid_request_defaults = validate_plugin_config(&plugin_config(json!({
+    let invalid_request_defaults = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {
@@ -1021,18 +1023,19 @@ fn assert_request_defaults_validation() {
             .any(|diag| diag.field.as_deref() == Some("request_defaults.rails.retrieval[0]"))
     );
 
-    let invalid_request_output_vars_shape = validate_plugin_config(&plugin_config(json!({
-        "mode": "remote",
-        "codec": "openai_chat",
-        "remote": {
-            "endpoint": "http://localhost:8000",
-            "config_id": "default"
-        },
-        "request_defaults": {
-            "thread_id": "short",
-            "output_vars": 7
-        }
-    })));
+    let invalid_request_output_vars_shape =
+        test_validate_static_plugin_config(&plugin_config(json!({
+            "mode": "remote",
+            "codec": "openai_chat",
+            "remote": {
+                "endpoint": "http://localhost:8000",
+                "config_id": "default"
+            },
+            "request_defaults": {
+                "thread_id": "short",
+                "output_vars": 7
+            }
+        })));
     assert!(invalid_request_output_vars_shape.has_errors());
     assert!(
         invalid_request_output_vars_shape
@@ -1052,7 +1055,7 @@ fn assert_request_defaults_validation() {
             .any(|diag| diag.field.as_deref() == Some("request_defaults.output_vars"))
     );
 
-    let valid_bool_output_vars = validate_plugin_config(&plugin_config(json!({
+    let valid_bool_output_vars = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {
@@ -1073,7 +1076,7 @@ fn unknown_fields_follow_policy() {
         .unwrap_or_else(|err| err.into_inner());
     reset_runtime();
 
-    let warn_report = validate_plugin_config(&plugin_config(json!({
+    let warn_report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {"endpoint": "http://localhost:8000", "config_id": "default"},
@@ -1086,7 +1089,7 @@ fn unknown_fields_follow_policy() {
             .any(|diag| diag.code == "nemo_guardrails.unknown_field")
     );
 
-    let nested_warn_report = validate_plugin_config(&plugin_config(json!({
+    let nested_warn_report = test_validate_static_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "remote": {"endpoint": "http://localhost:8000", "config_id": "default"},
@@ -1103,7 +1106,7 @@ fn unknown_fields_follow_policy() {
             .any(|diag| diag.component.as_deref() == Some("request_defaults.rails"))
     );
 
-    let ignored = validate_plugin_config(&plugin_config(json!({
+    let ignored = test_validate_static_plugin_config(&plugin_config(json!({
         "policy": {"unknown_field": "ignore", "unsupported_value": "ignore"},
         "mode": "remote",
         "codec": "openai_chat",
@@ -1125,16 +1128,17 @@ fn enabled_unknown_mode_initialization_fails_fast_when_policy_ignores_validation
         .unwrap_or_else(|err| err.into_inner());
     reset_runtime();
 
-    let error = futures::executor::block_on(initialize_plugins(plugin_config(json!({
-        "policy": {"unsupported_value": "ignore"},
-        "mode": "hybrid",
-        "codec": "openai_chat",
-        "remote": {
-            "endpoint": "http://localhost:8000",
-            "config_id": "default"
-        }
-    }))))
-    .unwrap_err();
+    let error =
+        futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(json!({
+            "policy": {"unsupported_value": "ignore"},
+            "mode": "hybrid",
+            "codec": "openai_chat",
+            "remote": {
+                "endpoint": "http://localhost:8000",
+                "config_id": "default"
+            }
+        }))))
+        .unwrap_err();
 
     match error {
         crate::plugin::PluginError::InvalidConfig(message) => {

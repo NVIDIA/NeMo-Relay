@@ -118,7 +118,7 @@ during graceful shutdown so queued subscriber work can drain and every
 exporter receives a teardown attempt.
 
 NeMo Relay shuts down OpenTelemetry endpoint providers sequentially. A slow or
-unreachable collector can delay `plugin.clear()` or process shutdown by
+unreachable collector can delay `activation.close()` or process shutdown by
 approximately the OpenTelemetry SDK's five-second shutdown bound plus one
 endpoint export timeout. Use each endpoint's `timeout_millis` value to bound
 that export attempt. This timeout behavior does not make a full batch queue

@@ -442,35 +442,10 @@ func assertErrorContains(t *testing.T, err error, want, context string) {
 }
 
 func TestTopLevelPluginCoverage(t *testing.T) {
-	oldValidate := validatePluginConfigJSON
-	oldInitialize := initializePluginsJSON
-	oldActive := activePluginReportJSON
 	oldKinds := listPluginKindsJSON
 	defer func() {
-		validatePluginConfigJSON = oldValidate
-		initializePluginsJSON = oldInitialize
-		activePluginReportJSON = oldActive
 		listPluginKindsJSON = oldKinds
 	}()
-
-	validatePluginConfigJSON = func(config PluginConfig) (string, error) { return "{", nil }
-	if _, err := ValidatePluginConfig(NewPluginConfig()); err == nil {
-		t.Fatal("expected ValidatePluginConfig unmarshal error")
-	}
-
-	initializePluginsJSON = func(config PluginConfig) (string, error) { return "{", nil }
-	if _, err := InitializePlugins(NewPluginConfig()); err == nil {
-		t.Fatal("expected InitializePlugins unmarshal error")
-	}
-
-	activePluginReportJSON = func() (string, error) { return "{", nil }
-	if _, err := ActivePluginReport(); err == nil {
-		t.Fatal("expected ActivePluginReport unmarshal error")
-	}
-	activePluginReportJSON = func() (string, error) { return "", errors.New("forced active report error") }
-	if _, err := ActivePluginReport(); err == nil || !strings.Contains(err.Error(), "forced active report error") {
-		t.Fatalf("expected ActivePluginReport passthrough error, got %v", err)
-	}
 
 	listPluginKindsJSON = func() (string, error) { return "{", nil }
 	if _, err := ListPluginKinds(); err == nil {

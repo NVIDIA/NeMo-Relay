@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use console::style;
-use nemo_relay::plugin::{ConfigPolicy, PluginConfig, validate_plugin_config};
+use nemo_relay::plugin::{ConfigPolicy, PluginConfig, validate_static_plugin_config};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -707,7 +707,7 @@ pub(crate) fn validate_config(config: &PluginConfig) -> Result<(), CliError> {
     {
         return Err(CliError::Config(error.to_string()));
     }
-    let report = validate_plugin_config(config);
+    let report = validate_static_plugin_config(config);
     if report.has_errors() {
         let messages = report
             .diagnostics

@@ -24,11 +24,11 @@ use nemo_relay::api::subscriber::flush_subscribers;
 use nemo_relay::api::tool::{
     ToolCallExecuteParams, ToolExecutionInterceptOutcome, ToolExecutionResult, tool_call_execute,
 };
+use nemo_relay::plugin::dynamic::{initialize, validate};
 use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, Plugin, PluginComponentSpec, PluginConfig,
-    PluginRegistrationContext, Result as PluginResult, clear_plugin_configuration,
-    deregister_plugin, initialize_plugins_exact, list_plugin_kinds, register_plugin,
-    validate_plugin_config,
+    PluginRegistrationContext, Result as PluginResult, deregister_plugin, list_plugin_kinds,
+    register_plugin,
 };
 use serde_json::{Map, Value as Json, json};
 
@@ -67,7 +67,12 @@ impl Plugin for DocumentationPlugin {
                 let reason = settings.registration_control.reason.clone();
                 context.register_conditional_middleware_guardrail(
                     "registration-control",
-                    settings.registration_control.kinds.iter().copied().collect::<BTreeSet<_>>(),
+                    settings
+                        .registration_control
+                        .kinds
+                        .iter()
+                        .copied()
+                        .collect::<BTreeSet<_>>(),
                     &settings.registration_control.registration_name,
                     Arc::new(move |_, _| Some(reason.clone())),
                 )?;
@@ -429,19 +434,19 @@ pub async fn run_workflow() -> Result<(), Box<dyn std::error::Error>> {
     reset_observed_events();
     register_plugin(Arc::new(DocumentationPlugin))?;
     println!("registered: {:?}", list_plugin_kinds());
-    let invalid = validate_plugin_config(&config("invalid"));
+    let invalid = validate(config("invalid"), None)?.config;
     assert_eq!(
         invalid.diagnostics[0].code,
         "documentation-plugin.unsupported_mode"
     );
-    let disabled_invalid = validate_plugin_config(&config_with_enabled("invalid", false));
+    let disabled_invalid = validate(config_with_enabled("invalid", false), None)?.config;
     assert_eq!(
         disabled_invalid.diagnostics[0].code,
         "documentation-plugin.unsupported_mode"
     );
     println!("invalid: {:?}", invalid.diagnostics);
-    let report = initialize_plugins_exact(config("enforce")).await?;
-    println!("active: {report:?}");
+    let mut activation = initialize(config("enforce"), None).await?;
+    println!("active: {:?}", activation.report());
 
     let tool = tool_call_execute(
         ToolCallExecuteParams::builder()
@@ -458,7 +463,10 @@ pub async fn run_workflow() -> Result<(), Box<dyn std::error::Error>> {
             .build(),
     )
     .await?;
-    assert_eq!(tool.result, json!({"value": 1, "plugin_tag": "documentation"}));
+    assert_eq!(
+        tool.result,
+        json!({"value": 1, "plugin_tag": "documentation"})
+    );
     assert_eq!(tool.annotation, Some(json!({"source": "application"})));
     println!("tool: {tool:?}");
 
@@ -507,7 +515,7 @@ pub async fn run_workflow() -> Result<(), Box<dyn std::error::Error>> {
     flush_subscribers()?;
     assert!(OBSERVED_EVENTS.load(Ordering::Relaxed) > 0);
 
-    clear_plugin_configuration()?;
+    activation.close()?;
     assert!(deregister_plugin("documentation-plugin"));
     assert!(
         !list_plugin_kinds()

@@ -15,7 +15,7 @@ use std::sync::{
 
 use nemo_relay::api::runtime::{NemoRelayContextState, global_context};
 use nemo_relay::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins,
+    PluginComponentSpec, PluginConfig, test_close_plugin_host, test_initialize_plugin_host_exact,
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
@@ -347,7 +347,7 @@ fn with_event_loop<T>(py: Python<'_>, f: impl FnOnce(Bound<'_, PyAny>) -> T) -> 
 }
 
 fn reset_runtime_state() {
-    let _ = clear_plugin_configuration();
+    let _ = test_close_plugin_host();
     let context = global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
 }
@@ -364,7 +364,7 @@ fn test_native_pymodule_entrypoint_registers_bindings_without_local_provider_ins
 
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let error = runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
             version: 1,
             components: vec![PluginComponentSpec {
                 kind: "nemo_guardrails".to_string(),
@@ -428,7 +428,7 @@ import nemo_relay
 async def run_case():
     stack = nemo_relay.create_scope_stack()
     nemo_relay.set_thread_scope_stack(stack)
-    await nemo_relay.plugin.initialize(
+    activation = await nemo_relay.plugin.initialize(
         {{
             "version": 1,
             "components": [
@@ -483,6 +483,7 @@ async def run_case():
     else:
         raise AssertionError("expected output rail block")
 
+    await activation.close()
     return {{
         "llm_error": llm_error,
         "seen_request_messages": seen_request_messages,
@@ -690,7 +691,7 @@ async def run_case():
     stack = nemo_relay.create_scope_stack()
     nemo_relay.set_thread_scope_stack(stack)
     event_log.clear()
-    await nemo_relay.plugin.initialize(plugin_config())
+    activation = await nemo_relay.plugin.initialize(plugin_config())
 
     request = nemo_relay.LLMRequest(
         {{}},
@@ -709,8 +710,10 @@ async def run_case():
     else:
         raise AssertionError("expected streamed output block")
 
-    await nemo_relay.plugin.clear_async()
-    await nemo_relay.plugin.initialize(plugin_config("stream_first_false"))
+    await activation.close()
+    activation = await nemo_relay.plugin.initialize(
+        plugin_config("stream_first_false")
+    )
     try:
         await run_stream(request)
     except RuntimeError as error:
@@ -718,6 +721,7 @@ async def run_case():
     else:
         raise AssertionError("expected stream_first=false error")
 
+    await activation.close()
     return {{
         "allowed_chunks": allowed_chunks,
         "blocked": blocked,
@@ -822,7 +826,7 @@ async def run_case():
     stack = nemo_relay.create_scope_stack()
     nemo_relay.set_thread_scope_stack(stack)
 
-    await nemo_relay.plugin.initialize(
+    activation = await nemo_relay.plugin.initialize(
         {{
             "version": 1,
             "components": [
@@ -878,6 +882,7 @@ async def run_case():
         return nemo_relay.ToolExecutionResult({{"raw": True}})
 
     tool_result = await nemo_relay.tools.execute("weather_lookup", {{"city": "Phoenix"}}, tool_impl)
+    await activation.close()
     return {{
         "llm_result": llm_result,
         "tool_result": tool_result.result,

@@ -279,13 +279,16 @@ impl DynamicPluginManifest {
         })?;
         let manifest_ref = normalized_manifest_path.to_string_lossy().into_owned();
 
-        let contents = fs::read_to_string(&normalized_manifest_path).map_err(|err| {
-            PluginError::Internal(format!(
-                "failed to read dynamic plugin manifest '{}': {err}",
+        let bytes =
+            super::read_bounded_regular_file(&normalized_manifest_path, "dynamic plugin manifest")
+                .map_err(PluginError::InvalidConfig)?;
+        let contents = std::str::from_utf8(&bytes).map_err(|error| {
+            PluginError::InvalidConfig(format!(
+                "dynamic plugin manifest '{}' is not UTF-8: {error}",
                 manifest_ref
             ))
         })?;
-        let manifest = Self::parse_toml(&contents)?;
+        let manifest = Self::parse_toml(contents)?;
         Ok((manifest, manifest_ref))
     }
 

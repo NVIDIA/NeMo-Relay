@@ -27,7 +27,7 @@ sha2 = "0.11"
 schemars = { version = "0.8", optional = true }
 
 [dev-dependencies]
-nemo-relay.workspace = true
+nemo-relay = { workspace = true, features = ["__test-plugin-host"] }
 futures = "0.3"
 tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }
 opentelemetry_sdk = { workspace = true, features = ["trace", "testing"] }

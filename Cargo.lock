@@ -1704,11 +1704,13 @@ dependencies = [
 name = "nemo-relay"
 version = "0.9.0"
 dependencies = [
+ "base64",
  "bitflags",
  "chrono",
  "futures",
  "futures-util",
  "hyper-util",
+ "jsonschema",
  "libloading",
  "log",
  "nemo-relay-plugin",
@@ -1720,8 +1722,10 @@ dependencies = [
  "opentelemetry-proto",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
+ "percent-encoding",
  "prost",
  "reqwest 0.12.28",
+ "ring",
  "rustix",
  "schemars",
  "semver",
@@ -1833,6 +1837,7 @@ dependencies = [
  "nemo-relay-pii-redaction",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-stream",

@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from plugin_host_test_helper import validate_plugin_config
+
 from nemo_relay import plugin
 from nemo_relay.pii_redaction import (
     PII_REDACTION_PLUGIN_KIND,
@@ -57,7 +59,7 @@ class TestPiiRedactionConfigHelpers:
         assert any(diag.get("field") == "builtin.detector" for diag in report["diagnostics"])
 
     def test_component_configures_plugin_validation(self):
-        report = plugin.validate(
+        report = validate_plugin_config(
             plugin.PluginConfig(
                 components=[
                     ComponentSpec(

@@ -58,16 +58,14 @@ use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::Usage;
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use nemo_relay::plugin::dynamic::{
-    DynamicPluginActivationSpec as CoreDynamicPluginActivationSpec, DynamicPluginKind,
-    PluginHostActivation as CorePluginHostActivation,
+    PluginHostActivation as CorePluginHostActivation, PluginHostReport,
+    initialize as initialize_impl, validate as validate_impl,
 };
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
-    PluginRegistrationContext, active_plugin_report as active_plugin_report_impl,
-    clear_plugin_configuration as clear_plugin_configuration_impl,
-    deregister_plugin as deregister_plugin_impl, initialize_plugins as initialize_plugins_impl,
+    PluginRegistrationContext, deregister_plugin as deregister_plugin_impl,
     list_plugin_kinds as list_plugin_kinds_impl, register_plugin as register_plugin_impl,
-    rollback_registrations, validate_plugin_config as validate_plugin_config_impl,
+    rollback_registrations,
 };
 use nemo_relay::shared_runtime::initialize_shared_runtime_binding;
 use nemo_relay_adaptive::acg::{
@@ -163,7 +161,7 @@ fn install_well_known_symbol_methods(exports: JsObject, mut env: Env) -> napi::R
         cleanup_node_environment();
         return Err(error);
     }
-    let activation: JsFunction = exports.get_named_property("DynamicPluginActivation")?;
+    let activation: JsFunction = exports.get_named_property("PluginHostActivation")?;
     let activation = activation.coerce_to_object()?;
     let mut prototype: JsObject = activation.get_named_property("prototype")?;
     let symbol: JsFunction = env.get_global()?.get_named_property("Symbol")?;
@@ -5801,15 +5799,6 @@ pub fn set_latency_sensitivity(value: u32) -> napi::Result<()> {
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
-/// Validate a plugin config document and return a structured diagnostics report.
-#[napi]
-pub fn validate_plugin_config(config: Json) -> napi::Result<Json> {
-    let config: PluginConfig =
-        serde_json::from_value(config).map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    serde_json::to_value(validate_plugin_config_impl(&config))
-        .map_err(|e| napi::Error::from_reason(e.to_string()))
-}
-
 /// Register a plugin backed by JavaScript callbacks.
 ///
 /// `validate` receives `(pluginConfig)` and should return a diagnostics array.
@@ -5877,52 +5866,14 @@ pub fn deregister_plugin(plugin_kind: String) -> bool {
     deregister_plugin_impl(&plugin_kind)
 }
 
-/// Initialize the active global plugin components.
-#[napi]
-pub async fn initialize_plugins(config: Json) -> napi::Result<Json> {
-    let config: PluginConfig =
-        serde_json::from_value(config).map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let report = initialize_plugins_impl(config)
-        .await
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    serde_json::to_value(&report).map_err(|e| napi::Error::from_reason(e.to_string()))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NodeDynamicPluginActivationSpec {
-    #[serde(alias = "plugin_id")]
-    plugin_id: String,
-    kind: DynamicPluginKind,
-    #[serde(alias = "manifest_ref")]
-    manifest_ref: String,
-    #[serde(default, alias = "environment_ref")]
-    environment_ref: Option<String>,
-    #[serde(default)]
-    config: serde_json::Map<String, Json>,
-}
-
-impl From<NodeDynamicPluginActivationSpec> for CoreDynamicPluginActivationSpec {
-    fn from(spec: NodeDynamicPluginActivationSpec) -> Self {
-        Self {
-            plugin_id: spec.plugin_id,
-            kind: spec.kind,
-            manifest_ref: spec.manifest_ref,
-            environment_ref: spec.environment_ref,
-            config: spec.config,
-        }
-    }
-}
-
 /// Owned dynamic plugin activation.
 ///
 /// Keep this object alive while code may invoke callbacks registered by the
 /// dynamic plugins. Call `close()` for deterministic cleanup; garbage
 /// collection performs the same cleanup as a defensive fallback.
 #[napi]
-pub struct DynamicPluginActivation {
+pub struct PluginHostActivation {
     close_state: Arc<DynamicPluginCloseState>,
-    report: Json,
 }
 
 type DynamicPluginTeardownResult = std::result::Result<(), String>;
@@ -5935,16 +5886,42 @@ enum DynamicPluginCloseStatus {
 
 struct DynamicPluginCloseState {
     status: StdMutex<DynamicPluginCloseStatus>,
+    report: StdMutex<PluginHostReport>,
     completion: tokio::sync::watch::Sender<Option<DynamicPluginTeardownResult>>,
 }
 
 impl DynamicPluginCloseState {
     fn new(activation: CorePluginHostActivation) -> Self {
         let (completion, _) = tokio::sync::watch::channel(None);
+        let report = activation.report();
         Self {
             status: StdMutex::new(DynamicPluginCloseStatus::Active(Some(activation))),
+            report: StdMutex::new(report),
             completion,
         }
+    }
+
+    fn report(&self) -> PluginHostReport {
+        let latest = {
+            let status = self
+                .status
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match &*status {
+                DynamicPluginCloseStatus::Active(Some(activation)) => Some(activation.report()),
+                DynamicPluginCloseStatus::Active(None)
+                | DynamicPluginCloseStatus::Closing
+                | DynamicPluginCloseStatus::Closed => None,
+            }
+        };
+        let mut report = self
+            .report
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(latest) = latest {
+            *report = latest;
+        }
+        report.clone()
     }
 
     fn active(&self) -> bool {
@@ -5966,6 +5943,12 @@ impl DynamicPluginCloseState {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             match &mut *status {
                 DynamicPluginCloseStatus::Active(activation) => {
+                    if let Some(current) = activation.as_ref() {
+                        *self
+                            .report
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()) = current.report();
+                    }
                     let activation = activation.take();
                     *status = DynamicPluginCloseStatus::Closing;
                     activation
@@ -5990,12 +5973,17 @@ impl DynamicPluginCloseState {
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .take();
                 let result = match activation {
-                    Some(activation) => {
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            activation.clear()
+                    Some(mut activation) => {
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            activation.close()
                         }))
                         .map_err(|_| "dynamic plugin teardown task panicked".to_string())
-                        .and_then(|result| result.map_err(|error| error.to_string()))
+                        .and_then(|result| result.map_err(|error| error.to_string()));
+                        *close_state
+                            .report
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()) = activation.report();
+                        result
                     }
                     None => Err("dynamic plugin teardown task lost its activation".to_string()),
                 };
@@ -6047,11 +6035,12 @@ impl DynamicPluginCloseState {
 }
 
 #[napi]
-impl DynamicPluginActivation {
+impl PluginHostActivation {
     /// Return the validation report produced by activation.
     #[napi(getter)]
-    pub fn report(&self) -> Json {
-        self.report.clone()
+    pub fn report(&self) -> napi::Result<Json> {
+        serde_json::to_value(self.close_state.report())
+            .map_err(|error| napi::Error::from_reason(error.to_string()))
     }
 
     /// Return whether this activation handle has not begun teardown.
@@ -6059,7 +6048,7 @@ impl DynamicPluginActivation {
     /// `false` does not guarantee another process-wide activation can start;
     /// failed teardown may intentionally retain the activation owner.
     #[napi(getter)]
-    pub fn active(&self) -> napi::Result<bool> {
+    pub fn is_active(&self) -> napi::Result<bool> {
         Ok(self.close_state.active())
     }
 
@@ -6092,57 +6081,36 @@ impl DynamicPluginActivation {
     }
 }
 
-impl Drop for DynamicPluginActivation {
+impl Drop for PluginHostActivation {
     fn drop(&mut self) {
         self.close_state.begin_close(true);
     }
 }
 
-/// Initialize with explicitly resolved dynamic plugins.
-///
-/// `config` is layered over discovered `plugins.toml` files and may contain
-/// statically registered components; dynamic components are activated after
-/// that effective base configuration. At least one dynamic plugin is required.
-/// Static-only callers should use `initializePlugins`. The returned object owns
-/// all loaded libraries and worker processes. Its validation report is available
-/// through the `report` property.
+/// Initialize the core-owned static and dynamic plugin host from layered files.
 #[napi]
-pub async fn initialize_with_dynamic_plugins(
+pub async fn initialize(
     config: Json,
-    specs: Json,
-) -> napi::Result<DynamicPluginActivation> {
+    additional_plugins_toml: Option<String>,
+) -> napi::Result<PluginHostActivation> {
     let config: PluginConfig = serde_json::from_value(config)
         .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
-    let specs: Vec<NodeDynamicPluginActivationSpec> =
-        serde_json::from_value(specs).map_err(|error| {
-            napi::Error::from_reason(format!("invalid dynamic plugin specs: {error}"))
-        })?;
-    let specs = specs.into_iter().map(Into::into).collect::<Vec<_>>();
-    let (activation, report) =
-        CorePluginHostActivation::activate_with_discovered_config(config, specs)
-            .await
-            .map_err(|error| napi::Error::from_reason(error.to_string()))?;
-    let report = serde_json::to_value(report)
+    let activation = initialize_impl(config, additional_plugins_toml.map(Into::into))
+        .await
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
-    Ok(DynamicPluginActivation {
+    Ok(PluginHostActivation {
         close_state: Arc::new(DynamicPluginCloseState::new(activation)),
-        report,
     })
 }
 
-/// Clear the active global plugin configuration.
+/// Validate dynamic plugins without loading any plugin code.
 #[napi]
-pub fn clear_plugin_configuration() -> napi::Result<()> {
-    clear_plugin_configuration_impl().map_err(|e| napi::Error::from_reason(e.to_string()))
-}
-
-/// Return the active plugin report or one retained after a teardown failure with runtime diagnostics.
-#[napi]
-pub fn active_plugin_report() -> napi::Result<Option<Json>> {
-    active_plugin_report_impl()
-        .map(|report| serde_json::to_value(&report))
-        .transpose()
-        .map_err(|e| napi::Error::from_reason(e.to_string()))
+pub fn validate(config: Json, additional_plugins_toml: Option<String>) -> napi::Result<Json> {
+    let config: PluginConfig = serde_json::from_value(config)
+        .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
+    let report = validate_impl(config, additional_plugins_toml.map(Into::into))
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    serde_json::to_value(report).map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
 /// List registered plugin kinds.
