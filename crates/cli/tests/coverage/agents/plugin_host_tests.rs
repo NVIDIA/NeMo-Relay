@@ -3157,7 +3157,13 @@ fn generated_windows_hook_command_executes_exact_arguments() {
     child.stdin.take().unwrap().write_all(b"ping\n").unwrap();
     let output = child.wait_with_output().unwrap();
 
-    assert!(output.status.success(), "{command}");
+    assert!(
+        output.status.success(),
+        "command: {command}\nstatus: {:?}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
     assert_eq!(std::fs::read_to_string(marker).unwrap().trim(), "ok");
     assert_eq!(std::fs::read(input_marker).unwrap(), b"ping\n");
     assert_eq!(
