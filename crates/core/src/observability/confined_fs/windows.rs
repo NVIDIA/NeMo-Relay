@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
 use windows_sys::Wdk::Storage::FileSystem::{
     FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF,
@@ -36,10 +36,14 @@ use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 const SHARE_ALL: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
 const PRIVATE_SECURITY_SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;OW)";
 
-pub(in crate::observability) struct ConfinedDir(File);
+pub(in crate::observability) struct ConfinedDir {
+    file: File,
+    path: PathBuf,
+}
 
 impl ConfinedDir {
     pub(in crate::observability) fn open_anchor(path: &Path) -> io::Result<Self> {
+        let anchor_path = path.to_path_buf();
         let path = wide_null(path.as_os_str());
         // SAFETY: `path` is NUL-terminated, and a successful owned handle is transferred to File.
         let handle = unsafe {
@@ -59,12 +63,15 @@ impl ConfinedDir {
         // SAFETY: `handle` is newly owned and valid.
         let file = unsafe { File::from_raw_handle(handle) };
         validate_handle(&file, true)?;
-        Ok(Self(file))
+        Ok(Self {
+            file,
+            path: anchor_path,
+        })
     }
 
     pub(in crate::observability) fn open_or_create_child(&self, name: &OsStr) -> io::Result<Self> {
         let file = open_relative(
-            &self.0,
+            &self.file,
             name,
             FILE_GENERIC_READ | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY,
             FILE_OPEN_IF,
@@ -74,7 +81,10 @@ impl ConfinedDir {
         )?;
         validate_handle(&file, true)?;
         restrict_private_handle(&file)?;
-        Ok(Self(file))
+        Ok(Self {
+            file,
+            path: self.path.join(name),
+        })
     }
 
     pub(in crate::observability) fn open_private_file(
@@ -83,7 +93,7 @@ impl ConfinedDir {
         append: bool,
     ) -> io::Result<File> {
         let file = open_relative(
-            &self.0,
+            &self.file,
             name,
             if append {
                 FILE_APPEND_DATA | FILE_READ_ATTRIBUTES
@@ -106,7 +116,7 @@ impl ConfinedDir {
 
     pub(in crate::observability) fn create_private_new(&self, name: &OsStr) -> io::Result<File> {
         let file = open_relative(
-            &self.0,
+            &self.file,
             name,
             FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE,
             FILE_CREATE,
@@ -121,7 +131,7 @@ impl ConfinedDir {
 
     pub(in crate::observability) fn reject_unsafe_target(&self, name: &OsStr) -> io::Result<()> {
         match open_relative(
-            &self.0,
+            &self.file,
             name,
             FILE_READ_ATTRIBUTES,
             FILE_OPEN,
@@ -141,7 +151,7 @@ impl ConfinedDir {
         _source: &OsStr,
         target: &OsStr,
     ) -> io::Result<()> {
-        let target = wide_null(target);
+        let target = wide_null(self.path.join(target).as_os_str());
         let target_name_len = target
             .len()
             .checked_sub(1)
@@ -156,7 +166,7 @@ impl ConfinedDir {
         // SAFETY: `storage` is aligned and sized for the header plus the complete UTF-16 name.
         unsafe {
             (*info).Anonymous.ReplaceIfExists = true;
-            (*info).RootDirectory = self.0.as_raw_handle();
+            (*info).RootDirectory = std::ptr::null_mut();
             (*info).FileNameLength = (target_name_len * std::mem::size_of::<u16>()) as u32;
             std::ptr::copy_nonoverlapping(
                 target.as_ptr(),
@@ -181,7 +191,7 @@ impl ConfinedDir {
 
     pub(in crate::observability) fn remove_file(&self, name: &OsStr) -> io::Result<()> {
         let file = open_relative(
-            &self.0,
+            &self.file,
             name,
             DELETE,
             FILE_OPEN,
