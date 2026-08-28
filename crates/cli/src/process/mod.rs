@@ -52,6 +52,7 @@ fn cmd_quote_arg(raw: &str) -> String {
     for ch in raw.chars() {
         match ch {
             '%' => escaped.push_str("^%"),
+            '^' => escaped.push_str("^^"),
             '"' => escaped.push_str("\"\""),
             _ => escaped.push(ch),
         }

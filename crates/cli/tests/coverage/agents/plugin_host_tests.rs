@@ -3118,6 +3118,10 @@ fn windows_shell_argument_quoting_and_hook_encoding_preserve_paths() {
         shell_quote_arg_for_platform("foo&bar", true),
         r#""foo&bar""#
     );
+    assert_eq!(
+        shell_quote_arg_for_platform("foo^bar", true),
+        r#""foo^^bar""#
+    );
     assert_eq!(shell_quote_arg_for_platform("", true), r#""""#);
 }
 
