@@ -141,7 +141,11 @@ impl ConfinedDir {
         _source: &OsStr,
         target: &OsStr,
     ) -> io::Result<()> {
-        let target = wide(target);
+        let target = wide_null(target);
+        let target_name_len = target
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| io::Error::other("observability output filename is empty"))?;
         // `SetFileInformationByHandle` expects the complete fixed-size record plus the
         // UTF-16 target name. The one-element `FileName` array remains part of the
         // fixed-size Rust representation.
@@ -153,7 +157,7 @@ impl ConfinedDir {
         unsafe {
             (*info).Anonymous.ReplaceIfExists = true;
             (*info).RootDirectory = self.0.as_raw_handle();
-            (*info).FileNameLength = (target.len() * std::mem::size_of::<u16>()) as u32;
+            (*info).FileNameLength = (target_name_len * std::mem::size_of::<u16>()) as u32;
             std::ptr::copy_nonoverlapping(
                 target.as_ptr(),
                 (*info).FileName.as_mut_ptr(),
