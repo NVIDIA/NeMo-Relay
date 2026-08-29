@@ -16,7 +16,9 @@ use serde::{Deserialize, Serialize};
 use crate::filesystem::{LockAttempt, atomic_write, try_lock_exclusive};
 
 use super::{BOOTSTRAP_LOCK_TIMEOUT, BOOTSTRAP_PROTOCOL_VERSION};
-use crate::gateway::client::{RelayHealth, probe, request_shutdown};
+use crate::gateway::client::{
+    RelayHealth, probe, probe_with_instance, request_lifecycle_shutdown, request_shutdown,
+};
 
 pub(crate) const BOOTSTRAP_STATE_DIR_ENV: &str = "NEMO_RELAY_BOOTSTRAP_STATE_DIR";
 pub(crate) const BOOTSTRAP_SHUTDOWN_TOKEN_ENV: &str = "NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN";
@@ -225,7 +227,11 @@ pub(crate) fn stop_owned_and_reset(url: &str) -> Result<(), String> {
         return Ok(());
     }
     let _lock = lock_endpoint(&state, url)?;
-    let path = owner_path(&state, url);
+    stop_owned_and_reset_locked(&state, url)
+}
+
+fn stop_owned_and_reset_locked(state: &Path, url: &str) -> Result<(), String> {
+    let path = owner_path(state, url);
     let Some(owner) = read_owner_record(&path)? else {
         return Ok(());
     };
@@ -275,6 +281,63 @@ pub(crate) fn stop_owned_and_reset(url: &str) -> Result<(), String> {
     remove_if_matches(&path, &owner)
 }
 
+pub(crate) fn stop_gateway_and_reset(url: &str) -> Result<(), String> {
+    let state = state_dir()?;
+    if !state.exists() {
+        return stop_gateway_without_owner(url);
+    }
+    let _lock = lock_endpoint(&state, url)?;
+    let path = owner_path(&state, url);
+    let previous_owner = read_optional_bytes(&path)?;
+    let owner_stop = stop_owned_and_reset_locked(&state, url);
+    if owner_stop.is_ok() && probe(url, None) == RelayHealth::Unavailable {
+        return Ok(());
+    }
+    stop_gateway_without_owner(url)?;
+    if let Some(previous_owner) = previous_owner {
+        remove_if_bytes_match(&path, &previous_owner)?;
+    }
+    Ok(())
+}
+
+fn stop_gateway_without_owner(url: &str) -> Result<(), String> {
+    let (health, _) = probe_with_instance(url, None);
+    match health {
+        RelayHealth::Unavailable => return Ok(()),
+        RelayHealth::Compatible => {}
+        RelayHealth::Incompatible => {
+            return Err(format!(
+                "Relay gateway at {url} uses an incompatible lifecycle protocol"
+            ));
+        }
+        RelayHealth::Foreign => {
+            return Err(format!(
+                "refusing to stop an unverified process at gateway URL {url}"
+            ));
+        }
+    }
+    let expected_instance = request_lifecycle_shutdown(url)?;
+    let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+    loop {
+        match probe_with_instance(url, None) {
+            (RelayHealth::Unavailable, _) => return Ok(()),
+            (RelayHealth::Compatible, Some(instance))
+                if instance == expected_instance && Instant::now() < deadline =>
+            {
+                thread::sleep(Duration::from_millis(50));
+            }
+            (RelayHealth::Compatible, Some(instance)) if instance == expected_instance => {
+                return Err(format!("Relay gateway at {url} did not stop"));
+            }
+            _ => {
+                return Err(format!(
+                    "a different process replaced the Relay gateway at {url} during shutdown"
+                ));
+            }
+        }
+    }
+}
+
 fn write_owner_record(path: &Path, record: &OwnerRecord) -> Result<(), String> {
     let bytes = serde_json::to_vec(record)
         .map_err(|error| format!("failed to encode gateway ownership: {error}"))?;
@@ -282,13 +345,20 @@ fn write_owner_record(path: &Path, record: &OwnerRecord) -> Result<(), String> {
 }
 
 pub(super) fn read_owner_record(path: &Path) -> Result<Option<OwnerRecord>, String> {
-    match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|error| {
+    match read_optional_bytes(path)? {
+        Some(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|error| {
             format!(
                 "failed to parse gateway ownership {}: {error}",
                 path.display()
             )
         }),
+        None => Ok(None),
+    }
+}
+
+fn read_optional_bytes(path: &Path) -> Result<Option<Vec<u8>>, String> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!(
             "failed to read gateway ownership {}: {error}",
@@ -299,6 +369,20 @@ pub(super) fn read_owner_record(path: &Path) -> Result<Option<OwnerRecord>, Stri
 
 fn remove_if_matches(path: &Path, expected: &OwnerRecord) -> Result<(), String> {
     if read_owner_record(path)?.as_ref() != Some(expected) {
+        return Ok(());
+    }
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "failed to remove gateway ownership {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+fn remove_if_bytes_match(path: &Path, expected: &[u8]) -> Result<(), String> {
+    if read_optional_bytes(path)?.as_deref() != Some(expected) {
         return Ok(());
     }
     match fs::remove_file(path) {

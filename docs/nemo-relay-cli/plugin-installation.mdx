@@ -162,16 +162,17 @@ To explicitly stop the managed shared gateway, first close active MCP clients,
 then run:
 
 ```bash
-nemo-relay gateway stop
+nemo-relay --bind 127.0.0.1:47632 gateway stop
 ```
 
-The command authenticates the Relay-owned sidecar and never stops a foreign
-process using the same endpoint. An open MCP client can restart the gateway as
-part of its one allowed recovery. To target a non-default persistent MCP
-endpoint, run `nemo-relay --bind 127.0.0.1:4041 gateway stop`.
+The command authenticates the Relay process at the configured endpoint and
+never stops a foreign process using the same endpoint. An open MCP client can
+restart the managed gateway as part of its one allowed recovery.
 
 `nemo-relay gateway start` starts the gateway with the same server
-configuration as a bare daemon invocation.
+configuration as a bare daemon invocation. `nemo-relay gateway stop` stops that
+gateway at the default daemon endpoint, `127.0.0.1:4040`. Pass the same
+`--bind` value to both commands when using a custom endpoint.
 
 ### Hook Delivery and Upgrade Safety
 

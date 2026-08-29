@@ -477,6 +477,11 @@ const BOOTSTRAP_HMAC_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const BOOTSTRAP_CHALLENGE_DOMAIN: &[u8] = b"nemo-relay/bootstrap-health/v1\0";
 const BOOTSTRAP_CLIENT_TOKEN_DOMAIN: &[u8] = b"nemo-relay/bootstrap-client/v1\0";
 const HOOK_CLIENT_TOKEN_DOMAIN: &[u8] = b"nemo-relay/hook-client/v1\0";
+const GATEWAY_LIFECYCLE_DOMAIN: &[u8] = b"nemo-relay/gateway-lifecycle/v1\0";
+// Health proofs are visible to any loopback client. A separate action domain prevents a health
+// challenge response from being replayed as shutdown authorization.
+const GATEWAY_LIFECYCLE_HEALTH_ACTION: &[u8] = b"health";
+const GATEWAY_LIFECYCLE_SHUTDOWN_ACTION: &[u8] = b"shutdown";
 const TRANSPARENT_GATEWAY_DOMAIN: &[u8] = b"nemo-relay/transparent-gateway/v1\0";
 const PYTHON_ENVIRONMENT_ATTESTATION_DOMAIN: &[u8] =
     b"nemo-relay/python-environment-attestation/v1\0";
@@ -484,6 +489,8 @@ const PYTHON_ENVIRONMENT_ATTESTATION_DOMAIN: &[u8] =
 /// Private proof installed into supported coding-agent provider configuration.
 pub(crate) const BOOTSTRAP_CLIENT_TOKEN_HEADER: &str = "x-nemo-relay-client-token";
 pub(crate) const HOOK_CLIENT_TOKEN_HEADER: &str = "x-nemo-relay-hook-client";
+pub(crate) const GATEWAY_LIFECYCLE_NONCE_HEADER: &str = "x-nemo-relay-lifecycle-nonce";
+pub(crate) const GATEWAY_LIFECYCLE_PROOF_HEADER: &str = "x-nemo-relay-lifecycle-proof";
 
 /// Stable health-proof context shared by a transparent wrapper and plugin-owned MCP client.
 pub(crate) fn transparent_gateway_fingerprint(gateway_url: &str) -> String {
@@ -539,6 +546,113 @@ impl BootstrapChallengeKey {
         );
         message.extend_from_slice(BOOTSTRAP_CHALLENGE_DOMAIN);
         message.extend_from_slice(fingerprint.as_bytes());
+        message.push(0);
+        message.extend_from_slice(nonce.as_bytes());
+        hmac::verify(&self.0, &message, &tag).is_ok()
+    }
+
+    pub(crate) fn gateway_lifecycle_health_proof(
+        &self,
+        instance_id: &str,
+        address: &str,
+        nonce: &str,
+    ) -> String {
+        self.gateway_lifecycle_proof(GATEWAY_LIFECYCLE_HEALTH_ACTION, instance_id, address, nonce)
+    }
+
+    pub(crate) fn verify_gateway_lifecycle_health_proof(
+        &self,
+        instance_id: &str,
+        address: &str,
+        nonce: &str,
+        proof: &str,
+    ) -> bool {
+        self.verify_gateway_lifecycle_proof(
+            GATEWAY_LIFECYCLE_HEALTH_ACTION,
+            instance_id,
+            address,
+            nonce,
+            proof,
+        )
+    }
+
+    pub(crate) fn gateway_lifecycle_shutdown_proof(
+        &self,
+        instance_id: &str,
+        address: &str,
+        nonce: &str,
+    ) -> String {
+        self.gateway_lifecycle_proof(
+            GATEWAY_LIFECYCLE_SHUTDOWN_ACTION,
+            instance_id,
+            address,
+            nonce,
+        )
+    }
+
+    pub(crate) fn verify_gateway_lifecycle_shutdown_proof(
+        &self,
+        instance_id: &str,
+        address: &str,
+        nonce: &str,
+        proof: &str,
+    ) -> bool {
+        self.verify_gateway_lifecycle_proof(
+            GATEWAY_LIFECYCLE_SHUTDOWN_ACTION,
+            instance_id,
+            address,
+            nonce,
+            proof,
+        )
+    }
+
+    fn gateway_lifecycle_proof(
+        &self,
+        action: &[u8],
+        instance_id: &str,
+        address: &str,
+        nonce: &str,
+    ) -> String {
+        let mut context = hmac::Context::with_key(&self.0);
+        context.update(GATEWAY_LIFECYCLE_DOMAIN);
+        context.update(action);
+        context.update(&[0]);
+        context.update(instance_id.as_bytes());
+        context.update(&[0]);
+        context.update(address.as_bytes());
+        context.update(&[0]);
+        context.update(nonce.as_bytes());
+        encode_hmac_tag(context.sign())
+    }
+
+    fn verify_gateway_lifecycle_proof(
+        &self,
+        action: &[u8],
+        instance_id: &str,
+        address: &str,
+        nonce: &str,
+        proof: &str,
+    ) -> bool {
+        let Some(encoded) = proof.strip_prefix("hmac-sha256:") else {
+            return false;
+        };
+        let Some(tag) = decode_fixed_hex::<32>(encoded) else {
+            return false;
+        };
+        let mut message = Vec::with_capacity(
+            GATEWAY_LIFECYCLE_DOMAIN.len()
+                + action.len()
+                + instance_id.len()
+                + address.len()
+                + nonce.len()
+                + 3,
+        );
+        message.extend_from_slice(GATEWAY_LIFECYCLE_DOMAIN);
+        message.extend_from_slice(action);
+        message.push(0);
+        message.extend_from_slice(instance_id.as_bytes());
+        message.push(0);
+        message.extend_from_slice(address.as_bytes());
         message.push(0);
         message.extend_from_slice(nonce.as_bytes());
         hmac::verify(&self.0, &message, &tag).is_ok()

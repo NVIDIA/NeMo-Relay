@@ -103,14 +103,15 @@ pub(crate) async fn run(server_args: &GatewayOverrides) -> Result<ExitCode, CliE
     }
 }
 
-/// Stops the managed shared gateway at the configured MCP endpoint.
-///
-/// Ownership state authenticates the target before requesting shutdown, so this
-/// never stops a foreign process that happens to use the same port.
-pub(crate) fn stop(server_args: &GatewayOverrides) -> Result<ExitCode, CliError> {
-    let bind = server_args.bind.unwrap_or_else(default_mcp_bind);
+/// Stops the verified Relay gateway at the configured endpoint.
+pub(crate) fn stop(bind: SocketAddr) -> Result<ExitCode, CliError> {
+    if bind.port() == 0 {
+        return Err(CliError::Config(
+            "gateway stop requires a concrete nonzero port".into(),
+        ));
+    }
     let url = format!("http://{bind}");
-    crate::bootstrap::state::stop_owned_and_reset(&url).map_err(CliError::Launch)?;
+    crate::bootstrap::state::stop_gateway_and_reset(&url).map_err(CliError::Launch)?;
     Ok(ExitCode::SUCCESS)
 }
 

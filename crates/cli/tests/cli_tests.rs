@@ -1378,6 +1378,11 @@ impl ChildGuard {
         let _ = child.kill();
         wait_child_with_output(child)
     }
+
+    fn wait(mut self) -> ExitStatus {
+        let mut child = self.0.take().unwrap();
+        wait_child(&mut child)
+    }
 }
 
 impl Drop for ChildGuard {
@@ -1571,6 +1576,61 @@ fn relay_health(address: SocketAddr) -> serde_json::Value {
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap()
+}
+
+fn wait_for_relay_health(address: SocketAddr) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok() {
+            return relay_health(address);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Relay gateway did not become ready at {address}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn cli_gateway_stop_stops_explicit_and_legacy_gateway_starts() {
+    for explicit_start in [true, false] {
+        let temp = tempfile::tempdir().unwrap();
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = probe.local_addr().unwrap();
+        drop(probe);
+        let xdg = temp.path().join("xdg");
+
+        let mut start = Command::new(gateway_bin());
+        start.args(["--bind", &address.to_string()]);
+        if explicit_start {
+            start.args(["gateway", "start"]);
+        }
+        start
+            .env("HOME", temp.path())
+            .env("XDG_CONFIG_HOME", &xdg)
+            .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let gateway = ChildGuard::new(start.spawn().unwrap());
+
+        let health = wait_for_relay_health(address);
+        assert_eq!(health["service"], "nemo-relay");
+        let stop = Command::new(gateway_bin())
+            .args(["--bind", &address.to_string(), "gateway", "stop"])
+            .env("HOME", temp.path())
+            .env("XDG_CONFIG_HOME", &xdg)
+            .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+            .output()
+            .unwrap();
+        assert!(
+            stop.status.success(),
+            "gateway stop failed: {}",
+            String::from_utf8_lossy(&stop.stderr)
+        );
+        assert!(gateway.wait().success());
+        wait_for_port_closed(address);
+    }
 }
 
 #[test]

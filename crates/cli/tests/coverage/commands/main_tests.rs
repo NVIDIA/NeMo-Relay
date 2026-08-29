@@ -93,8 +93,28 @@ fn operational_command_names_cover_logging_exempt_commands() {
     }
 }
 
+#[test]
+fn gateway_stop_uses_the_daemon_default_unless_bind_is_explicit() {
+    let default = Cli::try_parse_from(["nemo-relay", "gateway", "stop"]).unwrap();
+    assert_eq!(
+        gateway::stop_bind(&default.server),
+        "127.0.0.1:4040".parse().unwrap()
+    );
+
+    let explicit =
+        Cli::try_parse_from(["nemo-relay", "--bind", "127.0.0.1:47632", "gateway", "stop"])
+            .unwrap();
+    assert_eq!(
+        gateway::stop_bind(&explicit.server),
+        "127.0.0.1:47632".parse().unwrap()
+    );
+
+    let error = crate::mcp::stop("127.0.0.1:0".parse().unwrap()).unwrap_err();
+    assert!(error.to_string().contains("nonzero port"), "{error}");
+}
+
 #[tokio::test]
-async fn gateway_lifecycle_commands_use_the_requested_bind_and_verify_ownership() {
+async fn gateway_lifecycle_commands_use_the_requested_bind_and_refuse_foreign_listeners() {
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
     std::fs::create_dir_all(&xdg).unwrap();
@@ -134,21 +154,29 @@ async fn gateway_lifecycle_commands_use_the_requested_bind_and_verify_ownership(
     drop(occupied);
 
     let foreign = TcpListener::bind("127.0.0.1:0").unwrap();
+    foreign.set_nonblocking(true).unwrap();
     let foreign_address = foreign.local_addr().unwrap();
+    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let server_running = running.clone();
     let foreign_server = std::thread::spawn(move || {
-        let (mut stream, _) = foreign.accept().unwrap();
-        let mut request = [0_u8; 1024];
-        let _ = stream.read(&mut request);
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
-            .unwrap();
+        while server_running.load(std::sync::atomic::Ordering::Relaxed) {
+            match foreign.accept() {
+                Ok((mut stream, _)) => {
+                    let mut request = [0_u8; 1024];
+                    let _ = stream.read(&mut request);
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                        )
+                        .unwrap();
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(error) => panic!("foreign listener failed: {error}"),
+            }
+        }
     });
-    let _owner = crate::bootstrap::state::publish_owner_from_env(
-        foreign_address,
-        Some("test-shutdown-token"),
-    )
-    .unwrap()
-    .unwrap();
     let stop = Cli::try_parse_from([
         "nemo-relay",
         "--bind",
@@ -165,6 +193,7 @@ async fn gateway_lifecycle_commands_use_the_requested_bind_and_verify_ownership(
         error.contains("refusing to stop an unverified process"),
         "{error}"
     );
+    running.store(false, std::sync::atomic::Ordering::Relaxed);
     foreign_server.join().unwrap();
 }
 
