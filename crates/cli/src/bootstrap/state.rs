@@ -329,6 +329,9 @@ fn stop_gateway_without_owner(url: &str) -> Result<(), String> {
             (RelayHealth::Compatible, Some(instance)) if instance == expected_instance => {
                 return Err(format!("Relay gateway at {url} did not stop"));
             }
+            (RelayHealth::Foreign, _) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(50));
+            }
             _ => {
                 return Err(format!(
                     "a different process replaced the Relay gateway at {url} during shutdown"

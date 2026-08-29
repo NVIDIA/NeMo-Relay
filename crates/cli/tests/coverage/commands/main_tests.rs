@@ -162,13 +162,12 @@ async fn gateway_lifecycle_commands_use_the_requested_bind_and_refuse_foreign_li
         while server_running.load(std::sync::atomic::Ordering::Relaxed) {
             match foreign.accept() {
                 Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
                     let mut request = [0_u8; 1024];
                     let _ = stream.read(&mut request);
-                    stream
-                        .write_all(
-                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
-                        )
-                        .unwrap();
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    );
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(std::time::Duration::from_millis(5));
