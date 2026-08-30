@@ -103,18 +103,6 @@ pub(crate) async fn run(server_args: &GatewayOverrides) -> Result<ExitCode, CliE
     }
 }
 
-/// Stops the verified Relay gateway at the configured endpoint.
-pub(crate) fn stop(bind: SocketAddr) -> Result<ExitCode, CliError> {
-    if bind.port() == 0 {
-        return Err(CliError::Config(
-            "gateway stop requires a concrete nonzero port".into(),
-        ));
-    }
-    let url = format!("http://{bind}");
-    crate::bootstrap::state::stop_gateway_and_reset(&url).map_err(CliError::Launch)?;
-    Ok(ExitCode::SUCCESS)
-}
-
 /// Builds the host-independent persistent MCP launch contract.
 ///
 /// Host adapters add only schema-specific activation and environment-forwarding fields. Keeping

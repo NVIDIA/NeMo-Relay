@@ -3,7 +3,6 @@
 
 use std::ffi::OsString;
 use std::future::Future;
-use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -708,7 +707,7 @@ async fn bootstrap_shutdown_requires_the_private_owner_token() {
         None,
         false,
         Some(BootstrapShutdown {
-            token: Some("private-token".into()),
+            token: "private-token".into(),
             sender: Arc::new(std::sync::Mutex::new(Some(sender))),
         }),
         None,
@@ -733,89 +732,6 @@ async fn bootstrap_shutdown_requires_the_private_owner_token() {
                 .method("POST")
                 .uri("/bootstrap/shutdown")
                 .header("x-nemo-relay-bootstrap-token", "private-token")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
-    tokio::time::timeout(std::time::Duration::from_secs(1), receiver)
-        .await
-        .expect("shutdown signal was not delivered")
-        .unwrap();
-}
-
-#[tokio::test]
-async fn gateway_lifecycle_shutdown_requires_a_domain_separated_proof() {
-    let key = BootstrapChallengeKey::from_bytes(b"test lifecycle key");
-    let address: SocketAddr = "127.0.0.1:4040".parse().unwrap();
-    let nonce = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    let (sender, receiver) = oneshot::channel();
-    let mut state = AppState::new_with_bootstrap(
-        test_config(),
-        None,
-        Some(key.clone()),
-        false,
-        Some(BootstrapShutdown {
-            token: None,
-            sender: Arc::new(std::sync::Mutex::new(Some(sender))),
-        }),
-        None,
-    );
-    state.local_address = Some(address);
-    let instance_id = state.instance_id.clone();
-    let app = router_with_state(state);
-
-    let health = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/healthz")
-                .header(crate::configuration::GATEWAY_LIFECYCLE_NONCE_HEADER, nonce)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(health.status(), StatusCode::OK);
-    assert_eq!(
-        health
-            .headers()
-            .get(crate::configuration::GATEWAY_LIFECYCLE_PROOF_HEADER)
-            .unwrap(),
-        key.gateway_lifecycle_health_proof(&instance_id, &address.to_string(), nonce)
-            .as_str()
-    );
-
-    let rejected = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/bootstrap/shutdown")
-                .header(crate::configuration::GATEWAY_LIFECYCLE_NONCE_HEADER, nonce)
-                .header(
-                    crate::configuration::GATEWAY_LIFECYCLE_PROOF_HEADER,
-                    key.gateway_lifecycle_health_proof(&instance_id, &address.to_string(), nonce),
-                )
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
-
-    let accepted = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/bootstrap/shutdown")
-                .header(crate::configuration::GATEWAY_LIFECYCLE_NONCE_HEADER, nonce)
-                .header(
-                    crate::configuration::GATEWAY_LIFECYCLE_PROOF_HEADER,
-                    key.gateway_lifecycle_shutdown_proof(&instance_id, &address.to_string(), nonce),
-                )
                 .body(Body::empty())
                 .unwrap(),
         )

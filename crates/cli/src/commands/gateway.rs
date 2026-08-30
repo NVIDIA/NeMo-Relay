@@ -2,19 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::net::SocketAddr;
+use std::path::Path;
 use std::process::ExitCode;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use clap::{Args, Subcommand};
+use listeners::{Listener, Process, Protocol, SocketState};
+#[cfg(unix)]
+use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 
 use crate::error::CliError;
 
 use super::serve::ServerArgs;
-
-pub(super) fn stop_bind(server: &ServerArgs) -> SocketAddr {
-    server
-        .bind
-        .unwrap_or_else(|| crate::configuration::GatewayConfig::default().bind)
-}
 
 #[derive(Debug, Clone, Args)]
 pub(crate) struct GatewayCommand {
@@ -26,14 +26,18 @@ pub(crate) struct GatewayCommand {
 enum GatewaySubcommand {
     /// Start the gateway with the same server configuration as a bare daemon invocation.
     Start,
-    /// Stop the Relay gateway at the configured loopback endpoint.
-    Stop,
+    /// Stop the gateway process listening at the configured loopback endpoint.
+    Stop {
+        /// Terminate immediately instead of requesting graceful shutdown (the Windows default).
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 impl GatewayCommand {
     /// Returns whether this command only stops an existing gateway.
     pub(crate) fn is_stop(&self) -> bool {
-        matches!(self.command, GatewaySubcommand::Stop)
+        matches!(self.command, GatewaySubcommand::Stop { .. })
     }
 }
 
@@ -45,6 +49,186 @@ pub(crate) async fn execute(
 ) -> Result<ExitCode, CliError> {
     match command.command {
         GatewaySubcommand::Start => super::serve_gateway(server, bootstrap_shutdown_token).await,
-        GatewaySubcommand::Stop => crate::mcp::stop(stop_bind(server)),
+        GatewaySubcommand::Stop { force } => stop(stop_bind(server), force),
     }
+}
+
+const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const STOP_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+pub(super) fn stop_bind(server: &ServerArgs) -> SocketAddr {
+    server
+        .bind
+        .unwrap_or_else(|| crate::configuration::GatewayConfig::default().bind)
+}
+
+fn stop(bind: SocketAddr, force: bool) -> Result<ExitCode, CliError> {
+    validate_stop_bind(bind)?;
+    let Some(target) = resolve_relay_listener(bind)? else {
+        return Ok(ExitCode::SUCCESS);
+    };
+
+    // Resolve again immediately before signaling. This avoids acting on a PID that stopped owning
+    // the endpoint between discovery and action.
+    let Some(current) = resolve_relay_listener(bind)? else {
+        return Ok(ExitCode::SUCCESS);
+    };
+    if current.pid != target.pid {
+        return Err(CliError::Launch(format!(
+            "gateway listener at {bind} changed from PID {} to PID {} before shutdown",
+            target.pid, current.pid
+        )));
+    }
+
+    signal_process(target.pid, force).map_err(|error| {
+        CliError::Launch(format!(
+            "failed to stop gateway process {} at {bind}: {error}",
+            target.pid
+        ))
+    })?;
+
+    wait_for_listener_exit(bind, target.pid)?;
+    crate::bootstrap::state::remove_owner_for_pid(&format!("http://{bind}"), target.pid)
+        .map_err(CliError::Launch)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+pub(super) fn validate_stop_bind(bind: SocketAddr) -> Result<(), CliError> {
+    if !bind.ip().is_loopback() {
+        return Err(CliError::Config(format!(
+            "gateway stop requires a loopback address, got {bind}"
+        )));
+    }
+    if bind.port() == 0 {
+        return Err(CliError::Config(
+            "gateway stop requires a concrete nonzero port".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_relay_listener(bind: SocketAddr) -> Result<Option<Process>, CliError> {
+    let listeners = listeners::get_all().map_err(|error| {
+        CliError::Launch(format!(
+            "failed to resolve the gateway process listening at {bind}: {error}"
+        ))
+    })?;
+    select_relay_listener(bind, listeners)
+}
+
+pub(super) fn select_relay_listener(
+    bind: SocketAddr,
+    listeners: impl IntoIterator<Item = Listener>,
+) -> Result<Option<Process>, CliError> {
+    let mut matches = listeners.into_iter().filter(|listener| {
+        listener.socket == bind
+            && listener.protocol == Protocol::TCP
+            && listener.state == SocketState::Listen
+    });
+    let Some(first) = matches.next() else {
+        return Ok(None);
+    };
+    if let Some(other) = matches.find(|listener| listener.process.pid != first.process.pid) {
+        return Err(CliError::Launch(format!(
+            "multiple processes listen at gateway address {bind}: PIDs {} and {}",
+            first.process.pid, other.process.pid
+        )));
+    }
+    if !is_relay_process(&first.process) {
+        return Err(CliError::Launch(format!(
+            "refusing to stop non-Relay process '{}' at {bind}",
+            first.process.name
+        )));
+    }
+    Ok(Some(first.process))
+}
+
+fn is_relay_process(process: &Process) -> bool {
+    Path::new(&process.name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("nemo-relay"))
+        || Path::new(&process.path)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("nemo-relay"))
+}
+
+fn wait_for_listener_exit(bind: SocketAddr, pid: u32) -> Result<(), CliError> {
+    let deadline = Instant::now() + STOP_TIMEOUT;
+    loop {
+        match resolve_relay_listener(bind)? {
+            None => return Ok(()),
+            Some(process) if process.pid != pid => {
+                return Err(CliError::Launch(format!(
+                    "a different process replaced gateway PID {pid} at {bind} during shutdown"
+                )));
+            }
+            Some(_) if Instant::now() < deadline => thread::sleep(STOP_POLL_INTERVAL),
+            Some(_) => {
+                return Err(CliError::Launch(format!(
+                    "gateway process {pid} at {bind} did not stop"
+                )));
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+pub(super) fn signal_process(pid: u32, force: bool) -> Result<(), String> {
+    if force {
+        for descendant in descendant_pids(pid) {
+            send_unix_signal(descendant, libc::SIGKILL)?;
+        }
+    }
+    send_unix_signal(pid, if force { libc::SIGKILL } else { libc::SIGINT })
+}
+
+#[cfg(unix)]
+fn descendant_pids(root: u32) -> Vec<u32> {
+    fn collect(system: &System, parent: Pid, descendants: &mut Vec<u32>) {
+        for (pid, _) in system
+            .processes()
+            .iter()
+            .filter(|(_, process)| process.parent() == Some(parent))
+        {
+            collect(system, *pid, descendants);
+            descendants.push(pid.as_u32());
+        }
+    }
+
+    let system = System::new_with_specifics(
+        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+    );
+    let mut descendants = Vec::new();
+    collect(&system, Pid::from_u32(root), &mut descendants);
+    descendants
+}
+
+#[cfg(unix)]
+fn send_unix_signal(pid: u32, signal: libc::c_int) -> Result<(), String> {
+    let native_pid =
+        libc::pid_t::try_from(pid).map_err(|_| format!("PID {pid} is out of range"))?;
+    // SAFETY: callers verify the gateway PID and derive descendants from the OS process table.
+    if unsafe { libc::kill(native_pid, signal) } == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(format!("could not signal PID {pid}: {error}"))
+    }
+}
+
+#[cfg(windows)]
+fn signal_process(pid: u32, _force: bool) -> Result<(), String> {
+    let status = std::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .status()
+        .map_err(|error| format!("failed to launch taskkill: {error}"))?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| format!("taskkill exited with status {status}"))
 }

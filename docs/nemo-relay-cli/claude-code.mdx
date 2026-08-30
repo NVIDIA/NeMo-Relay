@@ -69,9 +69,10 @@ starts or reuses the shared gateway on `127.0.0.1:47632` immediately when the
 MCP process launches. The client verifies the gateway identity and effective
 persistent configuration, heartbeats it while MCP stdio remains open, and
 performs one coordinated restart if the gateway becomes unhealthy. The
-heartbeat defaults to 3 seconds; set
-`NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS` to a positive integer to adjust it
-without changing the gateway's idle timeout. Claude Code and Codex MCP clients
+heartbeat defaults to 3 seconds and is shortened automatically when necessary
+to remain below the gateway idle timeout. Set
+`NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS` to a positive integer shorter than
+the idle timeout to override it. Claude Code and Codex MCP clients
 share a compatible gateway, and the gateway
 exits after the final client's idle timeout. The MCP server advertises no tools.
 
@@ -94,14 +95,16 @@ then run:
 nemo-relay --bind 127.0.0.1:47632 gateway stop
 ```
 
-The command authenticates the Relay process at the configured endpoint and
-never stops a foreign process using the same endpoint. An open MCP client can
-restart the managed gateway as part of its one allowed recovery.
+The command resolves the process listening at that exact loopback address,
+verifies that its executable is named `nemo-relay`, and stops it. An open MCP
+client can restart the managed gateway as part of its one allowed recovery.
 
 `nemo-relay gateway start` starts the gateway with the same server
 configuration as a bare daemon invocation. `nemo-relay gateway stop` stops that
-gateway at the default daemon endpoint, `127.0.0.1:4040`. Pass the same
-`--bind` value to both commands when using a custom endpoint.
+gateway at the default daemon endpoint, `127.0.0.1:4040`. Pass the same `--bind`
+value to both commands for a custom endpoint. On Unix, add `--force` to terminate
+the process immediately instead of requesting a graceful shutdown. Windows
+always terminates the gateway process tree.
 
 Check or remove the installed plugin with:
 

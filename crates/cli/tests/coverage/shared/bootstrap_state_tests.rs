@@ -6,7 +6,6 @@ use crate::test_support::{EnvScope, accept_bounded, header, read_headers};
 use std::ffi::OsStr;
 use std::io::Write;
 use std::net::TcpListener;
-use std::sync::mpsc;
 
 #[test]
 fn owner_records_are_versioned_endpoint_scoped_and_round_trip() {
@@ -130,6 +129,29 @@ fn server_owner_guard_cleans_only_its_own_record() {
 }
 
 #[test]
+fn process_stop_cleans_only_the_matching_owner_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config");
+    let _scope = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(config.as_os_str())),
+        ("HOME", Some(dir.path().as_os_str())),
+        ("USERPROFILE", None),
+    ]);
+    let url = "http://127.0.0.1:47632";
+    let state = state_dir().unwrap();
+    create_private_dir(&state).unwrap();
+    let path = owner_path(&state, url);
+    let owner = OwnerRecord::new(42, url, "shutdown", Some("fingerprint"));
+    write_owner_record(&path, &owner).unwrap();
+
+    remove_owner_for_pid(url, 41).unwrap();
+    assert_eq!(read_owner_record(&path).unwrap(), Some(owner));
+
+    remove_owner_for_pid(url, 42).unwrap();
+    assert!(!path.exists());
+}
+
+#[test]
 fn stopping_an_absent_or_stale_owned_gateway_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config");
@@ -217,171 +239,6 @@ fn authenticated_owned_gateway_is_shut_down_and_cleaned_up() {
     });
 
     stop_owned_and_reset(&url).unwrap();
-    server.join().unwrap();
-    assert!(!path.exists());
-}
-
-#[test]
-fn ownerless_shutdown_ignores_malformed_owner_and_holds_the_startup_lock() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("config");
-    let _scope = EnvScope::set(&[
-        ("XDG_CONFIG_HOME", Some(config.as_os_str())),
-        ("HOME", Some(dir.path().as_os_str())),
-        ("USERPROFILE", None),
-    ]);
-    let key = crate::configuration::BootstrapChallengeKey::load().unwrap();
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let url = format!("http://{address}");
-    let state = state_dir().unwrap();
-    create_private_dir(&state).unwrap();
-    let path = owner_path(&state, &url);
-    std::fs::write(&path, b"{not-valid-json").unwrap();
-    let replacement = OwnerRecord::new(84, &url, "replacement-token", Some("replacement"));
-    let (shutdown_seen, shutdown_received) = mpsc::channel();
-    let (lock_attempted, lock_attempt) = mpsc::channel();
-
-    let publisher_state = state.clone();
-    let publisher_url = url.clone();
-    let publisher = std::thread::spawn(move || {
-        shutdown_received
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap();
-        let result = lock_endpoint_for(&publisher_state, &publisher_url, Duration::from_millis(25))
-            .map(drop);
-        lock_attempted.send(result).unwrap();
-    });
-
-    let server = std::thread::spawn(move || {
-        let body = format!(
-            "{{\"status\":\"ok\",\"service\":\"nemo-relay\",\"version\":\"{}\",\"bootstrap_protocol\":{},\"instance_id\":\"ownerless-instance\"}}",
-            env!("CARGO_PKG_VERSION"),
-            BOOTSTRAP_PROTOCOL_VERSION
-        );
-
-        let mut probe = accept_bounded(&listener);
-        read_headers(&mut probe);
-        probe
-            .write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                )
-                .as_bytes(),
-            )
-            .unwrap();
-
-        let mut lifecycle = accept_bounded(&listener);
-        let challenge = read_headers(&mut lifecycle);
-        let nonce = header(
-            &challenge,
-            crate::configuration::GATEWAY_LIFECYCLE_NONCE_HEADER,
-        );
-        let proof =
-            key.gateway_lifecycle_health_proof("ownerless-instance", &address.to_string(), &nonce);
-        lifecycle
-            .write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\n{}: {proof}\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
-                    crate::configuration::GATEWAY_LIFECYCLE_PROOF_HEADER,
-                    body.len()
-                )
-                .as_bytes(),
-            )
-            .unwrap();
-        let shutdown = read_headers(&mut lifecycle);
-        assert!(shutdown.starts_with("POST /bootstrap/shutdown HTTP/1.1"));
-        shutdown_seen.send(()).unwrap();
-        let error = lock_attempt
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap()
-            .unwrap_err();
-        assert!(error.contains("timed out waiting"), "{error}");
-        drop(listener);
-        lifecycle
-            .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            .unwrap();
-    });
-
-    stop_gateway_and_reset(&url).unwrap();
-    server.join().unwrap();
-    publisher.join().unwrap();
-    assert!(!path.exists());
-
-    let _lock = lock_endpoint(&state, &url).unwrap();
-    write_owner_record(&path, &replacement).unwrap();
-    assert_eq!(read_owner_record(&path).unwrap(), Some(replacement));
-}
-
-#[test]
-fn ownerless_shutdown_retries_a_transient_probe_failure() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("config");
-    let _scope = EnvScope::set(&[
-        ("XDG_CONFIG_HOME", Some(config.as_os_str())),
-        ("HOME", Some(dir.path().as_os_str())),
-        ("USERPROFILE", None),
-    ]);
-    let key = crate::configuration::BootstrapChallengeKey::load().unwrap();
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let url = format!("http://{address}");
-    let state = state_dir().unwrap();
-    create_private_dir(&state).unwrap();
-    let path = owner_path(&state, &url);
-    std::fs::write(&path, b"{not-valid-json").unwrap();
-
-    let server = std::thread::spawn(move || {
-        let body = format!(
-            "{{\"status\":\"ok\",\"service\":\"nemo-relay\",\"version\":\"{}\",\"bootstrap_protocol\":{},\"instance_id\":\"ownerless-instance\"}}",
-            env!("CARGO_PKG_VERSION"),
-            BOOTSTRAP_PROTOCOL_VERSION
-        );
-
-        let mut probe = accept_bounded(&listener);
-        read_headers(&mut probe);
-        probe
-            .write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                )
-                .as_bytes(),
-            )
-            .unwrap();
-
-        let mut lifecycle = accept_bounded(&listener);
-        let challenge = read_headers(&mut lifecycle);
-        let nonce = header(
-            &challenge,
-            crate::configuration::GATEWAY_LIFECYCLE_NONCE_HEADER,
-        );
-        let proof =
-            key.gateway_lifecycle_health_proof("ownerless-instance", &address.to_string(), &nonce);
-        lifecycle
-            .write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\n{}: {proof}\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
-                    crate::configuration::GATEWAY_LIFECYCLE_PROOF_HEADER,
-                    body.len()
-                )
-                .as_bytes(),
-            )
-            .unwrap();
-        let shutdown = read_headers(&mut lifecycle);
-        assert!(shutdown.starts_with("POST /bootstrap/shutdown HTTP/1.1"));
-        lifecycle
-            .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            .unwrap();
-        drop(lifecycle);
-
-        let transient_probe = accept_bounded(&listener);
-        drop(listener);
-        drop(transient_probe);
-    });
-
-    stop_gateway_and_reset(&url).unwrap();
     server.join().unwrap();
     assert!(!path.exists());
 }

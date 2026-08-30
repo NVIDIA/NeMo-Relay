@@ -573,8 +573,10 @@ pub(crate) fn plugin_idle_timeout() -> Result<Duration, String> {
 
 /// Returns the persistent MCP gateway heartbeat interval.
 pub(crate) fn plugin_heartbeat_interval() -> Result<Duration, String> {
-    let raw = env::var(crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV)
-        .unwrap_or_else(|_| "3".into());
+    let idle_timeout = plugin_idle_timeout()?;
+    let Ok(raw) = env::var(crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV) else {
+        return Ok((idle_timeout / 3).clamp(Duration::from_millis(100), Duration::from_secs(3)));
+    };
     let seconds = raw.parse::<u64>().map_err(|error| {
         format!(
             "{} must be a positive integer: {error}",
@@ -587,7 +589,15 @@ pub(crate) fn plugin_heartbeat_interval() -> Result<Duration, String> {
             crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV
         ));
     }
-    Ok(Duration::from_secs(seconds))
+    let heartbeat_interval = Duration::from_secs(seconds);
+    if heartbeat_interval >= idle_timeout {
+        return Err(format!(
+            "{} must be shorter than {}",
+            crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV,
+            crate::configuration::PLUGIN_IDLE_TIMEOUT_ENV
+        ));
+    }
+    Ok(heartbeat_interval)
 }
 
 #[cfg(test)]

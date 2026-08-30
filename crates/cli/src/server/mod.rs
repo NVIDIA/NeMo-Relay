@@ -37,8 +37,7 @@ use tokio::sync::oneshot;
 
 use crate::agents::shared::adapters::{claude_code, codex};
 use crate::configuration::{
-    BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, GATEWAY_LIFECYCLE_NONCE_HEADER,
-    GATEWAY_LIFECYCLE_PROOF_HEADER, GatewayConfig, HOOK_CLIENT_TOKEN_HEADER,
+    BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, GatewayConfig, HOOK_CLIENT_TOKEN_HEADER,
     ManagedBootstrapIdentity,
 };
 use crate::error::CliError;
@@ -69,7 +68,7 @@ pub(crate) struct AppState {
 
 #[derive(Clone)]
 pub(crate) struct BootstrapShutdown {
-    token: Option<String>,
+    token: String,
     sender: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 }
 
@@ -79,7 +78,6 @@ struct BootstrapServeOptions<'a> {
     identity: Option<ManagedBootstrapIdentity>,
     ready_file: Option<&'a Path>,
     shutdown_token: Option<String>,
-    lifecycle_shutdown: bool,
     transparent_proxy_credential: Option<crate::provider_auth::TransparentProxyCredential>,
 }
 
@@ -119,7 +117,6 @@ pub(crate) async fn serve_with_dynamic(
             identity: managed_bootstrap,
             ready_file,
             shutdown_token: bootstrap_shutdown_token,
-            lifecycle_shutdown: true,
             ..BootstrapServeOptions::default()
         },
     )
@@ -273,7 +270,6 @@ async fn serve_listener_with_dynamic_inner(
         identity: managed_bootstrap,
         ready_file,
         shutdown_token: bootstrap_shutdown_token,
-        lifecycle_shutdown,
         transparent_proxy_credential,
     } = bootstrap;
     let bootstrap_challenge_key = Some(BootstrapChallengeKey::load()?);
@@ -290,7 +286,7 @@ async fn serve_listener_with_dynamic_inner(
     let plugin_activation =
         initialize_plugin_host(config.plugin_config.clone(), dynamic_plugins).await?;
     let (bootstrap_shutdown, bootstrap_shutdown_rx) =
-        bootstrap_shutdown_channel(bootstrap_shutdown_token.clone(), lifecycle_shutdown);
+        bootstrap_shutdown_channel(bootstrap_shutdown_token.clone());
     let mut state = AppState::new_with_bootstrap(
         config,
         bootstrap_fingerprint,
@@ -721,11 +717,10 @@ async fn bootstrap_tls_tunnel(
 
 fn bootstrap_shutdown_channel(
     token: Option<String>,
-    lifecycle_enabled: bool,
 ) -> (Option<BootstrapShutdown>, Option<oneshot::Receiver<()>>) {
-    if token.is_none() && !lifecycle_enabled {
+    let Some(token) = token else {
         return (None, None);
-    }
+    };
     let (sender, receiver) = oneshot::channel();
     (
         Some(BootstrapShutdown {
@@ -746,11 +741,8 @@ async fn shutdown_bootstrap_sidecar(
     let owner_token_matches = headers
         .get("x-nemo-relay-bootstrap-token")
         .and_then(|value| value.to_str().ok())
-        .zip(shutdown.token.as_deref())
-        .is_some_and(|(presented, expected)| {
-            bool::from(presented.as_bytes().ct_eq(expected.as_bytes()))
-        });
-    if !owner_token_matches && !valid_gateway_lifecycle_shutdown(&state, &headers) {
+        .is_some_and(|presented| bool::from(presented.as_bytes().ct_eq(shutdown.token.as_bytes())));
+    if !owner_token_matches {
         return StatusCode::FORBIDDEN;
     }
     let Ok(mut sender) = shutdown.sender.lock() else {
@@ -761,36 +753,6 @@ async fn shutdown_bootstrap_sidecar(
     };
     let _ = sender.send(());
     StatusCode::NO_CONTENT
-}
-
-fn valid_gateway_lifecycle_shutdown(state: &AppState, headers: &HeaderMap) -> bool {
-    let Some(nonce) = headers
-        .get(GATEWAY_LIFECYCLE_NONCE_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .filter(|nonce| valid_gateway_lifecycle_nonce(nonce))
-    else {
-        return false;
-    };
-    let Some(proof) = headers
-        .get(GATEWAY_LIFECYCLE_PROOF_HEADER)
-        .and_then(|value| value.to_str().ok())
-    else {
-        return false;
-    };
-    let (Some(key), Some(address)) = (state.bootstrap_challenge_key.as_ref(), state.local_address)
-    else {
-        return false;
-    };
-    key.verify_gateway_lifecycle_shutdown_proof(
-        &state.instance_id,
-        &address.to_string(),
-        nonce,
-        proof,
-    )
-}
-
-fn valid_gateway_lifecycle_nonce(nonce: &str) -> bool {
-    nonce.len() == 64 && nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 async fn healthz(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -829,21 +791,6 @@ async fn healthz(State(state): State<AppState>, headers: HeaderMap) -> Response 
             }
         }
     };
-    if compatible
-        && let Some(nonce) = headers
-            .get(GATEWAY_LIFECYCLE_NONCE_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .filter(|nonce| valid_gateway_lifecycle_nonce(nonce))
-        && let (Some(key), Some(address)) =
-            (state.bootstrap_challenge_key.as_ref(), state.local_address)
-    {
-        let proof =
-            key.gateway_lifecycle_health_proof(&state.instance_id, &address.to_string(), nonce);
-        response_headers.insert(
-            GATEWAY_LIFECYCLE_PROOF_HEADER,
-            HeaderValue::from_str(&proof).expect("gateway lifecycle proof is an ASCII value"),
-        );
-    }
     (
         if compatible {
             StatusCode::OK

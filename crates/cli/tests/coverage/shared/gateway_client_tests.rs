@@ -79,63 +79,6 @@ fn serve_verified_shutdown(
     (url, receiver, server)
 }
 
-fn serve_lifecycle_shutdown(
-    key: crate::configuration::BootstrapChallengeKey,
-) -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap().to_string();
-    let url = format!("http://{address}");
-    let (sender, receiver) = mpsc::channel();
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        let challenge = read_headers(&mut stream);
-        let nonce = header(
-            &challenge,
-            crate::configuration::GATEWAY_LIFECYCLE_NONCE_HEADER,
-        );
-        let instance_id = "lifecycle-instance";
-        let proof = key.gateway_lifecycle_health_proof(instance_id, &address, &nonce);
-        let body = format!(
-            "{{\"status\":\"ok\",\"service\":\"nemo-relay\",\"version\":\"{}\",\"bootstrap_protocol\":{},\"instance_id\":\"{instance_id}\"}}",
-            env!("CARGO_PKG_VERSION"),
-            BOOTSTRAP_PROTOCOL_VERSION
-        );
-        stream
-            .write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\n{}: {proof}\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
-                    crate::configuration::GATEWAY_LIFECYCLE_PROOF_HEADER,
-                    body.len()
-                )
-                .as_bytes(),
-            )
-            .unwrap();
-        let request = read_headers(&mut stream);
-        assert_eq!(
-            header(
-                &request,
-                crate::configuration::GATEWAY_LIFECYCLE_NONCE_HEADER
-            ),
-            nonce
-        );
-        assert_eq!(
-            header(
-                &request,
-                crate::configuration::GATEWAY_LIFECYCLE_PROOF_HEADER
-            ),
-            key.gateway_lifecycle_shutdown_proof(instance_id, &address, &nonce)
-        );
-        let _ = sender.send(request);
-        stream
-            .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            .unwrap();
-    });
-    (url, receiver, server)
-}
-
 #[test]
 fn shutdown_request_sends_the_private_token_and_accepts_no_content() {
     let temp = tempfile::tempdir().unwrap();
@@ -158,28 +101,6 @@ fn shutdown_request_sends_the_private_token_and_accepts_no_content() {
     );
     assert!(
         request.contains("X-NeMo-Relay-Bootstrap-Token: private-token"),
-        "{request}"
-    );
-    server.join().unwrap();
-}
-
-#[test]
-fn lifecycle_shutdown_authenticates_the_bind_without_an_owner_record() {
-    let temp = tempfile::tempdir().unwrap();
-    let _environment = EnvScope::set(&[
-        ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
-        ("HOME", Some(temp.path().as_os_str())),
-    ]);
-    let key = crate::configuration::BootstrapChallengeKey::load().unwrap();
-    let (url, request, server) = serve_lifecycle_shutdown(key);
-
-    assert_eq!(
-        request_lifecycle_shutdown(&url).unwrap(),
-        "lifecycle-instance"
-    );
-    let request = request.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(
-        request.starts_with("POST /bootstrap/shutdown HTTP/1.1"),
         "{request}"
     );
     server.join().unwrap();

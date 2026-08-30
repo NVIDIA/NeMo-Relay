@@ -582,6 +582,64 @@ fn cli_mcp_help_describes_lifecycle_bound_native_gateway() {
 }
 
 #[test]
+fn cli_gateway_start_and_stop_control_the_same_process() {
+    for force in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = probe.local_addr().unwrap();
+        drop(probe);
+
+        let gateway = ChildGuard::new(
+            Command::new(gateway_bin())
+                .args(["--bind", &address.to_string(), "gateway", "start"])
+                .env("HOME", temp.path())
+                .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+                .env("TMPDIR", temp.path())
+                .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        wait_for_port_open(address);
+
+        let mut stop = Command::new(gateway_bin());
+        stop.args(["--bind", &address.to_string(), "gateway", "stop"])
+            .env("HOME", temp.path())
+            .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+            .env("TMPDIR", temp.path())
+            .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1");
+        if force {
+            stop.arg("--force");
+        }
+        let output = stop.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let _ = gateway.wait();
+        assert!(TcpStream::connect(address).is_err());
+    }
+}
+
+#[test]
+fn cli_gateway_stop_refuses_a_foreign_loopback_listener() {
+    let foreign = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = foreign.local_addr().unwrap();
+
+    let output = Command::new(gateway_bin())
+        .args(["--bind", &address.to_string(), "gateway", "stop"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("refusing to stop non-Relay process"));
+    assert_eq!(foreign.local_addr().unwrap(), address);
+}
+
+#[test]
 fn cli_mcp_starts_gateway_before_initialize_and_exits_cleanly() {
     let temp = tempfile::tempdir().unwrap();
     let mut child = Command::new(gateway_bin())
@@ -729,8 +787,7 @@ fn start_mcp_client_with_generation(
         .env("XDG_CONFIG_HOME", temp.join("xdg"))
         .env("XDG_RUNTIME_DIR", temp.join("runtime"))
         .env("TMPDIR", temp)
-        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", idle_timeout_secs)
-        .env("NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS", "1");
+        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", idle_timeout_secs);
     if let Some(generation) = generation {
         let token = std::fs::read_to_string(generation).unwrap();
         command
@@ -1511,6 +1568,20 @@ fn wait_for_port_closed(address: SocketAddr) {
     }
 }
 
+fn wait_for_port_open(address: SocketAddr) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "gateway did not start listening at {address}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn wait_for_owned_sidecar(temp: &std::path::Path, previous_pid: Option<u64>) -> serde_json::Value {
     let deadline = Instant::now() + SIDECAR_PUBLICATION_TIMEOUT;
     loop {
@@ -1576,61 +1647,6 @@ fn relay_health(address: SocketAddr) -> serde_json::Value {
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap()
-}
-
-fn wait_for_relay_health(address: SocketAddr) -> serde_json::Value {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok() {
-            return relay_health(address);
-        }
-        assert!(
-            Instant::now() < deadline,
-            "Relay gateway did not become ready at {address}"
-        );
-        thread::sleep(Duration::from_millis(20));
-    }
-}
-
-#[test]
-fn cli_gateway_stop_stops_explicit_and_legacy_gateway_starts() {
-    for explicit_start in [true, false] {
-        let temp = tempfile::tempdir().unwrap();
-        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = probe.local_addr().unwrap();
-        drop(probe);
-        let xdg = temp.path().join("xdg");
-
-        let mut start = Command::new(gateway_bin());
-        start.args(["--bind", &address.to_string()]);
-        if explicit_start {
-            start.args(["gateway", "start"]);
-        }
-        start
-            .env("HOME", temp.path())
-            .env("XDG_CONFIG_HOME", &xdg)
-            .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let gateway = ChildGuard::new(start.spawn().unwrap());
-
-        let health = wait_for_relay_health(address);
-        assert_eq!(health["service"], "nemo-relay");
-        let stop = Command::new(gateway_bin())
-            .args(["--bind", &address.to_string(), "gateway", "stop"])
-            .env("HOME", temp.path())
-            .env("XDG_CONFIG_HOME", &xdg)
-            .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
-            .output()
-            .unwrap();
-        assert!(
-            stop.status.success(),
-            "gateway stop failed: {}",
-            String::from_utf8_lossy(&stop.stderr)
-        );
-        assert!(gateway.wait().success());
-        wait_for_port_closed(address);
-    }
 }
 
 #[test]

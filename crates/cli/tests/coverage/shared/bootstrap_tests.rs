@@ -193,13 +193,23 @@ fn persistent_gateway_resolution_keeps_server_configuration_in_one_spec() {
 }
 
 #[test]
-fn heartbeat_interval_is_independent_of_idle_timeout_and_rejects_invalid_values() {
+fn heartbeat_interval_stays_below_idle_timeout_and_rejects_unsafe_values() {
     let _environment = EnvScope::set(&[(
         crate::configuration::PLUGIN_IDLE_TIMEOUT_ENV,
         Some(OsStr::new("9")),
     )]);
     assert_eq!(plugin_idle_timeout().unwrap(), Duration::from_secs(9));
     assert_eq!(plugin_heartbeat_interval().unwrap(), Duration::from_secs(3));
+    drop(_environment);
+
+    let _environment = EnvScope::set(&[(
+        crate::configuration::PLUGIN_IDLE_TIMEOUT_ENV,
+        Some(OsStr::new("1")),
+    )]);
+    assert_eq!(
+        plugin_heartbeat_interval().unwrap(),
+        Duration::from_secs(1) / 3
+    );
     drop(_environment);
 
     let _environment = EnvScope::set(&[
@@ -214,6 +224,23 @@ fn heartbeat_interval_is_independent_of_idle_timeout_and_rejects_invalid_values(
     ]);
     assert_eq!(plugin_idle_timeout().unwrap(), Duration::from_secs(300));
     assert_eq!(plugin_heartbeat_interval().unwrap(), Duration::from_secs(7));
+    drop(_environment);
+
+    let _environment = EnvScope::set(&[
+        (
+            crate::configuration::PLUGIN_IDLE_TIMEOUT_ENV,
+            Some(OsStr::new("3")),
+        ),
+        (
+            crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV,
+            Some(OsStr::new("3")),
+        ),
+    ]);
+    assert!(
+        plugin_heartbeat_interval()
+            .unwrap_err()
+            .contains("must be shorter")
+    );
     drop(_environment);
 
     let _environment = EnvScope::set(&[(

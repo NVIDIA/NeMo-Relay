@@ -14,10 +14,8 @@ use reqwest::Url;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::Value;
 
-use crate::configuration::{
-    BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, GATEWAY_LIFECYCLE_NONCE_HEADER,
-    GATEWAY_LIFECYCLE_PROOF_HEADER,
-};
+use crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER;
+use crate::configuration::BootstrapChallengeKey;
 
 use crate::bootstrap::{BOOTSTRAP_PROTOCOL_VERSION, HEALTHZ_TIMEOUT};
 
@@ -358,7 +356,14 @@ pub(crate) fn request_shutdown(
         .map_err(|error| format!("failed to configure sidecar shutdown write timeout: {error}"))?;
     let key = cached_bootstrap_challenge_key()
         .map_err(|error| format!("failed to load the Relay bootstrap challenge key: {error}"))?;
-    let nonce = random_challenge_nonce()?;
+    let mut nonce = [0_u8; 32];
+    SystemRandom::new()
+        .fill(&mut nonce)
+        .map_err(|_| "failed to generate a Relay bootstrap shutdown challenge".to_string())?;
+    let nonce = nonce
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     let authority = loopback_authority(&host, port);
     let challenge = format!(
         "GET /healthz HTTP/1.1\r\nHost: {authority}\r\nX-NeMo-Relay-Bootstrap-Fingerprint: {bootstrap_fingerprint}\r\nX-NeMo-Relay-Bootstrap-Nonce: {nonce}\r\nConnection: keep-alive\r\n\r\n"
@@ -408,89 +413,6 @@ pub(crate) fn request_shutdown(
                 .unwrap_or("unknown response")
         ))
     }
-}
-
-/// Authenticates the Relay instance at `url` and requests shutdown on the same connection.
-pub(crate) fn request_lifecycle_shutdown(url: &str) -> Result<String, String> {
-    let (host, port) = parse_loopback_url(url)?;
-    let addresses = (host.as_str(), port)
-        .to_socket_addrs()
-        .map_err(|error| format!("failed to resolve Relay gateway {url}: {error}"))?;
-    let mut stream = connect_loopback(addresses, HEALTHZ_TIMEOUT)
-        .map_err(|error| format!("failed to connect to Relay gateway {url}: {error}"))?;
-    stream
-        .set_read_timeout(Some(HEALTHZ_TIMEOUT))
-        .map_err(|error| format!("failed to configure gateway shutdown read timeout: {error}"))?;
-    stream
-        .set_write_timeout(Some(HEALTHZ_TIMEOUT))
-        .map_err(|error| format!("failed to configure gateway shutdown write timeout: {error}"))?;
-    let address = stream
-        .peer_addr()
-        .map_err(|error| format!("failed to identify Relay gateway address: {error}"))?
-        .to_string();
-    let key = cached_bootstrap_challenge_key()
-        .map_err(|error| format!("failed to load the Relay gateway lifecycle key: {error}"))?;
-    let nonce = random_challenge_nonce()?;
-    let authority = loopback_authority(&host, port);
-    let health_request = format!(
-        "GET /healthz HTTP/1.1\r\nHost: {authority}\r\n{GATEWAY_LIFECYCLE_NONCE_HEADER}: {nonce}\r\nConnection: keep-alive\r\n\r\n"
-    );
-    stream
-        .write_all(health_request.as_bytes())
-        .map_err(|error| format!("failed to verify Relay gateway before shutdown: {error}"))?;
-    let (health_headers, health_body) = read_http_message(&mut stream, 16 * 1024)
-        .map_err(|error| format!("failed to read Relay gateway lifecycle proof: {error}"))?;
-    let (health, instance_id) = classify_health_response(&health_headers, &health_body, None);
-    if health != RelayHealth::Compatible {
-        return Err("shutdown target did not verify as a compatible Relay gateway".into());
-    }
-    let instance_id = instance_id.expect("compatible health responses include an instance ID");
-    let proof_valid =
-        http_header(&health_headers, GATEWAY_LIFECYCLE_PROOF_HEADER).is_some_and(|proof| {
-            key.verify_gateway_lifecycle_health_proof(&instance_id, &address, &nonce, proof)
-        });
-    if !proof_valid {
-        return Err("Relay gateway did not authenticate lifecycle shutdown".into());
-    }
-    if http_header(&health_headers, "connection")
-        .is_some_and(|value| value.eq_ignore_ascii_case("close"))
-    {
-        return Err("Relay gateway closed the connection before the shutdown request".into());
-    }
-    let shutdown_proof = key.gateway_lifecycle_shutdown_proof(&instance_id, &address, &nonce);
-    let request = format!(
-        "POST /bootstrap/shutdown HTTP/1.1\r\nHost: {authority}\r\n{GATEWAY_LIFECYCLE_NONCE_HEADER}: {nonce}\r\n{GATEWAY_LIFECYCLE_PROOF_HEADER}: {shutdown_proof}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    );
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|error| format!("failed to request Relay gateway shutdown: {error}"))?;
-    let mut response = Vec::new();
-    stream
-        .take(16 * 1024)
-        .read_to_end(&mut response)
-        .map_err(|error| format!("failed to read Relay gateway shutdown response: {error}"))?;
-    let Some((headers, _)) = split_http_response(&response) else {
-        return Err("Relay gateway returned a malformed shutdown response".into());
-    };
-    if headers.starts_with(b"HTTP/1.1 204") || headers.starts_with(b"HTTP/1.0 204") {
-        Ok(instance_id)
-    } else {
-        Err(format!(
-            "Relay gateway rejected shutdown: {}",
-            String::from_utf8_lossy(headers)
-                .lines()
-                .next()
-                .unwrap_or("unknown response")
-        ))
-    }
-}
-
-fn random_challenge_nonce() -> Result<String, String> {
-    let mut nonce = [0_u8; 32];
-    SystemRandom::new()
-        .fill(&mut nonce)
-        .map_err(|_| "failed to generate a Relay gateway lifecycle challenge".to_string())?;
-    Ok(nonce.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 fn cached_bootstrap_challenge_key() -> Result<Arc<BootstrapChallengeKey>, String> {
