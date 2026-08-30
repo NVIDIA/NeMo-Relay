@@ -3,6 +3,7 @@
 
 //! PII redaction plugin component contract.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -187,9 +188,14 @@ pub struct BuiltinBackendConfig {
     )]
     #[cfg_attr(feature = "schema", schemars(schema_with = "builtin_action_schema"))]
     pub action: String,
-    /// Exact RFC 6901 JSON-pointer paths to sanitize. Empty means every string leaf.
+    /// Exact RFC 6901 JSON-pointer paths to sanitize. Empty together with
+    /// [`Self::target_path_globs`] means every string leaf.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_paths: Vec<String>,
+    /// JSON-pointer glob paths to sanitize. A whole `*` segment matches one
+    /// object key or array index; matching is not recursive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_path_globs: Vec<String>,
     /// Regex pattern used when `action = "regex_replace"` or `action = "redact"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
@@ -218,6 +224,9 @@ pub struct BuiltinBackendConfig {
         schemars(schema_with = "custom_mark_payload_policy_schema")
     )]
     pub custom_mark_payload_policy: String,
+    /// Exact string values that the trajectory preset may preserve for each typed metric attribute.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metric_string_attribute_allowlist: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for BuiltinBackendConfig {
@@ -226,6 +235,7 @@ impl Default for BuiltinBackendConfig {
             preset: None,
             action: default_builtin_action(),
             target_paths: Vec::new(),
+            target_path_globs: Vec::new(),
             pattern: None,
             detector: None,
             replacement: None,
@@ -233,6 +243,7 @@ impl Default for BuiltinBackendConfig {
             unmasked_prefix: None,
             unmasked_suffix: None,
             custom_mark_payload_policy: default_custom_mark_payload_policy(),
+            metric_string_attribute_allowlist: BTreeMap::new(),
         }
     }
 }
@@ -359,6 +370,7 @@ nemo_relay::editor_config! {
             values: ["remove", "redact", "regex_replace", "hash", "mask"],
         },
         target_paths => { label: "target_paths", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
+        target_path_globs => { label: "target_path_globs", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
         pattern => { label: "pattern", kind: String, optional: true },
         detector => {
             label: "detector",
@@ -389,6 +401,10 @@ nemo_relay::editor_config! {
             label: "custom_mark_payload_policy",
             kind: Enum,
             values: ["preserve", "redact_all_leaves"],
+        },
+        metric_string_attribute_allowlist => {
+            label: "metric_string_attribute_allowlist",
+            kind: Json,
         },
     }
 }
@@ -651,6 +667,7 @@ fn validate_pii_redaction_plugin_config_with_policy(
             "preset",
             "action",
             "target_paths",
+            "target_path_globs",
             "pattern",
             "detector",
             "replacement",
@@ -658,6 +675,7 @@ fn validate_pii_redaction_plugin_config_with_policy(
             "unmasked_prefix",
             "unmasked_suffix",
             "custom_mark_payload_policy",
+            "metric_string_attribute_allowlist",
         ],
     );
     validate_section_fields(
@@ -753,6 +771,7 @@ fn validate_profile_configuration(
                 "preset",
                 "action",
                 "target_paths",
+                "target_path_globs",
                 "pattern",
                 "detector",
                 "replacement",
@@ -760,6 +779,7 @@ fn validate_profile_configuration(
                 "unmasked_prefix",
                 "unmasked_suffix",
                 "custom_mark_payload_policy",
+                "metric_string_attribute_allowlist",
             ],
         );
         validate_section_fields(
@@ -936,6 +956,19 @@ fn validate_builtin_action_requirements(
             );
         }
     }
+    for (index, target_path_glob) in builtin.target_path_globs.iter().enumerate() {
+        if !is_valid_json_pointer(target_path_glob) {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "pii_redaction.unsupported_value",
+                Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+                Some(format!("builtin.target_path_globs[{index}]")),
+                "builtin.target_path_globs entries must be valid RFC 6901 JSON pointers"
+                    .to_string(),
+            );
+        }
+    }
 
     if builtin.preset.is_some() {
         validate_builtin_preset_requirements(diagnostics, policy, plugin_config, builtin);
@@ -954,6 +987,22 @@ fn validate_builtin_action_requirements(
             Some(PII_REDACTION_PLUGIN_KIND.to_string()),
             Some("builtin.custom_mark_payload_policy".to_string()),
             "builtin.custom_mark_payload_policy requires builtin.preset = 'trajectory_context'"
+                .to_string(),
+        );
+    }
+
+    let metric_allowlist_configured = plugin_config
+        .get("builtin")
+        .and_then(Json::as_object)
+        .is_some_and(|builtin| builtin.contains_key("metric_string_attribute_allowlist"));
+    if metric_allowlist_configured {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "pii_redaction.unsupported_value",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some("builtin.metric_string_attribute_allowlist".to_string()),
+            "builtin.metric_string_attribute_allowlist requires builtin.preset = 'trajectory_context'"
                 .to_string(),
         );
     }
@@ -1077,12 +1126,25 @@ fn validate_builtin_preset_requirements(
                 .to_string(),
         );
     }
+    if let Err(message) =
+        validate_metric_string_attribute_allowlist(&builtin.metric_string_attribute_allowlist)
+    {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "pii_redaction.unsupported_value",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some("builtin.metric_string_attribute_allowlist".to_string()),
+            message,
+        );
+    }
     let raw_builtin = plugin_config.get("builtin").and_then(Json::as_object);
     for field in [
         "action",
         "detector",
         "pattern",
         "target_paths",
+        "target_path_globs",
         "mask_char",
         "unmasked_prefix",
         "unmasked_suffix",
@@ -1098,6 +1160,38 @@ fn validate_builtin_preset_requirements(
             );
         }
     }
+}
+
+pub(super) fn validate_metric_string_attribute_allowlist(
+    allowlist: &BTreeMap<String, Vec<String>>,
+) -> Result<(), String> {
+    for (attribute, values) in allowlist {
+        if attribute.trim().is_empty() {
+            return Err(
+                "builtin.metric_string_attribute_allowlist keys must not be blank".to_string(),
+            );
+        }
+        if values.is_empty() {
+            return Err(format!(
+                "builtin.metric_string_attribute_allowlist['{attribute}'] must contain at least one value"
+            ));
+        }
+
+        let mut seen = BTreeSet::new();
+        for (index, value) in values.iter().enumerate() {
+            if value.trim().is_empty() {
+                return Err(format!(
+                    "builtin.metric_string_attribute_allowlist['{attribute}'][{index}] must not be blank"
+                ));
+            }
+            if !seen.insert(value) {
+                return Err(format!(
+                    "builtin.metric_string_attribute_allowlist['{attribute}'] contains duplicate value '{value}'"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_version(diagnostics: &mut Vec<ConfigDiagnostic>, policy: &ConfigPolicy, version: u32) {

@@ -199,7 +199,7 @@ fn canonical_json(value: Value) -> Value {
 fn gateway_provider_config(gateway_url: &str) -> String {
     format!(
         "model_providers.nemo-relay-openai={{name=\"NeMo Relay OpenAI\",base_url={},wire_api=\"responses\",requires_openai_auth=true,supports_websockets=false,env_http_headers={{{}={}}}}}",
-        toml_string(gateway_url),
+        toml_string(&super::versioned_gateway_url(gateway_url)),
         toml_string(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER),
         toml_string(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV),
     )

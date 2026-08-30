@@ -95,17 +95,18 @@ async def main() -> None:
     await serve_plugin(PolicyPlugin())
 ```
 
-Marks can also declare a typed data schema and exported-log severity without
+Marks can also declare a typed data schema, exported-log severity, and semantic category without
 changing the stable `grpc-v1` protocol identifier:
 
 ```python
-from nemo_relay_plugin import DataSchema, LogSeverity
+from nemo_relay_plugin import DataSchema, EventCategory, LogSeverity
 
 await ctx.runtime.emit_mark(
     "acme.policy.decision",
     {"allowed": True},
     data_schema=DataSchema("acme.policy.decision", "1"),
     severity=LogSeverity.INFO,
+    category=EventCategory.CUSTOM,
 )
 ```
 

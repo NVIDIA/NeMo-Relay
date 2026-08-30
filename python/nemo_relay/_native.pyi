@@ -1150,9 +1150,11 @@ class OpenTelemetryConfig:
     service_version: Optional[str]
     instrumentation_scope: str
     timeout_millis: int
+    completed_span_context_ttl_millis: int
     mark_projection: Literal["inherit", "event", "tool"]
     mark_exclude_names: list[str]
     promote_metadata_prefixes: list[str]
+    promote_resource_metadata_prefixes: list[str]
 
     def __init__(
         self,
@@ -1168,6 +1170,14 @@ class OpenTelemetryConfig:
     @headers.setter
     def headers(self, value: dict[str, str]) -> None:
         """Replace additional exporter headers."""
+        ...
+    @property
+    def header_env(self) -> dict[str, str]:
+        """Return header names mapped to environment variable names."""
+        ...
+    @header_env.setter
+    def header_env(self, value: dict[str, str]) -> None:
+        """Replace environment-backed exporter header references."""
         ...
     @property
     def resource_attributes(self) -> dict[str, str]:
@@ -1187,6 +1197,9 @@ class OpenTelemetryConfig:
         ...
     def set_header(self, key: str, value: str) -> None:
         """Set one exporter header key/value pair."""
+        ...
+    def set_header_from_env(self, key: str, variable: str) -> None:
+        """Map one exporter header to an environment variable."""
         ...
     def set_resource_attribute(self, key: str, value: str) -> None:
         """Set one OpenTelemetry resource attribute key/value pair."""
@@ -1253,6 +1266,7 @@ class OpenTelemetryLogConfig:
     max_queue_size: int
     max_export_batch_size: int
     scheduled_delay_millis: int
+    completed_span_context_ttl_millis: int
 
     def __init__(self, endpoint: str) -> None: ...
     @property
@@ -1260,10 +1274,15 @@ class OpenTelemetryLogConfig:
     @headers.setter
     def headers(self, value: dict[str, str]) -> None: ...
     @property
+    def header_env(self) -> dict[str, str]: ...
+    @header_env.setter
+    def header_env(self, value: dict[str, str]) -> None: ...
+    @property
     def resource_attributes(self) -> dict[str, str]: ...
     @resource_attributes.setter
     def resource_attributes(self, value: dict[str, str]) -> None: ...
     def set_header(self, key: str, value: str) -> None: ...
+    def set_header_from_env(self, key: str, variable: str) -> None: ...
     def set_resource_attribute(self, key: str, value: str) -> None: ...
 
 class OpenTelemetryLogSubscriber:
@@ -1304,10 +1323,15 @@ class OpenTelemetryMetricConfig:
     @headers.setter
     def headers(self, value: dict[str, str]) -> None: ...
     @property
+    def header_env(self) -> dict[str, str]: ...
+    @header_env.setter
+    def header_env(self, value: dict[str, str]) -> None: ...
+    @property
     def resource_attributes(self) -> dict[str, str]: ...
     @resource_attributes.setter
     def resource_attributes(self, value: dict[str, str]) -> None: ...
     def set_header(self, key: str, value: str) -> None: ...
+    def set_header_from_env(self, key: str, variable: str) -> None: ...
     def set_resource_attribute(self, key: str, value: str) -> None: ...
 
 class OpenTelemetryMetricSubscriber:

@@ -6,6 +6,13 @@ import type { ConfigPolicy, ConfigDiagnostic, ConfigReport } from './plugin';
 
 export { ConfigPolicy, ConfigDiagnostic, ConfigReport };
 
+/** Supported LLM response-cache key derivation strategies. */
+export const ResponseCacheKeyStrategy: {
+  readonly ExactRequest: 'exact_request';
+  readonly Logical: 'logical';
+};
+export type ResponseCacheKeyStrategy = (typeof ResponseCacheKeyStrategy)[keyof typeof ResponseCacheKeyStrategy];
+
 /** Adaptive state backend selection. */
 export interface BackendSpec {
   kind: string;
@@ -52,7 +59,7 @@ export interface AcgConfig {
   stability_thresholds?: AcgStabilityThresholds;
 }
 
-/** Opt-in exact-match LLM response and tool-result cache settings. */
+/** Opt-in LLM response and tool-result cache settings. */
 export interface ResponseCacheConfig {
   ttlSeconds?: number;
   /**
@@ -63,7 +70,7 @@ export interface ResponseCacheConfig {
   priority?: number;
   bypassRate?: number;
   cacheNondeterministic?: boolean;
-  keyStrategy?: string;
+  keyStrategy?: ResponseCacheKeyStrategy;
   headerAllowlist?: string[];
   backend?: BackendSpec;
   /** Opt-in tool-result cache; omit to leave the tool surface off. */
@@ -77,7 +84,7 @@ interface ResponseCachePluginConfig {
   priority?: number;
   bypass_rate?: number;
   cache_nondeterministic?: boolean;
-  key_strategy?: string;
+  key_strategy?: ResponseCacheKeyStrategy;
   header_allowlist?: string[];
   backend?: BackendSpec;
   tools?: ToolCachePluginConfig;
@@ -340,7 +347,7 @@ export declare function acgConfig(config?: AcgConfig): AcgConfig;
  * Create response-cache settings with defaults applied.
  *
  * Merges caller-supplied overrides onto the opt-in LLM response and tool-result
- * cache config shape (exact-match) used by the adaptive plugin. This is a section of
+ * cache config shape used by the adaptive plugin. This is a section of
  * the adaptive component, not a standalone plugin kind.
  *
  * @param config - Partial response-cache settings to override.

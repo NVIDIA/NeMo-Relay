@@ -35,9 +35,18 @@ pub(crate) use format::format_event_for_test;
 static LOGGER_LIFECYCLE_LOCK: Mutex<()> = Mutex::new(());
 static DEFAULT_LOGGING_RUNTIME: Mutex<Option<LoggingRuntime>> = Mutex::new(None);
 static ACTIVE_RELAY_LOGGER: Mutex<Option<Weak<Logger>>> = Mutex::new(None);
+#[cfg(test)]
+static TEST_LOGGING_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock_logger_lifecycle() -> MutexGuard<'static, ()> {
     LOGGER_LIFECYCLE_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+#[cfg(test)]
+pub(crate) fn lock_test_logging() -> MutexGuard<'static, ()> {
+    TEST_LOGGING_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner())
 }
@@ -99,7 +108,8 @@ pub struct LoggingRuntime {
 impl LoggingRuntime {
     /// Installs process-wide operational logging from resolved configuration.
     ///
-    /// Stderr is always enabled. Explicit file sinks fail initialization if they cannot be
+    /// Stderr is enabled by default and can be disabled with [`LoggingConfig::stderr_enabled`].
+    /// Explicit file sinks fail initialization if they cannot be
     /// opened. Dropping the returned runtime flushes sinks and detaches its logger from the
     /// process-global `log` proxy when it is still installed.
     pub fn configure(config: LoggingConfig) -> Result<Self> {
@@ -197,7 +207,8 @@ impl Drop for LoggingRuntime {
 
 /// Installs process-wide operational logging from resolved config.
 ///
-/// Stderr is always enabled. Explicit file sinks fail startup if they cannot be opened.
+/// Stderr is enabled by default and can be disabled with [`LoggingConfig::stderr_enabled`].
+/// Explicit file sinks fail startup if they cannot be opened.
 ///
 /// Verbosity comes from [`LoggingConfig::level`]: records below that minimum severity are discarded.
 /// Dropping the returned [`LoggingRuntime`] flushes sinks and detaches this logger from the

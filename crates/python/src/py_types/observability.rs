@@ -484,14 +484,19 @@ pub struct PyOpenTelemetryConfig {
     #[pyo3(get, set)]
     pub(crate) timeout_millis: u64,
     #[pyo3(get, set)]
+    pub(crate) completed_span_context_ttl_millis: u64,
+    #[pyo3(get, set)]
     pub(crate) mark_projection: String,
     #[pyo3(get, set)]
     pub(crate) mark_exclude_names: Vec<String>,
     pub(crate) headers: HashMap<String, String>,
+    pub(crate) header_env: HashMap<String, String>,
     pub(crate) resource_attributes: HashMap<String, String>,
     pub(crate) attribute_mappings: Vec<nemo_relay::observability::OtlpAttributeMapping>,
     #[pyo3(get, set)]
     pub(crate) promote_metadata_prefixes: Vec<String>,
+    #[pyo3(get, set)]
+    pub(crate) promote_resource_metadata_prefixes: Vec<String>,
 }
 
 impl PyOpenTelemetryConfig {
@@ -517,7 +522,10 @@ impl PyOpenTelemetryConfig {
         .with_transport(transport)
         .with_service_name(self.service_name.clone())
         .with_instrumentation_scope(self.instrumentation_scope.clone())
-        .with_timeout(Duration::from_millis(self.timeout_millis));
+        .with_timeout(Duration::from_millis(self.timeout_millis))
+        .with_completed_span_context_ttl(Duration::from_millis(
+            self.completed_span_context_ttl_millis,
+        ));
 
         if let Some(namespace) = &self.service_namespace {
             config = config.with_service_namespace(namespace.clone());
@@ -527,6 +535,9 @@ impl PyOpenTelemetryConfig {
         }
         for (key, value) in &self.headers {
             config = config.with_header(key.clone(), value.clone());
+        }
+        for (key, variable) in &self.header_env {
+            config = config.with_header_env(key.clone(), variable.clone());
         }
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
@@ -540,11 +551,18 @@ impl PyOpenTelemetryConfig {
             &self.promote_metadata_prefixes,
         )
         .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        nemo_relay::observability::validate_metadata_promotion_prefixes(
+            &self.promote_resource_metadata_prefixes,
+        )
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
         Ok(config
             .with_mark_projection(mark_projection)
             .with_mark_exclude_names(self.mark_exclude_names.clone())
             .with_attribute_mappings(self.attribute_mappings.clone())
-            .with_promote_metadata_prefixes(self.promote_metadata_prefixes.clone()))
+            .with_promote_metadata_prefixes(self.promote_metadata_prefixes.clone())
+            .with_promote_resource_metadata_prefixes(
+                self.promote_resource_metadata_prefixes.clone(),
+            ))
     }
 }
 
@@ -561,12 +579,15 @@ impl PyOpenTelemetryConfig {
             service_version: None,
             instrumentation_scope: "opentelemetry".to_string(),
             timeout_millis: 3_000,
+            completed_span_context_ttl_millis: 60_000,
             mark_projection: "inherit".to_string(),
             mark_exclude_names: nemo_relay::observability::default_mark_exclude_names(),
             headers: HashMap::new(),
+            header_env: HashMap::new(),
             resource_attributes: HashMap::new(),
             attribute_mappings: Vec::new(),
             promote_metadata_prefixes: Vec::new(),
+            promote_resource_metadata_prefixes: Vec::new(),
         }
     }
 
@@ -578,6 +599,20 @@ impl PyOpenTelemetryConfig {
     #[setter]
     pub(crate) fn set_headers(&mut self, headers: &Bound<'_, PyAny>) -> PyResult<()> {
         self.headers = py_string_map(headers, "headers")?;
+        Ok(())
+    }
+
+    #[getter]
+    pub(crate) fn header_env(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(
+            py,
+            &serde_json::to_value(&self.header_env).unwrap_or_default(),
+        )
+    }
+
+    #[setter]
+    pub(crate) fn set_header_env(&mut self, header_env: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.header_env = py_string_map(header_env, "header_env")?;
         Ok(())
     }
 
@@ -624,6 +659,10 @@ impl PyOpenTelemetryConfig {
 
     pub(crate) fn set_header(&mut self, key: String, value: String) {
         self.headers.insert(key, value);
+    }
+
+    pub(crate) fn set_header_from_env(&mut self, key: String, variable: String) {
+        self.header_env.insert(key, variable);
     }
 
     pub(crate) fn set_resource_attribute(&mut self, key: String, value: String) {
@@ -695,6 +734,8 @@ impl PyOpenTelemetrySubscriber {
     }
 
     /// Force a flush of finished spans through the exporter.
+    ///
+    /// A successful flush updates ``runtime_diagnostics()`` with queue drops observed so far.
     pub(crate) fn force_flush(&self, py: Python<'_>) -> PyResult<()> {
         py.detach(|| {
             self.with_runtime_context(|| {
@@ -776,7 +817,10 @@ pub struct PyOpenTelemetryLogConfig {
     pub(crate) max_export_batch_size: usize,
     #[pyo3(get, set)]
     pub(crate) scheduled_delay_millis: u64,
+    #[pyo3(get, set)]
+    pub(crate) completed_span_context_ttl_millis: u64,
     pub(crate) headers: HashMap<String, String>,
+    pub(crate) header_env: HashMap<String, String>,
     pub(crate) resource_attributes: HashMap<String, String>,
 }
 
@@ -795,7 +839,10 @@ impl PyOpenTelemetryLogConfig {
         .with_minimum_severity(self.minimum_severity.into())
         .with_max_queue_size(self.max_queue_size)
         .with_max_export_batch_size(self.max_export_batch_size)
-        .with_scheduled_delay(Duration::from_millis(self.scheduled_delay_millis));
+        .with_scheduled_delay(Duration::from_millis(self.scheduled_delay_millis))
+        .with_completed_span_context_ttl(Duration::from_millis(
+            self.completed_span_context_ttl_millis,
+        ));
         if let Some(namespace) = &self.service_namespace {
             config = config.with_service_namespace(namespace.clone());
         }
@@ -804,6 +851,9 @@ impl PyOpenTelemetryLogConfig {
         }
         for (key, value) in &self.headers {
             config = config.with_header(key.clone(), value.clone());
+        }
+        for (key, variable) in &self.header_env {
+            config = config.with_header_env(key.clone(), variable.clone());
         }
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
@@ -828,7 +878,9 @@ impl PyOpenTelemetryLogConfig {
             max_queue_size: 2_048,
             max_export_batch_size: 512,
             scheduled_delay_millis: 1_000,
+            completed_span_context_ttl_millis: 60_000,
             headers: HashMap::new(),
+            header_env: HashMap::new(),
             resource_attributes: HashMap::new(),
         }
     }
@@ -841,6 +893,20 @@ impl PyOpenTelemetryLogConfig {
     #[setter]
     fn set_headers(&mut self, headers: &Bound<'_, PyAny>) -> PyResult<()> {
         self.headers = py_string_map(headers, "headers")?;
+        Ok(())
+    }
+
+    #[getter]
+    fn header_env(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(
+            py,
+            &serde_json::to_value(&self.header_env).unwrap_or_default(),
+        )
+    }
+
+    #[setter]
+    fn set_header_env(&mut self, header_env: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.header_env = py_string_map(header_env, "header_env")?;
         Ok(())
     }
 
@@ -860,6 +926,10 @@ impl PyOpenTelemetryLogConfig {
 
     fn set_header(&mut self, key: String, value: String) {
         self.headers.insert(key, value);
+    }
+
+    fn set_header_from_env(&mut self, key: String, variable: String) {
+        self.header_env.insert(key, variable);
     }
 
     fn set_resource_attribute(&mut self, key: String, value: String) {
@@ -903,6 +973,9 @@ impl PyOpenTelemetryLogSubscriber {
             .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
     }
 
+    /// Flush queued Relay events and the OTLP log processor.
+    ///
+    /// A successful flush updates ``runtime_diagnostics()`` with queue drops observed so far.
     fn force_flush(&self, py: Python<'_>) -> PyResult<()> {
         py.detach(|| self.inner.force_flush())
             .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
@@ -970,6 +1043,7 @@ pub struct PyOpenTelemetryMetricConfig {
     #[pyo3(get, set)]
     pub(crate) cardinality_limit: usize,
     pub(crate) headers: HashMap<String, String>,
+    pub(crate) header_env: HashMap<String, String>,
     pub(crate) resource_attributes: HashMap<String, String>,
 }
 
@@ -998,6 +1072,9 @@ impl PyOpenTelemetryMetricConfig {
         for (key, value) in &self.headers {
             config = config.with_header(key.clone(), value.clone());
         }
+        for (key, variable) in &self.header_env {
+            config = config.with_header_env(key.clone(), variable.clone());
+        }
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
         }
@@ -1022,6 +1099,7 @@ impl PyOpenTelemetryMetricConfig {
             max_instruments: 256,
             cardinality_limit: 2_000,
             headers: HashMap::new(),
+            header_env: HashMap::new(),
             resource_attributes: HashMap::new(),
         }
     }
@@ -1034,6 +1112,20 @@ impl PyOpenTelemetryMetricConfig {
     #[setter]
     fn set_headers(&mut self, headers: &Bound<'_, PyAny>) -> PyResult<()> {
         self.headers = py_string_map(headers, "headers")?;
+        Ok(())
+    }
+
+    #[getter]
+    fn header_env(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(
+            py,
+            &serde_json::to_value(&self.header_env).unwrap_or_default(),
+        )
+    }
+
+    #[setter]
+    fn set_header_env(&mut self, header_env: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.header_env = py_string_map(header_env, "header_env")?;
         Ok(())
     }
 
@@ -1053,6 +1145,10 @@ impl PyOpenTelemetryMetricConfig {
 
     fn set_header(&mut self, key: String, value: String) {
         self.headers.insert(key, value);
+    }
+
+    fn set_header_from_env(&mut self, key: String, variable: String) {
+        self.header_env.insert(key, variable);
     }
 
     fn set_resource_attribute(&mut self, key: String, value: String) {

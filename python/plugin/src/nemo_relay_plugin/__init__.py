@@ -18,6 +18,7 @@ appropriate executor.
 Public data types:
     Json: Any JSON-serializable Python value.
     DataSchema: Schema identity for a mark's opaque data payload.
+    EventCategory: Well-known semantic category for a Relay event.
     LogSeverity: Telemetry severity assigned to an exported mark log.
     MetricKind: OpenTelemetry instrument kind for a metric measurement.
     MetricValueType: Explicit numeric representation for a metric measurement.
@@ -56,6 +57,7 @@ Public data types:
     WorkerSdkError: SDK, host-call, or worker protocol error.
 
 Public callback aliases:
+    ConditionalMiddlewareCallback: Runtime registration eligibility callback.
     SubscriberCallback: Event subscriber callback.
     EventMetadataInjectorCallback: Event metadata injector callback.
     EventSanitizeCallback: Mark or scope event sanitizer callback.
@@ -84,11 +86,13 @@ Public functions:
 
 from ._api import (
     AnnotatedLlmRequest,
+    ConditionalMiddlewareCallback,
     ConditionalMiddlewareGuardrailHandle,
     ConfigDiagnostic,
     DataSchema,
     DiagnosticLevel,
     Event,
+    EventCategory,
     EventMetadataInjectorCallback,
     EventSanitizeCallback,
     EventSanitizeFields,
@@ -144,11 +148,13 @@ from ._api import (
 
 __all__ = [
     "AnnotatedLlmRequest",
+    "ConditionalMiddlewareCallback",
     "ConditionalMiddlewareGuardrailHandle",
     "ConfigDiagnostic",
     "DataSchema",
     "DiagnosticLevel",
     "Event",
+    "EventCategory",
     "EventMetadataInjectorCallback",
     "EventSanitizeCallback",
     "EventSanitizeFields",

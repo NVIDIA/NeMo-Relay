@@ -11,7 +11,7 @@ if ! command -v codex >/dev/null 2>&1; then
     exit 0
 fi
 
-cargo build -p nemo-relay-cli --bin nemo-relay
+cargo build -p nemo-relay-cli --bin nemo-relay --features __test-cli-port-override
 
 work="$(mktemp -d)"
 provider_pid=""
@@ -112,6 +112,8 @@ export TMPDIR="$work/tmp"
 export PATH="$repo_root/target/debug:$PATH"
 export OPENAI_API_KEY="relay-e2e-key"
 export NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS=1
+gateway_port="$(python3 -c 'import socket; sock = socket.socket(); sock.bind(("127.0.0.1", 0)); print(sock.getsockname()[1]); sock.close()')"
+export NEMO_RELAY_TEST_GATEWAY_BIND="127.0.0.1:$gateway_port"
 mkdir -p "$HOME" "$CODEX_HOME" "$XDG_CONFIG_HOME/nemo-relay" "$XDG_DATA_HOME" "$TMPDIR"
 
 provider_ready="$work/provider-ready.json"
@@ -143,7 +145,7 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 2
+version = 4
 
 [components.config.atof]
 enabled = true
@@ -156,18 +158,20 @@ mode = "append"
 EOF
 
 wait_for_relay_port_release() {
-    python3 - <<'PY'
+    python3 - "$gateway_port" <<'PY'
 import socket
+import sys
 import time
 
+port = int(sys.argv[1])
 deadline = time.monotonic() + 6
 while time.monotonic() < deadline:
     with socket.socket() as sock:
         sock.settimeout(0.2)
-        if sock.connect_ex(("127.0.0.1", 47632)) != 0:
+        if sock.connect_ex(("127.0.0.1", port)) != 0:
             raise SystemExit(0)
     time.sleep(0.1)
-raise SystemExit("Relay port 47632 did not become free")
+raise SystemExit(f"Relay port {port} did not become free")
 PY
 }
 
@@ -414,9 +418,13 @@ with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
             "codex",
             "--profile",
             "relay-user-profile",
+            "--config",
+            'approval_policy="on-request"',
             "exec",
+            "--sandbox",
+            "workspace-write",
             "--skip-git-repo-check",
-            "ping",
+            "relay-e2e-tool",
         ],
         stdout=stdout,
         stderr=stderr,
@@ -476,7 +484,32 @@ rm -f "$events"
 wait_for_relay_port_release
 run_transparent_codex_ping
 wait_for_relay_port_release
-cmp "$CODEX_HOME/config.toml" "$work/codex-config-before-transparent.toml"
+python3 - "$work/codex-config-before-transparent.toml" "$CODEX_HOME/config.toml" "$transparent_project" <<'PY'
+import sys
+import tomllib
+from pathlib import Path
+
+
+def load(path):
+    with open(path, "rb") as config:
+        return tomllib.load(config)
+
+
+before = load(sys.argv[1])
+after = load(sys.argv[2])
+project = str(Path(sys.argv[3]).resolve())
+
+# Codex records trust for a workspace the first time it executes a tool there. Relay must preserve
+# every other user setting, including the provider and plugin configuration.
+expected_projects = dict(before.get("projects", {}))
+expected_projects[project] = {"trust_level": "trusted"}
+assert after.get("projects", {}) == expected_projects, (before, after)
+if "projects" in before:
+    after["projects"] = before["projects"]
+else:
+    after.pop("projects", None)
+assert after == before, (before, after)
+PY
 cmp "$CODEX_HOME/relay-user-profile.config.toml" "$work/codex-profile-before-transparent.toml"
 [[ -z "$(find_sidecar_file 'sidecar-*.owner.json')" ]]
 python3 - "$provider_log" "$events" <<'PY'
@@ -485,8 +518,10 @@ import sys
 
 requests = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
 responses = [row for row in requests if row["method"] == "POST" and row["path"].endswith("/responses")]
-assert len(responses) == 1, requests
+assert len(responses) == 2, requests
 assert responses[0]["model"] == "gpt-5.1-codex", responses
+assert [response["has_tool_result"] for response in responses] == [False, True], responses
+assert any(tool["name"] == "exec_command" for tool in responses[0]["tools"]), responses
 events = [json.loads(line) for line in open(sys.argv[2], encoding="utf-8") if line.strip()]
 turn_starts = [
     event for event in events
@@ -503,8 +538,25 @@ turn_ends = [
 assert len(turn_starts) == len(turn_ends) == 1, (turn_starts, turn_ends)
 assert turn_starts[0].get("data", {}).get("hook_event_name", "").lower() == "userpromptsubmit", turn_starts
 assert turn_ends[0].get("metadata", {}).get("hook_event_name", "").lower() == "stop", turn_ends
+tool_starts = [
+    event for event in events
+    if event.get("kind") == "scope"
+    and event.get("category") == "tool"
+    and event.get("scope_category") == "start"
+]
+tool_ends = [
+    event for event in events
+    if event.get("kind") == "scope"
+    and event.get("category") == "tool"
+    and event.get("scope_category") == "end"
+]
+assert len(tool_starts) == len(tool_ends) == 1, (tool_starts, tool_ends)
 PY
 nemo-relay doctor --plugin codex --install-dir "$install_dir"
+
+if [[ "${RELAY_E2E_TRANSPARENT_ONLY:-0}" == "1" ]]; then
+    exit 0
+fi
 
 # Exercise incompatible configuration handling before collecting acceptance events.
 export NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS=300
@@ -617,12 +669,14 @@ wait "$second_pid"
 background_pids=("")
 [[ "$(read_sidecar_pid "$sidecar_pid_file")" == "$shared_sidecar_pid" ]]
 kill -0 "$shared_sidecar_pid"
-python3 - <<'PY'
+python3 - "$gateway_port" <<'PY'
 import socket
+import sys
 
+port = int(sys.argv[1])
 with socket.socket() as sock:
     sock.settimeout(0.2)
-    assert sock.connect_ex(("127.0.0.1", 47632)) == 0, "shared Relay gateway stopped early"
+    assert sock.connect_ex(("127.0.0.1", port)) == 0, "shared Relay gateway stopped early"
 PY
 
 owner_file="$(find_sidecar_file 'sidecar-*.owner.json')"

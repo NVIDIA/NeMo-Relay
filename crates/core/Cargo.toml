@@ -26,6 +26,8 @@ atof-streaming = [
     "tokio/time",
 ]
 schema = ["dep:schemars", "nemo-relay-types/schema"]
+# Private test hook for suppressing implicit user/system plugin discovery.
+__skip-implicit-config = []
 # Deprecated with the built-in NeMo Guardrails integration; scheduled for removal in 0.9.
 guardrails-remote = []
 object-store = [
@@ -82,6 +84,12 @@ shell-words = "1"
 log = { version = "0.4", features = ["kv"] }
 spdlog-rs = { version = "0.5", features = ["log", "multi-thread"] }
 unicode-general-category = "1.1"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_IO"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }

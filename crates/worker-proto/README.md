@@ -39,7 +39,7 @@ and tool execution intercepts use structural `ToolExecutionInterceptOutcome` mes
 | JSON envelope helpers | Serialize Relay DTOs through `json_envelope` and `decode_json_envelope`, keeping protobuf responsible for transport flow rather than runtime data modeling. |
 | JSON value helpers | Serialize application-owned fields inside structural tool-result messages through `json_value` and `decode_json_value`. |
 | Tool results | `ToolNext` returns `ToolExecutionResultResponse`, and `ToolExecutionInterceptResult` returns `ToolExecutionInterceptOutcome`. Both preserve the application result and optional annotation. Intercept outcomes also include ordered pending marks. These fields use lossless protobuf `JsonValue` wrappers rather than `google.protobuf.Value`. |
-| Mark options | `EmitMarkRequest.data_schema` carries a `nemo.relay.DataSchema@1` envelope and `severity` carries the log severity. Omitting both preserves legacy behavior. |
+| Mark options | `EmitMarkRequest.data_schema` carries a `nemo.relay.DataSchema@1` envelope, `severity` carries the log severity, and `category` carries an optional semantic mark category. Omitting these fields preserves legacy behavior. |
 | Runtime diagnostics | Authenticated `GetRuntimeDiagnostics` returns a bounded active-host `{ code, message, count }` snapshot. Older hosts return gRPC `UNIMPLEMENTED`. |
 
 ## Installation

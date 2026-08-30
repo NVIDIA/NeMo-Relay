@@ -78,6 +78,7 @@ class BuiltinConfig:
 
     action: Literal["remove", "redact", "regex_replace", "hash", "mask"] = "remove"
     target_paths: list[str] = field(default_factory=list)
+    target_path_globs: list[str] = field(default_factory=list)
     pattern: str | None = None
     detector: str | None = None
     replacement: str | None = None
@@ -91,6 +92,7 @@ class BuiltinConfig:
             {
                 "action": self.action,
                 "target_paths": self.target_paths,
+                "target_path_globs": self.target_path_globs,
                 "pattern": self.pattern,
                 "detector": self.detector,
                 "replacement": self.replacement,

@@ -899,6 +899,16 @@ pub(super) fn merge_known_editor_object(
             existing.remove(*key);
             continue;
         };
+        if existing.get(*key) != Some(edited_value) {
+            for dependent in schema.fields.iter().filter(|field| {
+                field.kind == EditorFieldKind::DiscriminatedSection
+                    && field
+                        .tagged_union
+                        .is_some_and(|metadata| metadata.discriminator == *key)
+            }) {
+                existing.remove(dependent.name);
+            }
+        }
         if let Some(field) = schema.field(key)
             && field.kind == EditorFieldKind::Section
             && let Some(nested_schema) = field.schema()
@@ -907,6 +917,60 @@ pub(super) fn merge_known_editor_object(
                 edited_value.as_object(),
             )
         {
+            merge_known_editor_object(
+                existing_object,
+                edited_object.clone(),
+                &nested_editor_keys(nested_schema),
+                nested_schema,
+            );
+            continue;
+        }
+        if let Some(field) = schema.field(key)
+            && field.kind == EditorFieldKind::Map
+            && let Some(item) = field.list_item
+            && let Some(nested_schema) = item.schema.map(|schema| schema())
+            && let (Some(existing_entries), Some(edited_entries)) = (
+                existing.get_mut(*key).and_then(Value::as_object_mut),
+                edited_value.as_object(),
+            )
+        {
+            existing_entries.retain(|entry_key, _| edited_entries.contains_key(entry_key));
+            for (entry_key, edited_entry) in edited_entries {
+                if let (Some(existing_entry), Some(edited_object)) = (
+                    existing_entries
+                        .get_mut(entry_key)
+                        .and_then(Value::as_object_mut),
+                    edited_entry.as_object(),
+                ) {
+                    merge_known_editor_object(
+                        existing_entry,
+                        edited_object.clone(),
+                        &nested_editor_keys(nested_schema),
+                        nested_schema,
+                    );
+                } else {
+                    existing_entries.insert(entry_key.clone(), edited_entry.clone());
+                }
+            }
+            continue;
+        }
+        if let Some(field) = schema.field(key)
+            && field.kind == EditorFieldKind::DiscriminatedSection
+            && let Some(tagged_union) = field.tagged_union
+            && existing.get(tagged_union.discriminator) == edited.get(tagged_union.discriminator)
+            && let Some(tag) = edited
+                .get(tagged_union.discriminator)
+                .and_then(Value::as_str)
+            && let Some(variant) = tagged_union
+                .variants
+                .iter()
+                .find(|variant| variant.tag == tag)
+            && let (Some(existing_object), Some(edited_object)) = (
+                existing.get_mut(*key).and_then(Value::as_object_mut),
+                edited_value.as_object(),
+            )
+        {
+            let nested_schema = (variant.schema)();
             merge_known_editor_object(
                 existing_object,
                 edited_object.clone(),
@@ -946,7 +1010,7 @@ pub(super) fn display_field_value(
                 if items.len() == 1 { "" } else { "s" }
             )
         }
-        (EditorFieldKind::StringMap, Value::Object(entries)) => format!(
+        (EditorFieldKind::StringMap | EditorFieldKind::Map, Value::Object(entries)) => format!(
             "{} entr{}",
             entries.len(),
             if entries.len() == 1 { "y" } else { "ies" }

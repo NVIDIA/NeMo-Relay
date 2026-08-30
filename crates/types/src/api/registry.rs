@@ -87,7 +87,7 @@ pub struct RuntimeRegistrationOwner {
     pub kind: RuntimeRegistrationOwnerKind,
     /// Plugin kind for plugin-owned registrations.
     pub plugin_kind: Option<String>,
-    /// Zero-based component ordinal when multiple components share a kind.
+    /// One-based ordinal for a Relay-created plugin component, when applicable.
     pub component_ordinal: Option<u32>,
 }
 

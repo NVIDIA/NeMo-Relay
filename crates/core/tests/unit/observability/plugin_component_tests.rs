@@ -60,7 +60,7 @@ fn temp_dir(prefix: &str) -> PathBuf {
         .as_nanos();
     let path = std::env::temp_dir().join(format!("nemo-relay-{prefix}-{id}"));
     fs::create_dir_all(&path).unwrap();
-    path
+    path.canonicalize().unwrap()
 }
 
 #[cfg(feature = "atof-streaming")]
@@ -833,6 +833,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
             max_queue_size: None,
             max_export_batch_size: None,
             scheduled_delay_millis: None,
+            completed_span_context_ttl_millis: None,
             headers: HashMap::new(),
             header_env: HashMap::new(),
             resource_attributes: HashMap::new(),
@@ -840,6 +841,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
             mark_exclude_names: default_mark_exclude_names(),
             attribute_mappings: Vec::new(),
             promote_metadata_prefixes: Vec::new(),
+            promote_resource_metadata_prefixes: Vec::new(),
         }],
         logs: None,
         metrics: None,
@@ -1021,6 +1023,7 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
             max_queue_size: None,
             max_export_batch_size: None,
             scheduled_delay_millis: None,
+            completed_span_context_ttl_millis: None,
             headers: HashMap::new(),
             header_env: HashMap::from([("authorization".to_string(), variable.to_string())]),
             resource_attributes: HashMap::new(),
@@ -1028,6 +1031,7 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
             mark_exclude_names: default_mark_exclude_names(),
             attribute_mappings: Vec::new(),
             promote_metadata_prefixes: Vec::new(),
+            promote_resource_metadata_prefixes: Vec::new(),
         },
     )
     .unwrap();
@@ -1049,6 +1053,7 @@ fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
         max_queue_size: None,
         max_export_batch_size: None,
         scheduled_delay_millis: None,
+        completed_span_context_ttl_millis: None,
         headers: HashMap::new(),
         header_env: HashMap::new(),
         resource_attributes: HashMap::new(),
@@ -1056,7 +1061,28 @@ fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
         mark_exclude_names: default_mark_exclude_names(),
         attribute_mappings: Vec::new(),
         promote_metadata_prefixes: Vec::new(),
+        promote_resource_metadata_prefixes: Vec::new(),
     }
+}
+
+#[test]
+fn trace_endpoint_completed_context_ttl_is_applied_and_must_be_positive() {
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.completed_span_context_ttl_millis = Some(750);
+    let config = build_otel_config(0, endpoint).unwrap();
+    assert_eq!(
+        config.completed_span_context_ttl(),
+        Duration::from_millis(750)
+    );
+
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.completed_span_context_ttl_millis = Some(0);
+    assert!(
+        build_otel_config(0, endpoint)
+            .unwrap_err()
+            .to_string()
+            .contains("completed_span_context_ttl_millis must be greater than 0")
+    );
 }
 
 fn test_signal_endpoint() -> OpenTelemetrySignalEndpointConfig {
@@ -1163,6 +1189,19 @@ fn build_otel_config_carries_endpoint_batch_overrides() {
 
     let config = build_otel_config(1, test_opentelemetry_endpoint()).unwrap();
     assert_eq!(config.batch_overrides(), (None, None, None));
+}
+
+#[test]
+fn build_otel_config_carries_resource_metadata_promotion_prefixes() {
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.promote_resource_metadata_prefixes = vec!["deployment.".to_string()];
+
+    let config = build_otel_config(0, endpoint).unwrap();
+
+    assert_eq!(
+        config.promote_resource_metadata_prefixes(),
+        ["deployment.".to_string()]
+    );
 }
 
 #[test]
@@ -1488,9 +1527,47 @@ fn opentelemetry_endpoint_header_env_rejects_missing_and_duplicate_headers() {
             .read()
             .unwrap()
             .event_subscribers
-            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+            .contains_key("nemo-relay-plugin.v1.observability:1:opentelemetry")
     );
     clear_plugin_configuration().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn opentelemetry_header_env_non_unicode_errors_do_not_expose_values() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let variable = "NEMO_RELAY_TEST_NON_UNICODE_OTEL_HEADER_ENV";
+    let secret = "relay-plugin-secret";
+    let mut value = vec![0xff];
+    value.extend_from_slice(secret.as_bytes());
+    unsafe { std::env::set_var(variable, std::ffi::OsString::from_vec(value)) };
+
+    let trace: OpenTelemetryEndpointConfig = serde_json::from_value(json!({
+        "type": "full",
+        "endpoint": "http://localhost:4318/v1/traces",
+        "header_env": {"authorization": variable}
+    }))
+    .unwrap();
+    let trace_error = build_otel_config(0, trace).unwrap_err().to_string();
+    assert!(trace_error.contains(variable));
+    assert!(!trace_error.contains(secret));
+
+    let logs: OpenTelemetrySignalEndpointConfig = serde_json::from_value(json!({
+        "endpoint": "http://localhost:4318/v1/logs",
+        "header_env": {"authorization": variable}
+    }))
+    .unwrap();
+    let log_error = resolve_signal_headers("logs", 0, &logs)
+        .unwrap_err()
+        .to_string();
+    assert!(log_error.contains(variable));
+    assert!(!log_error.contains(secret));
+
+    unsafe { std::env::remove_var(variable) };
 }
 
 #[test]
@@ -1524,7 +1601,7 @@ fn invalid_log_endpoint_keeps_valid_signal_subscriber() {
             .read()
             .unwrap()
             .event_subscribers
-            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+            .contains_key("nemo-relay-plugin.v1.observability:1:opentelemetry")
     );
     clear_plugin_configuration().unwrap();
 }
@@ -1560,7 +1637,7 @@ fn invalid_metric_endpoint_keeps_valid_signal_subscriber() {
             .read()
             .unwrap()
             .event_subscribers
-            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+            .contains_key("nemo-relay-plugin.v1.observability:1:opentelemetry")
     );
     clear_plugin_configuration().unwrap();
 }
@@ -1612,7 +1689,7 @@ fn malformed_derived_signal_endpoint_keeps_valid_peers() {
             .read()
             .unwrap()
             .event_subscribers
-            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+            .contains_key("nemo-relay-plugin.v1.observability:1:opentelemetry")
     );
     clear_plugin_configuration().unwrap();
 }
@@ -2553,7 +2630,7 @@ fn atof_enabled_writes_jsonl_and_teardown_flushes() {
             .keys()
             .cloned()
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["__nemo_relay_plugin__observability__atof"]);
+        assert_eq!(names, vec!["nemo-relay-plugin.v1.observability:1:atof"]);
     }
 
     let agent = push_agent("atof-agent");
@@ -2786,7 +2863,7 @@ fn atif_defaults_create_one_file_per_top_level_agent() {
 }
 
 #[test]
-fn atif_filename_template_routes_by_metadata_and_skips_invalid_paths() {
+fn atif_filename_template_sanitizes_metadata_paths() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
     let dir = temp_dir("observability-atif-metadata-template");
@@ -2800,15 +2877,15 @@ fn atif_filename_template_routes_by_metadata_and_skips_invalid_paths() {
     }));
     futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
 
-    let invalid = crate::api::scope::push_scope(
+    let sanitized = crate::api::scope::push_scope(
         PushScopeParams::builder()
-            .name("invalid-metadata-path-agent")
+            .name("sanitized-metadata-path-agent")
             .scope_type(ScopeType::Agent)
             .metadata(json!({"routing": {"artifact_path": "../escape"}}))
             .build(),
     )
     .unwrap();
-    pop(&invalid);
+    pop(&sanitized);
 
     let valid = crate::api::scope::push_scope(
         PushScopeParams::builder()
@@ -2822,31 +2899,19 @@ fn atif_filename_template_routes_by_metadata_and_skips_invalid_paths() {
 
     flush_subscribers().unwrap();
     assert!(
-        crate::plugin::active_plugin_report()
-            .unwrap()
-            .runtime_diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "atif.destination_render_failed")
-    );
-    let teardown = clear_plugin_configuration().unwrap_err();
-    assert!(
-        teardown
-            .to_string()
-            .contains("atif.destination_render_failed")
-    );
-    let invalid_filename = format!("trajectory-{}.json", invalid.uuid);
-    assert!(
-        !dir.join(&invalid_filename).exists()
-            && !dir.join("../escape").join(&invalid_filename).exists(),
-        "unsafe metadata path should not produce a trajectory file"
+        dir.join(format!("-escape/trajectory-{}.json", sanitized.uuid))
+            .exists(),
+        "unsafe metadata groups should be replaced with a dash"
     );
     assert!(
         dir.join(format!(
-            "tenant-a/session-123/trajectory-{}.json",
+            "tenant-a-session-123/trajectory-{}.json",
             valid.uuid
         ))
         .exists()
     );
+
+    clear_plugin_configuration().unwrap();
 
     futures::executor::block_on(initialize_plugins_exact(plugin_config(json!({
         "atif": {
@@ -3302,6 +3367,7 @@ fn write_atif_reports_missing_local_path_and_unregistered_remote_sink() {
         agent_uuid,
         session_id: agent_uuid.to_string(),
         filename: "trajectory.json".into(),
+        local_root: None,
         local_path: None,
         payload: b"{}".to_vec(),
     };
@@ -3333,6 +3399,7 @@ fn write_atif_spills_to_local_when_all_remote_sinks_fail() {
         agent_uuid,
         session_id: agent_uuid.to_string(),
         filename: "trajectory.json".into(),
+        local_root: Some(dir.clone()),
         local_path: Some(path.clone()),
         payload: b"{}".to_vec(),
     };
@@ -3349,14 +3416,97 @@ fn write_atif_spills_to_local_when_all_remote_sinks_fail() {
 #[test]
 fn atif_dispatcher_default_output_path_uses_current_directory() {
     let dispatcher = AtifDispatcher::new(AtifSectionConfig::default());
-    let (filename, local_path) = dispatcher.prepare_destination("session-1", None).unwrap();
+    let (filename, local_root, local_path) =
+        dispatcher.prepare_destination("session-1", None).unwrap();
     assert_eq!(filename, "nemo-relay-atif-session-1.json");
+    assert_eq!(local_root.unwrap(), std::env::current_dir().unwrap());
     assert_eq!(
         local_path.unwrap(),
         std::env::current_dir()
             .unwrap()
             .join("nemo-relay-atif-session-1.json")
     );
+}
+
+#[test]
+fn atif_session_id_cannot_escape_the_output_directory() {
+    let dispatcher = AtifDispatcher::new(AtifSectionConfig::default());
+    for session_id in ["../escape", "/absolute", "nested/../../escape"] {
+        assert!(
+            dispatcher.prepare_destination(session_id, None).is_err(),
+            "unsafe session id should be rejected: {session_id:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn atif_local_write_replaces_regular_files_privately_and_rejects_symlinks() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let dir = tempfile::tempdir().unwrap();
+    let dir_path = dir.path().canonicalize().unwrap();
+    let path = dir_path.join("trajectory.json");
+    write_atif_local(&dir_path, &path, b"first").unwrap();
+    write_atif_local(&dir_path, &path, b"second").unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"second");
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    let target = dir_path.join("target.json");
+    fs::write(&target, b"preserve").unwrap();
+    let link = dir_path.join("link.json");
+    symlink(&target, &link).unwrap();
+    assert!(write_atif_local(&dir_path, &link, b"overwrite").is_err());
+    assert_eq!(fs::read(target).unwrap(), b"preserve");
+
+    let outside = tempfile::tempdir().unwrap();
+    let outside_path = outside.path().canonicalize().unwrap();
+    let linked_parent = dir_path.join("linked-parent");
+    symlink(&outside_path, &linked_parent).unwrap();
+    assert!(write_atif_local(&dir_path, &linked_parent.join("escaped.json"), b"escape").is_err());
+    assert!(!outside_path.join("escaped.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn atif_local_write_resolves_symlinked_configured_root() {
+    use std::os::unix::fs::symlink;
+
+    let parent = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let parent_path = parent.path().canonicalize().unwrap();
+    let outside_path = outside.path().canonicalize().unwrap();
+    let link = parent_path.join("linked");
+    symlink(&outside_path, &link).unwrap();
+    let root = link.join("atif");
+    let path = root.join("trajectory.json");
+
+    write_atif_local(&root, &path, b"trajectory").unwrap();
+    assert_eq!(
+        fs::read(outside_path.join("atif/trajectory.json")).unwrap(),
+        b"trajectory"
+    );
+}
+
+#[test]
+fn atif_metadata_template_values_are_sanitized() {
+    assert_eq!(sanitize_atif_metadata_fragment("tenant-a"), "tenant-a");
+    assert_eq!(sanitize_atif_metadata_fragment("../tenant/a"), "-tenant-a");
+    assert_eq!(
+        sanitize_atif_metadata_fragment(r"tenant\project"),
+        "tenant-project"
+    );
+    assert_eq!(
+        sanitize_atif_metadata_fragment("tenant / : project"),
+        "tenant-project"
+    );
+    assert_eq!(sanitize_atif_metadata_fragment("run...name"), "run-name");
+    assert_eq!(sanitize_atif_metadata_fragment("ténant///项目"), "t-nant-");
+    assert_eq!(sanitize_atif_metadata_fragment("."), "-");
+    assert_eq!(sanitize_atif_metadata_fragment(".."), "-");
 }
 
 #[test]
@@ -3438,7 +3588,7 @@ fn atif_metadata_template_values_must_be_safe_path_fragments() {
     let destination = nested_dispatcher
         .prepare_destination("session-1", Some(&nested_string))
         .unwrap();
-    assert_eq!(destination.0, "tenant-a/team_1/trajectory-session-1.json");
+    assert_eq!(destination.0, "tenant-a-team_1/trajectory-session-1.json");
 
     for template in [
         "/tmp/trajectory-{session_id}.json",
@@ -3496,6 +3646,7 @@ fn atif_payload_merges_correlation_with_existing_trajectory_extra() {
     let write = prepare_atif_payload(
         agent_uuid,
         format!("trajectory-{agent_uuid}.json"),
+        None,
         None,
         trajectory,
         Vec::new(),
@@ -3680,11 +3831,11 @@ fn otlp_sections_register_inferred_subscribers_with_full_config() {
         .keys()
         .cloned()
         .collect::<Vec<_>>();
-    assert!(names.contains(&"__nemo_relay_plugin__observability__opentelemetry".to_string()));
+    assert!(names.contains(&"nemo-relay-plugin.v1.observability:1:opentelemetry".to_string()));
     assert_eq!(
         names
             .iter()
-            .filter(|name| *name == "__nemo_relay_plugin__observability__opentelemetry")
+            .filter(|name| *name == "nemo-relay-plugin.v1.observability:1:opentelemetry")
             .count(),
         1
     );
@@ -3895,7 +4046,7 @@ fn opentelemetry_rejects_canonical_collision_during_validation_and_activation() 
             .read()
             .unwrap()
             .event_subscribers
-            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+            .contains_key("nemo-relay-plugin.v1.observability:1:opentelemetry")
     );
 }
 
@@ -3971,7 +4122,7 @@ fn invalid_later_opentelemetry_endpoint_keeps_fanout_registration() {
             .read()
             .unwrap()
             .event_subscribers
-            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+            .contains_key("nemo-relay-plugin.v1.observability:1:opentelemetry")
     );
     clear_plugin_configuration().unwrap();
 }
@@ -4131,6 +4282,7 @@ fn plugin_validation_reports_each_signal_specific_invalid_value() {
         max_queue_size: 0,
         max_export_batch_size: 1,
         scheduled_delay_millis: 0,
+        completed_span_context_ttl_millis: 0,
     };
     let metrics = OpenTelemetryMetricSectionConfig {
         enabled: true,
@@ -4984,11 +5136,25 @@ fn atif_storage_http_header_env_present_env_is_accepted() {
 }
 
 #[test]
-fn atif_storage_editor_field_is_optional_json() {
+fn atif_storage_editor_field_is_optional_typed_list() {
     let schema = AtifSectionConfig::editor_schema();
     let storage = schema.field("storage").expect("storage editor field");
-    assert_eq!(storage.kind, EditorFieldKind::Json);
+    assert_eq!(storage.kind, EditorFieldKind::List);
     assert!(storage.optional);
+    let tagged_union = storage
+        .list_item
+        .expect("storage list metadata")
+        .tagged_union
+        .expect("storage tagged-union metadata");
+    assert_eq!(tagged_union.discriminator, "type");
+    assert_eq!(
+        tagged_union
+            .variants
+            .iter()
+            .map(|variant| variant.tag)
+            .collect::<Vec<_>>(),
+        vec!["http", "s3"]
+    );
 }
 
 #[test]

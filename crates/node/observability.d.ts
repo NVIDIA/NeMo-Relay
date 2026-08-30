@@ -73,6 +73,7 @@ export interface OpenTelemetryEndpointConfig {
   mark_exclude_names?: string[];
   attribute_mappings?: Array<{ key: string; alias: string }>;
   promote_metadata_prefixes?: string[];
+  promote_resource_metadata_prefixes?: string[];
   transport?: 'http_binary' | 'grpc';
   headers?: Record<string, string>;
   header_env?: Record<string, string>;
@@ -85,6 +86,7 @@ export interface OpenTelemetryEndpointConfig {
   max_queue_size?: number;
   max_export_batch_size?: number;
   scheduled_delay_millis?: number;
+  completed_span_context_ttl_millis?: number;
 }
 
 export interface OpenTelemetrySignalEndpointConfig {

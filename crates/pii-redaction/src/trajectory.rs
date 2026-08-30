@@ -3,11 +3,15 @@
 
 //! Structure-preserving removal of conversational trajectory content.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use serde_json::Value as Json;
 
-use nemo_relay::api::event::{CategoryProfile, Event};
+use nemo_relay::api::event::{
+    CategoryProfile, Event, LOG_SEVERITY_METADATA_KEY, LogSeverity, METRIC_DATA_SCHEMA_NAME,
+    METRIC_DATA_SCHEMA_VERSION, MetricEnvelope,
+};
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse;
 
@@ -52,13 +56,24 @@ impl CustomMarkPayloadPolicy {
 pub(super) struct TrajectorySanitizer {
     replacement: Arc<String>,
     custom_mark_payload_policy: CustomMarkPayloadPolicy,
+    metric_string_attribute_allowlist: Arc<BTreeMap<String, BTreeSet<String>>>,
 }
 
 impl TrajectorySanitizer {
-    pub(super) fn new(replacement: String, policy: CustomMarkPayloadPolicy) -> Self {
+    pub(super) fn new(
+        replacement: String,
+        policy: CustomMarkPayloadPolicy,
+        metric_string_attribute_allowlist: BTreeMap<String, Vec<String>>,
+    ) -> Self {
         Self {
             replacement: Arc::new(replacement),
             custom_mark_payload_policy: policy,
+            metric_string_attribute_allowlist: Arc::new(
+                metric_string_attribute_allowlist
+                    .into_iter()
+                    .map(|(attribute, values)| (attribute, values.into_iter().collect()))
+                    .collect(),
+            ),
         }
     }
 
@@ -128,6 +143,20 @@ impl TrajectorySanitizer {
         event: &Event,
         mut fields: nemo_relay::api::event::EventSanitizeFields,
     ) -> nemo_relay::api::event::EventSanitizeFields {
+        let log_severity = valid_mark_log_severity(event, fields.metadata.as_ref());
+        if is_relay_metric_mark(event) {
+            fields.data = fields
+                .data
+                .and_then(|data| self.sanitize_metric_envelope(data));
+            fields.metadata = fields
+                .metadata
+                .map(|value| redact_semantic_content(value, &self.replacement, None));
+            fields.category_profile = fields
+                .category_profile
+                .and_then(|profile| sanitize_category_profile(profile, &self.replacement));
+            return restore_log_severity(fields, log_severity);
+        }
+
         let category = event.category().map(|category| category.as_str());
         let specialized_scope =
             matches!(event, Event::Scope(_)) && matches!(category, Some("llm" | "tool"));
@@ -147,7 +176,7 @@ impl TrajectorySanitizer {
                     .category_profile
                     .and_then(|profile| redact_custom_category_profile(profile, self));
             }
-            return fields;
+            return restore_log_severity(fields, log_severity);
         }
 
         if !specialized_scope {
@@ -165,8 +194,127 @@ impl TrajectorySanitizer {
         fields.category_profile = fields
             .category_profile
             .and_then(|profile| sanitize_category_profile(profile, &self.replacement));
-        fields
+        restore_log_severity(fields, log_severity)
     }
+
+    /// Redact optional metric text without modifying required export fields.
+    fn sanitize_metric_envelope(&self, data: Json) -> Option<Json> {
+        let mut envelope = serde_json::from_value::<MetricEnvelope>(data).ok()?;
+        envelope.validate().ok()?;
+        for measurement in &mut envelope.measurements {
+            measurement.description = measurement
+                .description
+                .take()
+                .map(|_| (*self.replacement).clone());
+            measurement.attributes = measurement.attributes.take().map(|attributes| {
+                redact_metric_string_attributes(
+                    attributes,
+                    &self.replacement,
+                    &self.metric_string_attribute_allowlist,
+                )
+            });
+        }
+        envelope.validate().ok()?;
+        serde_json::to_value(envelope).ok()
+    }
+}
+
+fn valid_mark_log_severity(event: &Event, metadata: Option<&Json>) -> Option<LogSeverity> {
+    if !matches!(event, Event::Mark(_)) {
+        return None;
+    }
+    metadata
+        .and_then(Json::as_object)
+        .and_then(|metadata| metadata.get(LOG_SEVERITY_METADATA_KEY))
+        .and_then(Json::as_str)
+        .and_then(|value| value.parse::<LogSeverity>().ok())
+}
+
+fn restore_log_severity(
+    mut fields: nemo_relay::api::event::EventSanitizeFields,
+    severity: Option<LogSeverity>,
+) -> nemo_relay::api::event::EventSanitizeFields {
+    if let (Some(severity), Some(Json::Object(metadata))) = (severity, fields.metadata.as_mut()) {
+        metadata.insert(
+            LOG_SEVERITY_METADATA_KEY.to_string(),
+            Json::String(severity.as_str().to_string()),
+        );
+    }
+    fields
+}
+
+/// Return whether an event carries Relay's typed metric schema.
+pub(crate) fn is_relay_metric_mark(event: &Event) -> bool {
+    matches!(event, Event::Mark(_))
+        && event.data_schema().is_some_and(|schema| {
+            schema.name == METRIC_DATA_SCHEMA_NAME && schema.version == METRIC_DATA_SCHEMA_VERSION
+        })
+}
+
+/// Redact strings in a typed metric attribute object.
+fn redact_metric_string_attributes(
+    value: Json,
+    replacement: &str,
+    allowlist: &BTreeMap<String, BTreeSet<String>>,
+) -> Json {
+    match value {
+        Json::Object(values) => Json::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| {
+                    let value = redact_metric_string_attribute(&key, value, replacement, allowlist);
+                    (key, value)
+                })
+                .collect(),
+        ),
+        value => value,
+    }
+}
+
+/// Redact an individual typed metric attribute when it contains text.
+fn redact_metric_string_attribute(
+    attribute: &str,
+    value: Json,
+    replacement: &str,
+    allowlist: &BTreeMap<String, BTreeSet<String>>,
+) -> Json {
+    match value {
+        Json::String(value) => Json::String(
+            if metric_string_value_is_allowed(allowlist, attribute, &value) {
+                value
+            } else {
+                replacement.to_string()
+            },
+        ),
+        Json::Array(values) if values.iter().all(Json::is_string) => Json::Array(
+            values
+                .into_iter()
+                .map(|value| {
+                    let Json::String(value) = value else {
+                        unreachable!("checked that every metric attribute value is a string");
+                    };
+                    Json::String(
+                        if metric_string_value_is_allowed(allowlist, attribute, &value) {
+                            value
+                        } else {
+                            replacement.to_string()
+                        },
+                    )
+                })
+                .collect(),
+        ),
+        value => value,
+    }
+}
+
+fn metric_string_value_is_allowed(
+    allowlist: &BTreeMap<String, BTreeSet<String>>,
+    attribute: &str,
+    value: &str,
+) -> bool {
+    allowlist
+        .get(attribute)
+        .is_some_and(|values| values.contains(value))
 }
 
 fn sanitize_scope_metadata(value: Json, replacement: &str) -> Json {
@@ -208,14 +356,22 @@ fn sanitize_category_profile(
     replacement: &str,
 ) -> Option<CategoryProfile> {
     profile.annotated_request = profile.annotated_request.as_ref().and_then(|request| {
-        TrajectorySanitizer::new(replacement.to_string(), CustomMarkPayloadPolicy::Preserve)
-            .sanitize_annotated_request((**request).clone())
-            .map(Arc::new)
+        TrajectorySanitizer::new(
+            replacement.to_string(),
+            CustomMarkPayloadPolicy::Preserve,
+            BTreeMap::new(),
+        )
+        .sanitize_annotated_request((**request).clone())
+        .map(Arc::new)
     });
     profile.annotated_response = profile.annotated_response.as_ref().and_then(|response| {
-        TrajectorySanitizer::new(replacement.to_string(), CustomMarkPayloadPolicy::Preserve)
-            .sanitize_annotated_response((**response).clone())
-            .map(Arc::new)
+        TrajectorySanitizer::new(
+            replacement.to_string(),
+            CustomMarkPayloadPolicy::Preserve,
+            BTreeMap::new(),
+        )
+        .sanitize_annotated_response((**response).clone())
+        .map(Arc::new)
     });
     profile.extra = profile
         .extra

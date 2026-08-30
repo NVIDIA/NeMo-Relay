@@ -92,9 +92,11 @@ endpoint = "http://localhost:4318/v1/traces"
 transport = "http_binary"
 service_name = "agent-service"
 promote_metadata_prefixes = ["app."]
+promote_resource_metadata_prefixes = ["deployment."]
 max_queue_size = 4096
 max_export_batch_size = 512
 scheduled_delay_millis = 1000
+completed_span_context_ttl_millis = 60000
 
 [components.config.opentelemetry.endpoints.header_env]
 authorization = "OTEL_AUTHORIZATION"
@@ -104,6 +106,7 @@ authorization = "OTEL_AUTHORIZATION"
 
 [components.config.opentelemetry.logs]
 enabled = true
+completed_span_context_ttl_millis = 60000
 minimum_severity = "info"
 
 [components.config.opentelemetry.metrics]
@@ -139,6 +142,7 @@ not stop application work or delivery to the other exporters.
 | `max_queue_size` | Environment or `2048` | Maximum completed spans buffered before this endpoint drops new spans. |
 | `max_export_batch_size` | Environment or `512` | Maximum spans exported in one batch; capped at the effective queue size. |
 | `scheduled_delay_millis` | Environment or `5000` ms | Maximum delay before this endpoint exports a non-full batch. A full batch exports sooner. |
+| `completed_span_context_ttl_millis` | `60000` | Positive duration for retaining completed scopes' trace context for late marks. |
 | `headers` | `{}` | String-to-string exporter headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
 | `resource_attributes` | `{}` | String-to-string resource attributes. |
@@ -146,6 +150,7 @@ not stop application work or delivery to the other exporters.
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
 | `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
+| `promote_resource_metadata_prefixes` | `[]` | Literal prefixes that select root Scope-start metadata to copy to OTLP resource attributes. Each unique effective resource retains an exporter pipeline for the subscriber lifetime. |
 
 ## Event Metadata Promotion
 
@@ -185,7 +190,7 @@ key. The diagnostic code is
 `otel.metadata_promotion_value_unsupported.<metadata-key>`, its message contains
 the key and rejection reason, and its count is the number of occurrences for
 that key. Relay does not record the rejected value or stop trace export. Match
-the `otel.metadata_promotion_value_unsupported.` prefix to monitor all rejected
+the `otel.metadata_promotion_value_unsupported.` prefix to monitor rejected span
 metadata keys.
 
 Projection-owned attributes take precedence over promoted metadata with the
@@ -197,8 +202,38 @@ keys in namespaces owned by Relay or supported semantic projections:
 `user.`. Relay omits the bare `metadata` key as well. Rejected keys produce a
 rate-limited operational diagnostic without dropping the Event or span.
 
-Promotion does not modify the Event or ATOF payload. Use `resource_attributes`
-instead for static values that must be attached to every span from an endpoint.
+Promotion does not modify the Event or ATOF payload. In OTLP trace output only,
+Relay removes successfully promoted keys from serialized Relay metadata
+attributes. This applies to every Scope-start, Scope-end, and Mark event, and
+also to OpenInference's `metadata` JSON attribute. Resource-promotion prefixes
+participate in that filtering for every event even though only a trace root's
+Scope-start metadata can create resource attributes. Keys that cannot be
+promoted, including values overridden by configured resource attributes, remain
+in serialized metadata. Use `resource_attributes` instead for static values
+that must be attached to every span from an endpoint.
+
+## Root Resource Metadata Promotion
+
+Set `promote_resource_metadata_prefixes` to derive resource attributes from the
+sanitized metadata on a trace root's Scope-start Event. Every span and scoped
+mark in that trace uses the same resource; child metadata and later root
+metadata changes do not modify it. The prefixes and supported value types match
+`promote_metadata_prefixes`.
+
+Configured `service_name`, `service_namespace`, `service_version`, and explicit
+`resource_attributes` take precedence over promoted metadata with the same key.
+Each distinct effective resource creates a retained OTLP trace pipeline, so use
+only controlled, low-cardinality values such as deployment, region, or cluster
+identity. Do not promote request, tenant, or user identifiers.
+
+Relay records two bounded runtime diagnostics for this setting. A rejected value
+produces `otel.resource_metadata_promotion_value_unsupported.<metadata-key>`.
+A failed resource-pipeline construction produces
+`otel.resource_metadata_pipeline_build_failed`; Relay then exports the trace
+through the endpoint's configured resource instead. Match both the
+`otel.metadata_promotion_value_unsupported.` and
+`otel.resource_metadata_promotion_value_unsupported.` prefixes to monitor all
+rejected metadata keys.
 
 ## Log and Metric Endpoint Resolution
 
@@ -264,6 +299,26 @@ inherited, the SDK caps the effective batch size at the effective queue size.
 The SDK falls back to its default for malformed environment values. Queue and
 batch sizes count spans, not bytes.
 
+## Completed Scope Lineage Retention
+
+Trace endpoints retain a completed scope's trace and parent span context for
+`completed_span_context_ttl_millis` after its scope-end event. A late mark in
+that window remains attached to the original trace and parent span. When the
+TTL expires, Relay emits subsequent marks as orphan spans and records the
+`otel.completed_span_context_expired` runtime diagnostic when it purges expired
+contexts.
+
+Keep closed scope handles only for short deferred follow-up work. Prefer
+emitting an event before the scope closes, or create a new active scope for
+later work. Increasing the TTL retains more completed contexts: memory grows
+with the completed-scope rate, TTL, and number of configured trace endpoints.
+
+OTLP logs use the same TTL-based completed-scope lineage behavior. Configure
+`opentelemetry.logs.completed_span_context_ttl_millis` independently when log
+export is enabled. Metrics do not retain completed-scope parent context. Do not
+rely on a closed scope handle for long-running follow-up work; emit the mark
+before closing the scope or use an active/new scope instead.
+
 If an endpoint's explicit batch settings are invalid, Relay skips that endpoint
 and records an `observability.invalid_otel_endpoint` configuration warning with
 its `opentelemetry.endpoints[N]` field. Other valid endpoints continue to
@@ -278,6 +333,15 @@ Relay's thread-based batch processor exports serially, so it does not expose
 the SDK's concurrent-export setting. It also does not expose a separate batch
 processor export timeout; use the endpoint's `timeout_millis` to bound each
 OTLP request.
+
+<Warning>
+**Known limitation: OTLP partial success is not reported.** A collector can
+return a successful OTLP response while rejecting individual spans, log
+records, or metric data points. With the vendored OpenTelemetry exporter,
+Relay treats that response as successful: it does not add a runtime diagnostic,
+and `force_flush()` and `shutdown()` can succeed. Monitor collector-side logs
+and rejection metrics when investigating missing telemetry.
+</Warning>
 
 <Warning>
 A full queue drops completed spans instead of applying backpressure to
@@ -295,7 +359,8 @@ For plugin-managed exporters, NeMo Relay also records `otel.spans_dropped` in th
 active plugin report's `runtime_diagnostics`. Its `count` is the exact number
 of dropped spans, `field` identifies the affected
 `opentelemetry.traces[N].endpoint`, and `message` includes the configured
-endpoint URL. If spans were dropped, clearing the plugin returns a delivery
+endpoint origin (scheme, host, and port), without URL credentials, paths, query
+parameters, or fragments. If spans were dropped, clearing the plugin returns a delivery
 failure error and retains the diagnostic for inspection. This error does not
 disable later plugin configuration.
 </Warning>
@@ -479,6 +544,7 @@ The `logs` section applies these processing settings to every log endpoint:
 | `max_queue_size` | `2048` | Maximum queued log records. |
 | `max_export_batch_size` | `512` | Maximum records in one batch; must not exceed the queue size. |
 | `scheduled_delay_millis` | `1000` | Maximum delay before exporting a partial batch. |
+| `completed_span_context_ttl_millis` | `60000` | Positive duration for retaining completed scope parent context for late logs. Contexts exactly at the TTL boundary remain linked. |
 
 Relay maps the event timestamp to the log timestamp and post-sanitization
 processing time to the observed timestamp. Sanitized `data` becomes the
@@ -649,6 +715,7 @@ config = OpenTelemetryConfig(
     "http://localhost:4318/v1/traces",
 )
 config.service_name = "agent-service"
+config.header_env = {"authorization": "OTEL_AUTHORIZATION"}
 subscriber = OpenTelemetrySubscriber(config)
 ```
 </Tab>
@@ -660,6 +727,7 @@ const subscriber = new OpenTelemetrySubscriber({
   type: "gen_ai",
   endpoint: "http://localhost:4318/v1/traces",
   serviceName: "agent-service",
+  headerEnv: { authorization: "OTEL_AUTHORIZATION" },
 });
 ```
 </Tab>
@@ -672,11 +740,29 @@ let config = OpenTelemetryConfig::new(
     OpenTelemetryType::GenAi,
     "http://localhost:4318/v1/traces",
 )
-.with_service_name("agent-service");
+.with_service_name("agent-service")
+.with_header_env("authorization", "OTEL_AUTHORIZATION");
 let subscriber = OpenTelemetrySubscriber::new(config)?;
 ```
 </Tab>
 </Tabs>
+
+Set each referenced environment variable before constructing the subscriber.
+Direct trace, log, and metric configs resolve `header_env` when the subscriber
+is constructed and retain that value for the subscriber's activation. Changing
+the process environment affects only a subsequently constructed subscriber.
+Static `headers` remain unchanged. A header name cannot appear in both maps,
+including names that differ only by ASCII case, and names within `header_env`
+must also be unique ignoring ASCII case.
+
+Each `header_env` reference must be nonblank, have no surrounding whitespace,
+and contain neither `=` nor NUL. Its environment value must be set, nonblank,
+contain no leading or trailing whitespace, be valid Unicode, and be a valid HTTP
+header value. Validation errors name the header and environment variable but do
+not include the resolved value.
+Relay supplies resolved values only as outbound OTLP request headers; it does
+not copy them into Event data, OpenTelemetry payloads, resource attributes, or
+runtime diagnostics.
 
 The log and metric equivalents are `OpenTelemetryLogConfig` with
 `OpenTelemetryLogSubscriber`, and `OpenTelemetryMetricConfig` with
@@ -692,7 +778,9 @@ call the binding's force-flush method (`force_flush()` or `forceFlush()`), and
 then call `shutdown()`. Force flush first crosses Relay's subscriber barrier
 and then flushes the provider. Log shutdown drains the batch queue. Metric
 shutdown performs the reader's final collection; it does not add a second
-metric flush.
+metric flush. For direct trace and log subscribers, a successful force flush
+updates `runtime_diagnostics()` with any batch queue drops observed so far; the
+diagnostic count remains cumulative through later flushes and shutdown.
 
 ### Log and Metric Subscriber Lifecycle
 

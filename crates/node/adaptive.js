@@ -8,6 +8,11 @@ const plugin = require('./plugin.js');
 
 const ADAPTIVE_PLUGIN_KIND = 'adaptive';
 
+const ResponseCacheKeyStrategy = Object.freeze({
+  ExactRequest: 'exact_request',
+  Logical: 'logical',
+});
+
 /**
  * Create a default adaptive component config.
  *
@@ -151,7 +156,7 @@ function acgConfig(config = {}) {
  * Create response-cache settings with defaults applied.
  *
  * Merges caller-supplied overrides onto the opt-in LLM response and tool-result
- * cache config shape (exact-match) used by the adaptive plugin. This is a section of
+ * cache config shape used by the adaptive plugin. This is a section of
  * the adaptive component, not a standalone plugin kind.
  *
  * @param {object} [config={}] - Partial response-cache settings to override.
@@ -170,7 +175,7 @@ function responseCacheConfig(config = {}) {
     priority: 50,
     bypassRate: 0,
     cacheNondeterministic: false,
-    keyStrategy: 'exact_request',
+    keyStrategy: ResponseCacheKeyStrategy.ExactRequest,
     headerAllowlist: [],
     backend: backend ?? inMemoryBackend(),
     ...rest,
@@ -297,6 +302,7 @@ function setLatencySensitivity(value) {
 module.exports = {
   AdaptiveRuntime,
   ADAPTIVE_PLUGIN_KIND,
+  ResponseCacheKeyStrategy,
   defaultConfig,
   inMemoryBackend,
   redisBackend,

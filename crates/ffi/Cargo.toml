@@ -16,6 +16,9 @@ workspace = true
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
 
+[features]
+__skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
+
 [dependencies]
 nemo-relay = { workspace = true, features = ["atof-streaming", "worker-grpc"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }

@@ -11,8 +11,9 @@ startup, configuration, plugins, gateway behavior, and runtime failures. It is
 separate from agent observability through ATOF, ATIF, OpenTelemetry, or
 OpenInference.
 
-Relay writes operational logs to stderr. Optional file sinks receive additional
-copies of those records. Each record includes a root Relay ID for correlation.
+Relay writes operational logs to stderr by default. Set `stderr_enabled` to
+`false` to disable that sink; optional file sinks continue receiving records.
+Each record includes a root Relay ID for correlation.
 
 ## Defaults
 
@@ -71,12 +72,14 @@ application that initializes logging with
 
 ```bash
 export NEMO_RELAY_LOG=debug
+export NEMO_RELAY_LOG_STDERR=false
 export NEMO_RELAY_LOG_STDERR_FORMAT=jsonl
 ```
 
 Supported values are:
 
 - `NEMO_RELAY_LOG`: `error`, `warn`, `info`, `debug`, or `trace`
+- `NEMO_RELAY_LOG_STDERR`: `true` (default) or `false`
 - `NEMO_RELAY_LOG_STDERR_FORMAT`: `human` or `jsonl`
 
 Alternatively, select an absolute TOML file:
@@ -111,6 +114,7 @@ Logging settings use a `[logging]` table:
 ```toml
 [logging]
 level = "info"
+stderr_enabled = false
 stderr_format = "human"
 flush_interval_millis = 1000
 

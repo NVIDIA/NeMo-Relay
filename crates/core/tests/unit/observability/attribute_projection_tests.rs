@@ -171,7 +171,7 @@ fn promotes_matching_primitive_metadata_without_overwriting_owned_keys() {
     let unpromoted_issues =
         promote_event_metadata_attributes(&mut unpromoted_attributes, &event, &[], &HashSet::new());
     assert!(unpromoted_attributes.is_empty());
-    assert!(unpromoted_issues.is_empty());
+    assert!(unpromoted_issues.issues.is_empty());
 
     let mut attributes = vec![opentelemetry::KeyValue::new("nv.owned", "projection")];
 
@@ -224,7 +224,7 @@ fn promotes_matching_primitive_metadata_without_overwriting_owned_keys() {
     );
     assert_eq!(value("other.unmatched"), None);
     assert_eq!(
-        issues,
+        issues.issues,
         vec![super::MetadataPromotionIssue {
             key: "nv.nested".to_string(),
             reason: "object values are not supported",
@@ -257,7 +257,7 @@ fn treats_metadata_promotion_prefixes_as_literal_string_prefixes() {
         &HashSet::new(),
     );
 
-    assert!(issues.is_empty());
+    assert!(issues.issues.is_empty());
     assert_eq!(
         attributes
             .iter()
@@ -316,12 +316,13 @@ fn rejects_metadata_keys_owned_by_relay_and_otel_projections() {
     );
     assert_eq!(
         issues
+            .issues
             .iter()
             .map(|issue| issue.key.as_str())
             .collect::<std::collections::HashSet<_>>(),
         std::collections::HashSet::from(reserved_keys)
     );
-    assert!(issues.iter().all(|issue| {
+    assert!(issues.issues.iter().all(|issue| {
         issue.reason == "attribute key is reserved by Relay or an OpenTelemetry projection"
     }));
 }
@@ -345,7 +346,7 @@ fn promotes_empty_metadata_arrays() {
         &HashSet::new(),
     );
 
-    assert!(issues.is_empty());
+    assert!(issues.issues.is_empty());
     assert_eq!(
         attributes,
         vec![opentelemetry::KeyValue::new(
@@ -382,6 +383,7 @@ fn reports_unsupported_metadata_values() {
 
     assert!(attributes.is_empty());
     let issues = issues
+        .issues
         .into_iter()
         .map(|issue| (issue.key, issue.reason))
         .collect::<std::collections::HashMap<_, _>>();

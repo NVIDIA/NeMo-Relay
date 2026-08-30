@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -24,7 +24,8 @@ use nemo_relay::plugin::dynamic::{
     WorkerPluginLoadSpec, load_native_plugins, load_worker_plugins,
 };
 use nemo_relay::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
+    PluginComponentSpec, PluginConfig, clear_plugin_configuration,
+    ensure_builtin_plugins_registered, initialize_plugins_exact,
 };
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
@@ -36,7 +37,8 @@ use tokio::sync::oneshot;
 
 use crate::agents::shared::adapters::{claude_code, codex, pi};
 use crate::configuration::{
-    BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, GatewayConfig, ManagedBootstrapIdentity,
+    BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, GatewayConfig, HOOK_CLIENT_TOKEN_HEADER,
+    ManagedBootstrapIdentity,
 };
 use crate::error::CliError;
 use crate::gateway;
@@ -87,6 +89,12 @@ pub(crate) async fn serve_with_dynamic(
     ready_file: Option<&Path>,
     bootstrap_shutdown_token: Option<String>,
 ) -> Result<(), CliError> {
+    if !config.bind.ip().is_loopback() {
+        return Err(CliError::Config(format!(
+            "explicit Relay gateways require a loopback bind address, got {}",
+            config.bind
+        )));
+    }
     let bind = config.bind.to_string();
     log::info!(
         target: "nemo_relay.server",
@@ -264,10 +272,7 @@ async fn serve_listener_with_dynamic_inner(
         shutdown_token: bootstrap_shutdown_token,
         transparent_proxy_credential,
     } = bootstrap;
-    let bootstrap_challenge_key = bootstrap_fingerprint
-        .as_ref()
-        .map(|_| BootstrapChallengeKey::load())
-        .transpose()?;
+    let bootstrap_challenge_key = Some(BootstrapChallengeKey::load()?);
     let bootstrap_tls = bootstrap_fingerprint
         .as_ref()
         .map(|_| crate::gateway::tls::RelayTlsIdentity::load_or_create())
@@ -276,7 +281,8 @@ async fn serve_listener_with_dynamic_inner(
         .map(|identity| identity.server_config())
         .transpose()
         .map_err(CliError::Launch)?;
-    let require_provider_client_token = managed_bootstrap.is_some();
+    let require_provider_client_token =
+        bootstrap_fingerprint.is_some() && transparent_proxy_credential.is_none();
     let plugin_activation =
         initialize_plugin_host(config.plugin_config.clone(), dynamic_plugins).await?;
     let (bootstrap_shutdown, bootstrap_shutdown_rx) =
@@ -535,6 +541,11 @@ impl AppState {
         &self,
         headers: &mut HeaderMap,
     ) -> Result<crate::provider_auth::ProviderRequestAuthorization, CliError> {
+        if headers.contains_key(header::ORIGIN) {
+            return Err(CliError::Unauthorized(
+                "browser-originated Relay provider requests are not accepted".into(),
+            ));
+        }
         if let Some(proxy) = &self.transparent_proxy_credential {
             let source_credential = proxy.consume(headers).inspect_err(|error| {
                 log::warn!(
@@ -569,6 +580,53 @@ impl AppState {
             allow_environment_provider_auth,
         })
     }
+
+    fn authorize_hook_request(&self, headers: &mut HeaderMap) -> Result<String, CliError> {
+        #[cfg(test)]
+        if self.bootstrap_challenge_key.is_none() && self.transparent_proxy_credential.is_none() {
+            return Ok("test-unauthenticated-hook-client".into());
+        }
+        if headers.contains_key(header::ORIGIN) {
+            return Err(CliError::Unauthorized(
+                "browser-originated Relay hook requests are not accepted".into(),
+            ));
+        }
+        if let Some(proxy) = &self.transparent_proxy_credential
+            && headers
+                .get(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER)
+                .is_some()
+        {
+            let identity = proxy.identity();
+            proxy.consume(headers)?;
+            headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
+            headers.remove(HOOK_CLIENT_TOKEN_HEADER);
+            return Ok(identity);
+        }
+        let token = headers
+            .get(BOOTSTRAP_CLIENT_TOKEN_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| {
+                CliError::Unauthorized(
+                    "Relay hook request did not present an internal client credential".into(),
+                )
+            })?;
+        let key = self.bootstrap_challenge_key.as_ref().ok_or_else(|| {
+            CliError::Unauthorized("Relay hook authentication is unavailable".into())
+        })?;
+        if !key.verify_client_token(token) {
+            return Err(CliError::Unauthorized(
+                "Relay hook client credential was invalid".into(),
+            ));
+        }
+        let identity = headers
+            .get(HOOK_CLIENT_TOKEN_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| key.verify_hook_client_token(value))
+            .unwrap_or_else(|| crate::provider_auth::credential_identity(token));
+        headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
+        headers.remove(HOOK_CLIENT_TOKEN_HEADER);
+        Ok(identity)
+    }
 }
 
 fn router_with_state(state: AppState) -> Router {
@@ -585,6 +643,7 @@ fn router_with_state(state: AppState) -> Router {
         .route("/models", get(gateway::models))
         .route("/v1/responses", post(gateway::passthrough))
         .route("/v1/chat/completions", post(gateway::passthrough))
+        .route("/v1/images/generations", post(gateway::images_generations))
         .route("/v1/messages", post(gateway::passthrough))
         .route("/v1/messages/count_tokens", post(gateway::passthrough))
         .route("/v1/models", get(gateway::models))
@@ -978,6 +1037,13 @@ impl PluginActivation {
         {
             return Err(CliError::Config(error.to_string()));
         }
+        // Reserve and register Relay's built-in plugin kinds before loading
+        // untrusted dynamic plugin code. This keeps the CLI activation path
+        // consistent with the runtime-owned dynamic plugin host.
+        ensure_builtin_plugins_registered().map_err(|error| {
+            CliError::Config(format!("built-in plugin initialization failed: {error}"))
+        })?;
+        let static_plugin_config = plugin_config.clone();
         plugin_config
             .components
             .extend(dynamic_plugins.iter().map(|plugin| PluginComponentSpec {
@@ -1043,36 +1109,52 @@ impl PluginActivation {
             .iter()
             .filter_map(|plugin| plugin.activation_snapshot.clone())
             .collect();
-        let native =
-            if native_specs.is_empty() {
+        initialize_plugins_exact(static_plugin_config)
+            .await
+            .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
+        let activation: Result<Self, CliError> = async {
+            let native = if native_specs.is_empty() {
                 None
             } else {
                 Some(load_native_plugins(native_specs).map_err(|error| {
                     CliError::Config(format!("native plugin load failed: {error}"))
                 })?)
             };
-        for plugin in &dynamic_plugins {
-            if let Some(snapshot) = plugin.activation_snapshot.as_ref() {
-                snapshot.verify_current()?;
+            for plugin in &dynamic_plugins {
+                if let Some(snapshot) = plugin.activation_snapshot.as_ref() {
+                    snapshot.verify_current()?;
+                }
             }
-        }
-        let worker =
-            if worker_specs.is_empty() {
+            let worker = if worker_specs.is_empty() {
                 None
             } else {
                 Some(load_worker_plugins(worker_specs).map_err(|error| {
                     CliError::Config(format!("worker plugin load failed: {error}"))
                 })?)
             };
-        initialize_plugins_exact(plugin_config)
-            .await
-            .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
-        Ok(Self {
-            active: true,
-            native,
-            worker,
-            _snapshots: snapshots,
-        })
+            clear_plugin_configuration().map_err(|error| {
+                CliError::Config(format!("static plugin teardown failed: {error}"))
+            })?;
+            initialize_plugins_exact(plugin_config)
+                .await
+                .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
+            Ok(Self {
+                active: true,
+                native,
+                worker,
+                _snapshots: snapshots,
+            })
+        }
+        .await;
+        if let Err(error) = activation {
+            return match clear_plugin_configuration() {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(CliError::Config(format!(
+                    "{error}; plugin activation cleanup failed: {cleanup_error}"
+                ))),
+            };
+        }
+        activation
     }
 
     fn clear(mut self) -> Result<(), CliError> {
@@ -1103,16 +1185,25 @@ impl Drop for PluginActivation {
 // adapter's pass-through response body so hook delivery stays causally ordered with observability.
 async fn codex_hook(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    mut headers: HeaderMap,
     payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Json<Value>, CliError> {
     state.touch();
+    let owner = state.authorize_hook_request(&mut headers)?;
     let Json(payload) = payload.map_err(hook_payload_rejection)?;
     let outcome = codex::adapt(payload, &headers);
     state
         .sessions
-        .apply_events(&headers, outcome.events)
+        .apply_authenticated_events(&headers, outcome.events, &owner)
         .await?;
+    if let Some(permission) = outcome.permission
+        && let Err(error) = authorize_hook_permission(&state, permission, &owner).await
+    {
+        return Ok(Json(serde_json::json!({
+            "decision": "deny",
+            "reason": permission_denial_reason(error),
+        })));
+    }
     Ok(Json(outcome.response))
 }
 
@@ -1120,16 +1211,43 @@ async fn codex_hook(
 // are committed before the response so Claude lifecycle hooks can close scopes deterministically.
 async fn claude_code_hook(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    mut headers: HeaderMap,
     payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Json<Value>, CliError> {
     state.touch();
+    let owner = state.authorize_hook_request(&mut headers)?;
     let Json(payload) = payload.map_err(hook_payload_rejection)?;
     let outcome = claude_code::adapt(payload, &headers);
     state
         .sessions
-        .apply_events(&headers, outcome.events)
+        .apply_authenticated_events(&headers, outcome.events, &owner)
         .await?;
+    if let Some(permission) = outcome.permission {
+        let result = authorize_hook_permission(&state, permission, &owner).await;
+        return Ok(Json(match result {
+            Ok(()) => serde_json::json!({
+                "continue": true,
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "allow",
+                    }
+                }
+            }),
+            Err(error) => {
+                serde_json::json!({
+                    "continue": true,
+                    "hookSpecificOutput": {
+                        "hookEventName": "PermissionRequest",
+                        "decision": {
+                            "behavior": "deny",
+                            "message": permission_denial_reason(error),
+                        }
+                    }
+                })
+            }
+        }));
+    }
     Ok(Json(outcome.response))
 }
 
@@ -1137,6 +1255,11 @@ async fn claude_code_hook(
 // Relay-authored extension rather than from pi itself. Events are committed before the response
 // so a conditional-execution guardrail rejection surfaces as HTTP 403 and the extension can turn
 // it into pi's `{block, reason}` before the tool runs.
+//
+// This is the one hook route that does not call `authorize_hook_request`. The extension posts from
+// inside pi's process, and on the standalone-daemon route nothing hands it a bootstrap or
+// transparent-proxy token, so requiring one here would break the documented setup. Closing that gap
+// means giving the extension a credential first; see `SessionManager::apply_events`.
 async fn pi_hook(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1154,6 +1277,29 @@ async fn pi_hook(
     // intercept produced. Absent a rewrite the body stays `{}`, which is what an allow has always
     // been, so an older extension keeps working unchanged.
     Ok(Json(pi::response_with_effects(outcome.response, &effects)))
+}
+
+async fn authorize_hook_permission(
+    state: &AppState,
+    permission: Result<crate::events::ToolEvent, String>,
+    owner: &str,
+) -> Result<(), CliError> {
+    match permission {
+        Ok(permission) => {
+            state
+                .sessions
+                .authorize_tool_permission(&permission, owner)
+                .await
+        }
+        Err(reason) => Err(CliError::InvalidPayload(reason)),
+    }
+}
+
+fn permission_denial_reason(error: CliError) -> String {
+    error
+        .guardrail_rejection_reason()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| error.to_string())
 }
 
 fn hook_payload_rejection(rejection: JsonRejection) -> CliError {

@@ -22,6 +22,10 @@ describe('pii_redaction plugin helpers', () => {
       priority: 100,
     });
     assert.deepEqual(piiRedaction.builtinConfig(), { action: 'remove' });
+    assert.deepEqual(piiRedaction.builtinConfig({ target_path_globs: ['/messages/*/content'] }), {
+      action: 'remove',
+      target_path_globs: ['/messages/*/content'],
+    });
     assert.deepEqual(piiRedaction.localModelConfig(), {});
 
     const component = piiRedaction.ComponentSpec({

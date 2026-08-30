@@ -29,12 +29,39 @@ fn shared_configuration_is_valid() {
             "enabled": false,
             "kinds": ["subscriber"],
             "registration_name": "documentation-controlled-subscriber",
+            "allowed_registration_name": "documentation-observed-subscriber",
             "reason": "disabled by documentation plugin"
         },
         "executor": { "worker_threads": 2 }
     })));
 
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
+fn enabled_registration_control_requires_distinct_targets() {
+    let diagnostics = validate_example_config(&object(json!({
+        "registration_control": {
+            "enabled": true,
+            "registration_name": "same-target",
+            "allowed_registration_name": "same-target"
+        }
+    })));
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "examples.rust_native_policy.invalid_registration_control"
+            && diagnostic.field.as_deref()
+                == Some("registration_control.allowed_registration_name")
+    }));
+
+    let disabled_diagnostics = validate_example_config(&object(json!({
+        "registration_control": {
+            "enabled": false,
+            "registration_name": "same-target",
+            "allowed_registration_name": "same-target"
+        }
+    })));
+    assert!(disabled_diagnostics.is_empty(), "{disabled_diagnostics:?}");
 }
 
 #[test]
@@ -116,6 +143,11 @@ fn invalid_values_are_rejected_at_their_fields() {
             json!({ "registration_control": { "registration_name": "" } }),
             "examples.rust_native_policy.invalid_registration_control",
             "registration_control.registration_name",
+        ),
+        (
+            json!({ "registration_control": { "allowed_registration_name": "" } }),
+            "examples.rust_native_policy.invalid_registration_control",
+            "registration_control.allowed_registration_name",
         ),
         (
             json!({ "registration_control": { "reason": "" } }),

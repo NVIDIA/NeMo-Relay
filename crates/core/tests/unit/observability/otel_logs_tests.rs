@@ -53,6 +53,24 @@ fn scope(uuid: Uuid, category: ScopeCategory) -> Event {
     scope_with_parent(uuid, None, category)
 }
 
+fn scope_at(
+    uuid: Uuid,
+    category: ScopeCategory,
+    timestamp: chrono::DateTime<chrono::Utc>,
+) -> Event {
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("agent")
+            .timestamp(timestamp)
+            .build(),
+        category,
+        Vec::new(),
+        ScopeType::Agent.into(),
+        None,
+    ))
+}
+
 fn processor(
     minimum_severity: LogSeverity,
 ) -> (LogEventProcessor, InMemoryLogExporter, SdkLoggerProvider) {
@@ -73,11 +91,11 @@ fn scope_lineage_retains_active_contexts_and_preserves_root_trace_id() {
     let mut lineage = ScopeLineage::new();
     let root = Uuid::now_v7();
     lineage.process_start(&scope(root, ScopeCategory::Start));
-    for _ in 0..COMPLETED_SPAN_CONTEXT_LIMIT {
+    for _ in 0..4_096 {
         lineage.process_start(&scope(Uuid::now_v7(), ScopeCategory::Start));
     }
 
-    assert_eq!(lineage.active.len(), COMPLETED_SPAN_CONTEXT_LIMIT + 1);
+    assert_eq!(lineage.active.len(), 4_097);
     assert!(lineage.active.contains_key(&root));
 
     let child = Uuid::now_v7();
@@ -90,23 +108,12 @@ fn scope_lineage_retains_active_contexts_and_preserves_root_trace_id() {
 }
 
 #[test]
-fn log_processor_reports_active_lineage_high_water_once() {
-    let (mut processor, _exporter, _provider) = processor(LogSeverity::Info);
-    for _ in 0..=COMPLETED_SPAN_CONTEXT_LIMIT {
-        processor.process(&scope(Uuid::now_v7(), ScopeCategory::Start));
-    }
-    assert!(processor.active_lineage_high_water_reported);
-
-    processor.process(&scope(Uuid::now_v7(), ScopeCategory::Start));
-    assert!(processor.active_lineage_high_water_reported);
-}
-
-#[test]
-fn scope_lineage_reuses_completed_parent_and_bounds_completed_contexts() {
+fn scope_lineage_reuses_completed_parent_within_ttl_and_expires_after_boundary() {
     let mut lineage = ScopeLineage::new();
     let parent = Uuid::now_v7();
-    lineage.process_start(&scope(parent, ScopeCategory::Start));
-    lineage.process_end(&scope(parent, ScopeCategory::End));
+    let closed_at = chrono::Utc::now();
+    lineage.process_start(&scope_at(parent, ScopeCategory::Start, closed_at));
+    lineage.process_end(&scope_at(parent, ScopeCategory::End, closed_at));
 
     let child = mark(Some(parent), "late.mark", None, None, None);
     let context = lineage
@@ -114,35 +121,52 @@ fn scope_lineage_reuses_completed_parent_and_bounds_completed_contexts() {
         .expect("completed parent context");
     assert_eq!(context.span_id(), relay_span_id(parent));
 
-    for _ in 0..=COMPLETED_SPAN_CONTEXT_LIMIT {
+    for _ in 0..4_098 {
         let uuid = Uuid::now_v7();
-        lineage.process_start(&scope(uuid, ScopeCategory::Start));
-        lineage.process_end(&scope(uuid, ScopeCategory::End));
+        lineage.process_start(&scope_at(uuid, ScopeCategory::Start, closed_at));
+        lineage.process_end(&scope_at(uuid, ScopeCategory::End, closed_at));
     }
-    assert_eq!(lineage.completed.len(), COMPLETED_SPAN_CONTEXT_LIMIT);
-    assert!(!lineage.completed.contains_key(&parent));
+    assert!(lineage.completed.contains_key(&parent));
+    assert_eq!(
+        lineage.expire_completed(
+            closed_at + chrono::Duration::seconds(60),
+            Duration::from_secs(60)
+        ),
+        0
+    );
+    assert!(lineage.completed.contains_key(&parent));
+    assert_eq!(
+        lineage.expire_completed(
+            closed_at + chrono::Duration::seconds(61),
+            Duration::from_secs(60)
+        ),
+        4_099
+    );
+    assert!(lineage.parent_context(&child).is_none());
 
     lineage.process_end(&scope(Uuid::now_v7(), ScopeCategory::End));
 }
 
 #[test]
-fn scope_lineage_tombstones_replaced_completed_contexts() {
+fn scope_lineage_replaces_completed_context_expiry_index_entries() {
     let mut lineage = ScopeLineage::new();
     let reused = Uuid::now_v7();
-    lineage.process_start(&scope(reused, ScopeCategory::Start));
-    lineage.process_end(&scope(reused, ScopeCategory::End));
-    lineage.process_start(&scope(reused, ScopeCategory::Start));
-    lineage.process_end(&scope(reused, ScopeCategory::End));
+    let closed_at = chrono::Utc::now();
+    lineage.process_start(&scope_at(reused, ScopeCategory::Start, closed_at));
+    lineage.process_end(&scope_at(reused, ScopeCategory::End, closed_at));
+    lineage.process_start(&scope_at(
+        reused,
+        ScopeCategory::Start,
+        closed_at + chrono::Duration::seconds(1),
+    ));
+    lineage.process_end(&scope_at(
+        reused,
+        ScopeCategory::End,
+        closed_at + chrono::Duration::seconds(1),
+    ));
 
-    for _ in 1..COMPLETED_SPAN_CONTEXT_LIMIT {
-        let uuid = Uuid::now_v7();
-        lineage.process_start(&scope(uuid, ScopeCategory::Start));
-        lineage.process_end(&scope(uuid, ScopeCategory::End));
-    }
-
-    assert_eq!(lineage.completed.len(), COMPLETED_SPAN_CONTEXT_LIMIT);
     assert!(lineage.completed.contains_key(&reused));
-    assert_eq!(lineage.completed_order.len(), COMPLETED_SPAN_CONTEXT_LIMIT);
+    assert_eq!(lineage.completed_expiry_index.len(), 1);
 }
 
 #[test]
@@ -298,7 +322,7 @@ fn log_delivery_state_reports_queue_and_export_failures_independently() {
 }
 
 #[test]
-fn direct_log_processor_records_queue_drops_on_shutdown() {
+fn direct_log_processor_records_cumulative_queue_drops_on_flush_and_shutdown() {
     let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
     let delivery_diagnostics = Arc::new(LogDeliveryDiagnostics::new(
         "https://collector.example/v1/logs".to_string(),
@@ -308,9 +332,23 @@ fn direct_log_processor_records_queue_drops_on_shutdown() {
     delivery_diagnostics.accepted.store(1, Ordering::Relaxed);
     let processor = DiagnosticBatchLogProcessor {
         inner: BatchLogProcessor::builder(InMemoryLogExporter::default()).build(),
-        diagnostics: delivery_diagnostics,
+        diagnostics: Arc::clone(&delivery_diagnostics),
     };
 
+    processor.force_flush().unwrap();
+
+    let diagnostics = runtime_diagnostics.snapshot();
+    let diagnostic = diagnostics
+        .get("otel.logs_dropped")
+        .expect("direct subscriber flush drop diagnostic");
+    assert_eq!(diagnostic.count, 2);
+    assert!(
+        diagnostic
+            .message
+            .contains("https://collector.example/v1/logs")
+    );
+
+    delivery_diagnostics.emitted.store(5, Ordering::Relaxed);
     processor
         .shutdown_with_timeout(Duration::from_secs(1))
         .unwrap();
@@ -318,8 +356,8 @@ fn direct_log_processor_records_queue_drops_on_shutdown() {
     let diagnostics = runtime_diagnostics.snapshot();
     let diagnostic = diagnostics
         .get("otel.logs_dropped")
-        .expect("direct subscriber drop diagnostic");
-    assert_eq!(diagnostic.count, 2);
+        .expect("direct subscriber shutdown drop diagnostic");
+    assert_eq!(diagnostic.count, 4);
     assert!(
         diagnostic
             .message

@@ -19,8 +19,8 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
     RelayHostRuntime, RelayHostRuntimeServer,
 };
 use nemo_relay_worker_proto::v1::{
-    CancelInvocationRequest, CreateScopeStackRequest, CreateScopeStackResponse,
-    DeregisterConditionalMiddlewareGuardrailRequest,
+    CancelInvocationRequest, ConditionalMiddlewareInvocation, CreateScopeStackRequest,
+    CreateScopeStackResponse, DeregisterConditionalMiddlewareGuardrailRequest,
     DeregisterConditionalMiddlewareGuardrailResponse, DropScopeStackRequest, EmitMarkRequest,
     GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, GuardrailResult, HandshakeRequest,
     HandshakeResponse, HealthRequest, HostAck, InvokeRequest, InvokeResponse, JsonEnvelope,
@@ -70,7 +70,7 @@ use tokio_stream::wrappers::UnixListenerStream;
 #[cfg(unix)]
 use tower::service_fn;
 
-use crate::api::event::{DataSchema, Event, EventSanitizeFields, LogSeverity};
+use crate::api::event::{DataSchema, Event, EventCategory, EventSanitizeFields, LogSeverity};
 use crate::api::llm::{LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmRequest};
 use crate::api::registry::{
     RuntimeRegistrationKind, RuntimeRegistrationOwnerKind,
@@ -586,6 +586,12 @@ fn load_one_worker_plugin(
     .map_err(|err| PluginError::RegistrationFailed(format!("worker handshake failed: {err}")))?;
     let handshake = handshake.into_inner();
     validate_worker_handshake(&spec.plugin_id, &handshake)?;
+    host_state.set_gate_callback(WorkerGateCallback {
+        plugin_kind: spec.plugin_id.clone(),
+        runtime: runtime_handle.runtime().handle().clone(),
+        client: client.clone(),
+        host_state: Arc::downgrade(&host_state),
+    });
 
     let config = Json::Object(spec.config.clone());
     let validate = block_on_runtime(
@@ -659,6 +665,7 @@ fn load_one_worker_plugin(
             kinds,
             gate.registration_name,
             gate.reason,
+            gate.callback,
         ) {
             host_state.cleanup_conditional_middleware_guardrails();
             return Err(PluginError::RegistrationFailed(format!(
@@ -1026,6 +1033,7 @@ fn spawn_worker_process(spec: WorkerProcessLaunch<'_>) -> crate::plugin::Result<
             (Command::new(entrypoint), command_display)
         }
     };
+    minimize_worker_environment(&mut command);
     command
         .current_dir(manifest_dir)
         .env("NEMO_RELAY_WORKER_ID", spec.activation_id)
@@ -1045,6 +1053,25 @@ fn spawn_worker_process(spec: WorkerProcessLaunch<'_>) -> crate::plugin::Result<
             spec.runtime, command_display
         ))
     })
+}
+
+fn minimize_worker_environment(command: &mut Command) {
+    const ALLOWLIST: &[&str] = &[
+        "PATH",
+        "SYSTEMROOT",
+        "WINDIR",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+    ];
+    let retained = ALLOWLIST
+        .iter()
+        .filter_map(|name| std::env::var_os(name).map(|value| (*name, value)))
+        .collect::<Vec<_>>();
+    command.env_clear();
+    command.envs(retained);
 }
 
 fn resolve_python_executable(
@@ -1143,7 +1170,8 @@ impl WorkerPluginInstance {
                 | RegistrationSurface::LlmStreamExecutionIntercept => {
                     self.install_llm_registration(ctx, registration, surface)?
                 }
-                RegistrationSurface::Unspecified => {
+                RegistrationSurface::ConditionalMiddlewareGuardrail
+                | RegistrationSurface::Unspecified => {
                     return Err(PluginError::RegistrationFailed(format!(
                         "worker plugin '{}' returned unspecified registration surface",
                         self.plugin_kind
@@ -1465,6 +1493,36 @@ struct WorkerPluginCallback {
     host_state: Arc<WorkerHostRuntimeState>,
 }
 
+#[derive(Clone)]
+struct WorkerGateCallback {
+    plugin_kind: String,
+    runtime: tokio::runtime::Handle,
+    client: PluginWorkerClient<Channel>,
+    host_state: std::sync::Weak<WorkerHostRuntimeState>,
+}
+
+impl WorkerGateCallback {
+    fn invoke(
+        &self,
+        callback_name: &str,
+        kinds: &BTreeSet<RuntimeRegistrationKind>,
+        registration_name: &str,
+    ) -> FlowResult<Option<String>> {
+        let host_state = self
+            .host_state
+            .upgrade()
+            .ok_or_else(|| FlowError::NotFound("worker activation is shutting down".into()))?;
+        WorkerPluginCallback {
+            plugin_kind: self.plugin_kind.clone(),
+            activation_id: host_state.activation_id.clone(),
+            runtime: self.runtime.clone(),
+            client: self.client.clone(),
+            host_state,
+        }
+        .invoke_conditional_middleware(callback_name, kinds, registration_name)
+    }
+}
+
 impl WorkerPluginCallback {
     fn log_callback_fallback(&self, callback_name: &str, surface: RegistrationSurface) {
         log::warn!(
@@ -1556,6 +1614,31 @@ impl Drop for WorkerInvocationGuard {
 }
 
 impl WorkerPluginCallback {
+    fn invoke_conditional_middleware(
+        &self,
+        callback_name: &str,
+        kinds: &BTreeSet<RuntimeRegistrationKind>,
+        registration_name: &str,
+    ) -> FlowResult<Option<String>> {
+        let request = self.base_request(
+            callback_name,
+            RegistrationSurface::ConditionalMiddlewareGuardrail,
+            None,
+            Some(invoke_request_payload::Payload::ConditionalMiddleware(
+                ConditionalMiddlewareInvocation {
+                    kinds: kinds
+                        .iter()
+                        .copied()
+                        .map(registration_surface_from_kind)
+                        .map(|surface| surface as i32)
+                        .collect(),
+                    registration_name: registration_name.into(),
+                },
+            )),
+        );
+        guardrail_from_invoke_response(self.invoke_blocking(request)?)
+    }
+
     fn invoke_subscriber(&self, registration_name: &str, event: &Event) -> FlowResult<()> {
         let request = self.base_request(
             registration_name,
@@ -2174,6 +2257,7 @@ struct WorkerHostRuntimeState {
     codecs: Mutex<HashMap<String, WorkerCodecCapability>>,
     gates_active: AtomicBool,
     conditional_middleware_guardrails: Mutex<HashMap<String, WorkerOwnedGate>>,
+    gate_callback: Mutex<Option<WorkerGateCallback>>,
 }
 
 struct WorkerOwnedGate {
@@ -2264,7 +2348,15 @@ impl WorkerHostRuntimeState {
             codecs: Mutex::new(HashMap::new()),
             gates_active: AtomicBool::new(true),
             conditional_middleware_guardrails: Mutex::new(HashMap::new()),
+            gate_callback: Mutex::new(None),
         }
+    }
+
+    fn set_gate_callback(&self, callback: WorkerGateCallback) {
+        *self
+            .gate_callback
+            .lock()
+            .expect("worker gate callback lock") = Some(callback);
     }
 
     fn cleanup_conditional_middleware_guardrails(&self) {
@@ -2303,6 +2395,7 @@ impl WorkerHostRuntimeState {
         kinds: BTreeSet<RuntimeRegistrationKind>,
         registration_name: String,
         reason: String,
+        callback: bool,
     ) -> FlowResult<String> {
         let mut owned_gates = self
             .conditional_middleware_guardrails
@@ -2325,11 +2418,37 @@ impl WorkerHostRuntimeState {
             "__nemo_relay_worker_gate__{}__{}__{}",
             self.activation_id, name, handle
         );
+        let callback_name = name.clone();
+        let gate_callback = self
+            .gate_callback
+            .lock()
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .clone();
         register_conditional_middleware_guardrail(
             &qualified_name,
             kinds,
             &registration_name,
-            Arc::new(move |_, _| Some(reason.clone())),
+            Arc::new(move |kinds, registration_name| {
+                if !callback {
+                    return Some(reason.clone());
+                }
+                let Some(invoker) = &gate_callback else {
+                    return None;
+                };
+                match invoker.invoke(&callback_name, kinds, registration_name) {
+                    Ok(reason) => reason,
+                    Err(error) => {
+                        log::warn!(
+                            target: "nemo_relay.worker",
+                            event = "worker_conditional_middleware_guardrail_failed",
+                            callback = callback_name.as_str(),
+                            registration_name = registration_name;
+                            "Worker conditional middleware guardrail failed open: {error}"
+                        );
+                        None
+                    }
+                }
+            }),
         )?;
         owned_gates.insert(
             handle.clone(),
@@ -2698,9 +2817,11 @@ fn runtime_registration_kind_from_surface(
         RegistrationSurface::LlmStreamExecutionIntercept => {
             Ok(RuntimeRegistrationKind::LlmStreamExecutionIntercept)
         }
-        RegistrationSurface::Unspecified => Err(Status::invalid_argument(
-            "runtime registration kind must be specified",
-        )),
+        RegistrationSurface::ConditionalMiddlewareGuardrail | RegistrationSurface::Unspecified => {
+            Err(Status::invalid_argument(
+                "surface is not a runtime registration kind",
+            ))
+        }
     }
 }
 
@@ -2822,6 +2943,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                 kinds,
                 request.registration_name,
                 request.reason,
+                request.callback,
             )
             .map_err(status_from_flow)?;
         Ok(Response::new(
@@ -2876,6 +2998,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             metadata,
             data_schema,
             severity,
+            category,
         } = request.into_inner();
         self.state.authorize(&activation_id, &auth_token)?;
         let data_schema = optional_typed_envelope::<DataSchema>(
@@ -2884,6 +3007,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             DATA_SCHEMA_SCHEMA,
         );
         let severity = optional_log_severity(&severity);
+        let category = (!category.is_empty()).then(|| EventCategory::new(category));
         let result = self.with_stack(scope.as_ref(), || {
             emit_scope_mark(
                 EmitMarkEventParams::builder()
@@ -2892,6 +3016,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                     .metadata_opt(optional_envelope_to_json(metadata)?)
                     .data_schema_opt(data_schema?)
                     .severity_opt(severity?)
+                    .category_opt(category)
                     .build(),
             )
         });

@@ -145,9 +145,32 @@ detector = "email"
 `custom_mark_payload_policy = "preserve"` is the default and leaves unknown
 plugin mark payloads intact for analysis. Use `redact_all_leaves` when opaque
 plugins may emit content: scalar leaves in data, metadata, and opaque category
-profile fields are replaced while typed category identity remains valid.
+profile fields are replaced while typed category identity remains valid. Relay
+metric-schema marks use schema-aware sanitization instead: required measurement
+fields and numeric analytics remain valid for metric export, while descriptions
+and string attribute values are redacted.
+
+The preset can preserve explicitly approved, bounded string metric dimensions
+without exposing arbitrary text:
+
+```toml
+[components.config.profiles.builtin.metric_string_attribute_allowlist]
+"gen_ai.operation.name" = ["chat", "text_completion"]
+```
+
+Relay compares both the attribute name and value exactly and case-sensitively.
+For string arrays, each element is checked separately. Unlisted attributes and
+unexpected values remain redacted. The allowlist is empty by default and does
+not apply to descriptions, mark metadata, category profiles, or non-metric
+marks. Configure only fixed constants or bounded enum values; do not add
+free-form identifiers or user-provided text.
+
 Strings become `[REDACTED]`, numbers become `0`, booleans become `false`, and
-nulls, keys, arrays, and object shape are retained.
+nulls, keys, arrays, and object shape are retained. On every mark, the preset
+preserves the reserved `nemo_relay.log.severity` metadata field in canonical
+form when it contains a supported severity. For opaque custom marks that use
+`redact_all_leaves`, unsupported severity values remain redacted with the
+other string leaves.
 Known Relay marks are sanitized semantically so their structural and analytical
 fields remain usable. This choice affects canonical event fields before
 subscriber fan-out; exporter-owned resource attributes are outside this

@@ -246,12 +246,14 @@ def test_enabled_registration_control_registers_expected_gate(example: Any):
 
     example.ExamplePythonWorker().register(context, config)
 
-    context.register_conditional_middleware_guardrail.assert_called_once_with(
+    args = context.register_conditional_middleware_guardrail.call_args.args
+    assert args[:3] == (
         "documentation_registration_control",
         {example.RuntimeRegistrationKind.SUBSCRIBER},
         "documentation-controlled-subscriber",
-        "disabled by documentation plugin",
     )
+    assert args[3]({example.RuntimeRegistrationKind.SUBSCRIBER}, args[2]) == ("disabled by documentation plugin")
+    assert args[3]({example.RuntimeRegistrationKind.SUBSCRIBER}, "documentation-observed-subscriber") is None
 
 
 async def test_event_metadata_injector_adds_transport_metadata(example: Any) -> None:

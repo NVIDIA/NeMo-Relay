@@ -43,6 +43,32 @@ impl Drop for BootstrapConfigHome {
     }
 }
 
+struct ScopedEnvVar {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl ScopedEnvVar {
+    fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
+        let previous = std::env::var_os(key);
+        // SAFETY: The caller holds the process-wide environment mutex through BootstrapConfigHome.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, previous }
+    }
+}
+
+impl Drop for ScopedEnvVar {
+    fn drop(&mut self) {
+        // SAFETY: BootstrapConfigHome outlives this guard and still holds the environment mutex.
+        unsafe {
+            match self.previous.take() {
+                Some(previous) => std::env::set_var(self.key, previous),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
     let _plugin_guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
@@ -57,12 +83,17 @@ async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
         ..crate::configuration::GatewayConfig::default()
     };
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let proxy_credential = crate::provider_auth::TransparentProxyCredential::generate().unwrap();
+    let _proxy_credential = ScopedEnvVar::set(
+        crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV,
+        proxy_credential.expose().as_ref(),
+    );
     let server = tokio::spawn(crate::server::serve_transparent_listener_with_dynamic(
         listener,
         config,
         Vec::new(),
         fingerprint.clone(),
-        crate::provider_auth::TransparentProxyCredential::generate().unwrap(),
+        proxy_credential,
         Some(shutdown_rx),
     ));
     tokio::time::timeout(Duration::from_secs(5), async {

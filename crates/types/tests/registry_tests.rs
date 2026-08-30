@@ -106,7 +106,7 @@ fn runtime_registration_identity_round_trips_plugin_owner() {
     let identity = RuntimeRegistrationIdentity {
         kind: RuntimeRegistrationKind::Subscriber,
         local_name: "opentelemetry".into(),
-        effective_name: "__nemo_relay_plugin__observability__1__opentelemetry".into(),
+        effective_name: "nemo-relay-plugin.v1.observability:1:opentelemetry".into(),
         owner: RuntimeRegistrationOwner {
             kind: RuntimeRegistrationOwnerKind::Plugin,
             plugin_kind: Some("observability".into()),
@@ -120,7 +120,7 @@ fn runtime_registration_identity_round_trips_plugin_owner() {
         json!({
             "kind": "subscriber",
             "local_name": "opentelemetry",
-            "effective_name": "__nemo_relay_plugin__observability__1__opentelemetry",
+            "effective_name": "nemo-relay-plugin.v1.observability:1:opentelemetry",
             "owner": {
                 "kind": "plugin",
                 "plugin_kind": "observability",

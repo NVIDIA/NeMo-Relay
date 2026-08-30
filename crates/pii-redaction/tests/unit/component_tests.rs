@@ -6,8 +6,10 @@
 
 use super::*;
 use crate::api::event::{
-    BaseEvent, CategoryProfile, Event, EventCategory, EventSanitizeFields, MarkEvent,
-    ScopeCategory, ScopeEvent,
+    BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, EventSanitizeFields,
+    LOG_SEVERITY_METADATA_KEY, LogSeverity, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION,
+    MarkEvent, MetricEnvelope, MetricKind, MetricMeasurement, MetricValueType, ScopeCategory,
+    ScopeEvent,
 };
 use crate::api::llm::{
     LlmCallExecuteParams, LlmCallParams, LlmRequest, LlmStreamCallExecuteParams, llm_call,
@@ -19,7 +21,8 @@ use crate::api::runtime::{
     NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
 };
 use crate::api::scope::{
-    EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
+    EmitMarkEventParams, EmitMetricEventParams, PopScopeParams, PushScopeParams, ScopeType, event,
+    metric, pop_scope, push_scope,
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 use crate::api::tool::{
@@ -40,14 +43,22 @@ use futures::StreamExt;
 use nemo_relay::observability::OpenTelemetryType;
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
 use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig};
-use nemo_relay::observability::otel::OpenTelemetrySubscriber;
+use nemo_relay::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
+use nemo_relay::observability::otel_metrics::{
+    OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber,
+};
+use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_sdk::trace::{InMemorySpanExporterBuilder, SdkTracerProvider};
+use prost::Message;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::io::{Read, Write};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 static TEST_LOGGING: Once = Once::new();
 
@@ -77,6 +88,73 @@ fn plugin_config(config: Json) -> PluginConfig {
         components: vec![component(config)],
         policy: Default::default(),
     }
+}
+
+struct CapturedOtlpRequest {
+    path: String,
+    body: Vec<u8>,
+}
+
+fn capture_one_otlp_request(
+    listener: std::net::TcpListener,
+) -> std::sync::mpsc::Receiver<CapturedOtlpRequest> {
+    capture_otlp_requests(listener, 1)
+}
+
+fn capture_otlp_requests(
+    listener: std::net::TcpListener,
+    request_count: usize,
+) -> std::sync::mpsc::Receiver<CapturedOtlpRequest> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for _ in 0..request_count {
+            let (mut stream, _) = listener.accept().expect("collector should accept request");
+            let mut bytes = Vec::new();
+            let mut buffer = [0_u8; 4_096];
+            let (header_end, content_length) = loop {
+                let count = stream.read(&mut buffer).expect("collector should read");
+                assert!(count > 0, "collector closed before request headers");
+                bytes.extend_from_slice(&buffer[..count]);
+                if let Some(offset) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                    let header_end = offset + 4;
+                    let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    break (header_end, content_length);
+                }
+            };
+            while bytes.len() < header_end + content_length {
+                let count = stream
+                    .read(&mut buffer)
+                    .expect("collector should read body");
+                assert!(count > 0, "collector closed before request body");
+                bytes.extend_from_slice(&buffer[..count]);
+            }
+            let path = String::from_utf8_lossy(&bytes[..header_end])
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .expect("request path")
+                .to_string();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .expect("collector should respond");
+            sender
+                .send(CapturedOtlpRequest {
+                    path,
+                    body: bytes[header_end..header_end + content_length].to_vec(),
+                })
+                .expect("capture receiver should remain available");
+        }
+    });
+    receiver
 }
 
 #[test]
@@ -200,9 +278,20 @@ fn builtin_backend_config_default_matches_documented_action_default() {
     assert!(config.preset.is_none());
     assert_eq!(config.action, "remove");
     assert_eq!(config.custom_mark_payload_policy, "preserve");
+    assert!(config.metric_string_attribute_allowlist.is_empty());
     assert!(config.target_paths.is_empty());
+    assert!(config.target_path_globs.is_empty());
     assert!(config.pattern.is_none());
     assert!(config.detector.is_none());
+}
+
+#[test]
+fn builtin_backend_editor_exposes_metric_string_allowlist_as_json() {
+    let schema = <BuiltinBackendConfig as nemo_relay::config_editor::EditorConfig>::editor_schema();
+    let field = schema
+        .field("metric_string_attribute_allowlist")
+        .expect("metric string allowlist should be editable");
+    assert_eq!(field.kind, nemo_relay::config_editor::EditorFieldKind::Json);
 }
 
 #[test]
@@ -249,7 +338,8 @@ fn trajectory_preset_validates_without_an_action_and_rejects_matcher_fields() {
             "builtin": {
                 "preset": "trajectory_context",
                 "action": "redact",
-                "detector": "email"
+                "detector": "email",
+                "target_path_globs": ["/messages/*/content"]
             }
         }]
     })));
@@ -264,6 +354,9 @@ fn trajectory_preset_validates_without_an_action_and_rejects_matcher_fields() {
             diagnostic.field.as_deref() == Some("profiles[0].builtin.detector")
         })
     );
+    assert!(invalid.diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("profiles[0].builtin.target_path_globs")
+    }));
 
     let policy_without_preset = validate_plugin_config(&plugin_config(json!({
         "codec": "openai_chat",
@@ -277,6 +370,122 @@ fn trajectory_preset_validates_without_an_action_and_rejects_matcher_fields() {
     }));
 }
 
+#[test]
+fn trajectory_metric_string_allowlist_validation_is_fail_closed() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    ensure_builtin_plugins_registered().unwrap();
+
+    let valid = validate_plugin_config(&plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [{
+            "mode": "builtin",
+            "builtin": {
+                "preset": "trajectory_context",
+                "metric_string_attribute_allowlist": {
+                    "query.source": ["main", "subagent"]
+                }
+            }
+        }]
+    })));
+    assert!(!valid.has_errors(), "{:#?}", valid.diagnostics);
+
+    let valid_legacy = validate_plugin_config(&plugin_config(json!({
+        "codec": "openai_chat",
+        "mode": "builtin",
+        "builtin": {
+            "preset": "trajectory_context",
+            "metric_string_attribute_allowlist": {"query.source": ["main"]}
+        }
+    })));
+    assert!(
+        !valid_legacy.has_errors(),
+        "{:#?}",
+        valid_legacy.diagnostics
+    );
+
+    let without_preset = validate_plugin_config(&plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [{
+            "mode": "builtin",
+            "builtin": {
+                "metric_string_attribute_allowlist": {"query.source": ["main"]}
+            }
+        }]
+    })));
+    assert!(
+        without_preset.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref()
+                == Some("profiles[0].builtin.metric_string_attribute_allowlist")
+                && diagnostic.message.contains("requires builtin.preset")
+        }),
+        "{:#?}",
+        without_preset.diagnostics
+    );
+
+    for (allowlist, expected_message) in [
+        (json!({" ": ["main"]}), "keys must not be blank"),
+        (
+            json!({"query.source": []}),
+            "must contain at least one value",
+        ),
+        (json!({"query.source": [" "]}), "must not be blank"),
+        (
+            json!({"query.source": ["main", "main"]}),
+            "contains duplicate value",
+        ),
+    ] {
+        let report = validate_plugin_config(&plugin_config(json!({
+            "codec": "openai_chat",
+            "profiles": [{
+                "mode": "builtin",
+                "builtin": {
+                    "preset": "trajectory_context",
+                    "metric_string_attribute_allowlist": allowlist
+                }
+            }]
+        })));
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref()
+                == Some("profiles[0].builtin.metric_string_attribute_allowlist")
+                && diagnostic.message.contains(expected_message)
+        }));
+    }
+
+    let runtime_error = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            metric_string_attribute_allowlist: BTreeMap::from([(
+                "query.source".into(),
+                vec!["main".into()],
+            )]),
+            ..BuiltinBackendConfig::default()
+        },
+        None,
+    )
+    .err()
+    .expect("runtime construction must reject an allowlist without the trajectory preset");
+    assert!(
+        runtime_error
+            .to_string()
+            .contains("requires builtin.preset")
+    );
+
+    let runtime_error = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            preset: Some("trajectory_context".into()),
+            metric_string_attribute_allowlist: BTreeMap::from([(
+                "query.source".into(),
+                vec!["main".into(), "main".into()],
+            )]),
+            ..BuiltinBackendConfig::default()
+        },
+        None,
+    )
+    .err()
+    .expect("runtime construction must reject invalid allowlist entries");
+    assert!(runtime_error.to_string().contains("duplicate value"));
+}
+
 fn trajectory_backend(codec: Option<&str>, policy: &str) -> crate::builtin::CompiledBuiltinBackend {
     crate::builtin::CompiledBuiltinBackend::new(
         BuiltinBackendConfig {
@@ -285,6 +494,20 @@ fn trajectory_backend(codec: Option<&str>, policy: &str) -> crate::builtin::Comp
             ..BuiltinBackendConfig::default()
         },
         codec.map(str::to_string),
+    )
+    .unwrap()
+}
+
+fn trajectory_backend_with_metric_allowlist(
+    allowlist: BTreeMap<String, Vec<String>>,
+) -> crate::builtin::CompiledBuiltinBackend {
+    crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            preset: Some("trajectory_context".into()),
+            metric_string_attribute_allowlist: allowlist,
+            ..BuiltinBackendConfig::default()
+        },
+        None,
     )
     .unwrap()
 }
@@ -442,6 +665,81 @@ async fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_c
         .expect("sanitizer callback must succeed")
         .is_none(),
         "a normalized-path policy must omit a runtime codec until it has a compatible projection"
+    );
+}
+
+#[tokio::test]
+async fn normalized_llm_target_path_globs_sanitize_variable_message_and_response_paths() {
+    let request_backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "regex_replace".to_string(),
+            pattern: Some("sk-[A-Za-z0-9_-]+".to_string()),
+            replacement: Some("[REDACTED]".to_string()),
+            target_path_globs: vec!["/messages/*/content/*/text".to_string()],
+            ..BuiltinBackendConfig::default()
+        },
+        Some("openai_responses".to_string()),
+    )
+    .unwrap();
+    let sanitize_request = crate::builtin::llm_sanitize_request_callback(request_backend);
+    let response_backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "regex_replace".to_string(),
+            pattern: Some("sk-[A-Za-z0-9_-]+".to_string()),
+            replacement: Some("[REDACTED]".to_string()),
+            target_path_globs: vec!["/message".to_string()],
+            ..BuiltinBackendConfig::default()
+        },
+        Some("openai_responses".to_string()),
+    )
+    .unwrap();
+    let sanitize_response = crate::builtin::llm_sanitize_response_callback(response_backend);
+
+    let request = sanitize_request(
+        LlmRequest {
+            headers: serde_json::Map::new(),
+            content: json!({
+                "model": "gpt-4.1-mini",
+                "input": [
+                    {"role": "user", "content": [{"type": "input_text", "text": "sk-first-secret"}]},
+                    {"role": "user", "content": [{"type": "input_text", "text": "sk-second-secret"}]}
+                ]
+            }),
+        },
+        LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(OpenAIResponsesCodec))),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        request.content["input"][0]["content"][0]["text"],
+        json!("[REDACTED]")
+    );
+    assert_eq!(
+        request.content["input"][1]["content"][0]["text"],
+        json!("[REDACTED]")
+    );
+
+    let response = sanitize_response(
+        json!({
+            "id": "resp_123",
+            "model": "gpt-4.1-mini",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "content": [{"type": "output_text", "text": "sk-response-secret"}]
+            }]
+        }),
+        LlmSanitizeResponseContext::with_identity(LlmCodecIdentity::BuiltIn(
+            BuiltinLlmCodec::OpenAiResponses,
+        )),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        response["output"][0]["content"][0]["text"],
+        json!("[REDACTED]")
     );
 }
 
@@ -1135,6 +1433,853 @@ async fn trajectory_custom_mark_policy_is_explicit_and_shape_preserving() {
 }
 
 #[tokio::test]
+async fn trajectory_custom_mark_preserves_only_valid_log_severity() {
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("neutral.plugin.log").build(),
+        Some(EventCategory::custom()),
+        None,
+    ));
+    let callback =
+        crate::builtin::event_sanitize_callback(trajectory_backend(None, "redact_all_leaves"));
+
+    let sanitized = callback(
+        Arc::new(event.clone()),
+        EventSanitizeFields {
+            data: Some(json!({"message": "private"})),
+            category_profile: None,
+            metadata: Some(json!({
+                LOG_SEVERITY_METADATA_KEY: "warning",
+                "owner": "private owner"
+            })),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(sanitized.data, Some(json!({"message": "[REDACTED]"})));
+    assert_eq!(
+        sanitized.metadata,
+        Some(json!({
+            LOG_SEVERITY_METADATA_KEY: "warn",
+            "owner": "[REDACTED]"
+        }))
+    );
+
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: None,
+            category_profile: None,
+            metadata: Some(json!({LOG_SEVERITY_METADATA_KEY: "private severity"})),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        sanitized.metadata,
+        Some(json!({LOG_SEVERITY_METADATA_KEY: "[REDACTED]"}))
+    );
+}
+
+#[tokio::test]
+async fn trajectory_metric_marks_preserve_typed_measurements_and_redact_text() {
+    let data = json!({
+        "measurements": [
+            {
+                "name": "example.request_count",
+                "kind": "counter",
+                "value_type": "u64",
+                "value": 1,
+                "description": "private request count",
+                "attributes": {
+                    "owner": "person@example.com",
+                    "regions": ["us-east", "us-west"],
+                    "attempt": 2,
+                    "sampled": true
+                }
+            },
+            {
+                "name": "example.queue_delta",
+                "kind": "up_down_counter",
+                "value_type": "i64",
+                "value": -2
+            },
+            {
+                "name": "example.latency",
+                "kind": "histogram",
+                "value_type": "f64",
+                "value": 3.5,
+                "boundaries": [1.0, 5.0]
+            }
+        ]
+    });
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("example.metrics")
+            .data(data.clone())
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(data),
+            category_profile: Some(CategoryProfile {
+                extra: BTreeMap::from([("owner".into(), json!("person@example.com"))]),
+                ..CategoryProfile::default()
+            }),
+            metadata: Some(json!({"owner": "person@example.com"})),
+        },
+    )
+    .await
+    .unwrap();
+
+    let data = sanitized.data.unwrap();
+    let envelope = serde_json::from_value::<MetricEnvelope>(data.clone()).unwrap();
+    envelope.validate().unwrap();
+    assert_eq!(data["measurements"][0]["value_type"], "u64");
+    assert_eq!(data["measurements"][0]["value"], 1);
+    assert_eq!(data["measurements"][1]["value_type"], "i64");
+    assert_eq!(data["measurements"][1]["value"], -2);
+    assert_eq!(data["measurements"][2]["value_type"], "f64");
+    assert_eq!(data["measurements"][2]["value"], 3.5);
+    assert_eq!(data["measurements"][2]["boundaries"], json!([1.0, 5.0]));
+    assert_eq!(data["measurements"][0]["description"], "[REDACTED]");
+    assert_eq!(data["measurements"][0]["attributes"]["owner"], "[REDACTED]");
+    assert_eq!(
+        data["measurements"][0]["attributes"]["regions"],
+        json!(["[REDACTED]", "[REDACTED]"])
+    );
+    assert_eq!(data["measurements"][0]["attributes"]["attempt"], 2);
+    assert_eq!(data["measurements"][0]["attributes"]["sampled"], true);
+    assert_eq!(sanitized.metadata.unwrap()["owner"], "[REDACTED]");
+    assert_eq!(
+        sanitized.category_profile.unwrap().extra["owner"],
+        "[REDACTED]"
+    );
+}
+
+#[tokio::test]
+async fn trajectory_metric_string_allowlist_requires_exact_key_and_value() {
+    let data = json!({
+        "measurements": [{
+            "name": "example.request_count",
+            "kind": "counter",
+            "value_type": "u64",
+            "value": 1,
+            "description": "private request count",
+            "attributes": {
+                "query.source": "main",
+                "operation": "private operation",
+                "unapproved.key": "main",
+                "execution.modes": ["main", "private mode"],
+                "attempt": 2,
+                "sampled": true
+            }
+        }]
+    });
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("example.metrics")
+            .data(data.clone())
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(
+        trajectory_backend_with_metric_allowlist(BTreeMap::from([
+            ("query.source".into(), vec!["main".into()]),
+            ("operation".into(), vec!["chat".into()]),
+            ("execution.modes".into(), vec!["main".into()]),
+        ])),
+    );
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(data),
+            category_profile: Some(CategoryProfile {
+                extra: BTreeMap::from([("query.source".into(), json!("main"))]),
+                ..CategoryProfile::default()
+            }),
+            metadata: Some(json!({"query.source": "main"})),
+        },
+    )
+    .await
+    .unwrap();
+
+    let data = sanitized.data.unwrap();
+    let envelope = serde_json::from_value::<MetricEnvelope>(data.clone()).unwrap();
+    envelope.validate().unwrap();
+    let attributes = &data["measurements"][0]["attributes"];
+    assert_eq!(attributes["query.source"], "main");
+    assert_eq!(attributes["operation"], "[REDACTED]");
+    assert_eq!(attributes["unapproved.key"], "[REDACTED]");
+    assert_eq!(attributes["execution.modes"], json!(["main", "[REDACTED]"]));
+    assert_eq!(attributes["attempt"], 2);
+    assert_eq!(attributes["sampled"], true);
+    assert_eq!(data["measurements"][0]["description"], "[REDACTED]");
+    assert_eq!(sanitized.metadata.unwrap()["query.source"], "[REDACTED]");
+    assert_eq!(
+        sanitized.category_profile.unwrap().extra["query.source"],
+        "[REDACTED]"
+    );
+}
+
+#[tokio::test]
+async fn builtin_metric_marks_preserve_typed_measurements() {
+    let data = json!({
+        "measurements": [{
+            "name": "example.request_count",
+            "kind": "counter",
+            "value_type": "u64",
+            "value": 1,
+            "description": "private request count",
+            "attributes": {"owner": "person@example.com"}
+        }]
+    });
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("example.metrics")
+            .data(data.clone())
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(
+        crate::builtin::CompiledBuiltinBackend::new(BuiltinBackendConfig::default(), None).unwrap(),
+    );
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(data),
+            category_profile: Some(CategoryProfile {
+                extra: BTreeMap::from([("owner".into(), json!("person@example.com"))]),
+                ..CategoryProfile::default()
+            }),
+            metadata: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let data = sanitized.data.unwrap();
+    serde_json::from_value::<MetricEnvelope>(data.clone())
+        .unwrap()
+        .validate()
+        .unwrap();
+    assert_eq!(data["measurements"][0]["value_type"], "u64");
+    assert_eq!(data["measurements"][0]["value"], 1);
+    assert!(data["measurements"][0]["description"].is_null());
+    assert_eq!(data["measurements"][0]["attributes"], json!({}));
+    assert!(
+        !sanitized
+            .category_profile
+            .unwrap()
+            .extra
+            .contains_key("owner")
+    );
+}
+
+#[tokio::test]
+async fn builtin_metric_marks_remove_string_array_attributes_at_target_paths() {
+    let data = json!({
+        "measurements": [{
+            "name": "example.request_count",
+            "kind": "counter",
+            "value_type": "u64",
+            "value": 1,
+            "attributes": {"regions": ["us-east", "us-west"]}
+        }]
+    });
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("example.metrics")
+            .data(data.clone())
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(
+        crate::builtin::CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                target_paths: vec!["/measurements/0/attributes/regions/0".to_string()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let sanitized = callback(
+        Arc::new(event.clone()),
+        EventSanitizeFields {
+            data: Some(data),
+            category_profile: None,
+            metadata: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let data = sanitized.data.unwrap();
+    serde_json::from_value::<MetricEnvelope>(data.clone())
+        .unwrap()
+        .validate()
+        .unwrap();
+    assert_eq!(
+        data["measurements"][0]["attributes"]["regions"],
+        json!(["us-west"])
+    );
+
+    let callback = crate::builtin::event_sanitize_callback(
+        crate::builtin::CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                target_paths: vec!["/measurements/0/attributes/regions".to_string()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(json!({
+                "measurements": [{
+                    "name": "example.request_count",
+                    "kind": "counter",
+                    "value_type": "u64",
+                    "value": 1,
+                    "attributes": {"regions": ["us-east", "us-west"]}
+                }]
+            })),
+            category_profile: None,
+            metadata: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let data = sanitized.data.unwrap();
+    serde_json::from_value::<MetricEnvelope>(data.clone())
+        .unwrap()
+        .validate()
+        .unwrap();
+    assert_eq!(data["measurements"][0]["attributes"], json!({}));
+}
+
+#[tokio::test]
+async fn builtin_target_path_globs_sanitize_nested_mark_payloads() {
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("example.mark").build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(
+        crate::builtin::CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "redact".to_string(),
+                pattern: Some("secret".to_string()),
+                replacement: Some("[REDACTED]".to_string()),
+                target_paths: vec!["/prompt".to_string()],
+                target_path_globs: vec![
+                    "/messages/*/content/*/text".to_string(),
+                    "/output/*/content/*/text".to_string(),
+                ],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(json!({
+                "prompt": "secret prompt",
+                "messages": [{"content": [{"text": "secret message"}]}],
+                "output": [{
+                    "content": [{"text": "secret output"}],
+                    "id": "secret identifier"
+                }],
+            })),
+            category_profile: None,
+            metadata: Some(json!({
+                "messages": [{"content": [{"text": "secret metadata"}]}],
+            })),
+        },
+    )
+    .await
+    .unwrap();
+
+    let data = sanitized.data.unwrap();
+    assert_eq!(data["prompt"], "[REDACTED] prompt");
+    assert_eq!(
+        data["messages"][0]["content"][0]["text"],
+        "[REDACTED] message"
+    );
+    assert_eq!(data["output"][0]["content"][0]["text"], "[REDACTED] output");
+    assert_eq!(data["output"][0]["id"], "secret identifier");
+    assert_eq!(
+        sanitized.metadata.unwrap()["messages"][0]["content"][0]["text"],
+        "[REDACTED] metadata"
+    );
+}
+
+#[tokio::test]
+async fn builtin_target_path_globs_treat_partial_asterisks_as_literal_segments() {
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("example.mark").build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(
+        crate::builtin::CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "redact".to_string(),
+                pattern: Some("sensitive".to_string()),
+                replacement: Some("[REDACTED]".to_string()),
+                target_path_globs: vec!["/content*".to_string()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(json!({
+                "content*": "sensitive literal key",
+                "content": "sensitive nonmatching key",
+            })),
+            category_profile: None,
+            metadata: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let data = sanitized.data.unwrap();
+    assert_eq!(data["content*"], "[REDACTED] literal key");
+    assert_eq!(data["content"], "sensitive nonmatching key");
+}
+
+#[tokio::test]
+async fn builtin_target_path_globs_sanitize_tool_payloads() {
+    let callback = crate::builtin::tool_sanitize_callback(
+        crate::builtin::CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "redact".to_string(),
+                pattern: Some("secret".to_string()),
+                replacement: Some("[REDACTED]".to_string()),
+                target_path_globs: vec!["/output/*/content/*/text".to_string()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
+    );
+
+    let sanitized = callback(
+        "example.tool".to_string(),
+        json!({
+            "output": [{
+                "content": [{"text": "secret tool result"}],
+                "id": "secret identifier"
+            }]
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        sanitized["output"][0]["content"][0]["text"],
+        "[REDACTED] tool result"
+    );
+    assert_eq!(sanitized["output"][0]["id"], "secret identifier");
+}
+
+#[tokio::test]
+async fn builtin_target_path_globs_sanitize_typed_metric_attributes() {
+    let data = json!({
+        "measurements": [{
+            "name": "example.request_count",
+            "kind": "counter",
+            "value_type": "u64",
+            "value": 1,
+            "attributes": {"regions": ["us-east", "us-west"]}
+        }]
+    });
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("example.metrics")
+            .data(data.clone())
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(
+        crate::builtin::CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                target_path_globs: vec!["/measurements/*/attributes/regions".to_string()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(data),
+            category_profile: None,
+            metadata: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let data = sanitized.data.unwrap();
+    serde_json::from_value::<MetricEnvelope>(data.clone())
+        .unwrap()
+        .validate()
+        .unwrap();
+    assert_eq!(data["measurements"][0]["attributes"], json!({}));
+}
+
+#[tokio::test]
+async fn configured_target_path_globs_redact_otlp_content_and_preserve_typed_metrics() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "codec": "openai_chat",
+        "profiles": [{
+            "mode": "builtin",
+            "priority": 90,
+            "builtin": {
+                "action": "redact",
+                "pattern": "synthetic-glob-secret",
+                "replacement": "[REDACTED]",
+                "target_paths": [
+                    "/prompt", "/response", "/message", "/content", "/input", "/output",
+                    "/result", "/stdout", "/stderr", "/command", "/description", "/arguments"
+                ],
+                "target_path_globs": [
+                    "/content/*/text",
+                    "/output/*/text",
+                    "/output/*/content/*/text",
+                    "/output/*/input",
+                    "/messages/*/content",
+                    "/messages/*/content/*/text",
+                    "/messages/*/content/*/text"
+                ]
+            }
+        }]
+    })))
+    .await
+    .unwrap();
+
+    let trace_listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("trace capture listener should bind");
+    let trace_endpoint = format!("http://{}", trace_listener.local_addr().unwrap());
+    let trace_request = capture_one_otlp_request(trace_listener);
+    let trace_subscriber = OpenTelemetrySubscriber::new(OpenTelemetryConfig::new(
+        OpenTelemetryType::Full,
+        trace_endpoint,
+    ))
+    .unwrap();
+    trace_subscriber
+        .register("pii-target-glob-e2e-traces")
+        .unwrap();
+
+    let metric_listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("metric capture listener should bind");
+    let metric_endpoint = format!("http://{}", metric_listener.local_addr().unwrap());
+    let metric_request = capture_otlp_requests(metric_listener, 2);
+    let metric_subscriber =
+        OpenTelemetryMetricSubscriber::new(OpenTelemetryMetricConfig::new(metric_endpoint))
+            .unwrap();
+    metric_subscriber
+        .register("pii-target-glob-e2e-metrics")
+        .unwrap();
+
+    let agent = push_scope(
+        PushScopeParams::builder()
+            .name("target-glob-agent")
+            .scope_type(ScopeType::Agent)
+            .input(json!({
+                "prompt": "synthetic-glob-secret prompt",
+                "messages": [
+                    {"content": "synthetic-glob-secret message"},
+                    {"content": [{"text": "synthetic-glob-secret nested message"}]}
+                ]
+            }))
+            .metadata(json!({"nv.user.id": "opaque-user-id"}))
+            .build(),
+    )
+    .unwrap();
+    tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("target-glob-tool")
+            .args(json!({
+                "arguments": "synthetic-glob-secret arguments",
+                "messages": [{"content": [{"text": "synthetic-glob-secret tool input"}]}]
+            }))
+            .func(Arc::new(|_| {
+                Box::pin(async move {
+                    Ok(ToolExecutionResult::new(json!({
+                        "output": [{
+                            "content": [{"text": "synthetic-glob-secret tool output"}]
+                        }]
+                    })))
+                })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    event(
+        EmitMarkEventParams::builder()
+            .name("target-glob-mark")
+            .data(json!({
+                "output": [{"content": [{"text": "synthetic-glob-secret mark output"}]}]
+            }))
+            .build(),
+    )
+    .unwrap();
+    pop_scope(
+        PopScopeParams::builder()
+            .handle_uuid(&agent.uuid)
+            .output(json!({
+                "response": "synthetic-glob-secret response",
+                "content": [{"text": "synthetic-glob-secret final content"}]
+            }))
+            .build(),
+    )
+    .unwrap();
+    metric(
+        EmitMetricEventParams::builder()
+            .name("target_glob_cache_efficiency")
+            .measurements(vec![
+                MetricMeasurement::builder()
+                    .name("example.cache_efficiency")
+                    .kind(MetricKind::Gauge)
+                    .value_type(MetricValueType::U64)
+                    .value(json!(42_u64))
+                    .attributes(json!({"lane": "metrics"}))
+                    .build(),
+            ])
+            .build(),
+    )
+    .unwrap();
+
+    trace_subscriber.force_flush().unwrap();
+    trace_subscriber
+        .deregister("pii-target-glob-e2e-traces")
+        .unwrap();
+    metric_subscriber.force_flush().unwrap();
+    metric_subscriber
+        .deregister("pii-target-glob-e2e-metrics")
+        .unwrap();
+    trace_subscriber.shutdown().unwrap();
+    metric_subscriber.shutdown().unwrap();
+    clear_plugin_configuration().unwrap();
+
+    let trace_request = trace_request
+        .recv_timeout(Duration::from_secs(5))
+        .expect("sanitized trace should reach the local OTLP collector");
+    assert_eq!(trace_request.path, "/v1/traces");
+    let trace = ExportTraceServiceRequest::decode(trace_request.body.as_slice()).unwrap();
+    let trace_debug = format!("{trace:#?}");
+    assert!(
+        !trace_debug.contains("synthetic-glob-secret"),
+        "{trace_debug}"
+    );
+    assert!(trace_debug.contains("[REDACTED]"), "{trace_debug}");
+    assert!(trace_debug.contains("opaque-user-id"), "{trace_debug}");
+
+    let metric_request = metric_request
+        .recv_timeout(Duration::from_secs(5))
+        .expect("typed metric should reach the local OTLP collector");
+    assert_eq!(metric_request.path, "/v1/metrics");
+    let metrics = ExportMetricsServiceRequest::decode(metric_request.body.as_slice()).unwrap();
+    let metric = metrics
+        .resource_metrics
+        .iter()
+        .flat_map(|resource| &resource.scope_metrics)
+        .flat_map(|scope| &scope.metrics)
+        .find(|metric| metric.name == "example.cache_efficiency")
+        .expect("typed metric should retain its name");
+    let Some(opentelemetry_proto::tonic::metrics::v1::metric::Data::Gauge(gauge)) = &metric.data
+    else {
+        panic!("typed metric should remain a gauge: {metric:#?}");
+    };
+    let Some(opentelemetry_proto::tonic::metrics::v1::number_data_point::Value::AsInt(value)) =
+        gauge
+            .data_points
+            .first()
+            .and_then(|point| point.value.as_ref())
+    else {
+        panic!("typed metric should retain its integer value: {metric:#?}");
+    };
+    assert_eq!(*value, 42);
+}
+
+#[tokio::test]
+async fn builtin_target_paths_keep_literal_asterisk_semantics() {
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("example.mark").build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(
+        crate::builtin::CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "redact".to_string(),
+                pattern: Some("secret".to_string()),
+                replacement: Some("[REDACTED]".to_string()),
+                target_paths: vec!["/*".to_string(), "/a~1b".to_string()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(json!({
+                "*": "secret literal",
+                "a/b": "secret escaped",
+                "other": "secret other",
+            })),
+            category_profile: None,
+            metadata: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let data = sanitized.data.unwrap();
+    assert_eq!(data["*"], "[REDACTED] literal");
+    assert_eq!(data["a/b"], "[REDACTED] escaped");
+    assert_eq!(data["other"], "secret other");
+}
+
+#[tokio::test]
+async fn trajectory_metric_marks_drop_invalid_envelopes() {
+    let data = json!({
+        "measurements": [{
+            "name": "example.invalid",
+            "kind": "counter",
+            "value_type": "invalid",
+            "value": 1
+        }]
+    });
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("example.metrics")
+            .data(data.clone())
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(data),
+            category_profile: None,
+            metadata: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(sanitized.data.is_none());
+}
+
+#[tokio::test]
+async fn builtin_metric_marks_drop_invalid_envelopes() {
+    let data = json!({
+        "measurements": [{
+            "name": "example.invalid",
+            "kind": "counter",
+            "value_type": "invalid",
+            "value": 1
+        }]
+    });
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("example.metrics")
+            .data(data.clone())
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ));
+    let callback = crate::builtin::event_sanitize_callback(
+        crate::builtin::CompiledBuiltinBackend::new(BuiltinBackendConfig::default(), None).unwrap(),
+    );
+    let sanitized = callback(
+        Arc::new(event),
+        EventSanitizeFields {
+            data: Some(data),
+            category_profile: None,
+            metadata: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(sanitized.data.is_none());
+}
+
+#[tokio::test]
 async fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annotations() {
     let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
     let annotated_response: nemo_relay::codec::response::AnnotatedLlmResponse =
@@ -1330,6 +2475,11 @@ fn typed_trajectory_preset_omits_the_legacy_default_action() {
     assert_eq!(serialized["preset"], "trajectory_context");
     assert!(serialized.get("action").is_none());
     assert!(serialized.get("custom_mark_payload_policy").is_none());
+    assert!(
+        serialized
+            .get("metric_string_attribute_allowlist")
+            .is_none()
+    );
 }
 
 #[test]
@@ -1978,6 +3128,42 @@ fn validate_accepts_valid_builtin_target_paths() {
 }
 
 #[test]
+fn validate_builtin_target_path_globs_as_json_pointers() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "builtin": {
+            "action": "remove",
+            "target_path_globs": [
+                "/messages/*/content",
+                "/output/*/content/*/text",
+                "/metadata/a~1b"
+            ]
+        }
+    })));
+    assert!(!report.has_errors(), "{:#?}", report.diagnostics);
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "builtin": {
+            "action": "remove",
+            "target_path_globs": ["messages/*/content", "/messages/~2content"]
+        }
+    })));
+    for index in 0..2 {
+        let expected_field = format!("builtin.target_path_globs[{index}]");
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref() == Some(expected_field.as_str())
+                && diagnostic.message.contains("RFC 6901")
+        }));
+    }
+}
+
+#[test]
 fn profile_validation_reports_malformed_target_path_index() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -2387,6 +3573,7 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
             .name("hermes.checkpoint")
             .data(json!({"content": raw_context, "email": raw_pii, "score": 0.95}))
             .metadata(json!({"reviewer": raw_pii}))
+            .severity(LogSeverity::Warn)
             .build(),
     )
     .unwrap();
@@ -2465,6 +3652,13 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
         .unwrap();
     assert_eq!(custom_mark.data().unwrap()["content"], "[REDACTED]");
     assert_eq!(custom_mark.data().unwrap()["score"], 0);
+    assert_eq!(
+        custom_mark.metadata().unwrap(),
+        &json!({
+            LOG_SEVERITY_METADATA_KEY: "warn",
+            "reviewer": "[REDACTED]"
+        })
+    );
 
     deregister_subscriber("pii-regression-subscriber").unwrap();
     atof.deregister("pii-regression-atof").unwrap();

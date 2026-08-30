@@ -38,7 +38,7 @@ fn temp_dir(prefix: &str) -> PathBuf {
         .as_nanos();
     let path = std::env::temp_dir().join(format!("nemo-relay-{prefix}-{id}"));
     fs::create_dir_all(&path).unwrap();
-    path
+    path.canonicalize().unwrap()
 }
 
 fn reset_global() {
@@ -1334,20 +1334,84 @@ fn missing_output_directory_is_created() {
     assert!(output_path.exists());
 }
 
+#[cfg(unix)]
 #[test]
-fn invalid_filename_errors_cleanly() {
-    let dir = temp_dir("atof-invalid-filename");
+fn output_directory_resolves_symlinked_configured_root() {
+    use std::os::unix::fs::symlink;
+
+    let parent = temp_dir("atof-symlinked-output-parent");
+    let outside = temp_dir("atof-symlinked-output-outside");
+    let link = parent.join("linked");
+    symlink(&outside, &link).unwrap();
+    let output_dir = link.join("atof");
+
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&output_dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        exporter.path(),
+        Some(output_dir.join("events.jsonl").as_path())
+    );
+    assert!(outside.join("atof/events.jsonl").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn existing_non_regular_output_is_rejected() {
+    use std::os::unix::net::UnixListener;
+
+    let temp = tempfile::tempdir_in("/tmp").unwrap();
+    let path = temp.path().join("events.jsonl");
+    let _listener = UnixListener::bind(&path).unwrap();
 
     let error = match AtofExporter::new(
         AtofExporterConfig::new()
-            .with_output_directory(&dir)
-            .with_filename("missing-parent/events.jsonl"),
+            .with_output_directory(temp.path())
+            .with_filename("events.jsonl"),
     ) {
-        Ok(_) => panic!("expected invalid filename path error"),
+        Ok(_) => panic!("expected a non-regular output target to be rejected"),
         Err(error) => error,
     };
 
     assert!(matches!(error, AtofExporterError::OpenFile { .. }));
+}
+
+#[test]
+fn nested_filename_creates_private_parent_directories() {
+    let dir = temp_dir("atof-invalid-filename");
+
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("missing-parent/events.jsonl"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        exporter.path(),
+        Some(dir.join("missing-parent/events.jsonl").as_path())
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let parent_mode = std::fs::metadata(dir.join("missing-parent"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        let file_mode = std::fs::metadata(dir.join("missing-parent/events.jsonl"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(parent_mode, 0o700);
+        assert_eq!(file_mode, 0o600);
+    }
 }
 
 #[test]
@@ -1727,16 +1791,13 @@ fn atof_config_helpers_cover_file_path_and_replace_dots_policy() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn atof_file_sink_reports_deferred_dev_full_write_failures() {
-    let exporter = AtofExporter::new(
+fn atof_file_sink_rejects_dev_full_as_an_unsafe_output_target() {
+    let result = AtofExporter::new(
         AtofExporterConfig::new()
             .with_output_directory("/dev")
             .with_filename("full"),
-    )
-    .unwrap();
-    exporter.subscriber()(&make_mark_event("write-failure"));
-    assert!(exporter.force_flush().is_err());
-    assert!(exporter.shutdown().is_err());
+    );
+    assert!(matches!(result, Err(AtofExporterError::OpenFile { .. })));
 }
 
 #[test]

@@ -31,4 +31,6 @@ nemo-relay.workspace = true
 futures = "0.3"
 tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }
 opentelemetry_sdk = { workspace = true, features = ["trace", "testing"] }
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic", "metrics"] }
+prost = "0.14"
 tempfile = "3"

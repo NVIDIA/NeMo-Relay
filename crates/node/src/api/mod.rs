@@ -275,12 +275,38 @@ fn build_otel_config(
         .instrumentation_scope
         .unwrap_or_else(|| "opentelemetry".to_string());
     let timeout_millis = options.timeout_millis.unwrap_or(3_000);
+    let completed_span_context_ttl_millis = options
+        .completed_span_context_ttl_millis
+        .map(|ttl| {
+            let (negative, value, lossless) = ttl.get_u64();
+            if negative || !lossless {
+                return Err(napi::Error::from_reason(
+                    "completedSpanContextTtlMillis must be a nonnegative u64 BigInt",
+                ));
+            }
+            if value == 0 {
+                return Err(napi::Error::from_reason(
+                    "completedSpanContextTtlMillis must be greater than 0",
+                ));
+            }
+            Ok(value)
+        })
+        .transpose()?
+        .unwrap_or_else(|| {
+            u64::try_from(
+                nemo_relay::observability::otel::DEFAULT_COMPLETED_SPAN_CONTEXT_TTL.as_millis(),
+            )
+            .expect("the default completed span context TTL fits in u64 milliseconds")
+        });
 
     let mut config = nemo_relay::observability::otel::OpenTelemetryConfig::new(otel_type, endpoint)
         .with_transport(transport)
         .with_service_name(service_name)
         .with_instrumentation_scope(instrumentation_scope)
-        .with_timeout(std::time::Duration::from_millis(timeout_millis.into()));
+        .with_timeout(std::time::Duration::from_millis(timeout_millis.into()))
+        .with_completed_span_context_ttl(std::time::Duration::from_millis(
+            completed_span_context_ttl_millis,
+        ));
 
     if let Some(namespace) = options.service_namespace {
         config = config.with_service_namespace(namespace);
@@ -290,6 +316,9 @@ fn build_otel_config(
     }
     for (key, value) in parse_string_map(options.headers, "headers")? {
         config = config.with_header(key, value);
+    }
+    for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
+        config = config.with_header_env(key, variable);
     }
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
@@ -302,7 +331,12 @@ fn build_otel_config(
                 .unwrap_or_else(nemo_relay::observability::default_mark_exclude_names),
         )
         .with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?)
-        .with_promote_metadata_prefixes(options.promote_metadata_prefixes.unwrap_or_default());
+        .with_promote_metadata_prefixes(options.promote_metadata_prefixes.unwrap_or_default())
+        .with_promote_resource_metadata_prefixes(
+            options
+                .promote_resource_metadata_prefixes
+                .unwrap_or_default(),
+        );
     Ok(config)
 }
 
@@ -315,6 +349,29 @@ fn build_otel_log_config(
             "endpoint must be a nonblank string",
         ));
     }
+    let completed_span_context_ttl_millis = options
+        .completed_span_context_ttl_millis
+        .map(|ttl| {
+            let (negative, value, lossless) = ttl.get_u64();
+            if negative || !lossless {
+                return Err(napi::Error::from_reason(
+                    "completedSpanContextTtlMillis must be a nonnegative u64 BigInt",
+                ));
+            }
+            if value == 0 {
+                return Err(napi::Error::from_reason(
+                    "completedSpanContextTtlMillis must be greater than 0",
+                ));
+            }
+            Ok(value)
+        })
+        .transpose()?
+        .unwrap_or_else(|| {
+            u64::try_from(
+                nemo_relay::observability::otel::DEFAULT_COMPLETED_SPAN_CONTEXT_TTL.as_millis(),
+            )
+            .expect("the default completed span context TTL fits in u64 milliseconds")
+        });
     let mut config = nemo_relay::observability::otel_logs::OpenTelemetryLogConfig::new(endpoint)
         .with_transport(parse_otel_transport(options.transport)?)
         .with_service_name(
@@ -334,6 +391,9 @@ fn build_otel_log_config(
         .with_max_export_batch_size(options.max_export_batch_size.unwrap_or(512) as usize)
         .with_scheduled_delay(std::time::Duration::from_millis(
             options.scheduled_delay_millis.unwrap_or(1_000).into(),
+        ))
+        .with_completed_span_context_ttl(std::time::Duration::from_millis(
+            completed_span_context_ttl_millis,
         ));
     if let Some(severity) = options.minimum_severity {
         config = config.with_minimum_severity(severity.into());
@@ -346,6 +406,9 @@ fn build_otel_log_config(
     }
     for (key, value) in parse_string_map(options.headers, "headers")? {
         config = config.with_header(key, value);
+    }
+    for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
+        config = config.with_header_env(key, variable);
     }
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
@@ -394,6 +457,9 @@ fn build_otel_metric_config(
     }
     for (key, value) in parse_string_map(options.headers, "headers")? {
         config = config.with_header(key, value);
+    }
+    for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
+        config = config.with_header_env(key, variable);
     }
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
@@ -5095,6 +5161,9 @@ pub struct OpenTelemetryConfig {
     pub endpoint: String,
     /// Extra exporter headers/metadata as string key/value pairs.
     pub headers: Option<Json>,
+    /// Header names mapped to environment variables resolved during subscriber activation.
+    #[napi(ts_type = "Record<string, string>")]
+    pub header_env: Option<Json>,
     /// Extra OpenTelemetry resource attributes as string key/value pairs.
     pub resource_attributes: Option<Json>,
     /// `service.name` resource attribute. Defaults to `"unknown_service"`.
@@ -5107,6 +5176,8 @@ pub struct OpenTelemetryConfig {
     pub instrumentation_scope: Option<String>,
     /// Export timeout in milliseconds. Defaults to `3000`.
     pub timeout_millis: Option<u32>,
+    /// Completed scope lineage retention in milliseconds as a `bigint`. Defaults to `60000`.
+    pub completed_span_context_ttl_millis: Option<BigInt>,
     /// Mark projection for full and OpenInference exporters. Defaults to `"inherit"`.
     #[napi(ts_type = "\"inherit\" | \"event\" | \"tool\"")]
     pub mark_projection: Option<String>,
@@ -5116,6 +5187,8 @@ pub struct OpenTelemetryConfig {
     pub attribute_mappings: Option<Json>,
     /// Literal Event metadata prefixes copied to top-level OTLP attributes.
     pub promote_metadata_prefixes: Option<Vec<String>>,
+    /// Literal root-scope Event metadata prefixes copied to OTLP resource attributes.
+    pub promote_resource_metadata_prefixes: Option<Vec<String>>,
 }
 
 /// OpenTelemetry-backed event subscriber.
@@ -5153,11 +5226,19 @@ impl OpenTelemetrySubscriber {
     }
 
     /// Force a flush of finished spans through the exporter.
+    ///
+    /// A successful flush updates `runtimeDiagnostics()` with queue drops observed so far.
     #[napi]
     pub fn force_flush(&self) -> napi::Result<()> {
         self.inner
             .force_flush()
             .map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Return bounded runtime diagnostics recorded by this subscriber.
+    #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
+    pub fn runtime_diagnostics(&self) -> Json {
+        otel_runtime_diagnostics_json(self.inner.runtime_diagnostics())
     }
 
     /// Shut down the underlying tracer provider.
@@ -5181,6 +5262,9 @@ pub struct OpenTelemetryLogConfig {
     /// Extra exporter headers/metadata as string key/value pairs.
     #[napi(ts_type = "Record<string, string>")]
     pub headers: Option<Json>,
+    /// Header names mapped to environment variables resolved during subscriber activation.
+    #[napi(ts_type = "Record<string, string>")]
+    pub header_env: Option<Json>,
     /// Extra OpenTelemetry resource attributes as string key/value pairs.
     #[napi(ts_type = "Record<string, string>")]
     pub resource_attributes: Option<Json>,
@@ -5202,6 +5286,8 @@ pub struct OpenTelemetryLogConfig {
     pub max_export_batch_size: Option<u32>,
     /// Maximum delay before a partial batch is exported. Defaults to `1000`.
     pub scheduled_delay_millis: Option<u32>,
+    /// Completed scope lineage retention in milliseconds as a `bigint`. Defaults to `60000`.
+    pub completed_span_context_ttl_millis: Option<BigInt>,
 }
 
 /// Subscriber that exports severity-tagged marks through OTLP logs.
@@ -5239,6 +5325,8 @@ impl OpenTelemetryLogSubscriber {
     }
 
     /// Flush queued Relay events and the OTLP log processor.
+    ///
+    /// A successful flush updates `runtimeDiagnostics()` with queue drops observed so far.
     #[napi]
     pub fn force_flush(&self) -> napi::Result<()> {
         self.inner
@@ -5273,6 +5361,9 @@ pub struct OpenTelemetryMetricConfig {
     /// Extra exporter headers/metadata as string key/value pairs.
     #[napi(ts_type = "Record<string, string>")]
     pub headers: Option<Json>,
+    /// Header names mapped to environment variables resolved during subscriber activation.
+    #[napi(ts_type = "Record<string, string>")]
+    pub header_env: Option<Json>,
     /// Extra OpenTelemetry resource attributes as string key/value pairs.
     #[napi(ts_type = "Record<string, string>")]
     pub resource_attributes: Option<Json>,

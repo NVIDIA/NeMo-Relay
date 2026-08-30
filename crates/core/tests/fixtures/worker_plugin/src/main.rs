@@ -4,8 +4,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use nemo_relay_worker::{
-    ConfigDiagnostic, DiagnosticLevel, EventSanitizeFields, Json, LlmRequest,
-    METRIC_DATA_SCHEMA_NAME, MetricKind, MetricMeasurement, MetricValueType, PendingMarkSpec,
+    ConfigDiagnostic, DiagnosticLevel, EmitMarkOptions, EventCategory, EventSanitizeFields, Json,
+    LlmRequest, METRIC_DATA_SCHEMA_NAME, MetricKind, MetricMeasurement, MetricValueType,
+    PendingMarkSpec,
 };
 use nemo_relay_worker::{
     JsonStream, LlmNext, LlmStreamNext, PluginContext, RuntimeRegistrationKind, ScopeType,
@@ -17,9 +18,6 @@ struct FixtureWorkerPlugin;
 
 impl WorkerPlugin for FixtureWorkerPlugin {
     fn plugin_id(&self) -> &str {
-        if std::env::var("FIXTURE_WORKER_PLUGIN_ID").as_deref() == Ok("other_worker") {
-            return "other_worker";
-        }
         "fixture_worker"
     }
 
@@ -145,8 +143,8 @@ impl WorkerPlugin for FixtureWorkerPlugin {
         ctx.register_conditional_middleware_guardrail(
             "fixture_initial_gate",
             BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
-            "missing-worker-target",
-            "fixture initial gate",
+            "fixture_worker_gate_target",
+            |_, _| async { Ok(Some("fixture initial gate".into())) },
         );
         register_fixture_tool_hooks(
             ctx,
@@ -384,7 +382,13 @@ async fn emit_runtime_events(
     runtime: nemo_relay_worker::PluginRuntime,
 ) -> nemo_relay_worker::Result<()> {
     runtime
-        .emit_mark("fixture.worker.mark", Some(json!("current")), None)
+        .emit_mark_with_options_and_category(
+            "fixture.worker.mark",
+            Some(json!("current")),
+            None,
+            EmitMarkOptions::default(),
+            EventCategory::custom(),
+        )
         .await?;
     let scope = runtime
         .push_scope(

@@ -42,8 +42,26 @@ impl LoggingArgs {
         &self,
         explicit_config: Option<&Path>,
     ) -> Result<LoggingConfig, CliError> {
+        if let Some(config) = self.resolve_explicit()? {
+            return Ok(config);
+        }
+
+        crate::configuration::resolve_logging_config(explicit_config)
+    }
+
+    /// Resolves direct logging settings without consulting Relay configuration files discovered
+    /// from the environment. Commands that repair or remove Relay state use this so malformed
+    /// ambient configuration cannot block the operation.
+    pub(super) fn resolve_without_ambient_config(&self) -> Result<LoggingConfig, CliError> {
+        Ok(self.resolve_explicit()?.unwrap_or_default())
+    }
+
+    /// Resolves only command-line, log-file, and environment logging sources.
+    fn resolve_explicit(&self) -> Result<Option<LoggingConfig>, CliError> {
         if let Some(path) = &self.config_path {
-            return LoggingConfig::from_file_path(path).map_err(logging_config_error);
+            return LoggingConfig::from_file_path(path)
+                .map(Some)
+                .map_err(logging_config_error);
         }
 
         if self.level.is_some() || self.stderr_format.is_some() {
@@ -55,14 +73,10 @@ impl LoggingArgs {
                 config.stderr_format =
                     LogFormat::parse(stderr_format).map_err(logging_config_error)?;
             }
-            return Ok(config);
+            return Ok(Some(config));
         }
 
-        if let Some(config) = LoggingConfig::from_environment().map_err(logging_config_error)? {
-            return Ok(config);
-        }
-
-        crate::configuration::resolve_logging_config(explicit_config)
+        LoggingConfig::from_environment().map_err(logging_config_error)
     }
 }
 

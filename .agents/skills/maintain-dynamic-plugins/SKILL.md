@@ -39,9 +39,11 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
   proof that an artifact was rebuilt. Do not add a legacy raw-result adapter.
 - Relay 0.8 retains the `grpc-v1` identifier and
   `nemo.relay.worker.v1` package while changing the tool-result protobuf types;
-  every worker must regenerate its bindings and rebuild. Native ABI v4 remains
-  unchanged. After this baseline reset, future incompatible native JSON or
-  worker protobuf changes must bump `native_api` or `worker_protocol`.
+  every worker must regenerate its bindings and rebuild. Native ABI v4 permits
+  append-only host-table extensions guarded by `struct_size`; existing fields
+  must remain frozen at their original offsets. Incompatible native JSON,
+  reordered or replaced native fields, or incompatible worker protobuf changes
+  must bump `native_api` or `worker_protocol`.
 - Do not add tests under `src`; Rust tests belong in crate `tests/` trees and
   Python SDK tests belong under `python/tests`.
 - Native and worker plugins are trusted extensions. Document that native plugins

@@ -132,6 +132,16 @@ fn logger_builder_rejects_duplicate_reserved_and_invalid_queue_sinks() {
 }
 
 #[test]
+fn logger_builder_omits_stderr_when_disabled() {
+    let config = LoggingConfig {
+        stderr_enabled: false,
+        ..LoggingConfig::default()
+    };
+    let (logger, _) = build_logger(&config, "root".into()).unwrap();
+    assert!(logger.sinks().is_empty());
+}
+
+#[test]
 fn logger_builder_reports_file_and_rotating_file_open_errors() {
     let temp = tempfile::tempdir().unwrap();
     let blocked_parent = temp.path().join("not-a-directory");

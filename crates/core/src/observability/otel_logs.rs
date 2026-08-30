@@ -4,11 +4,12 @@
 //! OpenTelemetry log export for sanitized Relay mark events.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use chrono::{DateTime, Utc};
 use opentelemetry::logs::{AnyValue, LogRecord as _, Logger as _, LoggerProvider as _, Severity};
 use opentelemetry::trace::{SpanContext, TraceFlags, TraceState};
 use opentelemetry::{InstrumentationScope, Key};
@@ -31,14 +32,14 @@ use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
 
 use super::OpenTelemetryRuntimeDiagnostics;
 use super::otel::{
-    COMPLETED_SPAN_CONTEXT_LIMIT, OpenTelemetryError, OtlpTransport, Result,
+    DEFAULT_COMPLETED_SPAN_CONTEXT_TTL, OpenTelemetryError, OtlpTransport, Result,
     normalize_shutdown_result,
 };
 use super::otel_signal::{
     MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics, build_grpc_metadata,
     build_in_owned_runtime, classify_metric_mark, reject_signal_header_environment,
-    resolve_http_signal_endpoint, should_relog_runtime_diagnostic, signal_resource,
-    validate_signal_headers,
+    resolve_header_env, resolve_http_signal_endpoint, should_relog_runtime_diagnostic,
+    signal_resource, validate_signal_headers,
 };
 
 const DEFAULT_MAX_QUEUE_SIZE: usize = 2_048;
@@ -50,6 +51,7 @@ const DEFAULT_SCHEDULED_DELAY: Duration = Duration::from_secs(1);
 pub struct OpenTelemetryLogConfig {
     endpoint: String,
     headers: HashMap<String, String>,
+    header_env: HashMap<String, String>,
     resource_attributes: HashMap<String, String>,
     service_name: String,
     service_namespace: Option<String>,
@@ -61,6 +63,7 @@ pub struct OpenTelemetryLogConfig {
     max_queue_size: usize,
     max_export_batch_size: usize,
     scheduled_delay: Duration,
+    completed_span_context_ttl: Duration,
     diagnostic_field: Option<String>,
 }
 
@@ -70,6 +73,7 @@ impl OpenTelemetryLogConfig {
         Self {
             endpoint: endpoint.into(),
             headers: HashMap::new(),
+            header_env: HashMap::new(),
             resource_attributes: HashMap::new(),
             service_name: "unknown_service".to_string(),
             service_namespace: None,
@@ -81,6 +85,7 @@ impl OpenTelemetryLogConfig {
             max_queue_size: DEFAULT_MAX_QUEUE_SIZE,
             max_export_batch_size: DEFAULT_MAX_EXPORT_BATCH_SIZE,
             scheduled_delay: DEFAULT_SCHEDULED_DELAY,
+            completed_span_context_ttl: DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
             diagnostic_field: None,
         }
     }
@@ -94,6 +99,12 @@ impl OpenTelemetryLogConfig {
     /// Add an exporter header or gRPC metadata entry.
     pub fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.insert(key.into(), value.into());
+        self
+    }
+
+    /// Map an exporter header name to the environment variable supplying its value.
+    pub fn with_header_env(mut self, key: impl Into<String>, variable: impl Into<String>) -> Self {
+        self.header_env.insert(key.into(), variable.into());
         self
     }
 
@@ -161,6 +172,15 @@ impl OpenTelemetryLogConfig {
         self
     }
 
+    /// Sets how long completed scopes retain log parent context for late marks.
+    ///
+    /// The value must be greater than zero. Subscriber construction fails with
+    /// [`OpenTelemetryError::ExporterBuild`] when the TTL is zero.
+    pub fn with_completed_span_context_ttl(mut self, ttl: Duration) -> Self {
+        self.completed_span_context_ttl = ttl;
+        self
+    }
+
     fn validate(&self) -> Result<()> {
         if self.endpoint.trim().is_empty() {
             return Err(OpenTelemetryError::ExporterBuild(
@@ -186,6 +206,11 @@ impl OpenTelemetryLogConfig {
         if self.scheduled_delay.is_zero() {
             return Err(OpenTelemetryError::ExporterBuild(
                 "scheduled_delay must be greater than 0".to_string(),
+            ));
+        }
+        if self.completed_span_context_ttl.is_zero() {
+            return Err(OpenTelemetryError::ExporterBuild(
+                "completed_span_context_ttl must be greater than 0".to_string(),
             ));
         }
         reject_signal_header_environment("OTEL_EXPORTER_OTLP_LOGS_HEADERS")?;
@@ -230,9 +255,12 @@ impl OpenTelemetryLogSubscriber {
         Self::new_with_runtime_diagnostics(config)
     }
 
-    fn new_with_runtime_diagnostics(config: OpenTelemetryLogConfig) -> Result<Self> {
+    fn new_with_runtime_diagnostics(mut config: OpenTelemetryLogConfig) -> Result<Self> {
         config.validate()?;
+        config.headers = resolve_header_env(&config.headers, &config.header_env)?;
+        validate_signal_headers(&config.headers)?;
         let minimum_severity = config.minimum_severity;
+        let completed_span_context_ttl = config.completed_span_context_ttl;
         let instrumentation_scope = config.instrumentation_scope.clone();
         let runtime_diagnostics = SignalRuntimeDiagnostics::new(config.diagnostic_field.clone());
         let delivery_diagnostics = Arc::new(LogDeliveryDiagnostics::new(
@@ -247,6 +275,7 @@ impl OpenTelemetryLogSubscriber {
         let processor = Arc::new(Mutex::new(LogEventProcessor::new_with_runtime_diagnostics(
             logger,
             minimum_severity,
+            completed_span_context_ttl,
             runtime_diagnostics.clone(),
         )));
         let callback_processor = Arc::clone(&processor);
@@ -302,6 +331,8 @@ impl OpenTelemetryLogSubscriber {
     }
 
     /// Flush queued Relay events and the OTLP log processor.
+    ///
+    /// After a successful flush, runtime diagnostics include queue drops observed so far.
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
         self.inner
@@ -395,7 +426,7 @@ struct LogDeliveryDiagnostics {
     emitted: AtomicU64,
     accepted: AtomicU64,
     export_failures: AtomicU64,
-    queue_reported: AtomicBool,
+    reported_queue_drops: AtomicU64,
     endpoint: String,
     runtime_diagnostics: SignalRuntimeDiagnostics,
 }
@@ -406,7 +437,7 @@ impl LogDeliveryDiagnostics {
             emitted: AtomicU64::new(0),
             accepted: AtomicU64::new(0),
             export_failures: AtomicU64::new(0),
-            queue_reported: AtomicBool::new(false),
+            reported_queue_drops: AtomicU64::new(0),
             endpoint,
             runtime_diagnostics,
         }
@@ -429,15 +460,27 @@ impl LogDeliveryDiagnostics {
             .emitted
             .load(Ordering::Relaxed)
             .saturating_sub(self.accepted.load(Ordering::Relaxed));
-        if dropped > 0 && !self.queue_reported.swap(true, Ordering::Relaxed) {
-            self.runtime_diagnostics.record(
-                "otel.logs_dropped",
-                format!(
-                    "OpenTelemetry dropped {dropped} logs before export to endpoint {} because the batch queue was full",
-                    self.endpoint
-                ),
+        let mut reported = self.reported_queue_drops.load(Ordering::Relaxed);
+        while dropped > reported {
+            match self.reported_queue_drops.compare_exchange_weak(
+                reported,
                 dropped,
-            );
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    self.runtime_diagnostics.record(
+                        "otel.logs_dropped",
+                        format!(
+                            "OpenTelemetry dropped logs before export to endpoint {} because the batch queue was full",
+                            self.endpoint
+                        ),
+                        dropped - reported,
+                    );
+                    break;
+                }
+                Err(current) => reported = current,
+            }
         }
         dropped
     }
@@ -495,7 +538,11 @@ impl LogProcessor for DiagnosticBatchLogProcessor {
     }
 
     fn force_flush(&self) -> OTelSdkResult {
-        self.inner.force_flush()
+        let result = self.inner.force_flush();
+        if result.is_ok() {
+            self.diagnostics.record_queue_drops();
+        }
+        result
     }
 
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
@@ -525,11 +572,15 @@ impl LogProcessor for DiagnosticBatchLogProcessor {
     }
 }
 
+struct CompletedLogContext {
+    closed_at: DateTime<Utc>,
+    span_context: SpanContext,
+}
+
 struct ScopeLineage {
     active: HashMap<Uuid, SpanContext>,
-    completed: HashMap<Uuid, (u64, SpanContext)>,
-    completed_order: VecDeque<(Uuid, u64)>,
-    next_completed_generation: u64,
+    completed: HashMap<Uuid, CompletedLogContext>,
+    completed_expiry_index: BTreeMap<DateTime<Utc>, HashSet<Uuid>>,
 }
 
 impl ScopeLineage {
@@ -537,8 +588,7 @@ impl ScopeLineage {
         Self {
             active: HashMap::new(),
             completed: HashMap::new(),
-            completed_order: VecDeque::new(),
-            next_completed_generation: 0,
+            completed_expiry_index: BTreeMap::new(),
         }
     }
 
@@ -565,20 +615,7 @@ impl ScopeLineage {
         let Some(context) = self.active.remove(&event.uuid()) else {
             return;
         };
-        let generation = self.next_completed_generation;
-        self.next_completed_generation = self.next_completed_generation.wrapping_add(1);
-        self.completed.insert(event.uuid(), (generation, context));
-        self.completed_order.push_back((event.uuid(), generation));
-        while self.completed_order.len() > COMPLETED_SPAN_CONTEXT_LIMIT {
-            if let Some((expired, generation)) = self.completed_order.pop_front()
-                && self
-                    .completed
-                    .get(&expired)
-                    .is_some_and(|(current_generation, _)| *current_generation == generation)
-            {
-                self.completed.remove(&expired);
-            }
-        }
+        self.record_completed(event.uuid(), *event.timestamp(), context);
     }
 
     fn parent_context(&self, event: &Event) -> Option<SpanContext> {
@@ -586,8 +623,8 @@ impl ScopeLineage {
         if let Some(context) = self.active.get(&parent_uuid) {
             return Some(context.clone());
         }
-        if let Some((_, context)) = self.completed.get(&parent_uuid) {
-            return Some(context.clone());
+        if let Some(context) = self.completed.get(&parent_uuid) {
+            return Some(context.span_context.clone());
         }
         let stack = current_scope_stack();
         let stack = stack.read().ok()?;
@@ -603,7 +640,66 @@ impl ScopeLineage {
     }
 
     fn remove_completed(&mut self, uuid: Uuid) {
-        self.completed.remove(&uuid);
+        if let Some(context) = self.completed.remove(&uuid) {
+            self.remove_expiry_index_entry(uuid, context.closed_at);
+        }
+    }
+
+    fn remove_expiry_index_entry(&mut self, uuid: Uuid, closed_at: DateTime<Utc>) {
+        let remove_bucket = self
+            .completed_expiry_index
+            .get_mut(&closed_at)
+            .is_some_and(|uuids| {
+                uuids.remove(&uuid);
+                uuids.is_empty()
+            });
+        if remove_bucket {
+            self.completed_expiry_index.remove(&closed_at);
+        }
+    }
+
+    fn record_completed(
+        &mut self,
+        uuid: Uuid,
+        closed_at: DateTime<Utc>,
+        span_context: SpanContext,
+    ) {
+        self.remove_completed(uuid);
+        self.completed.insert(
+            uuid,
+            CompletedLogContext {
+                closed_at,
+                span_context,
+            },
+        );
+        self.completed_expiry_index
+            .entry(closed_at)
+            .or_default()
+            .insert(uuid);
+    }
+
+    fn expire_completed(&mut self, timestamp: DateTime<Utc>, ttl: Duration) -> u64 {
+        let mut expired_count = 0;
+        while let Some((closed_at, _)) = self.completed_expiry_index.first_key_value() {
+            let closed_at = *closed_at;
+            if !timestamp
+                .signed_duration_since(closed_at)
+                .to_std()
+                .is_ok_and(|age| age > ttl)
+            {
+                break;
+            }
+            let uuids = self
+                .completed_expiry_index
+                .remove(&closed_at)
+                .expect("completed log expiry bucket exists");
+            for uuid in uuids {
+                if self.completed.remove(&uuid).is_some() {
+                    expired_count += 1;
+                }
+            }
+        }
+        expired_count
     }
 }
 
@@ -613,8 +709,8 @@ struct LogEventProcessor {
     lineage: ScopeLineage,
     invalid_severity_count: u64,
     invalid_metric_count: u64,
-    active_lineage_high_water_reported: bool,
     runtime_diagnostics: SignalRuntimeDiagnostics,
+    completed_span_context_ttl: Duration,
 }
 
 impl LogEventProcessor {
@@ -627,6 +723,7 @@ impl LogEventProcessor {
         Self::new_with_runtime_diagnostics(
             logger,
             minimum_severity,
+            DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
             SignalRuntimeDiagnostics::new(diagnostic_field),
         )
     }
@@ -634,6 +731,7 @@ impl LogEventProcessor {
     fn new_with_runtime_diagnostics(
         logger: SdkLogger,
         minimum_severity: LogSeverity,
+        completed_span_context_ttl: Duration,
         runtime_diagnostics: SignalRuntimeDiagnostics,
     ) -> Self {
         Self {
@@ -642,43 +740,37 @@ impl LogEventProcessor {
             lineage: ScopeLineage::new(),
             invalid_severity_count: 0,
             invalid_metric_count: 0,
-            active_lineage_high_water_reported: false,
             runtime_diagnostics,
+            completed_span_context_ttl,
         }
     }
 
     fn process(&mut self, event: &Event) {
+        let expired_count = self
+            .lineage
+            .expire_completed(*event.timestamp(), self.completed_span_context_ttl);
+        if expired_count > 0 {
+            let count = self.runtime_diagnostics.record(
+                "otel.completed_log_context_expired",
+                format!("OpenTelemetry expired {expired_count} completed log contexts"),
+                expired_count,
+            );
+            if should_relog_runtime_diagnostic(count) {
+                log::warn!(
+                    target: "nemo_relay.observability",
+                    event = "otel_completed_log_context_expired",
+                    expired_count;
+                    "OpenTelemetry expired completed log contexts"
+                );
+            }
+        }
         match event.scope_category() {
             Some(crate::api::event::ScopeCategory::Start) => {
                 self.lineage.process_start(event);
-                self.report_active_lineage_high_water();
             }
             Some(crate::api::event::ScopeCategory::End) => self.lineage.process_end(event),
             None => self.process_mark(event),
         }
-    }
-
-    fn report_active_lineage_high_water(&mut self) {
-        let active_scope_count = self.lineage.active.len();
-        if active_scope_count <= COMPLETED_SPAN_CONTEXT_LIMIT
-            || self.active_lineage_high_water_reported
-        {
-            return;
-        }
-        self.active_lineage_high_water_reported = true;
-        log::warn!(
-            target: "nemo_relay.observability",
-            event = "otel_log_active_scope_high_water",
-            active_scope_count;
-            "OpenTelemetry log lineage retained more than {COMPLETED_SPAN_CONTEXT_LIMIT} active scopes to preserve trace context"
-        );
-        self.runtime_diagnostics.record(
-            "otel.log_active_scope_high_water",
-            format!(
-                "OpenTelemetry log lineage retained {active_scope_count} active scopes to preserve trace context"
-            ),
-            active_scope_count as u64,
-        );
     }
 
     fn process_mark(&mut self, event: &Event) {

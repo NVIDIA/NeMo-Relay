@@ -35,6 +35,7 @@ pub(super) async fn close_sessions_for_shutdown(
 
 pub(super) async fn close_idle_sessions_from_parts(
     inner: &Arc<Mutex<HashMap<String, Session>>>,
+    authenticated_owners: &Arc<Mutex<HashMap<String, String>>>,
     alignment: &Arc<Mutex<SessionAlignmentState>>,
     now: Instant,
     timeout: Duration,
@@ -44,12 +45,40 @@ pub(super) async fn close_idle_sessions_from_parts(
     if idle_sessions.is_empty() {
         return Ok(0);
     }
+    let idle_session_ids = idle_sessions
+        .iter()
+        .map(|(session_id, _)| session_id.clone())
+        .collect::<HashSet<_>>();
     let (closed_turns, closed_subagents, retained_sessions, first_error) =
         close_idle_turns(idle_sessions, reason).await;
+    let retained_session_ids = retained_sessions
+        .iter()
+        .map(|(session_id, _)| session_id.clone())
+        .collect::<HashSet<_>>();
+    let released_owner_ids = idle_session_ids
+        .difference(&retained_session_ids)
+        .cloned()
+        .collect::<HashSet<_>>();
     let cleanup_sessions =
         restore_retained_sessions(inner, retained_sessions, &closed_subagents).await;
     clear_closed_subagents(alignment, closed_subagents, &cleanup_sessions).await;
+    release_closed_owner_ids(inner, authenticated_owners, &released_owner_ids).await;
     first_error.map_or(Ok(closed_turns), Err)
+}
+
+pub(super) async fn release_closed_owner_ids(
+    inner: &Arc<Mutex<HashMap<String, Session>>>,
+    authenticated_owners: &Arc<Mutex<HashMap<String, String>>>,
+    released_owner_ids: &HashSet<String>,
+) {
+    if released_owner_ids.is_empty() {
+        return;
+    }
+    let mut owners = authenticated_owners.lock().await;
+    let sessions = inner.lock().await;
+    owners.retain(|session_id, _| {
+        !released_owner_ids.contains(session_id) || sessions.contains_key(session_id)
+    });
 }
 
 async fn take_idle_sessions(

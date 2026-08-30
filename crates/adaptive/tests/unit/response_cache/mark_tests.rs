@@ -62,6 +62,7 @@ fn cache_mark_labels_have_stable_telemetry_values() {
         black_box(CacheReason::UnparseableBody).as_str(),
         "unparseable_body"
     );
+    assert_eq!(black_box(CacheReason::Uncacheable).as_str(), "uncacheable");
     assert_eq!(
         black_box(CacheReason::UnrepresentableNumber).as_str(),
         "unrepresentable_number"

@@ -20,6 +20,345 @@ use super::*;
 use crate::events::{LlmHintEvent, SessionEvent, ToolEvent};
 use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
 
+#[tokio::test]
+async fn authenticated_hook_clients_cannot_take_over_existing_sessions() {
+    let manager = SessionManager::new(session_test_config());
+    let event = || NormalizedEvent::AgentStarted(session_event("owned-session", "SessionStart"));
+    manager
+        .apply_authenticated_events(&HeaderMap::new(), vec![event()], "client-a")
+        .await
+        .unwrap();
+    manager
+        .apply_authenticated_events(&HeaderMap::new(), vec![event()], "client-a")
+        .await
+        .unwrap();
+    let error = manager
+        .apply_authenticated_events(&HeaderMap::new(), vec![event()], "client-b")
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CliError::Unauthorized(_)));
+}
+
+#[tokio::test]
+async fn rejected_authenticated_batch_does_not_claim_new_sessions() {
+    let manager = SessionManager::new(session_test_config());
+    let event =
+        |session_id| NormalizedEvent::AgentStarted(session_event(session_id, "SessionStart"));
+    manager
+        .apply_authenticated_events(&HeaderMap::new(), vec![event("owned-session")], "client-a")
+        .await
+        .unwrap();
+
+    let error = manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![event("new-session"), event("owned-session")],
+            "client-b",
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CliError::Unauthorized(_)));
+
+    manager
+        .apply_authenticated_events(&HeaderMap::new(), vec![event("new-session")], "client-a")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn ended_authenticated_sessions_can_be_reused_by_another_client() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("reused-session", "SessionStart")),
+                NormalizedEvent::AgentEnded(session_event("reused-session", "SessionEnd")),
+            ],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "reused-session",
+                "SessionStart",
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn authenticated_child_cannot_promote_into_another_clients_parent() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(codex_session_event(
+                "parent-thread",
+                "SessionStart",
+                json!({}),
+            ))],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    let error = manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: "child-thread".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SessionStart".into(),
+                payload: json!({
+                    "source": {"subagent": {"thread_spawn": {"parent_thread_id": "parent-thread"}}}
+                }),
+                metadata: json!({}),
+            })],
+            "client-b",
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, CliError::Unauthorized(_)));
+    assert!(!has_alignment_alias(&manager, "child-thread").await);
+    assert!(
+        !manager
+            .inner
+            .lock()
+            .await
+            .get("parent-thread")
+            .unwrap()
+            .subagents
+            .contains_key("child-thread")
+    );
+}
+
+#[tokio::test]
+async fn foreign_pending_child_is_discarded_when_its_parent_starts() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: "child-thread".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SessionStart".into(),
+                payload: json!({
+                    "source": {"subagent": {"thread_spawn": {"parent_thread_id": "parent-thread"}}}
+                }),
+                metadata: json!({}),
+            })],
+            "client-a",
+        )
+        .await
+        .unwrap();
+    assert!(has_pending_alignment(&manager, "child-thread").await);
+
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(codex_session_event(
+                "parent-thread",
+                "SessionStart",
+                json!({}),
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap();
+
+    assert!(!has_pending_alignment(&manager, "child-thread").await);
+    assert!(!has_alignment_alias(&manager, "child-thread").await);
+    assert!(
+        !manager
+            .inner
+            .lock()
+            .await
+            .get("parent-thread")
+            .unwrap()
+            .subagents
+            .contains_key("child-thread")
+    );
+}
+
+#[tokio::test]
+async fn authenticated_alias_rejects_events_from_a_different_client() {
+    let manager = SessionManager::new(session_test_config());
+    let child = || {
+        NormalizedEvent::AgentStarted(SessionEvent {
+            session_id: "child-thread".into(),
+            agent_kind: AgentKind::Codex,
+            event_name: "SessionStart".into(),
+            payload: json!({
+                "source": {"subagent": {"thread_spawn": {"parent_thread_id": "parent-thread"}}}
+            }),
+            metadata: json!({}),
+        })
+    };
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(codex_session_event(
+                    "parent-thread",
+                    "SessionStart",
+                    json!({}),
+                )),
+                child(),
+            ],
+            "client-a",
+        )
+        .await
+        .unwrap();
+    assert!(has_alignment_alias(&manager, "child-thread").await);
+
+    let error = manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentEnded(codex_session_event(
+                "child-thread",
+                "SessionEnd",
+                json!({}),
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CliError::Unauthorized(_)));
+    assert!(has_alignment_alias(&manager, "child-thread").await);
+}
+
+#[tokio::test]
+async fn pending_child_gateway_promotion_claims_its_authenticated_parent() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: "child-thread".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SessionStart".into(),
+                payload: json!({
+                    "source": {"subagent": {"thread_spawn": {"parent_thread_id": "parent-thread"}}}
+                }),
+                metadata: json!({}),
+            })],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    let active = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("child-thread".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(active.session_id, "parent-thread");
+    assert_eq!(
+        manager
+            .authenticated_owners
+            .lock()
+            .await
+            .get("parent-thread"),
+        Some(&"client-a".to_string())
+    );
+    manager.end_llm(active, json!({}), json!({})).await.unwrap();
+}
+
+#[tokio::test]
+async fn permission_requests_require_an_exact_recorded_tool_call() {
+    let manager = SessionManager::new(session_test_config());
+    let mut session = Session::new(
+        "permission-session".into(),
+        AgentKind::ClaudeCode,
+        SessionConfig::default(),
+    );
+    session.pending_tool_hints.push(PendingToolHint {
+        hint: ToolHint {
+            tool_call_id: Some("call-1".into()),
+            tool_name: Some("Read".into()),
+            subagent_id: None,
+            arguments: json!({"path": "README.md"}),
+            source: "test".into(),
+        },
+        inserted_at: Instant::now(),
+    });
+    manager
+        .inner
+        .lock()
+        .await
+        .insert("permission-session".into(), session);
+
+    let request = ToolEvent {
+        session_id: "permission-session".into(),
+        agent_kind: AgentKind::ClaudeCode,
+        event_name: "PermissionRequest".into(),
+        tool_call_id: "call-1".into(),
+        tool_name: "Read".into(),
+        subagent_id: None,
+        arguments: json!({"path": "README.md"}),
+        result: Value::Null,
+        status: None,
+        payload: json!({}),
+        metadata: json!({}),
+    };
+    manager
+        .authenticated_owners
+        .lock()
+        .await
+        .insert("permission-session".into(), "client-a".into());
+    manager
+        .authorize_tool_permission(&request, "client-a")
+        .await
+        .unwrap();
+
+    assert!(
+        manager
+            .authorize_tool_permission(&request, "client-b")
+            .await
+            .is_err()
+    );
+
+    let mut changed = request.clone();
+    changed.arguments = json!({"path": "secrets.txt"});
+    assert!(
+        manager
+            .authorize_tool_permission(&changed, "client-a")
+            .await
+            .is_err()
+    );
+
+    let mut changed = request.clone();
+    changed.tool_call_id = "call-2".into();
+    assert!(
+        manager
+            .authorize_tool_permission(&changed, "client-a")
+            .await
+            .is_err()
+    );
+
+    let mut changed = request;
+    changed.tool_name = "Write".into();
+    assert!(
+        manager
+            .authorize_tool_permission(&changed, "client-a")
+            .await
+            .is_err()
+    );
+}
+
 #[test]
 fn routing_identity_enrichment_replaces_untrusted_reserved_headers() {
     let mut request = LlmRequest {

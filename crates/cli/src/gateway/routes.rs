@@ -9,6 +9,7 @@ use super::*;
 pub(super) enum ProviderRoute {
     OpenAiResponses,
     OpenAiChatCompletions,
+    OpenAiImagesGenerations,
     OpenAiModels,
     AnthropicMessages,
     AnthropicCountTokens,
@@ -54,6 +55,7 @@ impl ProviderRoute {
             "/v1/responses" => Some(Self::OpenAiResponses),
             "/chat/completions" => Some(Self::OpenAiChatCompletions),
             "/v1/chat/completions" => Some(Self::OpenAiChatCompletions),
+            "/v1/images/generations" => Some(Self::OpenAiImagesGenerations),
             "/models" => Some(Self::OpenAiModels),
             "/v1/models" => Some(Self::OpenAiModels),
             "/v1/messages" => Some(Self::AnthropicMessages),
@@ -71,6 +73,9 @@ impl ProviderRoute {
             "openai_responses" | "openai.responses" | "/v1/responses" => {
                 Some(Self::OpenAiResponses)
             }
+            "openai_images_generations"
+            | "openai.images.generations"
+            | "/v1/images/generations" => Some(Self::OpenAiImagesGenerations),
             "openai_models" | "openai.models" | "/models" | "/v1/models" => {
                 Some(Self::OpenAiModels)
             }
@@ -89,7 +94,7 @@ impl ProviderRoute {
             Self::OpenAiResponses => Some(ProviderSurface::OpenAIResponses),
             Self::OpenAiChatCompletions => Some(ProviderSurface::OpenAIChat),
             Self::AnthropicMessages => Some(ProviderSurface::AnthropicMessages),
-            Self::AnthropicCountTokens | Self::OpenAiModels => None,
+            Self::AnthropicCountTokens | Self::OpenAiImagesGenerations | Self::OpenAiModels => None,
         }
     }
 
@@ -109,9 +114,10 @@ impl ProviderRoute {
         path_and_query: &str,
     ) -> String {
         let base = match self {
-            Self::OpenAiResponses | Self::OpenAiChatCompletions | Self::OpenAiModels => {
-                config.openai_base_url.as_str()
-            }
+            Self::OpenAiResponses
+            | Self::OpenAiChatCompletions
+            | Self::OpenAiImagesGenerations
+            | Self::OpenAiModels => config.openai_base_url.as_str(),
             Self::AnthropicMessages | Self::AnthropicCountTokens => {
                 config.anthropic_base_url.as_str()
             }
@@ -135,9 +141,10 @@ impl ProviderRoute {
     pub(super) fn upstream_url_with_base(self, base: &str, path_and_query: &str) -> String {
         let base = base.trim_end_matches('/');
         let path_and_query = match self {
-            Self::OpenAiResponses | Self::OpenAiChatCompletions | Self::OpenAiModels => {
-                normalize_openai_path_for_base(base, path_and_query)
-            }
+            Self::OpenAiResponses
+            | Self::OpenAiChatCompletions
+            | Self::OpenAiImagesGenerations
+            | Self::OpenAiModels => normalize_openai_path_for_base(base, path_and_query),
             _ => path_and_query.to_string(),
         };
         format!("{base}{path_and_query}")
@@ -150,6 +157,7 @@ impl ProviderRoute {
         match self {
             Self::OpenAiResponses => GatewayRouteKind::OpenAiResponses,
             Self::OpenAiChatCompletions => GatewayRouteKind::OpenAiChatCompletions,
+            Self::OpenAiImagesGenerations => GatewayRouteKind::OpenAiImagesGenerations,
             Self::OpenAiModels => GatewayRouteKind::OpenAiModels,
             Self::AnthropicMessages => GatewayRouteKind::AnthropicMessages,
             Self::AnthropicCountTokens => GatewayRouteKind::AnthropicCountTokens,
@@ -165,6 +173,7 @@ fn configured_auth_header<'a>(
     match route {
         ProviderRoute::OpenAiResponses
         | ProviderRoute::OpenAiChatCompletions
+        | ProviderRoute::OpenAiImagesGenerations
         | ProviderRoute::OpenAiModels => openai_auth_header,
         ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => {
             anthropic_auth_header
@@ -264,6 +273,7 @@ fn has_openai_replacement_auth(
             route,
             ProviderRoute::OpenAiResponses
                 | ProviderRoute::OpenAiChatCompletions
+                | ProviderRoute::OpenAiImagesGenerations
                 | ProviderRoute::OpenAiModels
         )
         && (configured_auth_header.is_some() || env_var_is_nonempty("OPENAI_API_KEY"))

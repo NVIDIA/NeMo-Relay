@@ -60,7 +60,7 @@ fn execute_plugin_doctor(
 ) -> Result<ExitCode, CliError> {
     let candidates = plugin.agents();
     let agents = if plugin.is_all() {
-        crate::agents::installed_integrations(&candidates, install_dir.as_deref())
+        crate::agents::installed_integrations(&candidates, install_dir.as_deref(), false)
     } else {
         candidates
     };

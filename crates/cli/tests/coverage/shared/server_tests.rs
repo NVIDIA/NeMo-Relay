@@ -28,7 +28,7 @@ use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, regi
 use nemo_relay::plugin::dynamic::DynamicPluginKind;
 use nemo_relay::plugin::{
     ConfigDiagnostic, Plugin, PluginRegistration, PluginRegistrationContext, deregister_plugin,
-    register_plugin,
+    ensure_builtin_plugins_registered, register_plugin,
 };
 use serde_json::{Map, Value, json};
 use tokio::net::TcpListener;
@@ -144,11 +144,49 @@ impl Drop for RequestInterceptCleanup {
     }
 }
 
+struct PluginKindCleanup(&'static str);
+
+impl Drop for PluginKindCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_plugin(self.0);
+    }
+}
+
 fn test_http_client() -> reqwest::Client {
-    reqwest::Client::new()
+    let key = BootstrapChallengeKey::load().expect("test hook credential should load");
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+        reqwest::header::HeaderValue::from_str(&key.client_token())
+            .expect("test hook credential should be a valid header"),
+    );
+    reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .expect("test HTTP client should build")
 }
 
 struct GenericTestPlugin;
+
+struct PreclaimedBuiltinPlugin;
+
+impl Plugin for PreclaimedBuiltinPlugin {
+    fn plugin_kind(&self) -> &str {
+        "observability"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Value>) -> Vec<ConfigDiagnostic> {
+        vec![]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Value>,
+        _ctx: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = nemo_relay::plugin::Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
 
 impl Plugin for GenericTestPlugin {
     fn plugin_kind(&self) -> &str {
@@ -524,6 +562,15 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
             .allow_environment_provider_auth
     );
 
+    let explicit_daemon =
+        AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), false, None, None);
+    assert!(
+        explicit_daemon
+            .authorize_provider_request(&mut HeaderMap::new())
+            .unwrap()
+            .allow_environment_provider_auth
+    );
+
     let transparent = AppState::new_with_bootstrap(
         test_config(),
         Some("transparent-fingerprint".into()),
@@ -550,6 +597,41 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
         !transparent_headers
             .contains_key(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER)
     );
+}
+
+#[tokio::test]
+async fn explicit_daemon_hook_authentication_is_internal_and_rejects_bad_tokens() {
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let state =
+        AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), true, None, None);
+    assert!(state.authorize_hook_request(&mut HeaderMap::new()).is_err());
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+        HeaderValue::from_str(&key.client_token()).unwrap(),
+    );
+    let hook_client_token = key.hook_client_token("test-hook-installation");
+    let expected_hook_owner = key.verify_hook_client_token(&hook_client_token).unwrap();
+    headers.insert(
+        crate::configuration::HOOK_CLIENT_TOKEN_HEADER,
+        HeaderValue::from_str(&hook_client_token).unwrap(),
+    );
+    let owner = state.authorize_hook_request(&mut headers).unwrap();
+    assert_eq!(owner, expected_hook_owner);
+    assert!(!headers.contains_key(crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER));
+    assert!(!headers.contains_key(crate::configuration::HOOK_CLIENT_TOKEN_HEADER));
+
+    let mut browser_headers = HeaderMap::new();
+    browser_headers.insert(
+        header::ORIGIN,
+        HeaderValue::from_static("https://example.test"),
+    );
+    browser_headers.insert(
+        crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+        HeaderValue::from_str(&key.client_token()).unwrap(),
+    );
+    assert!(state.authorize_hook_request(&mut browser_headers).is_err());
 }
 
 #[tokio::test]
@@ -1956,6 +2038,40 @@ async fn plugin_activation_covers_empty_invalid_and_missing_manifest_paths() {
 }
 
 #[tokio::test]
+async fn dynamic_cli_activation_initializes_builtins_before_loading_dynamic_plugins() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+    ensure_builtin_plugins_registered().expect("builtin registration must be available");
+    assert!(deregister_plugin("observability"));
+    register_plugin(Arc::new(PreclaimedBuiltinPlugin))
+        .expect("fixture must claim the builtin kind");
+
+    let error = match PluginActivation::initialize(
+        None,
+        vec![dynamic_component_without_manifest(
+            "fixture.missing",
+            DynamicPluginKind::RustDynamic,
+        )],
+    )
+    .await
+    {
+        Ok(_) => panic!("builtin ownership conflict must stop dynamic loading"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(
+        error.contains("built-in plugin initialization failed"),
+        "{error}"
+    );
+    assert!(
+        error.contains("reserved builtin plugin 'observability'"),
+        "{error}"
+    );
+    assert!(deregister_plugin("observability"));
+    ensure_builtin_plugins_registered().expect("builtin registration must recover");
+}
+
+#[tokio::test]
 async fn shutdown_future_helpers_cover_receiver_combinations() {
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let shutdown = server_shutdown_future(Some(ShutdownMode::Receiver(shutdown_rx)), None).unwrap();
@@ -2088,18 +2204,32 @@ async fn serve_listener_rejects_invalid_plugin_config() {
 }
 
 #[tokio::test]
-async fn serve_listener_with_dynamic_reports_native_load_errors() {
+async fn serve_listener_activates_static_plugins_before_dynamic_load_and_cleans_failure() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
+    let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
+    GENERIC_TEST_PLUGIN_REGISTRATIONS.store(0, Ordering::SeqCst);
+    GENERIC_TEST_PLUGIN_DEREGISTRATIONS.store(0, Ordering::SeqCst);
+    register_plugin(Arc::new(GenericTestPlugin)).unwrap();
+    let _plugin_cleanup = PluginKindCleanup(GENERIC_TEST_PLUGIN_KIND);
 
     let temp = tempfile::tempdir().unwrap();
     let manifest_ref = write_missing_native_plugin_manifest(temp.path(), "cli.missing-native");
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [{
+            "kind": GENERIC_TEST_PLUGIN_KIND,
+            "enabled": true,
+            "config": {}
+        }]
+    }));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     drop(shutdown_tx);
     let error = serve_listener_with_dynamic(
         listener,
-        test_config(),
+        config,
         vec![ActiveDynamicPluginComponent {
             plugin_id: "cli.missing-native".into(),
             kind: DynamicPluginKind::RustDynamic,
@@ -2117,7 +2247,13 @@ async fn serve_listener_with_dynamic_reports_native_load_errors() {
     let error = error.to_string();
     assert!(error.contains("native plugin load failed"), "{error}");
     assert!(error.contains("does not exist"), "{error}");
+    assert_eq!(GENERIC_TEST_PLUGIN_REGISTRATIONS.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        GENERIC_TEST_PLUGIN_DEREGISTRATIONS.load(Ordering::SeqCst),
+        1
+    );
     assert!(nemo_relay::plugin::active_plugin_report().is_none());
+    assert!(deregister_plugin(GENERIC_TEST_PLUGIN_KIND));
 }
 
 #[tokio::test]
@@ -2201,6 +2337,124 @@ async fn claude_code_hook_returns_continue_shape() {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["continue"], json!(true));
+}
+
+#[tokio::test]
+async fn claude_permission_request_allows_an_exact_active_tool() {
+    let app = router(test_config());
+    let pre_tool = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/claude-code")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "claude-permission",
+                        "hook_event_name": "PreToolUse",
+                        "tool_use_id": "tool-1",
+                        "tool_name": "Read",
+                        "tool_input": {"file_path": "README.md"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pre_tool.status(), StatusCode::OK);
+    let bytes = pre_tool.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body, json!({"continue": true}));
+
+    let permission = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/claude-code")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "claude-permission",
+                        "hook_event_name": "PermissionRequest",
+                        "tool_name": "Read",
+                        "tool_input": {"file_path": "README.md"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(permission.status(), StatusCode::OK);
+    let bytes = permission.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body["hookSpecificOutput"]["hookEventName"],
+        json!("PermissionRequest")
+    );
+    assert_eq!(
+        body["hookSpecificOutput"]["decision"]["behavior"],
+        json!("allow")
+    );
+
+    let second_pre_tool = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/claude-code")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "claude-permission",
+                        "hook_event_name": "PreToolUse",
+                        "tool_use_id": "tool-2",
+                        "tool_name": "Read",
+                        "tool_input": {"file_path": "README.md"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_pre_tool.status(), StatusCode::OK);
+
+    let ambiguous = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/claude-code")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "claude-permission",
+                        "hook_event_name": "PermissionRequest",
+                        "tool_name": "Read",
+                        "tool_input": {"file_path": "README.md"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ambiguous.status(), StatusCode::OK);
+    let bytes = ambiguous.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body["hookSpecificOutput"]["decision"]["behavior"],
+        json!("deny")
+    );
+    assert!(
+        body["hookSpecificOutput"]["decision"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not match")
+    );
 }
 
 #[tokio::test]
@@ -2496,6 +2750,42 @@ async fn gateway_forwards_openai_json_without_rewriting_payload() {
     assert_eq!(body["model"], json!("gpt-test"));
     assert_eq!(body["authorization"], json!("Bearer test"));
     assert_eq!(body["connection"], Value::Null);
+}
+
+#[tokio::test]
+async fn gateway_transparently_forwards_openai_image_generations() {
+    let upstream = spawn_upstream(false).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/images/generations?output_format=png")
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer image-test")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-image-1",
+                        "prompt": "a tiny relay robot"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["model"], json!("gpt-image-1"));
+    assert_eq!(body["prompt"], json!("a tiny relay robot"));
+    assert_eq!(
+        body["path"],
+        json!("/v1/images/generations?output_format=png")
+    );
+    assert_eq!(body["authorization"], json!("Bearer image-test"));
 }
 
 #[tokio::test]
@@ -3513,11 +3803,13 @@ async fn wait_for_gateway(url: &str) {
 }
 
 async fn spawn_upstream(streaming: bool) -> TestServer {
-    async fn chat(headers: HeaderMap, body: Bytes) -> impl IntoResponse {
+    async fn chat(uri: axum::http::Uri, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
         let payload: Value = serde_json::from_slice(&body).unwrap();
         Json(json!({
+            "path": uri.path_and_query().map(|value| value.as_str()),
             "model": payload["model"],
             "input": payload["input"],
+            "prompt": payload["prompt"],
             "authorization": headers
                 .get(header::AUTHORIZATION)
                 .and_then(|value| value.to_str().ok()),
@@ -3556,6 +3848,7 @@ async fn spawn_upstream(streaming: bool) -> TestServer {
     } else {
         Router::new()
             .route("/v1/chat/completions", post(chat))
+            .route("/v1/images/generations", post(chat))
             .route("/v1/responses", post(chat))
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

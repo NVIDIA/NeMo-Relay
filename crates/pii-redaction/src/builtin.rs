@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use regex::Regex;
@@ -9,7 +10,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 
-use nemo_relay::api::event::{CategoryProfile, Event, ScopeCategory};
+use nemo_relay::api::event::{CategoryProfile, Event, MetricEnvelope, ScopeCategory};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::{
     BuiltinLlmCodec, EventSanitizeFn, LlmCodecIdentity, LlmSanitizeRequestFn,
@@ -23,17 +24,145 @@ use nemo_relay::codec::resolve::{
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::plugin::{PluginError, Result as PluginResult};
 
-use super::component::BuiltinBackendConfig;
+use super::component::{BuiltinBackendConfig, validate_metric_string_attribute_allowlist};
 use super::detectors::BuiltinDetector;
 use super::overlay::BuiltinCodecName;
-use super::trajectory::{CustomMarkPayloadPolicy, TrajectorySanitizer};
+use super::trajectory::{CustomMarkPayloadPolicy, TrajectorySanitizer, is_relay_metric_mark};
 
 #[derive(Clone)]
 pub(super) struct CompiledBuiltinBackend {
     action: BuiltinAction,
-    target_paths: Arc<Vec<String>>,
+    target_path_matcher: Arc<TargetPathMatcher>,
     legacy_surface: Option<ProviderSurface>,
     trajectory: Option<TrajectorySanitizer>,
+}
+
+/// Compiled exact-pointer and single-segment glob selectors.
+#[derive(Clone)]
+struct TargetPathMatcher {
+    selectors: Vec<TargetPathSelector>,
+}
+
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
+enum TargetPathSelector {
+    Exact(Vec<String>),
+    Glob(Vec<TargetPathSegment>),
+}
+
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
+enum TargetPathSegment {
+    Exact(String),
+    Any,
+}
+
+impl TargetPathMatcher {
+    fn new(target_paths: &[String], target_path_globs: &[String]) -> Option<Self> {
+        let exact = target_paths
+            .iter()
+            .map(|path| json_pointer_segments(path).map(TargetPathSelector::Exact))
+            .collect::<Option<Vec<_>>>()?;
+        let globs = target_path_globs
+            .iter()
+            .map(|path| {
+                json_pointer_segments(path).map(|segments| {
+                    if segments.iter().all(|segment| segment != "*") {
+                        TargetPathSelector::Exact(segments)
+                    } else {
+                        TargetPathSelector::Glob(
+                            segments
+                                .into_iter()
+                                .map(|segment| {
+                                    if segment == "*" {
+                                        TargetPathSegment::Any
+                                    } else {
+                                        TargetPathSegment::Exact(segment)
+                                    }
+                                })
+                                .collect(),
+                        )
+                    }
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let mut seen = BTreeSet::new();
+        Some(Self {
+            selectors: exact
+                .into_iter()
+                .chain(globs)
+                .filter(|selector| seen.insert(selector.clone()))
+                .collect(),
+        })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.selectors.is_empty()
+    }
+
+    fn matches(&self, path_segments: &[String]) -> bool {
+        self.selectors.iter().any(|selector| match selector {
+            TargetPathSelector::Exact(segments) => segments == path_segments,
+            TargetPathSelector::Glob(segments) => {
+                segments.len() == path_segments.len()
+                    && segments.iter().zip(path_segments).all(|(selector, segment)| {
+                        matches!(selector, TargetPathSegment::Any)
+                            || matches!(selector, TargetPathSegment::Exact(value) if value == segment)
+                    })
+            }
+        })
+    }
+
+    fn matching_json_pointer_paths(&self, value: &Json) -> Vec<Vec<String>> {
+        let mut paths = BTreeSet::new();
+        self.collect_matching_paths(value, &mut Vec::new(), &mut paths);
+        paths.into_iter().collect()
+    }
+
+    fn collect_matching_paths(
+        &self,
+        value: &Json,
+        path_segments: &mut Vec<String>,
+        paths: &mut BTreeSet<Vec<String>>,
+    ) {
+        if self.matches(path_segments) {
+            paths.insert(path_segments.clone());
+        }
+        match value {
+            Json::Array(values) => {
+                for (index, value) in values.iter().enumerate() {
+                    path_segments.push(index.to_string());
+                    self.collect_matching_paths(value, path_segments, paths);
+                    path_segments.pop();
+                }
+            }
+            Json::Object(values) => {
+                for (key, value) in values {
+                    path_segments.push(key.clone());
+                    self.collect_matching_paths(value, path_segments, paths);
+                    path_segments.pop();
+                }
+            }
+            Json::Null | Json::Bool(_) | Json::Number(_) | Json::String(_) => {}
+        }
+    }
+
+    fn may_select_single_projected_response(&self) -> bool {
+        self.selectors.iter().any(|selector| {
+            let first = match selector {
+                TargetPathSelector::Exact(segments) => segments
+                    .first()
+                    .map(|segment| TargetPathSegment::Exact(segment.clone())),
+                TargetPathSelector::Glob(segments) => segments.first().cloned(),
+            };
+            match first {
+                Some(TargetPathSegment::Any) => true,
+                Some(TargetPathSegment::Exact(segment)) => matches!(
+                    segment.as_str(),
+                    "message" | "tool_calls" | "finish_reason" | "api_specific"
+                ),
+                None => false,
+            }
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -81,11 +210,23 @@ impl CompiledBuiltinBackend {
                 )));
             }
         }
+        for (index, target_path_glob) in config.target_path_globs.iter().enumerate() {
+            if !is_valid_json_pointer(target_path_glob) {
+                return Err(PluginError::InvalidConfig(format!(
+                    "builtin.target_path_globs[{index}] must be a valid RFC 6901 JSON pointer"
+                )));
+            }
+        }
         let trajectory = match config.preset.as_deref() {
             Some("trajectory_context") => {
+                validate_metric_string_attribute_allowlist(
+                    &config.metric_string_attribute_allowlist,
+                )
+                .map_err(PluginError::InvalidConfig)?;
                 if config.detector.is_some()
                     || config.pattern.is_some()
                     || !config.target_paths.is_empty()
+                    || !config.target_path_globs.is_empty()
                     || config.mask_char.is_some()
                     || config.unmasked_prefix.is_some()
                     || config.unmasked_suffix.is_some()
@@ -108,12 +249,19 @@ impl CompiledBuiltinBackend {
                         .clone()
                         .unwrap_or_else(|| "[REDACTED]".to_string()),
                     policy,
+                    config.metric_string_attribute_allowlist.clone(),
                 ))
             }
             Some(other) => {
                 return Err(PluginError::InvalidConfig(format!(
                     "unsupported builtin preset '{other}'"
                 )));
+            }
+            None if !config.metric_string_attribute_allowlist.is_empty() => {
+                return Err(PluginError::InvalidConfig(
+                    "builtin.metric_string_attribute_allowlist requires builtin.preset = 'trajectory_context'"
+                        .to_string(),
+                ));
             }
             None => None,
         };
@@ -172,10 +320,16 @@ impl CompiledBuiltinBackend {
             })?),
             None => None,
         };
+        let target_paths = TargetPathMatcher::new(&config.target_paths, &config.target_path_globs)
+            .ok_or_else(|| {
+                PluginError::InvalidConfig(
+                    "builtin target paths must be valid RFC 6901 JSON pointers".to_string(),
+                )
+            })?;
 
         Ok(Self {
             action,
-            target_paths: Arc::new(config.target_paths),
+            target_path_matcher: Arc::new(target_paths),
             legacy_surface: surface,
             trajectory,
         })
@@ -184,6 +338,106 @@ impl CompiledBuiltinBackend {
     fn sanitize_json_preorder_dfs(&self, value: Json) -> Json {
         self.sanitize_json_preorder_dfs_at_path(value, &mut Vec::new())
             .unwrap_or(Json::Null)
+    }
+
+    /// Sanitize optional metric text without modifying required export fields.
+    fn sanitize_metric_envelope(&self, data: Json) -> Option<Json> {
+        let mut envelope = serde_json::from_value::<MetricEnvelope>(data).ok()?;
+        envelope.validate().ok()?;
+        for (index, measurement) in envelope.measurements.iter_mut().enumerate() {
+            measurement.description = measurement.description.take().and_then(|description| {
+                self.sanitize_metric_string_at_path(
+                    description,
+                    &[
+                        "measurements".to_string(),
+                        index.to_string(),
+                        "description".to_string(),
+                    ],
+                )
+            });
+            measurement.attributes = measurement
+                .attributes
+                .take()
+                .map(|attributes| self.sanitize_metric_attributes(attributes, index));
+        }
+        envelope.validate().ok()?;
+        serde_json::to_value(envelope).ok()
+    }
+
+    /// Sanitize metric text using its payload-relative JSON Pointer.
+    fn sanitize_metric_string_at_path(
+        &self,
+        value: String,
+        path_segments: &[String],
+    ) -> Option<String> {
+        let mut path_segments = path_segments.to_vec();
+        self.sanitize_json_preorder_dfs_at_path(Json::String(value), &mut path_segments)
+            .and_then(|value| value.as_str().map(str::to_string))
+    }
+
+    /// Sanitize string-valued attributes while retaining analytical values.
+    fn sanitize_metric_attributes(&self, attributes: Json, measurement_index: usize) -> Json {
+        let Json::Object(attributes) = attributes else {
+            return attributes;
+        };
+        Json::Object(
+            attributes
+                .into_iter()
+                .filter_map(|(key, value)| {
+                    self.sanitize_metric_attribute(value, measurement_index, &key)
+                        .map(|value| (key, value))
+                })
+                .collect(),
+        )
+    }
+
+    /// Sanitize one metric attribute without changing its scalar type.
+    fn sanitize_metric_attribute(
+        &self,
+        value: Json,
+        measurement_index: usize,
+        attribute_key: &str,
+    ) -> Option<Json> {
+        let base_path = [
+            "measurements".to_string(),
+            measurement_index.to_string(),
+            "attributes".to_string(),
+            attribute_key.to_string(),
+        ];
+        match value {
+            Json::String(value) => self
+                .sanitize_metric_string_at_path(value, &base_path)
+                .map(Json::String),
+            Json::Array(values) if values.iter().all(Json::is_string) => {
+                if matches!(self.action, BuiltinAction::Remove)
+                    && self.matches_current_preorder_path(&base_path)
+                {
+                    return None;
+                }
+                Some(Json::Array(
+                    values
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(index, value)| match value {
+                            Json::String(value) => self
+                                .sanitize_metric_string_at_path(
+                                    value,
+                                    &[
+                                        base_path[0].clone(),
+                                        base_path[1].clone(),
+                                        base_path[2].clone(),
+                                        base_path[3].clone(),
+                                        index.to_string(),
+                                    ],
+                                )
+                                .map(Json::String),
+                            _ => unreachable!("checked all metric attribute values are strings"),
+                        })
+                        .collect(),
+                ))
+            }
+            value => Some(value),
+        }
     }
 
     fn sanitize_tool_result_annotation(&self, profile: &mut CategoryProfile) {
@@ -201,7 +455,7 @@ impl CompiledBuiltinBackend {
         value: Json,
         path_segments: &mut Vec<String>,
     ) -> Option<Json> {
-        if !self.target_paths.is_empty()
+        if !self.target_path_matcher.is_empty()
             && self.matches_current_preorder_path(path_segments)
             && matches!(self.action, BuiltinAction::Remove)
         {
@@ -233,7 +487,7 @@ impl CompiledBuiltinBackend {
             Json::Object(map) => Some(Json::Object(
                 map.into_iter()
                     .filter_map(|(key, value)| {
-                        path_segments.push(escape_json_pointer_segment(&key));
+                        path_segments.push(key.clone());
                         let sanitized =
                             self.sanitize_json_preorder_dfs_at_path(value, path_segments);
                         path_segments.pop();
@@ -246,11 +500,10 @@ impl CompiledBuiltinBackend {
     }
 
     fn matches_current_preorder_path(&self, path_segments: &[String]) -> bool {
-        if self.target_paths.is_empty() {
+        if self.target_path_matcher.is_empty() {
             return true;
         }
-        let current_path = render_json_pointer_path(path_segments);
-        self.target_paths.iter().any(|path| path == &current_path)
+        self.target_path_matcher.matches(path_segments)
     }
 
     fn sanitize_string_value(&self, text: String) -> Option<Json> {
@@ -354,9 +607,18 @@ impl CompiledBuiltinBackend {
     ) -> Option<LlmRequest> {
         let sanitized = serde_json::to_value(sanitized_annotated).ok()?;
         let mut sanitized_request = request.clone();
+        let original = serde_json::to_value(codec.decode(request).ok()?).ok()?;
+        let mut target_paths = BTreeSet::new();
+        target_paths.extend(
+            self.target_path_matcher
+                .matching_json_pointer_paths(&original),
+        );
+        target_paths.extend(
+            self.target_path_matcher
+                .matching_json_pointer_paths(&sanitized),
+        );
 
-        for target_path in self.target_paths.iter() {
-            let target_segments = json_pointer_segments(target_path)?;
+        for target_segments in target_paths {
             let current_annotated = codec.decode(&sanitized_request).ok()?;
             let mut current = serde_json::to_value(&current_annotated).ok()?;
             match (
@@ -433,22 +695,23 @@ impl CompiledBuiltinBackend {
         let sanitized_json = serde_json::to_value(&sanitized_annotated).ok()?;
         let payload = codec_name.overlay_response_payload(payload, &sanitized_annotated);
         let payload = self.sanitize_json_preorder_dfs(payload);
-        let target_segments = self
-            .target_paths
-            .iter()
-            .map(|target_path| json_pointer_segments(target_path))
-            .collect::<Option<Vec<_>>>()?;
-        let has_normalized_target = target_segments.iter().any(|target_segments| {
-            sanitized_json_pointer_value(&annotated_json, target_segments).is_some()
-                || sanitized_json_pointer_value(&sanitized_json, target_segments).is_some()
-        });
-        if !has_normalized_target {
+        let mut target_paths = BTreeSet::new();
+        target_paths.extend(
+            self.target_path_matcher
+                .matching_json_pointer_paths(&annotated_json),
+        );
+        target_paths.extend(
+            self.target_path_matcher
+                .matching_json_pointer_paths(&sanitized_json),
+        );
+        let target_paths: Vec<_> = target_paths.into_iter().collect();
+        if target_paths.is_empty() {
             return Some(payload);
         }
         let projected = codec.decode_response(&payload).ok()?;
         let projected = serde_json::to_value(projected).ok()?;
         Self::normalized_response_targets_match(
-            &target_segments,
+            &target_paths,
             &annotated_json,
             &sanitized_json,
             &projected,
@@ -473,16 +736,8 @@ impl CompiledBuiltinBackend {
     }
 
     fn targets_normalized_single_projected_response(&self) -> bool {
-        self.target_paths.iter().any(|path| {
-            json_pointer_segments(path)
-                .and_then(|segments| segments.into_iter().next())
-                .is_some_and(|segment| {
-                    matches!(
-                        segment.as_str(),
-                        "message" | "tool_calls" | "finish_reason" | "api_specific"
-                    )
-                })
-        })
+        self.target_path_matcher
+            .may_select_single_projected_response()
     }
 }
 
@@ -534,6 +789,18 @@ fn event_sanitize_callback_with_scope_categories(
 
             if let Some(trajectory) = backend.trajectory.as_ref() {
                 return Ok(trajectory.sanitize_event_fields(&event, fields));
+            }
+            if is_relay_metric_mark(&event) {
+                fields.data = fields
+                    .data
+                    .and_then(|data| backend.sanitize_metric_envelope(data));
+                fields.metadata = fields
+                    .metadata
+                    .map(|metadata| backend.sanitize_json_preorder_dfs(metadata));
+                fields.category_profile = fields.category_profile.and_then(|profile| {
+                    sanitize_serializable_with_backend::<CategoryProfile>(&backend, profile).ok()
+                });
+                return Ok(fields);
             }
             let specialized_scope = matches!(event.as_ref(), Event::Scope(_))
                 && event
@@ -587,7 +854,7 @@ pub(super) fn llm_sanitize_request_callback(
                 return Ok(Some(request));
             }
             request.headers = backend.sanitize_request_headers(request.headers);
-            if backend.target_paths.is_empty() {
+            if backend.target_path_matcher.is_empty() {
                 request.content = backend.sanitize_json_preorder_dfs(request.content);
                 return Ok(Some(request));
             }
@@ -626,7 +893,7 @@ pub(super) fn llm_sanitize_response_callback(
             if let Some(trajectory) = backend.trajectory.as_ref() {
                 return Ok(Some(trajectory.sanitize_provider_payload(payload)));
             }
-            if backend.target_paths.is_empty() {
+            if backend.target_path_matcher.is_empty() {
                 return Ok(Some(backend.sanitize_json_preorder_dfs(payload)));
             }
             if matches!(context.codec(), LlmCodecIdentity::None)
@@ -704,6 +971,9 @@ fn log_llm_payload_omitted(direction: &str, codec: &LlmCodecIdentity, reason: &s
 }
 
 fn json_pointer_segments(pointer: &str) -> Option<Vec<String>> {
+    if pointer.is_empty() {
+        return Some(Vec::new());
+    }
     pointer
         .strip_prefix('/')
         .map(|path| path.split('/').map(unescape_json_pointer_segment).collect())
@@ -773,22 +1043,6 @@ fn remove_sanitized_json_pointer_value(value: &mut Json, segments: &[String]) ->
         Json::Object(values) => values.remove(last).map(|_| ()),
         Json::Array(_) | Json::Null | Json::Bool(_) | Json::Number(_) | Json::String(_) => None,
     }
-}
-
-fn render_json_pointer_path(path_segments: &[String]) -> String {
-    if path_segments.is_empty() {
-        return String::new();
-    }
-    let mut rendered = String::new();
-    for segment in path_segments {
-        rendered.push('/');
-        rendered.push_str(segment);
-    }
-    rendered
-}
-
-fn escape_json_pointer_segment(segment: &str) -> String {
-    segment.replace('~', "~0").replace('/', "~1")
 }
 
 pub(crate) fn hex_sha256(text: &str) -> String {
@@ -904,4 +1158,30 @@ where
             "failed to deserialize sanitized value for PII redaction: {err}"
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_path_matcher_deduplicates_equivalent_selectors() {
+        let matcher = TargetPathMatcher::new(
+            &["/prompt".to_string(), "/prompt".to_string()],
+            &[
+                "/prompt".to_string(),
+                "/messages/*/content".to_string(),
+                "/messages/*/content".to_string(),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(matcher.selectors.len(), 2);
+        assert!(matcher.matches(&["prompt".to_string()]));
+        assert!(matcher.matches(&[
+            "messages".to_string(),
+            "0".to_string(),
+            "content".to_string(),
+        ]));
+    }
 }

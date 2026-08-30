@@ -206,7 +206,7 @@ pub(crate) fn uninstall(
             .unwrap_or_else(default_install_dir)
             .canonicalize_or_self(),
         operation_lock_dir,
-        force: false,
+        force: command.force,
         dry_run: command.dry_run,
         skip_doctor: true,
     };
@@ -280,6 +280,37 @@ pub(crate) fn doctor_marketplace_report(
 
 pub(crate) fn default_marketplace_install_dir() -> PathBuf {
     default_install_dir().canonicalize_or_self()
+}
+
+/// Returns whether deterministic Relay artifacts for the host still exist locally.
+pub(crate) fn local_install_exists(host: impl MarketplaceHost, install_dir: &Path) -> bool {
+    let layout = PluginLayout::new(host, install_dir);
+    layout.marketplace_root.exists() || layout.generation_lock.exists()
+}
+
+/// Returns whether force cleanup has a local artifact or live host registration to remove.
+pub(crate) fn force_cleanup_target_exists(host: impl MarketplaceHost, install_dir: &Path) -> bool {
+    force_cleanup_target_exists_with_runner(host, install_dir, &RealCommandRunner)
+}
+
+fn force_cleanup_target_exists_with_runner(
+    host: impl MarketplaceHost,
+    install_dir: &Path,
+    runner: &dyn CommandRunner,
+) -> bool {
+    if local_install_exists(host, install_dir) {
+        return true;
+    }
+    let options = PluginInstallOptions {
+        install_dir: install_dir.to_path_buf(),
+        operation_lock_dir: PathBuf::new(),
+        force: true,
+        dry_run: false,
+        skip_doctor: true,
+    };
+    host_registration_report(host, &options, runner).is_ok_and(|registration| {
+        registration.host_plugin_registered || registration.host_marketplace_registered
+    })
 }
 
 pub(crate) fn persisted_state_exists(host: impl MarketplaceHost, install_dir: &Path) -> bool {
@@ -868,6 +899,9 @@ fn uninstall_host_locked(
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
 ) -> Result<(), String> {
+    if options.force {
+        return force_uninstall_host_locked(host, options, runner, setup_runner);
+    }
     let state = read_state(host, &options.install_dir);
     let layout = PluginLayout::new(host, &options.install_dir);
     if let Some(state) = state.as_ref() {
@@ -921,6 +955,74 @@ fn uninstall_host_locked(
         }
     }
     result
+}
+
+/// Attempts every deterministic Relay-owned cleanup step and reports all failures together.
+fn force_uninstall_host_locked(
+    host: impl MarketplaceHost,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+    setup_runner: &dyn PluginSetupRunner,
+) -> Result<(), String> {
+    let layout = PluginLayout::new(host, &options.install_dir);
+    let mut errors = Vec::new();
+
+    if !options.dry_run
+        && let Err(error) = setup_runner.refresh_gateway()
+    {
+        errors.push(format!("failed to stop the Relay-owned gateway: {error}"));
+    }
+    let host_setup_removed =
+        match run_plugin_uninstall(host, &layout.plugin_root, options, setup_runner) {
+            Ok(()) => true,
+            Err(error) => {
+                errors.push(format!("failed to remove Relay host setup: {error}"));
+                false
+            }
+        };
+    if let Err(error) = run_host_plugin_removal(host, options, runner) {
+        errors.push(format!("failed to unregister the host plugin: {error}"));
+    }
+    if let Err(error) = run_host_marketplace_removal(host, options, runner) {
+        errors.push(format!(
+            "failed to unregister the host marketplace: {error}"
+        ));
+    }
+    if let Err(error) = remove_path(&layout.marketplace_root, options) {
+        errors.push(error);
+    }
+    if host_setup_removed && let Err(error) = remove_path(&layout.state_path, options) {
+        errors.push(error);
+    }
+    if !host_setup_removed
+        && !layout.state_path.exists()
+        && let Err(error) = write_state(&layout, options)
+    {
+        errors.push(format!(
+            "failed to preserve Relay cleanup retry state: {error}"
+        ));
+    }
+    if !options.dry_run {
+        match fs::remove_file(&layout.generation_lock) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => errors.push(format!(
+                "failed to remove MCP generation lock {}: {error}",
+                layout.generation_lock.display()
+            )),
+        }
+    }
+
+    if errors.is_empty() {
+        println!("force-uninstalled {} plugin", host.label());
+        Ok(())
+    } else {
+        Err(format!(
+            "forced {} cleanup completed with errors: {}",
+            host.label(),
+            errors.join("; ")
+        ))
+    }
 }
 
 fn retire_installed_generation(

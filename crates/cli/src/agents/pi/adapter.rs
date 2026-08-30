@@ -78,6 +78,10 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     AdapterOutcome {
         events,
         response: json!({}),
+        // pi has no `PermissionRequest` hook. Gating rides on `tool_call`, which the gateway
+        // answers with HTTP 403 and the extension turns into pi's `{block, reason}`, so there is
+        // no separate permission event for the host to evaluate.
+        permission: None,
     }
 }
 

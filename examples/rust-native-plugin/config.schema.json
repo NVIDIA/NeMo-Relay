@@ -140,13 +140,19 @@
           "default": ["subscriber"]
         },
         "registration_name": {
-          "description": "Effective name of the global registration to suppress.",
+          "description": "Effective name of the global registration to suppress. When registration control is enabled, this value must differ from allowed_registration_name.",
           "type": "string",
           "minLength": 1,
           "default": "documentation-controlled-subscriber"
         },
+        "allowed_registration_name": {
+          "description": "Effective name of the global registration that the example's second callback explicitly leaves enabled. When registration control is enabled, this value must differ from registration_name.",
+          "type": "string",
+          "minLength": 1,
+          "default": "documentation-observed-subscriber"
+        },
         "reason": {
-          "description": "Non-empty constant reason returned while the registration is suppressed.",
+          "description": "Non-empty reason returned by the callback while the registration is suppressed.",
           "type": "string",
           "minLength": 1,
           "default": "disabled by documentation plugin"

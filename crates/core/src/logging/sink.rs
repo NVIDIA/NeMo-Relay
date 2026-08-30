@@ -28,20 +28,22 @@ pub(crate) fn build_logger(
     let mut active_paths: Vec<PathBuf> = Vec::new();
     let mut reserved_paths: Vec<PathBuf> = Vec::new();
 
-    let stderr_sink = StdStreamSink::builder()
-        .stderr()
-        .style_mode(StyleMode::Never)
-        .formatter(RelayFormatter {
-            format: config.stderr_format,
-            root_relay_id: root_relay_id.clone(),
-        })
-        .level_filter(spdlog_level_filter(config.level))
-        .error_handler(stderr_error_handler("stderr"))
-        .build_arc()
-        .map_err(|error| {
-            FlowError::InvalidArgument(format!("failed to create stderr logging sink: {error}"))
-        })?;
-    sinks.push(stderr_sink);
+    if config.stderr_enabled {
+        let stderr_sink = StdStreamSink::builder()
+            .stderr()
+            .style_mode(StyleMode::Never)
+            .formatter(RelayFormatter {
+                format: config.stderr_format,
+                root_relay_id: root_relay_id.clone(),
+            })
+            .level_filter(spdlog_level_filter(config.level))
+            .error_handler(stderr_error_handler("stderr"))
+            .build_arc()
+            .map_err(|error| {
+                FlowError::InvalidArgument(format!("failed to create stderr logging sink: {error}"))
+            })?;
+        sinks.push(stderr_sink);
+    }
 
     for sink in &config.sinks {
         let LogSinkConfig::File(file_sink) = sink;

@@ -63,6 +63,8 @@ pub(crate) enum CacheReason {
     StreamNoCodec,
     /// The request body cannot be parsed.
     UnparseableBody,
+    /// The tool's resolved policy does not permit caching.
+    Uncacheable,
     /// Canonical JSON cannot safely represent an integer in the key.
     UnrepresentableNumber,
 }
@@ -81,6 +83,7 @@ impl CacheReason {
             Self::StoreError => "store_error",
             Self::StreamNoCodec => "stream_no_codec",
             Self::UnparseableBody => "unparseable_body",
+            Self::Uncacheable => "uncacheable",
             Self::UnrepresentableNumber => "unrepresentable_number",
         }
     }

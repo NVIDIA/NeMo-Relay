@@ -10,11 +10,11 @@ func TestPiiRedactionConfigHelpers(t *testing.T) {
 	if config.Version != 1 || config.Mode != "builtin" || !config.Input || !config.Output || !config.Mark || !config.ToolInput || !config.ToolOutput || config.Priority != 100 {
 		t.Fatalf("unexpected PII redaction defaults: %#v", config)
 	}
-	if config.Builtin == nil || config.Builtin.Action != "remove" || len(config.Builtin.TargetPaths) != 0 {
+	if config.Builtin == nil || config.Builtin.Action != "remove" || len(config.Builtin.TargetPaths) != 0 || len(config.Builtin.TargetPathGlobs) != 0 {
 		t.Fatalf("unexpected default built-in redaction config: %#v", config.Builtin)
 	}
 	builtin := NewPiiRedactionBuiltinConfig()
-	if builtin.Action != "remove" || len(builtin.TargetPaths) != 0 {
+	if builtin.Action != "remove" || len(builtin.TargetPaths) != 0 || len(builtin.TargetPathGlobs) != 0 {
 		t.Fatalf("unexpected built-in redaction defaults: %#v", builtin)
 	}
 	local := NewPiiRedactionLocalModelConfig()

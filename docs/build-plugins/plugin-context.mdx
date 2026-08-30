@@ -20,7 +20,7 @@ language-binding, native typed, and worker plugins.
 | Events | Mark sanitizer | Return replacement `data`, `category_profile`, and `metadata` fields for the emitted mark event. |
 | Events | Scope-start sanitizer | Return replacement observability fields for the emitted scope-start event. |
 | Events | Scope-end sanitizer | Return replacement observability fields for the emitted scope-end event. |
-| Runtime control | Conditional middleware guardrail | Make a matching global registration ineligible for future snapshots. Language bindings use a callback; native and worker SDKs install a host-resident constant reason. |
+| Runtime control | Conditional middleware guardrail | Return a reason to make a matching global registration ineligible for future snapshots, or no reason to leave it enabled. |
 | Tool | Request sanitizer | Sanitize the request recorded in start events without changing the request passed to real execution. |
 | Tool | Response sanitizer | Sanitize the result recorded in end events without changing the application result. |
 | Tool | Conditional guardrail | Allow or block real execution from the tool name and request. |
@@ -52,12 +52,12 @@ The registration method differs by SDK, as shown in the following table:
 | Python language binding | `register_conditional_middleware_guardrail` | Callback returns a reason or `None`. |
 | Node.js language binding | `registerConditionalMiddlewareGuardrail` | Callback returns a reason or `null`. |
 | Rust language binding | `register_conditional_middleware_guardrail` | Callback returns an optional reason. |
-| Rust native plugin | `register_conditional_middleware_guardrail` | Host-resident constant reason. |
-| Python worker | `register_conditional_middleware_guardrail` | Host-resident constant reason. |
-| Rust worker | `register_conditional_middleware_guardrail` | Host-resident constant reason. |
+| Rust native plugin | `register_conditional_middleware_guardrail` | Callback returns an optional reason. |
+| Python worker | `register_conditional_middleware_guardrail` | Sync or async callback returns a reason or `None`. |
+| Rust worker | `register_conditional_middleware_guardrail` | Async callback returns an optional reason. |
 
 Each method accepts a component-local gate name, a nonempty set of registration kinds,
-the target's effective global name, and the callback or constant reason. Context methods
+the target's effective global name, and the callback. Context methods
 do not return a deregistration handle because Relay owns cleanup. Runtime-level native
 and worker methods return an activation-owned handle for explicit dynamic
 deregistration.

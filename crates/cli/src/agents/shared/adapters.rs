@@ -30,6 +30,8 @@ pub(crate) struct AdapterOutcome {
     pub(crate) events: Vec<NormalizedEvent>,
     /// Hook response body returned to the invoking agent process.
     pub(crate) response: Value,
+    /// Final permission request evaluated separately so its observable hook event stays unchanged.
+    pub(crate) permission: Option<Result<ToolEvent, String>>,
 }
 
 pub(super) struct ClassificationRules<'a> {
@@ -306,6 +308,57 @@ pub(crate) struct ToolPathSet {
     arguments: &'static [&'static [&'static str]],
     result: &'static [&'static [&'static str]],
     status: &'static [&'static [&'static str]],
+}
+
+pub(super) fn permission_request(
+    payload: &Value,
+    headers: &HeaderMap,
+    kind: AgentKind,
+    extractor: &dyn AgentPayloadExtractor,
+) -> Option<Result<ToolEvent, String>> {
+    let event_name = extractor.event_name(payload)?;
+    if normalize_name(&event_name) != "permissionrequest" {
+        return None;
+    }
+    let session_id = match extractor.session_id(payload, headers) {
+        Some(value) if !value.trim().is_empty() => value,
+        _ => {
+            return Some(Err(
+                "permission request is missing a session identifier".into()
+            ));
+        }
+    };
+    let tool = extractor.tool_call(payload, headers, &event_name);
+    let tool_call_id = match tool.tool_call_id {
+        Some(value) if !value.trim().is_empty() => value,
+        None if kind == AgentKind::ClaudeCode => String::new(),
+        _ => {
+            return Some(Err(
+                "permission request is missing a tool-call identifier".into()
+            ));
+        }
+    };
+    let tool_name = match tool.tool_name {
+        Some(value) if !value.trim().is_empty() => value,
+        _ => return Some(Err("permission request is missing a tool name".into())),
+    };
+    let arguments = match tool.arguments {
+        Some(value) => value,
+        None => return Some(Err("permission request is missing tool arguments".into())),
+    };
+    Some(Ok(ToolEvent {
+        session_id,
+        agent_kind: kind,
+        event_name: event_name.clone(),
+        tool_call_id,
+        tool_name,
+        subagent_id: tool.subagent_id,
+        arguments,
+        result: Value::Null,
+        status: tool.status,
+        payload: payload.clone(),
+        metadata: extractor.metadata(payload, headers, kind, &event_name),
+    }))
 }
 
 /// Whether an extractor accepts the Claude installed-mode session header.

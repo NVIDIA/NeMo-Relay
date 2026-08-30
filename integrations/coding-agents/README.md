@@ -20,6 +20,11 @@ Use `nemo-relay doctor --plugin <host>` to verify an installation and
 `nemo-relay uninstall <host>` to remove Relay-owned host state. The transparent
 wrappers remain available as `nemo-relay claude` and `nemo-relay codex`.
 
+If normal removal is blocked by stale Relay state or MCP generation metadata,
+use `nemo-relay uninstall <host> --force`. It attempts each Relay-owned cleanup
+step independently, then reports any steps that could not complete. If host
+setup cleanup fails, Relay keeps its state so a later forced uninstall can retry.
+
 Host-specific source notes live in:
 
 - [`claude-code/`](claude-code/README.md)

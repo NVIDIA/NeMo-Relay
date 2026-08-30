@@ -37,8 +37,8 @@ use super::otel::{OpenTelemetryError, OtlpTransport, Result, normalize_shutdown_
 use super::otel_signal::{
     MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics, build_grpc_metadata,
     build_in_owned_runtime, classify_metric_mark, reject_signal_header_environment,
-    resolve_http_signal_endpoint, should_relog_runtime_diagnostic, signal_resource,
-    validate_signal_headers,
+    resolve_header_env, resolve_http_signal_endpoint, should_relog_runtime_diagnostic,
+    signal_resource, validate_signal_headers,
 };
 
 const DEFAULT_EXPORT_INTERVAL: Duration = Duration::from_secs(60);
@@ -97,6 +97,7 @@ impl std::str::FromStr for MetricTemporality {
 pub struct OpenTelemetryMetricConfig {
     endpoint: String,
     headers: HashMap<String, String>,
+    header_env: HashMap<String, String>,
     resource_attributes: HashMap<String, String>,
     service_name: String,
     service_namespace: Option<String>,
@@ -117,6 +118,7 @@ impl OpenTelemetryMetricConfig {
         Self {
             endpoint: endpoint.into(),
             headers: HashMap::new(),
+            header_env: HashMap::new(),
             resource_attributes: HashMap::new(),
             service_name: "unknown_service".to_string(),
             service_namespace: None,
@@ -141,6 +143,12 @@ impl OpenTelemetryMetricConfig {
     /// Add an exporter header or gRPC metadata entry.
     pub fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.insert(key.into(), value.into());
+        self
+    }
+
+    /// Map an exporter header name to the environment variable supplying its value.
+    pub fn with_header_env(mut self, key: impl Into<String>, variable: impl Into<String>) -> Self {
+        self.header_env.insert(key.into(), variable.into());
         self
     }
 
@@ -282,8 +290,10 @@ impl OpenTelemetryMetricSubscriber {
         Self::new_with_runtime_diagnostics(config)
     }
 
-    fn new_with_runtime_diagnostics(config: OpenTelemetryMetricConfig) -> Result<Self> {
+    fn new_with_runtime_diagnostics(mut config: OpenTelemetryMetricConfig) -> Result<Self> {
         config.validate()?;
+        config.headers = resolve_header_env(&config.headers, &config.header_env)?;
+        validate_signal_headers(&config.headers)?;
         let instrumentation_scope = config.instrumentation_scope.clone();
         let max_instruments = config.max_instruments;
         let cardinality_limit = config.cardinality_limit;
@@ -480,23 +490,34 @@ impl MetricDeliveryDiagnostics {
         let failures = self.export_failures.load(Ordering::Relaxed);
         (failures > 0).then(|| format!("otel.metrics_export_failed ({failures})"))
     }
+
+    fn record_export_failure(&self, error: &impl std::fmt::Display) -> u64 {
+        let failure_count = self.export_failures.fetch_add(1, Ordering::Relaxed) + 1;
+        self.runtime_diagnostics.record(
+            "otel.metrics_export_failed",
+            format!(
+                "OpenTelemetry metric export to endpoint {} failed: {error}",
+                self.endpoint
+            ),
+            1,
+        );
+        failure_count
+    }
 }
 
 impl<E: PushMetricExporter> PushMetricExporter for DiagnosticMetricExporter<E> {
     async fn export(&self, metrics: &ResourceMetrics) -> OTelSdkResult {
         let result = self.inner.export(metrics).await;
         if let Err(error) = &result {
-            self.diagnostics
-                .export_failures
-                .fetch_add(1, Ordering::Relaxed);
-            self.diagnostics.runtime_diagnostics.record(
-                "otel.metrics_export_failed",
-                format!(
-                    "OpenTelemetry metric export to endpoint {} failed: {error}",
-                    self.diagnostics.endpoint
-                ),
-                1,
-            );
+            let failure_count = self.diagnostics.record_export_failure(error);
+            if should_relog_runtime_diagnostic(failure_count) {
+                log::error!(
+                    target: "nemo_relay.observability",
+                    event = "otel_metrics_export_failed",
+                    endpoint = self.diagnostics.endpoint.as_str();
+                    "OpenTelemetry metric export failed: {error}"
+                );
+            }
         }
         result
     }

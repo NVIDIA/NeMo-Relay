@@ -407,7 +407,12 @@ impl PluginRegistration {
 #[derive(Default)]
 pub struct PluginRegistrationContext {
     registrations: Vec<PluginRegistration>,
-    namespace: Option<String>,
+    namespace: Option<PluginRegistrationNamespace>,
+}
+
+enum PluginRegistrationNamespace {
+    Plain(String),
+    PluginComponent(String),
 }
 
 impl PluginRegistrationContext {
@@ -420,7 +425,38 @@ impl PluginRegistrationContext {
     pub fn with_namespace(namespace: impl Into<String>) -> Self {
         Self {
             registrations: vec![],
-            namespace: Some(namespace.into()),
+            namespace: Some(PluginRegistrationNamespace::Plain(namespace.into())),
+        }
+    }
+
+    fn with_plugin_component_namespace(namespace: String) -> Self {
+        Self {
+            registrations: vec![],
+            namespace: Some(PluginRegistrationNamespace::PluginComponent(namespace)),
+        }
+    }
+
+    /// Creates a child context that extends this context's namespace.
+    ///
+    /// Child contexts preserve Relay-created plugin component qualification so
+    /// their local namespace segments and registration names remain encoded as
+    /// one effective component name.
+    pub fn with_child_namespace(&self, local_namespace: &str) -> Self {
+        let namespace = match &self.namespace {
+            Some(PluginRegistrationNamespace::Plain(namespace)) => {
+                PluginRegistrationNamespace::Plain(format!("{namespace}{local_namespace}"))
+            }
+            Some(PluginRegistrationNamespace::PluginComponent(namespace)) => {
+                PluginRegistrationNamespace::PluginComponent(format!(
+                    "{namespace}{}",
+                    encode_plugin_component_field(local_namespace)
+                ))
+            }
+            None => PluginRegistrationNamespace::Plain(local_namespace.to_string()),
+        };
+        Self {
+            registrations: vec![],
+            namespace: Some(namespace),
         }
     }
 
@@ -431,9 +467,19 @@ impl PluginRegistrationContext {
     /// not have to provide component instance ids.
     pub fn qualify_name(&self, name: &str) -> String {
         match &self.namespace {
-            Some(namespace) => format!("{namespace}{name}"),
+            Some(PluginRegistrationNamespace::Plain(namespace)) => format!("{namespace}{name}"),
+            Some(PluginRegistrationNamespace::PluginComponent(namespace)) => {
+                format!("{namespace}{}", encode_plugin_component_field(name))
+            }
             None => name.to_string(),
         }
+    }
+
+    pub(crate) fn uses_plugin_component_namespace(&self) -> bool {
+        matches!(
+            &self.namespace,
+            Some(PluginRegistrationNamespace::PluginComponent(_))
+        )
     }
 
     /// Registers an event subscriber and records its rollback closure.
@@ -2231,12 +2277,28 @@ fn validate_unique_component_kinds(path: &Path, document: &Json) -> Result<()> {
 /// by the gateway.
 #[doc(hidden)]
 pub fn default_plugin_config_paths(user_dir: Option<PathBuf>) -> Vec<PathBuf> {
+    if skip_implicit_plugin_config() {
+        return Vec::new();
+    }
     let mut paths = Vec::new();
     if let Some(dir) = user_dir {
         paths.push(dir.join("plugins.toml"));
     }
     paths.push(system_config_dir().join("plugins.toml"));
     paths
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn skip_implicit_plugin_config() -> bool {
+    std::env::var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
+#[cfg(not(feature = "__skip-implicit-config"))]
+fn skip_implicit_plugin_config() -> bool {
+    false
 }
 
 /// Resolves the platform system configuration directory.
@@ -2653,7 +2715,6 @@ async fn initialize_plugin_components(
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
 ) -> Result<Vec<PluginRegistration>> {
     ensure_builtin_plugins_registered()?;
-    let totals = plugin_component_totals(config);
     let mut ordinals: HashMap<&str, usize> = HashMap::new();
     let mut registrations = PendingPluginRegistrations::new(rollback_failures.clone());
 
@@ -2673,11 +2734,7 @@ async fn initialize_plugin_components(
             .entry(component.kind.as_str())
             .and_modify(|value| *value += 1)
             .or_insert(1);
-        let namespace = component_namespace(
-            &component.kind,
-            *ordinal,
-            totals.get(component.kind.as_str()).copied().unwrap_or(1),
-        );
+        let namespace = component_namespace(&component.kind, *ordinal);
 
         let mut pending =
             PendingPluginRegistrationContext::new(namespace, rollback_failures.clone());
@@ -2729,7 +2786,7 @@ struct PendingPluginRegistrationContext {
 impl PendingPluginRegistrationContext {
     fn new(namespace: String, rollback_failures: Option<Arc<Mutex<Vec<String>>>>) -> Self {
         Self {
-            context: PluginRegistrationContext::with_namespace(namespace),
+            context: PluginRegistrationContext::with_plugin_component_namespace(namespace),
             rollback_failures,
         }
     }
@@ -2804,11 +2861,85 @@ fn plugin_component_totals(config: &PluginConfig) -> HashMap<&str, usize> {
     totals
 }
 
-fn component_namespace(kind: &str, ordinal: usize, total: usize) -> String {
-    if total > 1 {
-        format!("__nemo_relay_plugin__{kind}__{ordinal}__")
-    } else {
-        format!("__nemo_relay_plugin__{kind}__")
+fn component_namespace(kind: &str, ordinal: usize) -> String {
+    assert!(ordinal > 0, "plugin component ordinals are one-based");
+    format!(
+        "nemo-relay-plugin.v1.{}:{ordinal}:",
+        encode_plugin_component_field(kind)
+    )
+}
+
+pub(crate) fn encode_plugin_component_field(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[(byte >> 4) as usize]));
+            encoded.push(char::from(HEX[(byte & 0x0f) as usize]));
+        }
+    }
+    encoded
+}
+
+pub(crate) fn decode_plugin_component_effective_name(
+    effective_name: &str,
+) -> Option<(String, u32, String)> {
+    const PREFIX: &str = "nemo-relay-plugin.v1.";
+
+    let rest = effective_name.strip_prefix(PREFIX)?;
+    let (encoded_kind, rest) = rest.split_once(':')?;
+    let (ordinal_text, encoded_local_name) = rest.split_once(':')?;
+    let ordinal = ordinal_text
+        .parse::<u32>()
+        .ok()
+        .filter(|ordinal| *ordinal > 0)?;
+    if ordinal.to_string() != ordinal_text {
+        return None;
+    }
+    let plugin_kind = decode_plugin_component_field(encoded_kind)?;
+    let local_name = decode_plugin_component_field(encoded_local_name)?;
+    (!plugin_kind.is_empty() && !local_name.is_empty()).then_some((
+        plugin_kind,
+        ordinal,
+        local_name,
+    ))
+}
+
+fn decode_plugin_component_field(encoded: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(encoded.len());
+    let encoded = encoded.as_bytes();
+    let mut index = 0;
+
+    while index < encoded.len() {
+        let byte = encoded[index];
+        if byte == b'%' {
+            let high = *encoded.get(index + 1)?;
+            let low = *encoded.get(index + 2)?;
+            bytes.push((hex_value(high)? << 4) | hex_value(low)?);
+            index += 3;
+        } else if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            bytes.push(byte);
+            index += 1;
+        } else {
+            return None;
+        }
+    }
+
+    let decoded = String::from_utf8(bytes).ok()?;
+    (encode_plugin_component_field(&decoded) == std::str::from_utf8(encoded).ok()?)
+        .then_some(decoded)
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
     }
 }
 

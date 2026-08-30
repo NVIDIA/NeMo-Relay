@@ -187,23 +187,25 @@ pub(crate) async fn send_verified_hook_forward_request(
     Result<crate::gateway::client::VerifiedHttpResponse, crate::gateway::client::VerifiedHttpError>,
     CliError,
 > {
-    let headers = gateway_headers(
+    let mut headers = gateway_headers(
         command.profile.as_deref(),
         command.session_metadata.as_deref(),
         command.gateway_mode,
-    )?
-    .iter()
-    .map(|(name, value)| {
-        value
-            .to_str()
-            .map(|value| (name.as_str().to_string(), value.to_string()))
-            .map_err(|error| {
-                CliError::Install(format!(
-                    "hook header {name} is not valid HTTP text: {error}"
-                ))
-            })
-    })
-    .collect::<Result<Vec<_>, _>>()?;
+    )?;
+    attach_internal_hook_credentials(command, &mut headers)?;
+    let headers = headers
+        .iter()
+        .map(|(name, value)| {
+            value
+                .to_str()
+                .map(|value| (name.as_str().to_string(), value.to_string()))
+                .map_err(|error| {
+                    CliError::Install(format!(
+                        "hook header {name} is not valid HTTP text: {error}"
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let gateway = gateway.clone();
     let gateway_url = gateway_url.to_string();
     let path = command.agent.hook_path().to_string();
@@ -228,21 +230,58 @@ async fn send_hook_forward_request(
     url: &str,
     input: String,
 ) -> Result<Result<reqwest::Response, reqwest::Error>, CliError> {
+    let mut headers = gateway_headers(
+        command.profile.as_deref(),
+        command.session_metadata.as_deref(),
+        command.gateway_mode,
+    )?;
+    attach_internal_hook_credentials(command, &mut headers)?;
     Ok(reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(HOOK_FORWARD_TIMEOUT)
         .build()?
         .post(url)
-        .headers(gateway_headers(
-            command.profile.as_deref(),
-            command.session_metadata.as_deref(),
-            command.gateway_mode,
-        )?)
+        .headers(headers)
         .header(CONTENT_TYPE, "application/json")
         .body(input)
         .send()
         .await)
+}
+
+fn attach_internal_hook_credentials(
+    command: &HookForwardRequest,
+    headers: &mut HeaderMap,
+) -> Result<(), CliError> {
+    let key = crate::configuration::BootstrapChallengeKey::load()?;
+    let client_token = key.client_token();
+    insert_header(
+        headers,
+        crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+        Some(&client_token),
+    )?;
+    if command.transparent_run {
+        let credential = std::env::var(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV)
+            .map_err(|_| {
+                CliError::Launch(
+                    "transparent hook forwarding is missing its invocation credential".into(),
+                )
+            })?;
+        insert_header(
+            headers,
+            crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+            Some(&credential),
+        )?;
+    }
+    if let Some(generation) = command.generation_token.as_deref() {
+        let token = key.hook_client_token(generation);
+        insert_header(
+            headers,
+            crate::configuration::HOOK_CLIENT_TOKEN_HEADER,
+            Some(&token),
+        )?;
+    }
+    Ok(())
 }
 
 // Handles hook delivery results without changing agent control flow unless `--fail-closed` was

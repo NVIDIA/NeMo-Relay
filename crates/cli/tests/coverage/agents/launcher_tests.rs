@@ -287,7 +287,7 @@ fn prepares_codex_config_overrides() {
             .argv
             .iter()
             .any(|arg| arg.contains("model_providers.nemo-relay-openai")
-                && arg.contains("base_url=\"http://127.0.0.1:1234\"")
+                && arg.contains("base_url=\"http://127.0.0.1:1234/v1\"")
                 // Codex sends its own credentials (ChatGPT-Plus OAuth or OPENAI_API_KEY).
                 // When OPENAI_API_KEY is in the environment the gateway substitutes it;
                 // otherwise codex's own auth is forwarded as-is.
@@ -365,6 +365,29 @@ fn prepares_codex_config_overrides() {
         assert_eq!(entries.last(), Some(&current_exe_dir));
     }
     prepared.restore().unwrap();
+}
+
+#[test]
+fn prepares_codex_config_overrides_with_versioned_trailing_slash_gateway_url() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Codex,
+        vec!["codex".into()],
+        "http://127.0.0.1:1234/",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    assert!(prepared.argv.iter().any(|arg| {
+        arg.contains("model_providers.nemo-relay-openai")
+            && arg.contains("base_url=\"http://127.0.0.1:1234/v1\"")
+    }));
 }
 
 #[test]
@@ -907,7 +930,21 @@ fn prepares_claude_dry_inserts_plugin_dir_after_authoritative_agent_executable()
         prepared.argv[plugin_index + 1],
         "<temporary-claude-plugin-dir>"
     );
-    assert_eq!(prepared.argv.last().map(String::as_str), Some("--resume"));
+    let resume_index = prepared
+        .argv
+        .iter()
+        .position(|argument| argument == "--resume")
+        .unwrap();
+    let settings_index = prepared
+        .argv
+        .iter()
+        .rposition(|argument| argument == "--settings")
+        .unwrap();
+    assert!(settings_index > resume_index);
+    assert_eq!(
+        prepared.argv[settings_index + 1],
+        "<temporary-claude-settings>"
+    );
     assert!(prepared.temp_dirs.is_empty());
 }
 
@@ -995,9 +1032,14 @@ fn claude_transparent_run_preserves_user_settings_and_prompt_boundary() {
     .unwrap();
 
     assert_eq!(prepared.argv[1], "--plugin-dir");
-    assert_eq!(prepared.argv[3], "--settings");
+    let separator = prepared.argv.iter().position(|arg| arg == "--").unwrap();
+    let settings_index = prepared.argv[..separator]
+        .iter()
+        .rposition(|arg| arg == "--settings")
+        .unwrap();
     let overlay: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&prepared.argv[4]).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(&prepared.argv[settings_index + 1]).unwrap())
+            .unwrap();
     assert_eq!(overlay["model"], "claude-user-setting-sentinel");
     assert_eq!(overlay["enabledPlugins"]["other@market"], true);
     assert_eq!(
@@ -1022,7 +1064,6 @@ fn claude_transparent_run_preserves_user_settings_and_prompt_boundary() {
             .iter()
             .any(|arg| arg.contains("ignored-second-source"))
     );
-    let separator = prepared.argv.iter().position(|arg| arg == "--").unwrap();
     assert_eq!(
         &prepared.argv[separator..],
         &["--", "--settings", "literal-prompt-value"]

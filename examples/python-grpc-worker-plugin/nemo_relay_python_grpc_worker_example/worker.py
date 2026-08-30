@@ -93,11 +93,12 @@ class ExamplePythonWorker(WorkerPlugin):
         registration_control = cast(dict[str, Json], settings["registration_control"])
 
         if registration_control["enabled"]:
+            reason = cast(str, registration_control["reason"])
             ctx.register_conditional_middleware_guardrail(
                 "documentation_registration_control",
                 {RuntimeRegistrationKind(kind) for kind in cast(list[str], registration_control["kinds"])},
                 cast(str, registration_control["registration_name"]),
-                cast(str, registration_control["reason"]),
+                lambda _kinds, name: reason if name.startswith("documentation-controlled-") else None,
             )
 
         if observe["enabled"]:

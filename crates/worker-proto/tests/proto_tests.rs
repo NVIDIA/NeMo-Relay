@@ -4,9 +4,11 @@
 //! Tests for stable worker protocol helpers, structural tool results, and enum values.
 
 use nemo_relay_worker_proto::v1::{
-    EmitMarkRequest, GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, HandshakeRequest,
-    HealthRequest, InvokeRequest, JsonEnvelope, JsonValue, RegistrationSurface, RuntimeDiagnostic,
-    ScopeType, ToolExecutionResult as ProtoToolExecutionResult,
+    ConditionalMiddlewareGuardrailRegistration, ConditionalMiddlewareInvocation, EmitMarkRequest,
+    GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, HandshakeRequest, HealthRequest,
+    InvokeRequest, JsonEnvelope, JsonValue, RegisterConditionalMiddlewareGuardrailRequest,
+    RegistrationSurface, RuntimeDiagnostic, ScopeType,
+    ToolExecutionResult as ProtoToolExecutionResult, invoke_request,
 };
 use nemo_relay_worker_proto::{
     WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
@@ -46,6 +48,10 @@ fn registration_surface_values_are_stable() {
     assert_eq!(RegistrationSurface::MarkSanitizeGuardrail as i32, 30);
     assert_eq!(RegistrationSurface::ScopeSanitizeStartGuardrail as i32, 31);
     assert_eq!(RegistrationSurface::ScopeSanitizeEndGuardrail as i32, 32);
+    assert_eq!(
+        RegistrationSurface::ConditionalMiddlewareGuardrail as i32,
+        40
+    );
 }
 
 #[test]
@@ -113,6 +119,32 @@ fn request_field_numbers_are_stable() {
     assert_eq!(
         InvokeRequest::decode(encoded.as_slice()).expect("decode invoke"),
         invoke
+    );
+
+    let activation_gate = ConditionalMiddlewareGuardrailRegistration {
+        callback: true,
+        ..Default::default()
+    };
+    assert_eq!(activation_gate.encode_to_vec(), b"\x28\x01".to_vec());
+
+    let runtime_gate = RegisterConditionalMiddlewareGuardrailRequest {
+        callback: true,
+        ..Default::default()
+    };
+    assert_eq!(runtime_gate.encode_to_vec(), b"\x38\x01".to_vec());
+
+    let conditional_invoke = InvokeRequest {
+        payload: Some(invoke_request::Payload::ConditionalMiddleware(
+            ConditionalMiddlewareInvocation {
+                kinds: vec![RegistrationSurface::ConditionalMiddlewareGuardrail as i32],
+                registration_name: "target".into(),
+            },
+        )),
+        ..Default::default()
+    };
+    assert_eq!(
+        conditional_invoke.encode_to_vec(),
+        b"\x6a\x0b\x0a\x01\x28\x12\x06target".to_vec()
     );
 }
 
@@ -217,6 +249,7 @@ fn emit_mark_additive_fields_preserve_legacy_wire_compatibility() {
     assert_eq!(legacy.name, "mark");
     assert!(legacy.data_schema.is_none());
     assert!(legacy.severity.is_empty());
+    assert!(legacy.category.is_empty());
 
     let request = EmitMarkRequest {
         name: "mark".into(),
@@ -228,12 +261,13 @@ fn emit_mark_additive_fields_preserve_legacy_wire_compatibility() {
             .unwrap(),
         ),
         severity: "warn".into(),
+        category: "custom".into(),
         ..EmitMarkRequest::default()
     };
     let encoded = request.encode_to_vec();
     assert_eq!(
         encoded,
-        b"\x22\x04mark\x3a\x52\x0a\x17nemo.relay.DataSchema@1\x12\x37{\"name\":\"nemo.relay.metric_measurements\",\"version\":\"1\"}\x42\x04warn"
+        b"\x22\x04mark\x3a\x52\x0a\x17nemo.relay.DataSchema@1\x12\x37{\"name\":\"nemo.relay.metric_measurements\",\"version\":\"1\"}\x42\x04warn\x4a\x06custom"
             .to_vec()
     );
     let round_trip = EmitMarkRequest::decode(encoded.as_slice()).unwrap();

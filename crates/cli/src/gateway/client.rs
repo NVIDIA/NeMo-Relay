@@ -14,6 +14,7 @@ use reqwest::Url;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::Value;
 
+use crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER;
 use crate::configuration::BootstrapChallengeKey;
 
 use crate::bootstrap::{BOOTSTRAP_PROTOCOL_VERSION, HEALTHZ_TIMEOUT};
@@ -200,11 +201,18 @@ pub(crate) fn post_verified(
 
     let mut request = format!("POST {path} HTTP/1.1\r\nHost: {authority}\r\n");
     for (name, value) in headers {
+        if name.eq_ignore_ascii_case(BOOTSTRAP_CLIENT_TOKEN_HEADER) {
+            continue;
+        }
         request.push_str(name);
         request.push_str(": ");
         request.push_str(value);
         request.push_str("\r\n");
     }
+    request.push_str(BOOTSTRAP_CLIENT_TOKEN_HEADER);
+    request.push_str(": ");
+    request.push_str(&key.client_token());
+    request.push_str("\r\n");
     request.push_str(&format!(
         "Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()

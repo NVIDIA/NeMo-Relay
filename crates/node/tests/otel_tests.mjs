@@ -40,6 +40,7 @@ describe('OpenTelemetrySubscriber', () => {
       serviceVersion: '1.0.0',
       instrumentationScope: 'node-tests',
       timeoutMillis: 1250,
+      completedSpanContextTtlMillis: 4294967296n,
       headers: {
         authorization: 'Bearer token',
       },
@@ -57,6 +58,7 @@ describe('OpenTelemetrySubscriber', () => {
     assert.equal(subscriber.deregister(name), true);
     assert.equal(subscriber.deregister(name), false);
     subscriber.forceFlush();
+    assert.deepEqual(subscriber.runtimeDiagnostics(), []);
     subscriber.shutdown();
   });
 
@@ -80,6 +82,17 @@ describe('OpenTelemetrySubscriber', () => {
           },
         }),
       /headers must be an object of string values/i,
+    );
+    assert.throws(
+      () =>
+        new OpenTelemetrySubscriber({
+          type: 'full',
+          endpoint: 'http://localhost:4318/v1/traces',
+          headerEnv: {
+            authorization: 1,
+          },
+        }),
+      /headerEnv must be an object of string values/i,
     );
     assert.throws(
       () =>
@@ -124,16 +137,39 @@ describe('OpenTelemetrySubscriber', () => {
       () => new OpenTelemetrySubscriber({ type: 'full', endpoint: ' \t' }),
       /endpoint must be a nonblank string/i,
     );
+    assert.throws(
+      () =>
+        new OpenTelemetrySubscriber({
+          type: 'full',
+          endpoint: 'http://localhost:4318/v1/traces',
+          completedSpanContextTtlMillis: 0n,
+        }),
+      /completedSpanContextTtlMillis must be greater than 0/i,
+    );
+    assert.throws(
+      () =>
+        new OpenTelemetrySubscriber({
+          type: 'full',
+          endpoint: 'http://localhost:4318/v1/traces',
+          completedSpanContextTtlMillis: -1n,
+        }),
+      /must be a nonnegative u64 BigInt/i,
+    );
   });
 
   it('exports scope push/pop and mark events end to end', async () => {
     const collector = await startCollector();
+    const variable = `NEMO_RELAY_NODE_HEADER_${Date.now()}`;
+    const secret = 'Bearer node-activation-secret';
+    process.env[variable] = secret;
     const subscriber = new OpenTelemetrySubscriber({
       type: 'full',
       endpoint: collector.endpoint,
       serviceName: 'node-agent',
       promoteMetadataPrefixes: ['nv.'],
+      headerEnv: { authorization: variable },
     });
+    process.env[variable] = 'Bearer node-changed-secret';
 
     const name = uniqueId('node_otel_e2e');
     subscriber.register(name);
@@ -159,13 +195,64 @@ describe('OpenTelemetrySubscriber', () => {
       const request = await collector.nextRequest();
       assert.equal(request.url, '/v1/traces');
       assert.equal(request.headers['content-type'], 'application/x-protobuf');
+      assert.equal(request.headers.authorization, secret);
       assert.ok(request.body.length > 0);
+      assert.equal(request.body.includes(Buffer.from(secret, 'utf8')), false);
       assertBodyContains(request.body, 'nemo_relay.mark.metadata.source');
       assertOtlpStringAttribute(request.body, 'nv.binding', 'node');
+      assert.equal(
+        subscriber.runtimeDiagnostics().some((entry) => entry.message.includes(secret)),
+        false,
+      );
     } finally {
       subscriber.deregister(name);
       subscriber.shutdown();
+      delete process.env[variable];
       await collector.close();
+    }
+  });
+
+  it('rejects header_env names that collide with static headers ignoring case', () => {
+    const variable = `NEMO_RELAY_NODE_DUPLICATE_${Date.now()}`;
+    process.env[variable] = 'Bearer secret';
+    try {
+      assert.throws(
+        () =>
+          new OpenTelemetrySubscriber({
+            type: 'full',
+            endpoint: 'http://localhost:4318/v1/traces',
+            headers: { Authorization: 'static' },
+            headerEnv: { authorization: variable },
+          }),
+        /unique across headers and header_env/i,
+      );
+    } finally {
+      delete process.env[variable];
+    }
+  });
+
+  it('rejects unset, blank, and invalid header_env values without exposing secrets', () => {
+    const variable = `NEMO_RELAY_NODE_INVALID_HEADER_${Date.now()}`;
+    const config = {
+      type: 'full',
+      endpoint: 'http://localhost:4318/v1/traces',
+      headerEnv: { authorization: variable },
+    };
+    delete process.env[variable];
+    assert.throws(() => new OpenTelemetrySubscriber(config), /is not set/i);
+
+    process.env[variable] = '  ';
+    assert.throws(() => new OpenTelemetrySubscriber(config), /nonblank value/i);
+
+    const secret = 'relay-node-secret';
+    process.env[variable] = `${secret}\ninvalid`;
+    try {
+      assert.throws(
+        () => new OpenTelemetrySubscriber(config),
+        (error) => /valid header value/i.test(error.message) && !error.message.includes(secret),
+      );
+    } finally {
+      delete process.env[variable];
     }
   });
 
@@ -197,7 +284,10 @@ describe('OpenTelemetrySubscriber', () => {
 });
 
 describe('OpenTelemetry log and metric subscribers', () => {
-  it('constructs signal-specific subscribers and supports lifecycle methods', () => {
+  it('constructs signal-specific subscribers and supports lifecycle methods', (t) => {
+    const variable = uniqueId('NEMO_RELAY_NODE_SIGNAL_HEADER');
+    process.env[variable] = 'signal-route';
+    t.after(() => delete process.env[variable]);
     const logSubscriber = new OpenTelemetryLogSubscriber({
       endpoint: 'http://localhost:4318/v1/logs',
       minimumSeverity: LogSeverity.Warn,
@@ -205,6 +295,7 @@ describe('OpenTelemetry log and metric subscribers', () => {
       maxExportBatchSize: 16,
       scheduledDelayMillis: 100,
       headers: { authorization: 'Bearer token' },
+      headerEnv: { 'x-relay-route': variable },
       resourceAttributes: { 'deployment.environment': 'test' },
     });
     const logName = uniqueId('node_otel_log');
@@ -223,6 +314,7 @@ describe('OpenTelemetry log and metric subscribers', () => {
       maxInstruments: 32,
       cardinalityLimit: 100,
       headers: { authorization: 'Bearer token' },
+      headerEnv: { 'x-relay-route': variable },
       resourceAttributes: { 'deployment.environment': 'test' },
     });
     const metricName = uniqueId('node_otel_metric');
@@ -243,6 +335,10 @@ describe('OpenTelemetry log and metric subscribers', () => {
           maxQueueSize: 0,
         }),
       /max_queue_size must be greater than 0/,
+    );
+    assert.throws(
+      () => new OpenTelemetryLogSubscriber({ endpoint: 'http://localhost:4318', completedSpanContextTtlMillis: 0n }),
+      /completedSpanContextTtlMillis must be greater than 0/i,
     );
     assert.throws(
       () =>

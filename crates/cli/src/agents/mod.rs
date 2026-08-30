@@ -614,6 +614,9 @@ pub(crate) fn detected_install_integrations(candidates: &[CodingAgent]) -> Vec<C
 
 /// Hosts with **marketplace plugin state** under `install_dir`.
 ///
+/// With `include_local_install`, force-cleanup targets count as state too, so a stale local
+/// installation is still reachable by `uninstall --force`.
+///
 /// ⚠️ **pi is never in this list, and putting it there panics the doctor.** Every consumer
 /// feeds the result into marketplace-only code -- `PluginLayout::new` calls
 /// `marketplace_manifest_relative`, which is `unreachable!()` for pi -- so a pi here is not
@@ -627,6 +630,7 @@ pub(crate) fn detected_install_integrations(candidates: &[CodingAgent]) -> Vec<C
 pub(crate) fn installed_integrations(
     candidates: &[CodingAgent],
     install_dir: Option<&Path>,
+    include_local_install: bool,
 ) -> Vec<CodingAgent> {
     let install_dir = install_dir
         .map(Path::to_path_buf)
@@ -637,6 +641,11 @@ pub(crate) fn installed_integrations(
         .filter(|agent| !matches!(agent, CodingAgent::Pi))
         .filter(|agent| {
             crate::installation::marketplace::persisted_state_exists(*agent, &install_dir)
+                || (include_local_install
+                    && crate::installation::marketplace::force_cleanup_target_exists(
+                        *agent,
+                        &install_dir,
+                    ))
         })
         .collect()
 }
@@ -646,11 +655,15 @@ pub(crate) fn installed_integrations(
 /// Marketplace state for Codex and Claude Code, and a Relay-managed extension directory for
 /// pi. Separate from [`installed_integrations`] because only one of the two questions has a
 /// pi answer, and answering both from one function is what broke `doctor`.
+///
+/// `include_local_install` is forwarded to [`installed_integrations`]. It does not gate pi:
+/// a Relay-managed extension directory *is* the local install, so it is always removable.
 pub(crate) fn uninstallable_integrations(
     candidates: &[CodingAgent],
     install_dir: Option<&Path>,
+    include_local_install: bool,
 ) -> Vec<CodingAgent> {
-    let mut agents = installed_integrations(candidates, install_dir);
+    let mut agents = installed_integrations(candidates, install_dir, include_local_install);
     if candidates.contains(&CodingAgent::Pi) && pi::install::is_installed() {
         agents.push(CodingAgent::Pi);
     }
@@ -682,7 +695,7 @@ pub(crate) fn collect_default_integration_readiness()
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
     let install_dir = crate::installation::marketplace::default_marketplace_install_dir();
-    let agents = installed_integrations(&CodingAgent::ALL, Some(&install_dir));
+    let agents = installed_integrations(&CodingAgent::ALL, Some(&install_dir), false);
     let pending = agents
         .into_iter()
         .map(|agent| spawn_integration_readiness(agent, install_dir.clone()))

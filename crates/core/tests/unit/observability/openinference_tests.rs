@@ -796,6 +796,7 @@ fn mapped_aliases_are_typed_and_cannot_replace_projected_span_fields() {
                 crate::observability::OtlpAttributeMapping::new("missing.source", "ignored.alias"),
             ],
             promote_metadata_prefixes: Vec::new(),
+            completed_span_context_ttl: crate::observability::otel::DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
         },
     )
     .unwrap();
@@ -3221,44 +3222,54 @@ fn late_parented_marks_reuse_completed_parent_trace_context() {
 }
 
 #[test]
-fn completed_span_context_cache_evicts_oldest_parent_contexts() {
+fn completed_span_context_ttl_retains_more_than_legacy_context_limit() {
     let (provider, exporter) = make_provider();
     let mut processor = crate::observability::otel::OtelEventProcessor::new_openinference(
         provider.clone(),
         "test-scope".to_string(),
     );
-    let span_count = crate::observability::otel::COMPLETED_SPAN_CONTEXT_LIMIT + 2;
+    let span_count = 4_098;
     let mut completed_uuids = Vec::with_capacity(span_count);
+    let timestamp = chrono::Utc::now();
 
     for index in 0..span_count {
         let uuid = Uuid::now_v7();
         completed_uuids.push(uuid);
         let name = format!("completed-{index}");
-        processor.process(&make_start_event(uuid, None, &name, ScopeType::Tool, None));
-        processor.process(&make_end_event(
-            uuid,
-            None,
-            &name,
-            ScopeType::Tool,
-            Some(json!({"status": "done"})),
-        ));
+        for category in [ScopeCategory::Start, ScopeCategory::End] {
+            processor.process(&Event::Scope(ScopeEvent::new(
+                BaseEvent::builder()
+                    .uuid(uuid)
+                    .name(&name)
+                    .timestamp(timestamp)
+                    .build(),
+                category,
+                Vec::new(),
+                EventCategory::from(ScopeType::Tool),
+                None,
+            )));
+        }
     }
 
     let oldest_uuid = completed_uuids[0];
     let recent_uuid = completed_uuids[span_count - 1];
-    assert!(!processor.completed_span_contexts.contains_key(&oldest_uuid));
+    assert!(processor.completed_span_contexts.contains_key(&oldest_uuid));
     assert!(processor.completed_span_contexts.contains_key(&recent_uuid));
 
-    processor.process(&make_mark_event(
-        Some(oldest_uuid),
-        "oldest-after-eviction",
-        Some(json!({"case": "oldest"})),
-    ));
-    processor.process(&make_mark_event(
-        Some(recent_uuid),
-        "recent-after-eviction",
-        Some(json!({"case": "recent"})),
-    ));
+    for (parent_uuid, name) in [
+        (oldest_uuid, "oldest-after-eviction"),
+        (recent_uuid, "recent-after-eviction"),
+    ] {
+        processor.process(&Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .parent_uuid(parent_uuid)
+                .name(name)
+                .timestamp(timestamp)
+                .build(),
+            None,
+            None,
+        )));
+    }
     processor.force_flush().unwrap();
 
     let spans = exporter.get_finished_spans().unwrap();
@@ -3282,11 +3293,11 @@ fn completed_span_context_cache_evicts_oldest_parent_contexts() {
         .find(|span| span.name.as_ref() == "mark:recent-after-eviction")
         .unwrap();
 
-    assert_ne!(
+    assert_eq!(
         oldest_mark.parent_span_id,
         oldest_parent.span_context.span_id()
     );
-    assert_ne!(
+    assert_eq!(
         oldest_mark.span_context.trace_id(),
         oldest_parent.span_context.trace_id()
     );
@@ -3302,7 +3313,170 @@ fn completed_span_context_cache_evicts_oldest_parent_contexts() {
 }
 
 #[test]
-fn process_start_removes_completed_span_order_entry() {
+fn completed_span_context_ttl_expires_after_the_boundary_and_reports_diagnostics() {
+    let (provider, exporter) = make_provider();
+    let runtime_diagnostics =
+        crate::observability::otel_signal::SignalRuntimeDiagnostics::new(None);
+    let mut processor = crate::observability::otel::OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+        provider.clone(),
+        "test-scope".to_string(),
+        crate::observability::OpenTelemetryType::OpenInference,
+        crate::observability::MarkProjection::default(),
+        crate::observability::default_mark_exclude_names(),
+        Vec::new(),
+        Vec::new(),
+        runtime_diagnostics.clone(),
+    );
+    let parent_uuid = Uuid::now_v7();
+    let closed_at = chrono::Utc::now();
+    let scope_event = |scope_category, timestamp| {
+        Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .uuid(parent_uuid)
+                .name("completed")
+                .timestamp(timestamp)
+                .build(),
+            scope_category,
+            Vec::new(),
+            EventCategory::from(ScopeType::Tool),
+            None,
+        ))
+    };
+    let mark_event = |name, timestamp| {
+        Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .parent_uuid(parent_uuid)
+                .name(name)
+                .timestamp(timestamp)
+                .build(),
+            None,
+            None,
+        ))
+    };
+
+    processor.process(&scope_event(ScopeCategory::Start, closed_at));
+    processor.process(&scope_event(ScopeCategory::End, closed_at));
+    processor.process(&mark_event(
+        "at-ttl-boundary",
+        closed_at + chrono::Duration::seconds(60),
+    ));
+    processor.process(&mark_event(
+        "after-ttl",
+        closed_at + chrono::Duration::seconds(61),
+    ));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let parent = finished_span_named(&spans, "completed");
+    let boundary_mark = finished_span_named(&spans, "mark:at-ttl-boundary");
+    let expired_mark = finished_span_named(&spans, "mark:after-ttl");
+    assert_eq!(
+        boundary_mark.span_context.trace_id(),
+        parent.span_context.trace_id()
+    );
+    assert_eq!(boundary_mark.parent_span_id, parent.span_context.span_id());
+    assert_ne!(
+        expired_mark.span_context.trace_id(),
+        parent.span_context.trace_id()
+    );
+    assert_ne!(expired_mark.parent_span_id, parent.span_context.span_id());
+    assert_eq!(
+        runtime_diagnostics
+            .snapshot()
+            .get("otel.completed_span_context_expired")
+            .map(|diagnostic| diagnostic.count),
+        Some(1)
+    );
+}
+
+#[test]
+fn completed_span_context_ttl_expires_out_of_order_completed_contexts() {
+    let (provider, exporter) = make_provider();
+    let runtime_diagnostics =
+        crate::observability::otel_signal::SignalRuntimeDiagnostics::new(None);
+    let mut processor = crate::observability::otel::OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+        provider,
+        "test-scope".to_string(),
+        crate::observability::OpenTelemetryType::OpenInference,
+        crate::observability::MarkProjection::default(),
+        crate::observability::default_mark_exclude_names(),
+        Vec::new(),
+        Vec::new(),
+        runtime_diagnostics.clone(),
+    );
+    let older_uuid = Uuid::now_v7();
+    let newer_uuid = Uuid::now_v7();
+    let closed_at = chrono::Utc::now();
+    let scope_event = |uuid, name, scope_category, timestamp| {
+        Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .uuid(uuid)
+                .name(name)
+                .timestamp(timestamp)
+                .build(),
+            scope_category,
+            Vec::new(),
+            EventCategory::from(ScopeType::Tool),
+            None,
+        ))
+    };
+
+    processor.process(&scope_event(
+        older_uuid,
+        "older",
+        ScopeCategory::Start,
+        closed_at,
+    ));
+    processor.process(&scope_event(
+        newer_uuid,
+        "newer",
+        ScopeCategory::Start,
+        closed_at,
+    ));
+    processor.process(&scope_event(
+        newer_uuid,
+        "newer",
+        ScopeCategory::End,
+        closed_at + chrono::Duration::seconds(30),
+    ));
+    processor.process(&scope_event(
+        older_uuid,
+        "older",
+        ScopeCategory::End,
+        closed_at,
+    ));
+    processor.process(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(older_uuid)
+            .name("after-older-ttl")
+            .timestamp(closed_at + chrono::Duration::seconds(61))
+            .build(),
+        None,
+        None,
+    )));
+    processor.force_flush().unwrap();
+
+    assert!(!processor.completed_span_contexts.contains_key(&older_uuid));
+    assert!(processor.completed_span_contexts.contains_key(&newer_uuid));
+    let spans = exporter.get_finished_spans().unwrap();
+    let older_span = finished_span_named(&spans, "older");
+    let late_mark = finished_span_named(&spans, "mark:after-older-ttl");
+    assert_ne!(
+        late_mark.span_context.trace_id(),
+        older_span.span_context.trace_id()
+    );
+    assert_ne!(late_mark.parent_span_id, older_span.span_context.span_id());
+    assert_eq!(
+        runtime_diagnostics
+            .snapshot()
+            .get("otel.completed_span_context_expired")
+            .map(|diagnostic| diagnostic.count),
+        Some(1)
+    );
+}
+
+#[test]
+fn process_start_removes_completed_span_expiry_index_entry() {
     let (provider, _exporter) = make_provider();
     let mut processor = crate::observability::otel::OtelEventProcessor::new_openinference(
         provider,
@@ -3327,9 +3501,9 @@ fn process_start_removes_completed_span_order_entry() {
     assert!(processor.completed_span_contexts.contains_key(&tool_uuid));
     assert_eq!(
         processor
-            .completed_span_order
-            .iter()
-            .filter(|uuid| **uuid == tool_uuid)
+            .completed_span_expiry_index
+            .values()
+            .filter(|uuids| uuids.contains(&tool_uuid))
             .count(),
         1
     );
@@ -3342,7 +3516,12 @@ fn process_start_removes_completed_span_order_entry() {
         None,
     ));
     assert!(!processor.completed_span_contexts.contains_key(&tool_uuid));
-    assert!(!processor.completed_span_order.contains(&tool_uuid));
+    assert!(
+        processor
+            .completed_span_expiry_index
+            .values()
+            .all(|uuids| !uuids.contains(&tool_uuid))
+    );
 
     processor.process(&make_end_event(
         tool_uuid,
@@ -3354,9 +3533,9 @@ fn process_start_removes_completed_span_order_entry() {
     assert!(processor.completed_span_contexts.contains_key(&tool_uuid));
     assert_eq!(
         processor
-            .completed_span_order
-            .iter()
-            .filter(|uuid| **uuid == tool_uuid)
+            .completed_span_expiry_index
+            .values()
+            .filter(|uuids| uuids.contains(&tool_uuid))
             .count(),
         1
     );

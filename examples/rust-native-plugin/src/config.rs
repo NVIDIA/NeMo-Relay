@@ -61,6 +61,7 @@ pub(crate) struct RegistrationControlConfig {
     pub enabled: bool,
     pub kinds: Vec<RuntimeRegistrationKind>,
     pub registration_name: String,
+    pub allowed_registration_name: String,
     pub reason: String,
 }
 
@@ -126,6 +127,7 @@ impl Default for RegistrationControlConfig {
             enabled: false,
             kinds: vec![RuntimeRegistrationKind::Subscriber],
             registration_name: "documentation-controlled-subscriber".into(),
+            allowed_registration_name: "documentation-observed-subscriber".into(),
             reason: "disabled by documentation plugin".into(),
         }
     }
@@ -192,6 +194,10 @@ pub(crate) fn validate(plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnosti
                     "registration_control.registration_name",
                     &config.registration_control.registration_name,
                 ),
+                (
+                    "registration_control.allowed_registration_name",
+                    &config.registration_control.allowed_registration_name,
+                ),
                 ("registration_control.reason", &config.registration_control.reason),
             ] {
                 if value.is_empty() {
@@ -202,6 +208,18 @@ pub(crate) fn validate(plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnosti
                         format!("{field} must not be empty"),
                     ));
                 }
+            }
+            if config.registration_control.enabled
+                && !config.registration_control.registration_name.is_empty()
+                && config.registration_control.registration_name
+                    == config.registration_control.allowed_registration_name
+            {
+                diagnostics.push(diagnostic(
+                    DiagnosticLevel::Error,
+                    "examples.rust_native_policy.invalid_registration_control",
+                    Some("registration_control.allowed_registration_name"),
+                    "registration_control.allowed_registration_name must differ from registration_control.registration_name when registration control is enabled",
+                ));
             }
         }
         Err(error) => diagnostics.push(diagnostic(
@@ -241,7 +259,13 @@ fn validate_unknown_fields(
     ];
     const EXECUTION: &[&str] = &["enabled", "priority", "emit_pending_marks"];
     const RUNTIME: &[&str] = &["emit_marks", "emit_isolated_scope"];
-    const REGISTRATION_CONTROL: &[&str] = &["enabled", "kinds", "registration_name", "reason"];
+    const REGISTRATION_CONTROL: &[&str] = &[
+        "enabled",
+        "kinds",
+        "registration_name",
+        "allowed_registration_name",
+        "reason",
+    ];
 
     report_unknown(plugin_config, "", TOP_LEVEL, diagnostics);
     for (field, allowed) in [

@@ -68,6 +68,12 @@ shared persistence:
 cargo add nemo-relay-adaptive --features redis-backend
 ```
 
+The response cache is opt-in. Its required `namespace` identifies one trusted
+cache-sharing domain and must not be reused across mutually untrusted tenants
+or upstream authorities. When tenants share a backend, include every
+answer-affecting tenant or routing header in `header_allowlist`; Relay cannot
+infer application-owned tenant identity.
+
 For local source development:
 
 ```bash

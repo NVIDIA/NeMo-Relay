@@ -38,14 +38,7 @@ fn maps_claude_canonical_tool_payload() {
         }
         event => panic!("unexpected event: {event:?}"),
     }
-    assert_eq!(outcome.response["continue"], json!(true));
-    assert_eq!(
-        outcome.response["hookSpecificOutput"],
-        json!({
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow"
-        })
-    );
+    assert_eq!(outcome.response, json!({"continue": true}));
 }
 
 #[test]
@@ -578,6 +571,70 @@ fn keeps_codex_response_unwrapped() {
         NormalizedEvent::AgentStarted(_)
     ));
     assert_eq!(outcome.response, json!({}));
+}
+
+#[test]
+fn permission_requests_keep_hook_marks_and_require_exact_tool_identity() {
+    let outcome = claude_code::adapt(
+        json!({
+            "session_id": "claude-session",
+            "hook_event_name": "PermissionRequest",
+            "tool_use_id": "toolu-1",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "README.md"}
+        }),
+        &HeaderMap::new(),
+    );
+    assert!(matches!(outcome.events[0], NormalizedEvent::HookMark(_)));
+    let permission = outcome.permission.unwrap().unwrap();
+    assert_eq!(permission.session_id, "claude-session");
+    assert_eq!(permission.tool_call_id, "toolu-1");
+    assert_eq!(permission.tool_name, "Write");
+    assert_eq!(permission.arguments, json!({"file_path": "README.md"}));
+
+    let claude_without_id = claude_code::adapt(
+        json!({
+            "session_id": "claude-session",
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "README.md"}
+        }),
+        &HeaderMap::new(),
+    );
+    assert_eq!(
+        claude_without_id.permission.unwrap().unwrap().tool_call_id,
+        ""
+    );
+
+    let codex_permission = codex::adapt(
+        json!({
+            "session_id": "codex-session",
+            "hook_event_name": "PermissionRequest",
+            "tool_call_id": "call-1",
+            "tool_name": "shell",
+            "arguments": {"cmd": "pwd"}
+        }),
+        &HeaderMap::new(),
+    )
+    .permission
+    .unwrap()
+    .unwrap();
+    assert_eq!(codex_permission.session_id, "codex-session");
+    assert_eq!(codex_permission.tool_call_id, "call-1");
+    assert_eq!(codex_permission.tool_name, "shell");
+    assert_eq!(codex_permission.arguments, json!({"cmd": "pwd"}));
+    assert_eq!(codex_permission.agent_kind, AgentKind::Codex);
+
+    let missing_id = codex::adapt(
+        json!({
+            "session_id": "codex-session",
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "shell",
+            "arguments": {"cmd": "pwd"}
+        }),
+        &HeaderMap::new(),
+    );
+    assert!(missing_id.permission.unwrap().is_err());
 }
 
 #[test]

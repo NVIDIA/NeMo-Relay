@@ -3778,6 +3778,7 @@ fn test_ffi_otel_signal_subscribers_apply_all_typed_options() {
                     64,
                     16,
                     10,
+                    60_000,
                     out,
                 )
             },

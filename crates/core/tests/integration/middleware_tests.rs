@@ -6736,7 +6736,7 @@ async fn test_runtime_registration_discovery_and_cross_owner_subscriber_gate() {
     setup_isolated_thread();
 
     let mut context =
-        PluginRegistrationContext::with_namespace("__nemo_relay_plugin__observability__");
+        PluginRegistrationContext::with_namespace("nemo-relay-plugin.v1.observability:1:");
     let deliveries = Arc::new(AtomicU32::new(0));
     let captured_deliveries = Arc::clone(&deliveries);
     context
@@ -6757,7 +6757,7 @@ async fn test_runtime_registration_discovery_and_cross_owner_subscriber_gate() {
     assert_eq!(registration.kind, RuntimeRegistrationKind::Subscriber);
     assert_eq!(
         registration.effective_name,
-        "__nemo_relay_plugin__observability__opentelemetry"
+        "nemo-relay-plugin.v1.observability:1:opentelemetry"
     );
     assert_eq!(
         registration.owner.kind,
@@ -6767,6 +6767,7 @@ async fn test_runtime_registration_discovery_and_cross_owner_subscriber_gate() {
         registration.owner.plugin_kind.as_deref(),
         Some("observability")
     );
+    assert_eq!(registration.owner.component_ordinal, Some(1));
 
     register_conditional_middleware_guardrail(
         "external_observability_gate",

@@ -1150,31 +1150,35 @@ fn openai_responses_input_content_message(content: &Json) -> Option<Json> {
     None
 }
 
-/// Try to promote `tool_calls` from the raw LLM response into `AtifToolCall` entries.
+/// Try to promote provider tool calls from a raw LLM response into `AtifToolCall` entries.
 ///
-/// Expected shape per OpenAI convention:
-/// ```json
-/// "tool_calls": [{ "id": "...", "type": "function", "function": { "name": "...", "arguments": "..." } }]
-/// ```
+/// Supports generic/OpenAI Chat `tool_calls`, OpenAI Responses `function_call`
+/// output items, and Anthropic `tool_use` content blocks. Provider-specific ID
+/// semantics are preserved so later observations can correlate to the call.
 ///
 /// String `arguments` are parsed into JSON for consistency with NeMo Relay tool events
 /// which always provide parsed arguments.
 ///
 /// Returns `None` if there are no tool calls or the structure is unrecognized.
 fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
-    let arr = tool_call_array(output)
-        .filter(|arr| !arr.is_empty())
-        .map(|arr| arr.iter().collect::<Vec<_>>())
-        .or_else(|| openai_responses_function_call_items(output))
-        .or_else(|| anthropic_messages_tool_use_items(output))?;
+    let (arr, origin) = if let Some(tool_calls) = tool_call_array(output).filter(|a| !a.is_empty())
+    {
+        (
+            tool_calls.iter().collect::<Vec<_>>(),
+            ToolCallOrigin::Generic,
+        )
+    } else if let Some(function_calls) = openai_responses_function_call_items(output) {
+        (function_calls, ToolCallOrigin::OpenAiResponses)
+    } else {
+        (
+            anthropic_messages_tool_use_items(output)?,
+            ToolCallOrigin::AnthropicMessages,
+        )
+    };
     let mut calls = Vec::with_capacity(arr.len());
     for (index, tc) in arr.iter().enumerate() {
         let tc_obj = tc.as_object()?;
-        let mut id = tc_obj
-            .get("id")
-            .or_else(|| tc_obj.get("tool_call_id"))
-            .or_else(|| tc_obj.get("call_id"))
-            .and_then(Json::as_str)
+        let mut id = tool_call_id_for_origin(tc_obj, origin)
             .unwrap_or("")
             .to_string();
         let func = tc_obj.get("function").and_then(Json::as_object);
@@ -1208,6 +1212,41 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
         });
     }
     if calls.is_empty() { None } else { Some(calls) }
+}
+
+/// Provider payload shape governing tool-call identifier semantics.
+#[derive(Clone, Copy)]
+enum ToolCallOrigin {
+    Generic,
+    OpenAiResponses,
+    AnthropicMessages,
+}
+
+/// Select the first usable correlation identifier for the provider payload shape.
+fn tool_call_id_for_origin(
+    tool_call: &serde_json::Map<String, Json>,
+    origin: ToolCallOrigin,
+) -> Option<&str> {
+    match origin {
+        // Responses distinguishes the output item `id` (`fc_*`) from the
+        // invocation `call_id` used by function_call_output and tool events.
+        ToolCallOrigin::OpenAiResponses => {
+            ["call_id", "id", "tool_call_id"].iter().find_map(|field| {
+                tool_call
+                    .get(*field)
+                    .and_then(Json::as_str)
+                    .filter(|value| !value.is_empty())
+            })
+        }
+        ToolCallOrigin::Generic | ToolCallOrigin::AnthropicMessages => {
+            ["id", "tool_call_id", "call_id"].iter().find_map(|field| {
+                tool_call
+                    .get(*field)
+                    .and_then(Json::as_str)
+                    .filter(|value| !value.is_empty())
+            })
+        }
+    }
 }
 
 // Annotation adapters: read the normalized message from an annotation, returning
@@ -2178,19 +2217,17 @@ impl PendingAgentStep {
         ancestry: AtifAncestry,
         invocation: AtifInvocationInfo,
         tool_call_order: Vec<String>,
+        llm_request: Option<Json>,
         llm_response: Json,
     ) {
         self.step_idx = Some(step_idx);
         self.ancestry = Some(ancestry);
         self.invocation = Some(invocation);
+        self.llm_request = llm_request;
         self.llm_response = Some(llm_response);
         self.tool_ancestry.clear();
         self.tool_invocations.clear();
         self.tool_call_order = tool_call_order;
-    }
-
-    fn stash_llm_request(&mut self, llm_request: Json) {
-        self.llm_request = Some(llm_request);
     }
 
     fn push_tool_metadata(&mut self, ancestry: AtifAncestry, invocation: AtifInvocationInfo) {
@@ -2251,7 +2288,8 @@ struct StepConversionState {
     pending_obs_timestamp: Option<String>,
     deferred_observations: HashMap<String, Vec<DeferredToolObservation>>,
     deferred_tool_metadata: HashMap<String, Vec<(AtifAncestry, AtifInvocationInfo)>>,
-    current_reasoning_effort: Option<Json>,
+    pending_llm_requests: HashMap<Uuid, Json>,
+    pending_reasoning_efforts: HashMap<Uuid, Json>,
     current_agent: PendingAgentStep,
 }
 
@@ -2514,10 +2552,13 @@ impl StepConversionState {
             return;
         };
         let content = unwrap_llm_request(input);
-        self.current_reasoning_effort = extract_reasoning_effort(&content);
+        if let Some(reasoning_effort) = extract_reasoning_effort(&content) {
+            self.pending_reasoning_efforts
+                .insert(event.uuid(), reasoning_effort);
+        }
         let has_paired_end = lookups.llm_end_uuids.contains(&event.uuid());
         let Some(message) = llm_start_user_step_message(event, &content, has_paired_end) else {
-            self.current_agent.stash_llm_request(content);
+            self.pending_llm_requests.insert(event.uuid(), content);
             return;
         };
         let extra = AtifStepExtra {
@@ -2548,13 +2589,15 @@ impl StepConversionState {
 
     fn handle_llm_end(&mut self, event: &Event, lookups: &EventLookupMaps) {
         self.flush_observations();
-
         let Some(output) = event.data() else {
             return;
         };
+
+        self.finalize_agent_extra();
+        let llm_request = self.pending_llm_requests.remove(&event.uuid());
+        let reasoning_effort = self.pending_reasoning_efforts.remove(&event.uuid());
         let tool_calls = extract_tool_calls(output);
         let tool_call_order = refresh_tool_call_lookup(&mut self.last_tool_call_map, &tool_calls);
-        let reasoning_effort = self.current_reasoning_effort.take();
         let reasoning_content = extract_reasoning_content(output);
         let start_ts = lookups.start_ts_map.get(&event.uuid()).cloned();
         let paired_start_model = lookups
@@ -2607,6 +2650,7 @@ impl StepConversionState {
             ancestry,
             invocation,
             tool_call_order,
+            llm_request,
             output.clone(),
         );
         self.attach_deferred_to_current_agent();

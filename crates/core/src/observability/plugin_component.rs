@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 use uuid::Uuid;
 
+use super::private_file::atomic_private_write;
 use crate::api::event::{Event, LogSeverity, ScopeCategory, ValidatedMetricMeasurement};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack, global_context};
 use crate::api::scope::ScopeType;
@@ -248,6 +249,13 @@ pub struct OpenTelemetryLogSectionConfig {
     /// Maximum delay before exporting a non-full log batch.
     #[serde(default = "default_otel_log_scheduled_delay_millis")]
     pub scheduled_delay_millis: u64,
+    /// Positive duration for retaining completed scope context for late logs.
+    #[serde(default = "default_completed_span_context_ttl_millis")]
+    pub completed_span_context_ttl_millis: u64,
+}
+
+fn default_completed_span_context_ttl_millis() -> u64 {
+    60_000
 }
 
 impl Default for OpenTelemetryLogSectionConfig {
@@ -259,6 +267,7 @@ impl Default for OpenTelemetryLogSectionConfig {
             max_queue_size: default_otel_log_max_queue_size(),
             max_export_batch_size: default_otel_log_max_export_batch_size(),
             scheduled_delay_millis: default_otel_log_scheduled_delay_millis(),
+            completed_span_context_ttl_millis: default_completed_span_context_ttl_millis(),
         }
     }
 }
@@ -326,6 +335,9 @@ pub struct OpenTelemetryEndpointConfig {
     /// Literal Event metadata prefixes copied to top-level OTLP attributes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub promote_metadata_prefixes: Vec<String>,
+    /// Literal root-scope Event metadata prefixes copied to OTLP resource attributes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub promote_resource_metadata_prefixes: Vec<String>,
     /// OTLP transport: `http_binary` or `grpc`.
     #[serde(default = "default_otlp_transport")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "otlp_transport_schema"))]
@@ -363,6 +375,9 @@ pub struct OpenTelemetryEndpointConfig {
     /// Maximum delay before exporting a non-full batch, in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scheduled_delay_millis: Option<u64>,
+    /// How long completed scopes retain trace context for late marks, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_span_context_ttl_millis: Option<u64>,
 }
 
 /// Multi-sink ATOF JSONL exporter config.
@@ -471,9 +486,9 @@ pub struct AtifSectionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_directory: Option<PathBuf>,
     /// Filename template. `{session_id}` is replaced with the top-level trajectory scope UUID, and
-    /// `{metadata.<path>:-fallback}` placeholders use path-safe strings from the top-level scope
-    /// metadata or the optional literal fallback. When [`storage`] is non-empty, the rendered
-    /// filename is appended to each backend's key prefix.
+    /// `{metadata.<path>:-fallback}` placeholders sanitize strings from the top-level scope
+    /// metadata into path-safe filename fragments or use the optional literal fallback. When
+    /// [`storage`] is non-empty, the rendered filename is appended to each backend's key prefix.
     ///
     /// [`storage`]: Self::storage
     #[serde(default = "default_atif_filename_template")]
@@ -673,6 +688,7 @@ crate::editor_config! {
         max_queue_size => { label: "max_queue_size", kind: Integer },
         max_export_batch_size => { label: "max_export_batch_size", kind: Integer },
         scheduled_delay_millis => { label: "scheduled_delay_millis", kind: Integer },
+        completed_span_context_ttl_millis => { label: "completed_span_context_ttl_millis", kind: Integer },
     }
 }
 
@@ -715,6 +731,24 @@ const fn otel_editor_field(
     }
 }
 
+const fn otel_list_editor_field(
+    name: &'static str,
+    optional: bool,
+    item: &'static EditorListItemSpec,
+) -> EditorFieldSpec {
+    EditorFieldSpec {
+        name,
+        label: name,
+        kind: EditorFieldKind::List,
+        enum_values: &[],
+        optional,
+        nested_schema: None,
+        nested_default: None,
+        list_item: Some(item),
+        tagged_union: None,
+    }
+}
+
 impl EditorConfig for OpenTelemetryEndpointConfig {
     fn editor_schema() -> &'static EditorSchema {
         static SCHEMA: EditorSchema = EditorSchema {
@@ -732,10 +766,20 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
                     &["inherit", "event", "tool"],
                     false,
                 ),
-                otel_editor_field("mark_exclude_names", EditorFieldKind::Json, &[], false),
+                otel_list_editor_field(
+                    "mark_exclude_names",
+                    false,
+                    &crate::config_editor::STRING_LIST_ITEM,
+                ),
                 otel_editor_field("attribute_mappings", EditorFieldKind::List, &[], false),
                 otel_editor_field(
                     "promote_metadata_prefixes",
+                    EditorFieldKind::List,
+                    &[],
+                    true,
+                ),
+                otel_editor_field(
+                    "promote_resource_metadata_prefixes",
                     EditorFieldKind::List,
                     &[],
                     true,
@@ -755,6 +799,12 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
                 otel_editor_field("max_export_batch_size", EditorFieldKind::Integer, &[], true),
                 otel_editor_field(
                     "scheduled_delay_millis",
+                    EditorFieldKind::Integer,
+                    &[],
+                    true,
+                ),
+                otel_editor_field(
+                    "completed_span_context_ttl_millis",
                     EditorFieldKind::Integer,
                     &[],
                     true,
@@ -874,16 +924,74 @@ crate::editor_config! {
 }
 
 crate::editor_config! {
+    impl HttpStorageConfig {
+        endpoint => { label: "endpoint", kind: String },
+        headers => { label: "headers", kind: StringMap },
+        header_env => { label: "header_env", kind: StringMap },
+        timeout_millis => { label: "timeout_millis", kind: Integer },
+    }
+}
+
+crate::editor_config! {
+    impl S3StorageConfig {
+        bucket => { label: "bucket", kind: String },
+        key_prefix => { label: "key_prefix", kind: String, optional: true },
+        access_key_id => { label: "access_key_id", kind: String, optional: true },
+        secret_access_key_var => { label: "secret_access_key_var", kind: String, optional: true },
+        session_token_var => { label: "session_token_var", kind: String, optional: true },
+        region => { label: "region", kind: String, optional: true },
+        endpoint_url => { label: "endpoint_url", kind: String, optional: true },
+        allow_http => { label: "allow_http", kind: Boolean, optional: true },
+    }
+}
+
+fn default_http_storage_editor_value() -> Json {
+    serde_json::json!({"type": "http", "endpoint": "", "headers": {}, "header_env": {}, "timeout_millis": 3000})
+}
+
+fn default_s3_storage_editor_value() -> Json {
+    serde_json::json!({"type": "s3", "bucket": ""})
+}
+
+static ATIF_STORAGE_VARIANTS: [EditorVariantSpec; 2] = [
+    EditorVariantSpec {
+        label: "HTTP",
+        tag: "http",
+        schema: <HttpStorageConfig as EditorConfig>::editor_schema,
+        default: default_http_storage_editor_value,
+    },
+    EditorVariantSpec {
+        label: "S3",
+        tag: "s3",
+        schema: <S3StorageConfig as EditorConfig>::editor_schema,
+        default: default_s3_storage_editor_value,
+    },
+];
+
+static ATIF_STORAGE_TAGGED_UNION: EditorTaggedUnionSpec = EditorTaggedUnionSpec {
+    discriminator: "type",
+    variants: &ATIF_STORAGE_VARIANTS,
+};
+
+static ATIF_STORAGE_LIST: EditorListItemSpec = EditorListItemSpec {
+    kind: EditorFieldKind::Section,
+    schema: None,
+    default: None,
+    tagged_union: Some(&ATIF_STORAGE_TAGGED_UNION),
+    list_item: None,
+};
+
+crate::editor_config! {
     impl AtifSectionConfig {
         enabled => { label: "enabled", kind: Boolean },
         agent_name => { label: "agent_name", kind: String },
         agent_version => { label: "agent_version", kind: String },
         model_name => { label: "model_name", kind: String },
-        tool_definitions => { label: "tool_definitions", kind: Json, optional: true },
+        tool_definitions => { label: "tool_definitions", kind: List, optional: true, list: &crate::config_editor::JSON_LIST_ITEM },
         extra => { label: "extra", kind: Json, optional: true },
         output_directory => { label: "output_directory", kind: String, optional: true },
         filename_template => { label: "filename_template", kind: String },
-        storage => { label: "storage", kind: Json, optional: true },
+        storage => { label: "storage", kind: List, optional: true, list: &ATIF_STORAGE_LIST },
     }
 }
 
@@ -1992,10 +2100,11 @@ fn build_opentelemetry_log_subscribers(
     if section.max_queue_size == 0
         || section.max_export_batch_size == 0
         || section.scheduled_delay_millis == 0
+        || section.completed_span_context_ttl_millis == 0
         || section.max_export_batch_size > section.max_queue_size
     {
         return Err(PluginError::InvalidConfig(
-            "OpenTelemetry logs batch settings must be positive and max_export_batch_size must not exceed max_queue_size".to_string(),
+            "OpenTelemetry logs batch settings and completed_span_context_ttl_millis must be positive and max_export_batch_size must not exceed max_queue_size".to_string(),
         ));
     }
     let mut subscribers = Vec::with_capacity(endpoints.len());
@@ -2100,7 +2209,10 @@ fn build_log_config(
         .with_minimum_severity(minimum_severity)
         .with_max_queue_size(section.max_queue_size)
         .with_max_export_batch_size(section.max_export_batch_size)
-        .with_scheduled_delay(Duration::from_millis(section.scheduled_delay_millis));
+        .with_scheduled_delay(Duration::from_millis(section.scheduled_delay_millis))
+        .with_completed_span_context_ttl(Duration::from_millis(
+            section.completed_span_context_ttl_millis,
+        ));
     config = apply_signal_common(config, &endpoint, headers);
     Ok(config)
 }
@@ -2177,9 +2289,9 @@ fn resolve_signal_headers(
                 "OpenTelemetry {signal}.endpoints[{index}] header {key:?} cannot appear in both headers and header_env"
             )));
         }
-        let value = std::env::var(variable).map_err(|error| {
+        let value = std::env::var(variable).map_err(|_| {
             PluginError::InvalidConfig(format!(
-                "OpenTelemetry {signal}.endpoints[{index}].header_env.{key} could not read environment variable {variable:?}: {error}"
+                "OpenTelemetry {signal}.endpoints[{index}].header_env.{key} could not read environment variable {variable:?}"
             ))
         })?;
         if value.trim().is_empty() || value.trim() != value {
@@ -2326,6 +2438,7 @@ struct AtifDispatcher {
 struct ManagedAtifExporter {
     exporter: AtifExporter,
     filename: String,
+    local_root: Option<PathBuf>,
     local_path: Option<PathBuf>,
     correlation: AtifCorrelation,
     observed_events: Vec<Event>,
@@ -2341,6 +2454,7 @@ struct PendingAtifWrite {
     // object-store feature; without it, only the local sink reads `local_path`.
     #[cfg_attr(not(feature = "object-store"), allow(dead_code))]
     filename: String,
+    local_root: Option<PathBuf>,
     local_path: Option<PathBuf>,
     payload: Vec<u8>,
 }
@@ -2354,6 +2468,7 @@ struct PendingAtifExport {
     agent_uuid: Uuid,
     exporter: AtifExporter,
     filename: String,
+    local_root: Option<PathBuf>,
     local_path: Option<PathBuf>,
     correlation: AtifCorrelation,
 }
@@ -2448,26 +2563,27 @@ impl AtifDispatcher {
         // subscriber is attached after that start event has already been
         // emitted.
         let session_id = event.uuid().to_string();
-        let (filename, local_path) = match self.prepare_destination(&session_id, event.metadata()) {
-            Ok(destination) => destination,
-            Err(error) => {
-                self.record_runtime_failure(
-                    "atif.destination_render_failed",
-                    Some("filename_template".into()),
-                    error.clone(),
-                    Some(session_id.clone()),
-                );
-                log::warn!(
-                    target: "nemo_relay.observability",
-                    event = "atif_destination_render_failed",
-                    plugin_kind = OBSERVABILITY_PLUGIN_KIND,
-                    exporter = "atif",
-                    session_id = session_id.as_str();
-                    "ATIF destination rendering failed: {error}"
-                );
-                return None;
-            }
-        };
+        let (filename, local_root, local_path) =
+            match self.prepare_destination(&session_id, event.metadata()) {
+                Ok(destination) => destination,
+                Err(error) => {
+                    self.record_runtime_failure(
+                        "atif.destination_render_failed",
+                        Some("filename_template".into()),
+                        error.clone(),
+                        Some(session_id.clone()),
+                    );
+                    log::warn!(
+                        target: "nemo_relay.observability",
+                        event = "atif_destination_render_failed",
+                        plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+                        exporter = "atif",
+                        session_id = session_id.as_str();
+                        "ATIF destination rendering failed: {error}"
+                    );
+                    return None;
+                }
+            };
         let exporter = AtifExporter::new(session_id.clone(), self.agent_info());
         (exporter.subscriber())(event);
         let correlation = AtifCorrelation::from_event(event);
@@ -2477,6 +2593,7 @@ impl AtifDispatcher {
             ManagedAtifExporter {
                 exporter,
                 filename,
+                local_root,
                 local_path,
                 correlation,
                 observed_events: vec![event.clone()],
@@ -2644,6 +2761,7 @@ impl AtifDispatcher {
                     agent_uuid,
                     exporter: agent.exporter.clone(),
                     filename: agent.filename.clone(),
+                    local_root: agent.local_root.clone(),
                     local_path: agent.local_path.clone(),
                     correlation: agent.correlation.clone(),
                 });
@@ -2693,16 +2811,33 @@ impl AtifDispatcher {
         &self,
         session_id: &str,
         metadata: Option<&Json>,
-    ) -> Result<(String, Option<PathBuf>), String> {
+    ) -> Result<(String, Option<PathBuf>, Option<PathBuf>), String> {
         validate_atif_filename_template(&self.config.filename_template)?;
+        if !is_safe_atif_session_id(session_id) {
+            return Err("ATIF session_id must be a non-empty path-safe filename component".into());
+        }
         let filename = render_atif_filename(&self.config.filename_template, session_id, metadata)?;
+        let rendered_path = Path::new(&filename);
+        if rendered_path.is_absolute()
+            || rendered_path.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir
+                        | Component::CurDir
+                        | Component::RootDir
+                        | Component::Prefix(_)
+                )
+            })
+        {
+            return Err("rendered ATIF filename must remain a path-safe relative path".into());
+        }
         let directory = self
             .config
             .output_directory
             .clone()
             .unwrap_or_else(default_output_directory);
         let path = directory.join(&filename);
-        Ok((filename, Some(path)))
+        Ok((filename, Some(directory), Some(path)))
     }
 
     fn sink_targets(&self) -> Vec<SinkLabel> {
@@ -2743,6 +2878,13 @@ impl AtifDispatcher {
         }
         record_active_plugin_runtime_diagnostic(diagnostic);
     }
+}
+
+fn is_safe_atif_session_id(value: &str) -> bool {
+    !matches!(value, "" | "." | "..")
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~'))
 }
 
 fn is_valid_atif_metadata_selector(selector: &str) -> bool {
@@ -2846,8 +2988,8 @@ fn render_atif_filename(
             };
         }
         let value = match resolved {
-            Some(Json::String(value)) => value.as_str(),
-            None | Some(Json::Null) => fallback.ok_or_else(|| {
+            Some(Json::String(value)) => sanitize_atif_metadata_fragment(value),
+            None | Some(Json::Null) => fallback.map(str::to_string).ok_or_else(|| {
                 format!(
                     "filename_template placeholder '{{metadata.{selector}}}' must resolve to a string"
                 )
@@ -2858,15 +3000,43 @@ fn render_atif_filename(
                 ));
             }
         };
-        if !is_safe_atif_metadata_path(value) {
+        if !is_safe_atif_metadata_path(&value) {
             return Err(format!(
                 "metadata path '{selector}' must be a path-safe relative fragment"
             ));
         }
-        rendered.replace_range(start..=end, value);
+        rendered.replace_range(start..=end, &value);
         cursor = start + value.len();
     }
     Ok(rendered)
+}
+
+fn sanitize_atif_metadata_fragment(value: &str) -> String {
+    let mut characters = value.chars().peekable();
+    let mut sanitized = String::with_capacity(value.len());
+    let mut replacing = false;
+
+    while let Some(character) = characters.next() {
+        let safe = if character == '.' {
+            let mut count = 1;
+            while characters.next_if_eq(&'.').is_some() {
+                count += 1;
+            }
+            count == 1 && !(sanitized.is_empty() && characters.peek().is_none())
+        } else {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '~')
+        };
+
+        if safe {
+            sanitized.push(character);
+            replacing = false;
+        } else if !replacing {
+            sanitized.push('-');
+            replacing = true;
+        }
+    }
+
+    sanitized
 }
 
 fn is_safe_atif_metadata_path(value: &str) -> bool {
@@ -2953,6 +3123,7 @@ fn prepare_atif_file(
     prepare_atif_payload(
         agent_uuid,
         agent.filename.clone(),
+        agent.local_root.clone(),
         agent.local_path.clone(),
         trajectory,
         observed_events,
@@ -2977,6 +3148,7 @@ fn prepare_atif_shutdown_file(
     prepare_atif_payload(
         export.agent_uuid,
         export.filename.clone(),
+        export.local_root.clone(),
         export.local_path.clone(),
         trajectory,
         observed_events,
@@ -2987,6 +3159,7 @@ fn prepare_atif_shutdown_file(
 fn prepare_atif_payload(
     agent_uuid: Uuid,
     filename: String,
+    local_root: Option<PathBuf>,
     local_path: Option<PathBuf>,
     trajectory: crate::observability::atif::AtifTrajectory,
     observed_events: Vec<Event>,
@@ -3020,6 +3193,7 @@ fn prepare_atif_payload(
         agent_uuid,
         session_id: agent_uuid.to_string(),
         filename,
+        local_root,
         local_path,
         payload,
     })
@@ -3034,9 +3208,9 @@ fn write_atif(
         .iter()
         .map(|label| {
             let result = match label {
-                SinkLabel::Local => match &write.local_path {
-                    Some(path) => write_atif_local(path, &write.payload),
-                    None => Err(std::io::Error::other(
+                SinkLabel::Local => match (&write.local_root, &write.local_path) {
+                    (Some(root), Some(path)) => write_atif_local(root, path, &write.payload),
+                    _ => Err(std::io::Error::other(
                         "ATIF local destination has no output path",
                     )),
                 },
@@ -3051,9 +3225,9 @@ fn write_atif(
             .all(|label| matches!(label, SinkLabel::Remote(_)))
         && results.iter().all(|(_, result)| result.is_err())
     {
-        let fallback = match &write.local_path {
-            Some(path) => write_atif_local(path, &write.payload),
-            None => Err(std::io::Error::other(
+        let fallback = match (&write.local_root, &write.local_path) {
+            (Some(root), Some(path)) => write_atif_local(root, path, &write.payload),
+            _ => Err(std::io::Error::other(
                 "ATIF local fallback has no output path",
             )),
         };
@@ -3062,11 +3236,8 @@ fn write_atif(
     results
 }
 
-fn write_atif_local(path: &PathBuf, payload: &[u8]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, payload)
+fn write_atif_local(root: &Path, path: &Path, payload: &[u8]) -> std::io::Result<()> {
+    atomic_private_write(root, path, payload)
 }
 
 #[cfg(feature = "object-store")]
@@ -3152,7 +3323,8 @@ fn build_otel_config(
         .with_mark_projection(section.mark_projection)
         .with_mark_exclude_names(section.mark_exclude_names)
         .with_attribute_mappings(section.attribute_mappings)
-        .with_promote_metadata_prefixes(section.promote_metadata_prefixes);
+        .with_promote_metadata_prefixes(section.promote_metadata_prefixes)
+        .with_promote_resource_metadata_prefixes(section.promote_resource_metadata_prefixes);
     if let Some(max_queue_size) = section.max_queue_size {
         config = config.with_max_queue_size(max_queue_size);
     }
@@ -3161,6 +3333,11 @@ fn build_otel_config(
     }
     if let Some(scheduled_delay_millis) = section.scheduled_delay_millis {
         config = config.with_scheduled_delay(Duration::from_millis(scheduled_delay_millis));
+    }
+    if let Some(completed_span_context_ttl_millis) = section.completed_span_context_ttl_millis {
+        config = config.with_completed_span_context_ttl(Duration::from_millis(
+            completed_span_context_ttl_millis,
+        ));
     }
     if let Some(namespace) = section.service_namespace {
         config = config.with_service_namespace(namespace);
@@ -3195,6 +3372,11 @@ fn validate_otel_batch_config(
     if section.scheduled_delay_millis == Some(0) {
         return Err(PluginError::InvalidConfig(format!(
             "OpenTelemetry endpoints[{index}].scheduled_delay_millis must be greater than 0"
+        )));
+    }
+    if section.completed_span_context_ttl_millis == Some(0) {
+        return Err(PluginError::InvalidConfig(format!(
+            "OpenTelemetry endpoints[{index}].completed_span_context_ttl_millis must be greater than 0"
         )));
     }
     if matches!(
@@ -3237,9 +3419,9 @@ fn apply_otel_environment_headers(
     header_env: HashMap<String, String>,
 ) -> PluginResult<CoreOpenTelemetryConfig> {
     for (key, variable) in header_env {
-        let value = std::env::var(&variable).map_err(|error| {
+        let value = std::env::var(&variable).map_err(|_| {
             PluginError::InvalidConfig(format!(
-                "OpenTelemetry endpoints[{index}].header_env.{key} could not read environment variable {variable:?}: {error}"
+                "OpenTelemetry endpoints[{index}].header_env.{key} could not read environment variable {variable:?}"
             ))
         })?;
         if value.trim().is_empty() || value.trim() != value {
@@ -3388,6 +3570,7 @@ fn validate_observability_section_fields(
             "mark_exclude_names",
             "attribute_mappings",
             "promote_metadata_prefixes",
+            "promote_resource_metadata_prefixes",
             "transport",
             "endpoint",
             "headers",
@@ -3408,6 +3591,7 @@ fn validate_observability_section_fields(
             "mark_exclude_names",
             "attribute_mappings",
             "promote_metadata_prefixes",
+            "promote_resource_metadata_prefixes",
             "transport",
             "endpoint",
             "headers",
@@ -3520,6 +3704,7 @@ fn validate_opentelemetry_endpoint_fields(
         "mark_exclude_names",
         "attribute_mappings",
         "promote_metadata_prefixes",
+        "promote_resource_metadata_prefixes",
         "transport",
         "headers",
         "header_env",
@@ -3532,6 +3717,7 @@ fn validate_opentelemetry_endpoint_fields(
         "max_queue_size",
         "max_export_batch_size",
         "scheduled_delay_millis",
+        "completed_span_context_ttl_millis",
     ];
     const REMOVED: &[&str] = &["semantic_selector", "capture_content"];
     let Some(endpoints) = opentelemetry
@@ -3749,6 +3935,20 @@ fn validate_opentelemetry_section(
                 "observability.unsupported_value",
                 Some("opentelemetry".to_string()),
                 Some(format!("endpoints[{index}].promote_metadata_prefixes")),
+                error,
+            );
+        }
+        if let Err(error) =
+            validate_metadata_promotion_prefixes(&endpoint.promote_resource_metadata_prefixes)
+        {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("opentelemetry".to_string()),
+                Some(format!(
+                    "endpoints[{index}].promote_resource_metadata_prefixes"
+                )),
                 error,
             );
         }
@@ -4041,6 +4241,10 @@ fn validate_opentelemetry_batch_config(
         (
             "scheduled_delay_millis",
             endpoint.scheduled_delay_millis == Some(0),
+        ),
+        (
+            "completed_span_context_ttl_millis",
+            endpoint.completed_span_context_ttl_millis == Some(0),
         ),
     ] {
         if is_zero {

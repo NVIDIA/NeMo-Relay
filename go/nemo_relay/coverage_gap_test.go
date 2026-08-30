@@ -206,6 +206,7 @@ func assertOpenTelemetrySignalDefaults(t *testing.T, endpoint string) {
 	}
 	if logConfig.MinimumSeverity != LogSeverityInfo || logConfig.MaxQueueSize != 2048 ||
 		logConfig.MaxExportBatchSize != 512 || logConfig.ScheduledDelay != time.Second ||
+		logConfig.CompletedSpanContextTTL != 60*time.Second ||
 		logConfig.Headers == nil || logConfig.ResourceAttributes == nil {
 		t.Fatalf("log defaults were not applied: %#v", logConfig)
 	}

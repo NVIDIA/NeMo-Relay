@@ -32,6 +32,7 @@ fn removal(dry_run: bool) -> UninstallRequest {
     UninstallRequest {
         install_dir: None,
         dry_run,
+        force: false,
     }
 }
 
@@ -238,6 +239,7 @@ fn install_dir_is_rejected_rather_than_ignored() {
     let uninstall_error = uninstall(UninstallRequest {
         install_dir: elsewhere,
         dry_run: false,
+        force: false,
     })
     .unwrap_err()
     .to_string();
@@ -311,16 +313,24 @@ fn a_managed_install_is_uninstallable_but_never_a_marketplace_integration() {
 
     install(request(false, false)).unwrap();
 
-    assert!(
-        !crate::agents::installed_integrations(&all, Some(&marketplace))
+    // Both hold whether or not force-cleanup targets are included: `include_local_install` widens
+    // the marketplace question, it does not give pi a marketplace answer.
+    for include_local_install in [false, true] {
+        assert!(
+            !crate::agents::installed_integrations(&all, Some(&marketplace), include_local_install)
+                .contains(&crate::agents::CodingAgent::Pi),
+            "pi in this list reaches marketplace code that aborts on it              (include_local_install={include_local_install})"
+        );
+        assert!(
+            crate::agents::uninstallable_integrations(
+                &all,
+                Some(&marketplace),
+                include_local_install
+            )
             .contains(&crate::agents::CodingAgent::Pi),
-        "pi in this list reaches marketplace code that aborts on it"
-    );
-    assert!(
-        crate::agents::uninstallable_integrations(&all, Some(&marketplace))
-            .contains(&crate::agents::CodingAgent::Pi),
-        "`uninstall all` has to see a managed pi install"
-    );
+            "`uninstall all` has to see a managed pi install              (include_local_install={include_local_install})"
+        );
+    }
 }
 
 /// Rewrite the recorded file list, the way a tampered or corrupted state file would read.

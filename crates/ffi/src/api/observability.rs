@@ -773,6 +773,7 @@ fn build_ffi_otel_config(
     transport: *const c_char,
     endpoint: *const c_char,
     headers_json: *const c_char,
+    header_env_json: *const c_char,
     resource_attributes_json: *const c_char,
     service_name: *const c_char,
     service_namespace: *const c_char,
@@ -812,6 +813,12 @@ fn build_ffi_otel_config(
         "headers",
         OpenTelemetryConfig::with_header,
     )?;
+    config = apply_string_map(
+        config,
+        header_env_json,
+        "header_env",
+        OpenTelemetryConfig::with_header_env,
+    )?;
     apply_string_map(
         config,
         resource_attributes_json,
@@ -849,6 +856,7 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create(
         transport,
         endpoint,
         headers_json,
+        std::ptr::null(),
         resource_attributes_json,
         service_name,
         service_namespace,
@@ -918,6 +926,136 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_optio
 ///
 /// `promote_metadata_prefixes_json` is a JSON array of literal metadata prefixes,
 /// such as `["nv."]`. Pass null to disable metadata promotion.
+/// `completed_span_context_ttl_millis` must be greater than zero.
+///
+/// # Safety
+/// Any non-null C strings must be valid and `out` must be non-null.
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_options_v4(
+    otel_type: *const c_char,
+    transport: *const c_char,
+    endpoint: *const c_char,
+    headers_json: *const c_char,
+    header_env_json: *const c_char,
+    resource_attributes_json: *const c_char,
+    service_name: *const c_char,
+    service_namespace: *const c_char,
+    service_version: *const c_char,
+    instrumentation_scope: *const c_char,
+    timeout_millis: u64,
+    mark_projection: *const c_char,
+    mark_exclude_names_json: *const c_char,
+    attribute_mappings_json: *const c_char,
+    promote_metadata_prefixes_json: *const c_char,
+    completed_span_context_ttl_millis: u64,
+    out: *mut *mut FfiOpenTelemetrySubscriber,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if let Err(status) = required_out_ptr(out) {
+        return status;
+    }
+    let config = match build_ffi_otel_config(
+        otel_type,
+        transport,
+        endpoint,
+        headers_json,
+        header_env_json,
+        resource_attributes_json,
+        service_name,
+        service_namespace,
+        service_version,
+        instrumentation_scope,
+        timeout_millis,
+    ) {
+        Ok(config) => config,
+        Err(status) => return status,
+    };
+    if completed_span_context_ttl_millis == 0 {
+        set_last_error("completed_span_context_ttl_millis must be greater than 0");
+        return NemoRelayStatus::InvalidArg;
+    }
+    let config = config
+        .with_mark_projection(match parse_mark_projection(mark_projection) {
+            Ok(value) => value,
+            Err(status) => return status,
+        })
+        .with_mark_exclude_names(match parse_mark_exclude_names(mark_exclude_names_json) {
+            Ok(value) => value,
+            Err(status) => return status,
+        })
+        .with_attribute_mappings(match parse_attribute_mappings(attribute_mappings_json) {
+            Ok(value) => value,
+            Err(status) => return status,
+        })
+        .with_promote_metadata_prefixes(
+            match parse_promote_metadata_prefixes(promote_metadata_prefixes_json) {
+                Ok(value) => value,
+                Err(status) => return status,
+            },
+        )
+        .with_completed_span_context_ttl(Duration::from_millis(completed_span_context_ttl_millis));
+    let subscriber = match create_otel_subscriber(config) {
+        Ok(subscriber) => subscriber,
+        Err(status) => return status,
+    };
+    unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetrySubscriber(subscriber))) };
+    NemoRelayStatus::Ok
+}
+
+/// Creates one typed OpenTelemetry exporter subscriber with projection, metadata, and lineage controls.
+///
+/// This compatibility entrypoint configures only static headers. Use
+/// `nemo_relay_otel_subscriber_create_with_projection_options_v4` for `header_env`.
+///
+/// # Safety
+/// Any non-null C strings must be valid and `out` must be non-null.
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_options_v3(
+    otel_type: *const c_char,
+    transport: *const c_char,
+    endpoint: *const c_char,
+    headers_json: *const c_char,
+    resource_attributes_json: *const c_char,
+    service_name: *const c_char,
+    service_namespace: *const c_char,
+    service_version: *const c_char,
+    instrumentation_scope: *const c_char,
+    timeout_millis: u64,
+    mark_projection: *const c_char,
+    mark_exclude_names_json: *const c_char,
+    attribute_mappings_json: *const c_char,
+    promote_metadata_prefixes_json: *const c_char,
+    completed_span_context_ttl_millis: u64,
+    out: *mut *mut FfiOpenTelemetrySubscriber,
+) -> NemoRelayStatus {
+    unsafe {
+        nemo_relay_otel_subscriber_create_with_projection_options_v4(
+            otel_type,
+            transport,
+            endpoint,
+            headers_json,
+            std::ptr::null(),
+            resource_attributes_json,
+            service_name,
+            service_namespace,
+            service_version,
+            instrumentation_scope,
+            timeout_millis,
+            mark_projection,
+            mark_exclude_names_json,
+            attribute_mappings_json,
+            promote_metadata_prefixes_json,
+            completed_span_context_ttl_millis,
+            out,
+        )
+    }
+}
+
+/// Creates one typed OpenTelemetry exporter subscriber with projection, metadata, and lineage controls.
+///
+/// This compatibility entrypoint preserves the 60-second completed-context retention default.
 ///
 /// # Safety
 /// Any non-null C strings must be valid and `out` must be non-null.
@@ -940,50 +1078,26 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_optio
     promote_metadata_prefixes_json: *const c_char,
     out: *mut *mut FfiOpenTelemetrySubscriber,
 ) -> NemoRelayStatus {
-    clear_last_error();
-    if let Err(status) = required_out_ptr(out) {
-        return status;
+    unsafe {
+        nemo_relay_otel_subscriber_create_with_projection_options_v3(
+            otel_type,
+            transport,
+            endpoint,
+            headers_json,
+            resource_attributes_json,
+            service_name,
+            service_namespace,
+            service_version,
+            instrumentation_scope,
+            timeout_millis,
+            mark_projection,
+            mark_exclude_names_json,
+            attribute_mappings_json,
+            promote_metadata_prefixes_json,
+            60_000,
+            out,
+        )
     }
-    let config = match build_ffi_otel_config(
-        otel_type,
-        transport,
-        endpoint,
-        headers_json,
-        resource_attributes_json,
-        service_name,
-        service_namespace,
-        service_version,
-        instrumentation_scope,
-        timeout_millis,
-    ) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
-    let config = config
-        .with_mark_projection(match parse_mark_projection(mark_projection) {
-            Ok(value) => value,
-            Err(status) => return status,
-        })
-        .with_mark_exclude_names(match parse_mark_exclude_names(mark_exclude_names_json) {
-            Ok(value) => value,
-            Err(status) => return status,
-        })
-        .with_attribute_mappings(match parse_attribute_mappings(attribute_mappings_json) {
-            Ok(value) => value,
-            Err(status) => return status,
-        })
-        .with_promote_metadata_prefixes(
-            match parse_promote_metadata_prefixes(promote_metadata_prefixes_json) {
-                Ok(value) => value,
-                Err(status) => return status,
-            },
-        );
-    let subscriber = match create_otel_subscriber(config) {
-        Ok(subscriber) => subscriber,
-        Err(status) => return status,
-    };
-    unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetrySubscriber(subscriber))) };
-    NemoRelayStatus::Ok
 }
 
 /// Registers the OpenTelemetry subscriber as an event subscriber.
@@ -1116,6 +1230,7 @@ fn build_ffi_otel_log_config(
     transport: *const c_char,
     endpoint: *const c_char,
     headers_json: *const c_char,
+    header_env_json: *const c_char,
     resource_attributes_json: *const c_char,
     service_name: *const c_char,
     service_namespace: *const c_char,
@@ -1126,6 +1241,7 @@ fn build_ffi_otel_log_config(
     max_queue_size: u64,
     max_export_batch_size: u64,
     scheduled_delay_millis: u64,
+    completed_span_context_ttl_millis: Option<u64>,
 ) -> Result<OpenTelemetryLogConfig, NemoRelayStatus> {
     let mut config = OpenTelemetryLogConfig::new(parse_required_otel_endpoint(endpoint)?)
         .with_transport(parse_otlp_transport(transport)?);
@@ -1164,6 +1280,15 @@ fn build_ffi_otel_log_config(
     if scheduled_delay_millis != 0 {
         config = config.with_scheduled_delay(Duration::from_millis(scheduled_delay_millis));
     }
+    if let Some(completed_span_context_ttl_millis) = completed_span_context_ttl_millis {
+        if completed_span_context_ttl_millis == 0 {
+            set_last_error("completed_span_context_ttl_millis must be greater than 0");
+            return Err(NemoRelayStatus::InvalidArg);
+        }
+        config = config.with_completed_span_context_ttl(Duration::from_millis(
+            completed_span_context_ttl_millis,
+        ));
+    }
     config = apply_optional_string(
         config,
         service_namespace,
@@ -1180,6 +1305,12 @@ fn build_ffi_otel_log_config(
         "headers",
         OpenTelemetryLogConfig::with_header,
     )?;
+    config = apply_string_map(
+        config,
+        header_env_json,
+        "header_env",
+        OpenTelemetryLogConfig::with_header_env,
+    )?;
     apply_string_map(
         config,
         resource_attributes_json,
@@ -1190,7 +1321,8 @@ fn build_ffi_otel_log_config(
 
 /// Creates an independently managed OpenTelemetry log subscriber.
 ///
-/// Numeric processing settings use their core-config defaults when zero.
+/// Numeric processing settings use their core-config defaults when zero, except
+/// `completed_span_context_ttl_millis`, which must be positive.
 ///
 /// # Safety
 /// Any non-null C strings must be valid and `out` must be non-null.
@@ -1210,6 +1342,53 @@ pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_create(
     max_queue_size: u64,
     max_export_batch_size: u64,
     scheduled_delay_millis: u64,
+    completed_span_context_ttl_millis: u64,
+    out: *mut *mut FfiOpenTelemetryLogSubscriber,
+) -> NemoRelayStatus {
+    unsafe {
+        nemo_relay_otel_log_subscriber_create_v2(
+            transport,
+            endpoint,
+            headers_json,
+            std::ptr::null(),
+            resource_attributes_json,
+            service_name,
+            service_namespace,
+            service_version,
+            instrumentation_scope,
+            timeout_millis,
+            minimum_severity,
+            max_queue_size,
+            max_export_batch_size,
+            scheduled_delay_millis,
+            completed_span_context_ttl_millis,
+            out,
+        )
+    }
+}
+
+/// Creates an independently managed OpenTelemetry log subscriber with `header_env` support.
+///
+/// # Safety
+/// Any non-null C strings must be valid and `out` must be non-null.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_create_v2(
+    transport: *const c_char,
+    endpoint: *const c_char,
+    headers_json: *const c_char,
+    header_env_json: *const c_char,
+    resource_attributes_json: *const c_char,
+    service_name: *const c_char,
+    service_namespace: *const c_char,
+    service_version: *const c_char,
+    instrumentation_scope: *const c_char,
+    timeout_millis: u64,
+    minimum_severity: *const c_char,
+    max_queue_size: u64,
+    max_export_batch_size: u64,
+    scheduled_delay_millis: u64,
+    completed_span_context_ttl_millis: u64,
     out: *mut *mut FfiOpenTelemetryLogSubscriber,
 ) -> NemoRelayStatus {
     clear_last_error();
@@ -1220,6 +1399,7 @@ pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_create(
         transport,
         endpoint,
         headers_json,
+        header_env_json,
         resource_attributes_json,
         service_name,
         service_namespace,
@@ -1230,6 +1410,7 @@ pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_create(
         max_queue_size,
         max_export_batch_size,
         scheduled_delay_millis,
+        Some(completed_span_context_ttl_millis),
     ) {
         Ok(config) => config,
         Err(status) => return status,
@@ -1361,6 +1542,7 @@ fn build_ffi_otel_metric_config(
     transport: *const c_char,
     endpoint: *const c_char,
     headers_json: *const c_char,
+    header_env_json: *const c_char,
     resource_attributes_json: *const c_char,
     service_name: *const c_char,
     service_namespace: *const c_char,
@@ -1420,6 +1602,12 @@ fn build_ffi_otel_metric_config(
         "headers",
         OpenTelemetryMetricConfig::with_header,
     )?;
+    config = apply_string_map(
+        config,
+        header_env_json,
+        "header_env",
+        OpenTelemetryMetricConfig::with_header_env,
+    )?;
     apply_string_map(
         config,
         resource_attributes_json,
@@ -1452,6 +1640,50 @@ pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_create(
     cardinality_limit: u64,
     out: *mut *mut FfiOpenTelemetryMetricSubscriber,
 ) -> NemoRelayStatus {
+    unsafe {
+        nemo_relay_otel_metric_subscriber_create_v2(
+            transport,
+            endpoint,
+            headers_json,
+            std::ptr::null(),
+            resource_attributes_json,
+            service_name,
+            service_namespace,
+            service_version,
+            instrumentation_scope,
+            timeout_millis,
+            export_interval_millis,
+            temporality,
+            max_instruments,
+            cardinality_limit,
+            out,
+        )
+    }
+}
+
+/// Creates an independently managed OpenTelemetry metric subscriber with `header_env` support.
+///
+/// # Safety
+/// Any non-null C strings must be valid and `out` must be non-null.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_create_v2(
+    transport: *const c_char,
+    endpoint: *const c_char,
+    headers_json: *const c_char,
+    header_env_json: *const c_char,
+    resource_attributes_json: *const c_char,
+    service_name: *const c_char,
+    service_namespace: *const c_char,
+    service_version: *const c_char,
+    instrumentation_scope: *const c_char,
+    timeout_millis: u64,
+    export_interval_millis: u64,
+    temporality: *const c_char,
+    max_instruments: u64,
+    cardinality_limit: u64,
+    out: *mut *mut FfiOpenTelemetryMetricSubscriber,
+) -> NemoRelayStatus {
     clear_last_error();
     if let Err(status) = required_out_ptr(out) {
         return status;
@@ -1460,6 +1692,7 @@ pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_create(
         transport,
         endpoint,
         headers_json,
+        header_env_json,
         resource_attributes_json,
         service_name,
         service_namespace,

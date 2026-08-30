@@ -52,9 +52,11 @@ describe('observability plugin helpers', () => {
         header_env: { authorization: 'OTEL_AUTHORIZATION' },
         resource_attributes: {},
         promote_metadata_prefixes: [],
+        promote_resource_metadata_prefixes: [],
         service_name: 'unknown_service',
         instrumentation_scope: 'opentelemetry',
         timeout_millis: 3000,
+        completed_span_context_ttl_millis: 60000,
         max_queue_size: 4096,
         max_export_batch_size: 256,
         scheduled_delay_millis: 750,
@@ -96,6 +98,7 @@ describe('observability plugin helpers', () => {
       max_queue_size: 2048,
       max_export_batch_size: 512,
       scheduled_delay_millis: 1000,
+      completed_span_context_ttl_millis: 60000,
     });
     assert.deepEqual(observability.openTelemetryMetricConfig(), {
       enabled: false,

@@ -190,6 +190,13 @@ the dynamic plugin references in the selected physical `plugins.toml`. Dynamic
 plugins with a manifest-declared JSON Schema provide structured field controls.
 Other dynamic plugins use a raw JSON object editor.
 
+At runtime, dynamic plugins that do not have an explicit host-policy override
+are classified as required and must carry a valid signature from a configured
+trusted public key. Installation and inspection remain available for unsigned
+plugins, but Relay refuses to activate them. Worker processes inherit only the
+small environment allowlist needed for process startup and TLS. Native plugins
+run in-process and must be treated as trusted host code after verification.
+
 The canonical plugin file is `plugins.toml`; user config lives at
 `~/.config/nemo-relay/plugins.toml` or
 `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`. Use

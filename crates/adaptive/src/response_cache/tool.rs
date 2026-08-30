@@ -235,6 +235,11 @@ async fn run_tool_cache(
     let policy = resolve_policy(&name, &response_cache, &tools);
 
     if !policy.cacheable {
+        emit_cache_mark(
+            CacheMark::new(CacheMarkStatus::Bypass, store.backend_kind())
+                .surface(CacheSurface::Tool)
+                .reason(CacheReason::Uncacheable),
+        );
         return next(args).await.map(Into::into);
     }
 

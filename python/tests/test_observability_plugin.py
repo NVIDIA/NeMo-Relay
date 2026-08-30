@@ -111,6 +111,7 @@ class TestObservabilityConfigHelpers:
         assert endpoint.max_queue_size is None
         assert endpoint.max_export_batch_size is None
         assert endpoint.scheduled_delay_millis is None
+        assert endpoint.completed_span_context_ttl_millis is None
 
     def test_defaults_and_component_wrapper(self):
         assert AtofConfig().to_dict() == {"enabled": False}
@@ -131,6 +132,7 @@ class TestObservabilityConfigHelpers:
             max_queue_size=4096,
             max_export_batch_size=256,
             scheduled_delay_millis=750,
+            completed_span_context_ttl_millis=60_000,
         ).to_dict() == {
             "type": "gen_ai",
             "endpoint": "http://localhost:4318/v1/traces",
@@ -138,6 +140,7 @@ class TestObservabilityConfigHelpers:
             "mark_exclude_names": ["llm.chunk"],
             "attribute_mappings": [],
             "promote_metadata_prefixes": [],
+            "promote_resource_metadata_prefixes": [],
             "transport": "http_binary",
             "service_name": "unknown_service",
             "instrumentation_scope": "opentelemetry",
@@ -145,6 +148,7 @@ class TestObservabilityConfigHelpers:
             "max_queue_size": 4096,
             "max_export_batch_size": 256,
             "scheduled_delay_millis": 750,
+            "completed_span_context_ttl_millis": 60_000,
             "headers": {},
             "header_env": {"authorization": "OTEL_AUTHORIZATION"},
             "resource_attributes": {},
@@ -155,6 +159,8 @@ class TestObservabilityConfigHelpers:
             promote_metadata_prefixes=["nv."],
         )
         assert endpoint.to_dict()["promote_metadata_prefixes"] == ["nv."]
+        endpoint.promote_resource_metadata_prefixes = ["deployment."]
+        assert endpoint.to_dict()["promote_resource_metadata_prefixes"] == ["deployment."]
 
         wrapped = ComponentSpec(ObservabilityConfig(atof=AtofConfig())).to_dict()
         assert wrapped["kind"] == OBSERVABILITY_PLUGIN_KIND

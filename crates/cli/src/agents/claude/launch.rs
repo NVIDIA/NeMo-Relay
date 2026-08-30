@@ -36,9 +36,12 @@ pub(crate) fn prepare(
             [
                 "--plugin-dir".into(),
                 "<temporary-claude-plugin-dir>".into(),
-                "--settings".into(),
-                "<temporary-claude-settings>".into(),
             ],
+        );
+        insert_before_argument_boundary(
+            &mut launch.argv,
+            launch.host_index,
+            ["--settings".into(), "<temporary-claude-settings>".into()],
         );
         launch
             .env
@@ -80,18 +83,31 @@ pub(crate) fn prepare(
     insert_after_host(
         &mut launch.argv,
         launch.host_index,
-        [
-            "--plugin-dir".into(),
-            root.display().to_string(),
-            "--settings".into(),
-            settings_path.display().to_string(),
-        ],
+        ["--plugin-dir".into(), root.display().to_string()],
+    );
+    insert_before_argument_boundary(
+        &mut launch.argv,
+        launch.host_index,
+        ["--settings".into(), settings_path.display().to_string()],
     );
     launch
         .env
         .push(("ANTHROPIC_BASE_URL".into(), gateway_url.to_string()));
     launch.temp_dirs.push(root);
     Ok(())
+}
+
+fn insert_before_argument_boundary(
+    argv: &mut Vec<String>,
+    host_index: usize,
+    values: impl IntoIterator<Item = String>,
+) {
+    let boundary = argv
+        .iter()
+        .skip(host_index + 1)
+        .position(|argument| argument == "--")
+        .map_or(argv.len(), |offset| host_index + 1 + offset);
+    argv.splice(boundary..boundary, values);
 }
 
 fn replace_custom_header(existing: &str, replacement: &str) -> String {

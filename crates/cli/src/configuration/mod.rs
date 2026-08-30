@@ -48,6 +48,9 @@ pub(crate) const DEFAULT_MAX_PASSTHROUGH_BODY_BYTES: usize = 100 * 1024 * 1024;
 pub(crate) const GATEWAY_URL_ENV: &str = "NEMO_RELAY_GATEWAY_URL";
 pub(crate) const TRANSPARENT_RUN_ENV: &str = "NEMO_RELAY_TRANSPARENT_RUN";
 
+#[cfg(feature = "__skip-implicit-config")]
+const TEST_SKIP_IMPLICIT_CONFIG_ENV: &str = "NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG";
+
 // TOML file shape grouped by user intent. Sections map 1:1 onto fields already present on
 // `GatewayConfig` / `AgentConfigs`; plugin configuration lives in `plugins.toml`.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -473,12 +476,14 @@ const BOOTSTRAP_HMAC_KEY_BYTES: usize = 32;
 const BOOTSTRAP_HMAC_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const BOOTSTRAP_CHALLENGE_DOMAIN: &[u8] = b"nemo-relay/bootstrap-health/v1\0";
 const BOOTSTRAP_CLIENT_TOKEN_DOMAIN: &[u8] = b"nemo-relay/bootstrap-client/v1\0";
+const HOOK_CLIENT_TOKEN_DOMAIN: &[u8] = b"nemo-relay/hook-client/v1\0";
 const TRANSPARENT_GATEWAY_DOMAIN: &[u8] = b"nemo-relay/transparent-gateway/v1\0";
 const PYTHON_ENVIRONMENT_ATTESTATION_DOMAIN: &[u8] =
     b"nemo-relay/python-environment-attestation/v1\0";
 
 /// Private proof installed into supported coding-agent provider configuration.
 pub(crate) const BOOTSTRAP_CLIENT_TOKEN_HEADER: &str = "x-nemo-relay-client-token";
+pub(crate) const HOOK_CLIENT_TOKEN_HEADER: &str = "x-nemo-relay-hook-client";
 
 /// Stable health-proof context shared by a transparent wrapper and plugin-owned MCP client.
 pub(crate) fn transparent_gateway_fingerprint(gateway_url: &str) -> String {
@@ -554,6 +559,33 @@ impl BootstrapChallengeKey {
             return false;
         };
         hmac::verify(&self.0, BOOTSTRAP_CLIENT_TOKEN_DOMAIN, &tag).is_ok()
+    }
+
+    pub(crate) fn hook_client_token(&self, identity: &str) -> String {
+        let identity = digest::digest(&digest::SHA256, identity.as_bytes())
+            .as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let mut context = hmac::Context::with_key(&self.0);
+        context.update(HOOK_CLIENT_TOKEN_DOMAIN);
+        context.update(identity.as_bytes());
+        format!("{identity}.{}", encode_hmac_tag(context.sign()))
+    }
+
+    pub(crate) fn verify_hook_client_token(&self, token: &str) -> Option<String> {
+        let (identity, signature) = token.split_once('.')?;
+        if identity.len() != 64 || !identity.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+        let encoded = signature.strip_prefix("hmac-sha256:")?;
+        let tag = decode_fixed_hex::<32>(encoded)?;
+        let mut message = Vec::with_capacity(HOOK_CLIENT_TOKEN_DOMAIN.len() + identity.len());
+        message.extend_from_slice(HOOK_CLIENT_TOKEN_DOMAIN);
+        message.extend_from_slice(identity.as_bytes());
+        hmac::verify(&self.0, &message, &tag)
+            .is_ok()
+            .then(|| format!("hook-client:{identity}"))
     }
 
     #[cfg(test)]
@@ -1156,10 +1188,18 @@ pub(crate) fn any_config_file_exists() -> bool {
 // Returns the config search path from lowest to highest precedence. An explicit path replaces the
 // ambient user file; the system layer still applies.
 fn config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
     if let Some(path) = explicit {
-        paths.push(path.clone());
-    } else if let Some(user) = user_config_path() {
+        let mut paths = vec![path.clone()];
+        if !skip_implicit_config() {
+            paths.push(system_config_dir().join("config.toml"));
+        }
+        return paths;
+    }
+    if skip_implicit_config() {
+        return Vec::new();
+    }
+    let mut paths = Vec::new();
+    if let Some(user) = user_config_path() {
         paths.push(user);
     }
     paths.push(system_config_dir().join("config.toml"));
@@ -1205,9 +1245,19 @@ pub(crate) fn user_plugin_config_path() -> Option<PathBuf> {
 
 pub(crate) fn user_plugin_runtime_config() -> Result<Option<Value>, CliError> {
     Ok(
-        load_plugin_toml_config_from_paths(implicit_plugin_config_paths(user_config_dir()))?
+        load_plugin_toml_config_from_paths(plugin_config_paths(None, None))?
             .and_then(|config| config.value),
     )
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn skip_implicit_config() -> bool {
+    env::var(TEST_SKIP_IMPLICIT_CONFIG_ENV).ok().as_deref() == Some("1")
+}
+
+#[cfg(not(feature = "__skip-implicit-config"))]
+fn skip_implicit_config() -> bool {
+    false
 }
 
 pub(crate) fn global_plugin_config_path() -> PathBuf {
