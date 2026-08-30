@@ -344,6 +344,170 @@ fn prepares_codex_config_overrides() {
 }
 
 #[test]
+fn prepares_codex_config_overrides_in_exec_scope() {
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Codex,
+        vec![
+            "codex".into(),
+            "--profile".into(),
+            "root".into(),
+            "exec".into(),
+            "--config".into(),
+            "mcp_servers.example.url=\"http://127.0.0.1:9902\"".into(),
+            "inspect the workspace".into(),
+        ],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    let exec_index = prepared.argv.iter().position(|arg| arg == "exec").unwrap();
+    let provider_index = prepared
+        .argv
+        .iter()
+        .position(|arg| arg == "model_provider=\"nemo-relay-openai\"")
+        .unwrap();
+    assert!(provider_index > exec_index);
+    assert!(
+        provider_index
+            < prepared
+                .argv
+                .iter()
+                .position(|arg| arg.starts_with("mcp_servers.example.url="))
+                .unwrap()
+    );
+}
+
+#[test]
+fn prepares_codex_config_overrides_in_resume_scope() {
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Codex,
+        vec![
+            "codex".into(),
+            "exec".into(),
+            "resume".into(),
+            "0198d672-f123-4567-89ab-cdef01234567".into(),
+            "--config".into(),
+            "mcp_servers.example.url=\"http://127.0.0.1:9902\"".into(),
+            "continue".into(),
+        ],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    let resume_index = prepared
+        .argv
+        .iter()
+        .position(|arg| arg == "resume")
+        .unwrap();
+    let provider_index = prepared
+        .argv
+        .iter()
+        .position(|arg| arg == "model_provider=\"nemo-relay-openai\"")
+        .unwrap();
+    assert!(provider_index > resume_index);
+    assert!(
+        provider_index
+            < prepared
+                .argv
+                .iter()
+                .position(|arg| arg == "0198d672-f123-4567-89ab-cdef01234567")
+                .unwrap()
+    );
+}
+
+#[test]
+fn prepares_codex_config_overrides_in_review_scope() {
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Codex,
+        vec![
+            "codex".into(),
+            "exec".into(),
+            "--model".into(),
+            "gpt-5.4".into(),
+            "review".into(),
+            "--config".into(),
+            "mcp_servers.example.url=\"http://127.0.0.1:9902\"".into(),
+            "inspect the workspace".into(),
+        ],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    let review_index = prepared
+        .argv
+        .iter()
+        .position(|argument| argument == "review")
+        .unwrap();
+    let provider_index = prepared
+        .argv
+        .iter()
+        .position(|argument| argument == "model_provider=\"nemo-relay-openai\"")
+        .unwrap();
+    assert!(provider_index > review_index);
+    assert!(
+        provider_index
+            < prepared
+                .argv
+                .iter()
+                .position(|argument| argument.starts_with("mcp_servers.example.url="))
+                .unwrap()
+    );
+}
+
+#[test]
+fn prepares_codex_config_at_root_for_non_exec_command_with_exec_argument() {
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Codex,
+        vec!["codex".into(), "mcp".into(), "remove".into(), "exec".into()],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(prepared.argv[0], "codex");
+    assert_eq!(prepared.argv[1], "--config");
+    let provider_index = prepared
+        .argv
+        .iter()
+        .position(|argument| argument == "model_provider=\"nemo-relay-openai\"")
+        .unwrap();
+    let mcp_index = prepared
+        .argv
+        .iter()
+        .position(|argument| argument == "mcp")
+        .unwrap();
+    assert!(provider_index < mcp_index);
+    assert_eq!(&prepared.argv[mcp_index..], ["mcp", "remove", "exec"]);
+}
+
+#[test]
 fn prepares_codex_config_overrides_with_versioned_trailing_slash_gateway_url() {
     let _guard = current_dir_lock().lock().unwrap();
     let resolved = ResolvedConfig {
