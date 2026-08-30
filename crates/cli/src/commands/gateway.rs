@@ -198,7 +198,7 @@ fn descendant_pids(root: u32) -> Vec<u32> {
     }
 
     let system = System::new_with_specifics(
-        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing().without_tasks()),
     );
     let mut descendants = Vec::new();
     collect(&system, Pid::from_u32(root), &mut descendants);
