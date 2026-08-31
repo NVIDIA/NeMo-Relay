@@ -983,6 +983,31 @@ fn refresh_preflight_retires_every_managed_generation_before_replacement() {
 }
 
 #[test]
+fn refresh_preflight_retires_multiple_directories_for_one_host() {
+    let home = tempdir().unwrap();
+    let _home = HomeScope::enter(home.path());
+    let first = tempdir().unwrap();
+    let second = tempdir().unwrap();
+    write_installed_state(CodingAgent::Codex, first.path());
+    write_installed_state(CodingAgent::Codex, second.path());
+
+    retire_integrations_for_refresh(&[
+        (CodingAgent::Codex, first.path().to_path_buf()),
+        (CodingAgent::Codex, second.path().to_path_buf()),
+    ])
+    .unwrap();
+
+    for install_dir in [first.path(), second.path()] {
+        let layout = PluginLayout::new(CodingAgent::Codex, install_dir);
+        assert!(
+            std::fs::read_to_string(layout.generation_fence)
+                .unwrap()
+                .starts_with("retired:")
+        );
+    }
+}
+
+#[test]
 fn refresh_preflight_restores_earlier_generations_when_a_target_is_invalid() {
     let home = tempdir().unwrap();
     let _home = HomeScope::enter(home.path());

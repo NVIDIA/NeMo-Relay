@@ -14,7 +14,7 @@ pub(crate) const DEFAULT_OPERATION_LOCK_TIMEOUT: Duration = Duration::from_secs(
 const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 
 pub(crate) struct PluginOperationLock {
-    _global_file: File,
+    _global_file: Option<File>,
     _root_file: Option<File>,
 }
 
@@ -39,8 +39,29 @@ impl PluginOperationLock {
             )?)
         };
         Ok(Self {
-            _global_file: global_file,
+            _global_file: Some(global_file),
             _root_file: root_file,
+        })
+    }
+
+    /// Acquire only the install-root lock after the caller has already acquired the host lock.
+    pub(crate) fn acquire_install_root(
+        installation_key: &str,
+        global_lock_dir: &Path,
+        install_dir: &Path,
+        timeout: Duration,
+    ) -> Result<Self, String> {
+        if directories_alias(global_lock_dir, install_dir) {
+            return Ok(Self {
+                _global_file: None,
+                _root_file: None,
+            });
+        }
+        let deadline = Instant::now() + timeout;
+        let root_file = acquire_lock_file(installation_key, install_dir, deadline, "install-root")?;
+        Ok(Self {
+            _global_file: None,
+            _root_file: Some(root_file),
         })
     }
 }

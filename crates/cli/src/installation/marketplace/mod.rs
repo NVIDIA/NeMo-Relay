@@ -11,6 +11,7 @@ pub(crate) mod state;
 
 pub(crate) use spec::{MarketplaceHost, PluginSetupSnapshot};
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -133,24 +134,31 @@ pub(crate) fn registered_install_dirs(host: impl MarketplaceHost) -> Result<Vec<
 }
 
 /// Check prerequisites before retiring any MCP generation for a refresh.
-pub(crate) fn prepare_integrations_for_refresh(
-    targets: &[(crate::agents::CodingAgent, PathBuf)],
-) -> Result<(), CliError> {
+pub(crate) fn prepare_integrations_for_refresh<H>(targets: &[(H, PathBuf)]) -> Result<(), CliError>
+where
+    H: MarketplaceHost + Eq + std::hash::Hash + Copy,
+{
     prepare_integrations_for_refresh_with_runner(targets, &RealCommandRunner)
 }
 
-fn prepare_integrations_for_refresh_with_runner(
-    targets: &[(crate::agents::CodingAgent, PathBuf)],
+fn prepare_integrations_for_refresh_with_runner<H>(
+    targets: &[(H, PathBuf)],
     runner: &dyn CommandRunner,
-) -> Result<(), CliError> {
+) -> Result<(), CliError>
+where
+    H: MarketplaceHost + Eq + std::hash::Hash + Copy,
+{
     validate_integrations_for_refresh_with_runner(targets, runner)?;
     retire_integrations_for_refresh(targets)
 }
 
-fn validate_integrations_for_refresh_with_runner(
-    targets: &[(crate::agents::CodingAgent, PathBuf)],
+fn validate_integrations_for_refresh_with_runner<H>(
+    targets: &[(H, PathBuf)],
     runner: &dyn CommandRunner,
-) -> Result<(), CliError> {
+) -> Result<(), CliError>
+where
+    H: MarketplaceHost + Copy,
+{
     for (host, install_dir) in targets {
         let options = PluginInstallOptions {
             install_dir: install_dir.clone(),
@@ -173,13 +181,25 @@ fn validate_integrations_for_refresh_with_runner(
 /// Keeping the operation and generation locks until all targets are retired makes this an
 /// all-or-nothing preflight: a failure restores every marker already invalidated. Once the
 /// preflight commits, no old MCP can recover the gateway while the per-host replacements run.
-pub(crate) fn retire_integrations_for_refresh(
-    targets: &[(crate::agents::CodingAgent, PathBuf)],
-) -> Result<(), CliError> {
+pub(crate) fn retire_integrations_for_refresh<H>(targets: &[(H, PathBuf)]) -> Result<(), CliError>
+where
+    H: MarketplaceHost + Eq + std::hash::Hash + Copy,
+{
     let operation_lock_dir = default_operation_lock_dir().map_err(CliError::Install)?;
+    let mut host_locks = HashMap::new();
     let mut retirements = Vec::with_capacity(targets.len());
     for (host, install_dir) in targets {
-        let operation_lock = PluginOperationLock::acquire(
+        if !host_locks.contains_key(host) {
+            let host_lock = PluginOperationLock::acquire(
+                host.install_arg(),
+                &operation_lock_dir,
+                &operation_lock_dir,
+                DEFAULT_OPERATION_LOCK_TIMEOUT,
+            )
+            .map_err(CliError::Install)?;
+            host_locks.insert(*host, host_lock);
+        }
+        let install_root_lock = PluginOperationLock::acquire_install_root(
             host.install_arg(),
             &operation_lock_dir,
             install_dir,
@@ -219,7 +239,7 @@ pub(crate) fn retire_integrations_for_refresh(
             .map_err(CliError::Install)?;
         retirements.push(RefreshGenerationRetirement {
             retirement,
-            _operation_lock: operation_lock,
+            _install_root_lock: install_root_lock,
         });
     }
     for retirement in &mut retirements {
@@ -231,7 +251,7 @@ pub(crate) fn retire_integrations_for_refresh(
 struct RefreshGenerationRetirement {
     // Drop the generation lock before releasing its operation lock.
     retirement: GenerationRetirement,
-    _operation_lock: PluginOperationLock,
+    _install_root_lock: PluginOperationLock,
 }
 
 pub(crate) fn collect_marketplace_readiness(
@@ -272,19 +292,14 @@ pub(crate) fn install(
     };
     let result = run_for_host(host, &options, install_host).inspect(|_| {
         if !command.dry_run
-            && let Err(error) = state::register_managed_integration(host, &options.install_dir)
+            && state::register_managed_integration(host, &options.install_dir).is_err()
         {
             log::warn!(
                 target: "nemo_relay.installation",
                 event = "managed_integration_registration_failed",
                 host = host_name,
-                error = error.as_str();
+                error_kind = "registry";
                 "Plugin installation completed but automatic refresh registration failed"
-            );
-            eprintln!(
-                "warning: installed {} but could not record it for automatic refresh: {error}; restore access to the user configuration directory, then rerun `nemo-relay install {} --force`",
-                host.label(),
-                host.install_arg()
             );
         }
     });
@@ -335,18 +350,14 @@ pub(crate) fn uninstall(
     };
     let result = run_for_host(host, &options, uninstall_host).inspect(|_| {
         if !command.dry_run
-            && let Err(error) = state::unregister_managed_integration(host, &options.install_dir)
+            && state::unregister_managed_integration(host, &options.install_dir).is_err()
         {
             log::warn!(
                 target: "nemo_relay.installation",
                 event = "managed_integration_unregistration_failed",
                 host = host_name,
-                error = error.as_str();
+                error_kind = "registry";
                 "Plugin uninstallation completed but automatic refresh cleanup failed"
-            );
-            eprintln!(
-                "warning: uninstalled {} but could not remove its automatic refresh record: {error}; future refreshes will skip the absent integration",
-                host.label()
             );
         }
     });
