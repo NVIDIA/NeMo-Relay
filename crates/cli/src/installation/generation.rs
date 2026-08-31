@@ -443,6 +443,37 @@ impl GenerationRetirement {
         self.invalidate_with(|path, retired| replace_generation_marker(path, retired, "invalidate"))
     }
 
+    /// Release the transaction lock while preserving the original marker for a later rollback.
+    ///
+    /// The marker must already be retired. A caller can either commit the replacement once the
+    /// new integration is installed or call [`Self::restore_after_rollback`] after a failure.
+    pub(crate) fn release_transaction_lock_for_refresh(&mut self) -> Result<(), String> {
+        if self.lock_released_for_tree_mutation {
+            return Ok(());
+        }
+        if !self.changed && !self.original.is_retired() {
+            return Err(format!(
+                "cannot release active MCP install generation lock {}",
+                self.original.lock_path().display()
+            ));
+        }
+        let Some(file) = self.lock.take() else {
+            return Err(format!(
+                "MCP install generation {} is not locked",
+                self.path.display()
+            ));
+        };
+        if let Err(error) = unlock_file(&file) {
+            self.lock = Some(file);
+            return Err(format!(
+                "failed to release MCP install generation lock {} before refreshing: {error}",
+                self.original.lock_path().display()
+            ));
+        }
+        self.lock_released_for_tree_mutation = true;
+        Ok(())
+    }
+
     fn invalidate_with(
         &mut self,
         write_retired: impl FnOnce(&Path, &GenerationMarker) -> Result<(), String>,

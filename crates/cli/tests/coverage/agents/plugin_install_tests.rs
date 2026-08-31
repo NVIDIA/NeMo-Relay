@@ -962,7 +962,7 @@ fn refresh_preflight_retires_every_managed_generation_before_replacement() {
         write_installed_state(host, install.path());
     }
 
-    retire_integrations_for_refresh(
+    let _preflight = retire_integrations_for_refresh(
         &CodingAgent::ALL
             .into_iter()
             .map(|host| (host, install.path().to_path_buf()))
@@ -991,7 +991,7 @@ fn refresh_preflight_retires_multiple_directories_for_one_host() {
     write_installed_state(CodingAgent::Codex, first.path());
     write_installed_state(CodingAgent::Codex, second.path());
 
-    retire_integrations_for_refresh(&[
+    let _preflight = retire_integrations_for_refresh(&[
         (CodingAgent::Codex, first.path().to_path_buf()),
         (CodingAgent::Codex, second.path().to_path_buf()),
     ])
@@ -3268,6 +3268,44 @@ fn force_install_keeps_existing_registration_when_gateway_refresh_fails() {
             "restore snapshot".to_string(),
         ]
     );
+}
+
+#[test]
+fn refresh_restores_preflight_generation_when_force_install_gateway_refresh_fails() {
+    let home = tempdir().unwrap();
+    let _home = HomeScope::enter(home.path());
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("codex", "/bin/codex")
+        .with_codex_registration(true, true);
+    let setup_runner = MockSetupRunner {
+        failing_call: Some("refresh gateway".into()),
+        ..MockSetupRunner::default()
+    };
+    let options = PluginInstallOptions {
+        force: true,
+        ..options(dir.path())
+    };
+    write_installed_state(CodingAgent::Codex, dir.path());
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    let previous = InstallGeneration::capture(layout.generation_fence.clone()).unwrap();
+    let mut preflight =
+        retire_integrations_for_refresh(&[(CodingAgent::Codex, dir.path().to_path_buf())]).unwrap();
+
+    let error = install_host(CodingAgent::Codex, &options, &runner, &setup_runner).unwrap_err();
+
+    assert!(error.contains("refresh gateway failed"));
+    assert!(
+        previous
+            .verify_current()
+            .unwrap_err()
+            .contains("has been retired")
+    );
+    preflight
+        .restore_failed_target(CodingAgent::Codex, dir.path())
+        .unwrap();
+    previous.verify_current().unwrap();
 }
 
 #[test]

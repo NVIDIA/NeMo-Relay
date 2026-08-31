@@ -49,9 +49,11 @@ fn refresh(command: RefreshCommand) -> Result<ExitCode, CliError> {
         })
         .cloned()
         .collect::<Vec<_>>();
-    if !command.dry_run {
-        crate::installation::marketplace::prepare_integrations_for_refresh(&managed_targets)?;
-    }
+    let mut preflight = (!command.dry_run)
+        .then(|| {
+            crate::installation::marketplace::prepare_integrations_for_refresh(&managed_targets)
+        })
+        .transpose()?;
     let mut attempted = 0;
     let mut errors = Vec::new();
 
@@ -77,27 +79,44 @@ fn refresh(command: RefreshCommand) -> Result<ExitCode, CliError> {
             dry_run: command.dry_run,
             skip_doctor: false,
         };
-        match crate::agents::install_integration(agent, request) {
-            Ok(status) if status == ExitCode::SUCCESS => println!(
-                "{} at {}: {}",
-                agent.label(),
-                install_dir.display(),
-                if command.dry_run {
-                    "would refresh — no reconnect required"
-                } else {
-                    "refreshed — reconnect required"
-                }
-            ),
-            Ok(_) => errors.push(format!(
+        let result = match crate::agents::install_integration(agent, request) {
+            Ok(status) if status == ExitCode::SUCCESS => Ok(()),
+            Ok(_) => Err(format!(
                 "{} at {} returned a nonzero status",
                 agent.label(),
                 install_dir.display()
             )),
-            Err(error) => errors.push(format!(
+            Err(error) => Err(format!(
                 "{} at {}: {error}",
                 agent.label(),
                 install_dir.display()
             )),
+        };
+        match result {
+            Ok(()) => {
+                if let Some(preflight) = preflight.as_mut() {
+                    preflight.commit_target(agent, &install_dir);
+                }
+                println!(
+                    "{} at {}: {}",
+                    agent.label(),
+                    install_dir.display(),
+                    if command.dry_run {
+                        "would refresh — no reconnect required"
+                    } else {
+                        "refreshed — reconnect required"
+                    }
+                );
+            }
+            Err(error) => {
+                let restore_error = preflight.as_mut().and_then(|preflight| {
+                    preflight.restore_failed_target(agent, &install_dir).err()
+                });
+                errors.push(match restore_error {
+                    Some(restore_error) => format!("{error}; additionally failed to restore the previous MCP generation: {restore_error}"),
+                    None => error,
+                });
+            }
         }
     }
 

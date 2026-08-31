@@ -134,7 +134,9 @@ pub(crate) fn registered_install_dirs(host: impl MarketplaceHost) -> Result<Vec<
 }
 
 /// Check prerequisites before retiring any MCP generation for a refresh.
-pub(crate) fn prepare_integrations_for_refresh<H>(targets: &[(H, PathBuf)]) -> Result<(), CliError>
+pub(crate) fn prepare_integrations_for_refresh<H>(
+    targets: &[(H, PathBuf)],
+) -> Result<RefreshIntegrationsPreflight<H>, CliError>
 where
     H: MarketplaceHost + Eq + std::hash::Hash + Copy,
 {
@@ -144,7 +146,7 @@ where
 fn prepare_integrations_for_refresh_with_runner<H>(
     targets: &[(H, PathBuf)],
     runner: &dyn CommandRunner,
-) -> Result<(), CliError>
+) -> Result<RefreshIntegrationsPreflight<H>, CliError>
 where
     H: MarketplaceHost + Eq + std::hash::Hash + Copy,
 {
@@ -178,10 +180,12 @@ where
 
 /// Retire every selected MCP generation before a refresh can stop the shared gateway.
 ///
-/// Keeping the operation and generation locks until all targets are retired makes this an
-/// all-or-nothing preflight: a failure restores every marker already invalidated. Once the
-/// preflight commits, no old MCP can recover the gateway while the per-host replacements run.
-pub(crate) fn retire_integrations_for_refresh<H>(targets: &[(H, PathBuf)]) -> Result<(), CliError>
+/// Each retirement retains its original marker until the corresponding replacement succeeds.
+/// A preflight or replacement failure restores every affected marker, while retired markers
+/// prevent old MCP clients from recovering the gateway during the replacement window.
+pub(crate) fn retire_integrations_for_refresh<H>(
+    targets: &[(H, PathBuf)],
+) -> Result<RefreshIntegrationsPreflight<H>, CliError>
 where
     H: MarketplaceHost + Eq + std::hash::Hash + Copy,
 {
@@ -199,7 +203,7 @@ where
             .map_err(CliError::Install)?;
             host_locks.insert(*host, host_lock);
         }
-        let install_root_lock = PluginOperationLock::acquire_install_root(
+        let _install_root_lock = PluginOperationLock::acquire_install_root(
             host.install_arg(),
             &operation_lock_dir,
             install_dir,
@@ -237,21 +241,57 @@ where
         retirement
             .invalidate_for_replacement()
             .map_err(CliError::Install)?;
-        retirements.push(RefreshGenerationRetirement {
-            retirement,
-            _install_root_lock: install_root_lock,
-        });
+        retirement
+            .release_transaction_lock_for_refresh()
+            .map_err(CliError::Install)?;
+        retirements.push((*host, install_dir.clone(), retirement));
     }
-    for retirement in &mut retirements {
-        retirement.retirement.commit_replacement();
-    }
-    Ok(())
+    Ok(RefreshIntegrationsPreflight { retirements })
 }
 
-struct RefreshGenerationRetirement {
-    // Drop the generation lock before releasing its operation lock.
-    retirement: GenerationRetirement,
-    _install_root_lock: PluginOperationLock,
+pub(crate) struct RefreshIntegrationsPreflight<H> {
+    retirements: Vec<(H, PathBuf, GenerationRetirement)>,
+}
+
+impl<H> std::fmt::Debug for RefreshIntegrationsPreflight<H> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RefreshIntegrationsPreflight")
+            .field("retirement_count", &self.retirements.len())
+            .finish()
+    }
+}
+
+impl<H> RefreshIntegrationsPreflight<H>
+where
+    H: Eq,
+{
+    pub(crate) fn commit_target(&mut self, host: H, install_dir: &Path) {
+        if let Some((_, _, retirement)) = self
+            .retirements
+            .iter_mut()
+            .find(|(target_host, target_dir, _)| *target_host == host && target_dir == install_dir)
+        {
+            retirement.commit_replacement();
+        }
+    }
+
+    pub(crate) fn restore_failed_target(
+        &mut self,
+        host: H,
+        install_dir: &Path,
+    ) -> Result<(), CliError> {
+        let Some((_, _, retirement)) = self
+            .retirements
+            .iter_mut()
+            .find(|(target_host, target_dir, _)| *target_host == host && target_dir == install_dir)
+        else {
+            return Ok(());
+        };
+        retirement
+            .restore_after_rollback()
+            .map_err(CliError::Install)
+    }
 }
 
 pub(crate) fn collect_marketplace_readiness(
