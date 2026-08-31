@@ -96,8 +96,10 @@ nemo-relay --bind 127.0.0.1:47632 gateway stop
 ```
 
 The command resolves the process listening at that exact loopback address,
-verifies that its executable is named `nemo-relay`, and stops it. An open MCP
-client can restart the managed gateway as part of its one allowed recovery.
+verifies that its executable is named `nemo-relay`, and stops it. It can only
+stop a gateway running on the local machine; remote gateway processes are not
+supported. An open MCP client can restart the managed gateway as part of its
+one allowed recovery.
 
 `nemo-relay gateway start` starts the gateway with the same server
 configuration as a bare daemon invocation. `nemo-relay gateway stop` stops that
