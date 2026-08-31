@@ -23,7 +23,7 @@ __skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
 nemo-relay = { workspace = true, features = ["atof-streaming", "worker-grpc"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 nemo-relay-pii-redaction.workspace = true
-chrono = "0.4"
+chrono = { version = "=0.4.41", default-features = false, features = ["std", "now"] }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
