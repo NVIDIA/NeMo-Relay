@@ -625,6 +625,53 @@ fn cli_gateway_start_and_stop_control_the_same_process() {
 }
 
 #[test]
+fn cli_gateway_start_honors_explicit_logging_without_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = probe.local_addr().unwrap();
+    drop(probe);
+
+    let gateway = Command::new(gateway_bin())
+        .args([
+            "--bind",
+            &address.to_string(),
+            "--log-level",
+            "info",
+            "--log-stderr-format",
+            "jsonl",
+            "gateway",
+            "start",
+        ])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("TMPDIR", temp.path())
+        .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_port_open(address);
+
+    let output = Command::new(gateway_bin())
+        .args(["--bind", &address.to_string(), "gateway", "stop"])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("TMPDIR", temp.path())
+        .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = wait_child_with_output(gateway);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("\"event\":\"command_started\""), "{stderr}");
+}
+
+#[test]
 fn cli_gateway_stop_refuses_a_foreign_loopback_listener() {
     let foreign = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = foreign.local_addr().unwrap();

@@ -64,6 +64,7 @@ fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
         Some(Command::Gateway(command)) if !command.is_stop() => {
             cli.server.to_runtime().requested_daemon_mode()
                 || runtime_configuration::any_config_file_exists()
+                || cli.logging.has_explicit_configuration()?
         }
         Some(command) => !command.skips_logging(),
         None => {
