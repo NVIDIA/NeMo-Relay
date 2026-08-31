@@ -1,0 +1,124 @@
+---
+title: "Struct Nemo Relay Native Host ApiV3"
+sidebar-title: "NemoRelayNativeHostApiV3"
+description: "ABI-v3 host extension appended to `NemoRelayNativeHostApiV1`."
+position: 34
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct NemoRelayNativeHostApiV3 &#123;Show 16 fields\n    pub v1: <a href=\"struct-nemorelaynativehostapiv1\">NemoRelayNativeHostApiV1</a>,\n    pub async_completion_resolve_json: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(completion: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasynccompletion\">NemoRelayNativeAsyncCompletion</a>, value_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub async_completion_reject: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(completion: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasynccompletion\">NemoRelayNativeAsyncCompletion</a>, message: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub async_completion_is_cancelled: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(completion: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasynccompletion\">NemoRelayNativeAsyncCompletion</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub async_completion_release: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(completion: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasynccompletion\">NemoRelayNativeAsyncCompletion</a>),\n    pub async_next_invoke: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(next: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasyncnext\">NemoRelayNativeAsyncNext</a>, invocation_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, completion: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasynccompletion\">NemoRelayNativeAsyncCompletion</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub async_next_release: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(next: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasyncnext\">NemoRelayNativeAsyncNext</a>),\n    pub plugin_context_register_async_middleware: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, kind: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, break_chain: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>, cb: <a href=\"type-nemorelaynativeasyncmiddlewarecb\">NemoRelayNativeAsyncMiddlewareCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub async_stream_push_json: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(stream: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasyncstream\">NemoRelayNativeAsyncStream</a>, chunk_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub async_stream_finish: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(stream: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasyncstream\">NemoRelayNativeAsyncStream</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub async_stream_reject: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(stream: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasyncstream\">NemoRelayNativeAsyncStream</a>, message: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub async_stream_is_cancelled: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(stream: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasyncstream\">NemoRelayNativeAsyncStream</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub async_stream_release: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(stream: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasyncstream\">NemoRelayNativeAsyncStream</a>),\n    pub async_next_invoke_stream: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(next: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasyncnext\">NemoRelayNativeAsyncNext</a>, invocation_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, stream: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasyncstream\">NemoRelayNativeAsyncStream</a>, cb: <a href=\"type-nemorelaynativeasyncnextstreamcb\">NemoRelayNativeAsyncNextStreamCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub plugin_context_register_async_stream_middleware: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, cb: <a href=\"type-nemorelaynativeasyncstreammiddlewarecb\">NemoRelayNativeAsyncStreamMiddlewareCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub async_next_invoke_result: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(next: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasyncnext\">NemoRelayNativeAsyncNext</a>, invocation_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, cb: <a href=\"type-nemorelaynativeasyncnextresultcb\">NemoRelayNativeAsyncNextResultCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n&#125;"}} /></pre>
+
+ABI-v3 host extension appended to [`NemoRelayNativeHostApiV1`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativehostapiv1).
+
+Its first field is the complete v1/v2 table, so legacy plugins can keep treating the pointer as a [`NemoRelayNativeHostApiV1`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativehostapiv1).
+
+## Fields
+
+### `v1: NemoRelayNativeHostApiV1`
+
+Compatibility prefix for ABI-v1/v2 plugins.
+
+### `async_completion_resolve_json: unsafe extern "C" fn(completion: *const NemoRelayNativeAsyncCompletion, value_json: *const NemoRelayNativeString) -> NemoRelayStatus`
+
+Resolves an async callback completion with a JSON value.
+
+Tool-execution middleware must supply canonical [`ToolExecutionInterceptOutcome`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutioninterceptoutcome) JSON.
+
+### `async_completion_reject: unsafe extern "C" fn(completion: *const NemoRelayNativeAsyncCompletion, message: *const NemoRelayNativeString) -> NemoRelayStatus`
+
+Rejects an async callback completion with a UTF-8 message.
+
+### `async_completion_is_cancelled: unsafe extern "C" fn(completion: *const NemoRelayNativeAsyncCompletion) -> bool`
+
+Returns true after the awaiting runtime has cancelled the invocation.
+
+### `async_completion_release: unsafe extern "C" fn(completion: *const NemoRelayNativeAsyncCompletion)`
+
+Releases the callback-owned reference after a pending completion settles.
+
+### `async_next_invoke: unsafe extern "C" fn(next: *const NemoRelayNativeAsyncNext, invocation_json: *const NemoRelayNativeString, completion: *const NemoRelayNativeAsyncCompletion) -> NemoRelayStatus`
+
+Invokes an execution continuation and settles a supplied completion.
+
+Cancellation of that completion aborts an in-flight continuation. This legacy convenience hook is one-shot because its result settles the middleware completion; use `async_next_invoke_result` for repeated or concurrent calls. For a tool continuation, the host resolves the completion with canonical [`ToolExecutionInterceptOutcome`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutioninterceptoutcome) JSON.
+
+### `async_next_release: unsafe extern "C" fn(next: *const NemoRelayNativeAsyncNext)`
+
+Releases the callback-owned continuation reference.
+
+Execution callbacks must call this exactly once after their final use for both `Complete` and `Pending` return states.
+
+### `plugin_context_register_async_middleware: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, kind: u32, name: *const NemoRelayNativeString, priority: i32, break_chain: bool, cb: NemoRelayNativeAsyncMiddlewareCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers a completion-based asynchronous middleware surface.
+
+`kind` must be a valid [`NemoRelayNativeAsyncMiddlewareKind`](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaynativeasyncmiddlewarekind) discriminant. The host rejects unknown `u32` values and [`NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept`](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaynativeasyncmiddlewarekind), which must use `plugin_context_register_async_stream_middleware`.
+
+### `async_stream_push_json: unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream, chunk_json: *const NemoRelayNativeString) -> NemoRelayStatus`
+
+Pushes one JSON chunk to an incremental native stream without blocking.
+
+A full bounded host queue returns [`NemoRelayStatus::Backpressured`](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaystatus); retry this same logical chunk after the consumer advances.
+
+### `async_stream_finish: unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> NemoRelayStatus`
+
+Finishes an incremental native stream successfully.
+
+### `async_stream_reject: unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream, message: *const NemoRelayNativeString) -> NemoRelayStatus`
+
+Rejects an incremental native stream without blocking.
+
+A full bounded queue returns [`NemoRelayStatus::Backpressured`](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaystatus); retry this same rejection after the consumer advances.
+
+### `async_stream_is_cancelled: unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> bool`
+
+Returns true when the consumer cancelled or released the stream.
+
+### `async_stream_release: unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream)`
+
+Releases the callback-owned incremental stream reference.
+
+### `async_next_invoke_stream: unsafe extern "C" fn(next: *const NemoRelayNativeAsyncNext, invocation_json: *const NemoRelayNativeString, stream: *const NemoRelayNativeAsyncStream, cb: NemoRelayNativeAsyncNextStreamCb, user_data: *mut c_void) -> NemoRelayStatus`
+
+Invokes a downstream stream and reports chunks incrementally.
+
+The host reports consumer cancellation through one terminal callback with a non-null error. If a result callback returns `false`, it must reclaim its own `user_data` before returning because no terminal callback follows. This hook may be called repeatedly or concurrently with independent callback state while the output stream remains active.
+
+### `plugin_context_register_async_stream_middleware: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, priority: i32, cb: NemoRelayNativeAsyncStreamMiddlewareCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers an incremental asynchronous LLM stream intercept.
+
+### `async_next_invoke_result: unsafe extern "C" fn(next: *const NemoRelayNativeAsyncNext, invocation_json: *const NemoRelayNativeString, cb: NemoRelayNativeAsyncNextResultCb, user_data: *mut c_void) -> NemoRelayStatus`
+
+Invokes a unary execution continuation with an independent result sink.
+
+Unlike the legacy completion-coupled `async_next_invoke`, this hook may be called repeatedly or concurrently with distinct `user_data`. For a tool continuation, the result callback receives canonical [`ToolExecutionResult`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutionresult) JSON.
+
+## Trait Implementations
+
+### `impl Clone for NemoRelayNativeHostApiV3`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-nemorelaynativehostapiv3\">NemoRelayNativeHostApiV3</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-nemorelaynativehostapiv3\">NemoRelayNativeHostApiV3</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Copy for NemoRelayNativeHostApiV3`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-nemorelaynativehostapiv3\">NemoRelayNativeHostApiV3</a>"}} /></pre>
+
+### `impl Send for NemoRelayNativeHostApiV3`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> for <a href=\"struct-nemorelaynativehostapiv3\">NemoRelayNativeHostApiV3</a>"}} /></pre>
+
+### `impl Sync for NemoRelayNativeHostApiV3`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> for <a href=\"struct-nemorelaynativehostapiv3\">NemoRelayNativeHostApiV3</a>"}} /></pre>

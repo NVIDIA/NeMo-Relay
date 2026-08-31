@@ -1,0 +1,38 @@
+---
+title: "Module otel"
+sidebar-title: "otel"
+description: "OpenTelemetry subscriber support for NeMo Relay."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+OpenTelemetry subscriber support for NeMo Relay.
+
+This crate adapts NeMo Relay lifecycle events into the selected `full`, `gen_ai`, or `openinference` OpenTelemetry trace projection. Scope start and end events open and close supported spans. Non-metric mark behavior is fixed by the selected projection; reserved metric-schema marks are not projected into traces.
+
+The public API is intentionally small:
+
+- [`OpenTelemetryConfig`](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-opentelemetryconfig) configures the OTLP exporter and resource metadata
+- [`OpenTelemetrySubscriber`](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-opentelemetrysubscriber) exposes a NeMo Relay [`EventSubscriberFn`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-eventsubscriberfn) and convenience `register` / `deregister` / `force_flush` / `shutdown` methods
+
+## Structs
+
+- [OpenTelemetryConfig](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-opentelemetryconfig): Configuration for the OpenTelemetry subscriber.
+- [OpenTelemetrySubscriber](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-opentelemetrysubscriber): OpenTelemetry-backed NeMo Relay subscriber.
+- [OpenTelemetrySubscriberOptions](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-opentelemetrysubscriberoptions): Options for constructing an OpenTelemetry subscriber from an existing tracer provider.
+
+## Enums
+
+- [OpenTelemetryError](/reference/api/rust-library-reference/nemo-relay/observability/otel/enum-opentelemetryerror): Errors produced while configuring or operating the OpenTelemetry subscriber.
+- [OtlpTransport](/reference/api/rust-library-reference/nemo-relay/observability/otel/enum-otlptransport): Supported OTLP trace transports.
+
+## Constants
+
+- [DEFAULT_COMPLETED_SPAN_CONTEXT_TTL](/reference/api/rust-library-reference/nemo-relay/observability/otel/constant-default-completed-span-context-ttl): Default period for attaching late marks to a completed scope's trace span.
+
+## Type Aliases
+
+- [Result](/reference/api/rust-library-reference/nemo-relay/observability/otel/type-result): Result type for the OpenTelemetry subscriber crate.
