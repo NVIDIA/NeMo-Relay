@@ -385,6 +385,89 @@ fn prepares_codex_config_overrides_in_exec_scope() {
 }
 
 #[test]
+fn prepares_codex_config_overrides_after_full_auto_in_exec_scope() {
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Codex,
+        vec![
+            "codex".into(),
+            "--full-auto".into(),
+            "exec".into(),
+            "--config".into(),
+            "mcp_servers.example.url=\"http://127.0.0.1:9902\"".into(),
+            "inspect the workspace".into(),
+        ],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    let exec_index = prepared.argv.iter().position(|arg| arg == "exec").unwrap();
+    let provider_index = prepared
+        .argv
+        .iter()
+        .position(|arg| arg == "model_provider=\"nemo-relay-openai\"")
+        .unwrap();
+    assert!(provider_index > exec_index);
+    assert!(
+        provider_index
+            < prepared
+                .argv
+                .iter()
+                .position(|arg| arg.starts_with("mcp_servers.example.url="))
+                .unwrap()
+    );
+}
+
+#[test]
+fn prepares_codex_config_overrides_in_fork_scope() {
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Codex,
+        vec![
+            "codex".into(),
+            "exec".into(),
+            "--model".into(),
+            "gpt-5.4".into(),
+            "fork".into(),
+            "0198d672-f123-4567-89ab-cdef01234567".into(),
+            "--config".into(),
+            "mcp_servers.example.url=\"http://127.0.0.1:9902\"".into(),
+            "continue".into(),
+        ],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    let fork_index = prepared.argv.iter().position(|arg| arg == "fork").unwrap();
+    let provider_index = prepared
+        .argv
+        .iter()
+        .position(|arg| arg == "model_provider=\"nemo-relay-openai\"")
+        .unwrap();
+    assert!(provider_index > fork_index);
+    assert!(
+        provider_index
+            < prepared
+                .argv
+                .iter()
+                .position(|arg| arg == "0198d672-f123-4567-89ab-cdef01234567")
+                .unwrap()
+    );
+}
+
+#[test]
 fn prepares_codex_config_overrides_in_resume_scope() {
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),

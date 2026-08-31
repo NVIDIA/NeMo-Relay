@@ -70,7 +70,7 @@ fn insert_config_in_command_scope(
         return;
     };
     let insert_at = command_position(argv, exec_index + 1)
-        .filter(|&index| matches!(argv[index].as_str(), "resume" | "review"))
+        .filter(|&index| matches!(argv[index].as_str(), "fork" | "resume" | "review"))
         .map_or(exec_index + 1, |index| index + 1);
     argv.splice(insert_at..insert_at, values);
 }
@@ -97,6 +97,7 @@ fn option_is_self_contained(argument: &str) -> bool {
         || matches!(
             argument,
             "--strict-config"
+                | "--full-auto"
                 | "--oss"
                 | "--dangerously-bypass-approvals-and-sandbox"
                 | "--dangerously-bypass-hook-trust"
