@@ -158,9 +158,32 @@ snapshot budget error, remove unrelated files from the manifest or load-target
 directory, flatten deeply nested directories, or reduce the managed Python
 environment before retrying. Concurrent Codex and Claude Code processes can
 share the sidecar. Each MCP client sends a heartbeat
-while its stdio connection is open, and the sidecar exits after 300 seconds
+while its stdio connection is open. The heartbeat defaults to 3 seconds and is
+shortened automatically when necessary to remain below the gateway idle
+timeout. Set `NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS` to a positive integer
+shorter than the idle timeout to override it. The sidecar exits after 300 seconds
 without activity by default. Relay does not install a wrapper, launch agent,
 system user service, scheduled task, login item, or persistent supervisor.
+
+To explicitly stop the managed shared gateway, first close active MCP clients,
+then run:
+
+```bash
+nemo-relay --bind 127.0.0.1:47632 gateway stop
+```
+
+The command resolves the process listening at that exact loopback address,
+verifies that its executable is named `nemo-relay`, and stops it. It can only
+stop a gateway running on the local machine; remote gateway processes are not
+supported. An open MCP client can restart the managed gateway as part of its
+one allowed recovery.
+
+`nemo-relay gateway start` starts the gateway with the same server
+configuration as a bare daemon invocation. `nemo-relay gateway stop` stops that
+gateway at the default daemon endpoint, `127.0.0.1:4040`. Pass the same `--bind`
+value to both commands for a custom endpoint. On Unix, add `--force` to terminate
+the process immediately instead of requesting a graceful shutdown. Windows
+always terminates the gateway process tree.
 
 On Windows, Relay requests Job Object breakaway when the host job permits it.
 When breakaway is unavailable and the host permits nested assignment, the

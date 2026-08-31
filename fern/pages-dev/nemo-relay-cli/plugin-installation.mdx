@@ -132,7 +132,10 @@ Claude Code and Codex processes use the same
 `nemo-relay mcp` lifecycle client. Before reading MCP protocol frames, it starts
 or reuses a detached native sidecar on `127.0.0.1:47632`. The client verifies
 Relay identity, version, protocol readiness, and effective user-level
-configuration, then heartbeats the sidecar every 30 seconds. Concurrent
+configuration, then heartbeats the sidecar every 3 seconds by default. Relay
+shortens the default automatically when necessary to keep it below the gateway
+idle timeout. Set `NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS` to a positive
+integer shorter than the idle timeout to override it. Concurrent
 processes from any host share the gateway. After the final MCP client closes,
 the sidecar exits after 300 idle seconds by default. If the gateway exits while
 MCP stdio is open, the client performs one coordinated restart and fails if
@@ -155,6 +158,26 @@ verify it on the same connection used for delivery, and send the canonical
 payload once. They never start or recover the gateway, and Relay does not retry
 after payload transmission begins. The MCP server advertises no tools in any
 host.
+
+To explicitly stop the managed shared gateway, first close active MCP clients,
+then run:
+
+```bash
+nemo-relay --bind 127.0.0.1:47632 gateway stop
+```
+
+The command resolves the process listening at that exact loopback address,
+verifies that its executable is named `nemo-relay`, and stops it. It can only
+stop a gateway running on the local machine; remote gateway processes are not
+supported. An open MCP client can restart the managed gateway as part of its
+one allowed recovery.
+
+`nemo-relay gateway start` starts the gateway with the same server
+configuration as a bare daemon invocation. `nemo-relay gateway stop` stops that
+gateway at the default daemon endpoint, `127.0.0.1:4040`. Pass the same `--bind`
+value to both commands for a custom endpoint. On Unix, add `--force` to terminate
+the process immediately instead of requesting a graceful shutdown. Windows
+always terminates the gateway process tree.
 
 ### Hook Delivery and Upgrade Safety
 
