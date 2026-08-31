@@ -88,6 +88,18 @@ wrapper for project-specific `.nemo-relay` configuration. Run
 `nemo-relay install claude-code --force` to replace an existing
 generation-fenced installation safely.
 
+After upgrading Relay, refresh every Relay-managed coding-agent integration
+before starting a new Claude Code session:
+
+```bash
+nemo-relay integrations refresh
+```
+
+The command retires old MCP generations, replaces the authenticated sidecar,
+and requires affected hosts to reconnect. For one Claude Code
+install, `nemo-relay install claude-code --force` remains the focused repair
+command. Manual MCP configurations are not changed.
+
 To explicitly stop the managed shared gateway, first close active MCP clients,
 then run:
 

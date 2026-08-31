@@ -165,6 +165,24 @@ shorter than the idle timeout to override it. The sidecar exits after 300 second
 without activity by default. Relay does not install a wrapper, launch agent,
 system user service, scheduled task, login item, or persistent supervisor.
 
+When a newly launched MCP client detects a verified Relay-owned gateway from a
+different Relay version, it stops that old sidecar and starts a matching one.
+This intentionally interrupts MCP clients still attached to the old gateway.
+Configuration-only compatibility mismatches remain errors and are not replaced
+automatically.
+
+After upgrading Relay, refresh every Relay-managed coding-agent integration
+before starting a new Codex session:
+
+```bash
+nemo-relay integrations refresh
+```
+
+The command retires old MCP generations, replaces the authenticated sidecar,
+and requires affected hosts to reconnect. For one Codex install,
+`nemo-relay install codex --force` remains the focused repair command. Manual
+MCP configurations are not changed.
+
 To explicitly stop the managed shared gateway, first close active MCP clients,
 then run:
 

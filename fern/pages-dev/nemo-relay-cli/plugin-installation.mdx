@@ -147,6 +147,12 @@ startup lock serializes launch and recovery, while a small recovery record lets
 overlapping MCP clients share the same restart attempt. The gateway tracks its
 own activity, idle shutdown, and authenticated ownership-record cleanup.
 
+When a newly launched MCP client detects a verified Relay-owned gateway from a
+different Relay version, it stops that old sidecar and starts a matching one.
+This intentionally interrupts MCP clients still attached to the old gateway.
+Configuration-only compatibility mismatches remain errors and are not replaced
+automatically.
+
 Codex marks the MCP server as required, so the captured turn waits for verified
 gateway readiness. Claude Code 2.1.121 or newer uses `alwaysLoad`, which blocks
 session startup until the MCP connection is ready. Installed MCP entries and
@@ -158,6 +164,28 @@ verify it on the same connection used for delivery, and send the canonical
 payload once. They never start or recover the gateway, and Relay does not retry
 after payload transmission begins. The MCP server advertises no tools in any
 host.
+
+## Refresh Installed Integrations
+
+After upgrading the `nemo-relay` binary, refresh every Relay-managed Codex and
+Claude Code installation with:
+
+```bash
+nemo-relay integrations refresh
+```
+
+Refresh retires each old MCP generation, stops the authenticated Relay-owned
+sidecar, and republishes the integration from the current binary. Restart the
+affected host clients afterward. To bring a legacy custom-directory installation
+under Relay management, reinstall the appropriate host before refreshing it:
+
+```bash
+nemo-relay install codex --install-dir <path-to-plugins> --force
+nemo-relay integrations refresh
+```
+
+Manual MCP configurations are not changed; reinstall them through Relay if you
+want Relay to manage future refreshes.
 
 To explicitly stop the managed shared gateway, first close active MCP clients,
 then run:
