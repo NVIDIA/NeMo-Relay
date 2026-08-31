@@ -12,7 +12,7 @@ use std::process::{Command as ProcessCommand, Stdio};
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
-use listeners::{Listener, Process, Protocol, SocketState};
+use listeners::{Listener, Process, Protocol};
 
 use super::completions::CompletionsCommand;
 use super::serve::ServerArgs;
@@ -132,34 +132,9 @@ fn gateway_stop_uses_the_daemon_bind_and_parses_force() {
 fn gateway_stop_selects_only_the_exact_relay_tcp_listener() {
     let bind = "127.0.0.1:4040".parse().unwrap();
     let listeners = [
-        test_listener(
-            "127.0.0.1:4041",
-            10,
-            "nemo-relay",
-            Protocol::TCP,
-            SocketState::Listen,
-        ),
-        test_listener(
-            "127.0.0.1:4040",
-            11,
-            "nemo-relay",
-            Protocol::UDP,
-            SocketState::Unknown,
-        ),
-        test_listener(
-            "127.0.0.1:4040",
-            12,
-            "nemo-relay",
-            Protocol::TCP,
-            SocketState::Established,
-        ),
-        test_listener(
-            "127.0.0.1:4040",
-            13,
-            "nemo-relay",
-            Protocol::TCP,
-            SocketState::Listen,
-        ),
+        test_listener("127.0.0.1:4041", 10, "nemo-relay", Protocol::TCP),
+        test_listener("127.0.0.1:4040", 11, "nemo-relay", Protocol::UDP),
+        test_listener("127.0.0.1:4040", 13, "nemo-relay", Protocol::TCP),
     ];
 
     let process = gateway::select_relay_listener(bind, listeners)
@@ -178,7 +153,6 @@ fn gateway_stop_refuses_foreign_or_ambiguous_listener_owners() {
             20,
             "postgres",
             Protocol::TCP,
-            SocketState::Listen,
         )],
     )
     .unwrap_err();
@@ -190,20 +164,8 @@ fn gateway_stop_refuses_foreign_or_ambiguous_listener_owners() {
     let ambiguous = gateway::select_relay_listener(
         bind,
         [
-            test_listener(
-                "127.0.0.1:4040",
-                21,
-                "nemo-relay",
-                Protocol::TCP,
-                SocketState::Listen,
-            ),
-            test_listener(
-                "127.0.0.1:4040",
-                22,
-                "nemo-relay",
-                Protocol::TCP,
-                SocketState::Listen,
-            ),
+            test_listener("127.0.0.1:4040", 21, "nemo-relay", Protocol::TCP),
+            test_listener("127.0.0.1:4040", 22, "nemo-relay", Protocol::TCP),
         ],
     )
     .unwrap_err();
@@ -251,13 +213,7 @@ fn gateway_force_stop_terminates_descendants() {
     panic!("force stop left child PID {child_pid} running");
 }
 
-fn test_listener(
-    address: &str,
-    pid: u32,
-    name: &str,
-    protocol: Protocol,
-    state: SocketState,
-) -> Listener {
+fn test_listener(address: &str, pid: u32, name: &str, protocol: Protocol) -> Listener {
     Listener {
         process: Process {
             pid,
@@ -266,7 +222,6 @@ fn test_listener(
         },
         socket: address.parse().unwrap(),
         protocol,
-        state,
     }
 }
 

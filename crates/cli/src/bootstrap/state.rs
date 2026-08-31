@@ -275,22 +275,6 @@ pub(crate) fn stop_owned_and_reset(url: &str) -> Result<(), String> {
     remove_if_matches(&path, &owner)
 }
 
-pub(crate) fn remove_owner_for_pid(url: &str, pid: u32) -> Result<(), String> {
-    let state = state_dir()?;
-    if !state.exists() {
-        return Ok(());
-    }
-    let _lock = lock_endpoint(&state, url)?;
-    let path = owner_path(&state, url);
-    let Some(owner) = read_owner_record(&path)? else {
-        return Ok(());
-    };
-    if owner.pid != pid || owner.service != "nemo-relay" || owner.url != url {
-        return Ok(());
-    }
-    remove_if_matches(&path, &owner)
-}
-
 fn write_owner_record(path: &Path, record: &OwnerRecord) -> Result<(), String> {
     let bytes = serde_json::to_vec(record)
         .map_err(|error| format!("failed to encode gateway ownership: {error}"))?;

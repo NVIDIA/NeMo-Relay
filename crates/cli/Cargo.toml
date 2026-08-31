@@ -46,7 +46,7 @@ hyper = "1"
 hyper-util = { version = "0.1", features = ["tokio"] }
 dialoguer = { version = "0.11", default-features = false, features = ["password"] }
 jsonschema = { version = "0.46.6", default-features = false }
-listeners = "0.6.1"
+listeners = "0.3"
 log = { version = "0.4", features = ["kv"] }
 percent-encoding = "2"
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "json", "rustls-tls-native-roots", "stream"] }
@@ -72,6 +72,8 @@ zstd = "0.13"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(any(unix, windows))'.dependencies]
 sysinfo = { version = "0.36.1", default-features = false, features = ["system"] }
 
 [target.'cfg(windows)'.dependencies]

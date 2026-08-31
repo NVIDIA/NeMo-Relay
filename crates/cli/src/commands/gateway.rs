@@ -8,9 +8,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use clap::{Args, Subcommand};
-use listeners::{Listener, Process, Protocol, SocketState};
-#[cfg(unix)]
-use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
+use listeners::{Listener, Process, Protocol};
+#[cfg(any(unix, windows))]
+use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, Signal, System};
 
 use crate::error::CliError;
 
@@ -88,8 +88,6 @@ fn stop(bind: SocketAddr, force: bool) -> Result<ExitCode, CliError> {
     })?;
 
     wait_for_listener_exit(bind, target.pid)?;
-    crate::bootstrap::state::remove_owner_for_pid(&format!("http://{bind}"), target.pid)
-        .map_err(CliError::Launch)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -120,11 +118,9 @@ pub(super) fn select_relay_listener(
     bind: SocketAddr,
     listeners: impl IntoIterator<Item = Listener>,
 ) -> Result<Option<Process>, CliError> {
-    let mut matches = listeners.into_iter().filter(|listener| {
-        listener.socket == bind
-            && listener.protocol == Protocol::TCP
-            && listener.state == SocketState::Listen
-    });
+    let mut matches = listeners
+        .into_iter()
+        .filter(|listener| listener.socket == bind && listener.protocol == Protocol::TCP);
     let Some(first) = matches.next() else {
         return Ok(None);
     };
@@ -174,61 +170,57 @@ fn wait_for_listener_exit(bind: SocketAddr, pid: u32) -> Result<(), CliError> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn signal_process(pid: u32, force: bool) -> Result<(), String> {
-    if force {
-        for descendant in descendant_pids(pid) {
-            send_unix_signal(descendant, libc::SIGKILL)?;
-        }
-    }
-    send_unix_signal(pid, if force { libc::SIGKILL } else { libc::SIGINT })
-}
-
-#[cfg(unix)]
-fn descendant_pids(root: u32) -> Vec<u32> {
-    fn collect(system: &System, parent: Pid, descendants: &mut Vec<u32>) {
-        for (pid, _) in system
-            .processes()
-            .iter()
-            .filter(|(_, process)| process.parent() == Some(parent))
-        {
-            collect(system, *pid, descendants);
-            descendants.push(pid.as_u32());
-        }
-    }
-
     let system = System::new_with_specifics(
         RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing().without_tasks()),
     );
-    let mut descendants = Vec::new();
-    collect(&system, Pid::from_u32(root), &mut descendants);
-    descendants
+    let root = Pid::from_u32(pid);
+    #[cfg(unix)]
+    if force {
+        signal_descendants(&system, root, Signal::Kill)?;
+    }
+    #[cfg(windows)]
+    signal_descendants(&system, root, Signal::Kill)?;
+    signal_pid(&system, root, stop_signal(force))
+}
+
+#[cfg(any(unix, windows))]
+fn signal_descendants(system: &System, parent: Pid, signal: Signal) -> Result<(), String> {
+    for pid in system
+        .processes()
+        .iter()
+        .filter_map(|(pid, process)| (process.parent() == Some(parent)).then_some(*pid))
+        .collect::<Vec<_>>()
+    {
+        signal_descendants(system, pid, signal)?;
+        signal_pid(system, pid, signal)?;
+    }
+    Ok(())
+}
+
+#[cfg(any(unix, windows))]
+fn signal_pid(system: &System, pid: Pid, signal: Signal) -> Result<(), String> {
+    let Some(process) = system.process(pid) else {
+        return Ok(());
+    };
+    process
+        .kill_with(signal)
+        .ok_or_else(|| format!("the platform cannot signal PID {}", pid.as_u32()))?
+        .then_some(())
+        .ok_or_else(|| format!("could not signal PID {}", pid.as_u32()))
 }
 
 #[cfg(unix)]
-fn send_unix_signal(pid: u32, signal: libc::c_int) -> Result<(), String> {
-    let native_pid =
-        libc::pid_t::try_from(pid).map_err(|_| format!("PID {pid} is out of range"))?;
-    // SAFETY: callers verify the gateway PID and derive descendants from the OS process table.
-    if unsafe { libc::kill(native_pid, signal) } == 0 {
-        return Ok(());
-    }
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        Ok(())
+fn stop_signal(force: bool) -> Signal {
+    if force {
+        Signal::Kill
     } else {
-        Err(format!("could not signal PID {pid}: {error}"))
+        Signal::Interrupt
     }
 }
 
 #[cfg(windows)]
-fn signal_process(pid: u32, _force: bool) -> Result<(), String> {
-    let status = std::process::Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
-        .status()
-        .map_err(|error| format!("failed to launch taskkill: {error}"))?;
-    status
-        .success()
-        .then_some(())
-        .ok_or_else(|| format!("taskkill exited with status {status}"))
+fn stop_signal(_force: bool) -> Signal {
+    Signal::Kill
 }

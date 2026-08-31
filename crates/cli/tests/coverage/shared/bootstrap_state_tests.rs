@@ -129,29 +129,6 @@ fn server_owner_guard_cleans_only_its_own_record() {
 }
 
 #[test]
-fn process_stop_cleans_only_the_matching_owner_record() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("config");
-    let _scope = EnvScope::set(&[
-        ("XDG_CONFIG_HOME", Some(config.as_os_str())),
-        ("HOME", Some(dir.path().as_os_str())),
-        ("USERPROFILE", None),
-    ]);
-    let url = "http://127.0.0.1:47632";
-    let state = state_dir().unwrap();
-    create_private_dir(&state).unwrap();
-    let path = owner_path(&state, url);
-    let owner = OwnerRecord::new(42, url, "shutdown", Some("fingerprint"));
-    write_owner_record(&path, &owner).unwrap();
-
-    remove_owner_for_pid(url, 41).unwrap();
-    assert_eq!(read_owner_record(&path).unwrap(), Some(owner));
-
-    remove_owner_for_pid(url, 42).unwrap();
-    assert!(!path.exists());
-}
-
-#[test]
 fn stopping_an_absent_or_stale_owned_gateway_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config");
