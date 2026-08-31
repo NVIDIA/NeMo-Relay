@@ -176,8 +176,7 @@ fn version_mismatched_owned_gateway_is_shut_down_and_cleaned_up() {
         let proof = key.proof("fingerprint", &nonce);
         let body = format!(
             "{{\"status\":\"ok\",\"service\":\"nemo-relay\",\"version\":\"{}\",\"bootstrap_protocol\":{},\"instance_id\":\"test-instance\"}}",
-            env!("CARGO_PKG_VERSION"),
-            BOOTSTRAP_PROTOCOL_VERSION
+            "previous-version", BOOTSTRAP_PROTOCOL_VERSION
         );
         health
             .write_all(

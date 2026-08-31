@@ -129,6 +129,23 @@ fn gateway_stop_uses_the_daemon_bind_and_parses_force() {
 }
 
 #[test]
+fn integrations_refresh_parses_the_default_and_legacy_install_directory_forms() {
+    let default = Cli::try_parse_from(["nemo-relay", "integrations", "refresh"]).unwrap();
+    assert_eq!(default.command.unwrap().log_name(), "integrations");
+
+    let explicit = Cli::try_parse_from([
+        "nemo-relay",
+        "integrations",
+        "refresh",
+        "--install-dir",
+        "/managed/plugins",
+        "--dry-run",
+    ])
+    .unwrap();
+    assert_eq!(explicit.command.unwrap().log_name(), "integrations");
+}
+
+#[test]
 fn gateway_stop_selects_only_the_exact_relay_tcp_listener() {
     let bind = "127.0.0.1:4040".parse().unwrap();
     let listeners = [

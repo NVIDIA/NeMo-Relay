@@ -9,6 +9,7 @@ use super::diagnostics::{AgentsCommand, DoctorCommand};
 use super::gateway::GatewayCommand;
 use super::hook_forward::HookForwardCommand;
 use super::install::{InstallCommand, UninstallCommand};
+use super::integrations::IntegrationsCommand;
 use super::logging::LoggingArgs;
 use super::model_pricing::PricingCommand;
 use super::plugins::PluginsCommand;
@@ -99,6 +100,8 @@ pub(crate) enum Command {
     Install(InstallCommand),
     /// Uninstall coding-agent plugins installed by `nemo-relay install`.
     Uninstall(UninstallCommand),
+    /// Refresh Relay-managed coding-agent integrations after upgrading Relay.
+    Integrations(IntegrationsCommand),
     /// Validate and configure model pricing catalogs.
     ModelPricing(PricingCommand),
     /// Diagnose env, agents, config, observability (use --offline to skip live network probes)
@@ -125,6 +128,7 @@ impl Command {
             Self::Plugins(_) => "plugins",
             Self::Install(_) => "install",
             Self::Uninstall(_) => "uninstall",
+            Self::Integrations(_) => "integrations",
             Self::ModelPricing(_) => "model_pricing",
             Self::Doctor(_) => "doctor",
             Self::Agents(_) => "agents",

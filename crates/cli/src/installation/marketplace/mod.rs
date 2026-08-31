@@ -128,6 +128,112 @@ pub(crate) fn marketplace_install_roots(
     (layout.marketplace_root, layout.plugin_root)
 }
 
+pub(crate) fn registered_install_dirs(host: impl MarketplaceHost) -> Result<Vec<PathBuf>, String> {
+    state::registered_install_dirs(host)
+}
+
+/// Check prerequisites before retiring any MCP generation for a refresh.
+pub(crate) fn prepare_integrations_for_refresh(
+    targets: &[(crate::agents::CodingAgent, PathBuf)],
+) -> Result<(), CliError> {
+    prepare_integrations_for_refresh_with_runner(targets, &RealCommandRunner)
+}
+
+fn prepare_integrations_for_refresh_with_runner(
+    targets: &[(crate::agents::CodingAgent, PathBuf)],
+    runner: &dyn CommandRunner,
+) -> Result<(), CliError> {
+    validate_integrations_for_refresh_with_runner(targets, runner)?;
+    retire_integrations_for_refresh(targets)
+}
+
+fn validate_integrations_for_refresh_with_runner(
+    targets: &[(crate::agents::CodingAgent, PathBuf)],
+    runner: &dyn CommandRunner,
+) -> Result<(), CliError> {
+    for (host, install_dir) in targets {
+        let options = PluginInstallOptions {
+            install_dir: install_dir.clone(),
+            operation_lock_dir: PathBuf::new(),
+            force: true,
+            dry_run: false,
+            skip_doctor: false,
+        };
+        let relay = require_relay(&options, runner).map_err(CliError::Install)?;
+        validate_relay_hook_forward(&relay, &options, runner).map_err(CliError::Install)?;
+        validate_relay_mcp(&relay, &options, runner).map_err(CliError::Install)?;
+        require_host_cli(*host, &options, runner).map_err(CliError::Install)?;
+        host::validate_host_version(*host, &options, runner).map_err(CliError::Install)?;
+    }
+    Ok(())
+}
+
+/// Retire every selected MCP generation before a refresh can stop the shared gateway.
+///
+/// Keeping the operation and generation locks until all targets are retired makes this an
+/// all-or-nothing preflight: a failure restores every marker already invalidated. Once the
+/// preflight commits, no old MCP can recover the gateway while the per-host replacements run.
+pub(crate) fn retire_integrations_for_refresh(
+    targets: &[(crate::agents::CodingAgent, PathBuf)],
+) -> Result<(), CliError> {
+    let operation_lock_dir = default_operation_lock_dir().map_err(CliError::Install)?;
+    let mut retirements = Vec::with_capacity(targets.len());
+    for (host, install_dir) in targets {
+        let operation_lock = PluginOperationLock::acquire(
+            host.install_arg(),
+            &operation_lock_dir,
+            install_dir,
+            DEFAULT_OPERATION_LOCK_TIMEOUT,
+        )
+        .map_err(CliError::Install)?;
+        let layout = PluginLayout::new(*host, install_dir);
+        let state = read_state(*host, install_dir).ok_or_else(|| {
+            CliError::Install(format!(
+                "missing persisted {} integration state at {}",
+                host.label(),
+                layout.state_path.display()
+            ))
+        })?;
+        layout
+            .validate_persisted_state(&state)
+            .map_err(CliError::Install)?;
+        let mut retirement = GenerationRetirement::acquire_for_plugin(
+            &layout.generation_fence,
+            &layout.generation_lock,
+        )
+        .map_err(|error| {
+            CliError::Install(invalid_generation_fence_error(
+                *host,
+                &layout.generation_fence,
+                &error,
+            ))
+        })?
+        .ok_or_else(|| {
+            CliError::Install(missing_generation_fence_error(
+                *host,
+                &layout.generation_fence,
+            ))
+        })?;
+        retirement
+            .invalidate_for_replacement()
+            .map_err(CliError::Install)?;
+        retirements.push(RefreshGenerationRetirement {
+            retirement,
+            _operation_lock: operation_lock,
+        });
+    }
+    for retirement in &mut retirements {
+        retirement.retirement.commit_replacement();
+    }
+    Ok(())
+}
+
+struct RefreshGenerationRetirement {
+    // Drop the generation lock before releasing its operation lock.
+    retirement: GenerationRetirement,
+    _operation_lock: PluginOperationLock,
+}
+
 pub(crate) fn collect_marketplace_readiness(
     host: impl MarketplaceHost,
     options: &PluginInstallOptions,
@@ -164,7 +270,24 @@ pub(crate) fn install(
         dry_run: command.dry_run,
         skip_doctor: command.skip_doctor,
     };
-    let result = run_for_host(host, &options, install_host);
+    let result = run_for_host(host, &options, install_host).inspect(|_| {
+        if !command.dry_run
+            && let Err(error) = state::register_managed_integration(host, &options.install_dir)
+        {
+            log::warn!(
+                target: "nemo_relay.installation",
+                event = "managed_integration_registration_failed",
+                host = host_name,
+                error = error.as_str();
+                "Plugin installation completed but automatic refresh registration failed"
+            );
+            eprintln!(
+                "warning: installed {} but could not record it for automatic refresh: {error}; restore access to the user configuration directory, then rerun `nemo-relay install {} --force`",
+                host.label(),
+                host.install_arg()
+            );
+        }
+    });
     match &result {
         Ok(_) => log::info!(
             target: "nemo_relay.installation",
@@ -210,7 +333,23 @@ pub(crate) fn uninstall(
         dry_run: command.dry_run,
         skip_doctor: true,
     };
-    let result = run_for_host(host, &options, uninstall_host);
+    let result = run_for_host(host, &options, uninstall_host).inspect(|_| {
+        if !command.dry_run
+            && let Err(error) = state::unregister_managed_integration(host, &options.install_dir)
+        {
+            log::warn!(
+                target: "nemo_relay.installation",
+                event = "managed_integration_unregistration_failed",
+                host = host_name,
+                error = error.as_str();
+                "Plugin uninstallation completed but automatic refresh cleanup failed"
+            );
+            eprintln!(
+                "warning: uninstalled {} but could not remove its automatic refresh record: {error}; future refreshes will skip the absent integration",
+                host.label()
+            );
+        }
+    });
     match &result {
         Ok(_) => log::info!(
             target: "nemo_relay.installation",

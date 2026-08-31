@@ -9,6 +9,7 @@ mod diagnostics;
 mod gateway;
 mod hook_forward;
 mod install;
+mod integrations;
 mod logging;
 mod mcp;
 mod model_pricing;
@@ -81,9 +82,12 @@ fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
 
     let mut fallback_error = None;
     let config = match cli.command.as_ref() {
-        // Uninstall uses persisted integration state, not Relay runtime configuration. Preserve
-        // direct logging settings while avoiding ambient config discovery that could block cleanup.
-        Some(Command::Uninstall(_)) => cli.logging.resolve_without_ambient_config(),
+        // Persistent integration maintenance uses saved integration state, not Relay runtime
+        // configuration. Preserve direct logging settings while avoiding ambient config discovery
+        // that could block cleanup or an upgrade refresh.
+        Some(Command::Uninstall(_) | Command::Integrations(_)) => {
+            cli.logging.resolve_without_ambient_config()
+        }
         Some(Command::Gateway(command)) if command.is_stop() => {
             cli.logging.resolve_without_ambient_config()
         }
@@ -191,6 +195,7 @@ async fn run_command(
         }
         Command::Install(command) => install::install(command),
         Command::Uninstall(command) => install::uninstall(command),
+        Command::Integrations(command) => integrations::execute(command),
         Command::Run(command) => run::execute(command, server).await,
         Command::Claude(command) => run::easy_path(CodingAgent::ClaudeCode, command, server).await,
         Command::Codex(command) => run::easy_path(CodingAgent::Codex, command, server).await,

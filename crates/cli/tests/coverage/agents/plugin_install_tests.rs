@@ -953,6 +953,95 @@ fn write_installed_state(host: CodingAgent, dir: &Path) {
     mark_plugin_setup_installed(host, &layout, &options(dir)).unwrap();
 }
 
+#[test]
+fn refresh_preflight_retires_every_managed_generation_before_replacement() {
+    let home = tempdir().unwrap();
+    let _home = HomeScope::enter(home.path());
+    let install = tempdir().unwrap();
+    for host in CodingAgent::ALL {
+        write_installed_state(host, install.path());
+    }
+
+    retire_integrations_for_refresh(
+        &CodingAgent::ALL
+            .into_iter()
+            .map(|host| (host, install.path().to_path_buf()))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+
+    for host in CodingAgent::ALL {
+        let layout = PluginLayout::new(host, install.path());
+        assert!(
+            std::fs::read_to_string(layout.generation_fence)
+                .unwrap()
+                .starts_with("retired:"),
+            "{} generation was not retired",
+            host.label()
+        );
+    }
+}
+
+#[test]
+fn refresh_preflight_restores_earlier_generations_when_a_target_is_invalid() {
+    let home = tempdir().unwrap();
+    let _home = HomeScope::enter(home.path());
+    let install = tempdir().unwrap();
+    write_installed_state(CodingAgent::ClaudeCode, install.path());
+
+    let error = retire_integrations_for_refresh(&[
+        (CodingAgent::ClaudeCode, install.path().to_path_buf()),
+        (CodingAgent::Codex, install.path().to_path_buf()),
+    ])
+    .unwrap_err();
+
+    assert!(
+        error.to_string().contains("missing persisted Codex"),
+        "{error}"
+    );
+    let layout = PluginLayout::new(CodingAgent::ClaudeCode, install.path());
+    assert!(
+        !std::fs::read_to_string(layout.generation_fence)
+            .unwrap()
+            .starts_with("retired:"),
+        "the previous generation was not restored"
+    );
+}
+
+#[test]
+fn refresh_preflight_validates_every_target_before_retiring_any_generation() {
+    let install = tempdir().unwrap();
+    for host in CodingAgent::ALL {
+        write_installed_state(host, install.path());
+    }
+    let targets = CodingAgent::ALL
+        .into_iter()
+        .map(|host| (host, install.path().to_path_buf()))
+        .collect::<Vec<_>>();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("claude", "/bin/claude");
+
+    let error = prepare_integrations_for_refresh_with_runner(&targets, &runner).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("required `codex` CLI was not found"),
+        "{error}"
+    );
+    for host in CodingAgent::ALL {
+        let layout = PluginLayout::new(host, install.path());
+        assert!(
+            !std::fs::read_to_string(layout.generation_fence)
+                .unwrap()
+                .starts_with("retired:"),
+            "{} generation was retired before prerequisite validation",
+            host.label()
+        );
+    }
+}
+
 #[cfg(windows)]
 fn replace_generation_with_legacy_marker(layout: &PluginLayout) -> (String, PathBuf) {
     let token = {
