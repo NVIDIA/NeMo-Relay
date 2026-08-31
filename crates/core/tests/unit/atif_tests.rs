@@ -4207,6 +4207,457 @@ fn test_exporter_skips_marks_regardless_of_name() {
     assert!(trajectory.steps.is_empty());
 }
 
+fn retry_test_metadata(correlation_id: Option<&str>, status: Option<&str>) -> Option<Json> {
+    let mut metadata = serde_json::Map::new();
+    if let Some(correlation_id) = correlation_id {
+        metadata.insert(
+            "llm_correlation_request_id".to_string(),
+            json!(correlation_id),
+        );
+    }
+    if let Some(status) = status {
+        metadata.insert("otel.status_code".to_string(), json!(status));
+    }
+    (!metadata.is_empty()).then_some(Json::Object(metadata))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn retry_test_span_with_identity(
+    uuid: Uuid,
+    start_parent: Uuid,
+    end_parent: Uuid,
+    operation: &str,
+    model: &str,
+    start_correlation: Option<&str>,
+    end_correlation: Option<&str>,
+    end_status: Option<&str>,
+    request: Json,
+    output: Option<Json>,
+    annotated_response: Option<AnnotatedLlmResponse>,
+) -> (Event, Event) {
+    let mut start = event_builder(uuid, EventType::Start)
+        .name(operation)
+        .parent_uuid(start_parent)
+        .scope_type(ScopeType::Llm)
+        .model_name(model)
+        .input(request);
+    if let Some(metadata) = retry_test_metadata(start_correlation, None) {
+        start = start.metadata(metadata);
+    }
+
+    let mut end = event_builder(uuid, EventType::End)
+        .name(operation)
+        .parent_uuid(end_parent)
+        .scope_type(ScopeType::Llm)
+        .model_name(model);
+    if let Some(metadata) = retry_test_metadata(end_correlation, end_status) {
+        end = end.metadata(metadata);
+    }
+    if let Some(output) = output {
+        end = end.output(output);
+    }
+    if let Some(annotated_response) = annotated_response {
+        end = end.annotated_response(annotated_response);
+    }
+
+    (start.build(), end.build())
+}
+
+fn retry_test_span(
+    uuid: Uuid,
+    parent_uuid: Uuid,
+    correlation_id: &str,
+    end_status: &str,
+    request: Json,
+    output: Option<Json>,
+    annotated_response: Option<AnnotatedLlmResponse>,
+) -> (Event, Event) {
+    retry_test_span_with_identity(
+        uuid,
+        parent_uuid,
+        parent_uuid,
+        "openai.chat_completions",
+        "test-model",
+        Some(correlation_id),
+        Some(correlation_id),
+        Some(end_status),
+        request,
+        output,
+        annotated_response,
+    )
+}
+
+fn retry_test_request(message: &str) -> Json {
+    json!({
+        "model": "test-model",
+        "messages": [{"role": "user", "content": message}],
+        "temperature": 0
+    })
+}
+
+fn retry_test_response(message: &str) -> Json {
+    json!({
+        "model": "test-model",
+        "choices": [{
+            "finish_reason": "stop",
+            "message": {"role": "assistant", "content": message}
+        }]
+    })
+}
+
+fn set_retry_test_timestamps(events: &mut [&mut Event]) {
+    set_sequential_event_timestamps(events, base_timestamp(), chrono::Duration::milliseconds(1));
+}
+
+#[test]
+fn test_exporter_suppresses_response_less_retry_user_step() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let parent_uuid = Uuid::now_v7();
+    let request = retry_test_request("Answer once.");
+    let mut response = retry_test_response("Recovered.");
+    response["model"] = json!("provider-resolved-model");
+    let (mut first_start, mut first_end) = retry_test_span(
+        Uuid::now_v7(),
+        parent_uuid,
+        "logical-request-1",
+        "ERROR",
+        request.clone(),
+        None,
+        None,
+    );
+    let (mut second_start, mut second_end) = retry_test_span(
+        Uuid::now_v7(),
+        parent_uuid,
+        "logical-request-1",
+        "ERROR",
+        request.clone(),
+        None,
+        None,
+    );
+    let (mut success_start, mut success_end) = retry_test_span(
+        Uuid::now_v7(),
+        parent_uuid,
+        "logical-request-1",
+        "OK",
+        request,
+        Some(response),
+        None,
+    );
+    set_retry_test_timestamps(&mut [
+        &mut first_start,
+        &mut first_end,
+        &mut second_start,
+        &mut second_end,
+        &mut success_start,
+        &mut success_end,
+    ]);
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.extend([
+            first_start,
+            first_end,
+            second_start,
+            second_end,
+            success_start,
+            success_end,
+        ]);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(
+        trajectory
+            .steps
+            .iter()
+            .map(|step| (step.source.as_str(), step.message.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("user", json!("Answer once.")),
+            ("agent", json!("Recovered.")),
+        ]
+    );
+}
+
+#[test]
+fn test_response_less_retry_requires_complete_identity_and_serial_order() {
+    let base = base_timestamp();
+    let parent_uuid = Uuid::now_v7();
+    let failed = LlmRetryCandidate {
+        uuid: Uuid::now_v7(),
+        parent_uuid,
+        start_ts: base,
+        end_ts: base + chrono::Duration::milliseconds(1),
+        operation: "openai.chat_completions".to_string(),
+        model_name: "test-model".to_string(),
+        request: retry_test_request("Identity check."),
+        correlation_id: "logical-request-3".to_string(),
+        terminal_state: LlmRetryTerminalState::ResponseLessError,
+    };
+    let success = LlmRetryCandidate {
+        uuid: Uuid::now_v7(),
+        parent_uuid,
+        start_ts: base + chrono::Duration::milliseconds(2),
+        end_ts: base + chrono::Duration::milliseconds(3),
+        operation: failed.operation.clone(),
+        model_name: failed.model_name.clone(),
+        request: failed.request.clone(),
+        correlation_id: failed.correlation_id.clone(),
+        terminal_state: LlmRetryTerminalState::SuccessfulResponse,
+    };
+    assert!(is_proven_retry(&failed, &success));
+
+    let mut variants = Vec::new();
+    let mut candidate = success.clone();
+    candidate.uuid = failed.uuid;
+    variants.push(candidate);
+    let mut candidate = success.clone();
+    candidate.parent_uuid = Uuid::now_v7();
+    variants.push(candidate);
+    let mut candidate = success.clone();
+    candidate.start_ts = failed.end_ts;
+    variants.push(candidate);
+    let mut candidate = success.clone();
+    candidate.operation = "anthropic.messages".to_string();
+    variants.push(candidate);
+    let mut candidate = success.clone();
+    candidate.model_name = "other-model".to_string();
+    variants.push(candidate);
+    let mut candidate = success.clone();
+    candidate.request["temperature"] = json!(1);
+    variants.push(candidate);
+    let mut candidate = success;
+    candidate.correlation_id = "other-request".to_string();
+    variants.push(candidate);
+
+    assert!(
+        variants
+            .iter()
+            .all(|candidate| !is_proven_retry(&failed, candidate))
+    );
+}
+
+#[test]
+fn test_response_less_retry_keeps_response_bearing_and_unproven_failures() {
+    let parent_uuid = Uuid::now_v7();
+    let request = retry_test_request("Preserve uncertain evidence.");
+    let exact_failed_uuid = Uuid::now_v7();
+    let response_bearing_uuid = Uuid::now_v7();
+    let null_response_uuid = Uuid::now_v7();
+    let annotated_uuid = Uuid::now_v7();
+    let lowercase_status_uuid = Uuid::now_v7();
+    let mut events = Vec::new();
+
+    for (uuid, correlation, status, output, annotated) in [
+        (exact_failed_uuid, "exact", "ERROR", None, None),
+        (
+            response_bearing_uuid,
+            "response-bearing",
+            "ERROR",
+            Some(json!({"choices": []})),
+            None,
+        ),
+        (
+            null_response_uuid,
+            "null-response",
+            "ERROR",
+            Some(Json::Null),
+            None,
+        ),
+        (
+            annotated_uuid,
+            "annotated",
+            "ERROR",
+            None,
+            Some(annotated_response_with_usage(
+                "test-model",
+                Usage::default(),
+            )),
+        ),
+        (lowercase_status_uuid, "lowercase", "error", None, None),
+    ] {
+        let failed = retry_test_span(
+            uuid,
+            parent_uuid,
+            correlation,
+            status,
+            request.clone(),
+            output,
+            annotated,
+        );
+        let success = retry_test_span(
+            Uuid::now_v7(),
+            parent_uuid,
+            correlation,
+            "OK",
+            request.clone(),
+            Some(retry_test_response("Recovered.")),
+            None,
+        );
+        events.extend([failed.0, failed.1, success.0, success.1]);
+    }
+    for (idx, event) in events.iter_mut().enumerate() {
+        set_event_timestamp(
+            event,
+            base_timestamp() + chrono::Duration::milliseconds(idx as i64),
+        );
+    }
+    let refs = events.iter().collect::<Vec<_>>();
+    let lookups = build_llm_dedupe(&refs);
+
+    assert!(lookups.suppressed_events.contains(&exact_failed_uuid));
+    assert!(!lookups.suppressed_events.contains(&response_bearing_uuid));
+    assert!(!lookups.suppressed_events.contains(&null_response_uuid));
+    assert!(!lookups.suppressed_events.contains(&annotated_uuid));
+    assert!(!lookups.suppressed_events.contains(&lowercase_status_uuid));
+}
+
+#[test]
+fn test_response_less_retry_keeps_incomplete_or_conflicting_lifecycle_identity() {
+    let parent_uuid = Uuid::now_v7();
+    let other_parent = Uuid::now_v7();
+    let request = retry_test_request("Reject incomplete identity.");
+    let mut events = Vec::new();
+    let mut failed_uuids = Vec::new();
+
+    for (start_correlation, end_correlation, start_parent, end_parent) in [
+        (None, None, parent_uuid, parent_uuid),
+        (None, Some("missing-start"), parent_uuid, parent_uuid),
+        (Some("missing-end"), None, parent_uuid, parent_uuid),
+        (Some(" "), Some(" "), parent_uuid, parent_uuid),
+        (Some("left"), Some("right"), parent_uuid, parent_uuid),
+        (
+            Some("parent-conflict"),
+            Some("parent-conflict"),
+            parent_uuid,
+            other_parent,
+        ),
+    ] {
+        let failed_uuid = Uuid::now_v7();
+        failed_uuids.push(failed_uuid);
+        let failed = retry_test_span_with_identity(
+            failed_uuid,
+            start_parent,
+            end_parent,
+            "openai.chat_completions",
+            "test-model",
+            start_correlation,
+            end_correlation,
+            Some("ERROR"),
+            request.clone(),
+            None,
+            None,
+        );
+        let correlation = start_correlation.or(end_correlation).unwrap_or("fallback");
+        let success = retry_test_span(
+            Uuid::now_v7(),
+            parent_uuid,
+            correlation,
+            "OK",
+            request.clone(),
+            Some(retry_test_response("Recovered.")),
+            None,
+        );
+        events.extend([failed.0, failed.1, success.0, success.1]);
+    }
+
+    let duplicate_uuid = Uuid::now_v7();
+    failed_uuids.push(duplicate_uuid);
+    let duplicate_failed = retry_test_span(
+        duplicate_uuid,
+        parent_uuid,
+        "duplicate-start",
+        "ERROR",
+        request.clone(),
+        None,
+        None,
+    );
+    let duplicate_start = duplicate_failed.0.clone();
+    let duplicate_success = retry_test_span(
+        Uuid::now_v7(),
+        parent_uuid,
+        "duplicate-start",
+        "OK",
+        request,
+        Some(retry_test_response("Recovered.")),
+        None,
+    );
+    events.extend([
+        duplicate_failed.0,
+        duplicate_start,
+        duplicate_failed.1,
+        duplicate_success.0,
+        duplicate_success.1,
+    ]);
+
+    for (idx, event) in events.iter_mut().enumerate() {
+        set_event_timestamp(
+            event,
+            base_timestamp() + chrono::Duration::milliseconds(idx as i64),
+        );
+    }
+    let refs = events.iter().collect::<Vec<_>>();
+    let lookups = build_llm_dedupe(&refs);
+
+    assert!(
+        failed_uuids
+            .iter()
+            .all(|uuid| !lookups.suppressed_events.contains(uuid))
+    );
+}
+
+#[test]
+fn test_response_less_retry_keeps_ambiguous_successes() {
+    let parent_uuid = Uuid::now_v7();
+    let failed_uuid = Uuid::now_v7();
+    let request = retry_test_request("Do not choose between successes.");
+    let failed = retry_test_span(
+        failed_uuid,
+        parent_uuid,
+        "ambiguous-request",
+        "ERROR",
+        request.clone(),
+        None,
+        None,
+    );
+    let first_success = retry_test_span(
+        Uuid::now_v7(),
+        parent_uuid,
+        "ambiguous-request",
+        "OK",
+        request.clone(),
+        Some(retry_test_response("First.")),
+        None,
+    );
+    let second_success = retry_test_span(
+        Uuid::now_v7(),
+        parent_uuid,
+        "ambiguous-request",
+        "OK",
+        request,
+        Some(retry_test_response("Second.")),
+        None,
+    );
+    let mut events = [
+        failed.0,
+        failed.1,
+        first_success.0,
+        first_success.1,
+        second_success.0,
+        second_success.1,
+    ];
+    for (idx, event) in events.iter_mut().enumerate() {
+        set_event_timestamp(
+            event,
+            base_timestamp() + chrono::Duration::milliseconds(idx as i64),
+        );
+    }
+    let refs = events.iter().collect::<Vec<_>>();
+    let lookups = build_llm_dedupe(&refs);
+
+    assert!(!lookups.suppressed_events.contains(&failed_uuid));
+}
+
 #[test]
 fn test_exporter_dedupes_overlapping_hook_and_gateway_llm_spans() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());

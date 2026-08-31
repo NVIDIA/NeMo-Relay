@@ -1727,7 +1727,162 @@ fn build_llm_dedupe(events: &[&Event]) -> LlmDedupeLookups {
         }
     }
 
+    suppress_response_less_retries(events, &mut lookups);
+
     lookups
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LlmRetryTerminalState {
+    ResponseLessError,
+    SuccessfulResponse,
+    Other,
+}
+
+#[derive(Debug, Clone)]
+struct LlmRetryCandidate {
+    uuid: Uuid,
+    parent_uuid: Uuid,
+    start_ts: DateTime<Utc>,
+    end_ts: DateTime<Utc>,
+    operation: String,
+    model_name: String,
+    request: Json,
+    correlation_id: String,
+    terminal_state: LlmRetryTerminalState,
+}
+
+#[derive(Default)]
+struct LlmRetrySpanParts<'a> {
+    starts: Vec<&'a Event>,
+    ends: Vec<&'a Event>,
+}
+
+/// Avoid projecting a transport failure as a second user turn when a later
+/// response is provably a retry of the same request.
+///
+/// This is deliberately stricter than the overlapping hook/gateway dedupe.
+/// Missing or ambiguous identity leaves every event visible.
+fn suppress_response_less_retries(events: &[&Event], lookups: &mut LlmDedupeLookups) {
+    let attempts = collect_llm_retry_candidates(events);
+    let suppress = attempts
+        .iter()
+        .filter(|attempt| {
+            attempt.terminal_state == LlmRetryTerminalState::ResponseLessError
+                && !lookups.suppressed_events.contains(&attempt.uuid)
+        })
+        .filter_map(|failed| {
+            let mut matching_successes = attempts.iter().filter(|candidate| {
+                candidate.terminal_state == LlmRetryTerminalState::SuccessfulResponse
+                    && !lookups.suppressed_events.contains(&candidate.uuid)
+                    && is_proven_retry(failed, candidate)
+            });
+            matching_successes.next()?;
+            matching_successes.next().is_none().then_some(failed.uuid)
+        })
+        .collect::<Vec<_>>();
+
+    lookups.suppressed_events.extend(suppress);
+}
+
+fn collect_llm_retry_candidates(events: &[&Event]) -> Vec<LlmRetryCandidate> {
+    let mut spans: HashMap<Uuid, LlmRetrySpanParts<'_>> = HashMap::new();
+    for event in events {
+        if event.category().map(|category| category.as_str()) != Some("llm") {
+            continue;
+        }
+        let parts = spans.entry(event.uuid()).or_default();
+        match event.scope_category() {
+            Some(crate::api::event::ScopeCategory::Start) => parts.starts.push(event),
+            Some(crate::api::event::ScopeCategory::End) => parts.ends.push(event),
+            None => {}
+        }
+    }
+
+    spans
+        .into_iter()
+        .filter_map(|(uuid, parts)| {
+            let [start] = parts.starts.as_slice() else {
+                return None;
+            };
+            let [end] = parts.ends.as_slice() else {
+                return None;
+            };
+            LlmRetryCandidate::from_events(uuid, start, end)
+        })
+        .collect()
+}
+
+impl LlmRetryCandidate {
+    fn from_events(uuid: Uuid, start: &Event, end: &Event) -> Option<Self> {
+        let parent_uuid = start.parent_uuid()?;
+        if end.parent_uuid() != Some(parent_uuid)
+            || start.name() != end.name()
+            || start.name().trim().is_empty()
+            || start.timestamp() >= end.timestamp()
+        {
+            return None;
+        }
+
+        let start_correlation = exact_llm_request_correlation_id(start)?;
+        let end_correlation = exact_llm_request_correlation_id(end)?;
+        if start_correlation != end_correlation {
+            return None;
+        }
+
+        let raw_response = end.data();
+        let terminal_state = if exact_otel_status(end) == Some("ERROR")
+            && raw_response.is_none()
+            && end.annotated_response().is_none()
+        {
+            LlmRetryTerminalState::ResponseLessError
+        } else if exact_otel_status(end) == Some("OK")
+            && raw_response.is_some_and(|response| !response.is_null())
+        {
+            LlmRetryTerminalState::SuccessfulResponse
+        } else {
+            LlmRetryTerminalState::Other
+        };
+
+        let model_name = model_name_for_llm_event(start)?;
+        if model_name.trim().is_empty() || model_name.trim() != model_name {
+            return None;
+        }
+
+        Some(Self {
+            uuid,
+            parent_uuid,
+            start_ts: *start.timestamp(),
+            end_ts: *end.timestamp(),
+            operation: start.name().to_string(),
+            model_name,
+            request: unwrap_llm_request(start.data()?),
+            correlation_id: start_correlation.to_string(),
+            terminal_state,
+        })
+    }
+}
+
+fn exact_llm_request_correlation_id(event: &Event) -> Option<&str> {
+    event
+        .metadata()?
+        .get("llm_correlation_request_id")?
+        .as_str()
+        .filter(|value| !value.trim().is_empty() && value.trim() == *value)
+}
+
+fn exact_otel_status(event: &Event) -> Option<&str> {
+    event.metadata()?.get("otel.status_code")?.as_str()
+}
+
+fn is_proven_retry(failed: &LlmRetryCandidate, candidate: &LlmRetryCandidate) -> bool {
+    failed.uuid != candidate.uuid
+        && failed.end_ts < candidate.start_ts
+        && failed.parent_uuid == candidate.parent_uuid
+        && failed.operation == candidate.operation
+        && failed.model_name == candidate.model_name
+        && failed.request == candidate.request
+        && failed.correlation_id == candidate.correlation_id
 }
 
 fn collect_llm_span_candidates(events: &[&Event]) -> Vec<LlmSpanCandidate> {
