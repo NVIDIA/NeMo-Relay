@@ -32,4 +32,4 @@ serde = "1"
 uuid = { workspace = true, features = ["v7"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
-chrono = { version = "=0.4.41", default-features = false, features = ["std", "now"] }
+chrono = "0.4"

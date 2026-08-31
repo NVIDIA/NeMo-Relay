@@ -14,11 +14,7 @@
  * On non-`Ok` returns, call [`nemo_relay_last_error`] on the same thread to
  * retrieve a human-readable error message.
  */
-enum NemoRelayStatus
-#if __STDC_VERSION__ >= 202311L
-  : int32_t
-#endif // __STDC_VERSION__ >= 202311L
- {
+enum NemoRelayStatus {
   /**
    * Operation completed successfully.
    */
@@ -60,20 +56,12 @@ enum NemoRelayStatus
    */
   NEMO_RELAY_STATUS_INVALID_ARG = 9,
 };
-#if __STDC_VERSION__ >= 202311L
-typedef enum NemoRelayStatus NemoRelayStatus;
-#else
 typedef int32_t NemoRelayStatus;
-#endif // __STDC_VERSION__ >= 202311L
 
 /**
  * Codec identity kind supplied to an LLM sanitizer.
  */
-enum NemoRelayLlmSanitizeCodecKind
-#if __STDC_VERSION__ >= 202311L
-  : uint32_t
-#endif // __STDC_VERSION__ >= 202311L
- {
+enum NemoRelayLlmSanitizeCodecKind {
   /**
    * No codec was active.
    */
@@ -91,20 +79,12 @@ enum NemoRelayLlmSanitizeCodecKind
    */
   NEMO_RELAY_LLM_SANITIZE_CODEC_KIND_OPAQUE = 3,
 };
-#if __STDC_VERSION__ >= 202311L
-typedef enum NemoRelayLlmSanitizeCodecKind NemoRelayLlmSanitizeCodecKind;
-#else
 typedef uint32_t NemoRelayLlmSanitizeCodecKind;
-#endif // __STDC_VERSION__ >= 202311L
 
 /**
  * The type of scope in the agent execution hierarchy.
  */
-enum NemoRelayScopeType
-#if __STDC_VERSION__ >= 202311L
-  : int32_t
-#endif // __STDC_VERSION__ >= 202311L
- {
+enum NemoRelayScopeType {
   /**
    * Top-level agent scope.
    */
@@ -150,11 +130,7 @@ enum NemoRelayScopeType
    */
   NEMO_RELAY_SCOPE_TYPE_UNKNOWN = 10,
 };
-#if __STDC_VERSION__ >= 202311L
-typedef enum NemoRelayScopeType NemoRelayScopeType;
-#else
 typedef int32_t NemoRelayScopeType;
-#endif // __STDC_VERSION__ >= 202311L
 
 /**
  * Opaque owned adaptive runtime handle.
