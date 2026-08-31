@@ -176,11 +176,12 @@ nemo-relay integrations refresh
 
 Refresh retires each old MCP generation, stops the authenticated Relay-owned
 sidecar, and republishes the integration from the current binary. Restart the
-affected host clients afterward. Installations created in a legacy custom
-directory can be refreshed and registered for future automatic discovery with:
+affected host clients afterward. To bring a legacy custom-directory installation
+under Relay management, reinstall the appropriate host before refreshing it:
 
 ```bash
-nemo-relay integrations refresh --install-dir <path-to-plugins>
+nemo-relay install codex --install-dir <path-to-plugins> --force
+nemo-relay integrations refresh
 ```
 
 Manual MCP configurations are not changed; reinstall them through Relay if you
