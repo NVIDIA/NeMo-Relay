@@ -147,6 +147,12 @@ startup lock serializes launch and recovery, while a small recovery record lets
 overlapping MCP clients share the same restart attempt. The gateway tracks its
 own activity, idle shutdown, and authenticated ownership-record cleanup.
 
+When a newly launched MCP client detects a verified Relay-owned gateway from a
+different Relay version, it stops that old sidecar and starts a matching one.
+This intentionally interrupts MCP clients still attached to the old gateway.
+Configuration-only compatibility mismatches remain errors and are not replaced
+automatically.
+
 Codex marks the MCP server as required, so the captured turn waits for verified
 gateway readiness. Claude Code 2.1.121 or newer uses `alwaysLoad`, which blocks
 session startup until the MCP connection is ready. Installed MCP entries and

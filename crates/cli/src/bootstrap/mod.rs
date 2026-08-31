@@ -178,11 +178,10 @@ fn acquire_gateway(spec: &GatewaySpec) -> Result<GatewayEndpoint, String> {
             (RelayHealth::Compatible, instance_id) => {
                 return compatible_endpoint(spec.bind, url, instance_id);
             }
-            (RelayHealth::Incompatible, _) => return Err(incompatible_relay_error(&url)),
             // A gateway may already be binding while another MCP process owns the
             // startup lock. Serialize before deciding whether either state is a
-            // genuine conflict.
-            (RelayHealth::Foreign | RelayHealth::Unavailable, _) => {}
+            // genuine conflict or a verified version mismatch that can be replaced.
+            (RelayHealth::Incompatible | RelayHealth::Foreign | RelayHealth::Unavailable, _) => {}
         }
     }
 
@@ -194,7 +193,13 @@ fn acquire_gateway(spec: &GatewaySpec) -> Result<GatewayEndpoint, String> {
     }
     match probe_relay_health_with_instance(&url, spec.bootstrap_fingerprint.as_deref()) {
         (RelayHealth::Compatible, instance_id) => compatible_endpoint(spec.bind, url, instance_id),
-        (RelayHealth::Incompatible, _) => Err(incompatible_relay_error(&url)),
+        (RelayHealth::Incompatible, _) => {
+            if state::stop_version_mismatched_owned_gateway_locked(&state, &url)? {
+                start_gateway(spec, &state)
+            } else {
+                Err(incompatible_relay_error(&url))
+            }
+        }
         (RelayHealth::Foreign, _) => Err(foreign_listener_error(&url)),
         (RelayHealth::Unavailable, _) => start_gateway(spec, &state),
     }
