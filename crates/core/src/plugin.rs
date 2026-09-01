@@ -1852,10 +1852,9 @@ async fn initialize_plugin_components_catching_panics(
         })?
 }
 
-/// Resolves a plugin host configuration with programmatic values at the lowest
-/// precedence, followed by an optional explicit file and discovered user and
-/// system files. The file order is intentionally authoritative so deployment
-/// policy can constrain embedding applications.
+/// Resolves a plugin host configuration from discovered files and an optional
+/// explicit file, then applies programmatic values as the highest-precedence
+/// layer.
 pub(crate) fn resolve_plugin_config_with_explicit(
     config: PluginConfig,
     explicit_path: Option<&Path>,
@@ -1866,8 +1865,8 @@ pub(crate) fn resolve_plugin_config_with_explicit(
     let (file_value, mut sources) =
         merge_plugin_config_documents(read_plugin_config_files(paths)?)?
             .unwrap_or_else(|| (Json::Object(Map::new()), Vec::new()));
-    let mut value = plugin_config_overlay_value(&config)?;
-    layer_config(&mut value, file_value);
+    let mut value = file_value;
+    layer_config(&mut value, plugin_config_overlay_value(&config)?);
     if let Some(explicit_path) = explicit_path {
         sources.retain(|source| source != &explicit_path);
     }

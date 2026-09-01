@@ -237,7 +237,7 @@ pub fn evaluate_dynamic_plugin_host_policy(
     let mut effect = DynamicPluginHostPolicyEffect {
         allowed: Some(true),
         startup: Some(DynamicPluginStartupClass::Optional),
-        attestation: Some(DynamicPluginAttestationMode::SignatureRequired),
+        attestation: Some(DynamicPluginAttestationMode::IntegrityOnly),
         trusted_public_keys: None,
     };
     effect.merge_from(policy.defaults.clone());
