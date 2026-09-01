@@ -3574,7 +3574,6 @@ fn force_install_recovers_from_orphaned_state_with_no_matching_disk_or_host_inst
 }
 
 #[test]
-#[ignore = "known gap: the uninstall path still treats a lone state file as an install"]
 fn uninstall_recovers_from_orphaned_state_with_no_matching_disk_or_host_install() {
     // Companion to the force-install regression above: the same orphaned state file must not make
     // `uninstall` fail with a "missing generation marker" error either. This path matters because
@@ -3603,7 +3602,6 @@ fn uninstall_recovers_from_orphaned_state_with_no_matching_disk_or_host_install(
 }
 
 #[test]
-#[ignore = "known gap: integrations refresh still requires a generation fence for any state file"]
 fn refresh_preflight_tolerates_an_orphaned_state_file() {
     // `integrations refresh` selects managed targets purely by "a state file exists", then runs
     // this preflight before any install. An orphaned state file must not abort the whole command
@@ -3620,6 +3618,43 @@ fn refresh_preflight_tolerates_an_orphaned_state_file() {
     let _preflight =
         retire_integrations_for_refresh(&[(CodingAgent::Codex, install.path().to_path_buf())])
             .unwrap();
+}
+
+#[test]
+fn refresh_preflight_retires_healthy_targets_alongside_an_orphaned_one() {
+    // The user-facing shape of the bug: one orphaned state file must not abort `integrations
+    // refresh` for the hosts that are still installed correctly.
+    let home = tempdir().unwrap();
+    let _home = HomeScope::enter(home.path());
+    let install = tempdir().unwrap();
+    for host in CodingAgent::ALL {
+        write_installed_state(host, install.path());
+    }
+    let orphaned = PluginLayout::new(CodingAgent::Codex, install.path());
+    std::fs::remove_dir_all(&orphaned.marketplace_root).unwrap();
+
+    let _preflight = retire_integrations_for_refresh(
+        &CodingAgent::ALL
+            .into_iter()
+            .map(|host| (host, install.path().to_path_buf()))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+
+    for host in CodingAgent::ALL {
+        if host == CodingAgent::Codex {
+            continue;
+        }
+        let layout = PluginLayout::new(host, install.path());
+        assert!(
+            std::fs::read_to_string(layout.generation_fence)
+                .unwrap()
+                .starts_with("retired:"),
+            "{} generation was not retired",
+            host.label()
+        );
+    }
+    assert!(!orphaned.marketplace_root.exists());
 }
 
 #[test]

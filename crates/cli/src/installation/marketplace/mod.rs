@@ -221,6 +221,18 @@ where
         layout
             .validate_persisted_state(&state)
             .map_err(CliError::Install)?;
+        // An orphaned state file names no live install, so there is no generation to retire and no
+        // reason to fail the whole refresh. Leave the target to the forced install that follows,
+        // which recovers it. A target with artifacts on disk still demands its fence below, so a
+        // genuinely corrupt install keeps failing loudly.
+        if !host.local_install_exists(
+            &layout.marketplace_root,
+            &layout.plugin_root,
+            &layout.plugin_manifest,
+            &layout.generation_fence,
+        ) {
+            continue;
+        }
         let mut retirement = GenerationRetirement::acquire_for_plugin(
             &layout.generation_fence,
             &layout.generation_lock,
@@ -1101,7 +1113,16 @@ fn uninstall_host_locked(
         .as_ref()
         .map(|state| state.plugin_root.as_path())
         .unwrap_or(&layout.plugin_root);
-    let local_install_exists = state.is_some() || layout.marketplace_root.exists();
+    // Same rule, and the same predicate, as the install path: neither a state file that merely
+    // parses nor a leftover generation lock is an install to retire. `retire_installed_generation`
+    // still re-checks host registration when the fence is missing, so an install that lost its
+    // marketplace root but stayed registered with the host is unaffected.
+    let local_install_exists = host.local_install_exists(
+        &layout.marketplace_root,
+        plugin_root,
+        &plugin_manifest_path(host, plugin_root),
+        &plugin_root.join(GENERATION_FILE_NAME),
+    );
     let mut generation_retirement = retire_installed_generation(
         host,
         plugin_root,
