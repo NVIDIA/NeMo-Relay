@@ -51,7 +51,7 @@ use state::{
 pub(super) use crate::bootstrap::DEFAULT_URL as DEFAULT_GATEWAY_URL;
 pub(super) const MARKETPLACE_NAME: &str = "nemo-relay-local";
 pub(super) const PLUGIN_NAME: &str = "nemo-relay-plugin";
-pub(crate) const RELAY_COMMAND: &str = "nemo-relay";
+pub(super) const RELAY_COMMAND: &str = "nemo-relay";
 
 fn default_operation_lock_dir() -> Result<PathBuf, String> {
     std::env::var_os("HOME")
@@ -605,9 +605,9 @@ fn prepare_install_transaction<H: MarketplaceHost>(
         None
     };
     if !options.force
-        && plugin_preflight
-            .as_ref()
-            .is_some_and(|preflight| preflight.previous_install_exists)
+        && plugin_preflight.as_ref().is_some_and(|preflight| {
+            preflight.previous_install_exists || preflight.previous_state_exists
+        })
     {
         return Err(existing_plugin_install_requires_force_error(host));
     }
@@ -1940,6 +1940,11 @@ struct PluginInstallPreflight {
     marketplace_registered: bool,
     previous_setup_installed: bool,
     previous_install_exists: bool,
+    // Tracked separately from `previous_install_exists`: an orphaned state file is not an install
+    // to retire, but it is still state a non-forced install must refuse to overwrite. Notably
+    // `force_uninstall_host_locked` writes one back as the cleanup-retry marker that
+    // `installed_integrations` relies on to keep offering cleanup.
+    previous_state_exists: bool,
     generation_retirement: Option<GenerationRetirement>,
 }
 
@@ -1987,14 +1992,13 @@ fn prepare_plugin_install(
         &previous_generation_fence,
     );
     // A persisted state file that merely parses is not proof of an install to protect: if it was
-    // orphaned by a manual cleanup or an interrupted uninstall, its own referenced roots are gone
-    // too. Require at least one of those roots to still exist before trusting the state file, so a
-    // stale state file alone can't manufacture a "missing generation marker" failure.
-    let state_root_exists = persisted
-        .as_ref()
-        .is_some_and(|state| state.marketplace_root.exists() || state.plugin_root.exists());
+    // orphaned by a manual cleanup or an interrupted uninstall, the install it describes is gone
+    // while the file remains. Decide what to retire from what is actually on disk and registered
+    // with the host, so a stale state file alone can't manufacture a "missing generation marker"
+    // failure. `validate_persisted_state` above already guarantees the state names this layout's
+    // roots, so `local_install_exists` covers everything the state file could point at.
     let previous_install_exists =
-        state_root_exists || local_install_exists || plugin_registered || marketplace_registered;
+        local_install_exists || plugin_registered || marketplace_registered;
     let generation_retirement = if previous_install_exists {
         if !previous_generation_fence.exists() {
             if legacy_plugin_without_mcp(host, &previous_plugin_root)? {
@@ -2020,6 +2024,7 @@ fn prepare_plugin_install(
     } else {
         None
     };
+    let state_bytes_present = state_bytes.is_some();
     Ok(PluginInstallPreflight {
         persisted,
         state_bytes,
@@ -2030,6 +2035,7 @@ fn prepare_plugin_install(
         marketplace_registered,
         previous_setup_installed,
         previous_install_exists,
+        previous_state_exists: state_bytes_present,
         generation_retirement,
     })
 }
@@ -2197,6 +2203,7 @@ fn begin_force_replacement(
         marketplace_registered,
         previous_setup_installed,
         previous_install_exists: _,
+        previous_state_exists: _,
         generation_retirement,
     } = preflight;
     let setup_snapshot = setup_runner.snapshot(host.install_arg())?;

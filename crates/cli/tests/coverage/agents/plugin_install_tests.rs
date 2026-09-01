@@ -3566,12 +3566,124 @@ fn force_install_recovers_from_orphaned_state_with_no_matching_disk_or_host_inst
     std::fs::remove_dir_all(&layout.marketplace_root).unwrap();
     assert!(layout.state_path.exists());
     assert!(!layout.marketplace_root.exists());
-    assert!(!layout.plugin_root.exists());
 
     install_host(CodingAgent::Codex, &options, &runner, &setup_runner).unwrap();
 
     assert!(layout.marketplace_root.exists());
     assert!(layout.generation_fence.exists());
+}
+
+#[test]
+#[ignore = "known gap: the uninstall path still treats a lone state file as an install"]
+fn uninstall_recovers_from_orphaned_state_with_no_matching_disk_or_host_install() {
+    // Companion to the force-install regression above: the same orphaned state file must not make
+    // `uninstall` fail with a "missing generation marker" error either. This path matters because
+    // the remediation text emitted by the install path tells the user to run uninstall afterwards.
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("codex", "/bin/codex")
+        .with_codex_registration(false, false);
+    let setup_runner = MockSetupRunner::default();
+    write_installed_state(CodingAgent::Codex, dir.path());
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    std::fs::remove_dir_all(&layout.marketplace_root).unwrap();
+    assert!(layout.state_path.exists());
+    assert!(!layout.marketplace_root.exists());
+
+    uninstall_host(
+        CodingAgent::Codex,
+        &options(dir.path()),
+        &runner,
+        &setup_runner,
+    )
+    .unwrap();
+
+    assert!(!layout.state_path.exists());
+}
+
+#[test]
+#[ignore = "known gap: integrations refresh still requires a generation fence for any state file"]
+fn refresh_preflight_tolerates_an_orphaned_state_file() {
+    // `integrations refresh` selects managed targets purely by "a state file exists", then runs
+    // this preflight before any install. An orphaned state file must not abort the whole command
+    // with a "missing generation marker" error, or the install-side recovery never gets to run.
+    let home = tempdir().unwrap();
+    let _home = HomeScope::enter(home.path());
+    let install = tempdir().unwrap();
+    write_installed_state(CodingAgent::Codex, install.path());
+    let layout = PluginLayout::new(CodingAgent::Codex, install.path());
+    std::fs::remove_dir_all(&layout.marketplace_root).unwrap();
+    assert!(layout.state_path.exists());
+    assert!(!layout.marketplace_root.exists());
+
+    let _preflight =
+        retire_integrations_for_refresh(&[(CodingAgent::Codex, install.path().to_path_buf())])
+            .unwrap();
+}
+
+#[test]
+fn force_install_recovers_from_a_bare_marketplace_root_for_claude_code() {
+    // Claude Code deliberately does not count a bare marketplace root as an install: it requires a
+    // plugin manifest, an .mcp.json, or a generation fence. A partial cleanup that leaves only the
+    // empty directory tree plus the state file is the same "nothing to safely replace" situation
+    // the orphaned-state regression covers, so install must recover rather than refuse.
+    let home = tempdir().unwrap();
+    let _home = HomeScope::enter(home.path());
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("claude", "/bin/claude");
+    let setup_runner = MockSetupRunner::default();
+    let options = PluginInstallOptions {
+        force: true,
+        ..options(dir.path())
+    };
+    write_installed_state(CodingAgent::ClaudeCode, dir.path());
+    let layout = PluginLayout::new(CodingAgent::ClaudeCode, dir.path());
+    for leftover in [
+        layout.plugin_root.join(".mcp.json"),
+        layout.generation_fence.clone(),
+        layout.plugin_manifest.clone(),
+    ] {
+        let _ = std::fs::remove_file(&leftover);
+        assert!(!leftover.exists());
+    }
+    assert!(layout.state_path.exists());
+    assert!(layout.marketplace_root.exists());
+
+    install_host(CodingAgent::ClaudeCode, &options, &runner, &setup_runner).unwrap();
+
+    assert!(layout.generation_fence.exists());
+}
+
+#[test]
+fn install_without_force_still_refuses_to_overwrite_an_orphaned_state_file() {
+    // Dropping the state file from `previous_install_exists` must not leak into the non-forced
+    // path: `force_uninstall_host_locked` deliberately writes the state file back (without its
+    // marketplace root) as the cleanup-retry marker that `installed_integrations` reads, so a
+    // plain install has to refuse rather than silently overwrite it.
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("codex", "/bin/codex")
+        .with_codex_registration(false, false);
+    let setup_runner = MockSetupRunner::default();
+    write_installed_state(CodingAgent::Codex, dir.path());
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    std::fs::remove_dir_all(&layout.marketplace_root).unwrap();
+    let state_before = std::fs::read(&layout.state_path).unwrap();
+
+    let error = install_host(
+        CodingAgent::Codex,
+        &options(dir.path()),
+        &runner,
+        &setup_runner,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("--force"), "unexpected error: {error}");
+    assert_eq!(std::fs::read(&layout.state_path).unwrap(), state_before);
 }
 
 #[test]
@@ -3702,6 +3814,7 @@ fn force_replacement_moves_and_restores_a_separate_plugin_tree() {
         marketplace_registered: false,
         previous_setup_installed: false,
         previous_install_exists: true,
+        previous_state_exists: false,
         generation_retirement: None,
     };
     let setup_runner = MockSetupRunner::default();
