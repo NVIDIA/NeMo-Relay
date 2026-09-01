@@ -150,11 +150,7 @@ fn codex_expected_plugin_hooks_prefer_path_relay_over_current_exe() {
     // Windows resolution only ever considers `nemo-relay` plus a PATHEXT suffix; the bare name is
     // never a candidate (see process::executable_extensions), so an extensionless fixture would
     // silently fall through to current_exe() and fail this test on Windows only.
-    let fake_relay = bin_dir.join(if cfg!(windows) {
-        "nemo-relay.exe"
-    } else {
-        "nemo-relay"
-    });
+    let fake_relay = bin_dir.join(format!("nemo-relay{}", std::env::consts::EXE_SUFFIX));
     fs::write(&fake_relay, b"#!/bin/sh\n").unwrap();
     let _path = EnvVarGuard::set_path("PATH", &bin_dir);
 
