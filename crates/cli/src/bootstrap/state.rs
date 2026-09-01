@@ -29,6 +29,8 @@ pub(super) struct OwnerRecord {
     version: String,
     bootstrap_protocol: u64,
     pid: u32,
+    #[serde(default)]
+    process_start_time: Option<u64>,
     url: String,
     shutdown_token: String,
     bootstrap_fingerprint: Option<String>,
@@ -48,6 +50,7 @@ impl OwnerRecord {
             version: env!("CARGO_PKG_VERSION").into(),
             bootstrap_protocol: BOOTSTRAP_PROTOCOL_VERSION,
             pid,
+            process_start_time: process_start_time(pid),
             url: url.into(),
             shutdown_token: shutdown_token.into(),
             bootstrap_fingerprint: fingerprint.map(str::to_owned),
@@ -265,6 +268,10 @@ pub(crate) fn stop_unhealthy_owned_gateway_locked(state: &Path, url: &str) -> Re
     if probe(url, owner.bootstrap_fingerprint.as_deref()) == RelayHealth::Compatible {
         return Ok(false);
     }
+    if !owner_process_identity_matches(&owner) {
+        remove_if_matches(&path, &owner)?;
+        return Ok(false);
+    }
 
     let was_running = terminate_owned_gateway_process(owner.pid)?;
     remove_if_matches(&path, &owner)?;
@@ -329,8 +336,9 @@ fn stop_owned_gateway_locked(path: &Path, owner: &OwnerRecord, url: &str) -> Res
 
 #[cfg(unix)]
 fn terminate_owned_gateway_process(pid: u32) -> Result<bool, String> {
-    let pid =
-        i32::try_from(pid).map_err(|_| format!("invalid managed gateway process ID {pid}"))?;
+    let Ok(pid) = i32::try_from(pid) else {
+        return Ok(false);
+    };
     if !process_is_running(pid) {
         return Ok(false);
     }
@@ -350,6 +358,27 @@ fn terminate_owned_gateway_process(pid: u32) -> Result<bool, String> {
             "managed Relay gateway process {pid} did not terminate"
         ))
     }
+}
+
+#[cfg(any(unix, windows))]
+fn process_start_time(pid: u32) -> Option<u64> {
+    use sysinfo::{Pid, System};
+
+    let system = System::new_all();
+    system
+        .process(Pid::from_u32(pid))
+        .map(|process| process.start_time())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn process_start_time(_pid: u32) -> Option<u64> {
+    None
+}
+
+fn owner_process_identity_matches(owner: &OwnerRecord) -> bool {
+    owner.process_start_time.is_some_and(|start_time| {
+        process_start_time(owner.pid).is_some_and(|current| current == start_time)
+    })
 }
 
 #[cfg(unix)]

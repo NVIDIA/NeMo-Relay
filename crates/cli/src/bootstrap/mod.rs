@@ -90,7 +90,8 @@ impl GatewaySpec {
                 log::error!(
                     target: "nemo_relay.bootstrap",
                     event = "gateway_acquisition_failed",
-                    bind = self.bind.to_string().as_str();
+                    bind = self.bind.to_string().as_str(),
+                    failure_kind = bootstrap_failure_kind(&error);
                     "Gateway acquisition failed"
                 );
                 Err(error)
@@ -120,7 +121,8 @@ impl GatewaySpec {
                 log::error!(
                     target: "nemo_relay.bootstrap",
                     event = "gateway_recovery_failed",
-                    instance_id = expected_instance;
+                    instance_id = expected_instance,
+                    failure_kind = bootstrap_failure_kind(&error);
                     "Gateway recovery failed"
                 );
                 Err(error)
@@ -230,7 +232,9 @@ fn recover_gateway(spec: &GatewaySpec, expected_instance: &str) -> Result<Gatewa
             }
             (RelayHealth::Incompatible, _) => return Err(incompatible_relay_error(&requested_url)),
             (RelayHealth::Foreign, _) => return Err(foreign_listener_error(&requested_url)),
-            (RelayHealth::Unavailable, _) => {}
+            (RelayHealth::Unavailable, _) => {
+                state::stop_unhealthy_owned_gateway_locked(&state, &requested_url)?;
+            }
         }
     }
 
@@ -319,6 +323,20 @@ fn incompatible_relay_error(url: &str) -> String {
     format!(
         "{url} is occupied by NeMo Relay with a different version or persistent configuration; stop it, wait for idle shutdown, or reinstall the integration with --force"
     )
+}
+
+fn bootstrap_failure_kind(error: &str) -> &'static str {
+    if error.contains("not a compatible NeMo Relay gateway") {
+        "foreign_listener"
+    } else if error.contains("different version or persistent configuration") {
+        "incompatible_gateway"
+    } else if error.contains("became unhealthy") {
+        "unhealthy_gateway"
+    } else if error.contains("did not become ready") {
+        "gateway_readiness_timeout"
+    } else {
+        "bootstrap_failure"
+    }
 }
 
 fn start_gateway(spec: &GatewaySpec, state: &Path) -> Result<GatewayEndpoint, String> {

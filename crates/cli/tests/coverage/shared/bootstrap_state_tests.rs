@@ -255,7 +255,7 @@ fn stale_unhealthy_gateway_owner_is_removed() {
     let dir = tempfile::tempdir().unwrap();
     let url = "http://127.0.0.1:9";
     let path = owner_path(dir.path(), url);
-    let owner = OwnerRecord::new(42, url, "shutdown-token", Some("fingerprint"));
+    let owner = OwnerRecord::new(u32::MAX, url, "shutdown-token", Some("fingerprint"));
     write_owner_record(&path, &owner).unwrap();
 
     assert!(!stop_unhealthy_owned_gateway_locked(dir.path(), url).unwrap());
@@ -265,18 +265,46 @@ fn stale_unhealthy_gateway_owner_is_removed() {
 #[cfg(unix)]
 #[test]
 fn unhealthy_owned_gateway_is_force_killed_after_the_grace_period() {
+    use std::os::unix::process::CommandExt;
+
     let dir = tempfile::tempdir().unwrap();
     let url = "http://127.0.0.1:9";
     let path = owner_path(dir.path(), url);
-    let mut child = std::process::Command::new("sh")
-        .args(["-c", "trap '' TERM; while :; do sleep 1; done"])
-        .spawn()
-        .unwrap();
+    let child_pid_path = dir.path().join("child.pid");
+    let mut command = std::process::Command::new("sh");
+    command.args([
+        "-c",
+        "trap '' TERM; sh -c 'trap \"\" TERM; while :; do sleep 60; done' & echo $! > \"$1\"; wait",
+        "sh",
+        child_pid_path.to_str().unwrap(),
+    ]);
+    // SAFETY: The child calls only async-signal-safe `setsid` before exec.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+    let mut child = command.spawn().unwrap();
+    let child_pid = loop {
+        if let Ok(value) = std::fs::read_to_string(&child_pid_path) {
+            break value.trim().parse::<i32>().unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
     let owner = OwnerRecord::new(child.id(), url, "shutdown-token", Some("fingerprint"));
     write_owner_record(&path, &owner).unwrap();
     let waiter = std::thread::spawn(move || child.wait());
 
     assert!(stop_unhealthy_owned_gateway_locked(dir.path(), url).unwrap());
     assert!(!waiter.join().unwrap().unwrap().success());
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while process_is_running(child_pid) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!process_is_running(child_pid));
     assert!(!path.exists());
 }
