@@ -5,7 +5,7 @@
 set -euo pipefail
 
 switchyard_repository="${SWITCHYARD_REPOSITORY:-https://github.com/NVIDIA-NeMo/Switchyard.git}"
-switchyard_commit="${SWITCHYARD_COMMIT:-ee84cf62f0b5efae5fc1537278cd8e16768c89ff}"
+switchyard_commit="${SWITCHYARD_COMMIT:-5e30df40dddc4c19c8ea976efbc2ff58b4bd023b}"
 output_dir="${1:-}"
 
 if [[ -z "$output_dir" ]]; then

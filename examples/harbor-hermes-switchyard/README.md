@@ -1,7 +1,7 @@
 # Harbor + Hermes + Switchyard evaluation
 
 This example runs one complete Terminal-Bench 2.0 cohort through Harbor and
-Hermes. Hermes owns an in-process NeMo Relay runtime satisfying `nemo-relay>=0.8.0,<1.0`; Relay loads the
+Hermes. Hermes owns an in-process NeMo Relay runtime satisfying `nemo-relay>=0.8.1,<0.9.0`; Relay loads the
 Switchyard native plugin, and Switchyard selects and calls the configured
 provider route. The cohort runner operates on one resumable 89-task cohort at
 a time. An optional, separate report workflow can compare or aggregate several
@@ -11,9 +11,9 @@ completed run roots without mutating them.
 
 | Dependency | Input used by this example |
 |---|---|
-| NeMo Relay | Built locally from the `release/0.8` branch (commit `451b535c0042855c8b61b90b96d3df24e582d841`) via `just package-python`, since no official `nemo-relay>=0.8.0` release exists on PyPI yet; installed by digest rather than from this source checkout. |
+| NeMo Relay | Official PyPI release `nemo-relay==0.8.2`, installed by digest as a `manylinux2014_x86_64` wheel. |
 | Hermes | `NousResearch/hermes-agent`, release `v2026.8.19` (commit `fcbd1076a93841fa88855acce810e342a5b78101`), which includes PR #77915. |
-| Switchyard | `NVIDIA-NeMo/Switchyard`, detached commit `ee84cf62f0b5efae5fc1537278cd8e16768c89ff` from PR #528 (open, branch `bbednarski/relay-plugin-runner`). |
+| Switchyard | `NVIDIA-NeMo/Switchyard`, detached commit `5e30df40dddc4c19c8ea976efbc2ff58b4bd023b` from PR #528 (open, branch `bbednarski/relay-plugin-runner`). |
 | Harbor | `harbor==0.20.0`, official registry export of `terminal-bench@2.0`. |
 
 Every source checkout is detached and verified. The Hermes installer is
@@ -83,8 +83,8 @@ reaching a provider.
   `tmux`;
 - an immutable 89-task Terminal-Bench 2.0 export downloaded from Harbor's
   official registry;
-- a Switchyard plugin bundle and a Relay wheel satisfying `nemo-relay>=0.8.0,<1.0` (currently built
-  locally; see below), matching Docker's architecture (`x86_64` or `aarch64`);
+- a Switchyard plugin bundle and a Relay wheel satisfying `nemo-relay>=0.8.1,<0.9.0`,
+  matching Docker's architecture (`x86_64` or `aarch64`);
 - a Phoenix endpoint accepting OTLP/HTTP OpenInference traces; and
 - provider and registry access for the full cohort. The all-89 admission uses
   neither; the Docker admission makes no provider calls but may pull its image,
@@ -109,20 +109,20 @@ case "$(docker info --format '{{.Architecture}}')" in
 esac
 ```
 
-Relay currently has no published `nemo-relay>=0.8.0` release, so this example
-requires building a wheel locally from this repository's own `release/0.8`
-branch. Build it in an isolated worktree so it doesn't disturb your working
-checkout (the `cp311`/`abi3` tags produced this way are required by the
-Hermes runtime):
+Download the official Relay wheel from PyPI (the `cp311`/`abi3` tags
+satisfy the Hermes runtime):
 
 ```bash
-git worktree add --detach /absolute/path/to/nemo-relay-release-0.8 release/0.8
-cd /absolute/path/to/nemo-relay-release-0.8
-just ref_name=0.8.0 package-python
+python3 -m pip download \
+  --only-binary=:all: --no-deps \
+  --platform "manylinux2014_${RELAY_ARCHITECTURE}" \
+  --implementation cp --python-version 311 --abi abi3 \
+  --dest /absolute/path/to/relay-wheel \
+  "nemo-relay>=0.8.1,<0.9.0"
 ```
 
 This produces a `manylinux2014_${RELAY_ARCHITECTURE}` wheel under
-`target/packages/wheels/`; reference it as `RELAY_WHEEL` below.
+`/absolute/path/to/relay-wheel/`; reference it as `RELAY_WHEEL` below.
 
 Build the Switchyard native bundle for that same architecture. With no
 `SWITCHYARD_TARGET_ARCHITECTURE` override, the builder detects the Docker
