@@ -202,13 +202,16 @@ async fn registration_rejects_a_duplicate_kind_and_missing_deregistration_is_fal
 }
 
 #[tokio::test]
-async fn disabled_component_is_excluded_from_effective_host_validation() {
+async fn disabled_component_configuration_is_still_validated() {
     let _registered = register_only().await;
     let report = validate(config_with_enabled("invalid", false), None)
-    .expect("disabled host should validate");
+    .expect("disabled host configuration should validate");
     assert!(deregister_plugin("documentation-plugin"));
 
-    assert!(report.config.diagnostics.is_empty());
+    assert_eq!(
+        report.config.diagnostics[0].code,
+        "documentation-plugin.unsupported_mode"
+    );
 }
 
 #[tokio::test]

@@ -94,13 +94,13 @@ test('validation warns about an unknown field', () => {
   assert.equal(diagnostics[0].field, 'unexpected');
 });
 
-test('disabled components are excluded from effective host validation', () => {
+test('disabled component configuration is still validated', () => {
   const restoreEnvironment = isolateExampleEnvironment();
   plugin.register('documentation-plugin', documentationPlugin);
   try {
     const report = plugin.validate(config('invalid', false));
 
-    assert.deepEqual(report.config.diagnostics, []);
+    assert.equal(report.config.diagnostics[0].code, 'documentation-plugin.unsupported_mode');
   } finally {
     plugin.deregister('documentation-plugin');
     restoreEnvironment();

@@ -123,15 +123,13 @@ def test_validation_warns_about_unknown_field() -> None:
     assert diagnostics[0]["field"] == "unexpected"
 
 
-def test_disabled_component_is_excluded_from_effective_host_validation(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_disabled_component_configuration_is_still_validated(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     plugin.register("documentation-plugin", DocumentationPlugin())
     try:
         report = plugin.validate(component("invalid", enabled=False))
-        assert report["config"]["diagnostics"] == []
+        assert report["config"]["diagnostics"][0]["code"] == "documentation-plugin.unsupported_mode"
     finally:
         plugin.deregister("documentation-plugin")
 
