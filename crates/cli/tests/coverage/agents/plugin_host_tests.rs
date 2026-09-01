@@ -2215,6 +2215,9 @@ fn codex_hooks_installed_requires_generated_plugin_local_groups() {
 
 #[test]
 fn codex_setup_can_validate_hooks_while_installer_holds_the_generation_lock() {
+    // Holds the environment lock: this test compares a helper-computed relay path against the
+    // one the source resolves, and both reads go through $PATH.
+    let _env = env_read_guard();
     let dir = tempdir().unwrap();
     let plugin_root = dir.path().join("plugin");
     let hooks_path = plugin_root.join("hooks").join("hooks.json");
