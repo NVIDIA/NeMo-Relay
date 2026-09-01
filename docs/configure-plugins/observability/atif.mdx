@@ -417,7 +417,7 @@ let config = PluginConfig {
 let report = validate(config.clone(), None)?;
 assert!(!report.config.has_errors());
 
-let activation = initialize(config, None).await?;
+let mut activation = initialize(config, None).await?;
 
 // Run instrumented application work here.
 

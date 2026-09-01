@@ -198,7 +198,7 @@ pub fn validate(
     })
 }
 
-/// Validates a targeted dynamic-plugin request for CLI diagnostics.
+/// Validates a targeted dynamic-plugin request for internal diagnostics.
 pub(crate) fn validate_request(request: PluginHostValidationRequest) -> Result<PluginHostReport> {
     let resolved = resolve_plugin_host_config_inner(
         request.config,

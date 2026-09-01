@@ -236,6 +236,8 @@ component for model pricing directly:
 <Tabs>
 <Tab title="Python" language="python">
 ```python
+import asyncio
+
 import nemo_relay
 
 config = nemo_relay.plugin.PluginConfig(
@@ -255,7 +257,7 @@ report = nemo_relay.plugin.validate(config)["config"]
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
-activation = await nemo_relay.plugin.initialize(config)
+activation = asyncio.run(nemo_relay.plugin.initialize(config))
 ```
 </Tab>
 
