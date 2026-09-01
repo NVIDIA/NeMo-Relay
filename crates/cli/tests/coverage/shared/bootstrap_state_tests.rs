@@ -234,7 +234,7 @@ fn same_version_or_invalid_owned_gateway_is_not_stopped_for_replacement() {
     let state = state_dir().unwrap();
     create_private_dir(&state).unwrap();
     let path = owner_path(&state, url);
-    let owner = OwnerRecord::new(42, url, "shutdown-token", Some("fingerprint"));
+    let owner = OwnerRecord::new(i32::MAX as u32, url, "shutdown-token", Some("fingerprint"));
     write_owner_record(&path, &owner).unwrap();
 
     let _lock = lock_endpoint(&state, url).unwrap();

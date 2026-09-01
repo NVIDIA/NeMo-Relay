@@ -90,8 +90,7 @@ impl GatewaySpec {
                 log::error!(
                     target: "nemo_relay.bootstrap",
                     event = "gateway_acquisition_failed",
-                    bind = self.bind.to_string().as_str(),
-                    error = error.as_str();
+                    bind = self.bind.to_string().as_str();
                     "Gateway acquisition failed"
                 );
                 Err(error)
@@ -121,8 +120,7 @@ impl GatewaySpec {
                 log::error!(
                     target: "nemo_relay.bootstrap",
                     event = "gateway_recovery_failed",
-                    instance_id = expected_instance,
-                    error = error.as_str();
+                    instance_id = expected_instance;
                     "Gateway recovery failed"
                 );
                 Err(error)
