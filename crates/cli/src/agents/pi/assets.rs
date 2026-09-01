@@ -13,9 +13,8 @@
 //!
 //! `integrations/pi` is the extension's development home -- its README, tsconfig and test
 //! suite -- and reaches the source through symlinks into this directory. Nothing is
-//! duplicated and there is no sync step. `cargo package` follows those symlinks from the
-//! other direction too, writing each target in as a regular file, which is how the
-//! published crate ends up self-contained.
+//! duplicated and there is no sync step. Because the real files live under the crate root,
+//! `cargo package` includes them directly, leaving the published crate self-contained.
 //!
 //! Only what pi loads lives here: the manifest, the entry point, and `src/`. `test/` and
 //! `tsconfig.json` have no runtime role, and the README is not read at run time.
