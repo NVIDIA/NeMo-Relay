@@ -15,6 +15,7 @@ hook first. The extension defaults to failing **open**, so an unavailable gatewa
 lets pi carry on with that activity unrecorded; and pi runs every extension's
 handler for a hook, so an extension registered ahead of this one can decide a
 tool call before Relay's gate ever sees it.
+
 Model traffic reaches Relay when the gateway forwards to the endpoint the
 selected model would otherwise call, which is what [Model
 Redirection](#model-redirection) explains.
@@ -74,10 +75,9 @@ for another agent, run the command above.
 
 pi has no plugin marketplace — no marketplace manifest, no `pi plugin` verb, and
 no MCP client for a plugin-owned server to serve — so this is not a marketplace
-install
-like the Claude Code and Codex ones. `--install-dir` therefore does not apply:
-pi decides where its extensions live. Set `PI_CODING_AGENT_DIR` to move pi's
-whole configuration.
+install like the Claude Code and Codex ones. `--install-dir` therefore does not
+apply: pi decides where its extensions live. Set `PI_CODING_AGENT_DIR` to move
+pi's whole configuration.
 
 Remove it with:
 
@@ -192,10 +192,9 @@ configuration.
 The launcher resolves the extension from the same places `nemo-relay doctor pi`
 looks — `NEMO_RELAY_PI_EXTENSION` first, then a user-scope install — so any
 install route above is enough and no variable is required. That includes the one
-`nemo-relay install pi` writes, which lands in a user-scope directory of pi's
-rather than in a Relay-owned plugin root like the Claude Code and Codex installs.
-pi extensions live in the user's own configuration directories, so Relay writes
-into one instead of managing a location of its own.
+`nemo-relay install pi` writes: pi extensions live in the user's own
+configuration directories, so Relay writes into one instead of managing a plugin
+root of its own as it does for Claude Code and Codex.
 
 A **project-scoped** install is deliberately never used. `-e` is not trust-gated,
 so passing one would load repository code pi itself declined to trust. Launch
@@ -244,13 +243,7 @@ it can block indefinitely before any hook fires.
 The extension posts 15 event types, covering session, turn, tool and
 inline-shell activity. Twelve carry a pi hook's own name. The other three —
 `model_redirect`, `tool_arguments_transformed` and `user_bash_end` — are
-synthesized by the extension. The table below names the source of each:
-redirection is evaluated at `session_start` and again on every `model_select`,
-and `model_redirect` is posted for each decision that explains something — a
-redirect, or a skip an operator can act on. Two transient skips are evaluated but
-not posted: no model resolved yet, and a provider already pointed at the gateway.
-`tool_arguments_transformed` is posted after a rewrite is applied, and
-`user_bash_end` after an inline-shell command is decided.
+synthesized by the extension. The table below names where each one comes from.
 
 pi reports both ends of a turn, so Relay opens the turn scope at pi's own
 `turn_start` instead of inferring one, and a mark that arrives between turns is
