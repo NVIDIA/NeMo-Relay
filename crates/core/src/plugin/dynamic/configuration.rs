@@ -451,9 +451,17 @@ fn state_for_plugin(
     if !state_path.exists() {
         return Ok(None);
     }
-    let raw = std::fs::read_to_string(&state_path).map_err(|error| {
+    let raw = read_bounded_regular_file(&state_path, "dynamic plugin lifecycle state").map_err(
+        |error| {
+            PluginError::InvalidConfig(format!(
+                "failed to read dynamic plugin lifecycle state {}: {error}",
+                state_path.display()
+            ))
+        },
+    )?;
+    let raw = String::from_utf8(raw).map_err(|error| {
         PluginError::InvalidConfig(format!(
-            "failed to read dynamic plugin lifecycle state {}: {error}",
+            "invalid dynamic plugin lifecycle state {}: {error}",
             state_path.display()
         ))
     })?;
