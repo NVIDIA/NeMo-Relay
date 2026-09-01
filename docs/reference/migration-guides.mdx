@@ -25,7 +25,9 @@ nemo-relay integrations refresh
 
 To repair only Codex, use `nemo-relay install codex --force`. It can repair
 Relay-owned marketplace entries that point to missing files. These commands
-apply to personal integrations.
+apply to personal integrations. Refreshing Codex also switches persistent routing
+to the built-in OpenAI provider, preserving session identity and routing image
+generation through Relay.
 
 For daemon bundles managed by an administrator, follow the
 [daemon upgrade workflow](/daemon/operations#upgrade-and-roll-back). Close
