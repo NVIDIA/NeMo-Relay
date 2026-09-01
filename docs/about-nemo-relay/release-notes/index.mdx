@@ -33,9 +33,9 @@ changes, compatibility updates, and fixed known issues.
 ## Known Issues in 0.9
 
 - OTLP collectors can return a successful response while rejecting individual
-  spans, log records, or metric data points. Relay 0.8 does not report these
-  partial successes in runtime diagnostics, and flush or shutdown can still
-  succeed. Monitor collector-side rejection metrics and logs; see
+  spans, log records, or metric data points. Relay does not report these partial
+  successes in runtime diagnostics, and flush or shutdown can still succeed.
+  Monitor collector-side rejection metrics and logs; see
   [OpenTelemetry](/configure-plugins/observability/opentelemetry#trace-batch-processor-configuration).
 - Go and the raw C FFI remain experimental and source-first. Generated API
   pages focus on Rust, Python, and Node.js.
@@ -54,13 +54,12 @@ changes, compatibility updates, and fixed known issues.
 - OpenClaw has public hook-backed telemetry. Its security and optimization
   coverage is partial because it does not own a managed execution path.
 - The built-in `nemo_guardrails` plugin is deprecated and scheduled for removal
-  in NeMo Relay 0.9. It remains available in 0.8: the remote backend inherits
-  its configured service's availability, latency, and policy behavior, and the
-  local backend requires Python 3.11 or later and `nemoguardrails==0.22.0`. A
-  replacement is not included in 0.8 and will target 0.9 or later. Removal will
-  include the built-in component kind, the public
-  `nemo_relay::plugins::nemo_guardrails` Rust module, its CLI editor entry, and
-  the `guardrails-remote` Cargo feature.
+  in NeMo Relay 0.9. No replacement is included. Until removal, the remote
+  backend inherits its configured service's availability, latency, and policy
+  behavior, and the local backend requires Python 3.11 or later and
+  `nemoguardrails==0.22.0`. Removal will include the built-in component kind,
+  the public `nemo_relay::plugins::nemo_guardrails` Rust module, its CLI editor
+  entry, and the `guardrails-remote` Cargo feature.
 - The PII redaction plugin currently supports its deterministic local backend;
   local-model backend configuration is reserved for future work.
 - Pricing and optimization estimates depend on model names, token data, pricing
