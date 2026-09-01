@@ -259,3 +259,109 @@ describe('a provider whose models span API families', () => {
     assert.equal(isNotable(decideRedirect(ANTHROPIC, config, new Set(), catalog)), true);
   });
 });
+
+describe('naming an upstream the gateway does not front', () => {
+  /** The launcher's credential is what the gateway requires before honouring the header. */
+  const namingConfig = (extra = {}) =>
+    matchConfig({ proxyToken: 'nrp_testtoken', ...extra });
+
+  it('redirects past a mismatch by naming the model endpoint', () => {
+    const decision = decideRedirect(
+      nvidiaModel,
+      namingConfig({ openaiUpstream: 'https://api.openai.com/v1' }),
+      none,
+      [nvidiaModel],
+    );
+
+    assert.equal(decision.kind, 'redirect');
+    assert.equal(decision.namedUpstream, nvidiaModel.baseUrl);
+  });
+
+  it('redirects when the gateway upstream is unknown', () => {
+    const decision = decideRedirect(
+      nvidiaModel,
+      { gatewayUrl: GATEWAY, mode: 'match', proxyToken: 'nrp_testtoken' },
+      none,
+      [nvidiaModel],
+    );
+
+    assert.equal(decision.kind, 'redirect');
+    assert.equal(decision.namedUpstream, nvidiaModel.baseUrl);
+  });
+
+  // Without the credential the gateway ignores the header, so redirecting would land
+  // on its configured upstream -- the wrong provider, which is the exact break the
+  // static check exists to prevent.
+  it('still refuses without the credential, because the header would be ignored', () => {
+    const decision = decideRedirect(
+      nvidiaModel,
+      matchConfig({ openaiUpstream: 'https://api.openai.com/v1' }),
+      none,
+      [nvidiaModel],
+    );
+
+    assert.equal(decision.kind, 'skip');
+    assert.equal(decision.code, 'upstream-mismatch');
+  });
+
+  it('names nothing when the gateway already fronts the endpoint', () => {
+    const decision = decideRedirect(nvidiaModel, namingConfig(), none, [nvidiaModel]);
+
+    assert.equal(decision.kind, 'redirect');
+    assert.equal(decision.namedUpstream, undefined);
+  });
+
+  // One endpoint is named for the whole provider, because `registerProvider` rewrites
+  // every model of it. A sibling elsewhere would be pointed at a host that has never
+  // heard of it -- a broken session rather than a missing span.
+  it('refuses a provider whose models do not share one endpoint', () => {
+    const sibling = {
+      id: 'nvidia/other',
+      api: 'openai-completions',
+      provider: 'nvidia',
+      baseUrl: 'https://other.nvidia.example/v1',
+    };
+    const decision = decideRedirect(
+      nvidiaModel,
+      namingConfig({ openaiUpstream: 'https://api.openai.com/v1' }),
+      none,
+      [nvidiaModel, sibling],
+    );
+
+    assert.equal(decision.kind, 'skip');
+    assert.equal(decision.code, 'provider-mixed-endpoints');
+  });
+
+  // An unserviceable sibling has no gateway route at all, so naming an endpoint for
+  // the provider would move it somewhere the gateway cannot forward it.
+  it('refuses a provider with a sibling the gateway cannot route', () => {
+    const sibling = {
+      id: 'nvidia/gemini-ish',
+      api: 'google-generative-ai',
+      provider: 'nvidia',
+      baseUrl: nvidiaModel.baseUrl,
+    };
+    const decision = decideRedirect(
+      nvidiaModel,
+      namingConfig({ openaiUpstream: 'https://api.openai.com/v1' }),
+      none,
+      [nvidiaModel, sibling],
+    );
+
+    assert.equal(decision.kind, 'skip');
+    assert.equal(decision.code, 'provider-mixed-endpoints');
+  });
+
+  // The gateway serves no route for the API at all, so there is nothing to name.
+  it('still refuses an unserviceable API', () => {
+    const decision = decideRedirect(
+      { ...nvidiaModel, api: 'google-generative-ai' },
+      namingConfig(),
+      none,
+      [],
+    );
+
+    assert.equal(decision.kind, 'skip');
+    assert.equal(decision.code, 'unserviceable-api');
+  });
+});

@@ -709,8 +709,10 @@ describe('the session join key on redirected providers', () => {
   // Same structural scope as the session id, and it matters more here: the credential
   // authenticates *this* invocation, so a provider the gateway does not front must
   // never see it. `registerProvider` runs only on a redirect, which is what enforces it.
+  // No credential, so naming the upstream is not available and a mismatch is still a
+  // refusal -- which is the state that leaves a provider un-redirected, and so the
+  // state in which nothing may be attached to it.
   it('never reaches a provider that was not redirected', async () => {
-    process.env.NEMO_RELAY_PROXY_CREDENTIAL = 'nrp_testtoken';
     process.env.NEMO_RELAY_PI_OPENAI_UPSTREAM = 'https://elsewhere.example/v1';
     try {
       const { fire, registrations } = loadRecording('sess-one');
@@ -719,6 +721,41 @@ describe('the session join key on redirected providers', () => {
     } finally {
       process.env.NEMO_RELAY_PI_OPENAI_UPSTREAM = 'https://api.openai.com/v1';
     }
+  });
+
+  // The credential turns a mismatch from a refusal into a redirect: the gateway can be
+  // told where to forward, so a provider it was never configured for still produces
+  // spans and is still subject to model-call policy.
+  it('names the endpoint when the gateway does not front it', async () => {
+    process.env.NEMO_RELAY_PROXY_CREDENTIAL = 'nrp_testtoken';
+    process.env.NEMO_RELAY_PI_OPENAI_UPSTREAM = 'https://elsewhere.example/v1';
+    try {
+      const { fire, registrations } = loadRecording('sess-one');
+      await fire('session_start', { reason: 'startup' });
+
+      assert.equal(registrations.length, 1, 'a named upstream makes the redirect safe');
+      assert.equal(
+        registrations[0].config.headers['x-nemo-relay-upstream-base-url'],
+        'https://api.openai.com/v1',
+        'the header must name the endpoint the model would otherwise have called',
+      );
+    } finally {
+      process.env.NEMO_RELAY_PI_OPENAI_UPSTREAM = 'https://api.openai.com/v1';
+    }
+  });
+
+  // Naming an upstream the gateway already forwards to would be a header that changes
+  // nothing, on every request, for the common case.
+  it('names no endpoint when the gateway already fronts the model', async () => {
+    process.env.NEMO_RELAY_PROXY_CREDENTIAL = 'nrp_testtoken';
+    const { fire, registrations } = loadRecording('sess-one');
+    await fire('session_start', { reason: 'startup' });
+
+    assert.equal(registrations.length, 1);
+    assert.ok(
+      !('x-nemo-relay-upstream-base-url' in registrations[0].config.headers),
+      'a static match must not name an upstream',
+    );
   });
 
   it('does not re-register when the session id has not moved', async () => {

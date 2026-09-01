@@ -214,6 +214,23 @@ pub(super) fn gateway_upstream_url_override(
     )
 }
 
+// The upstream this request names for itself, composed with the request path.
+//
+// Separate from `gateway_upstream_url_override` because the two answer different questions: that
+// one asks alignment which upstream a *harness* implies, from evidence the client did not choose
+// (a ChatGPT token's shape); this one is the client stating a destination outright, which is only
+// honored when it proved it is this invocation's own agent. Composition stays here so the OpenAI
+// `/v1` normalization has one home.
+pub(super) fn client_named_upstream_url(
+    route: ProviderRoute,
+    headers: &HeaderMap,
+    path_and_query: &str,
+    invocation_authenticated: bool,
+) -> Option<String> {
+    crate::agents::pi::alignment::client_named_upstream_base(headers, invocation_authenticated)
+        .map(|base| route.upstream_url_with_base(&base, path_and_query))
+}
+
 pub(super) fn gateway_upstream_url_override_with_openai_key_state(
     route: ProviderRoute,
     headers: &HeaderMap,

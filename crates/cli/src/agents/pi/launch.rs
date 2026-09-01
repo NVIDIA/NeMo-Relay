@@ -44,12 +44,11 @@ pub(crate) fn prepare(
 
     // Tell the extension what this gateway actually forwards to.
     //
-    // Redirection is only correct when the gateway's upstream is the same endpoint the selected
-    // model would otherwise call: the gateway resolves one OpenAI base and one Anthropic base from
-    // static configuration (`ProviderRoute::upstream_url`) and there is no per-request override a
-    // client can set -- inbound internal dispatch headers are stripped. Without these two values
-    // the extension would have to redirect blind, and pointing (say) an NVIDIA model at a gateway
-    // configured for `api.openai.com` breaks a session that worked a moment earlier.
+    // Still sent even though a launched session can name its own upstream (see
+    // `pi::alignment`): the named path is what makes an arbitrary provider work, and these two
+    // are what let the extension recognise the case where naming is unnecessary because the
+    // gateway already fronts the model's endpoint. Without them every redirect would carry a
+    // header, including the common one where it changes nothing.
     set_env(launch, PI_OPENAI_UPSTREAM_ENV, &gateway.openai_base_url);
     set_env(
         launch,

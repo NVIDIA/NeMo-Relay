@@ -1289,6 +1289,14 @@ pub(crate) async fn models(
         allow_environment_provider_auth,
         &state.config,
     )
+    .or_else(|| {
+        crate::gateway::routes::client_named_upstream_url(
+            provider,
+            &parts.headers,
+            path_and_query,
+            authorization.source_credential.is_relay_proxy_credential(),
+        )
+    })
     .unwrap_or_else(|| provider.upstream_url(&state.config, path_and_query));
     let sanitized = strip_replaceable_agent_auth_headers(
         &parts.headers,

@@ -60,6 +60,10 @@ pub(super) async fn prepare_gateway_request(
         .path_and_query()
         .map(|path| path.as_str())
         .unwrap_or(parts.uri.path());
+    // Agent-implied routing first, so an existing harness override keeps its exact behavior; a
+    // request that names its own upstream is consulted only when nothing else claimed the route.
+    // The two cannot both apply in practice -- one is inferred from a ChatGPT token, the other is
+    // sent by the pi extension -- so the order records precedence rather than resolving a clash.
     let upstream_url = gateway_upstream_url_override(
         provider,
         &parts.headers,
@@ -67,6 +71,14 @@ pub(super) async fn prepare_gateway_request(
         authorization.allow_environment_provider_auth,
         config,
     )
+    .or_else(|| {
+        super::routes::client_named_upstream_url(
+            provider,
+            &parts.headers,
+            path_and_query,
+            authorization.source_credential.is_relay_proxy_credential(),
+        )
+    })
     .unwrap_or_else(|| provider.upstream_url(config, path_and_query));
     parts.headers = super::routes::strip_replaceable_agent_auth_headers(
         &parts.headers,

@@ -2271,3 +2271,60 @@ async fn streaming_body_records_final_response_for_turn_output() {
 // `llm_stream_call_execute`. The runtime now owns stream-end lifecycle (start/end events emitted
 // by `LlmStreamWrapper`); core tests cover that contract, and the gateway no longer carries a
 // stream preview/truncation helper.
+
+/// A routing directive addressed to this gateway must not travel to the provider.
+///
+/// It names infrastructure and means nothing to any provider API, so forwarding it would be
+/// leaking a detail of our own deployment into a third party's request log.
+#[test]
+fn the_client_named_upstream_header_is_not_forwarded_upstream() {
+    let headers = HeaderMap::new();
+
+    assert!(!should_forward_request_header(
+        &HeaderName::from_static(crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER),
+        &headers
+    ));
+}
+
+/// A named upstream is composed with the request path by the same code that composes a
+/// configured one, so an operator's `/v1` prefix is not doubled.
+#[test]
+fn a_named_upstream_composes_through_the_route() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+        HeaderValue::from_static("https://integrate.api.nvidia.com/v1"),
+    );
+
+    assert_eq!(
+        crate::gateway::routes::client_named_upstream_url(
+            crate::gateway::routes::ProviderRoute::OpenAiChatCompletions,
+            &headers,
+            "/v1/chat/completions",
+            true,
+        )
+        .as_deref(),
+        Some("https://integrate.api.nvidia.com/v1/chat/completions")
+    );
+}
+
+/// The gateway falls back to configured routing rather than failing, so an unauthenticated
+/// caller simply does not get a say.
+#[test]
+fn an_unauthenticated_caller_gets_no_named_upstream() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+        HeaderValue::from_static("https://integrate.api.nvidia.com/v1"),
+    );
+
+    assert_eq!(
+        crate::gateway::routes::client_named_upstream_url(
+            crate::gateway::routes::ProviderRoute::OpenAiChatCompletions,
+            &headers,
+            "/v1/chat/completions",
+            false,
+        ),
+        None
+    );
+}

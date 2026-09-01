@@ -290,6 +290,14 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
         headers: {
           'x-nemo-relay-session-id': sessionKey,
           ...(redirect.proxyToken ? { 'x-nemo-relay-proxy-token': redirect.proxyToken } : {}),
+          // Only when the gateway does not already front this endpoint. It rides on
+          // the registration for the same reason the credential does -- the scope is
+          // structural, so a provider we left alone never names an upstream -- and
+          // the gateway ignores it unless the proxy credential above is present and
+          // matches, which is what stops any other local process steering it.
+          ...(decision.namedUpstream
+            ? { 'x-nemo-relay-upstream-base-url': decision.namedUpstream }
+            : {}),
         },
       });
       redirectedProviders.add(decision.provider);
