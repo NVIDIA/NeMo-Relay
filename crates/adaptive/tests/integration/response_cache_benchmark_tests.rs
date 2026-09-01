@@ -42,7 +42,7 @@ static TEST_MUTEX: Mutex<()> = Mutex::const_new(());
 const PER_CALL_TOTAL_TOKENS: u64 = 1280;
 
 fn reset_global() {
-    let _ = test_close_plugin_host();
+    test_close_plugin_host().expect("test plugin host must close");
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
     *state = NemoRelayContextState::new();

@@ -141,12 +141,12 @@ configuration before it activates the result and returns its sole lifecycle owne
 Use the following order so active callbacks cannot outlive their implementation:
 
 1. Stop sending new managed calls and let in-flight plugin callbacks settle. In Node.js,
-   await `relay.flushSubscribers()` before clearing so queued event and scope-end
+   await `relay.flushSubscribers()` before closing so queued event and scope-end
    sanitizers finish while their component still owns their callbacks.
-2. Close the activation handle. Python and Node.js await `activation.close()`; Rust
-   checks the `Result` returned by `activation.close()`.
-3. Inspect `activation.report` (or Rust `activation.report()`) before close when retaining
+2. Inspect `activation.report` (or Rust `activation.report()`) when retaining
    activation-time diagnostics for investigation.
+3. Close the activation handle. Python and Node.js await `activation.close()`; Rust
+   checks the `Result` returned by `activation.close()`.
 4. Deregister the plugin kind only after active behavior is gone. Deregistration affects
    future validation and initialization, not registrations already committed to the
    runtime.

@@ -13,7 +13,7 @@ use nemo_relay::plugin::{DiagnosticLevel, UnsupportedBehavior, test_close_plugin
 use nemo_relay::plugin::{Plugin, PluginRegistrationContext, rollback_registrations};
 use serde_json::json;
 fn reset_global() {
-    let _ = test_close_plugin_host();
+    test_close_plugin_host().expect("test plugin host must close");
     let _ = deregister_adaptive_component();
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
@@ -81,7 +81,7 @@ fn validate_adaptive_plugin_config_reports_unknown_fields_and_backend_errors() {
 #[tokio::test(flavor = "current_thread")]
 async fn register_adaptive_component_is_idempotent_and_deregisters_cleanly() {
     let _guard = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
-    let _ = test_close_plugin_host();
+    test_close_plugin_host().expect("test plugin host must close");
     let _ = deregister_adaptive_component();
 
     register_adaptive_component().unwrap();

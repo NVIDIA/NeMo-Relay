@@ -2139,6 +2139,18 @@ NemoRelayStatus nemo_relay_plugin_validate(const char *config_json,
                                            char **out_report_json);
 
 /**
+ * Validate only the supplied static plugin configuration.
+ *
+ * This entry point does not discover or merge `plugins.toml` layers. The
+ * returned host report therefore has no dynamic-plugin reports.
+ *
+ * # Safety
+ * `config_json` must be a valid C string and `out_report_json` must be a valid
+ * non-null output pointer.
+ */
+NemoRelayStatus nemo_relay_plugin_validate_exact(const char *config_json, char **out_report_json);
+
+/**
  * Close one owned plugin-host activation.
  *
  * This operation is idempotent. A null handle is treated as already closed.

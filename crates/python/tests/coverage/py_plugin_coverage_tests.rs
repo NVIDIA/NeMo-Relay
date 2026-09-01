@@ -32,6 +32,31 @@ fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
     module
 }
 
+fn with_event_loop<T>(py: Python<'_>, f: impl FnOnce(Bound<'_, PyAny>) -> T) -> T {
+    let asyncio = py.import("asyncio").unwrap();
+    #[cfg(windows)]
+    {
+        let policy = asyncio
+            .getattr("WindowsSelectorEventLoopPolicy")
+            .unwrap()
+            .call0()
+            .unwrap();
+        asyncio
+            .call_method1("set_event_loop_policy", (policy,))
+            .unwrap();
+    }
+    let event_loop = asyncio.call_method0("new_event_loop").unwrap();
+    asyncio
+        .call_method1("set_event_loop", (&event_loop,))
+        .unwrap();
+    let result = f(event_loop.clone().into_any());
+    asyncio
+        .call_method1("set_event_loop", (py.None(),))
+        .unwrap();
+    event_loop.call_method0("close").unwrap();
+    result
+}
+
 #[test]
 fn plugin_context_helpers_and_error_conversion_work() {
     let _python = crate::test_support::init_python_test();
@@ -136,6 +161,132 @@ fn register_adds_plugin_management_bindings() {
             plugin_error_to_py_err(PluginError::RegistrationFailed("teardown".into()))
                 .is_instance_of::<pyo3::exceptions::PyRuntimeError>(py)
         );
+    });
+}
+
+#[test]
+fn python_plugin_validation_and_initialization_cover_error_paths() {
+    let _python = crate::test_support::init_python_test();
+    let _plugin_test_state = lock_plugin_test_state_for_tests();
+    Python::attach(|py| {
+        let helpers = load_module(
+            py,
+            r#"
+class RaisingValidatePlugin:
+    def validate(self, plugin_config):
+        raise RuntimeError("validate boom")
+
+class InvalidDiagnosticsPlugin:
+    def validate(self, plugin_config):
+        return [{"level": "warning", "code": 1, "message": "bad"}]
+
+class FailingRegisterPlugin:
+    def validate(self, plugin_config):
+        return []
+
+    def register(self, plugin_config, context):
+        raise RuntimeError("register boom")
+
+class GoodPlugin:
+    def validate(self, plugin_config):
+        return []
+
+    def register(self, plugin_config, context):
+        context.register_subscriber("sub", lambda event: None)
+
+async def initialize_plugin(module, config):
+    return await module.initialize(config)
+"#,
+        );
+        let module = PyModule::new(py, "_plugin_cov_errors").unwrap();
+        register(&module).unwrap();
+
+        for (kind, class_name) in [
+            ("demo.raising_validate", "RaisingValidatePlugin"),
+            ("demo.invalid_diagnostics", "InvalidDiagnosticsPlugin"),
+            ("demo.failing_register", "FailingRegisterPlugin"),
+            ("demo.forced_failures", "GoodPlugin"),
+        ] {
+            register_plugin_py(
+                kind,
+                helpers
+                    .getattr(class_name)
+                    .unwrap()
+                    .call0()
+                    .unwrap()
+                    .unbind(),
+            )
+            .unwrap();
+        }
+
+        let config_for = |kind: &str| {
+            crate::convert::json_to_py(
+                py,
+                &json!({
+                    "version": 1,
+                    "components": [{"kind": kind, "enabled": true, "config": {}}]
+                }),
+            )
+            .unwrap()
+        };
+        let has_validate_failure = |report: &Py<PyAny>| {
+            crate::convert::py_to_json(report.bind(py)).unwrap()["config"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diagnostic| diagnostic["code"] == "plugin.validate_failed")
+        };
+
+        for kind in ["demo.raising_validate", "demo.invalid_diagnostics"] {
+            let config = config_for(kind);
+            let report = validate_py(py, config.bind(py), None).unwrap();
+            assert!(has_validate_failure(&report));
+        }
+
+        let forced_config = config_for("demo.forced_failures");
+        let conversion_guard = force_validate_config_to_py_error_for_tests("demo.forced_failures");
+        let report = validate_py(py, forced_config.bind(py), None).unwrap();
+        assert!(has_validate_failure(&report));
+        drop(conversion_guard);
+
+        with_event_loop(py, |event_loop| {
+            let failing_config = config_for("demo.failing_register");
+            let failing = helpers
+                .getattr("initialize_plugin")
+                .unwrap()
+                .call1((module.clone(), failing_config.bind(py)))
+                .unwrap();
+            let error = event_loop
+                .call_method1("run_until_complete", (failing,))
+                .unwrap_err();
+            assert!(error.to_string().contains("register boom"), "{error}");
+
+            let context_guard = force_plugin_context_new_error_for_tests("demo.forced_failures");
+            let failing = helpers
+                .getattr("initialize_plugin")
+                .unwrap()
+                .call1((module.clone(), forced_config.bind(py)))
+                .unwrap();
+            let error = event_loop
+                .call_method1("run_until_complete", (failing,))
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("forced plugin context allocation failure"),
+                "{error}"
+            );
+            drop(context_guard);
+        });
+
+        for kind in [
+            "demo.raising_validate",
+            "demo.invalid_diagnostics",
+            "demo.failing_register",
+            "demo.forced_failures",
+        ] {
+            assert!(deregister_plugin_py(kind));
+        }
     });
 }
 

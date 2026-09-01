@@ -63,7 +63,7 @@ fn enable_operational_logs() {
 
 fn reset_global() {
     enable_operational_logs();
-    let _ = test_close_plugin_host();
+    test_close_plugin_host().expect("test plugin host must close");
     let _ = deregister_plugin("test.header_plugin");
     let _ = deregister_plugin("test.failing_plugin");
 

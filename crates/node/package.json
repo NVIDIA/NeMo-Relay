@@ -81,5 +81,13 @@
     "typedoc": "^0.28.0",
     "typescript": "^5.9.3"
   },
+  "peerDependencies": {
+    "typescript": ">=5.2"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  },
   "license": "Apache-2.0"
 }

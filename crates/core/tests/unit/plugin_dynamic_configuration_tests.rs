@@ -265,6 +265,7 @@ fn manifest_paths_and_validation_reports_preserve_fail_closed_selection() {
     let manifest = worker_manifest("fixture.invalid", Some("missing.schema.json"));
     let mut policy = DynamicPluginHostPolicy::default();
     policy.apply_secure_defaults();
+    let evaluated_policy = evaluate_dynamic_plugin_host_policy(&policy, &manifest);
     let report = validate_declaration(
         &manifest,
         temp.path()
@@ -273,7 +274,7 @@ fn manifest_paths_and_validation_reports_preserve_fail_closed_selection() {
             .into_owned(),
         true,
         &Map::new(),
-        &policy,
+        &evaluated_policy,
     );
     assert!(!report.selected);
     assert_eq!(report.status.manifest, DynamicPluginCheckState::Invalid);

@@ -48,7 +48,7 @@ static TEST_MUTEX: Mutex<()> = Mutex::const_new(());
 const ROUTING_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
 
 fn reset_global() {
-    let _ = test_close_plugin_host();
+    test_close_plugin_host().expect("test plugin host must close");
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
     *state = NemoRelayContextState::new();

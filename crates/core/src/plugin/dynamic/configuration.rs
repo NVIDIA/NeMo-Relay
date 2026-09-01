@@ -13,7 +13,7 @@ use super::read_bounded_regular_file;
 use super::{
     DynamicPluginCheckState, DynamicPluginFailure, DynamicPluginHostPolicy, DynamicPluginKind,
     DynamicPluginManifest, DynamicPluginRecord, DynamicPluginStartupClass,
-    DynamicPluginValidationStatus, FileDynamicPluginHostPolicy,
+    DynamicPluginValidationStatus, EvaluatedDynamicPluginHostPolicy, FileDynamicPluginHostPolicy,
     evaluate_dynamic_plugin_host_policy, evaluate_dynamic_plugin_trust,
     validate_dynamic_plugin_config_schema,
 };
@@ -198,6 +198,18 @@ pub fn validate(
     })
 }
 
+/// Validates only the supplied static plugin configuration.
+///
+/// Unlike [`validate`], this does not discover or merge any `plugins.toml`
+/// layers. It is intended for component-specific validators whose callers
+/// supplied the complete configuration to validate.
+pub fn validate_exact(config: PluginConfig) -> PluginHostReport {
+    PluginHostReport {
+        config: crate::plugin::validate_static_plugin_config(&config),
+        dynamic_plugins: Vec::new(),
+    }
+}
+
 /// Validates a targeted dynamic-plugin request for internal diagnostics.
 pub(crate) fn validate_request(request: PluginHostValidationRequest) -> Result<PluginHostReport> {
     let resolved = resolve_plugin_host_config_inner(
@@ -231,12 +243,13 @@ pub(crate) fn validate_request(request: PluginHostValidationRequest) -> Result<P
         PluginHostValidationTarget::ManifestPath(manifest_path) => {
             let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)?;
             let policy = effective_policy(request.additional_plugins_toml.as_deref())?;
+            let evaluated_policy = evaluate_dynamic_plugin_host_policy(&policy, &manifest);
             vec![validate_declaration(
                 &manifest,
                 manifest_ref,
                 true,
                 &serde_json::Map::new(),
-                &policy,
+                &evaluated_policy,
             )]
         }
     };
@@ -253,23 +266,17 @@ fn resolve_plugin_host_config_inner(
 ) -> Result<ResolvedPluginHostConfig> {
     let resolved = resolve_plugin_config_with_explicit(programmatic, explicit_path)?;
     let paths = plugin_config_paths(explicit_path);
-    let policy = effective_policy_from_paths(&paths)?;
+    let files = read_plugin_files(&paths)?;
+    let mut policy = DynamicPluginHostPolicy::default();
     let mut active = Vec::new();
     let mut reports = Vec::new();
     let mut seen_ids = HashSet::new();
     let mut declarations = Vec::new();
 
-    for source in paths {
-        if !source.exists() {
-            continue;
+    for (source, file) in files {
+        if let Some(file_policy) = file.plugins.policy {
+            policy.merge_from(file_policy.into());
         }
-        let raw = read_utf8_plugin_file(&source)?;
-        let file: PluginFile = toml::from_str(&raw).map_err(|error| {
-            PluginError::InvalidConfig(format!(
-                "invalid plugin TOML in {}: {error}",
-                source.display()
-            ))
-        })?;
         declarations.extend(
             file.plugins
                 .dynamic
@@ -277,6 +284,7 @@ fn resolve_plugin_host_config_inner(
                 .map(|declared| (source.clone(), declared)),
         );
     }
+    policy.apply_secure_defaults();
     for (source, declared) in declarations {
         let manifest_path = resolve_manifest_path(&source, &declared.manifest);
         let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)?;
@@ -294,7 +302,7 @@ fn resolve_plugin_host_config_inner(
             manifest_ref.clone(),
             selected,
             &declared.config,
-            &policy,
+            &evaluated_policy,
         );
         let valid = report.failure.is_none();
         let effective_selected = report.selected;
@@ -334,11 +342,10 @@ fn validate_declaration(
     manifest_ref: String,
     selected: bool,
     config: &Map<String, Json>,
-    policy: &DynamicPluginHostPolicy,
+    evaluated_policy: &EvaluatedDynamicPluginHostPolicy,
 ) -> DynamicPluginValidationReport {
     let plugin_id = manifest.plugin.id.trim().to_owned();
-    let evaluated_policy = evaluate_dynamic_plugin_host_policy(policy, manifest);
-    let trust = evaluate_dynamic_plugin_trust(manifest, &manifest_ref, &evaluated_policy);
+    let trust = evaluate_dynamic_plugin_trust(manifest, &manifest_ref, evaluated_policy);
     let schema_failure = validate_dynamic_plugin_config_schema(
         manifest,
         &manifest_ref,
@@ -387,23 +394,31 @@ fn effective_policy(explicit_path: Option<&Path>) -> Result<DynamicPluginHostPol
 
 fn effective_policy_from_paths(paths: &[PathBuf]) -> Result<DynamicPluginHostPolicy> {
     let mut policy = DynamicPluginHostPolicy::default();
-    for source in paths {
-        if !source.exists() {
-            continue;
-        }
-        let raw = read_utf8_plugin_file(source)?;
-        let file: PluginFile = toml::from_str(&raw).map_err(|error| {
-            PluginError::InvalidConfig(format!(
-                "invalid plugin TOML in {}: {error}",
-                source.display()
-            ))
-        })?;
+    for (_, file) in read_plugin_files(paths)? {
         if let Some(file_policy) = file.plugins.policy {
             policy.merge_from(file_policy.into());
         }
     }
     policy.apply_secure_defaults();
     Ok(policy)
+}
+
+fn read_plugin_files(paths: &[PathBuf]) -> Result<Vec<(PathBuf, PluginFile)>> {
+    let mut files = Vec::new();
+    for source in paths {
+        if !source.exists() {
+            continue;
+        }
+        let raw = read_utf8_plugin_file(source)?;
+        let file = toml::from_str(&raw).map_err(|error| {
+            PluginError::InvalidConfig(format!(
+                "invalid plugin TOML in {}: {error}",
+                source.display()
+            ))
+        })?;
+        files.push((source.clone(), file));
+    }
+    Ok(files)
 }
 
 fn read_utf8_plugin_file(path: &Path) -> Result<String> {

@@ -4,6 +4,8 @@
 //! Python-facing generic plugin configuration and registration helpers.
 
 use std::collections::BTreeSet;
+#[cfg(test)]
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 #[cfg(test)]
@@ -52,7 +54,66 @@ use crate::py_callable::{
 };
 
 #[cfg(test)]
+static FORCE_VALIDATE_CONFIG_TO_PY_ERROR: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+#[cfg(test)]
+static FORCE_PLUGIN_CONTEXT_NEW_ERROR: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+#[cfg(test)]
 static PLUGIN_TEST_STATE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+#[cfg(test)]
+enum ForcedPluginTestFlagKind {
+    ValidateConfigToPyError,
+    PluginContextNewError,
+}
+
+#[cfg(test)]
+pub(crate) struct ForcedPluginTestFlagGuard {
+    kind: ForcedPluginTestFlagKind,
+    plugin_kind: String,
+}
+
+#[cfg(test)]
+impl Drop for ForcedPluginTestFlagGuard {
+    fn drop(&mut self) {
+        let forced_kinds = match self.kind {
+            ForcedPluginTestFlagKind::ValidateConfigToPyError => &FORCE_VALIDATE_CONFIG_TO_PY_ERROR,
+            ForcedPluginTestFlagKind::PluginContextNewError => &FORCE_PLUGIN_CONTEXT_NEW_ERROR,
+        };
+        if let Ok(mut forced_kinds) = forced_kinds.lock() {
+            forced_kinds.remove(&self.plugin_kind);
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn force_validate_config_to_py_error_for_tests(
+    plugin_kind: &str,
+) -> ForcedPluginTestFlagGuard {
+    FORCE_VALIDATE_CONFIG_TO_PY_ERROR
+        .lock()
+        .expect("forced validate hook mutex poisoned")
+        .insert(plugin_kind.to_string());
+    ForcedPluginTestFlagGuard {
+        kind: ForcedPluginTestFlagKind::ValidateConfigToPyError,
+        plugin_kind: plugin_kind.to_string(),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn force_plugin_context_new_error_for_tests(
+    plugin_kind: &str,
+) -> ForcedPluginTestFlagGuard {
+    FORCE_PLUGIN_CONTEXT_NEW_ERROR
+        .lock()
+        .expect("forced plugin context hook mutex poisoned")
+        .insert(plugin_kind.to_string());
+    ForcedPluginTestFlagGuard {
+        kind: ForcedPluginTestFlagKind::PluginContextNewError,
+        plugin_kind: plugin_kind.to_string(),
+    }
+}
 
 #[cfg(test)]
 pub(crate) fn lock_plugin_test_state_for_tests() -> std::sync::MutexGuard<'static, ()> {
@@ -66,6 +127,17 @@ fn plugin_config_to_py(
     _plugin_kind: &str,
     plugin_config: &Map<String, Json>,
 ) -> PyResult<Py<PyAny>> {
+    #[cfg(test)]
+    if FORCE_VALIDATE_CONFIG_TO_PY_ERROR
+        .lock()
+        .map(|forced_kinds| forced_kinds.contains(_plugin_kind))
+        .unwrap_or(false)
+    {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "forced plugin config conversion failure",
+        ));
+    }
+
     json_to_py(py, &Json::Object(plugin_config.clone()))
 }
 
@@ -75,6 +147,17 @@ fn new_py_plugin_context(
     registrations: Arc<Mutex<Vec<PluginRegistration>>>,
     namespace_prefix: String,
 ) -> PyResult<Py<PyPluginContext>> {
+    #[cfg(test)]
+    if FORCE_PLUGIN_CONTEXT_NEW_ERROR
+        .lock()
+        .map(|forced_kinds| forced_kinds.contains(_plugin_kind))
+        .unwrap_or(false)
+    {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "forced plugin context allocation failure",
+        ));
+    }
+
     Py::new(
         py,
         PyPluginContext {

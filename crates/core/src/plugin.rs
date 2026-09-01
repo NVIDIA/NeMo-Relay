@@ -2473,16 +2473,11 @@ pub async fn test_initialize_plugin_host_exact(config: PluginConfig) -> Result<C
 #[doc(hidden)]
 #[cfg(any(test, feature = "__test-plugin-host"))]
 pub fn test_close_plugin_host() -> Result<()> {
-    let mut host = TEST_PLUGIN_HOST.lock().map_err(|error| {
-        PluginError::Internal(format!("test plugin host lock poisoned: {error}"))
-    })?;
-    let result = host
-        .as_mut()
-        .map_or(Ok(()), dynamic::PluginHostActivation::close);
-    if result.is_ok() {
-        host.take();
-    }
-    result
+    let activation = TEST_PLUGIN_HOST
+        .lock()
+        .map_err(|error| PluginError::Internal(format!("test plugin host lock poisoned: {error}")))?
+        .take();
+    activation.map_or(Ok(()), |mut activation| activation.close())
 }
 
 /// Test-only snapshot of the owned host report.

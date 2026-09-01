@@ -3,7 +3,10 @@
 
 package nemo_relay
 
-import "sync"
+import (
+	"sync"
+	"testing"
+)
 
 var testPluginHost struct {
 	sync.Mutex
@@ -11,7 +14,49 @@ var testPluginHost struct {
 }
 
 func validateTestPluginConfig(config PluginConfig) (ConfigReport, error) {
-	return validateProgrammaticPluginConfig(config)
+	report, err := validateProgrammaticPluginConfig(config)
+	return report.Config, err
+}
+
+func TestValidateProgrammaticPluginConfigUsesExactHostReport(t *testing.T) {
+	originalExact := validateExactPluginHostJSON
+	originalLayered := validatePluginHostJSON
+	t.Cleanup(func() {
+		validateExactPluginHostJSON = originalExact
+		validatePluginHostJSON = originalLayered
+	})
+
+	validatePluginHostJSON = func(string, *string) (string, error) {
+		t.Fatal("programmatic validation must not discover plugins.toml layers")
+		return "", nil
+	}
+	validateExactPluginHostJSON = func(string) (string, error) {
+		return `{
+			"config":{"diagnostics":[]},
+			"dynamic_plugins":[{
+				"plugin_id":"fixture.dynamic",
+				"manifest_ref":"fixture.toml",
+				"kind":"worker",
+				"status":{
+					"manifest":"valid",
+					"compatibility":"valid",
+					"integrity":"valid",
+					"environment":"valid",
+					"authenticity":"valid",
+					"policy_satisfied":"valid"
+				},
+				"selected":true
+			}]
+		}`, nil
+	}
+
+	report, err := validateProgrammaticPluginConfig(PluginConfig{Version: 1})
+	if err != nil {
+		t.Fatalf("validateProgrammaticPluginConfig failed: %v", err)
+	}
+	if len(report.DynamicPlugins) != 1 || report.DynamicPlugins[0].PluginID != "fixture.dynamic" {
+		t.Fatalf("expected complete exact host report, got %#v", report)
+	}
 }
 
 func initializeTestPluginHost(config PluginConfig) (ConfigReport, error) {

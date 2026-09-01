@@ -36,6 +36,7 @@ extern int32_t nemo_relay_plugin_initialize(const char* config_json, const char*
 extern int32_t nemo_relay_plugin_host_activation_report_json(FfiPluginHostActivation* activation, char** out_report_json);
 extern int32_t nemo_relay_plugin_host_activation_is_active(FfiPluginHostActivation* activation, _Bool* out_active);
 extern int32_t nemo_relay_plugin_validate(const char* config_json, const char* additional_plugins_toml, char** out_report_json);
+extern int32_t nemo_relay_plugin_validate_exact(const char* config_json, char** out_report_json);
 extern int32_t nemo_relay_plugin_host_activation_close(FfiPluginHostActivation* activation);
 extern void nemo_relay_plugin_host_activation_free(FfiPluginHostActivation** activation);
 extern int32_t nemo_relay_list_plugin_kinds_json(char** out_json);
@@ -130,6 +131,15 @@ var (
 		}
 		var report *C.char
 		status := C.nemo_relay_plugin_validate(config, additional, &report)
+		return checkedJSONString(int32(status), func() string { return C.GoString(report) }, func() {
+			C.nemo_relay_string_free(report)
+		})
+	}
+	validateExactPluginHostJSON = func(configJSON string) (string, error) {
+		config := C.CString(configJSON)
+		defer C.free(unsafe.Pointer(config))
+		var report *C.char
+		status := C.nemo_relay_plugin_validate_exact(config, &report)
 		return checkedJSONString(int32(status), func() string { return C.GoString(report) }, func() {
 			C.nemo_relay_string_free(report)
 		})
@@ -439,9 +449,20 @@ func Validate(config PluginConfig, additionalPluginsTOML *string) (PluginHostRep
 	return report, nil
 }
 
-func validateProgrammaticPluginConfig(config PluginConfig) (ConfigReport, error) {
-	report, err := Validate(config, nil)
-	return report.Config, err
+func validateProgrammaticPluginConfig(config PluginConfig) (PluginHostReport, error) {
+	payload, err := marshalPluginHostActivationConfig(config)
+	if err != nil {
+		return PluginHostReport{}, err
+	}
+	raw, err := validateExactPluginHostJSON(string(payload))
+	if err != nil {
+		return PluginHostReport{}, err
+	}
+	var report PluginHostReport
+	if err := jsonUnmarshal([]byte(raw), &report); err != nil {
+		return PluginHostReport{}, err
+	}
+	return report, nil
 }
 
 // Report returns the immutable core-owned activation report.

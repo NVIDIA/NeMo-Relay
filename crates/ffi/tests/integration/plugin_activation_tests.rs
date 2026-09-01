@@ -169,7 +169,7 @@ fn write_and_assert_discovered_activation(report: &Json, plugins_toml: &Path) {
     let diagnostics = report["config"]["diagnostics"]
         .as_array()
         .expect("diagnostics array");
-    assert_eq!(diagnostics.len(), 2);
+    assert_eq!(diagnostics.len(), 1);
     assert!(diagnostics.iter().all(|diagnostic| {
         diagnostic["level"] == "warning"
             && diagnostic["code"] == "plugin.configuration_inherited"
@@ -251,10 +251,7 @@ fn ffi_activation_loads_native_callbacks_and_removes_them_before_free() {
         "manifest_ref": manifest,
         "config": {}
     }]));
-    assert_eq!(
-        report["config"]["diagnostics"][0]["code"],
-        "plugin.configuration_inherited"
-    );
+    assert_eq!(report["config"]["diagnostics"], json!([]));
     assert_eq!(report["dynamic_plugins"][0]["plugin_id"], "fixture_native");
     assert!(plugin_kinds().iter().any(|kind| kind == "fixture_native"));
 
@@ -309,10 +306,7 @@ fn ffi_activation_loads_worker_callbacks_and_stops_worker_on_clear() {
         "manifest_ref": manifest,
         "config": {}
     }]));
-    assert_eq!(
-        report["config"]["diagnostics"][0]["code"],
-        "plugin.configuration_inherited"
-    );
+    assert_eq!(report["config"]["diagnostics"], json!([]));
     assert_eq!(report["dynamic_plugins"][0]["plugin_id"], "fixture_worker");
     assert!(plugin_kinds().iter().any(|kind| kind == "fixture_worker"));
     assert_eq!(

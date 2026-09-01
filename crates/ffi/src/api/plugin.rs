@@ -19,7 +19,7 @@ use super::{
     wrap_tool_sanitize_fn,
 };
 use crate::api::event_registry::Surface;
-use nemo_relay::plugin::dynamic::{initialize, validate};
+use nemo_relay::plugin::dynamic::{initialize, validate, validate_exact};
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 
 struct FfiHostedPluginUserData {
@@ -341,6 +341,47 @@ pub unsafe extern "C" fn nemo_relay_plugin_validate(
         Err(error) => return status_from_plugin_error(&error),
     };
     match serde_json::to_value(report) {
+        Ok(report) => {
+            unsafe { *out_report_json = json_to_c_string(&report) };
+            NemoRelayStatus::Ok
+        }
+        Err(error) => {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::Internal
+        }
+    }
+}
+
+/// Validate only the supplied static plugin configuration.
+///
+/// This entry point does not discover or merge `plugins.toml` layers. The
+/// returned host report therefore has no dynamic-plugin reports.
+///
+/// # Safety
+/// `config_json` must be a valid C string and `out_report_json` must be a valid
+/// non-null output pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_plugin_validate_exact(
+    config_json: *const c_char,
+    out_report_json: *mut *mut c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if out_report_json.is_null() {
+        set_last_error("out_report_json pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out_report_json = std::ptr::null_mut() };
+    if let Err(status) = ensure_adaptive_component_registered() {
+        return status;
+    }
+    if let Err(status) = ensure_pii_redaction_component_registered() {
+        return status;
+    }
+    let config = match parse_plugin_config(config_json) {
+        Ok(config) => config,
+        Err(status) => return status,
+    };
+    match serde_json::to_value(validate_exact(config)) {
         Ok(report) => {
             unsafe { *out_report_json = json_to_c_string(&report) };
             NemoRelayStatus::Ok

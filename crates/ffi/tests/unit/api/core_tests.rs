@@ -514,6 +514,10 @@ fn test_ffi_plugin_top_level_null_and_invalid_paths() {
             validate_test_plugin_config(valid_config.as_ptr(), ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
+        assert_status!(
+            nemo_relay_plugin_validate_exact(valid_config.as_ptr(), ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
         assert!(
             read_last_error()
                 .unwrap_or_default()
@@ -534,6 +538,16 @@ fn test_ffi_plugin_top_level_null_and_invalid_paths() {
                 .unwrap_or_default()
                 .contains("invalid type")
         );
+        assert_status!(
+            nemo_relay_plugin_validate_exact(invalid_json.as_ptr(), &mut out_json),
+            NemoRelayStatus::InvalidJson
+        );
+        assert_status!(
+            nemo_relay_plugin_validate_exact(valid_config.as_ptr(), &mut out_json),
+            NemoRelayStatus::Ok
+        );
+        let exact_report = returned_json(out_json);
+        assert_eq!(exact_report["dynamic_plugins"], json!([]));
 
         assert_status!(
             activate_test_plugin_config(valid_config.as_ptr(), ptr::null_mut()),

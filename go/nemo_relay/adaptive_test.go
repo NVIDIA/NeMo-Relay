@@ -210,6 +210,11 @@ func testConfigureAdaptiveComponentLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initializeTestPluginHost failed: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := closeTestPluginHost(); err != nil {
+			t.Errorf("closeTestPluginHost failed: %v", err)
+		}
+	})
 	if len(configureReport.Diagnostics) != 0 {
 		t.Fatalf("expected clean configure report, got %#v", configureReport.Diagnostics)
 	}
@@ -222,7 +227,4 @@ func testConfigureAdaptiveComponentLifecycle(t *testing.T) {
 		t.Fatalf("expected active report with no diagnostics, got %#v", activeReport)
 	}
 
-	if err := closeTestPluginHost(); err != nil {
-		t.Fatalf("closeTestPluginHost failed: %v", err)
-	}
 }

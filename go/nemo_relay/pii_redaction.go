@@ -104,8 +104,9 @@ func PiiRedactionComponent(config PiiRedactionConfig) PluginComponentSpec {
 
 // ValidatePiiRedactionConfig validates a PII redaction config without activating it.
 func ValidatePiiRedactionConfig(config PiiRedactionConfig) (ConfigReport, error) {
-	return validateProgrammaticPluginConfig(PluginConfig{
+	report, err := validateProgrammaticPluginConfig(PluginConfig{
 		Version:    1,
 		Components: []PluginComponentSpec{PiiRedactionComponent(config)},
 	})
+	return report.Config, err
 }

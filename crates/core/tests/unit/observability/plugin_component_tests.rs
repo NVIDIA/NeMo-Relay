@@ -3721,7 +3721,7 @@ fn atif_explicit_options_and_open_agent_teardown_are_written() {
 
 #[test]
 #[cfg(feature = "object-store")]
-fn atif_open_agent_teardown_failure_retains_runtime_diagnostic_report() {
+fn atif_open_agent_teardown_failure_clears_the_test_host() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
     let dir = temp_dir("observability-atif-open-agent-delivery-failure");
@@ -3741,23 +3741,9 @@ fn atif_open_agent_teardown_failure_retains_runtime_diagnostic_report() {
     assert!(teardown.to_string().contains("atif.remote_delivery_failed"));
     server.join().unwrap().unwrap();
 
-    let report = crate::plugin::test_plugin_host_report()
-        .expect("failed teardown should retain its runtime diagnostics");
-    let diagnostic = report
-        .runtime_diagnostics
-        .iter()
-        .find(|diagnostic| diagnostic.code == "atif.remote_delivery_failed")
-        .expect("remote failure should be retained in the report");
-    assert_eq!(diagnostic.field.as_deref(), Some("storage[0]"));
-    assert_eq!(
-        diagnostic.session_id.as_deref(),
-        Some(agent.uuid.to_string().as_str())
-    );
-    assert!(!diagnostic.message.is_empty());
+    assert!(crate::plugin::test_plugin_host_report().is_none());
 
     pop(&agent);
-    test_close_plugin_host().unwrap();
-    assert!(crate::plugin::test_plugin_host_report().is_none());
 }
 
 #[test]

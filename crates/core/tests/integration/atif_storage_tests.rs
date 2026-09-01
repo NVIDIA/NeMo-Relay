@@ -578,15 +578,10 @@ fn atif_storage_http_non_2xx_retries_on_the_next_trajectory() {
         !teardown.to_string().contains("could not be removed"),
         "delivery failure should not imply a leaked registration: {teardown}"
     );
-    let retained_report =
-        test_plugin_host_report().expect("failed teardown should retain the plugin report");
-    let retained_diagnostic = retained_report
-        .runtime_diagnostics
-        .iter()
-        .find(|diagnostic| diagnostic.code == "atif.remote_delivery_failed")
-        .expect("failed upload diagnostic should remain readable after teardown");
-    assert_eq!(retained_diagnostic.field.as_deref(), Some("storage[0]"));
-    assert_eq!(retained_diagnostic.count, 2);
+    assert!(
+        test_plugin_host_report().is_none(),
+        "failed cleanup must not leave a stale test-host activation"
+    );
     // SAFETY: cleanup of test-only env var.
     unsafe {
         std::env::remove_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN");
