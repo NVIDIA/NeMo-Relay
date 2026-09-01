@@ -1206,6 +1206,61 @@ fn repeated_codex_install_does_not_overwrite_original_backup() {
             .unwrap()
             .verify_client_token(token)
     );
+    assert_eq!(doc["model_provider"].as_str(), Some("openai"));
+    let expected_openai_base_url =
+        crate::configuration::persistent_openai_base_url(DEFAULT_URL, token);
+    assert_eq!(
+        doc["openai_base_url"].as_str(),
+        Some(expected_openai_base_url.as_str())
+    );
+    assert!(codex_config_doc_has_managed_install(&doc, DEFAULT_URL));
+}
+
+#[test]
+fn codex_install_preserves_the_default_openai_provider_identity() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "model = \"gpt-test\"\n";
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert!(installed.get("model_provider").is_none());
+    let token = codex_provider_client_token(&installed).unwrap();
+    let expected_openai_base_url =
+        crate::configuration::persistent_openai_base_url(DEFAULT_URL, token);
+    assert_eq!(
+        installed["openai_base_url"].as_str(),
+        Some(expected_openai_base_url.as_str())
+    );
+    assert!(codex_config_doc_has_managed_install(
+        &installed,
+        DEFAULT_URL
+    ));
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn codex_uninstall_restores_a_user_openai_base_url() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "model_provider = \"openai\"\nopenai_base_url = \"https://example.test/v1\"\n";
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
 }
 
 #[test]
@@ -1354,7 +1409,8 @@ fn codex_install_and_uninstall_preserve_symlinked_config_path() {
             .is_symlink()
     );
     let installed = fs::read_to_string(&path).unwrap();
-    assert!(installed.contains("model_provider = \"nemo-relay-openai\""));
+    assert!(installed.contains("model_provider = \"openai\""));
+    assert!(installed.contains("openai_base_url = \"http://127.0.0.1:47632/v1/nemo-relay/"));
     assert!(installed.contains("custom = \"target-marker\""));
     assert!(installed.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
     let installed = fs::read_to_string(&target).unwrap();
@@ -1404,7 +1460,8 @@ fn codex_install_allows_non_utf8_symlink_target_paths() {
     install_codex_config(&path, DEFAULT_URL).unwrap();
 
     let installed = fs::read_to_string(&path).unwrap();
-    assert!(installed.contains("model_provider = \"nemo-relay-openai\""));
+    assert!(!installed.contains("model_provider ="));
+    assert!(installed.contains("openai_base_url = \"http://127.0.0.1:47632/v1/nemo-relay/"));
     assert!(installed.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
 
     let backup = fs::read_to_string(backup_path(&path)).unwrap();
@@ -1539,7 +1596,7 @@ fn codex_reinstall_sanitizes_managed_fields_from_a_partial_edit_backup() {
 
     let installed = fs::read_to_string(&path).unwrap();
     let partially_edited = installed.replacen(
-        "model_provider = \"nemo-relay-openai\"",
+        "model_provider = \"openai\"",
         "model_provider = \"local\"",
         1,
     );
@@ -2666,7 +2723,11 @@ fn codex_uninstall_removes_proof_from_a_user_modified_provider() {
     install_codex_config(&path, DEFAULT_URL).unwrap();
     let installed = fs::read_to_string(&path).unwrap();
     assert!(installed.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
-    let modified = installed.replacen(DEFAULT_URL, "http://127.0.0.1:49999", 1);
+    let modified = installed.replacen(
+        "base_url = \"http://127.0.0.1:47632/v1\"",
+        "base_url = \"http://127.0.0.1:49999/v1\"",
+        1,
+    );
     assert_ne!(installed, modified);
     fs::write(&path, modified).unwrap();
 

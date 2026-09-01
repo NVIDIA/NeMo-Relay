@@ -528,8 +528,9 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
     let mut headers = HeaderMap::new();
     assert!(
         !state
-            .authorize_provider_request(&mut headers)
+            .authorize_provider_request(&mut headers, "/v1/responses")
             .unwrap()
+            .0
             .allow_environment_provider_auth
     );
     headers.insert(
@@ -538,8 +539,9 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
     );
     assert!(
         !state
-            .authorize_provider_request(&mut headers)
+            .authorize_provider_request(&mut headers, "/v1/responses")
             .unwrap()
+            .0
             .allow_environment_provider_auth
     );
     headers.insert(
@@ -548,16 +550,18 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
     );
     assert!(
         state
-            .authorize_provider_request(&mut headers)
+            .authorize_provider_request(&mut headers, "/v1/responses")
             .unwrap()
+            .0
             .allow_environment_provider_auth
     );
 
     let foreground = AppState::new(test_config());
     assert!(
         foreground
-            .authorize_provider_request(&mut HeaderMap::new())
+            .authorize_provider_request(&mut HeaderMap::new(), "/v1/responses")
             .unwrap()
+            .0
             .allow_environment_provider_auth
     );
 
@@ -565,8 +569,9 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
         AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), false, None, None);
     assert!(
         explicit_daemon
-            .authorize_provider_request(&mut HeaderMap::new())
+            .authorize_provider_request(&mut HeaderMap::new(), "/v1/responses")
             .unwrap()
+            .0
             .allow_environment_provider_auth
     );
 
@@ -580,7 +585,7 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
     );
     assert!(
         transparent
-            .authorize_provider_request(&mut HeaderMap::new())
+            .authorize_provider_request(&mut HeaderMap::new(), "/v1/responses")
             .is_err()
     );
     let mut transparent_headers = HeaderMap::new();
@@ -589,13 +594,66 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
         HeaderValue::from_static("test-proxy-token"),
     );
     let authorization = transparent
-        .authorize_provider_request(&mut transparent_headers)
+        .authorize_provider_request(&mut transparent_headers, "/v1/responses")
         .unwrap();
-    assert!(authorization.allow_environment_provider_auth);
+    assert!(authorization.0.allow_environment_provider_auth);
     assert!(
         !transparent_headers
             .contains_key(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER)
     );
+}
+
+#[tokio::test]
+async fn managed_sidecar_accepts_capability_urls_without_forwarding_the_capability() {
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let state = AppState::new_with_bootstrap(
+        test_config(),
+        Some("expected-fingerprint".into()),
+        Some(key.clone()),
+        true,
+        None,
+        None,
+    );
+    let path = format!("/v1/nemo-relay/{}/responses", key.client_token());
+
+    let (authorization, provider_path) = state
+        .authorize_provider_request(&mut HeaderMap::new(), &path)
+        .unwrap();
+
+    assert!(authorization.allow_environment_provider_auth);
+    assert_eq!(provider_path, "/v1/responses");
+    assert!(
+        state
+            .authorize_provider_request(
+                &mut HeaderMap::new(),
+                "/v1/nemo-relay/hmac-sha256:wrong/responses"
+            )
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn router_rejects_invalid_provider_capabilities_before_proxying() {
+    let app = router_with_state(AppState::new_with_bootstrap(
+        test_config(),
+        Some("expected-fingerprint".into()),
+        Some(BootstrapChallengeKey::from_bytes(b"test challenge key")),
+        true,
+        None,
+        None,
+    ));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/nemo-relay/hmac-sha256:invalid/responses")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

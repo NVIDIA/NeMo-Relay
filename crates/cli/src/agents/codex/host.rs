@@ -799,6 +799,8 @@ pub(crate) fn install_codex_config(path: &Path, gateway_url: &str) -> Result<(),
     let gateway_url = super::versioned_gateway_url(gateway_url);
     let challenge = BootstrapChallengeKey::load().map_err(|error| error.to_string())?;
     let client_token = challenge.client_token();
+    let openai_base_url =
+        crate::configuration::persistent_openai_base_url(&gateway_url, &client_token);
     let raw = read_optional_text(path)?;
     let mut doc = raw
         .parse::<DocumentMut>()
@@ -827,7 +829,7 @@ pub(crate) fn install_codex_config(path: &Path, gateway_url: &str) -> Result<(),
             )),
         };
     }
-    doc["model_provider"] = value("nemo-relay-openai");
+    doc["openai_base_url"] = value(&openai_base_url);
     ensure_table(&mut doc, "features")["hooks"] = value(true);
     set_multi_agent_v2_enabled(&mut doc, false);
 
@@ -878,6 +880,7 @@ fn refresh_codex_config_backup(
     let mut baseline = current.clone();
     let preserved_provider = codex_extended_provider_without_proof(&baseline, gateway_url);
     let provider_is_managed = codex_provider_item_is_managed(&baseline, gateway_url);
+    restore_managed_openai_base_url(&mut baseline, previous, gateway_url, Some(challenge));
     restore_codex_config_from_backup(&mut baseline, previous, provider_is_managed, false);
     restore_codex_client_proof_from_backup(&mut baseline, previous, Some(challenge));
     if let Some(provider) = preserved_provider {
@@ -998,6 +1001,7 @@ fn sanitize_codex_backup_doc(
 
     if provider_is_managed {
         let preserved_provider = codex_extended_provider_without_proof(&backup, gateway_url);
+        remove_managed_openai_base_url(&mut backup, gateway_url, challenge);
         if top_level_item_is_str(&backup, "model_provider", "nemo-relay-openai") {
             backup.as_table_mut().remove("model_provider");
         }
@@ -1231,6 +1235,7 @@ pub(crate) fn uninstall_codex_config(
     let provider_is_managed = codex_provider_item_is_managed(&doc, &gateway_url);
     match backup_doc.as_ref() {
         Some(backup_doc) => {
+            restore_managed_openai_base_url(&mut doc, backup_doc, &gateway_url, challenge.as_ref());
             restore_codex_config_from_backup(
                 &mut doc,
                 backup_doc,
@@ -1238,7 +1243,13 @@ pub(crate) fn uninstall_codex_config(
                 preserve_hooks,
             );
         }
-        None => remove_codex_config_without_backup(&mut doc, provider_is_managed, preserve_hooks),
+        None => remove_codex_config_without_backup(
+            &mut doc,
+            &gateway_url,
+            provider_is_managed,
+            preserve_hooks,
+            challenge.as_ref(),
+        ),
     }
     if let Some(provider) = preserved_provider {
         ensure_table(&mut doc, "model_providers")
@@ -1302,10 +1313,66 @@ fn restore_codex_config_from_backup(
     restore_multi_agent_v2_enabled(doc, backup_doc);
 }
 
+fn codex_openai_base_url_is_managed(doc: &DocumentMut, gateway_url: &str) -> bool {
+    let Some(client_token) = codex_provider_client_token(doc) else {
+        return false;
+    };
+    let expected = crate::configuration::persistent_openai_base_url(gateway_url, client_token);
+    doc.get("openai_base_url")
+        .and_then(Item::as_value)
+        .and_then(TomlValue::as_str)
+        == Some(expected.as_str())
+}
+
+fn codex_openai_base_url_has_verified_capability(
+    doc: &DocumentMut,
+    gateway_url: &str,
+    challenge: Option<&BootstrapChallengeKey>,
+) -> bool {
+    let Some(challenge) = challenge else {
+        return false;
+    };
+    let expected_prefix = crate::configuration::persistent_openai_base_url(gateway_url, "");
+    doc.get("openai_base_url")
+        .and_then(Item::as_value)
+        .and_then(TomlValue::as_str)
+        .and_then(|url| url.strip_prefix(&expected_prefix))
+        .is_some_and(|token| {
+            !token.is_empty() && !token.contains('/') && challenge.verify_client_token(token)
+        })
+}
+
+fn restore_managed_openai_base_url(
+    doc: &mut DocumentMut,
+    backup: &DocumentMut,
+    gateway_url: &str,
+    challenge: Option<&BootstrapChallengeKey>,
+) {
+    if codex_openai_base_url_is_managed(doc, gateway_url)
+        || codex_openai_base_url_has_verified_capability(doc, gateway_url, challenge)
+    {
+        restore_top_level_item(doc, backup, "openai_base_url");
+    }
+}
+
+fn remove_managed_openai_base_url(
+    doc: &mut DocumentMut,
+    gateway_url: &str,
+    challenge: Option<&BootstrapChallengeKey>,
+) {
+    if codex_openai_base_url_is_managed(doc, gateway_url)
+        || codex_openai_base_url_has_verified_capability(doc, gateway_url, challenge)
+    {
+        doc.as_table_mut().remove("openai_base_url");
+    }
+}
+
 fn remove_codex_config_without_backup(
     doc: &mut DocumentMut,
+    gateway_url: &str,
     provider_is_managed: bool,
     preserve_hooks: bool,
+    challenge: Option<&BootstrapChallengeKey>,
 ) {
     if !provider_is_managed {
         return;
@@ -1313,6 +1380,7 @@ fn remove_codex_config_without_backup(
     if top_level_item_is_str(doc, "model_provider", "nemo-relay-openai") {
         doc.as_table_mut().remove("model_provider");
     }
+    remove_managed_openai_base_url(doc, gateway_url, challenge);
     if let Some(providers) = doc.get_mut("model_providers").and_then(Item::as_table_mut) {
         providers.remove("nemo-relay-openai");
     }
@@ -1502,10 +1570,19 @@ pub(crate) fn hook_config_has_hook_groups(config: &Value) -> bool {
 }
 
 pub(crate) fn codex_config_doc_has_managed_install(doc: &DocumentMut, gateway_url: &str) -> bool {
-    doc.get("model_provider")
+    let legacy_provider_selected = doc
+        .get("model_provider")
         .and_then(Item::as_value)
         .and_then(|value| value.as_str())
         == Some("nemo-relay-openai")
+        && codex_provider_item_is_managed(doc, gateway_url);
+    let openai_provider_selected = doc
+        .get("model_provider")
+        .and_then(Item::as_value)
+        .and_then(|value| value.as_str())
+        .is_none_or(|provider| provider == "openai");
+    (legacy_provider_selected
+        || (openai_provider_selected && codex_openai_base_url_is_managed(doc, gateway_url)))
         && codex_provider_item_is_managed(doc, gateway_url)
         && feature_hooks_enabled(doc) == Some(true)
         && feature_multi_agent_v2_enabled(doc) == Some(false)

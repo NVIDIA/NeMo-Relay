@@ -38,7 +38,7 @@ use tokio::sync::oneshot;
 use crate::agents::shared::adapters::{claude_code, codex};
 use crate::configuration::{
     BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, GatewayConfig, HOOK_CLIENT_TOKEN_HEADER,
-    ManagedBootstrapIdentity,
+    ManagedBootstrapIdentity, PROVIDER_CAPABILITY_PATH_SEGMENT,
 };
 use crate::error::CliError;
 use crate::gateway;
@@ -540,12 +540,14 @@ impl AppState {
     pub(crate) fn authorize_provider_request(
         &self,
         headers: &mut HeaderMap,
-    ) -> Result<crate::provider_auth::ProviderRequestAuthorization, CliError> {
+        path: &str,
+    ) -> Result<(crate::provider_auth::ProviderRequestAuthorization, String), CliError> {
         if headers.contains_key(header::ORIGIN) {
             return Err(CliError::Unauthorized(
                 "browser-originated Relay provider requests are not accepted".into(),
             ));
         }
+        let (path, capability_authenticated) = self.authorize_provider_path(path)?;
         if let Some(proxy) = &self.transparent_proxy_credential {
             let source_credential = proxy.consume(headers).inspect_err(|error| {
                 log::warn!(
@@ -556,29 +558,62 @@ impl AppState {
                     "Gateway request was rejected during transparent proxy authentication"
                 );
             })?;
-            return Ok(crate::provider_auth::ProviderRequestAuthorization {
-                source_credential,
-                allow_environment_provider_auth: true,
-            });
+            return Ok((
+                crate::provider_auth::ProviderRequestAuthorization {
+                    source_credential,
+                    allow_environment_provider_auth: true,
+                },
+                path,
+            ));
         }
         let allow_environment_provider_auth = if !self.require_provider_client_token {
             true
         } else {
-            self.bootstrap_challenge_key
-                .as_ref()
-                .and_then(|key| {
-                    headers
-                        .get(BOOTSTRAP_CLIENT_TOKEN_HEADER)
-                        .and_then(|value| value.to_str().ok())
-                        .map(|token| key.verify_client_token(token))
-                })
-                .unwrap_or(false)
+            capability_authenticated
+                || self
+                    .bootstrap_challenge_key
+                    .as_ref()
+                    .and_then(|key| {
+                        headers
+                            .get(BOOTSTRAP_CLIENT_TOKEN_HEADER)
+                            .and_then(|value| value.to_str().ok())
+                            .map(|token| key.verify_client_token(token))
+                    })
+                    .unwrap_or(false)
         };
-        Ok(crate::provider_auth::ProviderRequestAuthorization {
-            source_credential:
-                crate::provider_auth::SourceCredentialDisposition::from_provider_headers(headers),
-            allow_environment_provider_auth,
-        })
+        Ok((
+            crate::provider_auth::ProviderRequestAuthorization {
+                source_credential:
+                    crate::provider_auth::SourceCredentialDisposition::from_provider_headers(
+                        headers,
+                    ),
+                allow_environment_provider_auth,
+            },
+            path,
+        ))
+    }
+
+    fn authorize_provider_path(&self, path: &str) -> Result<(String, bool), CliError> {
+        let prefix = format!("/v1/{PROVIDER_CAPABILITY_PATH_SEGMENT}/");
+        let Some(capability_path) = path.strip_prefix(&prefix) else {
+            return Ok((path.to_string(), false));
+        };
+        let Some((client_token, provider_path)) = capability_path.split_once('/') else {
+            return Err(CliError::Unauthorized(
+                "Relay provider capability did not include a provider route".into(),
+            ));
+        };
+        let Some(key) = self.bootstrap_challenge_key.as_ref() else {
+            return Err(CliError::Unauthorized(
+                "Relay provider capability authentication is unavailable".into(),
+            ));
+        };
+        if !key.verify_client_token(client_token) {
+            return Err(CliError::Unauthorized(
+                "Relay provider capability was invalid".into(),
+            ));
+        }
+        Ok((format!("/v1/{provider_path}"), true))
     }
 
     fn authorize_hook_request(&self, headers: &mut HeaderMap) -> Result<String, CliError> {
@@ -646,6 +681,14 @@ fn router_with_state(state: AppState) -> Router {
         .route("/v1/messages", post(gateway::passthrough))
         .route("/v1/messages/count_tokens", post(gateway::passthrough))
         .route("/v1/models", get(gateway::models))
+        .route(
+            "/v1/nemo-relay/{capability}/images/generations",
+            post(gateway::images_generations),
+        )
+        .route(
+            "/v1/nemo-relay/{capability}/{*provider_path}",
+            post(gateway::passthrough).get(gateway::models),
+        )
         .layer(DefaultBodyLimit::max(max_hook_payload_bytes))
         .with_state(state)
 }

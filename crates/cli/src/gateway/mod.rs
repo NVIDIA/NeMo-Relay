@@ -73,8 +73,11 @@ pub(crate) async fn passthrough(
     mut request: Request<Body>,
 ) -> Result<Response<Body>, CliError> {
     state.touch();
-    let authorization = state.authorize_provider_request(request.headers_mut())?;
-    let prepared = prepare_gateway_request(&state.config, request, authorization).await?;
+    let request_path = request.uri().path().to_string();
+    let (authorization, provider_path) =
+        state.authorize_provider_request(request.headers_mut(), &request_path)?;
+    let prepared =
+        prepare_gateway_request(&state.config, request, authorization, &provider_path).await?;
     let prep = state
         .sessions
         .prepare_gateway_call(&prepared.headers, build_llm_gateway_start(&prepared))
@@ -91,8 +94,11 @@ pub(crate) async fn images_generations(
     mut request: Request<Body>,
 ) -> Result<Response<Body>, CliError> {
     state.touch();
-    let authorization = state.authorize_provider_request(request.headers_mut())?;
-    let prepared = prepare_gateway_request(&state.config, request, authorization).await?;
+    let request_path = request.uri().path().to_string();
+    let (authorization, provider_path) =
+        state.authorize_provider_request(request.headers_mut(), &request_path)?;
+    let prepared =
+        prepare_gateway_request(&state.config, request, authorization, &provider_path).await?;
     run_unmanaged_gateway(state, prepared).await
 }
 
@@ -1274,22 +1280,20 @@ pub(crate) async fn models(
     }
     let provider = ProviderRoute::OpenAiModels;
     let configured_auth_header = provider.configured_auth_header(&state.config);
-    let path_and_query = parts
-        .uri
-        .path_and_query()
-        .map(|p| p.as_str())
-        .unwrap_or(parts.uri.path());
-    let authorization = state.authorize_provider_request(&mut parts.headers)?;
+    let request_path = parts.uri.path().to_string();
+    let (authorization, provider_path) =
+        state.authorize_provider_request(&mut parts.headers, &request_path)?;
+    let path_and_query = request::provider_path_and_query(&provider_path, parts.uri.query());
     let allow_environment_provider_auth = authorization.allow_environment_provider_auth;
     parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
     let upstream_url = gateway_upstream_url_override(
         provider,
         &parts.headers,
-        path_and_query,
+        &path_and_query,
         allow_environment_provider_auth,
         &state.config,
     )
-    .unwrap_or_else(|| provider.upstream_url(&state.config, path_and_query));
+    .unwrap_or_else(|| provider.upstream_url(&state.config, &path_and_query));
     let sanitized = strip_replaceable_agent_auth_headers(
         &parts.headers,
         provider,

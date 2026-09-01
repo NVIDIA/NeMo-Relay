@@ -16,9 +16,8 @@ intervening release in sequence.
 ### Refresh the Installed Codex Provider Configuration
 
 If you use the persistent Codex integration, cycle its installation after
-upgrading to refresh the `nemo-relay-openai` provider configuration. This fixes
-a routing bug that can prevent Codex image-generation requests from reaching
-Relay:
+upgrading to refresh Relay's Codex provider routing. This fixes a routing bug
+that can prevent Codex image-generation requests from reaching Relay:
 
 ```bash
 nemo-relay uninstall codex
