@@ -1249,6 +1249,33 @@ fn codex_install_preserves_the_default_openai_provider_identity() {
 }
 
 #[test]
+fn codex_install_switches_custom_provider_to_openai_and_restores_it() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "model_provider = \"custom-provider\"\n";
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(installed["model_provider"].as_str(), Some("openai"));
+    let token = codex_provider_client_token(&installed).unwrap();
+    let expected_openai_base_url =
+        crate::configuration::persistent_openai_base_url(DEFAULT_URL, token);
+    assert_eq!(
+        installed["openai_base_url"].as_str(),
+        Some(expected_openai_base_url.as_str())
+    );
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
 fn codex_uninstall_restores_a_user_openai_base_url() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());

@@ -2632,6 +2632,120 @@ async fn gateway_transparently_forwards_openai_image_generations() {
 }
 
 #[tokio::test]
+async fn managed_capability_url_forwards_a_normalized_responses_request() {
+    let upstream = spawn_upstream(false).await;
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let app = router_with_state(AppState::new_with_bootstrap(
+        config,
+        Some("expected-fingerprint".into()),
+        Some(key.clone()),
+        true,
+        None,
+        None,
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/nemo-relay/{}/responses?include=usage",
+                    key.client_token()
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "model": "gpt-test", "input": "hello" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["path"], json!("/v1/responses?include=usage"));
+}
+
+#[tokio::test]
+async fn managed_capability_url_forwards_a_normalized_models_request() {
+    let upstream = spawn_models_upstream().await;
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let app = router_with_state(AppState::new_with_bootstrap(
+        config,
+        Some("expected-fingerprint".into()),
+        Some(key.clone()),
+        true,
+        None,
+        None,
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v1/nemo-relay/{}/models?limit=10",
+                    key.client_token()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["path"], json!("/v1/models?limit=10"));
+}
+
+#[tokio::test]
+async fn managed_capability_url_forwards_a_normalized_image_request() {
+    let upstream = spawn_upstream(false).await;
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let app = router_with_state(AppState::new_with_bootstrap(
+        config,
+        Some("expected-fingerprint".into()),
+        Some(key.clone()),
+        true,
+        None,
+        None,
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/nemo-relay/{}/images/generations?output_format=png",
+                    key.client_token()
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "model": "gpt-image-1", "prompt": "relay" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body["path"],
+        json!("/v1/images/generations?output_format=png")
+    );
+}
+
+#[tokio::test]
 async fn transparent_gateway_requires_and_consumes_its_invocation_token() {
     let upstream = spawn_upstream(false).await;
     let mut config = test_config();

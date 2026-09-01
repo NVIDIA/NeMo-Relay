@@ -830,6 +830,14 @@ pub(crate) fn install_codex_config(path: &Path, gateway_url: &str) -> Result<(),
         };
     }
     doc["openai_base_url"] = value(&openai_base_url);
+    if doc
+        .get("model_provider")
+        .and_then(Item::as_value)
+        .and_then(TomlValue::as_str)
+        .is_some_and(|provider| provider != "openai" && provider != "nemo-relay-openai")
+    {
+        doc["model_provider"] = value("openai");
+    }
     ensure_table(&mut doc, "features")["hooks"] = value(true);
     set_multi_agent_v2_enabled(&mut doc, false);
 
@@ -1304,7 +1312,17 @@ fn restore_codex_config_from_backup(
     preserve_hooks: bool,
 ) {
     if provider_is_managed {
-        restore_top_level_item_if_str(doc, backup_doc, "model_provider", "nemo-relay-openai");
+        let restore_openai_selection = top_level_item_is_str(doc, "model_provider", "openai")
+            && backup_doc
+                .get("model_provider")
+                .and_then(Item::as_value)
+                .and_then(TomlValue::as_str)
+                .is_some_and(|provider| provider != "openai");
+        if top_level_item_is_str(doc, "model_provider", "nemo-relay-openai")
+            || restore_openai_selection
+        {
+            restore_top_level_item(doc, backup_doc, "model_provider");
+        }
         restore_table_item(doc, backup_doc, "model_providers", "nemo-relay-openai");
     }
     if !preserve_hooks || feature_hooks_enabled(doc) != Some(true) {
@@ -1610,6 +1628,7 @@ pub(crate) fn restore_top_level_item(doc: &mut DocumentMut, backup: &DocumentMut
     }
 }
 
+#[cfg(test)]
 pub(crate) fn restore_top_level_item_if_str(
     doc: &mut DocumentMut,
     backup: &DocumentMut,
