@@ -108,6 +108,7 @@ async fn prepared_gateway_request_consumes_private_client_proof() {
                 crate::provider_auth::SourceCredentialDisposition::ProviderCredential,
             allow_environment_provider_auth: true,
         },
+        "/v1/responses",
     )
     .await
     .unwrap();
@@ -135,6 +136,7 @@ async fn prepared_gateway_request_decodes_zstd_for_observability() {
         &GatewayConfig::default(),
         request,
         environment_authorization(),
+        "/v1/responses",
     )
     .await
     .unwrap();
@@ -170,6 +172,7 @@ async fn prepared_gateway_request_decodes_chained_zstd_for_observability() {
         &GatewayConfig::default(),
         request,
         environment_authorization(),
+        "/v1/responses",
     )
     .await
     .unwrap();
@@ -213,9 +216,14 @@ async fn request_observability_decode_is_bounded_and_encoding_aware() {
         .header(header::CONTENT_ENCODING, "zstd")
         .body(Body::from(compressed))
         .unwrap();
-    let prepared = prepare_gateway_request(&config, request, environment_authorization())
-        .await
-        .unwrap();
+    let prepared = prepare_gateway_request(
+        &config,
+        request,
+        environment_authorization(),
+        "/v1/responses",
+    )
+    .await
+    .unwrap();
     assert!(prepared.request_json.is_null());
 
     let request = Request::builder()
@@ -224,9 +232,14 @@ async fn request_observability_decode_is_bounded_and_encoding_aware() {
         .header(header::CONTENT_ENCODING, "gzip")
         .body(Body::from(r#"{"model":"opaque"}"#))
         .unwrap();
-    let prepared = prepare_gateway_request(&config, request, environment_authorization())
-        .await
-        .unwrap();
+    let prepared = prepare_gateway_request(
+        &config,
+        request,
+        environment_authorization(),
+        "/v1/responses",
+    )
+    .await
+    .unwrap();
     assert!(prepared.request_json.is_null());
 
     let request = Request::builder()
@@ -235,9 +248,14 @@ async fn request_observability_decode_is_bounded_and_encoding_aware() {
         .header(header::CONTENT_ENCODING, "identity")
         .body(Body::from(r#"{"model":"gpt-test"}"#))
         .unwrap();
-    let prepared = prepare_gateway_request(&config, request, environment_authorization())
-        .await
-        .unwrap();
+    let prepared = prepare_gateway_request(
+        &config,
+        request,
+        environment_authorization(),
+        "/v1/responses",
+    )
+    .await
+    .unwrap();
     assert_eq!(
         prepared.request_json,
         json!({
@@ -258,6 +276,7 @@ async fn malformed_encoded_request_remains_a_raw_passthrough() {
         &GatewayConfig::default(),
         request,
         environment_authorization(),
+        "/v1/responses",
     )
     .await
     .unwrap();

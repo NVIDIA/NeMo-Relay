@@ -39,11 +39,12 @@ pub(super) async fn prepare_gateway_request(
     config: &crate::configuration::GatewayConfig,
     request: Request<Body>,
     mut authorization: crate::provider_auth::ProviderRequestAuthorization,
+    provider_path: &str,
 ) -> Result<PreparedGatewayRequest, CliError> {
     let (mut parts, body) = request.into_parts();
     parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
-    let provider = ProviderRoute::from_path(parts.uri.path()).ok_or_else(|| {
-        CliError::InvalidPayload(format!("unsupported gateway path {}", parts.uri.path()))
+    let provider = ProviderRoute::from_path(provider_path).ok_or_else(|| {
+        CliError::InvalidPayload(format!("unsupported gateway path {provider_path}"))
     })?;
     let body_bytes = axum::body::to_bytes(body, config.max_passthrough_body_bytes)
         .await
@@ -55,19 +56,15 @@ pub(super) async fn prepare_gateway_request(
     )
     .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
     .unwrap_or(Value::Null);
-    let path_and_query = parts
-        .uri
-        .path_and_query()
-        .map(|path| path.as_str())
-        .unwrap_or(parts.uri.path());
+    let path_and_query = provider_path_and_query(provider_path, parts.uri.query());
     let upstream_url = gateway_upstream_url_override(
         provider,
         &parts.headers,
-        path_and_query,
+        &path_and_query,
         authorization.allow_environment_provider_auth,
         config,
     )
-    .unwrap_or_else(|| provider.upstream_url(config, path_and_query));
+    .unwrap_or_else(|| provider.upstream_url(config, &path_and_query));
     parts.headers = super::routes::strip_replaceable_agent_auth_headers(
         &parts.headers,
         provider,
@@ -84,7 +81,7 @@ pub(super) async fn prepare_gateway_request(
     Ok(PreparedGatewayRequest {
         method: parts.method,
         headers: parts.headers,
-        path: parts.uri.path().to_string(),
+        path: provider_path.to_string(),
         provider,
         upstream_url,
         body_bytes,
@@ -92,6 +89,12 @@ pub(super) async fn prepare_gateway_request(
         streaming,
         authorization,
     })
+}
+
+pub(super) fn provider_path_and_query(provider_path: &str, query: Option<&str>) -> String {
+    query
+        .map(|query| format!("{provider_path}?{query}"))
+        .unwrap_or_else(|| provider_path.to_string())
 }
 
 // Decodes the transport body only for Relay's managed request representation. The original bytes

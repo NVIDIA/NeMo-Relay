@@ -19,10 +19,9 @@ discovered, enabled, and trusted handler for each of the 10 events in the
 supported Codex hook schema:
 `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
 `PermissionRequest`, `SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and
-`PostCompact`. Persistent setup also requires the
-`features.hooks` flag, plugin app-server metadata, and the `nemo-relay-openai`
-provider alias. The installer checks the Codex version before it changes any
-files.
+`PostCompact`. Persistent setup also requires the `features.hooks` flag,
+plugin app-server metadata, and Relay's built-in OpenAI endpoint override. The
+installer checks the Codex version before it changes any files.
 
 <Warning>
 Codex requires hooks to be trusted before they run. `nemo-relay install codex`
@@ -138,10 +137,18 @@ nemo-relay install codex
 ```
 
 The installer creates a local marketplace, installs
-`nemo-relay-plugin@nemo-relay-local`, enables Codex hooks, and configures the
-`nemo-relay-openai` provider alias at `http://127.0.0.1:47632/v1`. It then uses the
-existing `nemo-relay` binary on `PATH`; it does not install a plugin-local Relay
-binary.
+`nemo-relay-plugin@nemo-relay-local`, enables Codex hooks, and routes Codex's
+built-in `openai` provider through a per-user capability URL on the managed
+loopback gateway. This preserves `openai` as the provider identity recorded in
+new Codex sessions, so sessions created before and after installing Relay stay
+in the same provider history. The installer retains the `nemo-relay-openai`
+alias only to resume sessions created by earlier Relay versions. It then uses
+the existing `nemo-relay` binary on `PATH`; it does not install a plugin-local
+Relay binary.
+
+If your config explicitly selects another provider, installation switches it to
+the built-in `openai` provider while Relay is installed and restores your
+selection on uninstall.
 
 The required plugin MCP process is a lightweight lifecycle client. When it
 launches, it starts or reuses a detached Rust
@@ -226,9 +233,10 @@ referenced by user observability configuration. Rerun
 variable.
 
 The installer derives a per-user client proof for managed provider requests and
-writes the secret-bearing Codex configuration with an owner-only mode on Unix
-and a protected owner/System DACL on Windows. Relay consumes that proof before
-middleware, observability, or upstream forwarding.
+embeds it in the installed OpenAI base URL. Relay validates and removes that
+capability before middleware, observability, or upstream forwarding. The
+secret-bearing Codex configuration uses an owner-only mode on Unix and a
+protected owner/System DACL on Windows.
 
 Installer-owned hook commands pin `http://127.0.0.1:47632` and the
 install-generation fence. Hooks wait for the MCP-owned gateway and forward each
@@ -367,7 +375,8 @@ the active provider configuration. If existing conversations disappear after
 switching `model_provider` to `nemo-relay-openai`, the history has not been
 removed if it returns after restoring the previous provider configuration. Use
 this standalone provider alias only while capturing gateway telemetry, or prefer
-the transparent wrapper for CLI sessions. See the upstream Codex
+the persistent installation, which preserves the built-in `openai` provider
+identity. See the upstream Codex
 [history visibility discussion](https://github.com/openai/codex/issues/15494#issuecomment-4164170537)
 for context.
 </Warning>

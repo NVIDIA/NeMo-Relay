@@ -484,6 +484,18 @@ const PYTHON_ENVIRONMENT_ATTESTATION_DOMAIN: &[u8] =
 /// Private proof installed into supported coding-agent provider configuration.
 pub(crate) const BOOTSTRAP_CLIENT_TOKEN_HEADER: &str = "x-nemo-relay-client-token";
 pub(crate) const HOOK_CLIENT_TOKEN_HEADER: &str = "x-nemo-relay-hook-client";
+pub(crate) const PROVIDER_CAPABILITY_PATH_SEGMENT: &str = "nemo-relay";
+
+/// Returns the built-in OpenAI provider endpoint used by a persistent Codex installation.
+///
+/// Codex only exposes a base-URL override for its built-in OpenAI provider. The capability keeps
+/// Relay's existing per-user authorization boundary without changing Codex's provider identity.
+pub(crate) fn persistent_openai_base_url(gateway_url: &str, client_token: &str) -> String {
+    format!(
+        "{}/v1/{PROVIDER_CAPABILITY_PATH_SEGMENT}/{client_token}",
+        gateway_url.trim_end_matches('/').trim_end_matches("/v1")
+    )
+}
 
 /// Stable health-proof context shared by a transparent wrapper and plugin-owned MCP client.
 pub(crate) fn transparent_gateway_fingerprint(gateway_url: &str) -> String {
