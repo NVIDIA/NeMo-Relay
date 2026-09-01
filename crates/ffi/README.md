@@ -139,8 +139,11 @@ if (nemo_relay_plugin_initialize(config_json, NULL, &activation, &report_json) !
 }
 nemo_relay_string_free(report_json);
 /* Close, then free, the activation during process teardown. */
-nemo_relay_plugin_host_activation_close(activation);
-nemo_relay_plugin_host_activation_free(&activation);
+if (nemo_relay_plugin_host_activation_close(activation) != NEMO_RELAY_STATUS_OK) {
+    /* inspect nemo_relay_last_error(); do not free an activation that did not close */
+} else {
+    nemo_relay_plugin_host_activation_free(&activation);
+}
 ```
 
 Use `nemo_relay_event_v2` for a schema-tagged log mark and

@@ -5977,7 +5977,7 @@ impl DynamicPluginCloseState {
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             activation.close()
                         }))
-                        .map_err(|_| "dynamic plugin teardown task panicked".to_string())
+                        .map_err(|_| "plugin host teardown task panicked".to_string())
                         .and_then(|result| result.map_err(|error| error.to_string()));
                         *close_state
                             .report
@@ -5985,10 +5985,10 @@ impl DynamicPluginCloseState {
                             .unwrap_or_else(|poisoned| poisoned.into_inner()) = activation.report();
                         result
                     }
-                    None => Err("dynamic plugin teardown task lost its activation".to_string()),
+                    None => Err("plugin host teardown task lost its activation".to_string()),
                 };
                 if log_finalizer_error && let Err(error) = &result {
-                    eprintln!("nemo_relay: dynamic plugin finalizer teardown failed: {error}");
+                    eprintln!("nemo_relay: plugin host finalizer teardown failed: {error}");
                 }
                 close_state.finish(result);
             });

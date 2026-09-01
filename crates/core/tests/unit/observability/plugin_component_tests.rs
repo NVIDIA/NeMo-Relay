@@ -2162,6 +2162,7 @@ fn empty_and_disabled_config_register_nothing() {
 
     let state = global_context();
     assert!(state.read().unwrap().event_subscribers.is_empty());
+    crate::plugin::test_close_plugin_host().unwrap();
 }
 
 #[test]

@@ -143,6 +143,8 @@ if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
 activation = asyncio.run(nemo_relay.plugin.initialize(plugin_config))
+# Retain the activation while adaptive behavior is needed, then close it during teardown.
+asyncio.run(activation.close())
 ```
 </Tab>
 
