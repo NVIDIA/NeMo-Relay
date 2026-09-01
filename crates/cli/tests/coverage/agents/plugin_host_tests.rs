@@ -159,17 +159,32 @@ fn codex_expected_plugin_hooks_prefer_path_relay_over_current_exe() {
 
     let commands = expected_plugin_hook_command(&hooks_path).unwrap();
 
-    let expected_relay = fake_relay.canonicalize().unwrap_or(fake_relay);
-    let expected_relay = portable_executable_path(expected_relay);
+    // Compare whole generated commands rather than substring-matching the relay path: on Windows
+    // the path is embedded inside a base64 UTF-16 `-EncodedCommand` payload, so it never appears
+    // as plain text in the command string.
+    let generation_path = hooks_path
+        .parent()
+        .and_then(Path::parent)
+        .unwrap()
+        .join(crate::installation::generation::GENERATION_FILE_NAME);
+    let build_expectation = |relay: PathBuf| {
+        let relay = relay.canonicalize().unwrap_or(relay);
+        codex_plugin_hook_command(
+            &portable_executable_path(relay),
+            &generation_path,
+            TEST_PLUGIN_GENERATION,
+        )
+        .unwrap()
+    };
+
     let command = commands.for_event("SessionStart");
-    assert!(
-        command.contains(expected_relay.to_str().unwrap()),
-        "{command}"
+    assert_eq!(
+        command,
+        build_expectation(fake_relay).for_event("SessionStart")
     );
-    let real_current_exe = current_exe().unwrap();
-    assert!(
-        !command.contains(real_current_exe.to_str().unwrap()),
-        "{command}"
+    assert_ne!(
+        command,
+        build_expectation(current_exe().unwrap()).for_event("SessionStart")
     );
 }
 
