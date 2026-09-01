@@ -734,11 +734,11 @@ async fn shutdown_bootstrap_sidecar(
     let Some(shutdown) = state.bootstrap_shutdown.as_ref() else {
         return StatusCode::NOT_FOUND;
     };
-    if headers
+    let owner_token_matches = headers
         .get("x-nemo-relay-bootstrap-token")
         .and_then(|value| value.to_str().ok())
-        != Some(shutdown.token.as_str())
-    {
+        .is_some_and(|presented| bool::from(presented.as_bytes().ct_eq(shutdown.token.as_bytes())));
+    if !owner_token_matches {
         return StatusCode::FORBIDDEN;
     }
     let Ok(mut sender) = shutdown.sender.lock() else {

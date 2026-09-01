@@ -29,6 +29,9 @@ pub(crate) struct UninstallCommand {
     pub(crate) host: InstallTarget,
     #[arg(long)]
     pub(crate) install_dir: Option<PathBuf>,
+    /// Attempt all Relay-owned cleanup steps even when normal uninstall safety checks fail.
+    #[arg(long)]
+    pub(crate) force: bool,
     #[arg(long)]
     pub(crate) dry_run: bool,
 }
@@ -71,6 +74,7 @@ impl UninstallCommand {
     pub(crate) fn into_runtime(self) -> crate::installation::UninstallRequest {
         crate::installation::UninstallRequest {
             install_dir: self.install_dir,
+            force: self.force,
             dry_run: self.dry_run,
         }
     }
@@ -103,7 +107,11 @@ pub(super) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError>
     let request = command.into_runtime();
     let candidates = target.agents();
     let agents = if target.is_all() {
-        crate::agents::installed_integrations(&candidates, request.install_dir.as_deref())
+        crate::agents::installed_integrations(
+            &candidates,
+            request.install_dir.as_deref(),
+            request.force,
+        )
     } else {
         candidates
     };

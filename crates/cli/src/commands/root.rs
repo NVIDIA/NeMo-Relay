@@ -6,8 +6,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use super::completions::CompletionsCommand;
 use super::configure::ConfigCommand;
 use super::diagnostics::{AgentsCommand, DoctorCommand};
+use super::gateway::GatewayCommand;
 use super::hook_forward::HookForwardCommand;
 use super::install::{InstallCommand, UninstallCommand};
+use super::integrations::IntegrationsCommand;
 use super::logging::LoggingArgs;
 use super::model_pricing::PricingCommand;
 use super::plugins::PluginsCommand;
@@ -88,6 +90,8 @@ pub(crate) enum Command {
                       nemo-relay --bind 127.0.0.1:4041 mcp  # explicit standalone/test bind"
     )]
     Mcp,
+    /// Manage the persistent shared Relay gateway.
+    Gateway(GatewayCommand),
     /// Run the interactive setup (writes the XDG user `config.toml`)
     Config(ConfigCommand),
     /// Create or edit plugin configuration (writes `plugins.toml`)
@@ -96,6 +100,8 @@ pub(crate) enum Command {
     Install(InstallCommand),
     /// Uninstall coding-agent plugins installed by `nemo-relay install`.
     Uninstall(UninstallCommand),
+    /// Refresh Relay-managed coding-agent integrations after upgrading Relay.
+    Integrations(IntegrationsCommand),
     /// Validate and configure model pricing catalogs.
     ModelPricing(PricingCommand),
     /// Diagnose env, agents, config, observability (use --offline to skip live network probes)
@@ -117,10 +123,12 @@ impl Command {
             Self::Claude(_) => "claude",
             Self::Codex(_) => "codex",
             Self::Mcp => "mcp",
+            Self::Gateway(_) => "gateway",
             Self::Config(_) => "config",
             Self::Plugins(_) => "plugins",
             Self::Install(_) => "install",
             Self::Uninstall(_) => "uninstall",
+            Self::Integrations(_) => "integrations",
             Self::ModelPricing(_) => "model_pricing",
             Self::Doctor(_) => "doctor",
             Self::Agents(_) => "agents",
@@ -134,6 +142,7 @@ impl Command {
     /// invalid, so users can repair their configuration.
     pub(crate) fn skips_logging(&self) -> bool {
         matches!(self, Self::Config(_))
+            || matches!(self, Self::Gateway(command) if command.is_stop())
             || matches!(self, Self::Plugins(command) if command.is_edit())
             || matches!(self, Self::HookForward(command) if transparent_hook_is_inert(command))
     }

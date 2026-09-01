@@ -1889,6 +1889,342 @@ fn test_exporter_openai_responses_lifecycle_extracts_messages() {
     assert_eq!(agent_extra.llm_response.unwrap()["id"], json!("resp_1"));
 }
 
+/// Asserts that overlapping LLM lifecycles retain their matching request metadata.
+fn assert_exporter_preserves_extras_for_interleaved_llm_ends(reverse_ends: bool) {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let first_llm_uuid = Uuid::now_v7();
+    let second_llm_uuid = Uuid::now_v7();
+    let first_agent_uuid = Uuid::now_v7();
+    let second_agent_uuid = Uuid::now_v7();
+    let base = base_timestamp();
+
+    let mut first_start = event_builder(first_llm_uuid, EventType::Start)
+        .name("openai.responses")
+        .parent_uuid(first_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "reasoning_effort": "low",
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call_first",
+                "output": "first request"
+            }]
+        }))
+        .build();
+    let mut second_start = event_builder(second_llm_uuid, EventType::Start)
+        .name("openai.responses")
+        .parent_uuid(second_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "reasoning_effort": "high",
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call_second",
+                "output": "second request"
+            }]
+        }))
+        .build();
+    let mut first_end = event_builder(first_llm_uuid, EventType::End)
+        .name("openai.responses")
+        .parent_uuid(first_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "id": "resp_first",
+            "output": [{
+                "type": "message",
+                "id": "msg_first",
+                "phase": "final_answer",
+                "content": [{"type": "output_text", "text": "first response"}]
+            }]
+        }))
+        .build();
+    let mut second_end = event_builder(second_llm_uuid, EventType::End)
+        .name("openai.responses")
+        .parent_uuid(second_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "id": "resp_second",
+            "output": [{
+                "type": "function_call",
+                "call_id": "call_second",
+                "name": "wait_agent",
+                "arguments": "{}"
+            }]
+        }))
+        .build();
+    set_sequential_event_timestamps(
+        &mut [
+            &mut first_start,
+            &mut second_start,
+            &mut first_end,
+            &mut second_end,
+        ],
+        base,
+        chrono::Duration::milliseconds(1),
+    );
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.extend([first_start, second_start]);
+        if reverse_ends {
+            state.events.extend([second_end, first_end]);
+        } else {
+            state.events.extend([first_end, second_end]);
+        }
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let agent_steps = trajectory
+        .steps
+        .iter()
+        .filter(|step| step.source == "agent")
+        .collect::<Vec<_>>();
+    assert_eq!(agent_steps.len(), 2);
+
+    for (response_id, request_output, reasoning_effort, invocation_id) in [
+        ("resp_first", "first request", "low", first_llm_uuid),
+        ("resp_second", "second request", "high", second_llm_uuid),
+    ] {
+        let step = agent_steps
+            .iter()
+            .find(|step| step.extra.as_ref().unwrap()["llm_response"]["id"] == json!(response_id))
+            .unwrap();
+        let invocation_id = invocation_id.to_string();
+        let extra: AtifStepExtra =
+            serde_json::from_value(step.extra.clone().expect("agent step should retain extra"))
+                .unwrap();
+        assert_eq!(
+            extra.llm_request.as_ref().unwrap()["input"][0]["output"],
+            json!(request_output)
+        );
+        assert_eq!(step.reasoning_effort, Some(json!(reasoning_effort)));
+        assert_eq!(extra.llm_response.unwrap()["id"], json!(response_id));
+        assert_eq!(
+            extra.invocation.unwrap().invocation_id.as_deref(),
+            Some(invocation_id.as_str())
+        );
+    }
+}
+
+/// Verifies request metadata when overlapping LLM calls finish in start order.
+#[test]
+fn test_exporter_preserves_extras_for_interleaved_llm_ends() {
+    assert_exporter_preserves_extras_for_interleaved_llm_ends(false);
+}
+
+/// Verifies request metadata when overlapping LLM calls finish in reverse order.
+#[test]
+fn test_exporter_preserves_extras_for_reverse_interleaved_llm_ends() {
+    assert_exporter_preserves_extras_for_interleaved_llm_ends(true);
+}
+
+/// Finds a response in the specified trajectory without searching child trajectories.
+fn direct_agent_step_by_response_id<'a>(
+    trajectory: &'a AtifTrajectory,
+    response_id: &str,
+) -> Option<&'a AtifStep> {
+    trajectory.steps.iter().find(|step| {
+        step.extra
+            .as_ref()
+            .and_then(|extra| extra.get("llm_response"))
+            .and_then(|response| response.get("id"))
+            .and_then(Json::as_str)
+            == Some(response_id)
+    })
+}
+
+/// Verifies that overlapping responses remain isolated to their owning subagent.
+#[test]
+fn test_exporter_isolates_interleaved_responses_by_agent_scope() {
+    let root_uuid = Uuid::now_v7();
+    let first_agent_uuid = Uuid::now_v7();
+    let second_agent_uuid = Uuid::now_v7();
+    let first_llm_uuid = Uuid::now_v7();
+    let second_llm_uuid = Uuid::now_v7();
+    let base = base_timestamp();
+
+    let mut root_start = event_builder(root_uuid, EventType::Start)
+        .name("root-agent")
+        .scope_type(ScopeType::Agent)
+        .metadata(json!({
+            "nemo_relay_scope_role": "agent",
+            "session_id": root_uuid.to_string()
+        }))
+        .build();
+    let mut first_agent_start = event_builder(first_agent_uuid, EventType::Start)
+        .name("first-agent")
+        .parent_uuid(root_uuid)
+        .scope_type(ScopeType::Agent)
+        .metadata(json!({"nemo_relay_scope_role": "subagent"}))
+        .build();
+    let mut second_agent_start = event_builder(second_agent_uuid, EventType::Start)
+        .name("second-agent")
+        .parent_uuid(root_uuid)
+        .scope_type(ScopeType::Agent)
+        .metadata(json!({"nemo_relay_scope_role": "subagent"}))
+        .build();
+    let mut first_start = event_builder(first_llm_uuid, EventType::Start)
+        .name("openai.responses")
+        .parent_uuid(first_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .input(json!({"input": "first request"}))
+        .build();
+    let mut second_start = event_builder(second_llm_uuid, EventType::Start)
+        .name("openai.responses")
+        .parent_uuid(second_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .input(json!({"input": "second request"}))
+        .build();
+    let mut first_end = event_builder(first_llm_uuid, EventType::End)
+        .name("openai.responses")
+        .parent_uuid(first_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .output(json!({"id": "resp_first", "output": "first response"}))
+        .build();
+    let mut second_end = event_builder(second_llm_uuid, EventType::End)
+        .name("openai.responses")
+        .parent_uuid(second_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .output(json!({"id": "resp_second", "output": "second response"}))
+        .build();
+    set_sequential_event_timestamps(
+        &mut [
+            &mut root_start,
+            &mut first_agent_start,
+            &mut second_agent_start,
+            &mut first_start,
+            &mut second_start,
+            &mut first_end,
+            &mut second_end,
+        ],
+        base,
+        chrono::Duration::milliseconds(1),
+    );
+    let events = [
+        root_start,
+        first_agent_start,
+        second_agent_start,
+        first_start,
+        second_start,
+        first_end,
+        second_end,
+    ];
+    let trajectory = events_to_trajectory(
+        &root_uuid.to_string(),
+        make_agent_info(),
+        &events.iter().collect::<Vec<_>>(),
+    );
+
+    let children = trajectory.subagent_trajectories.as_ref().unwrap();
+    assert_eq!(children.len(), 2);
+    let first_child = children
+        .iter()
+        .find(|child| child.trajectory_id.as_deref() == Some(&first_agent_uuid.to_string()))
+        .unwrap();
+    let second_child = children
+        .iter()
+        .find(|child| child.trajectory_id.as_deref() == Some(&second_agent_uuid.to_string()))
+        .unwrap();
+    let first_step = direct_agent_step_by_response_id(first_child, "resp_first").unwrap();
+    let second_step = direct_agent_step_by_response_id(second_child, "resp_second").unwrap();
+    assert!(direct_agent_step_by_response_id(first_child, "resp_second").is_none());
+    assert!(direct_agent_step_by_response_id(second_child, "resp_first").is_none());
+    assert_eq!(
+        first_step.extra.as_ref().unwrap()["ancestry"]["parent_id"],
+        json!(first_agent_uuid.to_string())
+    );
+    assert_eq!(
+        second_step.extra.as_ref().unwrap()["ancestry"]["parent_id"],
+        json!(second_agent_uuid.to_string())
+    );
+}
+
+/// Verifies that an empty LLM end does not detach a subsequent tool result.
+#[test]
+fn test_payloadless_interleaved_llm_end_preserves_late_tool_result() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let first_llm_uuid = Uuid::now_v7();
+    let second_llm_uuid = Uuid::now_v7();
+    let first_agent_uuid = Uuid::now_v7();
+    let second_agent_uuid = Uuid::now_v7();
+    let tool_uuid = Uuid::now_v7();
+    let base = base_timestamp();
+
+    let mut first_start = event_builder(first_llm_uuid, EventType::Start)
+        .name("openai.responses")
+        .parent_uuid(first_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .input(json!({"input": "first request"}))
+        .build();
+    let mut second_start = event_builder(second_llm_uuid, EventType::Start)
+        .name("openai.responses")
+        .parent_uuid(second_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .input(json!({"input": "second request"}))
+        .build();
+    let mut first_end = event_builder(first_llm_uuid, EventType::End)
+        .name("openai.responses")
+        .parent_uuid(first_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "id": "resp_first",
+            "output": [{
+                "type": "function_call",
+                "call_id": "call_first",
+                "name": "terminal",
+                "arguments": "{}"
+            }]
+        }))
+        .build();
+    let mut payloadless_second_end = event_builder(second_llm_uuid, EventType::End)
+        .name("openai.responses")
+        .parent_uuid(second_agent_uuid)
+        .scope_type(ScopeType::Llm)
+        .build();
+    let mut late_tool_end = event_builder(tool_uuid, EventType::End)
+        .name("terminal")
+        .parent_uuid(first_agent_uuid)
+        .scope_type(ScopeType::Tool)
+        .tool_call_id("call_first")
+        .output(json!({"stdout": "late result"}))
+        .build();
+    set_sequential_event_timestamps(
+        &mut [
+            &mut first_start,
+            &mut second_start,
+            &mut first_end,
+            &mut payloadless_second_end,
+            &mut late_tool_end,
+        ],
+        base,
+        chrono::Duration::milliseconds(1),
+    );
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.extend([
+            first_start,
+            second_start,
+            first_end,
+            payloadless_second_end,
+            late_tool_end,
+        ]);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let first_step = direct_agent_step_by_response_id(&trajectory, "resp_first").unwrap();
+    let observation = first_step.observation.as_ref().unwrap();
+    assert_eq!(observation.results.len(), 1);
+    assert_eq!(
+        observation.results[0].source_call_id.as_deref(),
+        Some("call_first")
+    );
+    assert_structured_observation_result_extra(
+        &observation.results[0],
+        json!({"stdout": "late result"}),
+    );
+}
+
 #[test]
 fn test_exporter_anthropic_messages_lifecycle_promotes_tool_use_blocks() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());

@@ -2217,19 +2217,17 @@ impl PendingAgentStep {
         ancestry: AtifAncestry,
         invocation: AtifInvocationInfo,
         tool_call_order: Vec<String>,
+        llm_request: Option<Json>,
         llm_response: Json,
     ) {
         self.step_idx = Some(step_idx);
         self.ancestry = Some(ancestry);
         self.invocation = Some(invocation);
+        self.llm_request = llm_request;
         self.llm_response = Some(llm_response);
         self.tool_ancestry.clear();
         self.tool_invocations.clear();
         self.tool_call_order = tool_call_order;
-    }
-
-    fn stash_llm_request(&mut self, llm_request: Json) {
-        self.llm_request = Some(llm_request);
     }
 
     fn push_tool_metadata(&mut self, ancestry: AtifAncestry, invocation: AtifInvocationInfo) {
@@ -2290,7 +2288,8 @@ struct StepConversionState {
     pending_obs_timestamp: Option<String>,
     deferred_observations: HashMap<String, Vec<DeferredToolObservation>>,
     deferred_tool_metadata: HashMap<String, Vec<(AtifAncestry, AtifInvocationInfo)>>,
-    current_reasoning_effort: Option<Json>,
+    pending_llm_requests: HashMap<Uuid, Json>,
+    pending_reasoning_efforts: HashMap<Uuid, Json>,
     current_agent: PendingAgentStep,
 }
 
@@ -2553,10 +2552,13 @@ impl StepConversionState {
             return;
         };
         let content = unwrap_llm_request(input);
-        self.current_reasoning_effort = extract_reasoning_effort(&content);
+        if let Some(reasoning_effort) = extract_reasoning_effort(&content) {
+            self.pending_reasoning_efforts
+                .insert(event.uuid(), reasoning_effort);
+        }
         let has_paired_end = lookups.llm_end_uuids.contains(&event.uuid());
         let Some(message) = llm_start_user_step_message(event, &content, has_paired_end) else {
-            self.current_agent.stash_llm_request(content);
+            self.pending_llm_requests.insert(event.uuid(), content);
             return;
         };
         let extra = AtifStepExtra {
@@ -2587,13 +2589,15 @@ impl StepConversionState {
 
     fn handle_llm_end(&mut self, event: &Event, lookups: &EventLookupMaps) {
         self.flush_observations();
-
         let Some(output) = event.data() else {
             return;
         };
+
+        self.finalize_agent_extra();
+        let llm_request = self.pending_llm_requests.remove(&event.uuid());
+        let reasoning_effort = self.pending_reasoning_efforts.remove(&event.uuid());
         let tool_calls = extract_tool_calls(output);
         let tool_call_order = refresh_tool_call_lookup(&mut self.last_tool_call_map, &tool_calls);
-        let reasoning_effort = self.current_reasoning_effort.take();
         let reasoning_content = extract_reasoning_content(output);
         let start_ts = lookups.start_ts_map.get(&event.uuid()).cloned();
         let paired_start_model = lookups
@@ -2646,6 +2650,7 @@ impl StepConversionState {
             ancestry,
             invocation,
             tool_call_order,
+            llm_request,
             output.clone(),
         );
         self.attach_deferred_to_current_agent();

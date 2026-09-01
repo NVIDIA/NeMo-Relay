@@ -3887,13 +3887,11 @@ fn shared_defaults_cover_idle_lifecycle_and_lock_names() {
     let _plugin_url = EnvVarGuard::remove("NEMO_RELAY_PLUGIN_GATEWAY_URL");
     let _claude_url = EnvVarGuard::remove("NEMO_RELAY_GATEWAY_URL");
     let _timeout = EnvVarGuard::remove("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS");
+    let _heartbeat = EnvVarGuard::remove("NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS");
     let _fail_closed = EnvVarGuard::remove("NEMO_RELAY_FAIL_CLOSED");
 
     assert_eq!(plugin_idle_timeout().unwrap(), Duration::from_secs(300));
-    assert_eq!(
-        plugin_heartbeat_interval().unwrap(),
-        Duration::from_secs(30)
-    );
+    assert_eq!(plugin_heartbeat_interval().unwrap(), Duration::from_secs(3));
     assert_eq!(bootstrap_lock_name(""), "unknown");
 }
 

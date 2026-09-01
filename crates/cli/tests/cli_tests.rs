@@ -582,6 +582,111 @@ fn cli_mcp_help_describes_lifecycle_bound_native_gateway() {
 }
 
 #[test]
+fn cli_gateway_start_and_stop_control_the_same_process() {
+    for force in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = probe.local_addr().unwrap();
+        drop(probe);
+
+        let gateway = ChildGuard::new(
+            Command::new(gateway_bin())
+                .args(["--bind", &address.to_string(), "gateway", "start"])
+                .env("HOME", temp.path())
+                .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+                .env("TMPDIR", temp.path())
+                .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        wait_for_port_open(address);
+
+        let mut stop = Command::new(gateway_bin());
+        stop.args(["--bind", &address.to_string(), "gateway", "stop"])
+            .env("HOME", temp.path())
+            .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+            .env("TMPDIR", temp.path())
+            .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1");
+        if force {
+            stop.arg("--force");
+        }
+        let output = stop.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let _ = gateway.wait();
+        assert!(TcpStream::connect(address).is_err());
+    }
+}
+
+#[test]
+fn cli_gateway_start_honors_explicit_logging_without_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = probe.local_addr().unwrap();
+    drop(probe);
+
+    let gateway = Command::new(gateway_bin())
+        .args([
+            "--bind",
+            &address.to_string(),
+            "--log-level",
+            "info",
+            "--log-stderr-format",
+            "jsonl",
+            "gateway",
+            "start",
+        ])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("TMPDIR", temp.path())
+        .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_port_open(address);
+
+    let output = Command::new(gateway_bin())
+        .args(["--bind", &address.to_string(), "gateway", "stop"])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("TMPDIR", temp.path())
+        .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = wait_child_with_output(gateway);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("\"event\":\"command_started\""), "{stderr}");
+}
+
+#[test]
+fn cli_gateway_stop_refuses_a_foreign_loopback_listener() {
+    let foreign = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = foreign.local_addr().unwrap();
+
+    let output = Command::new(gateway_bin())
+        .args(["--bind", &address.to_string(), "gateway", "stop"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("refusing to stop non-Relay process"));
+    assert_eq!(foreign.local_addr().unwrap(), address);
+}
+
+#[test]
 fn cli_mcp_starts_gateway_before_initialize_and_exits_cleanly() {
     let temp = tempfile::tempdir().unwrap();
     let mut child = Command::new(gateway_bin())
@@ -1377,6 +1482,11 @@ impl ChildGuard {
         let _ = child.kill();
         wait_child_with_output(child)
     }
+
+    fn wait(mut self) -> ExitStatus {
+        let mut child = self.0.take().unwrap();
+        wait_child(&mut child)
+    }
 }
 
 impl Drop for ChildGuard {
@@ -1500,6 +1610,20 @@ fn wait_for_port_closed(address: SocketAddr) {
         assert!(
             Instant::now() < deadline,
             "shared gateway remained bound after the final MCP client and idle timeout"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn wait_for_port_open(address: SocketAddr) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "gateway did not start listening at {address}"
         );
         thread::sleep(Duration::from_millis(20));
     }

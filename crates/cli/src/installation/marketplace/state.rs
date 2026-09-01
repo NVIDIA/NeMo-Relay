@@ -8,9 +8,11 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::installation::generation::GENERATION_FILE_NAME;
+use crate::installation::operation_lock::{DEFAULT_OPERATION_LOCK_TIMEOUT, PluginOperationLock};
 
 use super::{MarketplaceHost, PLUGIN_NAME};
 
@@ -143,6 +145,123 @@ pub(super) struct PluginState {
     pub(super) host_plugin_removed: bool,
     pub(super) host_marketplace_removed: bool,
     pub(super) plugin_setup_installed: bool,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct ManagedIntegrationRegistry {
+    integrations: Vec<ManagedIntegrationRegistryEntry>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ManagedIntegrationRegistryEntry {
+    host: String,
+    install_dir: PathBuf,
+}
+
+const MANAGED_INTEGRATIONS_REGISTRY: &str = "managed-integrations.json";
+
+fn managed_integrations_registry_path() -> Result<PathBuf, String> {
+    crate::configuration::user_config_dir()
+        .map(|path| path.join(MANAGED_INTEGRATIONS_REGISTRY))
+        .ok_or_else(|| {
+            "cannot determine the user configuration directory for managed integrations".into()
+        })
+}
+
+fn read_managed_integrations_registry() -> Result<ManagedIntegrationRegistry, String> {
+    let path = managed_integrations_registry_path()?;
+    match fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
+            format!(
+                "failed to parse managed integrations registry {}: {error}",
+                path.display()
+            )
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(ManagedIntegrationRegistry::default())
+        }
+        Err(error) => Err(format!(
+            "failed to read managed integrations registry {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+fn write_managed_integrations_registry(
+    registry: &ManagedIntegrationRegistry,
+) -> Result<(), String> {
+    let path = managed_integrations_registry_path()?;
+    let mut bytes = serde_json::to_vec_pretty(registry)
+        .map_err(|error| format!("failed to encode managed integrations registry: {error}"))?;
+    bytes.push(b'\n');
+    crate::filesystem::atomic_write(&path, &bytes)
+}
+
+fn lock_managed_integrations_registry() -> Result<PluginOperationLock, String> {
+    let path = managed_integrations_registry_path()?;
+    let directory = path.parent().ok_or_else(|| {
+        format!(
+            "managed integrations registry path {} has no parent directory",
+            path.display()
+        )
+    })?;
+    PluginOperationLock::acquire(
+        "managed-integrations",
+        directory,
+        directory,
+        DEFAULT_OPERATION_LOCK_TIMEOUT,
+    )
+}
+
+pub(crate) fn registered_install_dirs(host: impl MarketplaceHost) -> Result<Vec<PathBuf>, String> {
+    Ok(read_managed_integrations_registry()?
+        .integrations
+        .into_iter()
+        .filter(|entry| entry.host == host.install_arg())
+        .map(|entry| entry.install_dir)
+        .collect())
+}
+
+pub(crate) fn register_managed_integration(
+    host: impl MarketplaceHost,
+    install_dir: &Path,
+) -> Result<(), String> {
+    let _lock = lock_managed_integrations_registry()?;
+    let install_dir = install_dir
+        .canonicalize()
+        .unwrap_or_else(|_| install_dir.to_path_buf());
+    let mut registry = read_managed_integrations_registry()?;
+    if !registry
+        .integrations
+        .iter()
+        .any(|entry| entry.host == host.install_arg() && entry.install_dir == install_dir)
+    {
+        registry.integrations.push(ManagedIntegrationRegistryEntry {
+            host: host.install_arg().into(),
+            install_dir,
+        });
+        write_managed_integrations_registry(&registry)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn unregister_managed_integration(
+    host: impl MarketplaceHost,
+    install_dir: &Path,
+) -> Result<(), String> {
+    let _lock = lock_managed_integrations_registry()?;
+    let install_dir = install_dir
+        .canonicalize()
+        .unwrap_or_else(|_| install_dir.to_path_buf());
+    let mut registry = read_managed_integrations_registry()?;
+    let previous = registry.integrations.len();
+    registry
+        .integrations
+        .retain(|entry| entry.host != host.install_arg() || entry.install_dir != install_dir);
+    if registry.integrations.len() != previous {
+        write_managed_integrations_registry(&registry)?;
+    }
+    Ok(())
 }
 
 pub(super) trait CanonicalizeOrSelf {

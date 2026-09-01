@@ -953,6 +953,120 @@ fn write_installed_state(host: CodingAgent, dir: &Path) {
     mark_plugin_setup_installed(host, &layout, &options(dir)).unwrap();
 }
 
+#[test]
+fn refresh_preflight_retires_every_managed_generation_before_replacement() {
+    let home = tempdir().unwrap();
+    let _home = HomeScope::enter(home.path());
+    let install = tempdir().unwrap();
+    for host in CodingAgent::ALL {
+        write_installed_state(host, install.path());
+    }
+
+    let _preflight = retire_integrations_for_refresh(
+        &CodingAgent::ALL
+            .into_iter()
+            .map(|host| (host, install.path().to_path_buf()))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+
+    for host in CodingAgent::ALL {
+        let layout = PluginLayout::new(host, install.path());
+        assert!(
+            std::fs::read_to_string(layout.generation_fence)
+                .unwrap()
+                .starts_with("retired:"),
+            "{} generation was not retired",
+            host.label()
+        );
+    }
+}
+
+#[test]
+fn refresh_preflight_retires_multiple_directories_for_one_host() {
+    let home = tempdir().unwrap();
+    let _home = HomeScope::enter(home.path());
+    let first = tempdir().unwrap();
+    let second = tempdir().unwrap();
+    write_installed_state(CodingAgent::Codex, first.path());
+    write_installed_state(CodingAgent::Codex, second.path());
+
+    let _preflight = retire_integrations_for_refresh(&[
+        (CodingAgent::Codex, first.path().to_path_buf()),
+        (CodingAgent::Codex, second.path().to_path_buf()),
+    ])
+    .unwrap();
+
+    for install_dir in [first.path(), second.path()] {
+        let layout = PluginLayout::new(CodingAgent::Codex, install_dir);
+        assert!(
+            std::fs::read_to_string(layout.generation_fence)
+                .unwrap()
+                .starts_with("retired:")
+        );
+    }
+}
+
+#[test]
+fn refresh_preflight_restores_earlier_generations_when_a_target_is_invalid() {
+    let home = tempdir().unwrap();
+    let _home = HomeScope::enter(home.path());
+    let install = tempdir().unwrap();
+    write_installed_state(CodingAgent::ClaudeCode, install.path());
+
+    let error = retire_integrations_for_refresh(&[
+        (CodingAgent::ClaudeCode, install.path().to_path_buf()),
+        (CodingAgent::Codex, install.path().to_path_buf()),
+    ])
+    .unwrap_err();
+
+    assert!(
+        error.to_string().contains("missing persisted Codex"),
+        "{error}"
+    );
+    let layout = PluginLayout::new(CodingAgent::ClaudeCode, install.path());
+    assert!(
+        !std::fs::read_to_string(layout.generation_fence)
+            .unwrap()
+            .starts_with("retired:"),
+        "the previous generation was not restored"
+    );
+}
+
+#[test]
+fn refresh_preflight_validates_every_target_before_retiring_any_generation() {
+    let install = tempdir().unwrap();
+    for host in CodingAgent::ALL {
+        write_installed_state(host, install.path());
+    }
+    let targets = CodingAgent::ALL
+        .into_iter()
+        .map(|host| (host, install.path().to_path_buf()))
+        .collect::<Vec<_>>();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("claude", "/bin/claude");
+
+    let error = prepare_integrations_for_refresh_with_runner(&targets, &runner).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("required `codex` CLI was not found"),
+        "{error}"
+    );
+    for host in CodingAgent::ALL {
+        let layout = PluginLayout::new(host, install.path());
+        assert!(
+            !std::fs::read_to_string(layout.generation_fence)
+                .unwrap()
+                .starts_with("retired:"),
+            "{} generation was retired before prerequisite validation",
+            host.label()
+        );
+    }
+}
+
 #[cfg(windows)]
 fn replace_generation_with_legacy_marker(layout: &PluginLayout) -> (String, PathBuf) {
     let token = {
@@ -2032,6 +2146,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
         crate::agents::installed_integrations(
             &CodingAgent::ALL,
             Some(&dir.path().join("install")),
+            false,
         )
         .is_empty()
     );
@@ -2068,6 +2183,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
             CodingAgent::Codex,
             crate::installation::UninstallRequest {
                 install_dir: Some(dir.path().join("dry-run-uninstall")),
+                force: false,
                 dry_run: true,
             },
         )
@@ -2091,6 +2207,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
         CodingAgent::Codex,
         crate::installation::UninstallRequest {
             install_dir: Some(dir.path().join("failed-uninstall")),
+            force: false,
             dry_run: false,
         },
     )
@@ -2108,8 +2225,61 @@ fn installed_selection_uses_persisted_integration_state() {
         r#"{"marketplaceRoot":"/tmp/m","pluginRoot":"/tmp/p"}"#,
     )
     .unwrap();
-    let selected = crate::agents::installed_integrations(&CodingAgent::ALL, Some(dir.path()));
+    let selected =
+        crate::agents::installed_integrations(&CodingAgent::ALL, Some(dir.path()), false);
     assert_eq!(selected, vec![CodingAgent::ClaudeCode]);
+}
+
+#[test]
+fn force_selection_includes_a_stale_local_install_without_state() {
+    let dir = tempdir().unwrap();
+    let empty_path = dir.path().join("empty-path");
+    std::fs::create_dir_all(&empty_path).unwrap();
+    let _path = PathScope::set_isolated(&empty_path, &dir.path().join("home"));
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    std::fs::create_dir_all(&layout.marketplace_root).unwrap();
+
+    assert!(
+        crate::agents::installed_integrations(&CodingAgent::ALL, Some(dir.path()), false)
+            .is_empty()
+    );
+    assert_eq!(
+        crate::agents::installed_integrations(&CodingAgent::ALL, Some(dir.path()), true),
+        vec![CodingAgent::Codex]
+    );
+}
+
+#[test]
+fn force_selection_includes_a_generation_lock_without_other_install_artifacts() {
+    let dir = tempdir().unwrap();
+    let empty_path = dir.path().join("empty-path");
+    std::fs::create_dir_all(&empty_path).unwrap();
+    let _path = PathScope::set_isolated(&empty_path, &dir.path().join("home"));
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    std::fs::write(&layout.generation_lock, "lock").unwrap();
+
+    assert!(
+        crate::agents::installed_integrations(&CodingAgent::ALL, Some(dir.path()), false)
+            .is_empty()
+    );
+    assert_eq!(
+        crate::agents::installed_integrations(&CodingAgent::ALL, Some(dir.path()), true),
+        vec![CodingAgent::Codex]
+    );
+}
+
+#[test]
+fn force_selection_includes_live_host_registration_without_local_artifacts() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("codex", "/bin/codex")
+        .with_codex_registration(true, false);
+
+    assert!(force_cleanup_target_exists_with_runner(
+        CodingAgent::Codex,
+        dir.path(),
+        &runner
+    ));
 }
 
 #[test]
@@ -3098,6 +3268,44 @@ fn force_install_keeps_existing_registration_when_gateway_refresh_fails() {
             "restore snapshot".to_string(),
         ]
     );
+}
+
+#[test]
+fn refresh_restores_preflight_generation_when_force_install_gateway_refresh_fails() {
+    let home = tempdir().unwrap();
+    let _home = HomeScope::enter(home.path());
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("codex", "/bin/codex")
+        .with_codex_registration(true, true);
+    let setup_runner = MockSetupRunner {
+        failing_call: Some("refresh gateway".into()),
+        ..MockSetupRunner::default()
+    };
+    let options = PluginInstallOptions {
+        force: true,
+        ..options(dir.path())
+    };
+    write_installed_state(CodingAgent::Codex, dir.path());
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    let previous = InstallGeneration::capture(layout.generation_fence.clone()).unwrap();
+    let mut preflight =
+        retire_integrations_for_refresh(&[(CodingAgent::Codex, dir.path().to_path_buf())]).unwrap();
+
+    let error = install_host(CodingAgent::Codex, &options, &runner, &setup_runner).unwrap_err();
+
+    assert!(error.contains("refresh gateway failed"));
+    assert!(
+        previous
+            .verify_current()
+            .unwrap_err()
+            .contains("has been retired")
+    );
+    preflight
+        .restore_failed_target(CodingAgent::Codex, dir.path())
+        .unwrap();
+    previous.verify_current().unwrap();
 }
 
 #[test]
@@ -4316,6 +4524,120 @@ fn uninstall_continues_when_relay_is_missing() {
             .iter()
             .any(|call| call == &format!("uninstall codex {DEFAULT_GATEWAY_URL}"))
     );
+}
+
+#[test]
+fn force_uninstall_preserves_state_after_setup_failure_for_retry() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default().with_executable("codex", "/bin/codex");
+    let setup_runner = MockSetupRunner {
+        failing_call: Some(format!("uninstall codex {DEFAULT_GATEWAY_URL}")),
+        ..MockSetupRunner::default()
+    };
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    write_installed_state(CodingAgent::Codex, dir.path());
+    let mut options = options(dir.path());
+    options.force = true;
+
+    let error = uninstall_host(CodingAgent::Codex, &options, &runner, &setup_runner).unwrap_err();
+
+    assert!(error.contains("failed to remove Relay host setup"));
+    assert!(!layout.marketplace_root.exists());
+    assert!(layout.state_path.exists());
+    assert_eq!(
+        crate::agents::installed_integrations(&[CodingAgent::Codex], Some(dir.path()), true),
+        vec![CodingAgent::Codex]
+    );
+    assert!(runner
+        .commands()
+        .iter()
+        .any(|command| command == "/bin/codex plugin remove nemo-relay-plugin@nemo-relay-local"));
+    assert!(
+        runner
+            .commands()
+            .iter()
+            .any(|command| command == "/bin/codex plugin marketplace remove nemo-relay-local")
+    );
+}
+
+#[test]
+fn force_uninstall_creates_state_after_setup_failure_without_prior_state() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("codex", "/bin/codex")
+        .with_codex_registration_sequence(&[(true, false), (false, false)]);
+    let setup_runner = MockSetupRunner {
+        failing_call: Some(format!("uninstall codex {DEFAULT_GATEWAY_URL}")),
+        ..MockSetupRunner::default()
+    };
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    let mut options = options(dir.path());
+    options.force = true;
+
+    assert!(force_cleanup_target_exists_with_runner(
+        CodingAgent::Codex,
+        dir.path(),
+        &runner
+    ));
+    let error = uninstall_host(CodingAgent::Codex, &options, &runner, &setup_runner).unwrap_err();
+
+    assert!(error.contains("failed to remove Relay host setup"));
+    assert!(layout.state_path.exists());
+    assert_eq!(
+        crate::agents::installed_integrations(&[CodingAgent::Codex], Some(dir.path()), true),
+        vec![CodingAgent::Codex]
+    );
+}
+
+#[test]
+fn force_uninstall_reports_a_generation_lock_cleanup_failure() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default().with_executable("codex", "/bin/codex");
+    let setup_runner = MockSetupRunner::default();
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    write_installed_state(CodingAgent::Codex, dir.path());
+    std::fs::remove_file(&layout.generation_lock).unwrap();
+    std::fs::create_dir(&layout.generation_lock).unwrap();
+    let mut options = options(dir.path());
+    options.force = true;
+
+    let error = uninstall_host(CodingAgent::Codex, &options, &runner, &setup_runner).unwrap_err();
+
+    assert!(error.contains("failed to remove MCP generation lock"));
+    assert!(layout.generation_lock.is_dir());
+    assert!(!layout.marketplace_root.exists());
+    assert!(!layout.state_path.exists());
+    assert!(force_cleanup_target_exists_with_runner(
+        CodingAgent::Codex,
+        dir.path(),
+        &runner
+    ));
+}
+
+#[test]
+fn force_selection_retains_a_host_after_registration_removal_fails() {
+    let dir = tempdir().unwrap();
+    let mut runner = MockRunner::default()
+        .with_executable("codex", "/bin/codex")
+        .with_codex_registration(true, false);
+    runner.failing_suffix = Some("plugin remove nemo-relay-plugin@nemo-relay-local".into());
+    let setup_runner = MockSetupRunner::default();
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    write_installed_state(CodingAgent::Codex, dir.path());
+    let mut options = options(dir.path());
+    options.force = true;
+
+    let error = uninstall_host(CodingAgent::Codex, &options, &runner, &setup_runner).unwrap_err();
+
+    assert!(error.contains("failed to unregister the host plugin"));
+    assert!(!layout.marketplace_root.exists());
+    assert!(!layout.state_path.exists());
+    assert!(!layout.generation_lock.exists());
+    assert!(force_cleanup_target_exists_with_runner(
+        CodingAgent::Codex,
+        dir.path(),
+        &runner
+    ));
 }
 
 #[test]

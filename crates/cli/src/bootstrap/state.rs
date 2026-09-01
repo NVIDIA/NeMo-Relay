@@ -225,9 +225,33 @@ pub(crate) fn stop_owned_and_reset(url: &str) -> Result<(), String> {
         return Ok(());
     }
     let _lock = lock_endpoint(&state, url)?;
-    let path = owner_path(&state, url);
+    stop_owned_and_reset_locked(&state, url).map(|_| ())
+}
+
+/// Stops a version-mismatched, Relay-owned gateway while the caller holds the
+/// endpoint startup lock.
+///
+/// Returns `true` when an owned gateway was stopped or a stale owned record was
+/// removed. Same-version, invalid, and absent records return `false` so callers
+/// can preserve the original incompatible-gateway error.
+pub(crate) fn stop_version_mismatched_owned_gateway_locked(
+    state: &Path,
+    url: &str,
+) -> Result<bool, String> {
+    let path = owner_path(state, url);
     let Some(owner) = read_owner_record(&path)? else {
-        return Ok(());
+        return Ok(false);
+    };
+    if !owner.valid_for(url) || owner.version == env!("CARGO_PKG_VERSION") {
+        return Ok(false);
+    }
+    stop_owned_gateway_locked(&path, &owner, url)
+}
+
+fn stop_owned_and_reset_locked(state: &Path, url: &str) -> Result<bool, String> {
+    let path = owner_path(state, url);
+    let Some(owner) = read_owner_record(&path)? else {
+        return Ok(false);
     };
     if !owner.valid_for(url) {
         return Err(format!(
@@ -235,10 +259,14 @@ pub(crate) fn stop_owned_and_reset(url: &str) -> Result<(), String> {
             path.display()
         ));
     }
+    stop_owned_gateway_locked(&path, &owner, url)
+}
+
+fn stop_owned_gateway_locked(path: &Path, owner: &OwnerRecord, url: &str) -> Result<bool, String> {
     match probe(url, owner.bootstrap_fingerprint.as_deref()) {
         RelayHealth::Unavailable => {
-            remove_if_matches(&path, &owner)?;
-            return Ok(());
+            remove_if_matches(path, owner)?;
+            return Ok(true);
         }
         RelayHealth::Compatible => {}
         RelayHealth::Incompatible | RelayHealth::Foreign => {
@@ -272,7 +300,8 @@ pub(crate) fn stop_owned_and_reset(url: &str) -> Result<(), String> {
             }
         }
     }
-    remove_if_matches(&path, &owner)
+    remove_if_matches(path, owner)?;
+    Ok(true)
 }
 
 fn write_owner_record(path: &Path, record: &OwnerRecord) -> Result<(), String> {

@@ -41,6 +41,7 @@ use crate::server::GatewayOverrides;
 
 pub(crate) const BOOTSTRAP_FINGERPRINT_ENV: &str = "NEMO_RELAY_BOOTSTRAP_FINGERPRINT";
 pub(crate) const PLUGIN_IDLE_TIMEOUT_ENV: &str = "NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS";
+pub(crate) const PLUGIN_HEARTBEAT_INTERVAL_ENV: &str = "NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS";
 pub(crate) const RELAY_PLUGIN_ID: &str = "nemo-relay-plugin@nemo-relay-local";
 pub(crate) const RELAY_SOURCE_PLUGIN_ID: &str = "nemo-relay-plugin@nemo-relay";
 pub(crate) const DEFAULT_MAX_HOOK_PAYLOAD_BYTES: usize = 20 * 1024 * 1024;
@@ -269,7 +270,7 @@ fn persistent_bootstrap_fingerprint(
     let environment = env::vars_os().filter_map(|(name, _)| name.into_string().ok());
     for name in crate::mcp_environment::forwarded_names(environment, gateway.plugin_config.as_ref())
     {
-        if name == PLUGIN_IDLE_TIMEOUT_ENV {
+        if name == PLUGIN_IDLE_TIMEOUT_ENV || name == PLUGIN_HEARTBEAT_INTERVAL_ENV {
             continue;
         }
         digest.update(&[0]);

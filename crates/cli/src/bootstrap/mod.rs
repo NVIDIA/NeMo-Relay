@@ -178,11 +178,10 @@ fn acquire_gateway(spec: &GatewaySpec) -> Result<GatewayEndpoint, String> {
             (RelayHealth::Compatible, instance_id) => {
                 return compatible_endpoint(spec.bind, url, instance_id);
             }
-            (RelayHealth::Incompatible, _) => return Err(incompatible_relay_error(&url)),
             // A gateway may already be binding while another MCP process owns the
             // startup lock. Serialize before deciding whether either state is a
-            // genuine conflict.
-            (RelayHealth::Foreign | RelayHealth::Unavailable, _) => {}
+            // genuine conflict or a verified version mismatch that can be replaced.
+            (RelayHealth::Incompatible | RelayHealth::Foreign | RelayHealth::Unavailable, _) => {}
         }
     }
 
@@ -194,7 +193,13 @@ fn acquire_gateway(spec: &GatewaySpec) -> Result<GatewayEndpoint, String> {
     }
     match probe_relay_health_with_instance(&url, spec.bootstrap_fingerprint.as_deref()) {
         (RelayHealth::Compatible, instance_id) => compatible_endpoint(spec.bind, url, instance_id),
-        (RelayHealth::Incompatible, _) => Err(incompatible_relay_error(&url)),
+        (RelayHealth::Incompatible, _) => {
+            if state::stop_version_mismatched_owned_gateway_locked(&state, &url)? {
+                start_gateway(spec, &state)
+            } else {
+                Err(incompatible_relay_error(&url))
+            }
+        }
         (RelayHealth::Foreign, _) => Err(foreign_listener_error(&url)),
         (RelayHealth::Unavailable, _) => start_gateway(spec, &state),
     }
@@ -571,8 +576,33 @@ pub(crate) fn plugin_idle_timeout() -> Result<Duration, String> {
     Ok(Duration::from_secs(seconds))
 }
 
+/// Returns the persistent MCP gateway heartbeat interval.
 pub(crate) fn plugin_heartbeat_interval() -> Result<Duration, String> {
-    Ok((plugin_idle_timeout()? / 3).clamp(Duration::from_millis(100), Duration::from_secs(30)))
+    let idle_timeout = plugin_idle_timeout()?;
+    let Ok(raw) = env::var(crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV) else {
+        return Ok((idle_timeout / 3).clamp(Duration::from_millis(100), Duration::from_secs(3)));
+    };
+    let seconds = raw.parse::<u64>().map_err(|error| {
+        format!(
+            "{} must be a positive integer: {error}",
+            crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV
+        )
+    })?;
+    if seconds == 0 {
+        return Err(format!(
+            "{} must be greater than 0",
+            crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV
+        ));
+    }
+    let heartbeat_interval = Duration::from_secs(seconds);
+    if heartbeat_interval >= idle_timeout {
+        return Err(format!(
+            "{} must be shorter than {}",
+            crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV,
+            crate::configuration::PLUGIN_IDLE_TIMEOUT_ENV
+        ));
+    }
+    Ok(heartbeat_interval)
 }
 
 #[cfg(test)]

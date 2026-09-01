@@ -521,9 +521,11 @@ pub(crate) fn detected_install_integrations(candidates: &[CodingAgent]) -> Vec<C
         .collect()
 }
 
+/// Returns hosts with persisted state, optionally including force-cleanup targets.
 pub(crate) fn installed_integrations(
     candidates: &[CodingAgent],
     install_dir: Option<&Path>,
+    include_local_install: bool,
 ) -> Vec<CodingAgent> {
     let install_dir = install_dir
         .map(Path::to_path_buf)
@@ -533,6 +535,11 @@ pub(crate) fn installed_integrations(
         .copied()
         .filter(|agent| {
             crate::installation::marketplace::persisted_state_exists(*agent, &install_dir)
+                || (include_local_install
+                    && crate::installation::marketplace::force_cleanup_target_exists(
+                        *agent,
+                        &install_dir,
+                    ))
         })
         .collect()
 }
@@ -562,7 +569,7 @@ pub(crate) fn collect_default_integration_readiness()
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
     let install_dir = crate::installation::marketplace::default_marketplace_install_dir();
-    let agents = installed_integrations(&CodingAgent::ALL, Some(&install_dir));
+    let agents = installed_integrations(&CodingAgent::ALL, Some(&install_dir), false);
     let pending = agents
         .into_iter()
         .map(|agent| spawn_integration_readiness(agent, install_dir.clone()))

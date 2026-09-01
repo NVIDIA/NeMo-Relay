@@ -151,7 +151,7 @@ fn stopping_an_absent_or_stale_owned_gateway_is_idempotent() {
 }
 
 #[test]
-fn authenticated_owned_gateway_is_shut_down_and_cleaned_up() {
+fn version_mismatched_owned_gateway_is_shut_down_and_cleaned_up() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config");
     let _scope = EnvScope::set(&[
@@ -165,7 +165,8 @@ fn authenticated_owned_gateway_is_shut_down_and_cleaned_up() {
     let state = state_dir().unwrap();
     create_private_dir(&state).unwrap();
     let path = owner_path(&state, &url);
-    let owner = OwnerRecord::new(42, &url, "shutdown-token", Some("fingerprint"));
+    let mut owner = OwnerRecord::new(42, &url, "shutdown-token", Some("fingerprint"));
+    owner.version = "previous-version".into();
     write_owner_record(&path, &owner).unwrap();
 
     let server = std::thread::spawn(move || {
@@ -175,8 +176,7 @@ fn authenticated_owned_gateway_is_shut_down_and_cleaned_up() {
         let proof = key.proof("fingerprint", &nonce);
         let body = format!(
             "{{\"status\":\"ok\",\"service\":\"nemo-relay\",\"version\":\"{}\",\"bootstrap_protocol\":{},\"instance_id\":\"test-instance\"}}",
-            env!("CARGO_PKG_VERSION"),
-            BOOTSTRAP_PROTOCOL_VERSION
+            "previous-version", BOOTSTRAP_PROTOCOL_VERSION
         );
         health
             .write_all(
@@ -215,7 +215,37 @@ fn authenticated_owned_gateway_is_shut_down_and_cleaned_up() {
             .unwrap();
     });
 
-    stop_owned_and_reset(&url).unwrap();
+    let _lock = lock_endpoint(&state, &url).unwrap();
+    assert!(stop_version_mismatched_owned_gateway_locked(&state, &url).unwrap());
     server.join().unwrap();
     assert!(!path.exists());
+}
+
+#[test]
+fn same_version_or_invalid_owned_gateway_is_not_stopped_for_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config");
+    let _scope = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(config.as_os_str())),
+        ("HOME", Some(dir.path().as_os_str())),
+        ("USERPROFILE", None),
+    ]);
+    let url = "http://127.0.0.1:47632";
+    let state = state_dir().unwrap();
+    create_private_dir(&state).unwrap();
+    let path = owner_path(&state, url);
+    let owner = OwnerRecord::new(42, url, "shutdown-token", Some("fingerprint"));
+    write_owner_record(&path, &owner).unwrap();
+
+    let _lock = lock_endpoint(&state, url).unwrap();
+    assert!(!stop_version_mismatched_owned_gateway_locked(&state, url).unwrap());
+    assert!(path.exists());
+    drop(_lock);
+
+    let mut invalid = owner;
+    invalid.bootstrap_protocol = BOOTSTRAP_PROTOCOL_VERSION.saturating_sub(1);
+    write_owner_record(&path, &invalid).unwrap();
+    let _lock = lock_endpoint(&state, url).unwrap();
+    assert!(!stop_version_mismatched_owned_gateway_locked(&state, url).unwrap());
+    assert!(path.exists());
 }
