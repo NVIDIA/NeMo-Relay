@@ -89,7 +89,11 @@ impl CodexHooksClient for FakeCodexHooksClient {
 }
 
 fn expected_plugin_command() -> crate::hooks::GeneratedHookCommands {
-    let relay = current_exe().unwrap();
+    // Mirrors source resolution order (crate::process::resolve_executable("nemo-relay"), falling
+    // back to current_exe()) so this helper stays correct on machines that happen to have a real
+    // `nemo-relay` on $PATH, rather than assuming current_exe() is always what gets embedded.
+    let relay =
+        crate::process::resolve_executable("nemo-relay").unwrap_or_else(|| current_exe().unwrap());
     let relay = relay.canonicalize().unwrap_or(relay);
     let relay = portable_executable_path(relay);
     codex_plugin_hook_command(
@@ -131,6 +135,39 @@ fn expected_plugin_command_for_hooks(path: &Path, event: &str) -> String {
                 .map(str::to_owned)
         })
         .unwrap_or_else(|| expected_plugin_command().for_event(event).to_owned())
+}
+
+#[test]
+fn codex_expected_plugin_hooks_prefer_path_relay_over_current_exe() {
+    // Regression test: the plugin marketplace writer resolves the relay binary via $PATH first,
+    // falling back to current_exe() (see require_relay()). Hook validation must resolve the same
+    // way, or install deterministically fails its own consistency check whenever a different
+    // `nemo-relay` sits earlier on $PATH than the binary performing the install.
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let bin_dir = dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let fake_relay = bin_dir.join("nemo-relay");
+    fs::write(&fake_relay, b"#!/bin/sh\n").unwrap();
+    let _path = EnvVarGuard::set_path("PATH", &bin_dir);
+
+    let hooks_path = dir.path().join("plugin").join("hooks").join("hooks.json");
+    write_plugin_generation_for_hooks(&hooks_path);
+
+    let commands = expected_plugin_hook_command(&hooks_path).unwrap();
+
+    let expected_relay = fake_relay.canonicalize().unwrap_or(fake_relay);
+    let expected_relay = portable_executable_path(expected_relay);
+    let command = commands.for_event("SessionStart");
+    assert!(
+        command.contains(expected_relay.to_str().unwrap()),
+        "{command}"
+    );
+    let real_current_exe = current_exe().unwrap();
+    assert!(
+        !command.contains(real_current_exe.to_str().unwrap()),
+        "{command}"
+    );
 }
 
 fn empty_codex_hooks_client() -> FakeCodexHooksClient {
@@ -2118,7 +2155,11 @@ fn codex_setup_can_validate_hooks_while_installer_holds_the_generation_lock() {
         &generation_lock,
     )
     .unwrap();
-    let relay = current_exe().unwrap();
+    // Matches source resolution order (crate::process::resolve_executable("nemo-relay"), falling
+    // back to current_exe()) so this test stays correct on machines that happen to have a real
+    // `nemo-relay` on $PATH, rather than assuming current_exe() is always what gets embedded.
+    let relay =
+        crate::process::resolve_executable("nemo-relay").unwrap_or_else(|| current_exe().unwrap());
     let relay = portable_executable_path(relay.canonicalize().unwrap_or(relay));
     let command = codex_plugin_hook_command(&relay, &generation_path, &token).unwrap();
     fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();

@@ -51,7 +51,7 @@ use state::{
 pub(super) use crate::bootstrap::DEFAULT_URL as DEFAULT_GATEWAY_URL;
 pub(super) const MARKETPLACE_NAME: &str = "nemo-relay-local";
 pub(super) const PLUGIN_NAME: &str = "nemo-relay-plugin";
-pub(super) const RELAY_COMMAND: &str = "nemo-relay";
+pub(crate) const RELAY_COMMAND: &str = "nemo-relay";
 
 fn default_operation_lock_dir() -> Result<PathBuf, String> {
     std::env::var_os("HOME")
