@@ -3546,6 +3546,35 @@ fn first_install_cleans_generated_marketplace_after_state_write_failure() {
 }
 
 #[test]
+fn force_install_recovers_from_orphaned_state_with_no_matching_disk_or_host_install() {
+    // Regression test for a state file left behind by a partial/manual cleanup: it still parses
+    // and names roots, but neither those roots nor any host registration exist anymore. Install
+    // must treat this as "nothing to safely replace" rather than failing with a "missing
+    // generation marker" error that blames a real install that isn't actually there.
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("codex", "/bin/codex")
+        .with_codex_registration(false, false);
+    let setup_runner = MockSetupRunner::default();
+    let options = PluginInstallOptions {
+        force: true,
+        ..options(dir.path())
+    };
+    write_installed_state(CodingAgent::Codex, dir.path());
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    std::fs::remove_dir_all(&layout.marketplace_root).unwrap();
+    assert!(layout.state_path.exists());
+    assert!(!layout.marketplace_root.exists());
+    assert!(!layout.plugin_root.exists());
+
+    install_host(CodingAgent::Codex, &options, &runner, &setup_runner).unwrap();
+
+    assert!(layout.marketplace_root.exists());
+    assert!(layout.generation_fence.exists());
+}
+
+#[test]
 fn force_replacement_restoration_aggregates_independent_cleanup_failures() {
     let dir = tempdir().unwrap();
     let install_file = dir.path().join("install-file");

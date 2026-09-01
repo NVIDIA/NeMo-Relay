@@ -51,7 +51,7 @@ use state::{
 pub(super) use crate::bootstrap::DEFAULT_URL as DEFAULT_GATEWAY_URL;
 pub(super) const MARKETPLACE_NAME: &str = "nemo-relay-local";
 pub(super) const PLUGIN_NAME: &str = "nemo-relay-plugin";
-pub(super) const RELAY_COMMAND: &str = "nemo-relay";
+pub(crate) const RELAY_COMMAND: &str = "nemo-relay";
 
 fn default_operation_lock_dir() -> Result<PathBuf, String> {
     std::env::var_os("HOME")
@@ -1986,10 +1986,15 @@ fn prepare_plugin_install(
         &previous_plugin_manifest,
         &previous_generation_fence,
     );
-    let previous_install_exists = state_bytes.is_some()
-        || local_install_exists
-        || plugin_registered
-        || marketplace_registered;
+    // A persisted state file that merely parses is not proof of an install to protect: if it was
+    // orphaned by a manual cleanup or an interrupted uninstall, its own referenced roots are gone
+    // too. Require at least one of those roots to still exist before trusting the state file, so a
+    // stale state file alone can't manufacture a "missing generation marker" failure.
+    let state_root_exists = persisted
+        .as_ref()
+        .is_some_and(|state| state.marketplace_root.exists() || state.plugin_root.exists());
+    let previous_install_exists =
+        state_root_exists || local_install_exists || plugin_registered || marketplace_registered;
     let generation_retirement = if previous_install_exists {
         if !previous_generation_fence.exists() {
             if legacy_plugin_without_mcp(host, &previous_plugin_root)? {
