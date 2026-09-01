@@ -108,15 +108,17 @@ pub(crate) fn prepare(
         ["-e".to_string(), rendered],
     );
 
-    // Redirection is conditional, so say what the condition is rather than promising LLM spans.
+    // A launched session can name its own upstream, so this names the cases that still do not
+    // reach the gateway rather than the far larger set that once did not.
     launch.notes.push(format!(
         "pi tool and turn activity is reported to NeMo Relay by the extension. Model calls are \
-         routed through the gateway only when the selected model's provider already targets this \
-         gateway's upstream (openai={openai}, anthropic={anthropic}); pi resolves a base URL per \
-         model from a generated catalog, and the gateway forwards to one statically configured \
-         upstream per API family. A model on any other provider keeps calling its own endpoint \
-         and produces no LLM spans -- select a matching model, or start the gateway with \
-         --openai-base-url / --anthropic-base-url pointing at that provider",
+         routed through the gateway: a model already targeting this gateway's upstream \
+         (openai={openai}, anthropic={anthropic}) is redirected as it is, and a model on any \
+         other provider is redirected with its own endpoint named on each request. Two cases \
+         still produce no LLM spans -- a model whose API the gateway has no route for, and a \
+         provider whose models span more than one endpoint unless both --openai-base-url and \
+         --anthropic-base-url already point at it, because a provider is redirected as a whole. \
+         The model_redirect mark on the session scope names the outcome either way",
         openai = gateway.openai_base_url,
         anthropic = gateway.anthropic_base_url,
     ));

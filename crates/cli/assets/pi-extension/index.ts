@@ -45,8 +45,9 @@
  *
  * **Model redirection.** pi resolves a base URL per model from a generated
  * catalog, so the extension points the active model's provider at the gateway
- * itself -- but only when the gateway forwards to the endpoint that model would
- * otherwise call. See `src/provider-redirect.ts`.
+ * itself. Under a launched session it also names the endpoint the gateway
+ * should forward to, so a provider the gateway was never configured for is
+ * still reachable. See `src/provider-redirect.ts`.
  *
  * Environment (set by the launcher, overridable by hand):
  * - `NEMO_RELAY_PI_GATEWAY_URL`  gateway base URL (default `http://127.0.0.1:4040`)

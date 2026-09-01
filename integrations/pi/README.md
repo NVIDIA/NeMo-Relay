@@ -331,11 +331,14 @@ gateway — because a mark per `session_start` for either is noise.
 | Gateway forwards somewhere else | Redirected, naming the endpoint | Skipped, `upstream-mismatch` |
 | Upstream unknown | Redirected, naming the endpoint | Skipped, `unknown-upstream` — set `NEMO_RELAY_PI_REDIRECT=force` to override |
 | Model's API has no gateway route (Bedrock, Azure OpenAI Responses, Google, Google Vertex, Mistral, OpenAI Codex, Radius) | Skipped, `unserviceable-api` | Skipped, `unserviceable-api` |
-| The provider's models do not share one endpoint | Skipped, `provider-mixed-endpoints` | Skipped, `provider-mixed-endpoints` |
+| The provider's models do not share one endpoint | Redirected only if both upstreams already point at it | Redirected only if both upstreams already point at it |
 
-The last row holds on both paths for the same reason: `registerProvider` is
-provider-wide, so one endpoint is chosen for every model of that provider, and
-they have to agree on it.
+The last row reads the same on both paths because `registerProvider` is
+provider-wide: one endpoint is chosen for every model of that provider, so they
+have to agree on it. Pointing `--openai-base-url` and `--anthropic-base-url` at
+that provider's respective endpoints is what makes them agree — Fireworks
+redirects fine once both are set. Naming cannot substitute, because a single
+header carries a single endpoint.
 
 The decision is re-evaluated on every `model_select`, so switching to a model the
 gateway does not front stops redirecting rather than silently misrouting.

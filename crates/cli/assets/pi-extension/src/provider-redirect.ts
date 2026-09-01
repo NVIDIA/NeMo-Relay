@@ -19,18 +19,24 @@
  * `streamSimple` and re-implement a provider protocol; the extension stays a
  * thin client.
  *
- * **Redirection is conditional, and the condition is the whole design.** The
- * gateway forwards to one statically configured upstream per API family and a
- * client cannot override it per request -- inbound internal dispatch headers
- * are stripped. So sending a model's traffic to the gateway is only correct
- * when the gateway's upstream *is* the endpoint that model would otherwise
- * call. Redirecting an NVIDIA model into a gateway configured for
- * `api.openai.com` does not degrade to "no spans"; it breaks the session.
+ * **The gateway has to know where to forward, and there are two ways to tell
+ * it.** It sends each API family to one statically configured upstream, so
+ * redirecting a model whose endpoint is not that upstream would reach the wrong
+ * provider: an NVIDIA model in a gateway configured for `api.openai.com` does
+ * not degrade to "no spans", it breaks the session.
  *
- * The launcher therefore passes the gateway's own upstreams
- * (`NEMO_RELAY_PI_OPENAI_UPSTREAM`, `NEMO_RELAY_PI_ANTHROPIC_UPSTREAM`) and
- * this module redirects only on a match. Unmatched models keep their own
- * endpoint and produce no LLM spans, which is the honest outcome.
+ * - **The endpoint already matches.** The launcher passes the gateway's own
+ *   upstreams (`NEMO_RELAY_PI_OPENAI_UPSTREAM`,
+ *   `NEMO_RELAY_PI_ANTHROPIC_UPSTREAM`), and a model already targeting one of
+ *   them is redirected as it is.
+ * - **The endpoint is named.** Otherwise, when this run holds the launcher's
+ *   proxy credential, the redirect carries `x-nemo-relay-upstream-base-url` and
+ *   the gateway forwards there instead. This is what makes pi's arbitrary
+ *   providers reachable.
+ *
+ * Without that credential the header would be ignored, so a standalone daemon
+ * redirects only on a match and unmatched models keep their own endpoint and
+ * produce no LLM spans.
  */
 
 /**
