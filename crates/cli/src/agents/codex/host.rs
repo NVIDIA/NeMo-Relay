@@ -586,13 +586,24 @@ pub(crate) fn expected_plugin_hook_command(
     expected_plugin_hook_command_with_token(plugin_hooks_path, None)
 }
 
+/// Resolves the relay binary the same way the installer's `require_relay()` does: prefer whatever
+/// `nemo-relay` is found on `$PATH`, falling back to the currently running executable. Generated
+/// hooks are validated against this same resolution immediately after being written, so diverging
+/// from `require_relay()`'s order here would make that validation fail whenever a different
+/// `nemo-relay` sits earlier on `$PATH` than the binary performing the install.
+fn resolve_relay_executable() -> Result<PathBuf, String> {
+    let relay = crate::process::resolve_executable(crate::installation::marketplace::RELAY_COMMAND)
+        .map(Ok)
+        .unwrap_or_else(current_exe)?;
+    let relay = relay.canonicalize().unwrap_or(relay);
+    Ok(portable_executable_path(relay))
+}
+
 fn expected_plugin_hook_command_with_token(
     plugin_hooks_path: &Path,
     generation_token: Option<&str>,
 ) -> Result<crate::hooks::GeneratedHookCommands, String> {
-    let relay = current_exe()?;
-    let relay = relay.canonicalize().unwrap_or(relay);
-    let relay = portable_executable_path(relay);
+    let relay = resolve_relay_executable()?;
     let generation_path = plugin_generation_file(plugin_hooks_path)?;
     let captured;
     let generation_token = match generation_token {
