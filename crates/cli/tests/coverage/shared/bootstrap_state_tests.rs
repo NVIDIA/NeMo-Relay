@@ -249,3 +249,34 @@ fn same_version_or_invalid_owned_gateway_is_not_stopped_for_replacement() {
     assert!(!stop_version_mismatched_owned_gateway_locked(&state, url).unwrap());
     assert!(path.exists());
 }
+
+#[test]
+fn stale_unhealthy_gateway_owner_is_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = "http://127.0.0.1:9";
+    let path = owner_path(dir.path(), url);
+    let owner = OwnerRecord::new(42, url, "shutdown-token", Some("fingerprint"));
+    write_owner_record(&path, &owner).unwrap();
+
+    assert!(!stop_unhealthy_owned_gateway_locked(dir.path(), url).unwrap());
+    assert!(!path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn unhealthy_owned_gateway_is_force_killed_after_the_grace_period() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = "http://127.0.0.1:9";
+    let path = owner_path(dir.path(), url);
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", "trap '' TERM; while :; do sleep 1; done"])
+        .spawn()
+        .unwrap();
+    let owner = OwnerRecord::new(child.id(), url, "shutdown-token", Some("fingerprint"));
+    write_owner_record(&path, &owner).unwrap();
+    let waiter = std::thread::spawn(move || child.wait());
+
+    assert!(stop_unhealthy_owned_gateway_locked(dir.path(), url).unwrap());
+    assert!(!waiter.join().unwrap().unwrap().success());
+    assert!(!path.exists());
+}

@@ -21,6 +21,7 @@ use crate::gateway::client::{RelayHealth, probe, request_shutdown};
 pub(crate) const BOOTSTRAP_STATE_DIR_ENV: &str = "NEMO_RELAY_BOOTSTRAP_STATE_DIR";
 pub(crate) const BOOTSTRAP_SHUTDOWN_TOKEN_ENV: &str = "NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN";
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const UNHEALTHY_GATEWAY_TERMINATION_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub(super) struct OwnerRecord {
@@ -248,6 +249,28 @@ pub(crate) fn stop_version_mismatched_owned_gateway_locked(
     stop_owned_gateway_locked(&path, &owner, url)
 }
 
+/// Terminates a managed gateway whose health endpoint is unavailable so its
+/// listener cannot block a replacement process from binding the endpoint.
+///
+/// The caller holds the endpoint startup lock. A valid ownership record is the
+/// authority for signalling the process; listeners without one remain untouched.
+pub(crate) fn stop_unhealthy_owned_gateway_locked(state: &Path, url: &str) -> Result<bool, String> {
+    let path = owner_path(state, url);
+    let Some(owner) = read_owner_record(&path)? else {
+        return Ok(false);
+    };
+    if !owner.valid_for(url) {
+        return Ok(false);
+    }
+    if probe(url, owner.bootstrap_fingerprint.as_deref()) == RelayHealth::Compatible {
+        return Ok(false);
+    }
+
+    let was_running = terminate_owned_gateway_process(owner.pid)?;
+    remove_if_matches(&path, &owner)?;
+    Ok(was_running)
+}
+
 fn stop_owned_and_reset_locked(state: &Path, url: &str) -> Result<bool, String> {
     let path = owner_path(state, url);
     let Some(owner) = read_owner_record(&path)? else {
@@ -302,6 +325,121 @@ fn stop_owned_gateway_locked(path: &Path, owner: &OwnerRecord, url: &str) -> Res
     }
     remove_if_matches(path, owner)?;
     Ok(true)
+}
+
+#[cfg(unix)]
+fn terminate_owned_gateway_process(pid: u32) -> Result<bool, String> {
+    let pid =
+        i32::try_from(pid).map_err(|_| format!("invalid managed gateway process ID {pid}"))?;
+    if !process_is_running(pid) {
+        return Ok(false);
+    }
+
+    log_unhealthy_gateway_termination_started(pid);
+    signal_gateway_process_group(pid, libc::SIGTERM)?;
+    if wait_for_process_exit(pid, UNHEALTHY_GATEWAY_TERMINATION_TIMEOUT) {
+        return Ok(true);
+    }
+
+    log_unhealthy_gateway_termination_escalated(pid);
+    signal_gateway_process_group(pid, libc::SIGKILL)?;
+    if wait_for_process_exit(pid, UNHEALTHY_GATEWAY_TERMINATION_TIMEOUT) {
+        Ok(true)
+    } else {
+        Err(format!(
+            "managed Relay gateway process {pid} did not terminate"
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn signal_gateway_process_group(pid: i32, signal: i32) -> Result<(), String> {
+    // Detached gateways call setsid, making their PID the process-group ID.
+    // Fall back to the direct PID for an older or otherwise non-detached sidecar.
+    let group_result = unsafe { libc::kill(-pid, signal) };
+    if group_result == 0 {
+        return Ok(());
+    }
+    let group_error = std::io::Error::last_os_error();
+    if group_error.raw_os_error() != Some(libc::ESRCH) {
+        return Err(format!(
+            "failed to signal managed Relay gateway process {pid}: {group_error}"
+        ));
+    }
+    if unsafe { libc::kill(pid, signal) } == 0 {
+        Ok(())
+    } else {
+        let error = std::io::Error::last_os_error();
+        (error.raw_os_error() == Some(libc::ESRCH))
+            .then_some(())
+            .ok_or_else(|| format!("failed to signal managed Relay gateway process {pid}: {error}"))
+    }
+}
+
+#[cfg(unix)]
+fn process_is_running(pid: i32) -> bool {
+    (unsafe { libc::kill(pid, 0) }) == 0
+        || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(unix)]
+fn wait_for_process_exit(pid: i32, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while process_is_running(pid) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    !process_is_running(pid)
+}
+
+#[cfg(windows)]
+fn terminate_owned_gateway_process(pid: u32) -> Result<bool, String> {
+    log_unhealthy_gateway_termination_started(pid as i32);
+    let graceful = std::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T"])
+        .status();
+    if graceful.is_ok_and(|status| status.success()) {
+        return Ok(true);
+    }
+    thread::sleep(UNHEALTHY_GATEWAY_TERMINATION_TIMEOUT);
+    log_unhealthy_gateway_termination_escalated(pid as i32);
+    let forced = std::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .status()
+        .map_err(|error| {
+            format!("failed to force-kill managed Relay gateway process {pid}: {error}")
+        })?;
+    if forced.success() {
+        Ok(true)
+    } else {
+        Err(format!(
+            "managed Relay gateway process {pid} did not terminate"
+        ))
+    }
+}
+
+fn log_unhealthy_gateway_termination_started(pid: i32) {
+    log::warn!(
+        target: "nemo_relay.bootstrap",
+        event = "unhealthy_gateway_termination_started",
+        process_id = pid;
+        "Terminating unhealthy managed gateway"
+    );
+}
+
+fn log_unhealthy_gateway_termination_escalated(pid: i32) {
+    log::warn!(
+        target: "nemo_relay.bootstrap",
+        event = "unhealthy_gateway_termination_escalated",
+        process_id = pid;
+        "Force-killing unhealthy managed gateway after graceful termination timeout"
+    );
+}
+
+#[cfg(not(any(unix, windows)))]
+fn terminate_owned_gateway_process(pid: u32) -> Result<bool, String> {
+    Err(format!(
+        "cannot terminate unhealthy managed Relay gateway process {pid} on this platform"
+    ))
 }
 
 fn write_owner_record(path: &Path, record: &OwnerRecord) -> Result<(), String> {

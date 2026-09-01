@@ -90,7 +90,8 @@ impl GatewaySpec {
                 log::error!(
                     target: "nemo_relay.bootstrap",
                     event = "gateway_acquisition_failed",
-                    bind = self.bind.to_string().as_str();
+                    bind = self.bind.to_string().as_str(),
+                    error = error.as_str();
                     "Gateway acquisition failed"
                 );
                 Err(error)
@@ -120,7 +121,8 @@ impl GatewaySpec {
                 log::error!(
                     target: "nemo_relay.bootstrap",
                     event = "gateway_recovery_failed",
-                    instance_id = expected_instance;
+                    instance_id = expected_instance,
+                    error = error.as_str();
                     "Gateway recovery failed"
                 );
                 Err(error)
@@ -200,8 +202,17 @@ fn acquire_gateway(spec: &GatewaySpec) -> Result<GatewayEndpoint, String> {
                 Err(incompatible_relay_error(&url))
             }
         }
-        (RelayHealth::Foreign, _) => Err(foreign_listener_error(&url)),
-        (RelayHealth::Unavailable, _) => start_gateway(spec, &state),
+        (RelayHealth::Foreign, _) => {
+            if state::stop_unhealthy_owned_gateway_locked(&state, &url)? {
+                start_gateway(spec, &state)
+            } else {
+                Err(foreign_listener_error(&url))
+            }
+        }
+        (RelayHealth::Unavailable, _) => {
+            state::stop_unhealthy_owned_gateway_locked(&state, &url)?;
+            start_gateway(spec, &state)
+        }
     }
 }
 
@@ -285,12 +296,28 @@ fn compatible_endpoint(
 }
 
 fn foreign_listener_error(url: &str) -> String {
+    log::error!(
+        target: "nemo_relay.bootstrap",
+        event = "gateway_port_conflict",
+        endpoint = url,
+        observed_health = "unverified_listener",
+        remediation = "stop_listener_or_configure_another_port";
+        "Gateway endpoint is occupied by an unverified listener"
+    );
     format!(
         "{url} is occupied by a service that is not a compatible NeMo Relay gateway; stop that service or configure another port"
     )
 }
 
 fn incompatible_relay_error(url: &str) -> String {
+    log::error!(
+        target: "nemo_relay.bootstrap",
+        event = "gateway_port_conflict",
+        endpoint = url,
+        observed_health = "incompatible_relay",
+        remediation = "stop_gateway_wait_for_idle_shutdown_or_reinstall_with_force";
+        "Gateway endpoint is occupied by an incompatible NeMo Relay gateway"
+    );
     format!(
         "{url} is occupied by NeMo Relay with a different version or persistent configuration; stop it, wait for idle shutdown, or reinstall the integration with --force"
     )
