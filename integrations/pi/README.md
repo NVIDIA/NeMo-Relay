@@ -59,11 +59,16 @@ To manage the extension yourself instead, use either of:
 
 ```bash
 # 1 · file drop
-cp -r integrations/pi ~/.pi/agent/extensions/nemo-relay
+cp -r crates/cli/assets/pi-extension ~/.pi/agent/extensions/nemo-relay
 
 # 2 · pi install, from a LOCAL PATH -- never with --local
-pi install /path/to/NeMo-Relay/integrations/pi
+pi install /path/to/NeMo-Relay/crates/cli/assets/pi-extension
 ```
+
+Both copy from `crates/cli/assets/pi-extension` rather than from this directory.
+That is where the extension's source actually lives -- see [Layout](#layout) --
+and it is the only self-contained copy: this directory reaches the source through
+symlinks, which a copy may or may not follow depending on the platform's `cp`.
 
 Install **one** copy. pi de-duplicates its extension set by path rather than by
 package, so two copies are two packages: both register hooks and every event is
@@ -479,6 +484,23 @@ prefix, so the gate records the decision, not the command. See
 npm run typecheck --prefix integrations/pi
 node --test integrations/pi/test/*.test.mjs
 ```
+
+### Layout
+
+The extension's source lives in `crates/cli/assets/pi-extension`, and
+`package.json`, `index.ts` and `src/` here are symlinks to it. There is one copy
+of every file, edited from either path.
+
+It lives under the CLI crate for a packaging reason rather than a design one:
+`nemo-relay install pi` embeds the extension with `include_str!` so installing
+needs no checkout, `nemo-relay-cli` is published to crates.io, and Cargo packages
+only files below the crate root. A copy kept in step by a sync step was the
+alternative, and it duplicated all seven files.
+
+What is real here is what has no runtime role: this README, `tsconfig.json` and
+`test/`. One consequence is worth knowing before you copy this directory
+anywhere -- it is not self-contained, so an install copies from
+`crates/cli/assets/pi-extension` instead.
 
 The gateway half of the contract is covered in Rust by
 `pi_tool_call_hook_rejects_when_conditional_guardrail_blocks`,

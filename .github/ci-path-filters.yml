@@ -206,6 +206,11 @@ openclaw:
 pi:
   - 'crates/cli/src/agents/pi/**'
   - 'crates/cli/src/agents/shared/adapters.rs'
+  # The extension's source lives under the CLI crate, because the published crate can only
+  # embed files below its own root. `integrations/pi` holds its README, tsconfig and test
+  # suite and symlinks the rest, so an edit to the extension itself lands here and would
+  # otherwise never reach the suite that tests it.
+  - 'crates/cli/assets/pi-extension/**'
   - 'integrations/pi/**'
 
 python:

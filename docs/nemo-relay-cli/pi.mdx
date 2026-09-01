@@ -21,7 +21,7 @@ Redirection](#model-redirection) explains.
 
 pi has no native hook-configuration file, and its external event stream is
 observation-only, so hook calls cannot be injected from outside the process. They
-originate inside a pi *extension*, which Relay ships at `integrations/pi/`. The
+originate inside a pi *extension*, which Relay ships in this repository. The
 extension is a thin HTTP client: it forwards pi's lifecycle to `POST /hooks/pi`
 and gates tool calls on the gateway's verdict. All policy and all span
 construction stay in the gateway.
@@ -96,11 +96,16 @@ extension yourself:
 
 ```bash
 # 1 · file drop
-cp -r integrations/pi ~/.pi/agent/extensions/nemo-relay
+cp -r crates/cli/assets/pi-extension ~/.pi/agent/extensions/nemo-relay
 
 # 2 · pi install, from a LOCAL PATH -- never with --local
-pi install /path/to/NeMo-Relay/integrations/pi
+pi install /path/to/NeMo-Relay/crates/cli/assets/pi-extension
 ```
+
+Both copy from `crates/cli/assets/pi-extension`, which is where the extension's
+source lives and the only self-contained copy of it. `integrations/pi` holds the
+extension's README, TypeScript configuration and test suite, and reaches the
+source through symlinks that a copy may or may not follow.
 
 Relay resolves either route too — or `NEMO_RELAY_PI_EXTENSION`, if you set it —
 and passes what it finds to `-e`, which loads first and is never trust-gated. It
@@ -137,7 +142,7 @@ directory yourself.
 <Warning>
 **Do not install from a git URL.** pi has no subdirectory syntax for a git
 source: it clones the repository root and looks there for a `pi` manifest key or
-a top-level `extensions/` directory. This extension lives at `integrations/pi`,
+a top-level `extensions/` directory. This extension lives further down the tree,
 so the install reports success and loads nothing — while the clone's root
 `skills/` directory *is* picked up, giving you NeMo Relay's skills in pi and none
 of the gating.

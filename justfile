@@ -582,7 +582,11 @@ set_node_package_versions() {
     # `nemo-relay-pi` is private and not published, so this bump changes nothing today. It is here
     # so the version cannot already be stale on the day that changes: a workspace member absent
     # from this list drifts silently, with no lockfile mismatch and no CI failure to catch it.
-    set_npm_package_version integrations/pi/package.json package-lock.json "$version" integrations/pi
+    #
+    # The manifest is written at its real path rather than through `integrations/pi`'s symlink to
+    # it. A checkout without symlink support leaves a text stub there, and writing through that
+    # would overwrite the link target's path with a manifest instead of bumping anything.
+    set_npm_package_version crates/cli/assets/pi-extension/package.json package-lock.json "$version" integrations/pi
 }
 
 set_node_package_version() {
@@ -1088,28 +1092,6 @@ check-python-worker-proto:
     outcome = pb.ToolExecutionInterceptResult.DESCRIPTOR.fields_by_name["outcome"]
     assert outcome.message_type.full_name == "nemo.relay.worker.v1.ToolExecutionInterceptOutcome"
     PY
-
-# Refresh the vendored copy of the pi extension that `nemo-relay install pi` writes.
-#
-# `nemo-relay-cli` is published to crates.io, and Cargo packages only files under the
-# crate root -- so the binary cannot embed `integrations/pi` directly and carries this
-# copy instead. `integrations/pi` stays the source of truth; a Rust test fails when the
-# two drift. Only the files pi loads are vendored: the manifest, the entry point and
-# `src/`. Tests, tsconfig and the README have no runtime role, and vendoring the README
-# would mean re-syncing on every wording change.
-sync-pi-extension:
-    #!/usr/bin/env bash
-    {{ bash_helpers }}
-    cd "$NEMO_RELAY_REPO_ROOT"
-    source_dir="integrations/pi"
-    target_dir="crates/cli/assets/pi-extension"
-    rm -rf "$target_dir"
-    mkdir -p "$target_dir/src"
-    cp "$source_dir/package.json" "$target_dir/package.json"
-    cp "$source_dir/index.ts" "$target_dir/index.ts"
-    cp "$source_dir"/src/*.ts "$target_dir/src/"
-    echo "Synced $(find "$target_dir" -type f | wc -l | tr -d " ") files into $target_dir"
-    echo "If the file set changed, update EXTENSION_FILES in crates/cli/src/agents/pi/assets.rs"
 
 generate-test-plugin-lockfiles:
     #!/usr/bin/env bash

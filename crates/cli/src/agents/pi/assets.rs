@@ -1,29 +1,30 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! The pi extension, vendored into the binary so installing it needs no checkout.
+//! The pi extension, embedded in the binary so installing it needs no checkout.
 //!
-//! `integrations/pi` stays the source of truth; this is a copy of it, and the copy exists
-//! for a packaging reason rather than a design one. `nemo-relay-cli` is published to
-//! crates.io, and Cargo packages only files under the crate root -- so
+//! **`crates/cli/assets/pi-extension` is the one copy of the extension.** It lives under
+//! this crate for a packaging reason rather than a design one: `nemo-relay-cli` is
+//! published to crates.io, and Cargo packages only files under the crate root -- so
 //! `include_str!("../../../../../integrations/pi/index.ts")` compiles in a workspace
 //! checkout and then fails to build from the published tarball, where that path does not
 //! exist. A build script that copies into `OUT_DIR` hits the same wall for the same
 //! reason: the source it would copy is not in the tarball either.
 //!
-//! Regenerate with `just sync-pi-extension`. The drift test fails when the two diverge,
-//! and skips itself when `integrations/pi` is absent -- which is exactly the
-//! published-crate case this vendoring exists to serve.
+//! `integrations/pi` is the extension's development home -- its README, tsconfig and test
+//! suite -- and reaches the source through symlinks into this directory. Nothing is
+//! duplicated and there is no sync step. `cargo package` follows those symlinks from the
+//! other direction too, writing each target in as a regular file, which is how the
+//! published crate ends up self-contained.
 //!
-//! Only what pi loads is vendored: the manifest, the entry point, and `src/`. `test/` and
-//! `tsconfig.json` have no runtime role, and vendoring the README would mean a re-sync on
-//! every wording change to a file nothing reads at run time.
+//! Only what pi loads lives here: the manifest, the entry point, and `src/`. `test/` and
+//! `tsconfig.json` have no runtime role, and the README is not read at run time.
 
 /// One file of the vendored extension.
 pub(crate) struct ExtensionFile {
     /// Path relative to the extension root, always `/`-separated.
     pub(crate) path: &'static str,
-    /// The file's contents, byte-identical to its counterpart in `integrations/pi`.
+    /// The file's contents, embedded from `assets/pi-extension` at compile time.
     pub(crate) contents: &'static str,
 }
 
@@ -64,9 +65,9 @@ pub(crate) const EXTENSION_FILES: &[ExtensionFile] = &[
 
 /// The version an install records for the extension it wrote.
 ///
-/// This crate's own version rather than a parse of the vendored `package.json`: the two are
+/// This crate's own version rather than a parse of the embedded `package.json`: the two are
 /// tied by a test, so there is one value here and no fallible path at install time. They are
-/// meant to move together -- the repository's version recipe already bumps `integrations/pi`
+/// meant to move together -- the repository's version recipe bumps this directory's manifest
 /// alongside the crates -- and asserting it is not theoretical, because a merge once left pi
 /// a release behind with no conflict to show for it.
 pub(crate) const EXTENSION_VERSION: &str = env!("CARGO_PKG_VERSION");

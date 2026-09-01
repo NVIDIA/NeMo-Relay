@@ -64,7 +64,7 @@ pub(crate) fn prepare(
         return Err(CliError::Launch(format!(
             "could not locate the NeMo Relay pi extension at a load path that is not \
              trust-gated; run `nemo-relay install pi`, install it yourself with `pi \
-             install <path to integrations/pi>` (without `--local`), or set \
+             install <path to crates/cli/assets/pi-extension>` (without `--local`), or set \
              {PI_EXTENSION_PATH_ENV} to its entry point. A project-scoped install is \
              deliberately not used here: `-e` is never trust-gated, so passing one would load \
              code pi itself would not trust. `nemo-relay doctor pi` reports what was found"
