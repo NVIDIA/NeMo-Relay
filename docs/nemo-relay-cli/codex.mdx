@@ -146,6 +146,10 @@ alias only to resume sessions created by earlier Relay versions. It then uses
 the existing `nemo-relay` binary on `PATH`; it does not install a plugin-local
 Relay binary.
 
+If your config explicitly selects another provider, installation switches it to
+the built-in `openai` provider while Relay is installed and restores your
+selection on uninstall.
+
 The required plugin MCP process is a lightweight lifecycle client. When it
 launches, it starts or reuses a detached Rust
 `nemo-relay --bind 127.0.0.1:47632` sidecar. It completes MCP initialization
