@@ -272,3 +272,7 @@ pub fn evaluate_dynamic_plugin_host_policy(
         failure,
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/plugin_dynamic_policy_tests.rs"]
+mod tests;
