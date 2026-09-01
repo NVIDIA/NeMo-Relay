@@ -25,7 +25,71 @@ This is the Release Notes template. Document one release version per page and us
 This page contains the release notes for [NVIDIA NeMo
 Relay](/about-nemo-relay/overview).
 
-## Release 0.8
+## Release 0.8.3
+
+Python release wheels now synchronize the selected release version between the
+package metadata and the compiled native extension. This prevents consumers
+that inspect the native extension version, including native-plugin compatibility
+checks, from observing a stale Relay version.
+
+## Release 0.8.2
+
+### Managed Gateway and Coding-Agent Lifecycle
+
+- The CLI now provides explicit `nemo-relay gateway start` and
+  `nemo-relay gateway stop` commands. Stopping verifies the Relay process at
+  the selected local loopback address before requesting shutdown; Unix callers
+  can use `--force` when graceful shutdown is not possible.
+- Persistent MCP integrations now send a configurable heartbeat. Set
+  `NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS` to a positive value shorter than
+  the gateway idle timeout when the default three-second interval is unsuitable.
+- After upgrading Relay, run `nemo-relay integrations refresh` to replace all
+  Relay-managed Codex and Claude Code integrations and their authenticated
+  sidecars. A newly started managed MCP client can also replace a verified
+  Relay-owned sidecar from a different Relay version; it never replaces a
+  foreign, invalid, or same-version gateway.
+- `nemo-relay uninstall <host> --force` can complete Relay-owned coding-agent
+  cleanup when normal safety checks fail.
+
+### Observability and Logging Fixes
+
+- ATIF exports retain the correct request metadata when LLM end events are
+  interleaved.
+- Set `stderr_enabled = false` under `[logging]` to disable the stderr sink
+  while retaining configured file sinks. See [Operational
+  Logging](/reference/operational-logging).
+
+## Release 0.8.1
+
+### Plugin and Configuration Improvements
+
+- The interactive plugin editor now handles structured maps, nested sections,
+  lists, and discriminator-selected configuration variants.
+- Built-in PII redaction supports `target_path_globs`. A complete `*` JSON
+  Pointer segment matches one object key or array index; existing
+  `target_paths` remain exact selectors. See [PII Redaction
+  Configuration](/configure-plugins/pii-redaction/configuration#path-semantics).
+- Native and worker plugins can register callback-based conditional middleware
+  guardrails. The additions preserve the existing native ABI v4 prefix and
+  `grpc-v1` constant-reason fields, so existing plugins remain compatible.
+- Built-in and configured static plugins now activate before dynamic plugins,
+  allowing dynamic plugin registrations to discover the runtime state required
+  during startup.
+
+### Observability and Security
+
+- OpenTelemetry can promote selected root Scope-start metadata into OTLP
+  resource attributes with `promote_resource_metadata_prefixes`. Each distinct
+  effective resource keeps its own exporter pipeline for the subscriber
+  lifetime. See [Root Resource Metadata
+  Promotion](/configure-plugins/observability/opentelemetry#root-resource-metadata-promotion).
+- Trajectory redaction preserves supported log-severity metadata, so sanitized
+  semantic logs remain exportable.
+- Gateway, permission, dynamic-plugin, observability, and response-cache
+  boundaries were hardened without changing public APIs, ABIs, configuration
+  schemas, or event formats.
+
+## Release 0.8.0
 
 NeMo Relay 0.8 strengthens plugin extensibility, managed tool execution, and
 observability while introducing source-breaking migration steps for native Rust

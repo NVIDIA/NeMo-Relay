@@ -13,17 +13,21 @@ intervening release in sequence.
 
 ## Upgrade to NeMo Relay 0.8
 
-### Refresh the Installed Codex Provider Configuration
+### Refresh Relay-Managed Coding-Agent Integrations
 
-If you use the persistent Codex integration, cycle its installation after
-upgrading to refresh the `nemo-relay-openai` provider configuration. This fixes
-a routing bug that can prevent Codex image-generation requests from reaching
-Relay:
+After upgrading to 0.8.2 or later, refresh every Relay-managed Codex and Claude
+Code integration before starting a new session:
 
 ```bash
-nemo-relay uninstall codex
-nemo-relay install codex
+nemo-relay integrations refresh
 ```
+
+The command retires old MCP generations and replaces Relay-owned sidecars with
+the current Relay binary. It does not modify manually configured MCP servers.
+For a focused repair of one managed Codex installation, use
+`nemo-relay install codex --force`. This refresh also replaces the older
+uninstall-and-install procedure for the persistent Codex provider configuration
+needed by the initial 0.8 release.
 
 ### Update Exhaustive Cache Configuration Literals
 
