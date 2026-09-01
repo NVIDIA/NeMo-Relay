@@ -34,18 +34,11 @@ fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
 
 fn with_event_loop<T>(py: Python<'_>, f: impl FnOnce(Bound<'_, PyAny>) -> T) -> T {
     let asyncio = py.import("asyncio").unwrap();
-    #[cfg(windows)]
-    {
-        let policy = asyncio
-            .getattr("WindowsSelectorEventLoopPolicy")
-            .unwrap()
-            .call0()
-            .unwrap();
-        asyncio
-            .call_method1("set_event_loop_policy", (policy,))
-            .unwrap();
-    }
-    let event_loop = asyncio.call_method0("new_event_loop").unwrap();
+    let event_loop = asyncio
+        .getattr("SelectorEventLoop")
+        .unwrap()
+        .call0()
+        .unwrap();
     asyncio
         .call_method1("set_event_loop", (&event_loop,))
         .unwrap();
@@ -185,6 +178,7 @@ class FailingRegisterPlugin:
         return []
 
     def register(self, plugin_config, context):
+        context.register_subscriber("sub", lambda event: None)
         raise RuntimeError("register boom")
 
 class GoodPlugin:
@@ -260,6 +254,10 @@ async def initialize_plugin(module, config):
                 .call_method1("run_until_complete", (failing,))
                 .unwrap_err();
             assert!(error.to_string().contains("register boom"), "{error}");
+            assert!(
+                !deregister_subscriber("nemo-relay-plugin.v1.demo.failing_register:1:sub").unwrap(),
+                "failed initialization should roll back partial registrations"
+            );
 
             let context_guard = force_plugin_context_new_error_for_tests("demo.forced_failures");
             let failing = helpers

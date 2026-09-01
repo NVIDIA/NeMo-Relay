@@ -3721,7 +3721,7 @@ fn atif_explicit_options_and_open_agent_teardown_are_written() {
 
 #[test]
 #[cfg(feature = "object-store")]
-fn atif_open_agent_teardown_failure_clears_the_test_host() {
+fn atif_open_agent_teardown_failure_retains_report_until_retry() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
     let dir = temp_dir("observability-atif-open-agent-delivery-failure");
@@ -3741,6 +3741,8 @@ fn atif_open_agent_teardown_failure_clears_the_test_host() {
     assert!(teardown.to_string().contains("atif.remote_delivery_failed"));
     server.join().unwrap().unwrap();
 
+    assert!(crate::plugin::test_plugin_host_report().is_some());
+    test_close_plugin_host().expect("inactive test-host activation should clear on retry");
     assert!(crate::plugin::test_plugin_host_report().is_none());
 
     pop(&agent);

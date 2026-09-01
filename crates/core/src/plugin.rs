@@ -2477,7 +2477,18 @@ pub fn test_close_plugin_host() -> Result<()> {
         .lock()
         .map_err(|error| PluginError::Internal(format!("test plugin host lock poisoned: {error}")))?
         .take();
-    activation.map_or(Ok(()), |mut activation| activation.close())
+    let Some(mut activation) = activation else {
+        return Ok(());
+    };
+    match activation.close() {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            *TEST_PLUGIN_HOST.lock().map_err(|lock_error| {
+                PluginError::Internal(format!("test plugin host lock poisoned: {lock_error}"))
+            })? = Some(activation);
+            Err(error)
+        }
+    }
 }
 
 /// Test-only snapshot of the owned host report.

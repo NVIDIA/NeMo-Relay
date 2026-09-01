@@ -579,9 +579,11 @@ fn atif_storage_http_non_2xx_retries_on_the_next_trajectory() {
         "delivery failure should not imply a leaked registration: {teardown}"
     );
     assert!(
-        test_plugin_host_report().is_none(),
-        "failed cleanup must not leave a stale test-host activation"
+        test_plugin_host_report().is_some(),
+        "failed cleanup should retain the test-host report for diagnosis"
     );
+    test_close_plugin_host().expect("inactive test-host activation should clear on retry");
+    assert!(test_plugin_host_report().is_none());
     // SAFETY: cleanup of test-only env var.
     unsafe {
         std::env::remove_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN");
