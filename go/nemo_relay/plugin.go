@@ -270,6 +270,15 @@ type PluginHostReport struct {
 // DynamicPluginCheckState is the result of one validation check.
 type DynamicPluginCheckState string
 
+const (
+	// DynamicPluginCheckStateUnknown indicates that a check was not applicable.
+	DynamicPluginCheckStateUnknown DynamicPluginCheckState = "unknown"
+	// DynamicPluginCheckStateValid indicates that a check succeeded.
+	DynamicPluginCheckStateValid DynamicPluginCheckState = "valid"
+	// DynamicPluginCheckStateInvalid indicates that a check failed.
+	DynamicPluginCheckStateInvalid DynamicPluginCheckState = "invalid"
+)
+
 // DynamicPluginValidationStatus is the canonical status attached to one plugin report.
 type DynamicPluginValidationStatus struct {
 	Manifest        DynamicPluginCheckState `json:"manifest"`

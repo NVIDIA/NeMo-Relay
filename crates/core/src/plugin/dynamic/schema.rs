@@ -8,13 +8,15 @@ use std::path::Path;
 use jsonschema::Draft;
 use serde_json::Value as Json;
 
-use super::{DynamicPluginManifest, read_bounded_regular_file};
+use super::{DynamicPluginManifest, read_regular_file_with_limit};
 use crate::plugin::{PluginError, Result};
 
 const MAX_CONFIG_SCHEMA_BYTES: usize = 1024 * 1024;
-const DRAFT_7_URIS: [&str; 2] = [
+const DRAFT_7_URIS: [&str; 4] = [
     "http://json-schema.org/draft-07/schema",
+    "http://json-schema.org/draft-07/schema#",
     "https://json-schema.org/draft-07/schema",
+    "https://json-schema.org/draft-07/schema#",
 ];
 const DRAFT_2020_12_URIS: [&str; 2] = [
     "https://json-schema.org/draft/2020-12/schema",
@@ -33,23 +35,22 @@ pub fn validate_dynamic_plugin_config_schema(
     let schema = load_schema(manifest.plugin.id.trim(), &path)?;
     schema.validate(config).map_err(|error| {
         PluginError::InvalidConfig(format!(
-            "dynamic plugin '{}' configuration does not satisfy {}: {}",
+            "dynamic plugin '{}' configuration does not satisfy {} at {}: {}",
             manifest.plugin.id,
             path.display(),
-            error.instance_path()
+            error.instance_path(),
+            error
         ))
     })
 }
 
 fn load_schema(plugin_id: &str, path: &Path) -> Result<jsonschema::Validator> {
-    let bytes = read_bounded_regular_file(path, "dynamic plugin config schema")
-        .map_err(PluginError::InvalidConfig)?;
-    if bytes.len() > MAX_CONFIG_SCHEMA_BYTES {
-        return Err(PluginError::InvalidConfig(format!(
-            "dynamic plugin '{plugin_id}' config schema {} exceeds the {MAX_CONFIG_SCHEMA_BYTES}-byte limit",
-            path.display()
-        )));
-    }
+    let bytes = read_regular_file_with_limit(
+        path,
+        "dynamic plugin config schema",
+        MAX_CONFIG_SCHEMA_BYTES as u64,
+    )
+    .map_err(PluginError::InvalidConfig)?;
     let schema: Json = serde_json::from_slice(&bytes).map_err(|error| {
         PluginError::InvalidConfig(format!(
             "dynamic plugin '{plugin_id}' config schema {} is not valid JSON: {error}",

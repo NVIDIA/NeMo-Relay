@@ -36,9 +36,7 @@ use nemo_relay::plugin::{
     ConfigDiagnostic, Plugin, PluginComponentSpec, PluginConfig, PluginRegistrationContext,
     Result as PluginResult, deregister_plugin, list_plugin_kinds, lookup_plugin, register_plugin,
 };
-use plugin_host_test_support::{
-    test_close_plugin_host, test_initialize_plugin_host_exact, test_plugin_host_report,
-};
+use plugin_host_test_support::{test_close_plugin_host, test_initialize_plugin_host_exact};
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -1918,7 +1916,7 @@ async fn plugin_host_activation_cleans_up_after_caller_cancellation() {
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            if test_plugin_host_report().is_none() && lookup_plugin("fixture_native").is_none() {
+            if lookup_plugin("fixture_native").is_none() {
                 break;
             }
             tokio::task::yield_now().await;

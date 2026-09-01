@@ -45,6 +45,15 @@ const GENERIC_TEST_PLUGIN_KIND: &str = "cli-test-generic-plugin";
 static GENERIC_TEST_PLUGIN_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static GENERIC_TEST_PLUGIN_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 
+struct BuiltinObservabilityRestore;
+
+impl Drop for BuiltinObservabilityRestore {
+    fn drop(&mut self) {
+        let _ = deregister_plugin("observability");
+        let _ = ensure_builtin_plugins_registered();
+    }
+}
+
 struct EnvVarGuard {
     _guard: std::sync::MutexGuard<'static, ()>,
     key: &'static str,
@@ -2034,6 +2043,7 @@ async fn dynamic_cli_activation_initializes_builtins_before_loading_dynamic_plug
     let _ = nemo_relay::plugin::test_close_plugin_host();
     ensure_builtin_plugins_registered().expect("builtin registration must be available");
     assert!(deregister_plugin("observability"));
+    let _restore_builtin_observability = BuiltinObservabilityRestore;
     register_plugin(Arc::new(PreclaimedBuiltinPlugin))
         .expect("fixture must claim the builtin kind");
 
@@ -2057,8 +2067,6 @@ async fn dynamic_cli_activation_initializes_builtins_before_loading_dynamic_plug
         error.contains("reserved builtin plugin 'observability'"),
         "{error}"
     );
-    assert!(deregister_plugin("observability"));
-    ensure_builtin_plugins_registered().expect("builtin registration must recover");
 }
 
 #[tokio::test]

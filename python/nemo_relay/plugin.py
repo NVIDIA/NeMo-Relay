@@ -11,8 +11,9 @@ per component by the runtime, so end users do not provide instance ids.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field, fields, is_dataclass
-from typing import TYPE_CHECKING, Callable, Literal, Protocol, Self, TypedDict, cast
+from typing import TYPE_CHECKING, Literal, Protocol, Self, TypedDict, cast
 
 from nemo_relay import (
     EventMetadataInjectorCallback,

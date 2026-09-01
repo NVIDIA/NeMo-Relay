@@ -978,26 +978,6 @@ async fn activate_server_plugins(
     if config.is_none() && dynamic_plugins.is_empty() {
         return Ok(None);
     }
-    if dynamic_plugins.is_empty() {
-        let plugin_config: PluginConfig = config
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?
-            .unwrap_or_default();
-        if let Some(error) = register_and_validate_plugin_components(&plugin_config)
-            .into_iter()
-            .next()
-        {
-            return Err(CliError::Config(error.to_string()));
-        }
-        let host = PluginHostActivation::initialize_exact(plugin_config)
-            .await
-            .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
-        return Ok(Some(ServerPluginActivation {
-            host,
-            _snapshots: Vec::new(),
-        }));
-    }
     let plugin_config: PluginConfig = config
         .map(serde_json::from_value)
         .transpose()
@@ -1008,6 +988,15 @@ async fn activate_server_plugins(
         .next()
     {
         return Err(CliError::Config(error.to_string()));
+    }
+    if dynamic_plugins.is_empty() {
+        let host = PluginHostActivation::initialize_exact(plugin_config)
+            .await
+            .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
+        return Ok(Some(ServerPluginActivation {
+            host,
+            _snapshots: Vec::new(),
+        }));
     }
     let mut snapshots = Vec::new();
     let specs = dynamic_plugins

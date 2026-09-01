@@ -1860,19 +1860,17 @@ pub(crate) fn resolve_plugin_config_with_explicit(
     config: PluginConfig,
     explicit_path: Option<&Path>,
 ) -> Result<ResolvedPluginConfig> {
-    let mut paths = explicit_path
-        .map(Path::to_path_buf)
-        .into_iter()
-        .collect::<Vec<_>>();
+    let explicit_path = explicit_path.map(Path::to_path_buf);
+    let mut paths = explicit_path.iter().cloned().collect::<Vec<_>>();
     paths.extend(default_plugin_config_paths(user_config_dir()));
-    let mut documents = vec![(
-        PathBuf::from("<programmatic plugin configuration>"),
-        plugin_config_overlay_value(&config)?,
-    )];
-    documents.extend(read_plugin_config_files(paths)?);
-    let (value, mut sources) = merge_plugin_config_documents(documents)?
-        .unwrap_or_else(|| (Json::Object(Map::new()), Vec::new()));
-    sources.retain(|source| source != Path::new("<programmatic plugin configuration>"));
+    let (file_value, mut sources) =
+        merge_plugin_config_documents(read_plugin_config_files(paths)?)?
+            .unwrap_or_else(|| (Json::Object(Map::new()), Vec::new()));
+    let mut value = plugin_config_overlay_value(&config)?;
+    layer_config(&mut value, file_value);
+    if let Some(explicit_path) = explicit_path {
+        sources.retain(|source| source != &explicit_path);
+    }
     Ok(ResolvedPluginConfig {
         config: serde_json::from_value(value)?,
         diagnostics: inherited_plugin_config_diagnostics(&sources),

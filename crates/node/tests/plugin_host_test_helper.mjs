@@ -16,8 +16,9 @@ export async function initialize(config, additionalPluginsToml) {
   if (activation !== undefined) {
     await activation.close();
   }
-  activation = await plugin.initialize(config, additionalPluginsToml);
-  return activation.report.config;
+  const nextActivation = await plugin.initialize(config, additionalPluginsToml);
+  activation = nextActivation;
+  return nextActivation.report.config;
 }
 
 export function report() {

@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use super::{
     DynamicPluginAttestationMode, DynamicPluginCheckState, DynamicPluginFailure,
     DynamicPluginFailurePhase, DynamicPluginManifest, EvaluatedDynamicPluginHostPolicy,
-    read_bounded_regular_file, stream_bounded_regular_file,
+    read_bounded_regular_file,
 };
 
 /// A failed artifact trust check.
@@ -182,8 +182,8 @@ pub fn evaluate_dynamic_plugin_trust(
             failure: None,
         };
     }
-    let artifact = match verify_integrity(manifest, manifest_ref) {
-        Ok(path) => path,
+    let artifact_bytes = match verify_integrity(manifest, manifest_ref) {
+        Ok(artifact) => artifact,
         Err(failure) => {
             return EvaluatedDynamicPluginTrust {
                 integrity: DynamicPluginCheckState::Invalid,
@@ -192,7 +192,7 @@ pub fn evaluate_dynamic_plugin_trust(
             };
         }
     };
-    match verify_authenticity(manifest, manifest_ref, &artifact, policy) {
+    match verify_authenticity(manifest, manifest_ref, &artifact_bytes, policy) {
         Ok(authenticity) => EvaluatedDynamicPluginTrust {
             integrity: DynamicPluginCheckState::Valid,
             authenticity,
@@ -222,7 +222,7 @@ pub fn resolve_dynamic_plugin_artifact_path(manifest_ref: &str, reference: &str)
 fn verify_integrity(
     manifest: &DynamicPluginManifest,
     manifest_ref: &str,
-) -> Result<PathBuf, DynamicPluginTrustFailure> {
+) -> Result<Vec<u8>, DynamicPluginTrustFailure> {
     let artifact = manifest
         .source
         .as_ref()
@@ -236,11 +236,14 @@ fn verify_integrity(
         .filter(|value| !value.is_empty())
         .ok_or(DynamicPluginTrustFailure::MissingIntegrityDigest)?;
     let artifact = resolve_dynamic_plugin_artifact_path(manifest_ref, artifact);
-    let actual =
-        sha256_file(&artifact).map_err(|error| DynamicPluginTrustFailure::ArtifactRead {
-            path: artifact.clone(),
-            error,
+    let bytes =
+        read_bounded_regular_file(&artifact, "dynamic plugin artifact").map_err(|error| {
+            DynamicPluginTrustFailure::ArtifactRead {
+                path: artifact.clone(),
+                error,
+            }
         })?;
+    let actual = sha256_bytes(&bytes);
     if actual != expected {
         return Err(DynamicPluginTrustFailure::IntegrityMismatch {
             path: artifact,
@@ -248,13 +251,13 @@ fn verify_integrity(
             actual,
         });
     }
-    Ok(artifact)
+    Ok(bytes)
 }
 
 fn verify_authenticity(
     manifest: &DynamicPluginManifest,
     manifest_ref: &str,
-    artifact: &Path,
+    artifact_bytes: &[u8],
     policy: &EvaluatedDynamicPluginHostPolicy,
 ) -> Result<DynamicPluginCheckState, DynamicPluginTrustFailure> {
     let signature = manifest
@@ -274,7 +277,7 @@ fn verify_authenticity(
         (_, Some(signature)) => {
             verify_signature(
                 manifest_ref,
-                artifact,
+                artifact_bytes,
                 signature,
                 &policy.trusted_public_keys,
             )?;
@@ -285,7 +288,7 @@ fn verify_authenticity(
 
 fn verify_signature(
     manifest_ref: &str,
-    artifact: &Path,
+    artifact_bytes: &[u8],
     signature_ref: &str,
     trusted_keys: &[String],
 ) -> Result<(), DynamicPluginTrustFailure> {
@@ -310,19 +313,12 @@ fn verify_signature(
             path: signature_path.clone(),
             error: format!("invalid base64 signature: {error}"),
         })?;
-    let artifact_bytes =
-        read_bounded_regular_file(artifact, "dynamic plugin artifact").map_err(|error| {
-            DynamicPluginTrustFailure::ArtifactRead {
-                path: artifact.to_path_buf(),
-                error,
-            }
-        })?;
     let mut parse_errors = Vec::new();
     for key in trusted_keys {
         match parse_ed25519_key(key) {
             Ok(key) => {
                 if UnparsedPublicKey::new(&ED25519, key)
-                    .verify(&artifact_bytes, &signature)
+                    .verify(artifact_bytes, &signature)
                     .is_ok()
                 {
                     return Ok(());
@@ -347,19 +343,17 @@ fn parse_ed25519_key(value: &str) -> Result<Vec<u8>, String> {
         .map_err(|error| format!("invalid ed25519 trusted public key '{value}': {error}"))
 }
 
-fn sha256_file(path: &Path) -> Result<String, String> {
+fn sha256_bytes(bytes: &[u8]) -> String {
     let mut digest = Sha256::new();
-    stream_bounded_regular_file(path, "dynamic plugin artifact", |chunk| {
-        digest.update(chunk)
-    })?;
-    Ok(format!(
+    digest.update(bytes);
+    format!(
         "sha256:{}",
         digest
             .finalize()
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
-    ))
+    )
 }
 
 #[cfg(test)]

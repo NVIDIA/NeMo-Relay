@@ -440,10 +440,7 @@ pub async fn run_workflow() -> Result<(), Box<dyn std::error::Error>> {
         "documentation-plugin.unsupported_mode"
     );
     let disabled_invalid = validate(config_with_enabled("invalid", false), None)?.config;
-    assert_eq!(
-        disabled_invalid.diagnostics[0].code,
-        "documentation-plugin.unsupported_mode"
-    );
+    assert!(disabled_invalid.diagnostics.is_empty());
     println!("invalid: {:?}", invalid.diagnostics);
     let mut activation = initialize(config("enforce"), None).await?;
     println!("active: {:?}", activation.report());

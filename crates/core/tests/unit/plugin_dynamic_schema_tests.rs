@@ -75,21 +75,30 @@ fn schema_validation_accepts_supported_drafts_and_local_references() {
         "http://json-schema.org/draft-07/schema",
         "https://json-schema.org/draft/2020-12/schema",
     ] {
-        fs::write(
-            &schema_path,
-            serde_json::to_vec(&json!({
-                "$schema": draft,
-                "type": "object",
-                "$defs": {"name": {"type": "string"}},
-                "properties": {
-                    "name": {"$ref": "#/$defs/name"},
-                    "items": {"type": "array", "items": {"$ref": "#/$defs/name"}}
-                },
-                "required": ["name"]
-            }))
-            .unwrap(),
-        )
-        .unwrap();
+        let definitions = if draft.contains("draft-07") {
+            json!({"definitions": {"name": {"type": "string"}}})
+        } else {
+            json!({"$defs": {"name": {"type": "string"}}})
+        };
+        let reference = if draft.contains("draft-07") {
+            "#/definitions/name"
+        } else {
+            "#/$defs/name"
+        };
+        let mut schema = json!({
+            "$schema": draft,
+            "type": "object",
+            "properties": {
+                "name": {"$ref": reference},
+                "items": {"type": "array", "items": {"$ref": reference}}
+            },
+            "required": ["name"]
+        });
+        schema
+            .as_object_mut()
+            .unwrap()
+            .extend(definitions.as_object().unwrap().clone());
+        fs::write(&schema_path, serde_json::to_vec(&schema).unwrap()).unwrap();
 
         validate_dynamic_plugin_config_schema(
             &manifest,

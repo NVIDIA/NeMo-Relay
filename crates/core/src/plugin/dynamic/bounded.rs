@@ -11,8 +11,19 @@ pub const MAX_DYNAMIC_PLUGIN_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Reads a regular file without following a Unix symlink and with a fixed byte budget.
 pub fn read_bounded_regular_file(path: &Path, description: &str) -> Result<Vec<u8>, String> {
+    read_regular_file_with_limit(path, description, MAX_DYNAMIC_PLUGIN_FILE_BYTES)
+}
+
+/// Reads a regular file without following a Unix symlink and with a caller-provided byte budget.
+pub fn read_regular_file_with_limit(
+    path: &Path,
+    description: &str,
+    max_bytes: u64,
+) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
-    stream_bounded_regular_file(path, description, |chunk| bytes.extend_from_slice(chunk))?;
+    stream_regular_file_with_limit(path, description, max_bytes, |chunk| {
+        bytes.extend_from_slice(chunk)
+    })?;
     Ok(bytes)
 }
 
@@ -20,6 +31,16 @@ pub fn read_bounded_regular_file(path: &Path, description: &str) -> Result<Vec<u
 pub fn stream_bounded_regular_file(
     path: &Path,
     description: &str,
+    consume: impl FnMut(&[u8]),
+) -> Result<(), String> {
+    stream_regular_file_with_limit(path, description, MAX_DYNAMIC_PLUGIN_FILE_BYTES, consume)
+}
+
+/// Streams a regular file through `consume` with a caller-provided byte budget.
+pub fn stream_regular_file_with_limit(
+    path: &Path,
+    description: &str,
+    max_bytes: u64,
     mut consume: impl FnMut(&[u8]),
 ) -> Result<(), String> {
     const BUFFER_BYTES: usize = 64 * 1024;
@@ -35,9 +56,9 @@ pub fn stream_bounded_regular_file(
             path.display()
         ));
     }
-    if metadata.len() > MAX_DYNAMIC_PLUGIN_FILE_BYTES {
+    if metadata.len() > max_bytes {
         return Err(format!(
-            "{description} {} exceeds the {MAX_DYNAMIC_PLUGIN_FILE_BYTES}-byte limit",
+            "{description} {} exceeds the {max_bytes}-byte limit",
             path.display()
         ));
     }
@@ -70,25 +91,32 @@ pub fn stream_bounded_regular_file(
             path.display()
         ));
     }
-    if opened.len() > MAX_DYNAMIC_PLUGIN_FILE_BYTES {
+    if opened.len() > max_bytes {
         return Err(format!(
-            "{description} {} exceeds the {MAX_DYNAMIC_PLUGIN_FILE_BYTES}-byte limit",
+            "{description} {} exceeds the {max_bytes}-byte limit",
             path.display()
         ));
     }
     let mut buffer = [0_u8; BUFFER_BYTES];
     let mut total = 0_u64;
     loop {
-        let count = file
-            .read(&mut buffer)
-            .map_err(|error| format!("failed to read {description} {}: {error}", path.display()))?;
+        let count = match file.read(&mut buffer) {
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                return Err(format!(
+                    "failed to read {description} {}: {error}",
+                    path.display()
+                ));
+            }
+        };
         if count == 0 {
             return Ok(());
         }
         total = total.saturating_add(count as u64);
-        if total > MAX_DYNAMIC_PLUGIN_FILE_BYTES {
+        if total > max_bytes {
             return Err(format!(
-                "{description} {} exceeds the {MAX_DYNAMIC_PLUGIN_FILE_BYTES}-byte limit",
+                "{description} {} exceeds the {max_bytes}-byte limit",
                 path.display()
             ));
         }
