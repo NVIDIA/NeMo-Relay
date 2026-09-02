@@ -3935,8 +3935,7 @@ command = "codex exec"
         .lines()
         .find(|line| line.starts_with("argv = "))
         .expect("dry-run output should include argv");
-    assert!(argv.starts_with("argv = codex "), "{stdout}");
-    assert!(argv.ends_with(" exec"), "{stdout}");
+    assert!(argv.starts_with("argv = codex exec --config "), "{stdout}");
 }
 
 #[test]
