@@ -455,28 +455,46 @@ fn termination_target_is_running(target: GatewayTerminationTarget) -> bool {
 
 #[cfg(windows)]
 fn terminate_owned_gateway_process(pid: u32) -> Result<bool, String> {
+    if !windows_process_is_running(pid) {
+        return Ok(false);
+    }
+
     log_unhealthy_gateway_termination_started(pid as i32);
-    let graceful = std::process::Command::new("taskkill")
+    let _graceful = std::process::Command::new("taskkill")
         .args(["/PID", &pid.to_string(), "/T"])
         .status();
-    if graceful.is_ok_and(|status| status.success()) {
+    if wait_for_windows_process_exit(pid, UNHEALTHY_GATEWAY_TERMINATION_TIMEOUT) {
         return Ok(true);
     }
-    thread::sleep(UNHEALTHY_GATEWAY_TERMINATION_TIMEOUT);
+
     log_unhealthy_gateway_termination_escalated(pid as i32);
-    let forced = std::process::Command::new("taskkill")
+    let _forced = std::process::Command::new("taskkill")
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .status()
         .map_err(|error| {
             format!("failed to force-kill managed Relay gateway process {pid}: {error}")
         })?;
-    if forced.success() {
+    if wait_for_windows_process_exit(pid, UNHEALTHY_GATEWAY_TERMINATION_TIMEOUT) {
         Ok(true)
     } else {
         Err(format!(
             "managed Relay gateway process {pid} did not terminate"
         ))
     }
+}
+
+#[cfg(windows)]
+fn windows_process_is_running(pid: u32) -> bool {
+    process_start_time(pid).is_some()
+}
+
+#[cfg(windows)]
+fn wait_for_windows_process_exit(pid: u32, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while windows_process_is_running(pid) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    !windows_process_is_running(pid)
 }
 
 fn log_unhealthy_gateway_termination_started(pid: i32) {
