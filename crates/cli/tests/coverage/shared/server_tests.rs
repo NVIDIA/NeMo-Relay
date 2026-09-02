@@ -5574,3 +5574,74 @@ async fn a_refused_named_upstream_never_reaches_the_configured_provider() {
         "the configured provider must never see a prompt addressed to somewhere else"
     );
 }
+
+/// A named destination must not be able to hand the request onward via a redirect.
+///
+/// Validation applies to the URL that was named. A `307` names a different one, and reqwest
+/// would follow up to ten of them — carrying the caller's provider key to a host nothing
+/// checked, possibly over plain `http`, which the named URL itself would have been refused for.
+/// Its own sensitive-header stripping does not cover this: that guards `Authorization` across
+/// origins, and provider keys travel in `x-api-key` and friends, which are ordinary headers.
+#[tokio::test]
+async fn a_named_upstream_redirect_is_not_followed() {
+    // Where the redirect points. Nothing may arrive here.
+    let redirect_target = spawn_named_upstream(completion_body("redirect target answered")).await;
+
+    let hops = Arc::new(Mutex::new(0_usize));
+    let counter = hops.clone();
+    let location = format!("{}/v1/chat/completions", redirect_target.server.url());
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(move || {
+            let counter = counter.clone();
+            let location = location.clone();
+            async move {
+                *counter.lock().unwrap() += 1;
+                (
+                    StatusCode::TEMPORARY_REDIRECT,
+                    [(header::LOCATION, location)],
+                )
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let redirector = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let mut config = test_config();
+    config.openai_base_url = "http://127.0.0.1:1".into();
+
+    let mut request = named_upstream_request(
+        &format!("http://{address}"),
+        Some("nrp_named_upstream"),
+        "follow me somewhere else",
+    );
+    request.headers_mut().insert(
+        "x-api-key",
+        HeaderValue::from_static("callers-own-provider-key"),
+    );
+
+    let response = router_for_launched_session(config, "nrp_named_upstream")
+        .oneshot(request)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        *hops.lock().unwrap(),
+        1,
+        "the named upstream itself should have been called exactly once"
+    );
+    assert!(
+        redirect_target.credentials.lock().unwrap().is_empty(),
+        "the redirect target must never be contacted, and must never see the caller's key"
+    );
+    assert_eq!(
+        response.status(),
+        StatusCode::TEMPORARY_REDIRECT,
+        "the redirect is surfaced to the caller rather than followed"
+    );
+
+    redirector.abort();
+}

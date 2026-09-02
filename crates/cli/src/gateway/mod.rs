@@ -184,7 +184,7 @@ async fn run_unmanaged_gateway(
         return passthrough_streaming(state, prepared).await;
     }
     let response = forward_upstream_request(
-        &state.http,
+        upstream_client(&state, prepared.client_named_upstream),
         &prepared.method,
         &prepared.upstream_url,
         &prepared.body_bytes,
@@ -331,7 +331,7 @@ fn build_buffered_func(
     prepared: &PreparedGatewayRequest,
     upstream_failures: CapturedUpstreamFailuresRef,
 ) -> LlmExecutionNextFn {
-    let http = state.http.clone();
+    let http = upstream_client(&state, prepared.client_named_upstream).clone();
     let method = prepared.method.clone();
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
@@ -525,7 +525,7 @@ fn build_streaming_func(
     prepared: &PreparedGatewayRequest,
     upstream_failures: CapturedUpstreamFailuresRef,
 ) -> LlmStreamExecutionNextFn {
-    let http = state.http.clone();
+    let http = upstream_client(&state, prepared.client_named_upstream).clone();
     let method = prepared.method.clone();
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
@@ -1116,7 +1116,7 @@ async fn passthrough_streaming(
     prepared: PreparedGatewayRequest,
 ) -> Result<Response<Body>, CliError> {
     let response = forward_upstream_request(
-        &state.http,
+        upstream_client(&state, prepared.client_named_upstream),
         &prepared.method,
         &prepared.upstream_url,
         &prepared.body_bytes,
@@ -1163,6 +1163,20 @@ fn selected_upstream_failure(failure: CapturedUpstreamFailure) -> Result<Respons
             bytes,
         } => build_response(status, headers, Body::from(bytes)),
         CapturedUpstreamFailure::Transport(error) => Err(CliError::Upstream(error)),
+    }
+}
+
+/// The HTTP client to dispatch with, chosen by where the destination came from.
+///
+/// A caller-named destination gets the client that does not follow redirects. Validation
+/// applies to the URL that was named; a redirect names a different one, and following it would
+/// carry the caller's provider credential to a host nothing checked -- possibly over plain
+/// http, which the named URL itself would have been refused for.
+fn upstream_client(state: &AppState, client_named_upstream: bool) -> &reqwest::Client {
+    if client_named_upstream {
+        &state.http_no_redirect
+    } else {
+        &state.http
     }
 }
 
@@ -1322,7 +1336,11 @@ pub(crate) async fn models(
         allow_environment_provider_auth,
         configured_auth_header,
     );
-    let mut upstream = state.http.get(upstream_url);
+    let mut upstream = if named_by_client {
+        state.http_no_redirect.get(upstream_url)
+    } else {
+        state.http.get(upstream_url)
+    };
     for (name, value) in &sanitized {
         if should_forward_request_header(name, &sanitized) {
             upstream = upstream.header(name, value);

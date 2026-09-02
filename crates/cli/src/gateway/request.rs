@@ -33,6 +33,11 @@ pub(super) struct PreparedGatewayRequest {
     pub(super) request_json: Value,
     pub(super) streaming: bool,
     pub(super) authorization: crate::provider_auth::ProviderRequestAuthorization,
+    /// Whether the destination came from the caller rather than from configuration.
+    ///
+    /// Carried through to dispatch because such a request must not follow redirects: the
+    /// validation applies to the URL that was named, and a redirect names a different one.
+    pub(super) client_named_upstream: bool,
 }
 
 pub(super) async fn prepare_gateway_request(
@@ -134,6 +139,7 @@ pub(super) async fn prepare_gateway_request(
         request_json,
         streaming,
         authorization,
+        client_named_upstream: named_by_client,
     })
 }
 

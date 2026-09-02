@@ -433,6 +433,11 @@ reason, rather than falling back to the gateway's configured upstream. The
 request was addressed to the endpoint it named, and quietly sending it somewhere
 else would deliver the prompt and the provider key to a different provider.
 
+**Redirects from a named endpoint are not followed.** The checks above apply to
+the URL that was named; a redirect names a different one. A `3xx` is returned to
+pi as it is, so a provider that redirects to a canonical host has to be named at
+that host instead.
+
 A **standalone `nemo-relay --bind` daemon issues no credential**, so it ignores
 the header and keeps the static behavior below. Point it at a provider with
 `--openai-base-url` / `--anthropic-base-url`, or launch through the wrapper.

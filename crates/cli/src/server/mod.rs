@@ -58,6 +58,8 @@ pub(crate) struct AppState {
     pub(crate) transparent_proxy_credential:
         Option<crate::provider_auth::TransparentProxyCredential>,
     pub(crate) http: Client,
+    /// Client for caller-named destinations; does not follow redirects. See `upstream_client`.
+    pub(crate) http_no_redirect: Client,
     pub(crate) sessions: SessionManager,
     pub(crate) last_activity: Arc<Mutex<Instant>>,
     pub(crate) bootstrap_shutdown: Option<BootstrapShutdown>,
@@ -511,6 +513,20 @@ impl AppState {
             .read_timeout(HTTP_READ_TIMEOUT)
             .build()
             .expect("gateway HTTP client configuration is valid");
+        // A second client for destinations the caller named, which must not follow redirects.
+        //
+        // Validation applies to the URL that was named; a redirect names a different one, and
+        // reqwest would follow up to ten of them. Its sensitive-header stripping does not help
+        // here either -- it covers `Authorization` across origins, and provider keys travel in
+        // `x-api-key` and friends, which are ordinary headers to it. So a validated `https`
+        // endpoint could 307 a caller's provider key to any host, including over plain http.
+        let http_no_redirect = Client::builder()
+            .connect_timeout(HTTP_CONNECT_TIMEOUT)
+            .timeout(HTTP_REQUEST_TIMEOUT)
+            .read_timeout(HTTP_READ_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("gateway HTTP client configuration is valid");
         Self {
             config,
             bootstrap_fingerprint,
@@ -518,6 +534,7 @@ impl AppState {
             require_provider_client_token,
             transparent_proxy_credential,
             http,
+            http_no_redirect,
             sessions,
             last_activity: Arc::new(Mutex::new(Instant::now())),
             bootstrap_shutdown,

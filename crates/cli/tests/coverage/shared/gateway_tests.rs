@@ -20,6 +20,15 @@ fn test_http_client() -> Client {
     Client::new()
 }
 
+/// Mirrors the production client used for caller-named destinations.
+fn test_http_client_no_redirect() -> Client {
+    crate::test_support::enable_operational_logs();
+    Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("test client configuration is valid")
+}
+
 fn environment_authorization() -> crate::provider_auth::ProviderRequestAuthorization {
     crate::provider_auth::ProviderRequestAuthorization {
         source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
@@ -1080,6 +1089,7 @@ async fn streaming_provider_error_does_not_poison_the_next_request() {
             source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
             allow_environment_provider_auth: false,
         },
+        client_named_upstream: false,
     };
     let func = build_streaming_func(
         state,
@@ -1149,6 +1159,7 @@ async fn buffered_body_read_failure_stays_structured() {
             source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
             allow_environment_provider_auth: false,
         },
+        client_named_upstream: false,
     };
     let func = build_buffered_func(
         state,
@@ -1201,6 +1212,7 @@ async fn buffered_invalid_json_becomes_safe_upstream_failure() {
             source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
             allow_environment_provider_auth: false,
         },
+        client_named_upstream: false,
     };
     let func = build_buffered_func(
         state,
@@ -1400,6 +1412,7 @@ fn build_llm_gateway_start_uses_alignment_identifiers_and_metadata() {
             source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
             allow_environment_provider_auth: true,
         },
+        client_named_upstream: false,
     };
 
     let start = build_llm_gateway_start(&prepared);
@@ -1978,6 +1991,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         require_provider_client_token: false,
         transparent_proxy_credential: None,
         http: test_http_client(),
+        http_no_redirect: test_http_client_no_redirect(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         bootstrap_shutdown: None,
@@ -2016,6 +2030,7 @@ async fn models_rejects_non_get_requests_directly() {
         require_provider_client_token: false,
         transparent_proxy_credential: None,
         http: test_http_client(),
+        http_no_redirect: test_http_client_no_redirect(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         bootstrap_shutdown: None,
@@ -2413,6 +2428,7 @@ async fn models_refuses_an_unusable_named_upstream() {
             crate::provider_auth::TransparentProxyCredential::from_static("nrp_models_named"),
         ),
         http: test_http_client(),
+        http_no_redirect: test_http_client_no_redirect(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         bootstrap_shutdown: None,
