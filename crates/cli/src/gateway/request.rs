@@ -33,6 +33,11 @@ pub(super) struct PreparedGatewayRequest {
     pub(super) request_json: Value,
     pub(super) streaming: bool,
     pub(super) authorization: crate::provider_auth::ProviderRequestAuthorization,
+    /// Whether the destination came from the caller rather than from configuration.
+    ///
+    /// Carried through to dispatch because such a request must not follow redirects: the
+    /// validation applies to the URL that was named, and a redirect names a different one.
+    pub(super) client_named_upstream: bool,
 }
 
 pub(super) async fn prepare_gateway_request(
@@ -60,14 +65,57 @@ pub(super) async fn prepare_gateway_request(
         .path_and_query()
         .map(|path| path.as_str())
         .unwrap_or(parts.uri.path());
-    let upstream_url = gateway_upstream_url_override(
+    // Agent-implied routing first, so an existing harness override keeps its exact behavior; a
+    // request that names its own upstream is consulted only when nothing else claimed the route.
+    // The two cannot both apply in practice -- one is inferred from a ChatGPT token, the other is
+    // sent by the pi extension -- so the order records precedence rather than resolving a clash.
+    let mut named_by_client = false;
+    let agent_override = gateway_upstream_url_override(
         provider,
         &parts.headers,
         path_and_query,
         authorization.allow_environment_provider_auth,
         config,
-    )
-    .unwrap_or_else(|| provider.upstream_url(config, path_and_query));
+    );
+    let upstream_url = match agent_override {
+        Some(url) => url,
+        None => match super::routes::client_named_upstream_url(
+            provider,
+            &parts.headers,
+            path_and_query,
+            authorization.source_credential.is_relay_proxy_credential(),
+        ) {
+            crate::agents::pi::alignment::NamedUpstream::Named(url) => {
+                named_by_client = true;
+                url
+            }
+            // Refuse rather than reroute. The caller registered this gateway as its provider and
+            // is sending a prompt and a provider credential meant for the endpoint it named;
+            // falling back to the configured upstream would deliver both to a different company.
+            crate::agents::pi::alignment::NamedUpstream::Rejected(reason) => {
+                return Err(CliError::InvalidPayload(reason.to_string()));
+            }
+            crate::agents::pi::alignment::NamedUpstream::Absent => {
+                provider.upstream_url(config, path_and_query)
+            }
+        },
+    };
+    if named_by_client {
+        // A client-named destination gets only the credentials the client itself sent.
+        //
+        // Naming a destination must not also be a way to *obtain* one. Environment and
+        // configured provider auth exist for the upstream this gateway was configured for, and
+        // injection fires precisely when the request carries no credential of its own -- so
+        // without this, a request naming any host would have `OPENAI_API_KEY`,
+        // `ANTHROPIC_API_KEY` or the configured `Authorization` value attached on the way out.
+        // The invocation credential proves the caller is the agent this run launched; it is not
+        // an authorization to export a secret this gateway holds to an address the caller chose.
+        //
+        // Source credentials are deliberately left in place, unlike the intercept-named
+        // `ExplicitTarget` path that strips them: pi sends the provider's own key for the
+        // provider it named, and that is the credential the request is supposed to travel with.
+        authorization.allow_environment_provider_auth = false;
+    }
     parts.headers = super::routes::strip_replaceable_agent_auth_headers(
         &parts.headers,
         provider,
@@ -91,6 +139,7 @@ pub(super) async fn prepare_gateway_request(
         request_json,
         streaming,
         authorization,
+        client_named_upstream: named_by_client,
     })
 }
 

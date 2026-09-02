@@ -5168,3 +5168,480 @@ async fn pi_tool_call_hook_omits_the_transform_when_nothing_rewrote_the_argument
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body, json!({}));
 }
+
+// ---------------------------------------------------------------------------
+// A launched pi session naming its own model upstream.
+//
+// The extension-side contract is asserted in `integrations/pi/test`; these cover the half
+// that only the gateway can answer -- that the named endpoint is actually forwarded to, that
+// an unauthenticated caller cannot move traffic, that the routing header does not travel to
+// the provider, and that model-call policy still applies on the named path.
+// ---------------------------------------------------------------------------
+
+/// Records what each request carried, so the assertions can be about the provider's view.
+struct NamedUpstream {
+    server: TestServer,
+    routing_headers: Arc<Mutex<Vec<Option<String>>>>,
+    /// Every credential-bearing header the provider actually received, per request.
+    ///
+    /// Recorded so a test can assert on what a named destination is *given*, not only on where
+    /// the request went. Naming a host must not also hand it a secret this gateway holds.
+    credentials: Arc<Mutex<Vec<Vec<String>>>>,
+}
+
+async fn spawn_named_upstream(body: Value) -> NamedUpstream {
+    let routing_headers = Arc::new(Mutex::new(Vec::new()));
+    let credentials = Arc::new(Mutex::new(Vec::new()));
+    let recorder = routing_headers.clone();
+    let credential_recorder = credentials.clone();
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(move |headers: HeaderMap| {
+            let recorder = recorder.clone();
+            let credential_recorder = credential_recorder.clone();
+            let body = body.clone();
+            async move {
+                recorder.lock().unwrap().push(
+                    headers
+                        .get(crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER)
+                        .and_then(|value| value.to_str().ok())
+                        .map(ToOwned::to_owned),
+                );
+                let seen: Vec<String> =
+                    ["authorization", "x-api-key", "api-key", "anthropic-api-key"]
+                        .into_iter()
+                        .filter(|name| headers.contains_key(*name))
+                        .map(ToOwned::to_owned)
+                        .collect();
+                credential_recorder.lock().unwrap().push(seen);
+                Json(body)
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    NamedUpstream {
+        server: TestServer {
+            url: format!("http://{address}"),
+            handle,
+        },
+        routing_headers,
+        credentials,
+    }
+}
+
+fn completion_body(content: &str) -> Value {
+    json!({
+        "id": "chatcmpl-named",
+        "object": "chat.completion",
+        "model": "nvidia/nemotron-test",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": content },
+            "finish_reason": "stop"
+        }],
+        "usage": { "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8 }
+    })
+}
+
+/// A gateway that authenticates its client the way `nemo-relay run` does.
+fn router_for_launched_session(config: GatewayConfig, credential: &'static str) -> Router {
+    let mut state = AppState::new(config);
+    state.transparent_proxy_credential =
+        Some(crate::provider_auth::TransparentProxyCredential::from_static(credential));
+    router_with_state(state)
+}
+
+fn named_upstream_request(upstream: &str, credential: Option<&str>, prompt: &str) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method("POST")
+        // `/chat/completions`, not `/v1/chat/completions`: Relay registers its own root as pi's
+        // base URL, and pi's OpenAI SDK appends the bare path to whatever base it was given. The
+        // named base supplies the `/v1`, which is what makes the composed destination match the
+        // endpoint pi would have called unredirected.
+        .uri("/chat/completions")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+            format!("{upstream}/v1"),
+        );
+    if let Some(credential) = credential {
+        builder = builder.header(
+            crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+            credential,
+        );
+    }
+    builder
+        .body(Body::from(
+            json!({
+                "model": "nvidia/nemotron-test",
+                "messages": [{ "role": "user", "content": prompt }]
+            })
+            .to_string(),
+        ))
+        .unwrap()
+}
+
+/// The acceptance criterion: a provider the gateway does not statically front is reached, and
+/// the call is recorded as an LLM span rather than passing through unobserved.
+#[tokio::test]
+async fn a_named_upstream_is_forwarded_to_and_produces_an_llm_span() {
+    const SUBSCRIBER: &str = "pi-named-upstream-span-test";
+    let _ = deregister_subscriber(SUBSCRIBER);
+    let spans = Arc::new(Mutex::new(Vec::<String>::new()));
+    let recorder = spans.clone();
+    register_subscriber(
+        SUBSCRIBER,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::End) {
+                recorder.lock().unwrap().push(event.name().to_string());
+            }
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_named_upstream(completion_body("named upstream answered")).await;
+    let mut config = test_config();
+    // Nothing listens here. If the header were ignored, the request could not succeed, so a
+    // 200 is itself evidence that routing followed the header rather than the configuration.
+    config.openai_base_url = "http://127.0.0.1:1".into();
+
+    let response = router_for_launched_session(config, "nrp_named_upstream")
+        .oneshot(named_upstream_request(
+            &upstream.server.url(),
+            Some("nrp_named_upstream"),
+            "reach the named provider",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        json!("named upstream answered"),
+        "the response must come from the named upstream"
+    );
+
+    // The routing header addresses the gateway, so the provider must never see it.
+    assert_eq!(
+        *upstream.routing_headers.lock().unwrap(),
+        vec![None],
+        "the routing header must be stripped before forwarding"
+    );
+
+    flush_subscribers().unwrap();
+    let names = spans.lock().unwrap().clone();
+    // The managed LLM span is named for the provider route it went through, so this is also
+    // an assertion that the call took the managed path rather than being proxied unobserved.
+    assert!(
+        names.iter().any(|name| name == "openai.chat_completions"),
+        "a named-upstream call must still be recorded as an LLM span: {names:?}"
+    );
+    deregister_subscriber(SUBSCRIBER).unwrap();
+}
+
+/// The security boundary, end to end, on the gateway anyone can reach.
+///
+/// A standalone `nemo-relay --bind` daemon mints no credential, so nothing can authenticate as
+/// its launcher and the header has to be inert: traffic goes where the operator configured it,
+/// not where the caller asked. This is the case the documentation promises stays static.
+#[tokio::test]
+async fn a_standalone_gateway_ignores_a_named_upstream() {
+    let configured = spawn_named_upstream(completion_body("configured upstream answered")).await;
+    let named = spawn_named_upstream(completion_body("named upstream answered")).await;
+    let mut config = test_config();
+    config.openai_base_url = format!("{}/v1", configured.server.url());
+
+    // `router` builds state without a transparent proxy credential, which is what a
+    // `--bind` daemon does.
+    let response = router(config)
+        .oneshot(named_upstream_request(
+            &named.server.url(),
+            None,
+            "try to move traffic without proving anything",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        json!("configured upstream answered"),
+        "an unauthenticated header must not redirect the request"
+    );
+    assert!(
+        named.routing_headers.lock().unwrap().is_empty(),
+        "the upstream the caller named must never have been contacted"
+    );
+}
+
+/// On a launched gateway the boundary closes earlier still.
+///
+/// Holding a credential makes it mandatory, so an unauthenticated provider call is refused
+/// before routing is considered at all -- the header never gets a chance to be read. Worth
+/// pinning, because it is why the test above has to use a standalone gateway to prove the
+/// header is ignored rather than simply omitting the credential.
+#[tokio::test]
+async fn a_launched_gateway_refuses_an_unauthenticated_call_outright() {
+    let named = spawn_named_upstream(completion_body("must not be reached")).await;
+    let mut config = test_config();
+    config.openai_base_url = "http://127.0.0.1:1".into();
+
+    let response = router_for_launched_session(config, "nrp_named_upstream")
+        .oneshot(named_upstream_request(
+            &named.server.url(),
+            None,
+            "no credential at all",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        named.routing_headers.lock().unwrap().is_empty(),
+        "a refused call must never reach any provider"
+    );
+}
+
+/// Naming an upstream must not route around model-call policy: the point of redirecting is
+/// that these calls become governable, so a policy that blocks has to block here too.
+#[tokio::test]
+async fn model_call_policy_still_applies_on_a_named_upstream() {
+    const INTERCEPT: &str = "pi-named-upstream-policy-test";
+    let _ = deregister_llm_execution_intercept(INTERCEPT);
+    let _cleanup = LlmExecutionInterceptCleanup(INTERCEPT);
+    register_llm_execution_intercept(
+        INTERCEPT,
+        1,
+        Arc::new(move |_name, request, next| {
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() == Some("blocked by policy") {
+                    return Err(nemo_relay::error::FlowError::GuardrailRejected(
+                        "model calls are refused by test policy".to_string(),
+                    ));
+                }
+                next(request).await
+            })
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_named_upstream(completion_body("must not be reached")).await;
+    let mut config = test_config();
+    config.openai_base_url = "http://127.0.0.1:1".into();
+
+    let response = router_for_launched_session(config, "nrp_named_upstream")
+        .oneshot(named_upstream_request(
+            &upstream.server.url(),
+            Some("nrp_named_upstream"),
+            "blocked by policy",
+        ))
+        .await
+        .unwrap();
+
+    assert_ne!(
+        response.status(),
+        StatusCode::OK,
+        "a blocking model-call policy must refuse a named-upstream call"
+    );
+    assert!(
+        upstream.routing_headers.lock().unwrap().is_empty(),
+        "a refused call must never reach the provider"
+    );
+}
+
+/// Naming a destination must not also be a way to obtain a credential for it.
+///
+/// Environment and configured provider auth exist for the upstream this gateway was configured
+/// for, and injection fires precisely when the request carries none of its own -- so a request
+/// that both names a host and sends no credential is exactly the shape that would have carried
+/// `OPENAI_API_KEY` or the configured `Authorization` value out to an address the caller chose.
+/// The invocation credential proves who the caller is; it does not authorize exporting a secret
+/// this gateway holds.
+#[tokio::test]
+async fn a_named_upstream_never_receives_a_gateway_held_credential() {
+    let upstream = spawn_named_upstream(completion_body("named upstream answered")).await;
+    let mut config = test_config();
+    config.openai_base_url = "http://127.0.0.1:1".into();
+    // The secret this gateway would otherwise attach to an unauthenticated request.
+    config.openai_auth_header = Some("Bearer gateway-held-secret".into());
+
+    let response = router_for_launched_session(config, "nrp_named_upstream")
+        .oneshot(named_upstream_request(
+            &upstream.server.url(),
+            Some("nrp_named_upstream"),
+            "name a host while sending no credential of my own",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        *upstream.credentials.lock().unwrap(),
+        vec![Vec::<String>::new()],
+        "the named provider must receive no credential the caller did not send itself"
+    );
+}
+
+/// The other half of the same rule: a credential the caller *did* send still travels.
+///
+/// Without this the fix would read as "named upstreams are unauthenticated", which would break
+/// the feature -- pi sends the provider's own key for the provider it named, and that is the
+/// credential the request is supposed to carry.
+#[tokio::test]
+async fn a_named_upstream_still_receives_the_callers_own_credential() {
+    let upstream = spawn_named_upstream(completion_body("named upstream answered")).await;
+    let mut config = test_config();
+    config.openai_base_url = "http://127.0.0.1:1".into();
+    config.openai_auth_header = Some("Bearer gateway-held-secret".into());
+
+    let mut request = named_upstream_request(
+        &upstream.server.url(),
+        Some("nrp_named_upstream"),
+        "name a host and send my own provider key",
+    );
+    request.headers_mut().insert(
+        header::AUTHORIZATION,
+        HeaderValue::from_static("Bearer callers-own-provider-key"),
+    );
+
+    let response = router_for_launched_session(config, "nrp_named_upstream")
+        .oneshot(request)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        *upstream.credentials.lock().unwrap(),
+        vec![vec!["authorization".to_string()]],
+        "the caller's own provider credential must still reach the provider it named"
+    );
+}
+
+/// A refused destination must fail the request, not quietly become a different destination.
+///
+/// This is the shape that matters: pi registered this gateway as its provider, so the prompt and
+/// the provider credential in flight were meant for the endpoint the caller named. Falling back
+/// to configured routing would hand both to whoever the gateway happens to be configured for.
+#[tokio::test]
+async fn a_refused_named_upstream_never_reaches_the_configured_provider() {
+    let configured = spawn_named_upstream(completion_body("configured upstream answered")).await;
+    let mut config = test_config();
+    config.openai_base_url = format!("{}/v1", configured.server.url());
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/chat/completions")
+        .header(header::CONTENT_TYPE, "application/json")
+        // Plain http to a host that is not loopback: refused, and an on-prem provider is exactly
+        // who would be named this way.
+        .header(
+            crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+            "http://onprem.example.com/v1",
+        )
+        .header(
+            crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+            "nrp_named_upstream",
+        )
+        .body(Body::from(
+            json!({
+                "model": "onprem/model",
+                "messages": [{ "role": "user", "content": "meant for the on-prem provider" }]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = router_for_launched_session(config, "nrp_named_upstream")
+        .oneshot(request)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "a named destination that cannot be used must fail the request"
+    );
+    assert!(
+        configured.routing_headers.lock().unwrap().is_empty(),
+        "the configured provider must never see a prompt addressed to somewhere else"
+    );
+}
+
+/// A named destination must not be able to hand the request onward via a redirect.
+///
+/// Validation applies to the URL that was named. A `307` names a different one, and reqwest
+/// would follow up to ten of them — carrying the caller's provider key to a host nothing
+/// checked, possibly over plain `http`, which the named URL itself would have been refused for.
+/// Its own sensitive-header stripping does not cover this: that guards `Authorization` across
+/// origins, and provider keys travel in `x-api-key` and friends, which are ordinary headers.
+#[tokio::test]
+async fn a_named_upstream_redirect_is_not_followed() {
+    // Where the redirect points. Nothing may arrive here.
+    let redirect_target = spawn_named_upstream(completion_body("redirect target answered")).await;
+
+    let hops = Arc::new(Mutex::new(0_usize));
+    let counter = hops.clone();
+    let location = format!("{}/v1/chat/completions", redirect_target.server.url());
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(move || {
+            let counter = counter.clone();
+            let location = location.clone();
+            async move {
+                *counter.lock().unwrap() += 1;
+                (
+                    StatusCode::TEMPORARY_REDIRECT,
+                    [(header::LOCATION, location)],
+                )
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let redirector = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let mut config = test_config();
+    config.openai_base_url = "http://127.0.0.1:1".into();
+
+    let mut request = named_upstream_request(
+        &format!("http://{address}"),
+        Some("nrp_named_upstream"),
+        "follow me somewhere else",
+    );
+    request.headers_mut().insert(
+        "x-api-key",
+        HeaderValue::from_static("callers-own-provider-key"),
+    );
+
+    let response = router_for_launched_session(config, "nrp_named_upstream")
+        .oneshot(request)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        *hops.lock().unwrap(),
+        1,
+        "the named upstream itself should have been called exactly once"
+    );
+    assert!(
+        redirect_target.credentials.lock().unwrap().is_empty(),
+        "the redirect target must never be contacted, and must never see the caller's key"
+    );
+    assert_eq!(
+        response.status(),
+        StatusCode::TEMPORARY_REDIRECT,
+        "the redirect is surfaced to the caller rather than followed"
+    );
+
+    redirector.abort();
+}

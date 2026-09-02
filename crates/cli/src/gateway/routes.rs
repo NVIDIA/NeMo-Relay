@@ -214,6 +214,44 @@ pub(super) fn gateway_upstream_url_override(
     )
 }
 
+// The upstream this request names for itself, composed with the request path.
+//
+// Separate from `gateway_upstream_url_override` because the two answer different questions: that
+// one asks alignment which upstream a *harness* implies, from evidence the client did not choose
+// (a ChatGPT token's shape); this one is the client stating a destination outright, which is only
+// honored when it proved it is this invocation's own agent. Composition stays here so the OpenAI
+// `/v1` normalization has one home.
+// Composed by plain concatenation, deliberately *not* through `upstream_url_with_base`.
+//
+// That helper normalizes `/v1` for a *configured* base, where the operator may or may not have
+// included it and Relay has to reconcile the two. A named base is not that: it is the endpoint
+// the client would otherwise have called itself, and the path is the one its own SDK produced.
+// Reconciling them changes the destination. Concretely, Relay registers its root as pi's base,
+// so pi's OpenAI SDK sends `/chat/completions`; normalizing that against a base of
+// `https://api.example.com` yields `https://api.example.com/v1/chat/completions`, while pi
+// unredirected would have called `https://api.example.com/chat/completions`. Bases that already
+// end in `/v1` hide the difference, which is why it survived a live run against one.
+pub(super) fn client_named_upstream_url(
+    route: ProviderRoute,
+    headers: &HeaderMap,
+    path_and_query: &str,
+    invocation_authenticated: bool,
+) -> crate::agents::pi::alignment::NamedUpstream {
+    let _ = route;
+    match crate::agents::pi::alignment::client_named_upstream_base(
+        headers,
+        invocation_authenticated,
+    ) {
+        crate::agents::pi::alignment::NamedUpstream::Named(base) => {
+            crate::agents::pi::alignment::NamedUpstream::Named(format!(
+                "{}{path_and_query}",
+                base.trim_end_matches('/')
+            ))
+        }
+        other => other,
+    }
+}
+
 pub(super) fn gateway_upstream_url_override_with_openai_key_state(
     route: ProviderRoute,
     headers: &HeaderMap,

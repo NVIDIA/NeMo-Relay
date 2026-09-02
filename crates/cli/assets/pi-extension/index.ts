@@ -45,8 +45,9 @@
  *
  * **Model redirection.** pi resolves a base URL per model from a generated
  * catalog, so the extension points the active model's provider at the gateway
- * itself -- but only when the gateway forwards to the endpoint that model would
- * otherwise call. See `src/provider-redirect.ts`.
+ * itself. Under a launched session it also names the endpoint the gateway
+ * should forward to, so a provider the gateway was never configured for is
+ * still reachable. See `src/provider-redirect.ts`.
  *
  * Environment (set by the launcher, overridable by hand):
  * - `NEMO_RELAY_PI_GATEWAY_URL`  gateway base URL (default `http://127.0.0.1:4040`)
@@ -290,6 +291,14 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
         headers: {
           'x-nemo-relay-session-id': sessionKey,
           ...(redirect.proxyToken ? { 'x-nemo-relay-proxy-token': redirect.proxyToken } : {}),
+          // Only when the gateway does not already front this endpoint. It rides on
+          // the registration for the same reason the credential does -- the scope is
+          // structural, so a provider we left alone never names an upstream -- and
+          // the gateway ignores it unless the proxy credential above is present and
+          // matches, which is what stops any other local process steering it.
+          ...(decision.namedUpstream
+            ? { 'x-nemo-relay-upstream-base-url': decision.namedUpstream }
+            : {}),
         },
       });
       redirectedProviders.add(decision.provider);

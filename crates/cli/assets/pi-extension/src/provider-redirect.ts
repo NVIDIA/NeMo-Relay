@@ -19,18 +19,24 @@
  * `streamSimple` and re-implement a provider protocol; the extension stays a
  * thin client.
  *
- * **Redirection is conditional, and the condition is the whole design.** The
- * gateway forwards to one statically configured upstream per API family and a
- * client cannot override it per request -- inbound internal dispatch headers
- * are stripped. So sending a model's traffic to the gateway is only correct
- * when the gateway's upstream *is* the endpoint that model would otherwise
- * call. Redirecting an NVIDIA model into a gateway configured for
- * `api.openai.com` does not degrade to "no spans"; it breaks the session.
+ * **The gateway has to know where to forward, and there are two ways to tell
+ * it.** It sends each API family to one statically configured upstream, so
+ * redirecting a model whose endpoint is not that upstream would reach the wrong
+ * provider: an NVIDIA model in a gateway configured for `api.openai.com` does
+ * not degrade to "no spans", it breaks the session.
  *
- * The launcher therefore passes the gateway's own upstreams
- * (`NEMO_RELAY_PI_OPENAI_UPSTREAM`, `NEMO_RELAY_PI_ANTHROPIC_UPSTREAM`) and
- * this module redirects only on a match. Unmatched models keep their own
- * endpoint and produce no LLM spans, which is the honest outcome.
+ * - **The endpoint already matches.** The launcher passes the gateway's own
+ *   upstreams (`NEMO_RELAY_PI_OPENAI_UPSTREAM`,
+ *   `NEMO_RELAY_PI_ANTHROPIC_UPSTREAM`), and a model already targeting one of
+ *   them is redirected as it is.
+ * - **The endpoint is named.** Otherwise, when this run holds the launcher's
+ *   proxy credential, the redirect carries `x-nemo-relay-upstream-base-url` and
+ *   the gateway forwards there instead. This is what makes pi's arbitrary
+ *   providers reachable.
+ *
+ * Without that credential the header would be ignored, so a standalone daemon
+ * redirects only on a match and unmatched models keep their own endpoint and
+ * produce no LLM spans.
  */
 
 /**
@@ -106,7 +112,23 @@ export type RedirectSkipCode =
   | 'provider-mixed-endpoints';
 
 export type RedirectDecision =
-  | { kind: 'redirect'; provider: string; api: string; upstream: string; reason: string }
+  | {
+      kind: 'redirect';
+      provider: string;
+      api: string;
+      upstream: string;
+      reason: string;
+      /**
+       * The endpoint the gateway must be told to forward to, when it does not
+       * already front it.
+       *
+       * Absent on a static redirect, where the gateway's configured upstream is
+       * the destination and saying so again would only add a header. Present
+       * means every request for this provider carries it, so the gateway can
+       * reach a provider it was never configured for.
+       */
+      namedUpstream?: string;
+    }
   | { kind: 'skip'; code: RedirectSkipCode; provider?: string; api?: string; reason: string };
 
 /**
@@ -122,6 +144,62 @@ function isSafeToRedirect(model: RedirectModel, config: RedirectConfig): boolean
   const upstream = family === 'openai' ? config.openaiUpstream : config.anthropicUpstream;
   if (!upstream) return false;
   return normalizeBaseUrl(upstream) === normalizeBaseUrl(model.baseUrl);
+}
+
+/**
+ * Whether this invocation may tell the gateway where to forward.
+ *
+ * The gateway honors a named upstream only from a request carrying this run's
+ * proxy credential, so without one the header would be ignored and the redirect
+ * would land on the gateway's own configured upstream -- the wrong provider,
+ * which is the failure the static check exists to prevent. Having the credential
+ * is therefore the precondition for redirecting past a mismatch, not a detail of
+ * how the request is authenticated.
+ */
+function canNameUpstream(config: RedirectConfig): boolean {
+  return Boolean(config.proxyToken);
+}
+
+/**
+ * Redirect a provider the gateway does not front, by naming its endpoint.
+ *
+ * The sibling scan survives from the static path but changes its question. There
+ * it asked whether every model already targets the gateway's configured
+ * upstream; here one endpoint is named for the whole provider, so it asks
+ * whether every model shares the endpoint about to be named. A provider mixing
+ * endpoints is still refused -- naming one of them would point the rest at a host
+ * that has never heard of them, which is the same broken session the static path
+ * refuses to create.
+ */
+function nameUpstream(
+  model: RedirectModel,
+  siblings: readonly RedirectModel[],
+): RedirectDecision {
+  const target = normalizeBaseUrl(model.baseUrl);
+  const unsafe = siblings.find(
+    (sibling) =>
+      !SERVICEABLE_APIS.has(sibling.api) || normalizeBaseUrl(sibling.baseUrl) !== target,
+  );
+  if (unsafe) {
+    return {
+      kind: 'skip',
+      code: 'provider-mixed-endpoints',
+      provider: model.provider,
+      api: model.api,
+      reason:
+        `redirecting ${model.provider} would also move its ${unsafe.api} models, and ` +
+        `${unsafe.id} targets ${unsafe.baseUrl} rather than ${model.baseUrl}; ` +
+        `a provider is named one endpoint, so its models must share one`,
+    };
+  }
+  return {
+    kind: 'redirect',
+    provider: model.provider,
+    api: model.api,
+    upstream: model.baseUrl,
+    namedUpstream: model.baseUrl,
+    reason: `the gateway does not front ${model.baseUrl}, so each request names it`,
+  };
 }
 
 /** Whether this outcome explains something a trace reader would otherwise have to guess. */
@@ -221,6 +299,12 @@ export function decideRedirect(
   }
 
   if (!upstream) {
+    // Not knowing the gateway's upstream stops mattering once we can name ours:
+    // the comparison existed to prove a redirect lands on the right provider, and
+    // naming the endpoint proves it directly.
+    if (canNameUpstream(config)) {
+      return nameUpstream(model, siblings);
+    }
     // Launched outside `nemo-relay run --agent pi`, so the gateway's upstream
     // is unknown. Staying put is the safe default: a wrong redirect breaks the
     // session, a skipped one only costs spans.
@@ -241,6 +325,13 @@ export function decideRedirect(
   // `provider-mixed-endpoints`, naming the selected model as the sibling that
   // blocked it. Same decision either way; this is the code an operator can act on.
   if (normalizeBaseUrl(upstream) !== normalizeBaseUrl(model.baseUrl)) {
+    // A mismatch is the ordinary case for pi's arbitrary providers: 32 of its 39
+    // speak an API the gateway serves, but only the two it is configured for are
+    // the endpoint a model already calls. Naming the endpoint turns that from a
+    // refusal into a redirect.
+    if (canNameUpstream(config)) {
+      return nameUpstream(model, siblings);
+    }
     return {
       kind: 'skip',
       code: 'upstream-mismatch',

@@ -44,12 +44,11 @@ pub(crate) fn prepare(
 
     // Tell the extension what this gateway actually forwards to.
     //
-    // Redirection is only correct when the gateway's upstream is the same endpoint the selected
-    // model would otherwise call: the gateway resolves one OpenAI base and one Anthropic base from
-    // static configuration (`ProviderRoute::upstream_url`) and there is no per-request override a
-    // client can set -- inbound internal dispatch headers are stripped. Without these two values
-    // the extension would have to redirect blind, and pointing (say) an NVIDIA model at a gateway
-    // configured for `api.openai.com` breaks a session that worked a moment earlier.
+    // Still sent even though a launched session can name its own upstream (see
+    // `pi::alignment`): the named path is what makes an arbitrary provider work, and these two
+    // are what let the extension recognise the case where naming is unnecessary because the
+    // gateway already fronts the model's endpoint. Without them every redirect would carry a
+    // header, including the common one where it changes nothing.
     set_env(launch, PI_OPENAI_UPSTREAM_ENV, &gateway.openai_base_url);
     set_env(
         launch,
@@ -109,15 +108,17 @@ pub(crate) fn prepare(
         ["-e".to_string(), rendered],
     );
 
-    // Redirection is conditional, so say what the condition is rather than promising LLM spans.
+    // A launched session can name its own upstream, so this names the cases that still do not
+    // reach the gateway rather than the far larger set that once did not.
     launch.notes.push(format!(
         "pi tool and turn activity is reported to NeMo Relay by the extension. Model calls are \
-         routed through the gateway only when the selected model's provider already targets this \
-         gateway's upstream (openai={openai}, anthropic={anthropic}); pi resolves a base URL per \
-         model from a generated catalog, and the gateway forwards to one statically configured \
-         upstream per API family. A model on any other provider keeps calling its own endpoint \
-         and produces no LLM spans -- select a matching model, or start the gateway with \
-         --openai-base-url / --anthropic-base-url pointing at that provider",
+         routed through the gateway: a model already targeting this gateway's upstream \
+         (openai={openai}, anthropic={anthropic}) is redirected as it is, and a model on any \
+         other provider is redirected with its own endpoint named on each request. Two cases \
+         still produce no LLM spans -- a model whose API the gateway has no route for, and a \
+         provider whose models span more than one endpoint unless both --openai-base-url and \
+         --anthropic-base-url already point at it, because a provider is redirected as a whole. \
+         The model_redirect mark on the session scope names the outcome either way",
         openai = gateway.openai_base_url,
         anthropic = gateway.anthropic_base_url,
     ));

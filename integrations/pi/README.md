@@ -25,9 +25,11 @@ anyway, because untested is not the same as broken.
 **Model traffic is redirected conditionally.** pi has no base-URL flag and no
 generic environment override — it resolves `baseUrl` per model from a generated
 catalog — so the extension points the active model's provider at the gateway
-itself. It only does so when the gateway forwards to the endpoint that
-model would otherwise have called; see [Model Redirection](#model-redirection).
-When it does not, you get tool and turn activity but no LLM spans.
+itself. Under `nemo-relay pi` it also names the endpoint the gateway should
+forward to, so an arbitrary provider still produces LLM spans; against a
+standalone daemon it redirects only when the gateway already fronts that
+endpoint. See [Model Redirection](#model-redirection). Where it cannot redirect,
+you get tool and turn activity but no LLM spans.
 
 ## Usage
 
@@ -300,28 +302,49 @@ that provider and keeps their API, headers, costs and context windows. That is
 much cheaper than pi's own `custom-provider-*` examples, which register a
 `streamSimple` and re-implement a provider protocol.
 
-**It is conditional, and the condition is the point.** The gateway forwards to
-one statically configured upstream per API family — `--openai-base-url` and
-`--anthropic-base-url` — and a client cannot override that per request. So
-redirecting is only correct when the gateway's upstream *is* the endpoint the
-selected model would otherwise call. Pointing an NVIDIA model at a gateway
-configured for `api.openai.com` does not degrade to "no spans"; it breaks the
-session. The extension therefore redirects only on a match, and records each
-outcome that explains something as a `model_redirect` mark so a trace without LLM
-spans accounts for itself. Two transient skips are evaluated but not marked — no
-model resolved yet, and a provider already pointed at the gateway — because a
-mark per `session_start` for either is noise.
+**The gateway has to know where to forward.** It sends each API family to one
+statically configured upstream — `--openai-base-url` and `--anthropic-base-url` —
+so redirecting a model whose endpoint is not that upstream would reach the wrong
+provider. Pointing an NVIDIA model at a gateway configured for `api.openai.com`
+does not degrade to "no spans"; it breaks the session.
 
-| Situation | Outcome |
-|---|---|
-| Gateway upstream equals the model's endpoint | Redirected; LLM spans appear under the turn |
-| Gateway forwards somewhere else | Skipped, `upstream-mismatch` |
-| Model's API has no gateway route (Bedrock, Azure OpenAI Responses, Google, Google Vertex, Mistral, OpenAI Codex, Radius) | Skipped, `unserviceable-api` |
-| Launched outside `nemo-relay run --agent pi`, so the upstream is unknown | Skipped, `unknown-upstream` — set `NEMO_RELAY_PI_REDIRECT=force` to override |
-| Another model of the same provider targets an endpoint the gateway does not front | Skipped, `provider-mixed-endpoints` — the registration is provider-wide, so point both upstreams at that provider |
+There are two ways to satisfy that, and which one applies depends on how the
+gateway was started:
 
-`nemo-relay run --agent pi` sets the two upstream variables for you. Running pi
-by hand against a standalone gateway means setting them yourself, or forcing.
+- **Named per request.** Under `nemo-relay pi` or `run --agent pi`, the extension
+  sends `x-nemo-relay-upstream-base-url` on each request, so the gateway forwards
+  to a provider it was never configured for. It honors that header only from a
+  request carrying this invocation's proxy credential — minted per run and given
+  only to the process the launcher starts — and strips it before forwarding.
+  A named endpoint receives only the credential the request already carried: the
+  gateway never attaches its own configured or environment provider key to a
+  destination the client chose, so naming a host is not a way to obtain a key
+  for it. Because that credential does travel, a named endpoint must use `https`
+  unless it is loopback — a local model server on `127.0.0.1` is allowed, a plain
+  `http` host that is reachable from off the machine is refused.
+- **Statically configured.** A standalone `nemo-relay --bind` daemon issues no
+  credential, so it ignores the header. Redirection there still requires the
+  gateway's own upstream to be the model's endpoint.
+
+Each outcome that explains something is recorded as a `model_redirect` mark, so a
+trace without LLM spans accounts for itself. Two transient skips are evaluated
+but not marked — no model resolved yet, and a provider already pointed at the
+gateway — because a mark per `session_start` for either is noise.
+
+| Situation | Launched by `nemo-relay pi` | Standalone daemon |
+|---|---|---|
+| Gateway upstream equals the model's endpoint | Redirected | Redirected |
+| Gateway forwards somewhere else | Redirected, naming the endpoint | Skipped, `upstream-mismatch` |
+| Upstream unknown | Redirected, naming the endpoint | Skipped, `unknown-upstream` — set `NEMO_RELAY_PI_REDIRECT=force` to override |
+| Model's API has no gateway route (Bedrock, Azure OpenAI Responses, Google, Google Vertex, Mistral, OpenAI Codex, Radius) | Skipped, `unserviceable-api` | Skipped, `unserviceable-api` |
+| The provider's models do not share one endpoint | Redirected only if both upstreams already point at it | Redirected only if both upstreams already point at it |
+
+The last row reads the same on both paths because `registerProvider` is
+provider-wide: one endpoint is chosen for every model of that provider, so they
+have to agree on it. Pointing `--openai-base-url` and `--anthropic-base-url` at
+that provider's respective endpoints is what makes them agree — Fireworks
+redirects fine once both are set. Naming cannot substitute, because a single
+header carries a single endpoint.
 
 The decision is re-evaluated on every `model_select`, so switching to a model the
 gateway does not front stops redirecting rather than silently misrouting.

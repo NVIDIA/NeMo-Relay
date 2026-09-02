@@ -14,6 +14,7 @@ use semver::Version;
 
 use super::AgentDescriptor;
 
+pub(crate) mod alignment;
 pub(crate) mod assets;
 pub(crate) mod doctor;
 pub(crate) mod install;
