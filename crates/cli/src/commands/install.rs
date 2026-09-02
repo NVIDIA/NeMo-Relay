@@ -21,6 +21,11 @@ pub(crate) struct InstallCommand {
     pub(crate) dry_run: bool,
     #[arg(long)]
     pub(crate) skip_doctor: bool,
+    /// Experimental: move existing Codex thread history onto the Relay provider so it stays
+    /// visible in the Codex resume picker. `nemo-relay uninstall codex` reverses this
+    /// automatically.
+    #[arg(long)]
+    pub(crate) migrate_history: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -34,6 +39,9 @@ pub(crate) struct UninstallCommand {
     pub(crate) force: bool,
     #[arg(long)]
     pub(crate) dry_run: bool,
+    /// Leave migrated Codex thread history on the Relay provider instead of restoring it.
+    #[arg(long)]
+    pub(crate) skip_history_migration: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
@@ -66,6 +74,7 @@ impl InstallCommand {
             force: self.force,
             dry_run: self.dry_run,
             skip_doctor: self.skip_doctor,
+            migrate_history: self.migrate_history,
         }
     }
 }
@@ -76,12 +85,18 @@ impl UninstallCommand {
             install_dir: self.install_dir,
             force: self.force,
             dry_run: self.dry_run,
+            skip_history_migration: self.skip_history_migration,
         }
     }
 }
 
 pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
     let target = command.host;
+    if command.migrate_history && matches!(target, InstallTarget::ClaudeCode) {
+        return Err(CliError::Install(
+            "--migrate-history applies to the Codex integration only".into(),
+        ));
+    }
     let request = command.into_runtime();
     let candidates = target.agents();
     let agents = if target.is_all() {
@@ -104,6 +119,11 @@ pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
 
 pub(super) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError> {
     let target = command.host;
+    if command.skip_history_migration && matches!(target, InstallTarget::ClaudeCode) {
+        return Err(CliError::Install(
+            "--skip-history-migration applies to the Codex integration only".into(),
+        ));
+    }
     let request = command.into_runtime();
     let candidates = target.agents();
     let agents = if target.is_all() {
