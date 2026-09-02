@@ -428,6 +428,11 @@ credential travels to it, plain `http` to anything reachable from off the machin
 is refused. A local model server — `http://127.0.0.1:11434/v1` and the like — is
 allowed, since its traffic never reaches a network.
 
+**A named endpoint that cannot be used fails the request**, with `400` and a
+reason, rather than falling back to the gateway's configured upstream. The
+request was addressed to the endpoint it named, and quietly sending it somewhere
+else would deliver the prompt and the provider key to a different provider.
+
 A **standalone `nemo-relay --bind` daemon issues no credential**, so it ignores
 the header and keeps the static behavior below. Point it at a provider with
 `--openai-base-url` / `--anthropic-base-url`, or launch through the wrapper.

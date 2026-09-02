@@ -2289,23 +2289,54 @@ fn the_client_named_upstream_header_is_not_forwarded_upstream() {
 /// A named upstream is composed with the request path by the same code that composes a
 /// configured one, so an operator's `/v1` prefix is not doubled.
 #[test]
-fn a_named_upstream_composes_through_the_route() {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
-        HeaderValue::from_static("https://integrate.api.nvidia.com/v1"),
-    );
+fn a_named_upstream_is_the_destination_the_client_would_have_called() {
+    // Relay registers its own root as pi's base, so pi's OpenAI SDK sends `/chat/completions`.
+    // The named base is joined to that path untouched: the point is to reach the endpoint the
+    // client would have reached on its own, and `/v1` reconciliation is a rule for *configured*
+    // bases, where the operator may or may not have included it.
+    for (base, expected) in [
+        // Already carries `/v1`, as pi's NVIDIA catalog entry does.
+        (
+            "https://integrate.api.nvidia.com/v1",
+            "https://integrate.api.nvidia.com/v1/chat/completions",
+        ),
+        // Does not. Normalizing would send this to `/v1/chat/completions`, which is not where
+        // pi would have gone.
+        (
+            "https://api.example.com",
+            "https://api.example.com/chat/completions",
+        ),
+        // A trailing slash must not double up.
+        (
+            "https://api.example.com/",
+            "https://api.example.com/chat/completions",
+        ),
+        // A base with its own path prefix keeps it.
+        (
+            "https://api.example.com/inference/v1",
+            "https://api.example.com/inference/v1/chat/completions",
+        ),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+            HeaderValue::from_str(base).unwrap(),
+        );
 
-    assert_eq!(
-        crate::gateway::routes::client_named_upstream_url(
+        let named = crate::gateway::routes::client_named_upstream_url(
             crate::gateway::routes::ProviderRoute::OpenAiChatCompletions,
             &headers,
-            "/v1/chat/completions",
+            "/chat/completions",
             true,
-        )
-        .as_deref(),
-        Some("https://integrate.api.nvidia.com/v1/chat/completions")
-    );
+        );
+        assert!(
+            matches!(
+                &named,
+                crate::agents::pi::alignment::NamedUpstream::Named(url) if url == expected
+            ),
+            "{base} should reach {expected}"
+        );
+    }
 }
 
 /// The gateway falls back to configured routing rather than failing, so an unauthenticated
@@ -2318,13 +2349,37 @@ fn an_unauthenticated_caller_gets_no_named_upstream() {
         HeaderValue::from_static("https://integrate.api.nvidia.com/v1"),
     );
 
-    assert_eq!(
+    assert!(matches!(
         crate::gateway::routes::client_named_upstream_url(
             crate::gateway::routes::ProviderRoute::OpenAiChatCompletions,
             &headers,
-            "/v1/chat/completions",
+            "/chat/completions",
             false,
         ),
-        None
+        crate::agents::pi::alignment::NamedUpstream::Absent
+    ));
+}
+
+/// A destination that is named but refused must not fall back to configured routing.
+///
+/// The caller registered this gateway as its provider and is sending a prompt and a provider
+/// credential meant for the endpoint it named. Treating a refusal like an absent header would
+/// forward both to the configured OpenAI or Anthropic upstream -- a different company.
+#[test]
+fn a_refused_named_upstream_is_rejected_rather_than_rerouted() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+        HeaderValue::from_static("http://onprem.example.com/v1"),
     );
+
+    assert!(matches!(
+        crate::gateway::routes::client_named_upstream_url(
+            crate::gateway::routes::ProviderRoute::OpenAiChatCompletions,
+            &headers,
+            "/chat/completions",
+            true,
+        ),
+        crate::agents::pi::alignment::NamedUpstream::Rejected(_)
+    ));
 }

@@ -1283,24 +1283,34 @@ pub(crate) async fn models(
     let mut allow_environment_provider_auth = authorization.allow_environment_provider_auth;
     parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
     let mut named_by_client = false;
-    let upstream_url = gateway_upstream_url_override(
+    let agent_override = gateway_upstream_url_override(
         provider,
         &parts.headers,
         path_and_query,
         allow_environment_provider_auth,
         &state.config,
-    )
-    .or_else(|| {
-        let named = crate::gateway::routes::client_named_upstream_url(
+    );
+    let upstream_url = match agent_override {
+        Some(url) => url,
+        None => match crate::gateway::routes::client_named_upstream_url(
             provider,
             &parts.headers,
             path_and_query,
             authorization.source_credential.is_relay_proxy_credential(),
-        );
-        named_by_client = named.is_some();
-        named
-    })
-    .unwrap_or_else(|| provider.upstream_url(&state.config, path_and_query));
+        ) {
+            crate::agents::pi::alignment::NamedUpstream::Named(url) => {
+                named_by_client = true;
+                url
+            }
+            // Refuse rather than reroute; see `gateway::request::prepare_gateway_request`.
+            crate::agents::pi::alignment::NamedUpstream::Rejected(reason) => {
+                return Err(CliError::InvalidPayload(reason.to_string()));
+            }
+            crate::agents::pi::alignment::NamedUpstream::Absent => {
+                provider.upstream_url(&state.config, path_and_query)
+            }
+        },
+    };
     if named_by_client {
         // Same reasoning as the passthrough path: naming a destination is not a way to obtain a
         // credential for it. See `gateway::request::prepare_gateway_request`.

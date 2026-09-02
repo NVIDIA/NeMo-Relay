@@ -38,38 +38,64 @@ use reqwest::Url;
 /// and this one is meant to arrive from a client.
 pub(crate) const UPSTREAM_BASE_URL_HEADER: &str = "x-nemo-relay-upstream-base-url";
 
+/// What a request asked for, and whether it may have it.
+///
+/// The three states are distinct on purpose. Collapsing "asked for something we refuse" into
+/// "asked for nothing" is not a safe default here: the caller registered this gateway as its
+/// provider and is sending a prompt and a provider credential intended for the endpoint it
+/// named. Quietly forwarding that to the configured OpenAI or Anthropic upstream instead
+/// would deliver both to the wrong company. A refusal has to be visible.
+pub(crate) enum NamedUpstream {
+    /// No opinion. Configured routing applies, which is the ordinary path for every other agent.
+    Absent,
+    /// Use this base.
+    Named(String),
+    /// A destination was named that may not be used. Refuse the request rather than reroute it.
+    Rejected(&'static str),
+}
+
 /// The upstream this request asks for, when the request is entitled to ask.
 ///
-/// Returns the base URL as written rather than a reserialized one, so an operator's `/v1` or
-/// path prefix survives; composing it with the request path stays in `ProviderRoute`, which is
-/// where the OpenAI `/v1` normalization already lives.
+/// Returns the base URL as written rather than a reserialized one, so the endpoint the caller
+/// named is the endpoint it gets.
 pub(crate) fn client_named_upstream_base(
     headers: &HeaderMap,
     invocation_authenticated: bool,
-) -> Option<String> {
+) -> NamedUpstream {
     // Checked before the header is even read: an unauthenticated request has no say in where
-    // this gateway sends traffic, and treating the header as absent keeps the fallback to
-    // configured routing on exactly one path.
+    // this gateway sends traffic. `Absent` rather than `Rejected` deliberately -- a standalone
+    // daemon serves clients that never had a credential to present, and its documented
+    // behaviour is that the header is inert there, not that such requests fail.
     if !invocation_authenticated {
-        return None;
+        return NamedUpstream::Absent;
     }
 
-    let raw = headers.get(UPSTREAM_BASE_URL_HEADER)?.to_str().ok()?.trim();
+    let Some(raw) = headers.get(UPSTREAM_BASE_URL_HEADER) else {
+        return NamedUpstream::Absent;
+    };
+    let Ok(raw) = raw.to_str() else {
+        return NamedUpstream::Rejected("upstream base URL header is not valid text");
+    };
+    let raw = raw.trim();
     if raw.is_empty() {
-        return None;
+        return NamedUpstream::Rejected("upstream base URL header is empty");
     }
 
-    let url = Url::parse(raw).ok()?;
+    let Ok(url) = Url::parse(raw) else {
+        return NamedUpstream::Rejected("upstream base URL header is not an absolute URL");
+    };
     // An absolute http(s) URL with a host, and nothing else. A relative URL would resolve
     // against the gateway itself, a non-http scheme reaches schemes reqwest treats very
     // differently (`file:`), and credentials in the authority would be forwarded to whatever
     // host follows them.
     if !matches!(url.scheme(), "http" | "https") {
-        return None;
+        return NamedUpstream::Rejected("upstream base URL must use http or https");
     }
-    url.host_str()?;
+    if url.host_str().is_none() {
+        return NamedUpstream::Rejected("upstream base URL has no host");
+    }
     if !url.username().is_empty() || url.password().is_some() {
-        return None;
+        return NamedUpstream::Rejected("upstream base URL must not carry credentials");
     }
     // Cleartext only where it cannot leave the machine.
     //
@@ -79,10 +105,12 @@ pub(crate) fn client_named_upstream_base(
     // model server -- Ollama, vLLM, LM Studio -- is exactly the kind of provider this feature
     // exists to reach, and its traffic never reaches a network.
     if url.scheme() == "http" && !is_loopback(&url) {
-        return None;
+        return NamedUpstream::Rejected(
+            "upstream base URL must use https unless it is a loopback address",
+        );
     }
 
-    Some(raw.to_string())
+    NamedUpstream::Named(raw.to_string())
 }
 
 /// Whether this host is one that cannot be reached from off the machine.

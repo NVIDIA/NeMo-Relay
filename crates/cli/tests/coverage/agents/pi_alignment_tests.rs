@@ -5,6 +5,18 @@ use axum::http::{HeaderMap, HeaderValue};
 
 use super::*;
 
+/// The base a decision names, or `None` for anything that is not a usable destination.
+fn named(decision: NamedUpstream) -> Option<String> {
+    match decision {
+        NamedUpstream::Named(base) => Some(base),
+        _ => None,
+    }
+}
+
+fn is_rejected(decision: NamedUpstream) -> bool {
+    matches!(decision, NamedUpstream::Rejected(_))
+}
+
 fn headers_naming(upstream: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -19,7 +31,7 @@ fn an_authenticated_request_names_its_own_upstream() {
     let headers = headers_naming("https://integrate.api.nvidia.com/v1");
 
     assert_eq!(
-        client_named_upstream_base(&headers, true).as_deref(),
+        named(client_named_upstream_base(&headers, true)).as_deref(),
         Some("https://integrate.api.nvidia.com/v1"),
         "the base is returned as written, so an operator's path prefix survives"
     );
@@ -34,20 +46,26 @@ fn an_authenticated_request_names_its_own_upstream() {
 fn an_unauthenticated_request_cannot_name_an_upstream() {
     let headers = headers_naming("https://integrate.api.nvidia.com/v1");
 
-    assert_eq!(client_named_upstream_base(&headers, false), None);
+    assert!(matches!(
+        client_named_upstream_base(&headers, false),
+        NamedUpstream::Absent
+    ));
 }
 
 #[test]
 fn a_request_without_the_header_names_nothing() {
-    assert_eq!(client_named_upstream_base(&HeaderMap::new(), true), None);
+    assert!(matches!(
+        client_named_upstream_base(&HeaderMap::new(), true),
+        NamedUpstream::Absent
+    ));
 }
 
 #[test]
 fn a_blank_header_names_nothing() {
-    assert_eq!(
-        client_named_upstream_base(&headers_naming("   "), true),
-        None
-    );
+    assert!(is_rejected(client_named_upstream_base(
+        &headers_naming("   "),
+        true
+    )));
 }
 
 /// Each of these would reach somewhere the caller should not be able to send credentialed traffic.
@@ -66,10 +84,9 @@ fn only_absolute_http_urls_with_a_bare_host_are_accepted() {
         // Parses, but there is no host to forward to.
         "https://",
     ] {
-        assert_eq!(
-            client_named_upstream_base(&headers_naming(rejected), true),
-            None,
-            "{rejected} must not be accepted as an upstream"
+        assert!(
+            is_rejected(client_named_upstream_base(&headers_naming(rejected), true)),
+            "{rejected} must be refused, not silently ignored"
         );
     }
 }
@@ -88,7 +105,7 @@ fn loopback_upstreams_may_use_plain_http() {
         "http://127.2.3.4:8000/v1",
     ] {
         assert_eq!(
-            client_named_upstream_base(&headers_naming(accepted), true).as_deref(),
+            named(client_named_upstream_base(&headers_naming(accepted), true)).as_deref(),
             Some(accepted),
             "{accepted} is unreachable from off the machine and must be allowed"
         );
@@ -106,17 +123,19 @@ fn a_remote_upstream_must_use_https() {
         // Reserved for loopback by RFC 6761, but it still resolves through the host's resolver.
         "http://ollama.localhost/v1",
     ] {
-        assert_eq!(
-            client_named_upstream_base(&headers_naming(rejected), true),
-            None,
+        assert!(
+            is_rejected(client_named_upstream_base(&headers_naming(rejected), true)),
             "{rejected} would carry a provider credential in cleartext off the machine"
         );
     }
 
     // The same hosts over TLS are fine.
     assert_eq!(
-        client_named_upstream_base(&headers_naming("https://integrate.api.nvidia.com/v1"), true)
-            .as_deref(),
+        named(client_named_upstream_base(
+            &headers_naming("https://integrate.api.nvidia.com/v1"),
+            true
+        ))
+        .as_deref(),
         Some("https://integrate.api.nvidia.com/v1")
     );
 }

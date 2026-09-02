@@ -5258,7 +5258,11 @@ fn router_for_launched_session(config: GatewayConfig, credential: &'static str) 
 fn named_upstream_request(upstream: &str, credential: Option<&str>, prompt: &str) -> Request<Body> {
     let mut builder = Request::builder()
         .method("POST")
-        .uri("/v1/chat/completions")
+        // `/chat/completions`, not `/v1/chat/completions`: Relay registers its own root as pi's
+        // base URL, and pi's OpenAI SDK appends the bare path to whatever base it was given. The
+        // named base supplies the `/v1`, which is what makes the composed destination match the
+        // endpoint pi would have called unredirected.
+        .uri("/chat/completions")
         .header(header::CONTENT_TYPE, "application/json")
         .header(
             crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
@@ -5518,5 +5522,55 @@ async fn a_named_upstream_still_receives_the_callers_own_credential() {
         *upstream.credentials.lock().unwrap(),
         vec![vec!["authorization".to_string()]],
         "the caller's own provider credential must still reach the provider it named"
+    );
+}
+
+/// A refused destination must fail the request, not quietly become a different destination.
+///
+/// This is the shape that matters: pi registered this gateway as its provider, so the prompt and
+/// the provider credential in flight were meant for the endpoint the caller named. Falling back
+/// to configured routing would hand both to whoever the gateway happens to be configured for.
+#[tokio::test]
+async fn a_refused_named_upstream_never_reaches_the_configured_provider() {
+    let configured = spawn_named_upstream(completion_body("configured upstream answered")).await;
+    let mut config = test_config();
+    config.openai_base_url = format!("{}/v1", configured.server.url());
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/chat/completions")
+        .header(header::CONTENT_TYPE, "application/json")
+        // Plain http to a host that is not loopback: refused, and an on-prem provider is exactly
+        // who would be named this way.
+        .header(
+            crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+            "http://onprem.example.com/v1",
+        )
+        .header(
+            crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+            "nrp_named_upstream",
+        )
+        .body(Body::from(
+            json!({
+                "model": "onprem/model",
+                "messages": [{ "role": "user", "content": "meant for the on-prem provider" }]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = router_for_launched_session(config, "nrp_named_upstream")
+        .oneshot(request)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "a named destination that cannot be used must fail the request"
+    );
+    assert!(
+        configured.routing_headers.lock().unwrap().is_empty(),
+        "the configured provider must never see a prompt addressed to somewhere else"
     );
 }

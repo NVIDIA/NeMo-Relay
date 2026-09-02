@@ -65,24 +65,36 @@ pub(super) async fn prepare_gateway_request(
     // The two cannot both apply in practice -- one is inferred from a ChatGPT token, the other is
     // sent by the pi extension -- so the order records precedence rather than resolving a clash.
     let mut named_by_client = false;
-    let upstream_url = gateway_upstream_url_override(
+    let agent_override = gateway_upstream_url_override(
         provider,
         &parts.headers,
         path_and_query,
         authorization.allow_environment_provider_auth,
         config,
-    )
-    .or_else(|| {
-        let named = super::routes::client_named_upstream_url(
+    );
+    let upstream_url = match agent_override {
+        Some(url) => url,
+        None => match super::routes::client_named_upstream_url(
             provider,
             &parts.headers,
             path_and_query,
             authorization.source_credential.is_relay_proxy_credential(),
-        );
-        named_by_client = named.is_some();
-        named
-    })
-    .unwrap_or_else(|| provider.upstream_url(config, path_and_query));
+        ) {
+            crate::agents::pi::alignment::NamedUpstream::Named(url) => {
+                named_by_client = true;
+                url
+            }
+            // Refuse rather than reroute. The caller registered this gateway as its provider and
+            // is sending a prompt and a provider credential meant for the endpoint it named;
+            // falling back to the configured upstream would deliver both to a different company.
+            crate::agents::pi::alignment::NamedUpstream::Rejected(reason) => {
+                return Err(CliError::InvalidPayload(reason.to_string()));
+            }
+            crate::agents::pi::alignment::NamedUpstream::Absent => {
+                provider.upstream_url(config, path_and_query)
+            }
+        },
+    };
     if named_by_client {
         // A client-named destination gets only the credentials the client itself sent.
         //
