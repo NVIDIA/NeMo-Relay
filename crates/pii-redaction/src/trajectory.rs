@@ -77,7 +77,10 @@ impl TrajectorySanitizer {
         &self,
         request: AnnotatedLlmRequest,
     ) -> Option<AnnotatedLlmRequest> {
-        let mut value = serde_json::to_value(request).ok()?;
+        let mut value = match serde_json::to_value(request) {
+            Ok(value) => value,
+            Err(_) => return log_annotated_llm_payload_omitted("request", "serialization failure"),
+        };
         let preserved = take_root_fields(
             &value,
             &[
@@ -97,14 +100,22 @@ impl TrajectorySanitizer {
         );
         value = redact_semantic_content(value, &self.replacement, None);
         restore_root_fields(&mut value, preserved);
-        serde_json::from_value(value).ok()
+        match serde_json::from_value(value) {
+            Ok(request) => Some(request),
+            Err(_) => log_annotated_llm_payload_omitted("request", "deserialization failure"),
+        }
     }
 
     pub(super) fn sanitize_annotated_response(
         &self,
         response: AnnotatedLlmResponse,
     ) -> Option<AnnotatedLlmResponse> {
-        let mut value = serde_json::to_value(response).ok()?;
+        let mut value = match serde_json::to_value(response) {
+            Ok(value) => value,
+            Err(_) => {
+                return log_annotated_llm_payload_omitted("response", "serialization failure");
+            }
+        };
         let mut preserved = take_root_fields(
             &value,
             &[
@@ -123,7 +134,10 @@ impl TrajectorySanitizer {
         }
         value = redact_semantic_content(value, &self.replacement, None);
         restore_root_fields(&mut value, preserved);
-        serde_json::from_value(value).ok()
+        match serde_json::from_value(value) {
+            Ok(response) => Some(response),
+            Err(_) => log_annotated_llm_payload_omitted("response", "deserialization failure"),
+        }
     }
 
     pub(super) fn sanitize_event_fields(
@@ -187,8 +201,17 @@ impl TrajectorySanitizer {
 
     /// Redact optional metric text without modifying required export fields.
     fn sanitize_metric_envelope(&self, data: Json) -> Option<Json> {
-        let mut envelope = serde_json::from_value::<MetricEnvelope>(data).ok()?;
-        envelope.validate().ok()?;
+        let mut envelope = match serde_json::from_value::<MetricEnvelope>(data) {
+            Ok(envelope) => envelope,
+            Err(_) => {
+                return log_metric_envelope_omitted("metric envelope deserialization failure");
+            }
+        };
+        if envelope.validate().is_err() {
+            return log_metric_envelope_omitted(
+                "metric envelope validation failure before redaction",
+            );
+        }
         for measurement in &mut envelope.measurements {
             measurement.description = measurement
                 .description
@@ -199,9 +222,37 @@ impl TrajectorySanitizer {
                 .take()
                 .map(|attributes| redact_metric_string_attributes(attributes, &self.replacement));
         }
-        envelope.validate().ok()?;
-        serde_json::to_value(envelope).ok()
+        if envelope.validate().is_err() {
+            return log_metric_envelope_omitted(
+                "metric envelope validation failure after redaction",
+            );
+        }
+        match serde_json::to_value(envelope) {
+            Ok(data) => Some(data),
+            Err(_) => log_metric_envelope_omitted("metric envelope serialization failure"),
+        }
     }
+}
+
+fn log_annotated_llm_payload_omitted<T>(direction: &str, reason: &str) -> Option<T> {
+    log::warn!(
+        target: "nemo_relay.plugin",
+        event = "pii_llm_payload_omitted",
+        codec_kind = "annotated",
+        reason;
+        "PII redaction omitted an annotated LLM {direction} payload"
+    );
+    None
+}
+
+fn log_metric_envelope_omitted(reason: &str) -> Option<Json> {
+    log::warn!(
+        target: "nemo_relay.plugin",
+        event = "pii_metric_envelope_omitted",
+        reason;
+        "PII redaction omitted a metric envelope"
+    );
+    None
 }
 
 fn valid_mark_log_severity(event: &Event, metadata: Option<&Json>) -> Option<LogSeverity> {
