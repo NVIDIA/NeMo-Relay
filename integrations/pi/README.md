@@ -316,6 +316,10 @@ gateway was started:
   to a provider it was never configured for. It honors that header only from a
   request carrying this invocation's proxy credential — minted per run and given
   only to the process the launcher starts — and strips it before forwarding.
+  A named endpoint receives only the credential the request already carried: the
+  gateway never attaches its own configured or environment provider key to a
+  destination the client chose, so naming a host is not a way to obtain a key
+  for it.
 - **Statically configured.** A standalone `nemo-relay --bind` daemon issues no
   credential, so it ignores the header. Redirection there still requires the
   gateway's own upstream to be the model's endpoint.

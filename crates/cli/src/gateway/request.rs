@@ -64,6 +64,7 @@ pub(super) async fn prepare_gateway_request(
     // request that names its own upstream is consulted only when nothing else claimed the route.
     // The two cannot both apply in practice -- one is inferred from a ChatGPT token, the other is
     // sent by the pi extension -- so the order records precedence rather than resolving a clash.
+    let mut named_by_client = false;
     let upstream_url = gateway_upstream_url_override(
         provider,
         &parts.headers,
@@ -72,14 +73,32 @@ pub(super) async fn prepare_gateway_request(
         config,
     )
     .or_else(|| {
-        super::routes::client_named_upstream_url(
+        let named = super::routes::client_named_upstream_url(
             provider,
             &parts.headers,
             path_and_query,
             authorization.source_credential.is_relay_proxy_credential(),
-        )
+        );
+        named_by_client = named.is_some();
+        named
     })
     .unwrap_or_else(|| provider.upstream_url(config, path_and_query));
+    if named_by_client {
+        // A client-named destination gets only the credentials the client itself sent.
+        //
+        // Naming a destination must not also be a way to *obtain* one. Environment and
+        // configured provider auth exist for the upstream this gateway was configured for, and
+        // injection fires precisely when the request carries no credential of its own -- so
+        // without this, a request naming any host would have `OPENAI_API_KEY`,
+        // `ANTHROPIC_API_KEY` or the configured `Authorization` value attached on the way out.
+        // The invocation credential proves the caller is the agent this run launched; it is not
+        // an authorization to export a secret this gateway holds to an address the caller chose.
+        //
+        // Source credentials are deliberately left in place, unlike the intercept-named
+        // `ExplicitTarget` path that strips them: pi sends the provider's own key for the
+        // provider it named, and that is the credential the request is supposed to travel with.
+        authorization.allow_environment_provider_auth = false;
+    }
     parts.headers = super::routes::strip_replaceable_agent_auth_headers(
         &parts.headers,
         provider,

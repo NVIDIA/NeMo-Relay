@@ -416,6 +416,13 @@ gateway honors that header only from a request carrying this invocation's proxy
 credential, which the launcher mints per run and gives only to the process it
 starts, and strips it before forwarding.
 
+**A named endpoint receives only the credential the request already carried.**
+Naming a destination does not obtain one: the gateway never attaches its own
+configured `Authorization` value, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` to an
+endpoint the client chose — those belong to the upstream it was configured for.
+pi sends the provider's own key for the provider it named, and that key travels;
+nothing else does.
+
 A **standalone `nemo-relay --bind` daemon issues no credential**, so it ignores
 the header and keeps the static behavior below. Point it at a provider with
 `--openai-base-url` / `--anthropic-base-url`, or launch through the wrapper.

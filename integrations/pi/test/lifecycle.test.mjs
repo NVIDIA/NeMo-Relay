@@ -726,7 +726,7 @@ describe('the session join key on redirected providers', () => {
   // Asserts the extension's half of the contract only: that a mismatch now registers,
   // and that the registration carries the endpoint. Whether the gateway then forwards
   // there, opens an LLM span and applies model-call policy is asserted on the Rust
-  // side, in `pi_named_upstream_tests.rs`.
+  // side, in `crates/cli/tests/coverage/shared/server_tests.rs`.
   it('names the endpoint when the gateway does not front it', async () => {
     process.env.NEMO_RELAY_PROXY_CREDENTIAL = 'nrp_testtoken';
     process.env.NEMO_RELAY_PI_OPENAI_UPSTREAM = 'https://elsewhere.example/v1';

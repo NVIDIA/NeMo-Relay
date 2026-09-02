@@ -5182,15 +5182,23 @@ async fn pi_tool_call_hook_omits_the_transform_when_nothing_rewrote_the_argument
 struct NamedUpstream {
     server: TestServer,
     routing_headers: Arc<Mutex<Vec<Option<String>>>>,
+    /// Every credential-bearing header the provider actually received, per request.
+    ///
+    /// Recorded so a test can assert on what a named destination is *given*, not only on where
+    /// the request went. Naming a host must not also hand it a secret this gateway holds.
+    credentials: Arc<Mutex<Vec<Vec<String>>>>,
 }
 
 async fn spawn_named_upstream(body: Value) -> NamedUpstream {
     let routing_headers = Arc::new(Mutex::new(Vec::new()));
+    let credentials = Arc::new(Mutex::new(Vec::new()));
     let recorder = routing_headers.clone();
+    let credential_recorder = credentials.clone();
     let app = Router::new().route(
         "/v1/chat/completions",
         post(move |headers: HeaderMap| {
             let recorder = recorder.clone();
+            let credential_recorder = credential_recorder.clone();
             let body = body.clone();
             async move {
                 recorder.lock().unwrap().push(
@@ -5199,6 +5207,13 @@ async fn spawn_named_upstream(body: Value) -> NamedUpstream {
                         .and_then(|value| value.to_str().ok())
                         .map(ToOwned::to_owned),
                 );
+                let seen: Vec<String> =
+                    ["authorization", "x-api-key", "api-key", "anthropic-api-key"]
+                        .into_iter()
+                        .filter(|name| headers.contains_key(*name))
+                        .map(ToOwned::to_owned)
+                        .collect();
+                credential_recorder.lock().unwrap().push(seen);
                 Json(body)
             }
         }),
@@ -5214,6 +5229,7 @@ async fn spawn_named_upstream(body: Value) -> NamedUpstream {
             handle,
         },
         routing_headers,
+        credentials,
     }
 }
 
@@ -5434,5 +5450,73 @@ async fn model_call_policy_still_applies_on_a_named_upstream() {
     assert!(
         upstream.routing_headers.lock().unwrap().is_empty(),
         "a refused call must never reach the provider"
+    );
+}
+
+/// Naming a destination must not also be a way to obtain a credential for it.
+///
+/// Environment and configured provider auth exist for the upstream this gateway was configured
+/// for, and injection fires precisely when the request carries none of its own -- so a request
+/// that both names a host and sends no credential is exactly the shape that would have carried
+/// `OPENAI_API_KEY` or the configured `Authorization` value out to an address the caller chose.
+/// The invocation credential proves who the caller is; it does not authorize exporting a secret
+/// this gateway holds.
+#[tokio::test]
+async fn a_named_upstream_never_receives_a_gateway_held_credential() {
+    let upstream = spawn_named_upstream(completion_body("named upstream answered")).await;
+    let mut config = test_config();
+    config.openai_base_url = "http://127.0.0.1:1".into();
+    // The secret this gateway would otherwise attach to an unauthenticated request.
+    config.openai_auth_header = Some("Bearer gateway-held-secret".into());
+
+    let response = router_for_launched_session(config, "nrp_named_upstream")
+        .oneshot(named_upstream_request(
+            &upstream.server.url(),
+            Some("nrp_named_upstream"),
+            "name a host while sending no credential of my own",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        *upstream.credentials.lock().unwrap(),
+        vec![Vec::<String>::new()],
+        "the named provider must receive no credential the caller did not send itself"
+    );
+}
+
+/// The other half of the same rule: a credential the caller *did* send still travels.
+///
+/// Without this the fix would read as "named upstreams are unauthenticated", which would break
+/// the feature -- pi sends the provider's own key for the provider it named, and that is the
+/// credential the request is supposed to carry.
+#[tokio::test]
+async fn a_named_upstream_still_receives_the_callers_own_credential() {
+    let upstream = spawn_named_upstream(completion_body("named upstream answered")).await;
+    let mut config = test_config();
+    config.openai_base_url = "http://127.0.0.1:1".into();
+    config.openai_auth_header = Some("Bearer gateway-held-secret".into());
+
+    let mut request = named_upstream_request(
+        &upstream.server.url(),
+        Some("nrp_named_upstream"),
+        "name a host and send my own provider key",
+    );
+    request.headers_mut().insert(
+        header::AUTHORIZATION,
+        HeaderValue::from_static("Bearer callers-own-provider-key"),
+    );
+
+    let response = router_for_launched_session(config, "nrp_named_upstream")
+        .oneshot(request)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        *upstream.credentials.lock().unwrap(),
+        vec![vec!["authorization".to_string()]],
+        "the caller's own provider credential must still reach the provider it named"
     );
 }
