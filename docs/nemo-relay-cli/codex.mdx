@@ -303,7 +303,16 @@ nemo-relay install codex --migrate-history
 
 Close every Codex session first. The migration takes the database write lock
 and fails cleanly with `database is locked` rather than writing partial state
-if Codex is still running. It requires `sqlite3` on `PATH`.
+if Codex is still running.
+
+<Warning title="Requires sqlite3">
+This is the only Relay feature that needs the `sqlite3` command on `PATH`. It
+is present by default on macOS and most Linux distributions, but not on Windows
+or in minimal container images. Without it, `--migrate-history` stops and
+reports the missing command; the rest of the Codex integration is unaffected.
+Uninstall needs `sqlite3` only when a migration was recorded, and the journal
+survives a failed reversal, so a later uninstall can still complete it.
+</Warning>
 
 Before rewriting anything, Relay copies the thread database and its
 write-ahead-log sidecars into a timestamped `nemo-relay-history-backup-*`

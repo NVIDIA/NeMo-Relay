@@ -23,7 +23,8 @@ pub(crate) struct InstallCommand {
     pub(crate) skip_doctor: bool,
     /// Experimental: move existing Codex thread history onto the Relay provider so it stays
     /// visible in the Codex resume picker. `nemo-relay uninstall codex` reverses this
-    /// automatically.
+    /// automatically. Requires the `sqlite3` command on PATH, which Windows does not provide by
+    /// default.
     #[arg(long)]
     pub(crate) migrate_history: bool,
     /// Codex thread database to migrate, when Codex has moved past the default schema
