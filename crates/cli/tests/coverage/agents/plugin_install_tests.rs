@@ -958,19 +958,19 @@ fn refresh_preflight_retires_every_managed_generation_before_replacement() {
     let home = tempdir().unwrap();
     let _home = HomeScope::enter(home.path());
     let install = tempdir().unwrap();
-    for host in CodingAgent::ALL {
+    for host in CodingAgent::MARKETPLACE_HOSTS {
         write_installed_state(host, install.path());
     }
 
     let _preflight = retire_integrations_for_refresh(
-        &CodingAgent::ALL
+        &CodingAgent::MARKETPLACE_HOSTS
             .into_iter()
             .map(|host| (host, install.path().to_path_buf()))
             .collect::<Vec<_>>(),
     )
     .unwrap();
 
-    for host in CodingAgent::ALL {
+    for host in CodingAgent::MARKETPLACE_HOSTS {
         let layout = PluginLayout::new(host, install.path());
         assert!(
             std::fs::read_to_string(layout.generation_fence)
@@ -1036,10 +1036,10 @@ fn refresh_preflight_restores_earlier_generations_when_a_target_is_invalid() {
 #[test]
 fn refresh_preflight_validates_every_target_before_retiring_any_generation() {
     let install = tempdir().unwrap();
-    for host in CodingAgent::ALL {
+    for host in CodingAgent::MARKETPLACE_HOSTS {
         write_installed_state(host, install.path());
     }
-    let targets = CodingAgent::ALL
+    let targets = CodingAgent::MARKETPLACE_HOSTS
         .into_iter()
         .map(|host| (host, install.path().to_path_buf()))
         .collect::<Vec<_>>();
@@ -1055,7 +1055,7 @@ fn refresh_preflight_validates_every_target_before_retiring_any_generation() {
             .contains("required `codex` CLI was not found"),
         "{error}"
     );
-    for host in CodingAgent::ALL {
+    for host in CodingAgent::MARKETPLACE_HOSTS {
         let layout = PluginLayout::new(host, install.path());
         assert!(
             !std::fs::read_to_string(layout.generation_fence)
@@ -3627,21 +3627,21 @@ fn refresh_preflight_retires_healthy_targets_alongside_an_orphaned_one() {
     let home = tempdir().unwrap();
     let _home = HomeScope::enter(home.path());
     let install = tempdir().unwrap();
-    for host in CodingAgent::ALL {
+    for host in CodingAgent::MARKETPLACE_HOSTS {
         write_installed_state(host, install.path());
     }
     let orphaned = PluginLayout::new(CodingAgent::Codex, install.path());
     std::fs::remove_dir_all(&orphaned.marketplace_root).unwrap();
 
     let _preflight = retire_integrations_for_refresh(
-        &CodingAgent::ALL
+        &CodingAgent::MARKETPLACE_HOSTS
             .into_iter()
             .map(|host| (host, install.path().to_path_buf()))
             .collect::<Vec<_>>(),
     )
     .unwrap();
 
-    for host in CodingAgent::ALL {
+    for host in CodingAgent::MARKETPLACE_HOSTS {
         if host == CodingAgent::Codex {
             continue;
         }

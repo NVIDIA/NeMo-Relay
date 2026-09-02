@@ -146,7 +146,7 @@ pub(crate) async fn collect_report(
             configured_agents,
             &plugin_diagnostics,
         ),
-        agents: collect_agents(target_agent, &resolved).await,
+        agents: collect_agents(target_agent, probe_mode, &resolved).await,
         host_plugins: crate::agents::collect_default_integration_readiness(),
         observability: collect_observability(&resolved.gateway, probe_mode).await,
         completions: collect_completions(home.as_deref()),
@@ -417,6 +417,7 @@ fn plugin_layer_status(
 
 async fn collect_agents(
     target_agent: Option<CodingAgent>,
+    probe_mode: DoctorProbeMode,
     resolved: &ResolvedConfig,
 ) -> Vec<AgentInfo> {
     let mut out = Vec::with_capacity(CodingAgent::ALL.len());
@@ -424,7 +425,7 @@ async fn collect_agents(
         if target_agent.is_some_and(|target| target != agent) {
             continue;
         }
-        out.push(collect_agent(agent, target_agent == Some(agent), resolved).await);
+        out.push(collect_agent(agent, target_agent == Some(agent), probe_mode, resolved).await);
     }
     out
 }
@@ -432,6 +433,7 @@ async fn collect_agents(
 async fn collect_agent(
     agent: CodingAgent,
     target_requested: bool,
+    probe_mode: DoctorProbeMode,
     resolved: &ResolvedConfig,
 ) -> AgentInfo {
     let configured = agent_configured(agent, &resolved.agents);
@@ -462,6 +464,9 @@ async fn collect_agent(
         &mut status,
         &mut details,
     );
+    let checks =
+        agent_preflight_checks(agent, probe_mode, configured || target_requested, resolved).await;
+    status = fold_preflight_checks(status, &checks);
     AgentInfo {
         name: agent.as_arg(),
         status,
@@ -470,7 +475,286 @@ async fn collect_agent(
         path,
         version,
         annotation: details.join("; "),
+        checks,
     }
+}
+
+/// Preflight checks that depend on how the *agent* is set up rather than on
+/// anything NeMo Relay wrote.
+///
+/// Only pi has any. Codex reads a generated hook config and Claude Code reads a
+/// settings file, both written by `nemo-relay install`, so their setup is
+/// already fully described by `hook_status`. pi's hooks live in an extension the
+/// user installs wherever they like, and pi's own trust rules decide whether it
+/// loads -- neither of which is visible from anything NeMo Relay owns.
+async fn agent_preflight_checks(
+    agent: CodingAgent,
+    probe_mode: DoctorProbeMode,
+    relevant: bool,
+    resolved: &ResolvedConfig,
+) -> Vec<Check> {
+    if agent != CodingAgent::Pi {
+        return Vec::new();
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut checks = vec![pi_extension_trust_check(&cwd)];
+    checks.extend(pi_managed_install_check());
+    // The filesystem check is free and always worth running -- a stray project-scoped
+    // extension is worth knowing about whether or not pi is set up yet. The network probe
+    // is not: a bare `nemo-relay doctor` on a machine that does not use pi would spend the
+    // timeout budget dialling a gateway nobody asked about, and warn about it.
+    if relevant {
+        checks.push(pi_gateway_reachability_check(probe_mode, resolved).await);
+    }
+    checks
+}
+
+/// Report a Relay-managed install that is older than the binary driving it.
+///
+/// pi ships breaking changes through *minor* releases, and the extension is what
+/// translates pi's hook shapes for the gateway -- so an extension written by an older
+/// Relay is the same silent failure the version floor exists to catch, arriving from the
+/// other side. Only a managed install can be checked: a copy the user placed themselves
+/// records no version, and inferring one from its contents would report drift on an edit.
+///
+/// Nothing is reported when there is no managed install, because there is nothing to be
+/// stale -- the other pi checks already cover "installed, somewhere else" and "not
+/// installed at all".
+fn pi_managed_install_check() -> Option<Check> {
+    const NAME: &str = "pi extension install";
+    let installed = crate::agents::pi::install::installed_version()?;
+    let current = crate::agents::pi::assets::EXTENSION_VERSION;
+    if installed == current {
+        return Some(Check {
+            name: NAME,
+            status: Status::Pass,
+            details: format!("NeMo Relay-managed, version {installed}"),
+        });
+    }
+    Some(Check {
+        name: NAME,
+        status: Status::Warn,
+        details: format!(
+            "the installed NeMo Relay pi extension is version {installed} and this build \
+             ships {current}. pi can change a hook shape in a minor release, and the \
+             symptom is missing spans rather than an error. Run `nemo-relay install pi` \
+             to update it"
+        ),
+    })
+}
+
+/// Warn when an extension sits somewhere pi will silently ignore.
+///
+/// The danger is specific: pi adds project-scoped extensions to its candidate
+/// set only for a trusted project, and its non-interactive modes never prompt
+/// for trust. The skip is a bare conditional rather than an error path, so pi
+/// does not treat it as a failure and nothing surfaces it -- and the extension
+/// cannot surface it either, because it is not running. This check is the only
+/// place a user finds out before wondering why NeMo Relay "does nothing".
+fn pi_extension_trust_check(cwd: &Path) -> Check {
+    const NAME: &str = "pi extension load path";
+    let sites = crate::agents::pi::doctor::relay_extension_sites(cwd);
+    let project_sites: Vec<&crate::agents::pi::doctor::ExtensionSite> = sites
+        .iter()
+        .filter(|site| site.scope == crate::agents::pi::doctor::ExtensionScope::Project)
+        .collect();
+
+    // Ahead of the project warning, because a project copy must not hide it: the two ungated
+    // copies load whether or not the project is trusted, and that is the louder problem.
+    // Asked of the copy the launcher would choose, not of whichever site sorts first: a copy pi's
+    // settings switch off is not one of the two that load, and naming it here would report a
+    // duplicate that does not exist.
+    if let Some(launched) = crate::agents::pi::doctor::launchable_extension_path(cwd)
+        && let Some(duplicate) =
+            crate::agents::pi::doctor::conflicting_extension_site(cwd, &launched)
+    {
+        return Check {
+            name: NAME,
+            status: Status::Warn,
+            details: format!(
+                "two copies would load: {} and {}. pi de-duplicates by path, not by package, \
+                 so both register hooks and every event is reported twice -- each turn is \
+                 closed as superseded by its own duplicate, and the inline-shell gate decides \
+                 one command twice. Keep one copy",
+                launched.display(),
+                duplicate.display()
+            ),
+        };
+    }
+
+    if let Some(project) = project_sites.first() {
+        return Check {
+            name: NAME,
+            status: Status::Warn,
+            details: format!(
+                "{} is project-scoped, so pi loads it only when the project is trusted, and \
+                 `-p`, `--mode json` and `--mode rpc` never prompt -- it is silently skipped \
+                 there, with nothing reporting it. Install at user scope \
+                 (`~/.pi/agent/extensions/`, or `pi install` without `--local`), or set {} to \
+                 it. `nemo-relay run --agent pi` passes `-e`, which is never trust-gated, but it \
+                 resolves only those two routes and refuses a project-scoped copy for the same \
+                 reason this warns about one",
+                project.path.display(),
+                crate::agents::pi::launch::PI_EXTENSION_PATH_ENV
+            ),
+        };
+    }
+
+    use crate::agents::pi::doctor::SettingsFilter;
+    match sites.first() {
+        // Installed, and switched off in pi's own settings. Same silent drop as the trust gate,
+        // from the other direction -- and `-e` ignores those filters, so the launcher still
+        // instruments a session the user's own `pi` runs are missing.
+        Some(site) if site.filter == SettingsFilter::Excluded => Check {
+            name: NAME,
+            status: Status::Warn,
+            details: format!(
+                "{} is recorded in pi's settings with its extensions filtered off, so pi does not \
+                 load it -- remove the `extensions` filter, or the `autoload: false`, on that \
+                 entry. `nemo-relay run --agent pi` is unaffected: it passes `-e`, which applies \
+                 no settings filter",
+                site.path.display()
+            ),
+        },
+        // Installed, with a filter this check cannot evaluate: pi matches glob patterns with
+        // `minimatch`, which is not reimplemented here. Reporting Pass would claim pi loads it,
+        // and that is the claim this whole check exists to stop being made on no evidence.
+        Some(site) if site.filter == SettingsFilter::Undecided => Check {
+            name: NAME,
+            status: Status::Warn,
+            details: format!(
+                "{} is recorded in pi's settings with a glob filter on its extensions, and \
+                 whether pi loads it cannot be decided from here. Check that filter if NeMo \
+                 Relay appears to do nothing. `nemo-relay run --agent pi` is unaffected: it \
+                 passes `-e`, which applies no settings filter",
+                site.path.display()
+            ),
+        },
+        Some(site) => Check {
+            name: NAME,
+            status: Status::Pass,
+            details: format!("{} ({})", site.path.display(), site.scope.describe()),
+        },
+        None => Check {
+            name: NAME,
+            status: Status::Info,
+            details: format!(
+                "the NeMo Relay pi extension was not found; run `nemo-relay install pi`, \
+                 or set {} to a copy you manage yourself",
+                crate::agents::pi::launch::PI_EXTENSION_PATH_ENV
+            ),
+        },
+    }
+}
+
+/// Probe the gateway the pi extension will post to.
+///
+/// Deliberately a warning rather than a failure when it does not answer: the
+/// gateway is a separate process a user normally starts alongside pi, so doctor
+/// running before it is the common case rather than a broken one. What makes
+/// this worth probing at all is that the extension defaults to **failing open**,
+/// so an unreachable gateway does not stop pi -- it silently stops enforcing.
+async fn pi_gateway_reachability_check(
+    probe_mode: DoctorProbeMode,
+    resolved: &ResolvedConfig,
+) -> Check {
+    const NAME: &str = "pi gateway reachability";
+    let url = crate::agents::pi::doctor::gateway_url(Some(resolved.gateway.bind));
+    if probe_mode.is_offline() {
+        return Check {
+            name: NAME,
+            status: Status::Info,
+            details: format!("{url} (live reachability probe skipped (--offline))"),
+        };
+    }
+    // The shared probe classifies rather than just connecting, which is the difference
+    // between "your gateway is down" and "something else owns that port" -- two problems
+    // with nothing in common. It is blocking and loopback-only, hence the offload; a pi
+    // gateway pointed somewhere else falls back to a plain reachability check below.
+    let probed = if is_loopback(&url) {
+        let probe_url = url.clone();
+        timeout(
+            NETWORK_TIMEOUT,
+            tokio::task::spawn_blocking(move || crate::gateway::client::probe(&probe_url, None)),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+    } else {
+        None
+    };
+
+    let unreachable = |detail: &str| Check {
+        name: NAME,
+        status: Status::Warn,
+        details: format!(
+            "{url} {detail}; start the gateway before pi, or every hook will fault -- and \
+             because the extension fails open by default, pi keeps running with no policy applied"
+        ),
+    };
+
+    match probed {
+        Some(crate::gateway::client::RelayHealth::Compatible) => Check {
+            name: NAME,
+            status: Status::Pass,
+            details: format!("{url} is running a compatible NeMo Relay gateway"),
+        },
+        Some(crate::gateway::client::RelayHealth::Incompatible) => Check {
+            name: NAME,
+            status: Status::Warn,
+            details: format!(
+                "{url} is a NeMo Relay gateway of an incompatible version; the pi extension \
+                 posts hooks here"
+            ),
+        },
+        Some(crate::gateway::client::RelayHealth::Foreign) => Check {
+            name: NAME,
+            status: Status::Warn,
+            details: format!(
+                "{url} is answering, but it is not a NeMo Relay gateway -- something else owns \
+                 that port, so every hook goes somewhere unexpected"
+            ),
+        },
+        Some(crate::gateway::client::RelayHealth::Unavailable) => unreachable("is not answering"),
+        // Non-loopback, or the blocking probe did not finish in budget.
+        None => match reqwest::Client::builder()
+            .timeout(NETWORK_TIMEOUT)
+            .build()
+            .ok()
+        {
+            Some(client) => match client.get(format!("{url}/healthz")).send().await {
+                Ok(response) if response.status().is_success() => Check {
+                    name: NAME,
+                    status: Status::Pass,
+                    details: format!("{url} answered /healthz"),
+                },
+                Ok(response) => Check {
+                    name: NAME,
+                    status: Status::Warn,
+                    details: format!(
+                        "{url} answered /healthz with HTTP {}; the pi extension posts hooks here",
+                        response.status().as_u16()
+                    ),
+                },
+                Err(_) => unreachable("did not answer /healthz"),
+            },
+            None => unreachable("could not be probed"),
+        },
+    }
+}
+
+/// Whether a URL names the local machine, which is all the shared probe supports.
+fn is_loopback(url: &str) -> bool {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_owned))
+        .is_some_and(|host| {
+            host == "localhost"
+                || host
+                    .trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        })
 }
 
 fn agent_details(
@@ -504,14 +788,30 @@ fn apply_agent_version_status(
     status: &mut Status,
     details: &mut Vec<String>,
 ) {
+    // Three outcomes, not two. A host whose minor releases can move a hook shape has a
+    // band above the floor that is untested rather than supported, and reporting it as a
+    // plain pass is what let a newer pi look verified.
+    let mut unverified = None;
     let problem = match version {
-        Some(version) => agent.validate_version_output(version).err(),
+        Some(version) => match agent.validate_version_output(version) {
+            Ok(parsed) => {
+                unverified = agent.unverified_version(&parsed);
+                None
+            }
+            Err(problem) => Some(problem),
+        },
         None if executable_found => Some(format!(
             "could not determine version; NeMo Relay requires {}",
             agent.version_requirement()
         )),
         None => None,
     };
+    if let Some(unverified) = unverified {
+        // Warn even when the agent is not the requested target: an untested host is a
+        // property of the machine, not of what the user asked about.
+        *status = combine_status(*status, Status::Warn, true);
+        details.push(unverified);
+    }
     if let Some(problem) = problem {
         *status = combine_status(
             *status,
@@ -554,6 +854,25 @@ fn agent_command_status(path: Option<&Path>, configured: bool, target_requested:
         (false, true, _) | (false, _, true) => Status::Fail,
         (false, false, false) => Status::Info,
     }
+}
+
+/// Fold preflight findings into the agent status, configured or not.
+///
+/// The readiness gate `combine_status` applies elsewhere asks whether the user has
+/// told Relay to use this agent, which is the right question for "the hook config
+/// is missing" -- nobody wants a bare `doctor` complaining about an agent they do
+/// not run. It is the wrong question here, because a preflight finding is
+/// *evidence* rather than readiness: every warning branch already requires the
+/// extension to be installed on this machine, and a machine without one reports
+/// `Info`, which never folds either way.
+///
+/// Gating on `configured` meant `agents --json` reported `status: "pass"` for a pi
+/// whose only install is project-scoped -- the exact silent skip the check exists
+/// to catch -- while its own nested check said `warn`.
+fn fold_preflight_checks(status: Status, checks: &[Check]) -> Status {
+    checks.iter().fold(status, |status, check| {
+        combine_status(status, check.status, true)
+    })
 }
 
 fn combine_status(base: Status, hook: Status, readiness_required: bool) -> Status {

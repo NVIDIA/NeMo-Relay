@@ -35,7 +35,7 @@ use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use crate::agents::shared::adapters::{claude_code, codex};
+use crate::agents::shared::adapters::{claude_code, codex, pi};
 use crate::configuration::{
     BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, GatewayConfig, HOOK_CLIENT_TOKEN_HEADER,
     ManagedBootstrapIdentity,
@@ -637,6 +637,7 @@ fn router_with_state(state: AppState) -> Router {
         .route("/bootstrap/shutdown", post(shutdown_bootstrap_sidecar))
         .route("/hooks/codex", post(codex_hook))
         .route("/hooks/claude-code", post(claude_code_hook))
+        .route("/hooks/pi", post(pi_hook))
         .route("/responses", post(gateway::passthrough))
         .route("/chat/completions", post(gateway::passthrough))
         .route("/models", get(gateway::models))
@@ -1248,6 +1249,34 @@ async fn claude_code_hook(
         }));
     }
     Ok(Json(outcome.response))
+}
+
+// Handles pi extension hooks. pi has no native hook-config file, so these arrive from a NeMo
+// Relay-authored extension rather than from pi itself. Events are committed before the response
+// so a conditional-execution guardrail rejection surfaces as HTTP 403 and the extension can turn
+// it into pi's `{block, reason}` before the tool runs.
+//
+// This is the one hook route that does not call `authorize_hook_request`. The extension posts from
+// inside pi's process, and on the standalone-daemon route nothing hands it a bootstrap or
+// transparent-proxy token, so requiring one here would break the documented setup. Closing that gap
+// means giving the extension a credential first; see `SessionManager::apply_events`.
+async fn pi_hook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, CliError> {
+    state.touch();
+    let Json(payload) = payload.map_err(hook_payload_rejection)?;
+    let outcome = pi::adapt(payload, &headers);
+    let effects = state
+        .sessions
+        .apply_events(&headers, outcome.events)
+        .await?;
+    // pi is the one agent whose hook response can carry a rewritten payload back: its `tool_call`
+    // hook documents in-place mutation of `input`, so the extension can apply what a request
+    // intercept produced. Absent a rewrite the body stays `{}`, which is what an allow has always
+    // been, so an older extension keeps working unchanged.
+    Ok(Json(pi::response_with_effects(outcome.response, &effects)))
 }
 
 async fn authorize_hook_permission(

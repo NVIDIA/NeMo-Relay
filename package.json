@@ -8,7 +8,8 @@
   "workspaces": [
     "crates/node",
     "examples/language-binding-plugin/node",
-    "integrations/openclaw"
+    "integrations/openclaw",
+    "integrations/pi"
   ],
   "devDependencies": {
     "fern-api": "5.57.0",

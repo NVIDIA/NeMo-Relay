@@ -194,6 +194,7 @@ fn exit_code_fails_when_agent_readiness_fails() {
         path: None,
         version: None,
         annotation: "configured command not found on $PATH".into(),
+        checks: Vec::new(),
     });
     assert_eq!(exit_code(&report), 1);
 }
@@ -335,6 +336,7 @@ fn format_human_uses_symbols_for_agent_statuses() {
             path: Some(PathBuf::from("/bin/claude")),
             version: Some("1.0.0".into()),
             annotation: "hooks: injected during run".into(),
+            checks: Vec::new(),
         },
         AgentInfo {
             name: "codex",
@@ -344,6 +346,21 @@ fn format_human_uses_symbols_for_agent_statuses() {
             path: None,
             version: None,
             annotation: "not configured".into(),
+            checks: Vec::new(),
+        },
+        AgentInfo {
+            name: "pi",
+            status: Status::Warn,
+            configured: true,
+            command: "pi".into(),
+            path: Some(PathBuf::from("/bin/pi")),
+            version: Some("0.84.0".into()),
+            annotation: "hooks: emitted by the extension".into(),
+            checks: vec![Check {
+                name: "pi extension load path",
+                status: Status::Warn,
+                details: "project scope, which pi loads only for a trusted project".into(),
+            }],
         },
     ];
 
@@ -353,6 +370,12 @@ fn format_human_uses_symbols_for_agent_statuses() {
     assert!(rendered.contains("    ·  codex"));
     assert!(!rendered.contains("    pass "));
     assert!(!rendered.contains("    info "));
+    // pi's findings are the reason agents carry checks at all: where the extension sits decides
+    // whether pi loads it, and a status symbol alone cannot say that.
+    assert!(
+        rendered.contains("pi extension load path: project scope"),
+        "an agent check must reach the human report: {rendered}"
+    );
 }
 
 #[test]
@@ -781,7 +804,12 @@ async fn collect_agents_filters_target_and_records_version() {
 
     let mut resolved = ResolvedConfig::default();
     resolved.agents.codex.command = Some(codex.to_string_lossy().into_owned());
-    let agents = collect_agents(Some(CodingAgent::Codex), &resolved).await;
+    let agents = collect_agents(
+        Some(CodingAgent::Codex),
+        DoctorProbeMode::Offline,
+        &resolved,
+    )
+    .await;
 
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].name, "codex");
@@ -806,7 +834,12 @@ async fn collect_agents_preserves_wrapper_argv_for_version_validation() {
 
     let mut resolved = ResolvedConfig::default();
     resolved.agents.codex.command = Some(format!("{} codex", wrapper.display()));
-    let agents = collect_agents(Some(CodingAgent::Codex), &resolved).await;
+    let agents = collect_agents(
+        Some(CodingAgent::Codex),
+        DoctorProbeMode::Offline,
+        &resolved,
+    )
+    .await;
 
     assert_eq!(agents[0].status, Status::Pass);
     assert_eq!(agents[0].path.as_deref(), Some(wrapper.as_path()));
@@ -825,12 +858,18 @@ async fn collect_agents_distinguishes_required_and_optional_version_failures() {
 
     let mut configured = ResolvedConfig::default();
     configured.agents.codex.command = Some(codex.display().to_string());
-    let required = collect_agents(Some(CodingAgent::Codex), &configured).await;
+    let required = collect_agents(
+        Some(CodingAgent::Codex),
+        DoctorProbeMode::Offline,
+        &configured,
+    )
+    .await;
     assert_eq!(required[0].status, Status::Fail);
     assert!(required[0].annotation.contains("is unsupported"));
 
     let _environment = EnvScope::set(&[("PATH", Some(temp.path().as_os_str()))]);
-    let discovered = collect_agents(None, &ResolvedConfig::default()).await;
+    let discovered =
+        collect_agents(None, DoctorProbeMode::Offline, &ResolvedConfig::default()).await;
     let optional = discovered
         .iter()
         .find(|agent| agent.name == "codex")
@@ -840,7 +879,12 @@ async fn collect_agents_distinguishes_required_and_optional_version_failures() {
 
     std::fs::write(&codex, "#!/bin/sh\nexit 0\n").unwrap();
     make_executable(&codex);
-    let required = collect_agents(Some(CodingAgent::Codex), &configured).await;
+    let required = collect_agents(
+        Some(CodingAgent::Codex),
+        DoctorProbeMode::Offline,
+        &configured,
+    )
+    .await;
     assert_eq!(required[0].status, Status::Fail);
     assert!(
         required[0]
@@ -848,7 +892,8 @@ async fn collect_agents_distinguishes_required_and_optional_version_failures() {
             .contains("could not determine version")
     );
 
-    let discovered = collect_agents(None, &ResolvedConfig::default()).await;
+    let discovered =
+        collect_agents(None, DoctorProbeMode::Offline, &ResolvedConfig::default()).await;
     let optional = discovered
         .iter()
         .find(|agent| agent.name == "codex")
@@ -2416,6 +2461,7 @@ fn format_agents_human_lists_supported_and_separates_detected() {
             path: Some(PathBuf::from("/opt/homebrew/bin/claude")),
             version: Some("2.1.4".into()),
             annotation: "hooks: injected during run".into(),
+            checks: Vec::new(),
         },
         AgentInfo {
             name: "codex",
@@ -2425,6 +2471,7 @@ fn format_agents_human_lists_supported_and_separates_detected() {
             path: None,
             version: None,
             annotation: "not configured".into(),
+            checks: Vec::new(),
         },
     ];
     let rendered = format_agents_human(&agents);
@@ -2441,15 +2488,32 @@ fn format_agents_human_lists_supported_and_separates_detected() {
 
 #[test]
 fn format_agents_json_matches_doctor_agents_shape() {
-    let agents = vec![AgentInfo {
-        name: "claude",
-        status: Status::Pass,
-        configured: true,
-        command: "claude".into(),
-        path: Some(PathBuf::from("/opt/homebrew/bin/claude")),
-        version: Some("2.1.4".into()),
-        annotation: "hooks: injected during run".into(),
-    }];
+    let agents = vec![
+        AgentInfo {
+            name: "claude",
+            status: Status::Pass,
+            configured: true,
+            command: "claude".into(),
+            path: Some(PathBuf::from("/opt/homebrew/bin/claude")),
+            version: Some("2.1.4".into()),
+            annotation: "hooks: injected during run".into(),
+            checks: Vec::new(),
+        },
+        AgentInfo {
+            name: "pi",
+            status: Status::Warn,
+            configured: true,
+            command: "pi".into(),
+            path: Some(PathBuf::from("/opt/homebrew/bin/pi")),
+            version: Some("0.84.0".into()),
+            annotation: "hooks: emitted by the extension".into(),
+            checks: vec![Check {
+                name: "pi extension load path",
+                status: Status::Warn,
+                details: "project scope, which pi loads only for a trusted project".into(),
+            }],
+        },
+    ];
     let json = format_agents_json(&agents).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert!(parsed.is_array());
@@ -2459,6 +2523,48 @@ fn format_agents_json_matches_doctor_agents_shape() {
     assert_eq!(parsed[0]["command"], "claude");
     assert_eq!(parsed[0]["version"], "2.1.4");
     assert_eq!(parsed[0]["path"], "/opt/homebrew/bin/claude");
+    // An agent with no findings must not grow an empty array in the schema: the field is skipped,
+    // so a consumer written against the pre-pi shape stays valid.
+    assert!(parsed[0].get("checks").is_none());
+    // pi is the one agent that reports findings of its own, so the nested shape is part of the
+    // published schema rather than an implementation detail.
+    assert_eq!(
+        parsed[1]["checks"],
+        serde_json::json!([{
+            "name": "pi extension load path",
+            "status": "warn",
+            "details": "project scope, which pi loads only for a trusted project"
+        }])
+    );
+}
+
+// A preflight finding is evidence, not readiness. Gating the fold on `configured` made
+// `agents --json` report `pass` for a pi whose only install is project-scoped -- the exact silent
+// skip the check exists to catch -- while the nested check said `warn`. The `Info` half is what
+// keeps a bare `doctor` quiet on a machine with no pi extension at all.
+#[test]
+fn preflight_findings_fold_into_the_agent_status_whether_or_not_it_is_configured() {
+    let warn = [Check {
+        name: "pi extension load path",
+        status: Status::Warn,
+        details: "project-scoped".into(),
+    }];
+    assert_eq!(fold_preflight_checks(Status::Pass, &warn), Status::Warn);
+
+    let info = [Check {
+        name: "pi extension load path",
+        status: Status::Info,
+        details: "not located".into(),
+    }];
+    assert_eq!(fold_preflight_checks(Status::Pass, &info), Status::Pass);
+
+    let fail = [Check {
+        name: "pi extension load path",
+        status: Status::Fail,
+        details: "unreadable".into(),
+    }];
+    assert_eq!(fold_preflight_checks(Status::Pass, &fail), Status::Fail);
+    assert_eq!(fold_preflight_checks(Status::Pass, &[]), Status::Pass);
 }
 
 #[test]

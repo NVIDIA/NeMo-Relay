@@ -15,7 +15,7 @@ use crate::configuration::SessionConfig;
 use crate::error::CliError;
 use crate::events::{AgentKind, NormalizedEvent, SessionEvent};
 
-use super::{LlmGatewayStart, Session};
+use super::{LlmGatewayStart, Session, ToolArgumentTransform};
 
 pub(super) fn apply_start_alias(start: &mut LlmGatewayStart, alias: &SessionAlias) {
     start.session_id = Some(alias.parent_session_id.clone());
@@ -77,7 +77,14 @@ pub(super) async fn apply_event_to_session(
     event_kind: AgentKind,
     config: SessionConfig,
     is_agent_started: bool,
-) -> Result<(bool, Option<SubscriberDelivery>), CliError> {
+) -> Result<
+    (
+        bool,
+        Option<SubscriberDelivery>,
+        Option<ToolArgumentTransform>,
+    ),
+    CliError,
+> {
     let session = sessions
         .entry(session_id.to_string())
         .or_insert_with(|| Session::new(session_id.to_string(), event_kind, config));
@@ -88,7 +95,12 @@ pub(super) async fn apply_event_to_session(
         session.agent_kind = event_kind;
     }
     let subscriber_delivery = session.apply(event).await?;
-    Ok((session.is_empty(), subscriber_delivery))
+    let tool_argument_transform = session.take_tool_argument_transform();
+    Ok((
+        session.is_empty(),
+        subscriber_delivery,
+        tool_argument_transform,
+    ))
 }
 
 pub(super) async fn promote_pending_subagents_for_parent(

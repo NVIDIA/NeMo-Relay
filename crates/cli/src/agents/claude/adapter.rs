@@ -38,6 +38,12 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
                 "PermissionDenied",
                 "permissionDenied",
             ],
+            // Claude Code reports only the close of a turn (`Stop`); its turns stay
+            // lazily opened, and `PreCompact`/`PostCompact` are matched by the
+            // shared fallback rather than by an adapter-specific rule.
+            turn_start: &[],
+            turn_end: &["Stop", "stop"],
+            compaction: &[],
         },
     );
     let response = json!({ "continue": true });

@@ -206,6 +206,14 @@ pub(super) fn format_human_agents(out: &mut String, report: &DoctorReport) {
                 ));
             }
         }
+        for check in &agent.checks {
+            out.push_str(&format!(
+                "          {}  {}: {}\n",
+                format_status(check.status),
+                check.name,
+                check.details
+            ));
+        }
     }
     out.push('\n');
 }
@@ -295,7 +303,10 @@ pub(crate) fn format_json(report: &DoctorReport) -> Result<String, CliError> {
 /// the same JSON schema as `doctor.agents` for consistency.
 pub(crate) async fn agents_report() -> Result<Vec<AgentInfo>, CliError> {
     let resolved = resolve_server_config(&GatewayOverrides::default())?;
-    Ok(collect_agents(None, &resolved).await)
+    // Offline: `nemo-relay agents` is a fast local listing, not a diagnostic run. `doctor`
+    // is where a user asks for live probes, and it is the command that has `--offline` to
+    // turn them back off.
+    Ok(collect_agents(None, DoctorProbeMode::Offline, &resolved).await)
 }
 
 /// Renders the agents listing in human form.

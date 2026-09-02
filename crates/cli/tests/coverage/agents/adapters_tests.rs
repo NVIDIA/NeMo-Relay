@@ -5,7 +5,7 @@ use axum::http::HeaderMap;
 use serde_json::json;
 
 use super::*;
-use crate::agents::shared::adapters::{claude_code, codex};
+use crate::agents::shared::adapters::{claude_code, codex, pi};
 
 #[test]
 fn maps_claude_canonical_tool_payload() {
@@ -1111,4 +1111,247 @@ fn json_path_lookups_handle_empty_strings_arrays_and_deep_nesting() {
         first_value_at(&payload, &[&["missing"][..], &["also", "missing"][..]]),
         None
     );
+}
+
+// --------------------------------------------------------------------------
+// pi turn boundaries, compaction, and attempt attribution
+// --------------------------------------------------------------------------
+
+// pi is the only harness that reports the *opening* of a turn. Before this was classified the
+// gateway opened the turn implicitly on whichever event arrived first, which was `agent_start`
+// on the first attempt and `turn_start` on later ones -- the same trace, two different
+// boundaries.
+#[test]
+fn pi_turn_start_opens_the_turn_and_turn_end_closes_it() {
+    let started = pi::adapt(
+        json!({
+            "session_id": "pi-session",
+            "hook_event_name": "turn_start",
+            "turn_index": 0,
+            "turn_seq": 3,
+            "attempt_index": 1
+        }),
+        &HeaderMap::new(),
+    );
+    assert!(
+        matches!(started.events.as_slice(), [NormalizedEvent::TurnStarted(_)]),
+        "pi turn_start must open the turn scope. events: {:?}",
+        started.events
+    );
+
+    let ended = pi::adapt(
+        json!({
+            "session_id": "pi-session",
+            "hook_event_name": "turn_end",
+            "turn_index": 0,
+            "turn_seq": 3,
+            "attempt_index": 1
+        }),
+        &HeaderMap::new(),
+    );
+    // The close still emits its primary event plus the shared TurnEnded, exactly as `Stop` does.
+    assert!(
+        ended
+            .events
+            .iter()
+            .any(|event| matches!(event, NormalizedEvent::TurnEnded(_))),
+        "pi turn_end must close the turn scope. events: {:?}",
+        ended.events
+    );
+}
+
+// `agent_settled` ends a logical agent run, which can span several turns. Classifying it as a
+// turn boundary would merge every re-entry attempt into one turn.
+#[test]
+fn pi_agent_lifecycle_hooks_stay_marks_not_turn_boundaries() {
+    for event_name in ["agent_start", "agent_end", "agent_settled"] {
+        let outcome = pi::adapt(
+            json!({ "session_id": "pi-session", "hook_event_name": event_name }),
+            &HeaderMap::new(),
+        );
+        assert!(
+            matches!(outcome.events.as_slice(), [NormalizedEvent::HookMark(_)]),
+            "{event_name} must stay a mark. events: {:?}",
+            outcome.events
+        );
+    }
+}
+
+// pi announces a compaction before doing it, and any extension loading after this one can still
+// cancel it. Only the completed event is a compaction to the runtime, which treats one as proof
+// the context was rebuilt.
+#[test]
+fn pi_compaction_is_classified_only_once_it_has_happened() {
+    let announced = pi::adapt(
+        json!({
+            "session_id": "pi-session",
+            "hook_event_name": "session_before_compact",
+            "reason": "threshold",
+            "will_retry": false
+        }),
+        &HeaderMap::new(),
+    );
+    assert!(
+        matches!(announced.events.as_slice(), [NormalizedEvent::HookMark(_)]),
+        "session_before_compact must stay a mark. events: {:?}",
+        announced.events
+    );
+
+    let completed = pi::adapt(
+        json!({
+            "session_id": "pi-session",
+            "hook_event_name": "session_compact",
+            "reason": "threshold",
+            "will_retry": true
+        }),
+        &HeaderMap::new(),
+    );
+    assert!(
+        matches!(
+            completed.events.as_slice(),
+            [NormalizedEvent::Compaction(_)]
+        ),
+        "session_compact must be a compaction. events: {:?}",
+        completed.events
+    );
+}
+
+// pi's bang-prefixed inline shell never reaches the tool registry, so it never fires `tool_call`
+// and none of the tool gating covers it. It is classified as a tool boundary so the same
+// conditional-execution guardrail chain decides it; the close is synthesized by the extension,
+// because pi reports no completion for inline shell.
+#[test]
+fn pi_inline_shell_is_classified_as_a_tool_boundary() {
+    let started = pi::adapt(
+        json!({
+            "session_id": "pi-session",
+            "hook_event_name": "user_bash",
+            "tool_call_id": "user-bash-0",
+            "tool_name": "user_bash",
+            "input": { "command": "git status", "cwd": "/work", "exclude_from_context": false }
+        }),
+        &HeaderMap::new(),
+    );
+    match started.events.as_slice() {
+        [NormalizedEvent::ToolStarted(event)] => {
+            // The name a guardrail matches on. Deliberately not `bash`: a policy has to be able to
+            // tell a command the user typed from one the model proposed, and the guardrail chain
+            // sees only the name and the arguments.
+            assert_eq!(event.tool_name, "user_bash");
+            assert_eq!(event.arguments["command"], json!("git status"));
+        }
+        events => panic!("user_bash must open a tool span. events: {events:?}"),
+    }
+
+    let ended = pi::adapt(
+        json!({
+            "session_id": "pi-session",
+            "hook_event_name": "user_bash_end",
+            "tool_call_id": "user-bash-0",
+            "tool_name": "user_bash",
+            "status": "error"
+        }),
+        &HeaderMap::new(),
+    );
+    assert!(
+        matches!(ended.events.as_slice(), [NormalizedEvent::ToolEnded(_)]),
+        "user_bash_end must close the tool span. events: {:?}",
+        ended.events
+    );
+}
+
+// The promotion is what makes attribution survive on tool events at all: the session manager
+// builds tool spans from the extracted call id, name, arguments, result and metadata, and drops
+// the raw payload. Without this the keys would be accepted on the wire and silently discarded.
+#[test]
+fn pi_attempt_attribution_is_promoted_from_payload_into_metadata() {
+    let outcome = pi::adapt(
+        json!({
+            "session_id": "pi-session",
+            "hook_event_name": "tool_call",
+            "tool_call_id": "call-1",
+            "tool_name": "read",
+            "input": { "path": "README.md" },
+            "attempt_index": 2,
+            "turn_seq": 5
+        }),
+        &HeaderMap::new(),
+    );
+    match &outcome.events[0] {
+        NormalizedEvent::ToolStarted(event) => {
+            assert_eq!(event.metadata["attempt_index"], json!(2));
+            assert_eq!(event.metadata["turn_seq"], json!(5));
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+// Counters only. A string here would put an untyped field into observability metadata that every
+// consumer then has to defend against, and pi's own `turn_index` is deliberately never promoted
+// because the gateway assigns its own to the turn scope.
+#[test]
+fn pi_attribution_promotion_ignores_non_numeric_and_foreign_keys() {
+    let outcome = pi::adapt(
+        json!({
+            "session_id": "pi-session",
+            "hook_event_name": "turn_end",
+            "attempt_index": "one",
+            "turn_seq": null,
+            "turn_index": 4
+        }),
+        &HeaderMap::new(),
+    );
+    match &outcome.events[0] {
+        NormalizedEvent::HookMark(event) => {
+            assert!(event.metadata.get("attempt_index").is_none());
+            assert!(event.metadata.get("turn_seq").is_none());
+            assert!(
+                event.metadata.get("turn_index").is_none(),
+                "pi's resetting turn_index must not collide with the gateway's own"
+            );
+            // The raw values stay on the payload, which is what mark events record as `data`.
+            assert_eq!(event.payload["turn_index"], json!(4));
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+// Codex and Claude Code share the classification machinery, so the two lists pi introduced must
+// stay inert for them: `PreCompact`/`PostCompact` continue through the shared fallback, and
+// neither harness gains a turn-start event it never sends.
+#[test]
+fn turn_start_and_compaction_rules_stay_inert_for_codex_and_claude() {
+    for outcome in [
+        codex::adapt(
+            json!({ "session_id": "codex-session", "hook_event_name": "PreCompact" }),
+            &HeaderMap::new(),
+        ),
+        claude_code::adapt(
+            json!({ "session_id": "claude-session", "hook_event_name": "PostCompact" }),
+            &HeaderMap::new(),
+        ),
+    ] {
+        assert!(
+            matches!(outcome.events.as_slice(), [NormalizedEvent::Compaction(_)]),
+            "compaction must still classify through the shared fallback. events: {:?}",
+            outcome.events
+        );
+    }
+
+    for outcome in [
+        codex::adapt(
+            json!({ "session_id": "codex-session", "hook_event_name": "turn_start" }),
+            &HeaderMap::new(),
+        ),
+        claude_code::adapt(
+            json!({ "session_id": "claude-session", "hook_event_name": "turn_start" }),
+            &HeaderMap::new(),
+        ),
+    ] {
+        assert!(
+            matches!(outcome.events.as_slice(), [NormalizedEvent::HookMark(_)]),
+            "only pi declares turn_start. events: {:?}",
+            outcome.events
+        );
+    }
 }
