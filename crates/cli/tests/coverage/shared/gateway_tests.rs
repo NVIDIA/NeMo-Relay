@@ -2383,3 +2383,62 @@ fn a_refused_named_upstream_is_rejected_rather_than_rerouted() {
         crate::agents::pi::alignment::NamedUpstream::Rejected(_)
     ));
 }
+
+/// The `/v1/models` route resolves a named upstream too, so it has to refuse one the same way.
+///
+/// Covered separately from the passthrough path because it is a second, hand-rolled copy of the
+/// same resolution: it does not share `prepare_gateway_request`, so a fix applied only there
+/// would leave this route silently rerouting to the configured provider.
+#[tokio::test]
+async fn models_refuses_an_unusable_named_upstream() {
+    let config = GatewayConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        // Nothing must reach this. If the refusal fell back to configured routing, the request
+        // would be sent here instead of failing.
+        openai_base_url: "http://127.0.0.1:1".into(),
+        openai_auth_header: None,
+        anthropic_base_url: "http://127.0.0.1:1".into(),
+        anthropic_auth_header: None,
+        metadata: None,
+        plugin_config: None,
+        max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+    };
+    let state = AppState {
+        config: config.clone(),
+        bootstrap_fingerprint: None,
+        bootstrap_challenge_key: None,
+        require_provider_client_token: false,
+        transparent_proxy_credential: Some(
+            crate::provider_auth::TransparentProxyCredential::from_static("nrp_models_named"),
+        ),
+        http: test_http_client(),
+        sessions: SessionManager::new(config),
+        last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
+        bootstrap_shutdown: None,
+        instance_id: "test-instance".into(),
+        bootstrap_tls: None,
+        local_address: None,
+    };
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/v1/models")
+        .header(
+            crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+            "nrp_models_named",
+        )
+        // Plain http to a host that is not loopback: refused.
+        .header(
+            crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+            "http://onprem.example.com/v1",
+        )
+        .body(Body::empty())
+        .unwrap();
+
+    let error = models(State(state), request).await.unwrap_err();
+
+    assert!(
+        matches!(error, crate::error::CliError::InvalidPayload(_)),
+        "a named destination that cannot be used must fail the request: {error}"
+    );
+}

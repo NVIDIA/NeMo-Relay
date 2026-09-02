@@ -139,3 +139,25 @@ fn a_remote_upstream_must_use_https() {
         Some("https://integrate.api.nvidia.com/v1")
     );
 }
+
+/// A base is a prefix and the request path is appended to it, so neither of these survives.
+///
+/// A query would land before the path, and a fragment would swallow it — everything after `#`
+/// is never sent to the server at all. Either one routes somewhere other than the endpoint the
+/// caller named, which is the failure this whole path exists to avoid.
+#[test]
+fn a_base_carrying_a_query_or_fragment_is_refused() {
+    for rejected in [
+        "https://provider.example/api?version=1",
+        "https://provider.example/api#section",
+        "https://provider.example/api?version=1#section",
+        // Empty but present still changes the composed URL.
+        "https://provider.example/api?",
+        "https://provider.example/api#",
+    ] {
+        assert!(
+            is_rejected(client_named_upstream_base(&headers_naming(rejected), true)),
+            "{rejected} cannot have a request path appended to it"
+        );
+    }
+}

@@ -97,6 +97,16 @@ pub(crate) fn client_named_upstream_base(
     if !url.username().is_empty() || url.password().is_some() {
         return NamedUpstream::Rejected("upstream base URL must not carry credentials");
     }
+    // A base is a prefix, and the request path is appended to it as text. Neither of these can
+    // survive that: a query would end up before the path (`...?version=1/chat/completions`), and
+    // a fragment would swallow it entirely, since everything after `#` is never sent to the
+    // server. Both would route somewhere other than the endpoint that was named.
+    if url.query().is_some() {
+        return NamedUpstream::Rejected("upstream base URL must not carry a query string");
+    }
+    if url.fragment().is_some() {
+        return NamedUpstream::Rejected("upstream base URL must not carry a fragment");
+    }
     // Cleartext only where it cannot leave the machine.
     //
     // A named destination is forwarded the provider credential the request carried, so plain
