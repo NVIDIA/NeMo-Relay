@@ -71,8 +71,38 @@ pub(crate) fn client_named_upstream_base(
     if !url.username().is_empty() || url.password().is_some() {
         return None;
     }
+    // Cleartext only where it cannot leave the machine.
+    //
+    // A named destination is forwarded the provider credential the request carried, so plain
+    // `http` to a remote host would put that key on the wire in the clear. Loopback is the
+    // exception every secure-context rule makes, and it is the case that matters here: a local
+    // model server -- Ollama, vLLM, LM Studio -- is exactly the kind of provider this feature
+    // exists to reach, and its traffic never reaches a network.
+    if url.scheme() == "http" && !is_loopback(&url) {
+        return None;
+    }
 
     Some(raw.to_string())
+}
+
+/// Whether this host is one that cannot be reached from off the machine.
+///
+/// Deliberately narrow: the loopback IP ranges and the literal `localhost`. A name merely
+/// ending in `.localhost` is reserved for loopback by RFC 6761 but still resolves through
+/// whatever the host's resolver says, so it is left to the `https` requirement rather than
+/// trusted here.
+fn is_loopback(url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    // `host_str` brackets an IPv6 literal, which `IpAddr` does not parse.
+    host.trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|address| address.is_loopback())
 }
 
 #[cfg(test)]

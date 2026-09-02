@@ -74,14 +74,49 @@ fn only_absolute_http_urls_with_a_bare_host_are_accepted() {
     }
 }
 
+/// Cleartext is allowed only where it cannot leave the machine.
+///
+/// A local model server is exactly the kind of provider this feature exists to reach, and its
+/// traffic never touches a network, so requiring TLS there would cost the main use case
+/// without protecting anything.
 #[test]
-fn loopback_and_plain_http_upstreams_are_allowed() {
-    // A local model server or an on-prem proxy is a legitimate destination, and the credential
-    // already establishes that the caller is this invocation's own agent.
-    for accepted in ["http://127.0.0.1:8000/v1", "http://localhost:11434/v1"] {
+fn loopback_upstreams_may_use_plain_http() {
+    for accepted in [
+        "http://127.0.0.1:8000/v1",
+        "http://localhost:11434/v1",
+        "http://[::1]:8000/v1",
+        "http://127.2.3.4:8000/v1",
+    ] {
         assert_eq!(
             client_named_upstream_base(&headers_naming(accepted), true).as_deref(),
-            Some(accepted)
+            Some(accepted),
+            "{accepted} is unreachable from off the machine and must be allowed"
         );
     }
+}
+
+/// The named destination is forwarded the provider credential the request carried, so plain
+/// `http` to anywhere reachable would put that key on the wire in the clear.
+#[test]
+fn a_remote_upstream_must_use_https() {
+    for rejected in [
+        "http://integrate.api.nvidia.com/v1",
+        "http://192.168.1.10:8000/v1",
+        "http://example.com/v1",
+        // Reserved for loopback by RFC 6761, but it still resolves through the host's resolver.
+        "http://ollama.localhost/v1",
+    ] {
+        assert_eq!(
+            client_named_upstream_base(&headers_naming(rejected), true),
+            None,
+            "{rejected} would carry a provider credential in cleartext off the machine"
+        );
+    }
+
+    // The same hosts over TLS are fine.
+    assert_eq!(
+        client_named_upstream_base(&headers_naming("https://integrate.api.nvidia.com/v1"), true)
+            .as_deref(),
+        Some("https://integrate.api.nvidia.com/v1")
+    );
 }

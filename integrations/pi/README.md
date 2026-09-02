@@ -319,7 +319,9 @@ gateway was started:
   A named endpoint receives only the credential the request already carried: the
   gateway never attaches its own configured or environment provider key to a
   destination the client chose, so naming a host is not a way to obtain a key
-  for it.
+  for it. Because that credential does travel, a named endpoint must use `https`
+  unless it is loopback — a local model server on `127.0.0.1` is allowed, a plain
+  `http` host that is reachable from off the machine is refused.
 - **Statically configured.** A standalone `nemo-relay --bind` daemon issues no
   credential, so it ignores the header. Redirection there still requires the
   gateway's own upstream to be the model's endpoint.

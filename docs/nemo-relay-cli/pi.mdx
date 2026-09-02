@@ -423,6 +423,11 @@ endpoint the client chose — those belong to the upstream it was configured for
 pi sends the provider's own key for the provider it named, and that key travels;
 nothing else does.
 
+**A named endpoint must use `https`, unless it is loopback.** Because that
+credential travels to it, plain `http` to anything reachable from off the machine
+is refused. A local model server — `http://127.0.0.1:11434/v1` and the like — is
+allowed, since its traffic never reaches a network.
+
 A **standalone `nemo-relay --bind` daemon issues no credential**, so it ignores
 the header and keeps the static behavior below. Point it at a provider with
 `--openai-base-url` / `--anthropic-base-url`, or launch through the wrapper.
