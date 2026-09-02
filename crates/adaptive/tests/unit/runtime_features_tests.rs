@@ -18,6 +18,7 @@ use crate::trie::serialization::TrieEnvelope;
 use crate::types::metadata::{AgentHints, MetadataEnvelope, ParallelHint};
 use crate::types::plan::{ExecutionPlan, ParallelGroup};
 use crate::types::records::RunRecord;
+use nemo_relay::api::event::{BaseEvent, EventCategory, ScopeCategory, ScopeEvent};
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
     llm_request_intercepts, llm_stream_call_execute,
@@ -709,7 +710,7 @@ async fn adaptive_runtime_register_survives_hot_cache_seed_failures() {
         })),
         cache_diagnostics_tracker: Arc::new(RwLock::new(CacheDiagnosticsTracker::default())),
         pending_events: Arc::new(AtomicUsize::new(0)),
-        event_tx,
+        event_tx: Some(event_tx),
         event_rx: Some(event_rx),
         drain_handle: None,
         registered: false,
@@ -1345,4 +1346,51 @@ async fn adaptive_runtime_shutdown_is_a_clean_noop_after_deregister() {
         .unwrap();
     runtime.deregister().unwrap();
     runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn adaptive_runtime_shutdown_drains_queued_telemetry() {
+    let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
+    reset_global();
+
+    let agent_id = "shutdown-drain-agent";
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig {
+        agent_id: Some(agent_id.into()),
+        state: Some(StateConfig {
+            backend: BackendSpec::in_memory(),
+        }),
+        telemetry: Some(TelemetryComponentConfig::default()),
+        ..AdaptiveConfig::default()
+    })
+    .await
+    .unwrap();
+    runtime.register().await.unwrap();
+    let backend = runtime.backend.as_ref().unwrap().clone();
+    let run_uuid = Uuid::now_v7();
+    let events = [
+        Event::Scope(ScopeEvent::new(
+            BaseEvent::builder().uuid(run_uuid).name("agent").build(),
+            ScopeCategory::Start,
+            Vec::new(),
+            EventCategory::agent(),
+            None,
+        )),
+        Event::Scope(ScopeEvent::new(
+            BaseEvent::builder().uuid(run_uuid).name("agent").build(),
+            ScopeCategory::End,
+            Vec::new(),
+            EventCategory::agent(),
+            None,
+        )),
+    ];
+    let tx = runtime.event_tx.as_ref().unwrap().clone();
+    for event in events {
+        runtime.pending_events.fetch_add(1, Ordering::SeqCst);
+        tx.send(event).unwrap();
+    }
+    drop(tx);
+
+    runtime.shutdown().await.unwrap();
+
+    assert_eq!(backend.list_runs_dyn(agent_id).await.unwrap().len(), 1);
 }
