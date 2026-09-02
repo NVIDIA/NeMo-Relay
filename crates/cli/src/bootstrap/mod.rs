@@ -231,7 +231,11 @@ fn recover_gateway(spec: &GatewaySpec, expected_instance: &str) -> Result<Gatewa
                 return compatible_endpoint(spec.bind, requested_url, instance_id);
             }
             (RelayHealth::Incompatible, _) => return Err(incompatible_relay_error(&requested_url)),
-            (RelayHealth::Foreign, _) => return Err(foreign_listener_error(&requested_url)),
+            (RelayHealth::Foreign, _) => {
+                if !state::stop_unhealthy_owned_gateway_locked(&state, &requested_url)? {
+                    return Err(foreign_listener_error(&requested_url));
+                }
+            }
             (RelayHealth::Unavailable, _) => {
                 state::stop_unhealthy_owned_gateway_locked(&state, &requested_url)?;
             }
