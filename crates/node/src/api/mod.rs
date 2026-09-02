@@ -42,6 +42,7 @@ use nemo_relay::api::runtime::{
 use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
     capture_propagation_context_with_root as capture_propagation_context_with_root_handle,
+    capture_rootless_propagation_context as capture_rootless_propagation_context_handle,
     capture_traceparent as capture_traceparent_handle,
     create_scope_stack as create_scope_stack_handle,
     create_scope_stack_from_propagation as create_scope_stack_from_propagation_handle,
@@ -2184,12 +2185,31 @@ pub fn capture_propagation_context(env: Env) -> napi::Result<PropagationContext>
         return Ok(propagation_context_to_napi(
             nemo_relay::api::runtime::PropagationContext {
                 version: nemo_relay::api::runtime::PropagationContext::VERSION,
-                root_uuid: None,
+                root_uuid: Some(parent_uuid),
                 parent_uuid,
             },
         ));
     }
     with_effective_scope_stack(&env, capture_propagation_context_handle)?
+        .map(propagation_context_to_napi)
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+/// Capture the current Relay causal parent without a propagation root.
+#[napi]
+pub fn capture_rootless_propagation_context(env: Env) -> napi::Result<PropagationContext> {
+    if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
+        let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
+            .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
+        return Ok(propagation_context_to_napi(
+            nemo_relay::api::runtime::PropagationContext {
+                version: nemo_relay::api::runtime::PropagationContext::VERSION,
+                root_uuid: None,
+                parent_uuid,
+            },
+        ));
+    }
+    with_effective_scope_stack(&env, capture_rootless_propagation_context_handle)?
         .map(propagation_context_to_napi)
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }

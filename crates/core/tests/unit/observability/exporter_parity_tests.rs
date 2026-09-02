@@ -1001,7 +1001,7 @@ fn session_instance_correlates_otel_and_openinference_traces() {
     let expected_root_uuid = scope_stack.read().unwrap().root_uuid().to_string();
     let uuid = Uuid::now_v7();
     let metadata = json!({"session_id": "logical-session", "user_id": "alice"});
-    let start = Event::Scope(ScopeEvent::new(
+    let mut start = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
             .uuid(uuid)
             .name("session-root")
@@ -1012,7 +1012,8 @@ fn session_instance_correlates_otel_and_openinference_traces() {
         EventCategory::agent(),
         None,
     ));
-    let end = make_scope_event(
+    start.set_propagation_root_uuid(Some(scope_stack.read().unwrap().root_uuid()));
+    let mut end = make_scope_event(
         ScopeCategory::End,
         uuid,
         "session-root",
@@ -1020,6 +1021,7 @@ fn session_instance_correlates_otel_and_openinference_traces() {
         None,
         None,
     );
+    end.set_propagation_root_uuid(start.propagation_root_uuid());
     let exports = with_scope_stack(scope_stack, || export_through_all_exporters(&[start, end]));
     let otel = exports
         .otel_spans

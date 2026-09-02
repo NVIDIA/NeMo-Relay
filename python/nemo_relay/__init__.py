@@ -141,6 +141,7 @@ from nemo_relay._native import (
 from nemo_relay._native import (
     capture_propagation_context_with_root as _capture_propagation_context_with_root,
 )
+from nemo_relay._native import capture_rootless_propagation_context as _capture_rootless_propagation_context
 from nemo_relay._native import capture_thread_scope_stack as _capture_thread_scope_stack
 from nemo_relay._native import capture_traceparent as _capture_traceparent
 from nemo_relay._native import create_scope_stack as _create_scope_stack
@@ -476,6 +477,19 @@ def capture_propagation_context() -> PropagationContext:
     return _capture_propagation_context()
 
 
+def capture_rootless_propagation_context() -> PropagationContext:
+    """Capture the current causal parent without a propagation root.
+
+    Returns:
+        PropagationContext: Context with no root UUID, opting out of Relay
+            session propagation when it is installed in another scope stack.
+    """
+    get_scope_stack()
+    if parent_uuid := _propagation_parent_var.get():
+        return PropagationContext(parent_uuid)
+    return _capture_rootless_propagation_context()
+
+
 def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationContext:
     """Capture the current parent with an optional stable application session root.
 
@@ -670,6 +684,7 @@ __all__ = [
     "PropagationContext",
     "create_scope_stack",
     "capture_propagation_context",
+    "capture_rootless_propagation_context",
     "capture_propagation_context_with_root",
     "capture_traceparent",
     "create_scope_stack_from_propagation",
