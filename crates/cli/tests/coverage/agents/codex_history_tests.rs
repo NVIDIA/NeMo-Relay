@@ -467,3 +467,48 @@ fn migrate_rejects_a_threads_table_without_a_provider_column() {
         "unexpected error: {error}"
     );
 }
+
+#[test]
+fn migrate_fails_cleanly_while_another_writer_holds_the_lock() {
+    require_sqlite3_or_skip!();
+    let scope = CodexHistoryScope::enter(&[("thread-a", OPENAI_PROVIDER)]);
+    // Stands in for a running Codex: an open write transaction on the database.
+    let mut holder = Command::new("sqlite3")
+        .arg(scope.database())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("sqlite3 spawns");
+    {
+        use std::io::Write;
+        let stdin = holder.stdin.as_mut().expect("sqlite3 stdin");
+        writeln!(stdin, "BEGIN IMMEDIATE;").expect("write lock statement");
+        stdin.flush().expect("flush lock statement");
+    }
+    // Give the holder time to take the lock before competing for it.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    let error = migrate_to_relay(/*dry_run*/ false, /*database*/ None)
+        .expect_err("a locked database is an error");
+
+    let _ = holder.kill();
+    let _ = holder.wait();
+    assert!(
+        error.contains("locked") || error.contains("busy"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        error.contains("quit any running Codex session"),
+        "the error should say how to recover: {error}"
+    );
+    assert_eq!(
+        scope.providers(),
+        vec![("thread-a".to_string(), OPENAI_PROVIDER.to_string())],
+        "a locked migration leaves the database unchanged"
+    );
+    assert!(
+        !migration_recorded(),
+        "a locked migration records no journal to reverse"
+    );
+}
