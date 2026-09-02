@@ -72,6 +72,18 @@ macro_rules! pi_marketplace_unreachable {
 impl CodingAgent {
     pub(crate) const ALL: [Self; 3] = [Self::ClaudeCode, Self::Codex, Self::Pi];
 
+    /// Every agent Relay installs *through the plugin marketplace*.
+    ///
+    /// Not the same set as [`Self::ALL`], and the difference is load-bearing: pi has no
+    /// marketplace, so `PluginLayout::new` and everything reached from it is
+    /// `pi_marketplace_unreachable!()` for it. Anything that writes or reads marketplace state
+    /// for a set of hosts wants this constant, not `ALL` -- iterating `ALL` there panics.
+    ///
+    /// Named rather than filtered at each call site because the failure mode is silent until
+    /// it is loud: `ALL` compiles fine and reads naturally, and the panic only appears once a
+    /// host without a marketplace reaches the layout.
+    pub(crate) const MARKETPLACE_HOSTS: [Self; 2] = [Self::ClaudeCode, Self::Codex];
+
     const fn descriptor(self) -> AgentDescriptor {
         match self {
             Self::ClaudeCode => claude::DESCRIPTOR,
