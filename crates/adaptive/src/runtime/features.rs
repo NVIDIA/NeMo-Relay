@@ -540,7 +540,8 @@ impl AdaptiveRuntime {
     /// A [`Result`] that is `Ok(())` when shutdown completes.
     ///
     /// # Errors
-    /// Propagates any error returned by [`Self::deregister`].
+    /// This method currently always returns `Ok(())` after deregistering
+    /// features and either draining or aborting telemetry work.
     pub async fn shutdown(mut self) -> Result<()> {
         rollback_registrations(&mut self.registrations);
         if let Ok(mut guard) = self.bound_scopes.write() {

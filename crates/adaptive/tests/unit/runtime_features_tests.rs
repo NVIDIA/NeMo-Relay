@@ -1366,6 +1366,45 @@ async fn adaptive_runtime_shutdown_drains_queued_telemetry() {
     .unwrap();
     runtime.register().await.unwrap();
     let backend = runtime.backend.as_ref().unwrap().clone();
+    queue_completed_agent_run(&mut runtime);
+
+    runtime.shutdown().await.unwrap();
+
+    assert_eq!(backend.list_runs_dyn(agent_id).await.unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn adaptive_runtime_deregister_drains_queued_telemetry() {
+    let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
+    reset_global();
+
+    let agent_id = "deregister-drain-agent";
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig {
+        agent_id: Some(agent_id.into()),
+        state: Some(StateConfig {
+            backend: BackendSpec::in_memory(),
+        }),
+        telemetry: Some(TelemetryComponentConfig::default()),
+        ..AdaptiveConfig::default()
+    })
+    .await
+    .unwrap();
+    runtime.register().await.unwrap();
+    let backend = runtime.backend.as_ref().unwrap().clone();
+    queue_completed_agent_run(&mut runtime);
+
+    runtime.deregister().unwrap();
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while backend.list_runs_dyn(agent_id).await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("deregistered telemetry drain must finish queued runs");
+}
+
+fn queue_completed_agent_run(runtime: &mut AdaptiveRuntime) {
     let run_uuid = Uuid::now_v7();
     let events = [
         Event::Scope(ScopeEvent::new(
@@ -1389,8 +1428,4 @@ async fn adaptive_runtime_shutdown_drains_queued_telemetry() {
         tx.send(event).unwrap();
     }
     drop(tx);
-
-    runtime.shutdown().await.unwrap();
-
-    assert_eq!(backend.list_runs_dyn(agent_id).await.unwrap().len(), 1);
 }
