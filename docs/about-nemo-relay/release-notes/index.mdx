@@ -32,6 +32,21 @@ package metadata and the compiled native extension. This prevents consumers
 that inspect the native extension version, including native-plugin compatibility
 checks, from observing a stale Relay version.
 
+### Managed Coding-Agent Reliability Fixes
+
+- `nemo-relay install`, `nemo-relay uninstall`, and
+  `nemo-relay integrations refresh` now recover when an orphaned persisted
+  plugin-state file remains after an interrupted uninstall or manual cleanup.
+  A normal install still refuses to overwrite that state without `--force`.
+- `nemo-relay install codex --force` now resolves the Relay executable the same
+  way when it writes and validates generated hooks. This prevents a
+  self-consistency failure when a different Relay binary appears earlier on
+  `PATH`, such as during local development.
+- Persistent managed gateways that stop answering health checks are now safely
+  terminated and restarted when their recorded Relay process identity matches.
+  Relay continues to leave unverified listeners untouched, and operational logs
+  now classify gateway port conflicts and recovery failures with remediation.
+
 ## Release 0.8.2
 
 ### Managed Gateway and Coding-Agent Lifecycle
