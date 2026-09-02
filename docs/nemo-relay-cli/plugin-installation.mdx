@@ -86,6 +86,12 @@ each user and host, even when two operations name different install
 directories. If another operation is still active after a short wait, Relay
 stops with a timeout instead of changing host-wide plugin state concurrently.
 
+Codex installs accept an experimental `--migrate-history` flag that keeps
+existing Codex thread history visible in the resume picker after Relay changes
+the active provider. It edits Codex's own thread database, so read
+[Migrate Codex Thread History](/nemo-relay-cli/codex#migrate-codex-thread-history)
+before using it.
+
 ## What Install Changes
 
 For Claude Code and Codex, `nemo-relay install` writes a local marketplace named
@@ -330,6 +336,12 @@ hooks before unregistering the plugin, while Codex can still report its hook
 metadata. It then removes the host registration and marketplace. Claude Code
 provider routing is restored from the Relay backup. Unrelated user hooks and
 configuration remain unchanged.
+
+If a Codex install migrated thread history with `--migrate-history`, uninstall
+also reverses that migration. The reversal is inferred from the recorded
+migration, so it needs no flag. See
+[Migrate Codex Thread History](/nemo-relay-cli/codex#migrate-codex-thread-history)
+for what it changes and how to opt out.
 
 ## Compatibility and Migration
 
