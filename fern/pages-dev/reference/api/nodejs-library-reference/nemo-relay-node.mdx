@@ -833,6 +833,14 @@ Capture the current Relay causal parent for application-managed transport.
 export declare function capturePropagationContext(): PropagationContext
 ```
 
+### `captureRootlessPropagationContext`
+
+Capture the current Relay causal parent without a propagation root.
+
+```ts
+export declare function captureRootlessPropagationContext(): PropagationContext
+```
+
 ### `capturePropagationContextWithRoot`
 
 Capture the current parent with an optional stable application session root.

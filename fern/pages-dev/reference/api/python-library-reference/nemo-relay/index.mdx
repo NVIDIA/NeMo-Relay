@@ -65,6 +65,14 @@ def capture_propagation_context() -> PropagationContext
 
 Capture the current Relay causal parent for application-managed transport.
 
+### `capture_rootless_propagation_context`
+
+```python
+def capture_rootless_propagation_context() -> PropagationContext
+```
+
+Capture the current causal parent without a propagation root.
+
 ### `capture_propagation_context_with_root`
 
 ```python

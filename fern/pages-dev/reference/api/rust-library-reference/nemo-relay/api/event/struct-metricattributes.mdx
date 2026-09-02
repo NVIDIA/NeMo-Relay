@@ -21,6 +21,12 @@ A deterministic map of typed OpenTelemetry metric attributes.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-metricattributes\">MetricAttributes</a>"}} /></pre>
 
+#### `insert`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn insert(&amp;mut self, key: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, value: <a href=\"enum-attributevalue\">AttributeValue</a>)"}} /></pre>
+
+Insert or replace a typed metric attribute.
+
 #### `iter`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn iter(&amp;self) -&gt; impl <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/iterator/trait.Iterator.html\">Iterator</a>&lt;Item = (&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, &amp;<a href=\"enum-attributevalue\">AttributeValue</a>)&gt;"}} /></pre>
