@@ -404,33 +404,66 @@ model's provider at the gateway directly, with
 `registerProvider(provider, { baseUrl })`. pi rewrites the URL of every existing
 model for that provider and keeps their API, headers, costs and context windows.
 
-Redirection is **conditional**. The gateway forwards to one statically
-configured upstream per API family, set by `--openai-base-url` and
-`--anthropic-base-url`, and a client cannot override that per request.
-Redirecting is therefore only correct when the gateway's upstream is the endpoint
-the selected model would otherwise have called. Pointing an NVIDIA model at a
-gateway configured for `api.openai.com` does not produce a trace without spans;
-it breaks the session.
+The gateway forwards to one statically configured upstream per API family, set by
+`--openai-base-url` and `--anthropic-base-url`. Redirecting a model whose
+endpoint is not that upstream would send the request to the wrong provider —
+which does not produce a trace without spans, it breaks the session.
 
-`nemo-relay run --agent pi` passes the gateway's upstreams to the extension, and
-the extension redirects only on a match:
+**Under `nemo-relay pi` or `nemo-relay run --agent pi`, the extension names the
+endpoint instead**, in an `x-nemo-relay-upstream-base-url` header on each
+request, so the gateway forwards to a provider it was never configured for. The
+gateway honors that header only from a request carrying this invocation's proxy
+credential, which the launcher mints per run and gives only to the process it
+starts, and strips it before forwarding.
 
-| Situation | Outcome |
-| --- | --- |
-| Gateway upstream equals the model's endpoint | Redirected; LLM spans appear under the turn |
-| Gateway forwards elsewhere | Skipped (`upstream-mismatch`) |
-| Model's API has no gateway route | Skipped (`unserviceable-api`) |
-| Upstream unknown, e.g. a standalone gateway | Skipped (`unknown-upstream`) |
-| Another model of the same provider targets an endpoint the gateway does not front | Skipped (`provider-mixed-endpoints`) |
+**A named endpoint receives only the credential the request already carried.**
+Naming a destination does not obtain one: the gateway never attaches its own
+configured `Authorization` value, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` to an
+endpoint the client chose — those belong to the upstream it was configured for.
+pi sends the provider's own key for the provider it named, and that key travels;
+nothing else does.
+
+**A named endpoint must use `https`, unless it is loopback.** Because that
+credential travels to it, plain `http` to anything reachable from off the machine
+is refused. A local model server — `http://127.0.0.1:11434/v1` and the like — is
+allowed, since its traffic never reaches a network.
+
+**A named endpoint that cannot be used fails the request**, with `400` and a
+reason, rather than falling back to the gateway's configured upstream. The
+request was addressed to the endpoint it named, and quietly sending it somewhere
+else would deliver the prompt and the provider key to a different provider.
+
+**Redirects from a named endpoint are not followed.** The checks above apply to
+the URL that was named; a redirect names a different one. A `3xx` is returned to
+pi as it is, so a provider that redirects to a canonical host has to be named at
+that host instead.
+
+A **standalone `nemo-relay --bind` daemon issues no credential**, so it ignores
+the header and keeps the static behavior below. Point it at a provider with
+`--openai-base-url` / `--anthropic-base-url`, or launch through the wrapper.
+
+| Situation | Launched by `nemo-relay pi` | Standalone daemon |
+| --- | --- | --- |
+| Gateway upstream equals the model's endpoint | Redirected | Redirected |
+| Gateway forwards elsewhere | Redirected, naming the endpoint | Skipped (`upstream-mismatch`) |
+| Upstream unknown | Redirected, naming the endpoint | Skipped (`unknown-upstream`) |
+| Model's API has no gateway route | Skipped (`unserviceable-api`) | Skipped (`unserviceable-api`) |
+| The provider's models do not share one endpoint | Redirected only if both upstreams already point at it | Redirected only if both upstreams already point at it |
 
 `registerProvider` rewrites every model of the provider, not only the selected
-one, so the endpoint check is applied to the whole provider. A provider that
+one, so the check is applied to the whole provider either way. A provider that
 mixes endpoints — Fireworks serves `anthropic-messages` at `/inference` and
 `openai-completions` at `/inference/v1` — is left alone even when the selected
 model matches, because redirecting it would move its siblings to an endpoint that
-has never heard of them. Pointing both `--openai-base-url` and
-`--anthropic-base-url` at that provider unblocks it, unless a sibling speaks an
-API the gateway has no route for at all.
+has never heard of them.
+
+**The way through is configuration, not naming.** Point `--openai-base-url` and
+`--anthropic-base-url` at that provider's respective endpoints, and every model
+then already targets the gateway's upstream for its own family, so the whole
+provider redirects. That works on a launched session and a standalone daemon
+alike. Naming cannot substitute for it: one endpoint is named per provider, so a
+provider spanning two has no single value to send. It still fails if a sibling
+speaks an API the gateway has no route for at all.
 
 Each of these outcomes is recorded as a `model_redirect` mark on the session
 scope, so a trace with no LLM spans states its own reason. The decision is
@@ -518,13 +551,18 @@ at the entry point directly isolates it.
 ## Troubleshoot LLM Lifecycle
 
 Look for the `model_redirect` mark on the session scope: it names the outcome and
-the reason. The common ones are `upstream-mismatch` (start the gateway with
-`--openai-base-url` or `--anthropic-base-url` pointing at the model's provider),
-`unknown-upstream` (launch through `nemo-relay run --agent pi`, or set
-`NEMO_RELAY_PI_REDIRECT=force`), `unserviceable-api` (the model's provider
-speaks an API the gateway has no route for — pick another model), and
-`provider-mixed-endpoints`, whose reason names the sibling model that blocked it
-— point both upstreams at that provider, or select a model elsewhere.
+the reason.
+
+`upstream-mismatch` and `unknown-upstream` appear only on a standalone daemon,
+which cannot be told where to forward. Launch through `nemo-relay pi` and the
+endpoint is named for you; otherwise point the gateway at the provider with
+`--openai-base-url` or `--anthropic-base-url`, or set
+`NEMO_RELAY_PI_REDIRECT=force` if you know the gateway is already correct.
+
+`unserviceable-api` means the model's provider speaks an API the gateway has no
+route for, so pick another model. `provider-mixed-endpoints` names the sibling
+model that blocked it — its provider's models do not share one endpoint, and a
+provider is redirected as a whole; select a model elsewhere.
 
 Tool and turn activity are unaffected by any of these.
 
