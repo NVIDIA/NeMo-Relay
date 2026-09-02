@@ -2160,6 +2160,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
                 dry_run: true,
                 skip_doctor: true,
                 migrate_history: false,
+                history_database: None,
             }
         )
         .unwrap(),
@@ -2187,6 +2188,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
                 force: false,
                 dry_run: true,
                 skip_history_migration: false,
+                history_database: None,
             },
         )
         .unwrap(),
@@ -2201,6 +2203,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
             dry_run: false,
             skip_doctor: true,
             migrate_history: false,
+            history_database: None,
         },
     )
     .expect_err("an unavailable host CLI should fail installation");
@@ -2213,6 +2216,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
             force: false,
             dry_run: false,
             skip_history_migration: false,
+            history_database: None,
         },
     )
     .expect_err("an unavailable host CLI should fail uninstallation");

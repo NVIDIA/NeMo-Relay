@@ -34,7 +34,9 @@ pub(crate) const OPENAI_PROVIDER: &str = "openai";
 /// The provider id Relay installs into `config.toml`.
 pub(crate) const RELAY_PROVIDER: &str = "nemo-relay-openai";
 
-/// Codex's thread index. The numeric suffix is a Codex schema generation.
+/// Codex's thread index. The numeric suffix is a Codex schema generation, so a
+/// future Codex release can move this to `state_6.sqlite` or later. Override the
+/// default with `--history-database` when that happens.
 const STATE_DB_FILE: &str = "state_5.sqlite";
 /// Journal recording migrations so uninstall can infer and reverse them.
 const JOURNAL_FILE: &str = "codex-history-migration.json";
@@ -65,15 +67,20 @@ impl MigrationOutcome {
 /// Rewrites pre-install `openai` threads to the Relay provider.
 ///
 /// Returns `None` when there was nothing to migrate.
-pub(crate) fn migrate_to_relay(dry_run: bool) -> Result<Option<MigrationOutcome>, String> {
-    let database = state_db_path()?;
+pub(crate) fn migrate_to_relay(
+    dry_run: bool,
+    database: Option<&Path>,
+) -> Result<Option<MigrationOutcome>, String> {
+    let database = resolve_database(database)?;
     if !database.exists() {
         return Err(format!(
-            "no Codex thread database at {}; run Codex at least once before migrating history",
+            "no Codex thread database at {}; run Codex at least once before migrating history, or \
+             name the current database with `--history-database`",
             database.display()
         ));
     }
     require_sqlite3()?;
+    ensure_thread_schema(&database)?;
     let thread_ids = thread_ids_for_provider(&database, OPENAI_PROVIDER)?;
     if thread_ids.is_empty() {
         println!(
@@ -118,11 +125,23 @@ pub(crate) fn migrate_to_relay(dry_run: bool) -> Result<Option<MigrationOutcome>
 /// fix, mirrored.
 ///
 /// Returns `None` when no migration was recorded or there is nothing to move.
-pub(crate) fn restore_from_relay(dry_run: bool) -> Result<Option<MigrationOutcome>, String> {
+pub(crate) fn restore_from_relay(
+    dry_run: bool,
+    database: Option<&Path>,
+) -> Result<Option<MigrationOutcome>, String> {
     let Some(journal) = read_journal()? else {
         return Ok(None);
     };
-    let database = journal_database(&journal).unwrap_or(state_db_path()?);
+    // An explicit override wins, then the database the migration pinned, then
+    // the default. The journal matters most here: it names the database that
+    // was actually rewritten, even if the default has since moved on.
+    let database = match database {
+        Some(database) => resolve_database(Some(database))?,
+        None => match journal_database(&journal) {
+            Some(database) => database,
+            None => resolve_database(None)?,
+        },
+    };
     if !database.exists() {
         clear_journal(dry_run)?;
         return Err(format!(
@@ -131,6 +150,7 @@ pub(crate) fn restore_from_relay(dry_run: bool) -> Result<Option<MigrationOutcom
         ));
     }
     require_sqlite3()?;
+    ensure_thread_schema(&database)?;
     let thread_ids = thread_ids_for_provider(&database, RELAY_PROVIDER)?;
     if thread_ids.is_empty() {
         clear_journal(dry_run)?;
@@ -169,8 +189,45 @@ pub(crate) fn migration_recorded() -> bool {
     matches!(read_journal(), Ok(Some(_)))
 }
 
-fn state_db_path() -> Result<PathBuf, String> {
-    Ok(codex_home_dir()?.join(STATE_DB_FILE))
+/// Resolves the thread database to operate on.
+///
+/// A bare file name such as `state_6.sqlite` resolves inside the Codex home,
+/// which is the common case when Codex bumps its schema generation. Anything
+/// with a directory component is used as given.
+fn resolve_database(explicit: Option<&Path>) -> Result<PathBuf, String> {
+    let Some(explicit) = explicit else {
+        return Ok(codex_home_dir()?.join(STATE_DB_FILE));
+    };
+    if explicit.components().count() == 1 && explicit.is_relative() {
+        return Ok(codex_home_dir()?.join(explicit));
+    }
+    Ok(explicit.to_path_buf())
+}
+
+/// Rejects a database that does not carry the columns this migration rewrites.
+///
+/// The path can come from `--history-database`, so a typo or an unrelated
+/// SQLite file should fail before anything is copied or written.
+fn ensure_thread_schema(database: &Path) -> Result<(), String> {
+    let columns = run_sqlite(database, "PRAGMA table_info(threads);")?;
+    if columns.trim().is_empty() {
+        return Err(format!(
+            "{} has no `threads` table; it does not look like a Codex thread database",
+            database.display()
+        ));
+    }
+    let has_provider = columns
+        .lines()
+        .filter_map(|line| line.split('|').nth(1))
+        .any(|column| column == "model_provider");
+    if !has_provider {
+        return Err(format!(
+            "the `threads` table in {} has no `model_provider` column; this Codex schema is not \
+             supported",
+            database.display()
+        ));
+    }
+    Ok(())
 }
 
 fn journal_path() -> Result<PathBuf, String> {

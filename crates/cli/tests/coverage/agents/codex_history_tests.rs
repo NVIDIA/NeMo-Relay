@@ -17,10 +17,15 @@ use crate::test_support::EnvScope;
 struct CodexHistoryScope {
     _env: EnvScope,
     home: TempDir,
+    database: String,
 }
 
 impl CodexHistoryScope {
     fn enter(threads: &[(&str, &str)]) -> Self {
+        Self::enter_named(STATE_DB_FILE, threads)
+    }
+
+    fn enter_named(database: &str, threads: &[(&str, &str)]) -> Self {
         let home = tempfile::tempdir().expect("temporary home");
         let codex_home = home.path().join(".codex");
         std::fs::create_dir_all(&codex_home).expect("codex home");
@@ -33,13 +38,17 @@ impl CodexHistoryScope {
             ("XDG_CONFIG_HOME", Some(config_home.as_os_str())),
             ("APPDATA", Some(config_home.as_os_str())),
         ]);
-        let scope = Self { _env: env, home };
+        let scope = Self {
+            _env: env,
+            home,
+            database: database.to_string(),
+        };
         seed_database(&scope.database(), threads);
         scope
     }
 
     fn database(&self) -> std::path::PathBuf {
-        self.home.path().join(".codex").join(STATE_DB_FILE)
+        self.home.path().join(".codex").join(&self.database)
     }
 
     fn providers(&self) -> Vec<(String, String)> {
@@ -134,7 +143,7 @@ fn migrate_moves_openai_threads_onto_the_relay_provider() {
         ("thread-c", "some-other-provider"),
     ]);
 
-    let outcome = migrate_to_relay(/*dry_run*/ false)
+    let outcome = migrate_to_relay(/*dry_run*/ false, /*database*/ None)
         .expect("migration succeeds")
         .expect("migration reports an outcome");
 
@@ -159,7 +168,7 @@ fn migrate_records_a_journal_that_uninstall_can_infer() {
         "no migration is recorded before one runs"
     );
 
-    migrate_to_relay(/*dry_run*/ false).expect("migration succeeds");
+    migrate_to_relay(/*dry_run*/ false, /*database*/ None).expect("migration succeeds");
 
     assert!(migration_recorded(), "uninstall can infer the migration");
     let journal = scope.journal().expect("journal exists");
@@ -179,7 +188,7 @@ fn migrate_backs_up_the_database_before_rewriting_it() {
     require_sqlite3_or_skip!();
     let scope = CodexHistoryScope::enter(&[("thread-a", OPENAI_PROVIDER)]);
 
-    migrate_to_relay(/*dry_run*/ false).expect("migration succeeds");
+    migrate_to_relay(/*dry_run*/ false, /*database*/ None).expect("migration succeeds");
 
     let backups = scope.backup_dirs();
     assert_eq!(backups.len(), 1, "exactly one backup directory is created");
@@ -197,7 +206,8 @@ fn migrate_reports_nothing_to_do_without_built_in_provider_threads() {
     require_sqlite3_or_skip!();
     let scope = CodexHistoryScope::enter(&[("thread-a", RELAY_PROVIDER)]);
 
-    let outcome = migrate_to_relay(/*dry_run*/ false).expect("migration succeeds");
+    let outcome =
+        migrate_to_relay(/*dry_run*/ false, /*database*/ None).expect("migration succeeds");
 
     assert_eq!(outcome, None, "an empty migration reports no outcome");
     assert!(
@@ -215,7 +225,7 @@ fn dry_run_migration_reports_without_touching_the_database() {
     require_sqlite3_or_skip!();
     let scope = CodexHistoryScope::enter(&[("thread-a", OPENAI_PROVIDER)]);
 
-    let outcome = migrate_to_relay(/*dry_run*/ true)
+    let outcome = migrate_to_relay(/*dry_run*/ true, /*database*/ None)
         .expect("dry run succeeds")
         .expect("dry run reports an outcome");
 
@@ -236,9 +246,9 @@ fn restore_returns_migrated_threads_to_the_built_in_provider() {
         ("thread-a", OPENAI_PROVIDER),
         ("thread-b", "some-other-provider"),
     ]);
-    migrate_to_relay(/*dry_run*/ false).expect("migration succeeds");
+    migrate_to_relay(/*dry_run*/ false, /*database*/ None).expect("migration succeeds");
 
-    let outcome = restore_from_relay(/*dry_run*/ false)
+    let outcome = restore_from_relay(/*dry_run*/ false, /*database*/ None)
         .expect("restore succeeds")
         .expect("restore reports an outcome");
 
@@ -261,7 +271,7 @@ fn restore_returns_migrated_threads_to_the_built_in_provider() {
 fn restore_also_moves_threads_created_while_relay_was_installed() {
     require_sqlite3_or_skip!();
     let scope = CodexHistoryScope::enter(&[("pre-install", OPENAI_PROVIDER)]);
-    migrate_to_relay(/*dry_run*/ false).expect("migration succeeds");
+    migrate_to_relay(/*dry_run*/ false, /*database*/ None).expect("migration succeeds");
     // A thread Codex recorded under the Relay provider after the migration ran.
     sqlite(
         &scope.database(),
@@ -271,7 +281,7 @@ fn restore_also_moves_threads_created_while_relay_was_installed() {
         ),
     );
 
-    let outcome = restore_from_relay(/*dry_run*/ false)
+    let outcome = restore_from_relay(/*dry_run*/ false, /*database*/ None)
         .expect("restore succeeds")
         .expect("restore reports an outcome");
 
@@ -295,7 +305,8 @@ fn restore_without_a_recorded_migration_is_a_no_op() {
     require_sqlite3_or_skip!();
     let scope = CodexHistoryScope::enter(&[("thread-a", RELAY_PROVIDER)]);
 
-    let outcome = restore_from_relay(/*dry_run*/ false).expect("restore succeeds");
+    let outcome =
+        restore_from_relay(/*dry_run*/ false, /*database*/ None).expect("restore succeeds");
 
     assert_eq!(outcome, None, "no journal means nothing to reverse");
     assert_eq!(
@@ -309,9 +320,9 @@ fn restore_without_a_recorded_migration_is_a_no_op() {
 fn dry_run_restore_reports_without_touching_the_database() {
     require_sqlite3_or_skip!();
     let scope = CodexHistoryScope::enter(&[("thread-a", OPENAI_PROVIDER)]);
-    migrate_to_relay(/*dry_run*/ false).expect("migration succeeds");
+    migrate_to_relay(/*dry_run*/ false, /*database*/ None).expect("migration succeeds");
 
-    let outcome = restore_from_relay(/*dry_run*/ true)
+    let outcome = restore_from_relay(/*dry_run*/ true, /*database*/ None)
         .expect("dry run succeeds")
         .expect("dry run reports an outcome");
 
@@ -340,7 +351,8 @@ fn migrate_fails_when_codex_has_no_thread_database() {
         ("APPDATA", Some(home.path().as_os_str())),
     ]);
 
-    let error = migrate_to_relay(/*dry_run*/ false).expect_err("missing database is an error");
+    let error = migrate_to_relay(/*dry_run*/ false, /*database*/ None)
+        .expect_err("missing database is an error");
 
     assert!(
         error.contains("no Codex thread database at"),
@@ -352,4 +364,106 @@ fn migrate_fails_when_codex_has_no_thread_database() {
 fn sql_string_escapes_embedded_quotes() {
     assert_eq!(sql_string("openai"), "'openai'");
     assert_eq!(sql_string("o'brien"), "'o''brien'");
+}
+
+#[test]
+fn a_named_database_resolves_inside_the_codex_home() {
+    require_sqlite3_or_skip!();
+    // The schema generation Codex might move to next.
+    let scope = CodexHistoryScope::enter_named(
+        "state_6.sqlite",
+        &[("thread-a", OPENAI_PROVIDER), ("thread-b", OPENAI_PROVIDER)],
+    );
+
+    let outcome = migrate_to_relay(/*dry_run*/ false, Some(Path::new("state_6.sqlite")))
+        .expect("migration succeeds")
+        .expect("migration reports an outcome");
+
+    assert_eq!(outcome.thread_ids, vec!["thread-a", "thread-b"]);
+    assert_eq!(
+        scope.providers(),
+        vec![
+            ("thread-a".to_string(), RELAY_PROVIDER.to_string()),
+            ("thread-b".to_string(), RELAY_PROVIDER.to_string()),
+        ]
+    );
+    assert_eq!(
+        scope.journal().expect("journal exists")["database"],
+        json!(scope.database()),
+        "the journal pins the overridden database"
+    );
+}
+
+#[test]
+fn a_full_path_database_is_used_as_given() {
+    require_sqlite3_or_skip!();
+    let scope = CodexHistoryScope::enter(&[("ignored", OPENAI_PROVIDER)]);
+    let elsewhere = scope.home.path().join("elsewhere.sqlite");
+    seed_database(&elsewhere, &[("thread-a", OPENAI_PROVIDER)]);
+
+    let outcome = migrate_to_relay(/*dry_run*/ false, Some(&elsewhere))
+        .expect("migration succeeds")
+        .expect("migration reports an outcome");
+
+    assert_eq!(outcome.thread_ids, vec!["thread-a"]);
+    assert_eq!(
+        scope.providers(),
+        vec![("ignored".to_string(), OPENAI_PROVIDER.to_string())],
+        "the default database is left alone"
+    );
+}
+
+#[test]
+fn restore_prefers_the_database_the_migration_recorded() {
+    require_sqlite3_or_skip!();
+    let scope = CodexHistoryScope::enter_named("state_6.sqlite", &[("thread-a", OPENAI_PROVIDER)]);
+    migrate_to_relay(/*dry_run*/ false, Some(Path::new("state_6.sqlite")))
+        .expect("migration succeeds");
+
+    // No override here: uninstall infers both the reversal and its target.
+    let outcome = restore_from_relay(/*dry_run*/ false, /*database*/ None)
+        .expect("restore succeeds")
+        .expect("restore reports an outcome");
+
+    assert_eq!(outcome.thread_ids, vec!["thread-a"]);
+    assert_eq!(
+        scope.providers(),
+        vec![("thread-a".to_string(), OPENAI_PROVIDER.to_string())],
+        "reversal follows the journal rather than the default file name"
+    );
+}
+
+#[test]
+fn migrate_rejects_a_database_without_a_threads_table() {
+    require_sqlite3_or_skip!();
+    let scope = CodexHistoryScope::enter(&[("thread-a", OPENAI_PROVIDER)]);
+    let unrelated = scope.home.path().join("unrelated.sqlite");
+    sqlite(&unrelated, "CREATE TABLE notes (id TEXT);");
+
+    let error = migrate_to_relay(/*dry_run*/ false, Some(&unrelated))
+        .expect_err("an unrelated database is rejected");
+
+    assert!(
+        error.contains("has no `threads` table"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn migrate_rejects_a_threads_table_without_a_provider_column() {
+    require_sqlite3_or_skip!();
+    let scope = CodexHistoryScope::enter(&[("thread-a", OPENAI_PROVIDER)]);
+    let future = scope.home.path().join("state_9.sqlite");
+    sqlite(
+        &future,
+        "CREATE TABLE threads (id TEXT, provider_ref TEXT);",
+    );
+
+    let error = migrate_to_relay(/*dry_run*/ false, Some(&future))
+        .expect_err("an unsupported schema is rejected");
+
+    assert!(
+        error.contains("has no `model_provider` column"),
+        "unexpected error: {error}"
+    );
 }

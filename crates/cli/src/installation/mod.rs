@@ -17,6 +17,8 @@ pub(crate) struct InstallRequest {
     pub(crate) skip_doctor: bool,
     /// Experimental: rewrite pre-install Codex thread history onto the Relay provider.
     pub(crate) migrate_history: bool,
+    /// Codex thread database to migrate, when it is not the default generation.
+    pub(crate) history_database: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,4 +28,6 @@ pub(crate) struct UninstallRequest {
     pub(crate) dry_run: bool,
     /// Skip the reversal that a recorded history migration would otherwise infer.
     pub(crate) skip_history_migration: bool,
+    /// Codex thread database to restore, overriding the one the journal recorded.
+    pub(crate) history_database: Option<PathBuf>,
 }

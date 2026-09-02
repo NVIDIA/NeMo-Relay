@@ -81,6 +81,7 @@ fn refresh(command: RefreshCommand) -> Result<ExitCode, CliError> {
             // Refresh repairs an existing installation; any recorded history
             // migration stays recorded and does not need to run again.
             migrate_history: false,
+            history_database: None,
         };
         let result = match crate::agents::install_integration(agent, request) {
             Ok(status) if status == ExitCode::SUCCESS => Ok(()),

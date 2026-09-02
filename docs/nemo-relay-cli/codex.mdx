@@ -328,6 +328,23 @@ history on the Relay provider instead.
 Add `--dry-run` to either command to report the thread counts that would move
 without touching the database or the journal.
 
+Relay targets Codex's current thread database, `state_5.sqlite`. The numeric
+suffix is a Codex schema generation, so a future Codex release can move to
+`state_6.sqlite` or later. Name the current database explicitly when that
+happens:
+
+```bash
+nemo-relay install codex --migrate-history --history-database state_6.sqlite
+```
+
+A bare file name resolves inside the Codex home; a value with a directory
+component is used as given. Relay rejects a database that has no `threads`
+table or no `model_provider` column before it copies or rewrites anything.
+
+`--history-database` requires `--migrate-history` at install time. At uninstall
+time it overrides the database the migration recorded, which is otherwise
+preferred over the default; supply it only when that recorded path has moved.
+
 `nemo-relay integrations refresh` does not re-run the migration. A recorded
 migration stays recorded across reinstalls and upgrades.
 
