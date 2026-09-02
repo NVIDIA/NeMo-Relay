@@ -23,6 +23,20 @@ fn owner_records_are_versioned_endpoint_scoped_and_round_trip() {
     assert_eq!(lock_name("not a url/with spaces"), "not_a_url_with_spaces");
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[test]
+fn live_owner_record_uses_a_process_instance_identity() {
+    let owner = OwnerRecord::new(
+        std::process::id(),
+        "http://127.0.0.1:47632",
+        "shutdown",
+        Some("fingerprint"),
+    );
+
+    assert!(owner.process_identity.is_some());
+    assert!(owner_process_identity_matches(&owner));
+}
+
 #[test]
 fn recovery_records_preserve_pending_and_ready_attempts() {
     let dir = tempfile::tempdir().unwrap();
@@ -234,7 +248,7 @@ fn same_version_or_invalid_owned_gateway_is_not_stopped_for_replacement() {
     let state = state_dir().unwrap();
     create_private_dir(&state).unwrap();
     let path = owner_path(&state, url);
-    let owner = OwnerRecord::new(42, url, "shutdown-token", Some("fingerprint"));
+    let owner = OwnerRecord::new(i32::MAX as u32, url, "shutdown-token", Some("fingerprint"));
     write_owner_record(&path, &owner).unwrap();
 
     let _lock = lock_endpoint(&state, url).unwrap();
@@ -248,4 +262,63 @@ fn same_version_or_invalid_owned_gateway_is_not_stopped_for_replacement() {
     let _lock = lock_endpoint(&state, url).unwrap();
     assert!(!stop_version_mismatched_owned_gateway_locked(&state, url).unwrap());
     assert!(path.exists());
+}
+
+#[test]
+fn stale_unhealthy_gateway_owner_is_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = "http://127.0.0.1:9";
+    let path = owner_path(dir.path(), url);
+    let owner = OwnerRecord::new(u32::MAX, url, "shutdown-token", Some("fingerprint"));
+    write_owner_record(&path, &owner).unwrap();
+
+    assert!(!stop_unhealthy_owned_gateway_locked(dir.path(), url).unwrap());
+    assert!(!path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn unhealthy_owned_gateway_is_force_killed_after_the_grace_period() {
+    use std::os::unix::process::CommandExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let url = "http://127.0.0.1:9";
+    let path = owner_path(dir.path(), url);
+    let child_pid_path = dir.path().join("child.pid");
+    let mut command = std::process::Command::new("sh");
+    command.args([
+        "-c",
+        "sh -c 'trap \"\" TERM; while :; do sleep 60; done' & echo $! > \"$1\"; wait",
+        "sh",
+        child_pid_path.to_str().unwrap(),
+    ]);
+    // SAFETY: The child calls only async-signal-safe `setsid` before exec.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+    let mut child = command.spawn().unwrap();
+    let child_pid = loop {
+        if let Ok(value) = std::fs::read_to_string(&child_pid_path) {
+            break value.trim().parse::<i32>().unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let owner = OwnerRecord::new(child.id(), url, "shutdown-token", Some("fingerprint"));
+    write_owner_record(&path, &owner).unwrap();
+    let waiter = std::thread::spawn(move || child.wait());
+
+    assert!(stop_unhealthy_owned_gateway_locked(dir.path(), url).unwrap());
+    assert!(!waiter.join().unwrap().unwrap().success());
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while process_is_running(child_pid) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!process_is_running(child_pid));
+    assert!(!path.exists());
 }

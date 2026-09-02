@@ -89,7 +89,11 @@ impl CodexHooksClient for FakeCodexHooksClient {
 }
 
 fn expected_plugin_command() -> crate::hooks::GeneratedHookCommands {
-    let relay = current_exe().unwrap();
+    // Mirrors source resolution order (crate::process::resolve_executable("nemo-relay"), falling
+    // back to current_exe()) so this helper stays correct on machines that happen to have a real
+    // `nemo-relay` on $PATH, rather than assuming current_exe() is always what gets embedded.
+    let relay =
+        crate::process::resolve_executable("nemo-relay").unwrap_or_else(|| current_exe().unwrap());
     let relay = relay.canonicalize().unwrap_or(relay);
     let relay = portable_executable_path(relay);
     codex_plugin_hook_command(
@@ -131,6 +135,57 @@ fn expected_plugin_command_for_hooks(path: &Path, event: &str) -> String {
                 .map(str::to_owned)
         })
         .unwrap_or_else(|| expected_plugin_command().for_event(event).to_owned())
+}
+
+#[test]
+fn codex_expected_plugin_hooks_prefer_path_relay_over_current_exe() {
+    // Regression test: the plugin marketplace writer resolves the relay binary via $PATH first,
+    // falling back to current_exe() (see require_relay()). Hook validation must resolve the same
+    // way, or install deterministically fails its own consistency check whenever a different
+    // `nemo-relay` sits earlier on $PATH than the binary performing the install.
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let bin_dir = dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    // Windows resolution only ever considers `nemo-relay` plus a PATHEXT suffix; the bare name is
+    // never a candidate (see process::executable_extensions), so an extensionless fixture would
+    // silently fall through to current_exe() and fail this test on Windows only.
+    let fake_relay = bin_dir.join(format!("nemo-relay{}", std::env::consts::EXE_SUFFIX));
+    fs::write(&fake_relay, b"#!/bin/sh\n").unwrap();
+    let _path = EnvVarGuard::set_path("PATH", &bin_dir);
+
+    let hooks_path = dir.path().join("plugin").join("hooks").join("hooks.json");
+    write_plugin_generation_for_hooks(&hooks_path);
+
+    let commands = expected_plugin_hook_command(&hooks_path).unwrap();
+
+    // Compare whole generated commands rather than substring-matching the relay path: on Windows
+    // the path is embedded inside a base64 UTF-16 `-EncodedCommand` payload, so it never appears
+    // as plain text in the command string.
+    let generation_path = hooks_path
+        .parent()
+        .and_then(Path::parent)
+        .unwrap()
+        .join(crate::installation::generation::GENERATION_FILE_NAME);
+    let build_expectation = |relay: PathBuf| {
+        let relay = relay.canonicalize().unwrap_or(relay);
+        codex_plugin_hook_command(
+            &portable_executable_path(relay),
+            &generation_path,
+            TEST_PLUGIN_GENERATION,
+        )
+        .unwrap()
+    };
+
+    let command = commands.for_event("SessionStart");
+    assert_eq!(
+        command,
+        build_expectation(fake_relay).for_event("SessionStart")
+    );
+    assert_ne!(
+        command,
+        build_expectation(current_exe().unwrap()).for_event("SessionStart")
+    );
 }
 
 fn empty_codex_hooks_client() -> FakeCodexHooksClient {
@@ -380,6 +435,19 @@ fn home_env_lock() -> &'static Mutex<()> {
     &crate::test_support::ENV_TEST_LOCK
 }
 
+/// Takes the process-wide environment lock without changing any variable.
+///
+/// Generating a hook command now resolves the relay binary through `$PATH` (see
+/// `resolve_relay_executable`), so a test that compares a helper-computed expectation against a
+/// source-computed command reads `$PATH` twice. Without this guard those two reads can straddle
+/// another test's `$PATH` override and disagree. `HomeScope` is the wrong tool here because these
+/// tests want the ambient `HOME`/`CODEX_HOME`; they only need the mutual exclusion.
+fn env_read_guard() -> std::sync::MutexGuard<'static, ()> {
+    home_env_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
 struct HomeScope<'a> {
     _guard: std::sync::MutexGuard<'a, ()>,
     prev_home: Option<std::ffi::OsString>,
@@ -514,6 +582,9 @@ fn atomic_write_replaces_existing_destination() {
 
 #[test]
 fn codex_auto_trusts_only_exact_generated_plugin_hooks_and_verifies_them() {
+    // Holds the environment lock: this test compares a helper-computed relay path against the
+    // one the source resolves, and both reads go through $PATH.
+    let _env = env_read_guard();
     let dir = tempdir().unwrap();
     let hooks_path = dir.path().join("plugin").join("hooks.json");
     let config_path = dir.path().join(".codex").join("config.toml");
@@ -577,6 +648,9 @@ fn codex_auto_trusts_only_exact_generated_plugin_hooks_and_verifies_them() {
 
 #[test]
 fn codex_auto_trust_refuses_missing_required_hook_without_writing_state() {
+    // Holds the environment lock: this test compares a helper-computed relay path against the
+    // one the source resolves, and both reads go through $PATH.
+    let _env = env_read_guard();
     let dir = tempdir().unwrap();
     let hooks_path = dir.path().join("plugin").join("hooks.json");
     let config_path = dir.path().join(".codex").join("config.toml");
@@ -603,6 +677,9 @@ fn codex_auto_trust_refuses_missing_required_hook_without_writing_state() {
 
 #[test]
 fn codex_auto_trust_refuses_duplicate_discovered_handler() {
+    // Holds the environment lock: this test compares a helper-computed relay path against the
+    // one the source resolves, and both reads go through $PATH.
+    let _env = env_read_guard();
     let dir = tempdir().unwrap();
     let config_path = dir.path().join("config.toml");
     fs::write(&config_path, "").unwrap();
@@ -629,6 +706,9 @@ fn codex_auto_trust_refuses_duplicate_discovered_handler() {
 
 #[test]
 fn every_generated_codex_hook_is_required_exactly_once_and_trusted() {
+    // Holds the environment lock: this test compares a helper-computed relay path against the
+    // one the source resolves, and both reads go through $PATH.
+    let _env = env_read_guard();
     for (event, display) in [
         ("session_start", "SessionStart"),
         ("user_prompt_submit", "UserPromptSubmit"),
@@ -710,6 +790,9 @@ fn every_generated_codex_hook_is_required_exactly_once_and_trusted() {
 
 #[test]
 fn codex_auto_trust_reverifies_every_generated_hook_after_writing() {
+    // Holds the environment lock: this test compares a helper-computed relay path against the
+    // one the source resolves, and both reads go through $PATH.
+    let _env = env_read_guard();
     for event in [
         "session_start",
         "user_prompt_submit",
@@ -774,6 +857,9 @@ fn codex_auto_trust_reverifies_every_generated_hook_after_writing() {
 
 #[test]
 fn codex_auto_trust_rejects_targeted_hook_that_disappears_after_write() {
+    // Holds the environment lock: this test compares a helper-computed relay path against the
+    // one the source resolves, and both reads go through $PATH.
+    let _env = env_read_guard();
     let dir = tempdir().unwrap();
     let config_path = dir.path().join("config.toml");
     fs::write(&config_path, "").unwrap();
@@ -806,6 +892,9 @@ fn codex_auto_trust_rejects_targeted_hook_that_disappears_after_write() {
 
 #[test]
 fn codex_auto_trust_rejects_targeted_hook_that_changes_key_after_write() {
+    // Holds the environment lock: this test compares a helper-computed relay path against the
+    // one the source resolves, and both reads go through $PATH.
+    let _env = env_read_guard();
     let dir = tempdir().unwrap();
     let config_path = dir.path().join("config.toml");
     fs::write(&config_path, "").unwrap();
@@ -837,6 +926,9 @@ fn codex_auto_trust_rejects_targeted_hook_that_changes_key_after_write() {
 
 #[test]
 fn codex_auto_trust_restores_exact_prior_state_after_verification_failure() {
+    // Holds the environment lock: this test compares a helper-computed relay path against the
+    // one the source resolves, and both reads go through $PATH.
+    let _env = env_read_guard();
     let dir = tempdir().unwrap();
     let config_path = dir.path().join("config.toml");
     fs::write(
@@ -890,6 +982,9 @@ custom = "preserve"
 
 #[test]
 fn codex_auto_trust_aggregates_original_and_rollback_errors() {
+    // Holds the environment lock: this test compares a helper-computed relay path against the
+    // one the source resolves, and both reads go through $PATH.
+    let _env = env_read_guard();
     let dir = tempdir().unwrap();
     let config_path = dir.path().join("config.toml");
     fs::write(&config_path, "").unwrap();
@@ -915,6 +1010,9 @@ fn codex_auto_trust_aggregates_original_and_rollback_errors() {
 
 #[test]
 fn codex_auto_trust_does_not_depend_on_reported_plugin_source_path() {
+    // Holds the environment lock: this test compares a helper-computed relay path against the
+    // one the source resolves, and both reads go through $PATH.
+    let _env = env_read_guard();
     let dir = tempdir().unwrap();
     let reported_hooks_path = dir.path().join("codex-cache").join("hooks.json");
     let config_path = dir.path().join(".codex").join("config.toml");
@@ -940,6 +1038,9 @@ fn codex_auto_trust_does_not_depend_on_reported_plugin_source_path() {
 
 #[test]
 fn codex_auto_trust_rejects_modified_loaded_plugin_hook_file() {
+    // Holds the environment lock: this test compares a helper-computed relay path against the
+    // one the source resolves, and both reads go through $PATH.
+    let _env = env_read_guard();
     let dir = tempdir().unwrap();
     let reported_hooks_path = dir.path().join("codex-cache").join("hooks.json");
     fs::create_dir_all(reported_hooks_path.parent().unwrap()).unwrap();
@@ -979,6 +1080,9 @@ fn codex_auto_trust_rejects_modified_loaded_plugin_hook_file() {
 
 #[test]
 fn codex_hook_trust_report_distinguishes_modified_disabled_and_missing_hooks() {
+    // Holds the environment lock: this test compares a helper-computed relay path against the
+    // one the source resolves, and both reads go through $PATH.
+    let _env = env_read_guard();
     let dir = tempdir().unwrap();
     let hooks_path = dir.path().join(".codex").join("hooks.json");
     let hooks = vec![
@@ -1028,6 +1132,9 @@ fn codex_hook_trust_report_distinguishes_modified_disabled_and_missing_hooks() {
 
 #[test]
 fn codex_hook_trust_report_recognizes_legacy_generated_hooks_as_stale() {
+    // Holds the environment lock: this test compares a helper-computed relay path against the
+    // one the source resolves, and both reads go through $PATH.
+    let _env = env_read_guard();
     let dir = tempdir().unwrap();
     let hooks_path = dir.path().join(".codex").join("hooks.json");
     let expected = expected_plugin_command();
@@ -2108,6 +2215,9 @@ fn codex_hooks_installed_requires_generated_plugin_local_groups() {
 
 #[test]
 fn codex_setup_can_validate_hooks_while_installer_holds_the_generation_lock() {
+    // Holds the environment lock: this test compares a helper-computed relay path against the
+    // one the source resolves, and both reads go through $PATH.
+    let _env = env_read_guard();
     let dir = tempdir().unwrap();
     let plugin_root = dir.path().join("plugin");
     let hooks_path = plugin_root.join("hooks").join("hooks.json");
@@ -2118,7 +2228,11 @@ fn codex_setup_can_validate_hooks_while_installer_holds_the_generation_lock() {
         &generation_lock,
     )
     .unwrap();
-    let relay = current_exe().unwrap();
+    // Matches source resolution order (crate::process::resolve_executable("nemo-relay"), falling
+    // back to current_exe()) so this test stays correct on machines that happen to have a real
+    // `nemo-relay` on $PATH, rather than assuming current_exe() is always what gets embedded.
+    let relay =
+        crate::process::resolve_executable("nemo-relay").unwrap_or_else(|| current_exe().unwrap());
     let relay = portable_executable_path(relay.canonicalize().unwrap_or(relay));
     let command = codex_plugin_hook_command(&relay, &generation_path, &token).unwrap();
     fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
