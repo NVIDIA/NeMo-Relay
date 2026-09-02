@@ -39,7 +39,7 @@ use super::{
     validate_metadata_promotion_prefixes,
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
-use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
+use crate::api::runtime::EventSubscriberFn;
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use crate::codec::response::CostEstimate;
@@ -2129,12 +2129,9 @@ impl OtelEventProcessor {
         let Some(parent_uuid) = event.parent_uuid() else {
             return Context::new();
         };
-        let stack = current_scope_stack();
-        let stack = stack.read().expect("scope stack lock poisoned");
-        if !stack.is_propagated_parent(parent_uuid) {
+        let Some(root_uuid) = event.propagation_root_uuid() else {
             return Context::new();
-        }
-        let root_uuid = stack.root_uuid();
+        };
         Context::new().with_remote_span_context(SpanContext::new(
             relay_trace_id(root_uuid),
             relay_span_id(parent_uuid),

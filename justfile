@@ -1863,8 +1863,10 @@ package-openclaw:
 package-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
-    # Uses the workspace version from Cargo.toml, then writes the Python package
-    # version into pyproject.toml using PEP 440 before building a platform wheel.
+    # An explicit ref_name is synced into the Cargo workspace version first,
+    # so the compiled extension embeds the same version reported by the
+    # Python package, then written into pyproject.toml using PEP 440 before
+    # building a platform wheel.
     output_dir="{{ output_dir }}"
     linux_glibc_version="{{ linux_glibc_version }}"
     export_uv_python_runtime
@@ -1880,6 +1882,7 @@ package-python:
         set_python_package_version "${version}+${sha}" true
     else
         echo "Using explicit version {{ ref_name }}"
+        set_cargo_workspace_version "{{ ref_name }}"
         set_python_package_version "{{ ref_name }}" true
     fi
     build_args=()

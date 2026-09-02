@@ -739,11 +739,11 @@ async fn shutdown_bootstrap_sidecar(
     let Some(shutdown) = state.bootstrap_shutdown.as_ref() else {
         return StatusCode::NOT_FOUND;
     };
-    if headers
+    let owner_token_matches = headers
         .get("x-nemo-relay-bootstrap-token")
         .and_then(|value| value.to_str().ok())
-        != Some(shutdown.token.as_str())
-    {
+        .is_some_and(|presented| bool::from(presented.as_bytes().ct_eq(shutdown.token.as_bytes())));
+    if !owner_token_matches {
         return StatusCode::FORBIDDEN;
     }
     let Ok(mut sender) = shutdown.sender.lock() else {
@@ -900,7 +900,7 @@ enum ServerPluginActivation {
     Dynamic(PluginActivation),
 }
 
-const REMOVED_SWITCHYARD_MESSAGE: &str = "the built-in Switchyard service integration was removed in NeMo Relay >=0.8.0; remove this `[[components]]` entry and follow the NeMo Relay Switchyard migration guide for the Switchyard-owned dynamic plugin: https://docs.nvidia.com/nemo/relay/reference/migration-guides#migrate-to-the-switchyard-owned-dynamic-plugin";
+const REMOVED_SWITCHYARD_MESSAGE: &str = "the built-in Switchyard service integration was removed in NeMo Relay >=0.8.0; remove this `[[components]]` entry and refer to the NeMo Relay migration guides for current Switchyard migration information: https://docs.nvidia.com/nemo/relay/reference/migration-guides";
 
 impl ServerPluginActivation {
     fn clear(self) -> Result<(), CliError> {

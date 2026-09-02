@@ -11,6 +11,7 @@ pub(crate) mod state;
 
 pub(crate) use spec::{MarketplaceHost, PluginSetupSnapshot};
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -50,7 +51,7 @@ use state::{
 pub(super) use crate::bootstrap::DEFAULT_URL as DEFAULT_GATEWAY_URL;
 pub(super) const MARKETPLACE_NAME: &str = "nemo-relay-local";
 pub(super) const PLUGIN_NAME: &str = "nemo-relay-plugin";
-pub(super) const RELAY_COMMAND: &str = "nemo-relay";
+pub(crate) const RELAY_COMMAND: &str = "nemo-relay";
 
 fn default_operation_lock_dir() -> Result<PathBuf, String> {
     std::env::var_os("HOME")
@@ -128,6 +129,183 @@ pub(crate) fn marketplace_install_roots(
     (layout.marketplace_root, layout.plugin_root)
 }
 
+pub(crate) fn registered_install_dirs(host: impl MarketplaceHost) -> Result<Vec<PathBuf>, String> {
+    state::registered_install_dirs(host)
+}
+
+/// Check prerequisites before retiring any MCP generation for a refresh.
+pub(crate) fn prepare_integrations_for_refresh<H>(
+    targets: &[(H, PathBuf)],
+) -> Result<RefreshIntegrationsPreflight<H>, CliError>
+where
+    H: MarketplaceHost + Eq + std::hash::Hash + Copy,
+{
+    prepare_integrations_for_refresh_with_runner(targets, &RealCommandRunner)
+}
+
+fn prepare_integrations_for_refresh_with_runner<H>(
+    targets: &[(H, PathBuf)],
+    runner: &dyn CommandRunner,
+) -> Result<RefreshIntegrationsPreflight<H>, CliError>
+where
+    H: MarketplaceHost + Eq + std::hash::Hash + Copy,
+{
+    validate_integrations_for_refresh_with_runner(targets, runner)?;
+    retire_integrations_for_refresh(targets)
+}
+
+fn validate_integrations_for_refresh_with_runner<H>(
+    targets: &[(H, PathBuf)],
+    runner: &dyn CommandRunner,
+) -> Result<(), CliError>
+where
+    H: MarketplaceHost + Copy,
+{
+    for (host, install_dir) in targets {
+        let options = PluginInstallOptions {
+            install_dir: install_dir.clone(),
+            operation_lock_dir: PathBuf::new(),
+            force: true,
+            dry_run: false,
+            skip_doctor: false,
+        };
+        let relay = require_relay(&options, runner).map_err(CliError::Install)?;
+        validate_relay_hook_forward(&relay, &options, runner).map_err(CliError::Install)?;
+        validate_relay_mcp(&relay, &options, runner).map_err(CliError::Install)?;
+        require_host_cli(*host, &options, runner).map_err(CliError::Install)?;
+        host::validate_host_version(*host, &options, runner).map_err(CliError::Install)?;
+    }
+    Ok(())
+}
+
+/// Retire every selected MCP generation before a refresh can stop the shared gateway.
+///
+/// Each retirement retains its original marker until the corresponding replacement succeeds.
+/// A preflight or replacement failure restores every affected marker, while retired markers
+/// prevent old MCP clients from recovering the gateway during the replacement window.
+pub(crate) fn retire_integrations_for_refresh<H>(
+    targets: &[(H, PathBuf)],
+) -> Result<RefreshIntegrationsPreflight<H>, CliError>
+where
+    H: MarketplaceHost + Eq + std::hash::Hash + Copy,
+{
+    let operation_lock_dir = default_operation_lock_dir().map_err(CliError::Install)?;
+    let mut host_locks = HashMap::new();
+    let mut retirements = Vec::with_capacity(targets.len());
+    for (host, install_dir) in targets {
+        if !host_locks.contains_key(host) {
+            let host_lock = PluginOperationLock::acquire(
+                host.install_arg(),
+                &operation_lock_dir,
+                &operation_lock_dir,
+                DEFAULT_OPERATION_LOCK_TIMEOUT,
+            )
+            .map_err(CliError::Install)?;
+            host_locks.insert(*host, host_lock);
+        }
+        let _install_root_lock = PluginOperationLock::acquire_install_root(
+            host.install_arg(),
+            &operation_lock_dir,
+            install_dir,
+            DEFAULT_OPERATION_LOCK_TIMEOUT,
+        )
+        .map_err(CliError::Install)?;
+        let layout = PluginLayout::new(*host, install_dir);
+        let state = read_state(*host, install_dir).ok_or_else(|| {
+            CliError::Install(format!(
+                "missing persisted {} integration state at {}",
+                host.label(),
+                layout.state_path.display()
+            ))
+        })?;
+        layout
+            .validate_persisted_state(&state)
+            .map_err(CliError::Install)?;
+        // An orphaned state file names no live install, so there is no generation to retire and no
+        // reason to fail the whole refresh. Leave the target to the forced install that follows,
+        // which recovers it. A target with artifacts on disk still demands its fence below, so a
+        // genuinely corrupt install keeps failing loudly.
+        if !host.local_install_exists(
+            &layout.marketplace_root,
+            &layout.plugin_root,
+            &layout.plugin_manifest,
+            &layout.generation_fence,
+        ) {
+            continue;
+        }
+        let mut retirement = GenerationRetirement::acquire_for_plugin(
+            &layout.generation_fence,
+            &layout.generation_lock,
+        )
+        .map_err(|error| {
+            CliError::Install(invalid_generation_fence_error(
+                *host,
+                &layout.generation_fence,
+                &error,
+            ))
+        })?
+        .ok_or_else(|| {
+            CliError::Install(missing_generation_fence_error(
+                *host,
+                &layout.generation_fence,
+            ))
+        })?;
+        retirement
+            .invalidate_for_replacement()
+            .map_err(CliError::Install)?;
+        retirement
+            .release_transaction_lock_for_refresh()
+            .map_err(CliError::Install)?;
+        retirements.push((*host, install_dir.clone(), retirement));
+    }
+    Ok(RefreshIntegrationsPreflight { retirements })
+}
+
+pub(crate) struct RefreshIntegrationsPreflight<H> {
+    retirements: Vec<(H, PathBuf, GenerationRetirement)>,
+}
+
+impl<H> std::fmt::Debug for RefreshIntegrationsPreflight<H> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RefreshIntegrationsPreflight")
+            .field("retirement_count", &self.retirements.len())
+            .finish()
+    }
+}
+
+impl<H> RefreshIntegrationsPreflight<H>
+where
+    H: Eq,
+{
+    pub(crate) fn commit_target(&mut self, host: H, install_dir: &Path) {
+        if let Some((_, _, retirement)) = self
+            .retirements
+            .iter_mut()
+            .find(|(target_host, target_dir, _)| *target_host == host && target_dir == install_dir)
+        {
+            retirement.commit_replacement();
+        }
+    }
+
+    pub(crate) fn restore_failed_target(
+        &mut self,
+        host: H,
+        install_dir: &Path,
+    ) -> Result<(), CliError> {
+        let Some((_, _, retirement)) = self
+            .retirements
+            .iter_mut()
+            .find(|(target_host, target_dir, _)| *target_host == host && target_dir == install_dir)
+        else {
+            return Ok(());
+        };
+        retirement
+            .restore_after_rollback()
+            .map_err(CliError::Install)
+    }
+}
+
 pub(crate) fn collect_marketplace_readiness(
     host: impl MarketplaceHost,
     options: &PluginInstallOptions,
@@ -164,7 +342,19 @@ pub(crate) fn install(
         dry_run: command.dry_run,
         skip_doctor: command.skip_doctor,
     };
-    let result = run_for_host(host, &options, install_host);
+    let result = run_for_host(host, &options, install_host).inspect(|_| {
+        if !command.dry_run
+            && state::register_managed_integration(host, &options.install_dir).is_err()
+        {
+            log::warn!(
+                target: "nemo_relay.installation",
+                event = "managed_integration_registration_failed",
+                host = host_name,
+                error_kind = "registry";
+                "Plugin installation completed but automatic refresh registration failed"
+            );
+        }
+    });
     match &result {
         Ok(_) => log::info!(
             target: "nemo_relay.installation",
@@ -210,7 +400,19 @@ pub(crate) fn uninstall(
         dry_run: command.dry_run,
         skip_doctor: true,
     };
-    let result = run_for_host(host, &options, uninstall_host);
+    let result = run_for_host(host, &options, uninstall_host).inspect(|_| {
+        if !command.dry_run
+            && state::unregister_managed_integration(host, &options.install_dir).is_err()
+        {
+            log::warn!(
+                target: "nemo_relay.installation",
+                event = "managed_integration_unregistration_failed",
+                host = host_name,
+                error_kind = "registry";
+                "Plugin uninstallation completed but automatic refresh cleanup failed"
+            );
+        }
+    });
     match &result {
         Ok(_) => log::info!(
             target: "nemo_relay.installation",
@@ -415,9 +617,9 @@ fn prepare_install_transaction<H: MarketplaceHost>(
         None
     };
     if !options.force
-        && plugin_preflight
-            .as_ref()
-            .is_some_and(|preflight| preflight.previous_install_exists)
+        && plugin_preflight.as_ref().is_some_and(|preflight| {
+            preflight.previous_install_exists || preflight.previous_state_exists
+        })
     {
         return Err(existing_plugin_install_requires_force_error(host));
     }
@@ -911,7 +1113,16 @@ fn uninstall_host_locked(
         .as_ref()
         .map(|state| state.plugin_root.as_path())
         .unwrap_or(&layout.plugin_root);
-    let local_install_exists = state.is_some() || layout.marketplace_root.exists();
+    // Same rule, and the same predicate, as the install path: neither a state file that merely
+    // parses nor a leftover generation lock is an install to retire. `retire_installed_generation`
+    // still re-checks host registration when the fence is missing, so an install that lost its
+    // marketplace root but stayed registered with the host is unaffected.
+    let local_install_exists = host.local_install_exists(
+        &layout.marketplace_root,
+        plugin_root,
+        &plugin_manifest_path(host, plugin_root),
+        &plugin_root.join(GENERATION_FILE_NAME),
+    );
     let mut generation_retirement = retire_installed_generation(
         host,
         plugin_root,
@@ -1750,6 +1961,11 @@ struct PluginInstallPreflight {
     marketplace_registered: bool,
     previous_setup_installed: bool,
     previous_install_exists: bool,
+    // Tracked separately from `previous_install_exists`: an orphaned state file is not an install
+    // to retire, but it is still state a non-forced install must refuse to overwrite. Notably
+    // `force_uninstall_host_locked` writes one back as the cleanup-retry marker that
+    // `installed_integrations` relies on to keep offering cleanup.
+    previous_state_exists: bool,
     generation_retirement: Option<GenerationRetirement>,
 }
 
@@ -1796,10 +2012,14 @@ fn prepare_plugin_install(
         &previous_plugin_manifest,
         &previous_generation_fence,
     );
-    let previous_install_exists = state_bytes.is_some()
-        || local_install_exists
-        || plugin_registered
-        || marketplace_registered;
+    // A persisted state file that merely parses is not proof of an install to protect: if it was
+    // orphaned by a manual cleanup or an interrupted uninstall, the install it describes is gone
+    // while the file remains. Decide what to retire from what is actually on disk and registered
+    // with the host, so a stale state file alone can't manufacture a "missing generation marker"
+    // failure. `validate_persisted_state` above already guarantees the state names this layout's
+    // roots, so `local_install_exists` covers everything the state file could point at.
+    let previous_install_exists =
+        local_install_exists || plugin_registered || marketplace_registered;
     let generation_retirement = if previous_install_exists {
         if !previous_generation_fence.exists() {
             if legacy_plugin_without_mcp(host, &previous_plugin_root)? {
@@ -1825,6 +2045,7 @@ fn prepare_plugin_install(
     } else {
         None
     };
+    let state_bytes_present = state_bytes.is_some();
     Ok(PluginInstallPreflight {
         persisted,
         state_bytes,
@@ -1835,6 +2056,7 @@ fn prepare_plugin_install(
         marketplace_registered,
         previous_setup_installed,
         previous_install_exists,
+        previous_state_exists: state_bytes_present,
         generation_retirement,
     })
 }
@@ -2002,6 +2224,7 @@ fn begin_force_replacement(
         marketplace_registered,
         previous_setup_installed,
         previous_install_exists: _,
+        previous_state_exists: _,
         generation_retirement,
     } = preflight;
     let setup_snapshot = setup_runner.snapshot(host.install_arg())?;

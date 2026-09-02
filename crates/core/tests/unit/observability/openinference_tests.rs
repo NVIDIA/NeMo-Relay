@@ -859,6 +859,11 @@ fn mapped_aliases_are_typed_and_cannot_replace_projected_span_fields() {
     );
 }
 
+fn with_propagation_root(mut event: Event, root_uuid: Uuid) -> Event {
+    event.set_propagation_root_uuid(Some(root_uuid));
+    event
+}
+
 #[test]
 fn session_identity_is_projected_on_trace_roots_and_marks_only() {
     let (provider, exporter) = make_provider();
@@ -872,71 +877,79 @@ fn session_identity_is_projected_on_trace_roots_and_marks_only() {
     let root_uuid = Uuid::now_v7();
     let child_uuid = Uuid::now_v7();
     let second_root_uuid = Uuid::now_v7();
-    let instance_id = crate::api::runtime::current_scope_stack()
-        .read()
-        .unwrap()
-        .root_uuid()
-        .to_string();
+    let instance_id = root_uuid.to_string();
+    let second_instance_id = second_root_uuid.to_string();
     let identity = json!({
         "session_id": "logical-session",
         "user_id": "alice",
         "agent_kind": "claude-code"
     });
 
-    callback(&make_start_event_with_metadata(
+    callback(&with_propagation_root(
+        make_start_event_with_metadata(root_uuid, None, "identity-root", identity.clone()),
         root_uuid,
-        None,
-        "identity-root",
-        identity.clone(),
     ));
-    callback(&make_start_event_with_metadata(
-        child_uuid,
-        Some(root_uuid),
-        "identity-child",
-        identity.clone(),
-    ));
-    callback(&make_mark_event_with_metadata(
-        Some(root_uuid),
-        identity.clone(),
-    ));
-    callback(&make_end_event(
-        child_uuid,
-        Some(root_uuid),
-        "identity-child",
-        ScopeType::Agent,
-        None,
-    ));
-    callback(&make_end_event(
+    callback(&with_propagation_root(
+        make_start_event_with_metadata(
+            child_uuid,
+            Some(root_uuid),
+            "identity-child",
+            identity.clone(),
+        ),
         root_uuid,
-        None,
-        "identity-root",
-        ScopeType::Agent,
-        None,
     ));
-    callback(&make_start_event_with_metadata(
+    callback(&with_propagation_root(
+        make_mark_event_with_metadata(Some(root_uuid), identity.clone()),
+        root_uuid,
+    ));
+    callback(&with_propagation_root(
+        make_end_event(
+            child_uuid,
+            Some(root_uuid),
+            "identity-child",
+            ScopeType::Agent,
+            None,
+        ),
+        root_uuid,
+    ));
+    callback(&with_propagation_root(
+        make_end_event(root_uuid, None, "identity-root", ScopeType::Agent, None),
+        root_uuid,
+    ));
+    callback(&with_propagation_root(
+        make_start_event_with_metadata(
+            second_root_uuid,
+            None,
+            "identity-second-root",
+            json!({"session_id": "logical-session", "user_id": 42}),
+        ),
         second_root_uuid,
-        None,
-        "identity-second-root",
-        json!({"session_id": "logical-session", "user_id": 42}),
     ));
-    callback(&make_end_event(
+    callback(&with_propagation_root(
+        make_end_event(
+            second_root_uuid,
+            None,
+            "identity-second-root",
+            ScopeType::Agent,
+            None,
+        ),
         second_root_uuid,
-        None,
-        "identity-second-root",
-        ScopeType::Agent,
-        None,
     ));
-    callback(&make_mark_event_with_metadata(None, identity));
+    callback(&with_propagation_root(
+        make_mark_event_with_metadata(None, identity),
+        root_uuid,
+    ));
     subscriber.force_flush().unwrap();
 
     let spans = exporter.get_finished_spans().unwrap();
-    assert_session_root_and_child_identity(&spans, &instance_id);
+    assert_session_root_and_child_identity(&spans, &instance_id, &second_instance_id);
     assert_session_mark_identity(&spans);
 }
 
 fn assert_session_root_and_child_identity(
     spans: &[opentelemetry_sdk::trace::SpanData],
     instance_id: &str,
+    second_instance_id: &str,
 ) {
     let root = finished_span_named(spans, "identity-root");
     let child = finished_span_named(spans, "identity-child");
@@ -972,7 +985,7 @@ fn assert_session_root_and_child_identity(
     );
     assert_eq!(
         second_root_attributes["nemo_relay.session.instance_id"],
-        root_attributes["nemo_relay.session.instance_id"]
+        second_instance_id
     );
     assert_ne!(
         root.span_context.trace_id(),

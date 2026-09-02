@@ -2962,6 +2962,16 @@ NemoRelayStatus nemo_relay_scope_stack_create(struct FfiScopeStack **out);
 NemoRelayStatus nemo_relay_capture_propagation_context_json(char **out);
 
 /**
+ * Serialize the current causal parent without a propagation root.
+ *
+ * The returned JSON must be freed with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `out` must be a valid, writable pointer to a C-string output slot.
+ */
+NemoRelayStatus nemo_relay_capture_rootless_propagation_context_json(char **out);
+
+/**
  * Serialize the current causal parent with an application-supplied root UUID.
  *
  * Pass null for `root_uuid` to omit the root. The returned JSON must be freed

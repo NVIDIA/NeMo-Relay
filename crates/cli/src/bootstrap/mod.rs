@@ -90,7 +90,8 @@ impl GatewaySpec {
                 log::error!(
                     target: "nemo_relay.bootstrap",
                     event = "gateway_acquisition_failed",
-                    bind = self.bind.to_string().as_str();
+                    bind = self.bind.to_string().as_str(),
+                    failure_kind = bootstrap_failure_kind(&error);
                     "Gateway acquisition failed"
                 );
                 Err(error)
@@ -120,7 +121,8 @@ impl GatewaySpec {
                 log::error!(
                     target: "nemo_relay.bootstrap",
                     event = "gateway_recovery_failed",
-                    instance_id = expected_instance;
+                    instance_id = expected_instance,
+                    failure_kind = bootstrap_failure_kind(&error);
                     "Gateway recovery failed"
                 );
                 Err(error)
@@ -178,11 +180,10 @@ fn acquire_gateway(spec: &GatewaySpec) -> Result<GatewayEndpoint, String> {
             (RelayHealth::Compatible, instance_id) => {
                 return compatible_endpoint(spec.bind, url, instance_id);
             }
-            (RelayHealth::Incompatible, _) => return Err(incompatible_relay_error(&url)),
             // A gateway may already be binding while another MCP process owns the
             // startup lock. Serialize before deciding whether either state is a
-            // genuine conflict.
-            (RelayHealth::Foreign | RelayHealth::Unavailable, _) => {}
+            // genuine conflict or a verified version mismatch that can be replaced.
+            (RelayHealth::Incompatible | RelayHealth::Foreign | RelayHealth::Unavailable, _) => {}
         }
     }
 
@@ -194,9 +195,24 @@ fn acquire_gateway(spec: &GatewaySpec) -> Result<GatewayEndpoint, String> {
     }
     match probe_relay_health_with_instance(&url, spec.bootstrap_fingerprint.as_deref()) {
         (RelayHealth::Compatible, instance_id) => compatible_endpoint(spec.bind, url, instance_id),
-        (RelayHealth::Incompatible, _) => Err(incompatible_relay_error(&url)),
-        (RelayHealth::Foreign, _) => Err(foreign_listener_error(&url)),
-        (RelayHealth::Unavailable, _) => start_gateway(spec, &state),
+        (RelayHealth::Incompatible, _) => {
+            if state::stop_version_mismatched_owned_gateway_locked(&state, &url)? {
+                start_gateway(spec, &state)
+            } else {
+                Err(incompatible_relay_error(&url))
+            }
+        }
+        (RelayHealth::Foreign, _) => {
+            if state::stop_unhealthy_owned_gateway_locked(&state, &url)? {
+                start_gateway(spec, &state)
+            } else {
+                Err(foreign_listener_error(&url))
+            }
+        }
+        (RelayHealth::Unavailable, _) => {
+            state::stop_unhealthy_owned_gateway_locked(&state, &url)?;
+            start_gateway(spec, &state)
+        }
     }
 }
 
@@ -215,8 +231,14 @@ fn recover_gateway(spec: &GatewaySpec, expected_instance: &str) -> Result<Gatewa
                 return compatible_endpoint(spec.bind, requested_url, instance_id);
             }
             (RelayHealth::Incompatible, _) => return Err(incompatible_relay_error(&requested_url)),
-            (RelayHealth::Foreign, _) => return Err(foreign_listener_error(&requested_url)),
-            (RelayHealth::Unavailable, _) => {}
+            (RelayHealth::Foreign, _) => {
+                if !state::stop_unhealthy_owned_gateway_locked(&state, &requested_url)? {
+                    return Err(foreign_listener_error(&requested_url));
+                }
+            }
+            (RelayHealth::Unavailable, _) => {
+                state::stop_unhealthy_owned_gateway_locked(&state, &requested_url)?;
+            }
         }
     }
 
@@ -280,15 +302,45 @@ fn compatible_endpoint(
 }
 
 fn foreign_listener_error(url: &str) -> String {
+    log::error!(
+        target: "nemo_relay.bootstrap",
+        event = "gateway_port_conflict",
+        endpoint = url,
+        observed_health = "unverified_listener",
+        remediation = "stop_listener_or_configure_another_port";
+        "Gateway endpoint is occupied by an unverified listener"
+    );
     format!(
         "{url} is occupied by a service that is not a compatible NeMo Relay gateway; stop that service or configure another port"
     )
 }
 
 fn incompatible_relay_error(url: &str) -> String {
+    log::error!(
+        target: "nemo_relay.bootstrap",
+        event = "gateway_port_conflict",
+        endpoint = url,
+        observed_health = "incompatible_relay",
+        remediation = "stop_gateway_wait_for_idle_shutdown_or_reinstall_with_force";
+        "Gateway endpoint is occupied by an incompatible NeMo Relay gateway"
+    );
     format!(
         "{url} is occupied by NeMo Relay with a different version or persistent configuration; stop it, wait for idle shutdown, or reinstall the integration with --force"
     )
+}
+
+fn bootstrap_failure_kind(error: &str) -> &'static str {
+    if error.contains("not a compatible NeMo Relay gateway") {
+        "foreign_listener"
+    } else if error.contains("different version or persistent configuration") {
+        "incompatible_gateway"
+    } else if error.contains("became unhealthy") {
+        "unhealthy_gateway"
+    } else if error.contains("did not become ready") {
+        "gateway_readiness_timeout"
+    } else {
+        "bootstrap_failure"
+    }
 }
 
 fn start_gateway(spec: &GatewaySpec, state: &Path) -> Result<GatewayEndpoint, String> {
@@ -571,8 +623,33 @@ pub(crate) fn plugin_idle_timeout() -> Result<Duration, String> {
     Ok(Duration::from_secs(seconds))
 }
 
+/// Returns the persistent MCP gateway heartbeat interval.
 pub(crate) fn plugin_heartbeat_interval() -> Result<Duration, String> {
-    Ok((plugin_idle_timeout()? / 3).clamp(Duration::from_millis(100), Duration::from_secs(30)))
+    let idle_timeout = plugin_idle_timeout()?;
+    let Ok(raw) = env::var(crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV) else {
+        return Ok((idle_timeout / 3).clamp(Duration::from_millis(100), Duration::from_secs(3)));
+    };
+    let seconds = raw.parse::<u64>().map_err(|error| {
+        format!(
+            "{} must be a positive integer: {error}",
+            crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV
+        )
+    })?;
+    if seconds == 0 {
+        return Err(format!(
+            "{} must be greater than 0",
+            crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV
+        ));
+    }
+    let heartbeat_interval = Duration::from_secs(seconds);
+    if heartbeat_interval >= idle_timeout {
+        return Err(format!(
+            "{} must be shorter than {}",
+            crate::configuration::PLUGIN_HEARTBEAT_INTERVAL_ENV,
+            crate::configuration::PLUGIN_IDLE_TIMEOUT_ENV
+        ));
+    }
+    Ok(heartbeat_interval)
 }
 
 #[cfg(test)]

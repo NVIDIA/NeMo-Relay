@@ -25,7 +25,7 @@ use serde_json::{Map, Value as Json};
 use uuid::Uuid;
 
 use crate::api::event::{ATOF_VERSION, Event, LOG_SEVERITY_METADATA_KEY, LogSeverity};
-use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
+use crate::api::runtime::EventSubscriberFn;
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use crate::observability::{relay_span_id, relay_trace_id};
 use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
@@ -598,7 +598,9 @@ impl ScopeLineage {
         let trace_id = parent
             .as_ref()
             .map(SpanContext::trace_id)
-            .unwrap_or_else(|| relay_trace_id(event.uuid()));
+            .unwrap_or_else(|| {
+                relay_trace_id(event.propagation_root_uuid().unwrap_or(event.uuid()))
+            });
         self.active.insert(
             event.uuid(),
             SpanContext::new(
@@ -626,11 +628,9 @@ impl ScopeLineage {
         if let Some(context) = self.completed.get(&parent_uuid) {
             return Some(context.span_context.clone());
         }
-        let stack = current_scope_stack();
-        let stack = stack.read().ok()?;
-        stack.is_propagated_parent(parent_uuid).then(|| {
+        event.propagation_root_uuid().map(|root_uuid| {
             SpanContext::new(
-                relay_trace_id(stack.root_uuid()),
+                relay_trace_id(root_uuid),
                 relay_span_id(parent_uuid),
                 TraceFlags::SAMPLED,
                 true,
@@ -876,6 +876,9 @@ fn add_log_attributes(record: &mut opentelemetry_sdk::logs::SdkLogRecord, event:
     record.add_attribute("nemo_relay.atof.version", ATOF_VERSION);
     record.add_attribute("nemo_relay.mark.name", event.name().to_string());
     record.add_attribute("nemo_relay.mark.uuid", event.uuid().to_string());
+    if let Some(root_uuid) = event.propagation_root_uuid() {
+        record.add_attribute("nemo_relay.session.instance_id", root_uuid.to_string());
+    }
     if let Some(parent_uuid) = event.parent_uuid() {
         record.add_attribute("nemo_relay.mark.parent_uuid", parent_uuid.to_string());
     }

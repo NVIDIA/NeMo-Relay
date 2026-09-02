@@ -6,8 +6,10 @@
 mod completions;
 mod configure;
 mod diagnostics;
+mod gateway;
 mod hook_forward;
 mod install;
+mod integrations;
 mod logging;
 mod mcp;
 mod model_pricing;
@@ -60,6 +62,11 @@ struct LoggingSetup {
 
 fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
     let initialize = match cli.command.as_ref() {
+        Some(Command::Gateway(command)) if !command.is_stop() => {
+            cli.server.to_runtime().requested_daemon_mode()
+                || runtime_configuration::any_config_file_exists()
+                || cli.logging.has_explicit_configuration()?
+        }
         Some(command) => !command.skips_logging(),
         None => {
             cli.server.to_runtime().requested_daemon_mode()
@@ -75,9 +82,15 @@ fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
 
     let mut fallback_error = None;
     let config = match cli.command.as_ref() {
-        // Uninstall uses persisted integration state, not Relay runtime configuration. Preserve
-        // direct logging settings while avoiding ambient config discovery that could block cleanup.
-        Some(Command::Uninstall(_)) => cli.logging.resolve_without_ambient_config(),
+        // Persistent integration maintenance uses saved integration state, not Relay runtime
+        // configuration. Preserve direct logging settings while avoiding ambient config discovery
+        // that could block cleanup or an upgrade refresh.
+        Some(Command::Uninstall(_) | Command::Integrations(_)) => {
+            cli.logging.resolve_without_ambient_config()
+        }
+        Some(Command::Gateway(command)) if command.is_stop() => {
+            cli.logging.resolve_without_ambient_config()
+        }
         Some(Command::Mcp) => cli.logging.resolve(None),
         Some(Command::Run(command)) => cli
             .logging
@@ -125,7 +138,15 @@ async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, 
     );
 
     let result = match cli.command {
-        Some(command) => run_command(command, &cli.server, logging.fallback_error.as_ref()).await,
+        Some(command) => {
+            run_command(
+                command,
+                &cli.server,
+                logging.fallback_error.as_ref(),
+                bootstrap_shutdown_token,
+            )
+            .await
+        }
         None => run_default(&cli.server, bootstrap_shutdown_token).await,
     };
     match &result {
@@ -165,6 +186,7 @@ async fn run_command(
     command: Command,
     server: &ServerArgs,
     logging_fallback_error: Option<&error::CliError>,
+    bootstrap_shutdown_token: Option<String>,
 ) -> Result<ExitCode, error::CliError> {
     match command {
         Command::HookForward(command) => {
@@ -173,11 +195,15 @@ async fn run_command(
         }
         Command::Install(command) => install::install(command),
         Command::Uninstall(command) => install::uninstall(command),
+        Command::Integrations(command) => integrations::execute(command),
         Command::Run(command) => run::execute(command, server).await,
         Command::Claude(command) => run::easy_path(CodingAgent::ClaudeCode, command, server).await,
         Command::Codex(command) => run::easy_path(CodingAgent::Codex, command, server).await,
         Command::Pi(command) => run::easy_path(CodingAgent::Pi, command, server).await,
         Command::Mcp => mcp::execute(server).await,
+        Command::Gateway(command) => {
+            gateway::execute(command, server, bootstrap_shutdown_token).await
+        }
         Command::Config(command) => configure::execute(command, server).await,
         Command::Plugins(command) => plugins::execute(command, server),
         Command::ModelPricing(command) => model_pricing::execute(command),
@@ -211,29 +237,7 @@ async fn run_default(
     //   exists. Once configured, bare `nemo-relay` becomes a quick health check; explicit
     //   `nemo-relay config` remains the reconfiguration path.
     if runtime_args.requested_daemon_mode() {
-        let resolved = runtime_configuration::resolve_server_config(&runtime_args)?;
-        let explicit_plugin_config = crate::configuration::explicit_plugin_config_path(
-            runtime_args.config.as_ref(),
-            runtime_args.plugin_config_path.as_ref(),
-        );
-        let dynamic_plugins = crate::plugins::lifecycle::active_dynamic_plugin_components(
-            explicit_plugin_config.as_ref(),
-            &resolved,
-        )?;
-        let managed_bootstrap = runtime_configuration::managed_bootstrap_identity(
-            &runtime_args,
-            &resolved,
-            &dynamic_plugins,
-        )?;
-        server::serve_with_dynamic(
-            resolved.gateway,
-            dynamic_plugins,
-            managed_bootstrap,
-            runtime_args.ready_file.as_deref(),
-            bootstrap_shutdown_token,
-        )
-        .await?;
-        Ok(ExitCode::SUCCESS)
+        serve_gateway(server_args, bootstrap_shutdown_token).await
     } else if runtime_configuration::any_config_file_exists() {
         runtime_diagnostics::run_doctor(
             None,
@@ -247,6 +251,37 @@ async fn run_default(
         configure::run(None, None).await?;
         Ok(ExitCode::SUCCESS)
     }
+}
+
+/// Resolves and serves the configured gateway until it shuts down.
+async fn serve_gateway(
+    server_args: &ServerArgs,
+    bootstrap_shutdown_token: Option<String>,
+) -> Result<ExitCode, error::CliError> {
+    let runtime_args = server_args.to_runtime();
+    let resolved = runtime_configuration::resolve_server_config(&runtime_args)?;
+    let explicit_plugin_config = crate::configuration::explicit_plugin_config_path(
+        runtime_args.config.as_ref(),
+        runtime_args.plugin_config_path.as_ref(),
+    );
+    let dynamic_plugins = crate::plugins::lifecycle::active_dynamic_plugin_components(
+        explicit_plugin_config.as_ref(),
+        &resolved,
+    )?;
+    let managed_bootstrap = runtime_configuration::managed_bootstrap_identity(
+        &runtime_args,
+        &resolved,
+        &dynamic_plugins,
+    )?;
+    server::serve_with_dynamic(
+        resolved.gateway,
+        dynamic_plugins,
+        managed_bootstrap,
+        runtime_args.ready_file.as_deref(),
+        bootstrap_shutdown_token,
+    )
+    .await?;
+    Ok(ExitCode::SUCCESS)
 }
 
 #[cfg(test)]

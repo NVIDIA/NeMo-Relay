@@ -36,6 +36,11 @@ pub(super) struct LoggingArgs {
 }
 
 impl LoggingArgs {
+    /// Returns whether direct command-line, log-file, or environment settings are present.
+    pub(super) fn has_explicit_configuration(&self) -> Result<bool, CliError> {
+        Ok(self.resolve_explicit()?.is_some())
+    }
+
     /// Selects one logging source: direct CLI settings, environment, file configuration, or
     /// built-in defaults. Sources are not merged with one another.
     pub(super) fn resolve(

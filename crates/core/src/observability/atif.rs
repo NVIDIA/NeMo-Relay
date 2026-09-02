@@ -333,6 +333,7 @@ pub struct AtifTrajectory {
 
 struct AtifExporterState {
     session_id: String,
+    trajectory_id: String,
     agent_info: AtifAgentInfo,
     events: Vec<Event>,
 }
@@ -356,9 +357,19 @@ impl AtifExporter {
     /// # Returns
     /// A new [`AtifExporter`] with an empty in-memory event buffer.
     pub fn new(session_id: String, agent_info: AtifAgentInfo) -> Self {
+        Self::new_for_trajectory(session_id.clone(), session_id, agent_info)
+    }
+
+    /// Create an exporter whose session and root trajectory identifiers differ.
+    pub(crate) fn new_for_trajectory(
+        session_id: String,
+        trajectory_id: String,
+        agent_info: AtifAgentInfo,
+    ) -> Self {
         Self {
             state: Arc::new(Mutex::new(AtifExporterState {
                 session_id,
+                trajectory_id,
                 agent_info,
                 events: Vec::new(),
             })),
@@ -407,10 +418,11 @@ impl AtifExporter {
     /// callers that prefer an explicitly fallible method name.
     pub fn try_export(&self) -> Result<AtifTrajectory> {
         flush_subscribers()?;
-        let (session_id, agent_info, events) = {
+        let (session_id, trajectory_id, agent_info, events) = {
             let state = self.state.lock().unwrap();
             (
                 state.session_id.clone(),
+                state.trajectory_id.clone(),
                 state.agent_info.clone(),
                 state.events.clone(),
             )
@@ -418,6 +430,7 @@ impl AtifExporter {
         let collected_events: Vec<&Event> = events.iter().collect();
         Ok(events_to_trajectory(
             &session_id,
+            &trajectory_id,
             agent_info,
             &collected_events,
         ))
@@ -3478,6 +3491,7 @@ fn nearest_non_turn_agent_parent(
 
 fn events_to_trajectory(
     session_id: &str,
+    trajectory_id: &str,
     agent_info: AtifAgentInfo,
     events: &[&Event],
 ) -> AtifTrajectory {
@@ -3485,16 +3499,24 @@ fn events_to_trajectory(
     sorted.sort_by_key(|event| *event.timestamp());
     let tree = AgentScopeTree::from_events(&sorted);
 
-    if let Some(root_uuid) = tree.choose_root(session_id)
+    if let Some(root_uuid) = tree.choose_root(trajectory_id)
         && can_use_agent_scope_tree(&tree, &sorted)
     {
-        return agent_scope_to_trajectory(&tree, root_uuid, session_id, &agent_info, &sorted, true);
+        return agent_scope_to_trajectory(
+            &tree,
+            root_uuid,
+            session_id,
+            trajectory_id,
+            &agent_info,
+            &sorted,
+            true,
+        );
     }
 
     let steps = events_to_steps(&sorted);
     trajectory_from_parts(
         session_id.to_string(),
-        Some(session_id.to_string()),
+        Some(trajectory_id.to_string()),
         agent_info,
         steps,
         None,
@@ -3534,6 +3556,7 @@ fn agent_scope_to_trajectory(
     tree: &AgentScopeTree,
     agent_uuid: Uuid,
     session_id: &str,
+    root_trajectory_id: &str,
     agent_info: &AtifAgentInfo,
     sorted_events: &[&Event],
     is_root: bool,
@@ -3550,6 +3573,7 @@ fn agent_scope_to_trajectory(
                         tree,
                         *child_uuid,
                         session_id,
+                        root_trajectory_id,
                         agent_info,
                         sorted_events,
                         false,
@@ -3575,7 +3599,7 @@ fn agent_scope_to_trajectory(
         .collect::<HashSet<_>>();
     prune_subagent_refs(&mut steps, &child_trajectory_ids);
     let trajectory_id = if is_root {
-        session_id.to_string()
+        root_trajectory_id.to_string()
     } else {
         agent_uuid.to_string()
     };

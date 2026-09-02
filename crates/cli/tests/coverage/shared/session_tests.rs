@@ -2256,7 +2256,7 @@ async fn codex_stop_snapshots_atif_without_session_end() {
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "codex-atif-stop");
     assert_eq!(atif["schema_version"], json!("ATIF-v1.7"));
-    assert_eq!(atif["trajectory_id"], atif["session_id"]);
+    assert_ne!(atif["trajectory_id"], atif["session_id"]);
     assert!(atif["subagent_trajectories"].is_null());
     assert_eq!(atif["final_metrics"]["total_steps"], json!(2));
 
@@ -2281,8 +2281,8 @@ async fn codex_stop_snapshots_atif_without_session_end() {
                 && event["scope_category"] == "end"
         })
         .expect("Codex Stop should close the turn scope");
-    assert_eq!(turn_start["uuid"], atif["session_id"]);
-    assert_eq!(turn_end["uuid"], atif["session_id"]);
+    assert_eq!(turn_start["uuid"], atif["trajectory_id"]);
+    assert_eq!(turn_end["uuid"], atif["trajectory_id"]);
     assert_eq!(
         turn_end["data"]["output"][0]["call_id"],
         json!("tool-call-1")

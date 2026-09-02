@@ -2109,8 +2109,10 @@ fn test_exporter_isolates_interleaved_responses_by_agent_scope() {
         first_end,
         second_end,
     ];
+    let root_id = root_uuid.to_string();
     let trajectory = events_to_trajectory(
-        &root_uuid.to_string(),
+        &root_id,
+        &root_id,
         make_agent_info(),
         &events.iter().collect::<Vec<_>>(),
     );
