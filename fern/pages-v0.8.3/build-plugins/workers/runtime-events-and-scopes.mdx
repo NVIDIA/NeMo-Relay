@@ -1,0 +1,361 @@
+---
+title: "Runtime Events and Scopes"
+description: "Use worker host-runtime marks, scopes, stack binding, and cleanup."
+position: 34
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Worker code cannot manipulate host [scope](/about-nemo-relay/concepts/scopes) objects
+directly. The SDK exposes an
+authenticated `PluginRuntime` proxy whose operations preserve the invocation's captured
+scope context while the `RelayHostRuntime` service performs the real work.
+
+## Runtime Operation Map
+
+| Intent | Rust Worker SDK | Python Worker SDK |
+|---|---|---|
+| Emit a mark | Await `emit_mark` with name, data, and metadata. | Await `emit_mark` with the same JSON fields. |
+| Create or drop an isolated stack | Await `create_scope_stack` and `drop_scope_stack`. | Await the same operations and retain the returned stack ID only for its owned lifetime. |
+| Bind and restore a stack | Run a future through `with_scope_stack`. | Enter `bind_scope_stack`; use `clear_scope_stack` when code must deliberately run without a bound stack. |
+| Push and pop a scope | Await `push_scope`, retain its handle, and await `pop_scope`. | Await the same pair; the handle, not a guessed scope ID, owns the pop. |
+| Inspect inherited context | The runtime proxy carries the task scope snapshot. | `current_scope_stack_id` and `current_parent_scope_id` expose the current binding. |
+| Emit typed telemetry | Use `emit_mark_with_options` or `emit_metric`. | Use the matching async runtime methods. |
+| Read runtime diagnostics | Await `runtime_diagnostics`. | Await `runtime_diagnostics`. |
+| Discover global runtime registrations | Await `list_runtime_registrations`. | Await `list_runtime_registrations`. |
+| Disable or enable a global registration | Await `register_conditional_middleware_guardrail`, retain the returned handle, and await `deregister_conditional_middleware_guardrail`. | Await the matching methods and retain the returned opaque handle. |
+
+Every host request carries the activation ID, token, and relevant scope context. A worker
+must not expose, log, or persist the activation token or codec capability IDs. Those
+values identify a live local capability and expire with the activation or invocation.
+
+## Control a Registration from a Background Task
+
+Worker gates are callback-based. Relay invokes the callback through `grpc-v1` while it
+constructs a middleware or publication snapshot. Callback, transport, and timeout
+failures leave the target enabled. Keep callbacks fast and side-effect free.
+
+The following worker flows discover the observability plugin's OpenTelemetry subscriber
+and disable it for one timer interval:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import asyncio
+
+from nemo_relay_plugin import RuntimeRegistrationKind
+
+subscribers = await ctx.runtime.list_runtime_registrations(
+    {RuntimeRegistrationKind.SUBSCRIBER}
+)
+opentelemetry = next(
+    (
+        registration
+        for registration in subscribers
+        if registration.local_name == "opentelemetry"
+        and registration.owner.plugin_kind == "observability"
+    ),
+    None,
+)
+if opentelemetry is None:
+    raise RuntimeError("OpenTelemetry subscriber was not found")
+
+gate = await ctx.runtime.register_conditional_middleware_guardrail(
+    "pause-opentelemetry",
+    {RuntimeRegistrationKind.SUBSCRIBER},
+    opentelemetry.effective_name,
+    lambda _kinds, _name: "worker timer active",
+)
+try:
+    await asyncio.sleep(30)
+finally:
+    await ctx.runtime.deregister_conditional_middleware_guardrail(gate)
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use std::collections::BTreeSet;
+use std::time::Duration;
+use nemo_relay_worker::{RuntimeRegistrationKind, WorkerSdkError};
+
+let kinds = BTreeSet::from([RuntimeRegistrationKind::Subscriber]);
+let opentelemetry = runtime
+    .list_runtime_registrations(Some(kinds.clone()))
+    .await?
+    .into_iter()
+    .find(|registration| {
+        registration.local_name == "opentelemetry"
+            && registration.owner.plugin_kind.as_deref() == Some("observability")
+    })
+    .ok_or_else(|| WorkerSdkError::Callback(
+        "OpenTelemetry subscriber was not found".into()
+    ))?;
+
+let gate = runtime
+    .register_conditional_middleware_guardrail(
+        "pause-opentelemetry",
+        kinds,
+        &opentelemetry.effective_name,
+        |_, _| async { Ok(Some("worker timer active".into())) },
+    )
+    .await?;
+tokio::time::sleep(Duration::from_secs(30)).await;
+runtime.deregister_conditional_middleware_guardrail(&gate).await?;
+```
+</Tab>
+</Tabs>
+
+The worker can remove only gates owned by its activation. Relay removes any
+remaining owned gates during ordinary activation teardown. A worker can also
+call `PluginContext.register_conditional_middleware_guardrail` during
+registration to declare an initial callback-backed gate; use `PluginRuntime` for
+timer-controlled changes after activation.
+
+Refer to [Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
+for global-only behavior, effective-name discovery, all-matching-gate semantics, and
+the distinction between activation-owned and runtime-discovered gates.
+
+## Declare an Initial Gate
+
+Use the component context when the validated configuration requires the gate for the
+complete worker activation. The following examples install equivalent callbacks:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+ctx.register_conditional_middleware_guardrail(
+    "documentation_registration_control",
+    {RuntimeRegistrationKind.SUBSCRIBER},
+    registration_name,
+    lambda _kinds, _name: "disabled by documentation plugin",
+)
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+ctx.register_conditional_middleware_guardrail(
+    "documentation_registration_control",
+    BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+    registration_name,
+    |_, _| async { Ok(Some("disabled by documentation plugin".into())) },
+);
+```
+</Tab>
+</Tabs>
+
+Relay validates initial gate names, kinds, targets, and duplicate names before it commits
+the worker registrations. Failed registration returns no initial gates. Ordinary
+teardown removes every gate that remains owned by the worker activation.
+
+Use typed [mark](/about-nemo-relay/concepts/events) options when an exported mark needs
+a data schema, log severity, or semantic category. Use
+`emit_metric` for Relay metric measurements. `runtime_diagnostics` returns the bounded,
+ordered host-level `{ code, message, count }` snapshot. It does not identify the plugin
+that recorded a diagnostic.
+
+## Emit Typed Telemetry and Read Diagnostics
+
+Choose your worker language to add schema, severity, and category metadata to a mark and inspect
+runtime diagnostics:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay_plugin import DataSchema, EventCategory, LogSeverity
+
+await ctx.runtime.emit_mark(
+    "example.python_worker.policy_decision",
+    {"allowed": True},
+    data_schema=DataSchema("example.policy.decision", "1"),
+    severity=LogSeverity.INFO,
+    category=EventCategory.CUSTOM,
+)
+await ctx.runtime.emit_metric(
+    "example.python_worker.requests",
+    [{"name": "example.requests", "kind": "counter", "value_type": "u64", "value": 1}],
+)
+
+diagnostic = (await ctx.runtime.runtime_diagnostics()).get("otel.metric_mark_invalid")
+if diagnostic is not None:
+    print(f"{diagnostic.message} occurred {diagnostic.count} times")
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay_worker::{DataSchema, EmitMarkOptions, EventCategory, LogSeverity};
+
+runtime
+    .emit_mark_with_options_and_category(
+        "example.rust_worker.policy_decision",
+        Some(json!({ "allowed": true })),
+        None,
+        EmitMarkOptions {
+            data_schema: Some(
+                DataSchema::builder()
+                    .name("example.policy.decision")
+                    .version("1")
+                    .build(),
+            ),
+            severity: Some(LogSeverity::Info),
+        },
+        EventCategory::custom(),
+    )
+    .await?;
+
+let diagnostics = runtime.runtime_diagnostics().await?;
+if let Some(diagnostic) = diagnostics.get("otel.metric_mark_invalid") {
+    eprintln!("{} occurred {} times", diagnostic.message, diagnostic.count);
+}
+```
+</Tab>
+</Tabs>
+
+An older host can return `UNIMPLEMENTED` for `runtime_diagnostics`. The SDK reports that
+as an unsupported runtime-diagnostics error. Relay validates the data schema and
+severity at the host boundary. It validates metric measurements after sanitization, so
+it rejects an invalid group as a whole.
+
+## Execute the Complete Cleanup Sequence
+
+Choose your worker language to review the complete cleanup sequence:
+
+<Tabs>
+<Tab title="Python" language="python">
+The Python helper pushes a child scope, emits the ordinary mark inside it, and closes the
+scope by its returned handle. It then binds an isolated stack only for work that should
+have independent parentage. The `finally` block drops the stack even if isolated mark
+emission fails or the callback is cancelled.
+
+```python
+async def emit_runtime_events(ctx, tag, settings):
+    handle = await ctx.runtime.push_scope(
+        "example.python_worker.request",
+        scope_type=ScopeType.CUSTOM,
+        data={"tag": tag},
+    )
+    try:
+        if settings["emit_marks"]:
+            await ctx.runtime.emit_mark(
+                "example.python_worker.tool_request",
+                {"tag": tag},
+            )
+    except BaseException:
+        try:
+            await ctx.runtime.pop_scope(handle, metadata={"failed": True})
+        except BaseException:
+            pass
+        raise
+    else:
+        await ctx.runtime.pop_scope(handle, output={"done": True})
+
+    if settings["emit_isolated_scope"]:
+        stack_id = await ctx.runtime.create_scope_stack()
+        try:
+            with ctx.runtime.bind_scope_stack(stack_id):
+                if settings["emit_marks"]:
+                    await ctx.runtime.emit_mark(
+                        "example.python_worker.isolated.mark",
+                        {"tag": tag},
+                    )
+        finally:
+            await ctx.runtime.drop_scope_stack(stack_id)
+```
+</Tab>
+<Tab title="Rust" language="rust">
+The checked Rust worker performs the same operations. `with_scope_stack` accepts a
+closure that creates the bound future, restores the previous task binding afterward,
+and returns the future's result. Stack drop is attempted even when that result is an
+error, and both results are checked before the middleware returns.
+
+```rust
+async fn emit_runtime_events(
+    runtime: &PluginRuntime,
+    tag: &str,
+    config: &RuntimeConfig,
+) -> Result<()> {
+    let handle = runtime.push_scope(
+        None,
+        "example.rust_worker.request",
+        ScopeType::Custom,
+        Some(json!({ "tag": tag })),
+        None,
+        None,
+    ).await?;
+    let work = if config.emit_marks {
+        runtime.emit_mark(
+            "example.rust_worker.request.seen",
+            Some(json!({ "tag": tag })),
+            None,
+        ).await
+    } else {
+        Ok(())
+    };
+    match work {
+        Ok(()) => runtime.pop_scope(
+            &handle,
+            Some(json!({ "done": true })),
+            None,
+        ).await?,
+        Err(error) => {
+            let _ = runtime.pop_scope(
+                &handle,
+                None,
+                Some(json!({ "failed": true })),
+            ).await;
+            return Err(error);
+        }
+    }
+
+    if config.emit_isolated_scope {
+        let stack = runtime.create_scope_stack().await?;
+        let emitted = runtime.with_scope_stack(&stack, || async {
+            runtime.emit_mark(
+                "example.rust_worker.isolated.mark",
+                Some(json!({ "tag": tag })),
+                None,
+            ).await
+        }).await;
+        let dropped = runtime.drop_scope_stack(&stack).await;
+        emitted?;
+        dropped?;
+    }
+    Ok(())
+}
+```
+</Tab>
+</Tabs>
+
+Both implementations pop the handle exactly once. Successful work supplies scope output;
+failed work supplies failure metadata and then propagates the original callback error.
+
+## Clean Up Under Failure
+
+The examples use a structured cleanup sequence: capture the previous binding, create an
+isolated stack only when configured, bind it, push a scope, run plugin work, pop the scope
+with success or error metadata, restore the previous binding, and drop the isolated
+stack. Python uses `try`/`finally`; Rust uses explicit result handling and awaits cleanup
+before returning.
+
+Shutdown can race with these operations. The worker stops accepting new invocations,
+cancels active callbacks, and continues only the bounded cleanup that the SDK can still
+authenticate. An unreachable host can reject final cleanup, so the worker also releases
+its local handles and terminates rather than retrying forever.
+
+## Verify Parentage and Restoration
+
+Use the following procedure to verify scope parentage, restoration, and failure cleanup:
+
+1. Invoke middleware inside a managed LLM scope and emit a mark through the runtime
+   proxy. Confirm the mark's parent is the invocation scope.
+2. Push and pop a child custom scope and verify its start and end event ordering.
+3. Create and bind an isolated stack, emit another mark, and confirm it belongs to the
+   isolated root rather than the application call.
+4. Raise an error after the push and confirm the pop, prior binding restoration, and
+   stack drop still occur.
+5. Cancel the callback during runtime work and repeat the same cleanup assertions.
+
+Success means marks and scopes have intentional parentage, invocation tokens stay
+private, no stack remains owned after failure or cancellation, and subsequent worker
+callbacks receive their own unmodified scope snapshots.

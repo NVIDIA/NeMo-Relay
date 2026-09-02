@@ -1,0 +1,261 @@
+---
+title: "Wrap Tool Calls"
+description: ""
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this guide when a framework, SDK, or orchestration layer owns tool invocation and you need NeMo Relay to observe and control those calls without changing the framework's public behavior.
+
+## What You Build
+
+You will place a managed NeMo Relay tool execution wrapper at the framework's
+stable tool boundary. The wrapper emits tool lifecycle events, runs tool
+middleware, keeps the tool attached to the active scope, and unwraps the
+canonical `ToolExecutionResult.result` for the framework.
+
+## Before You Start
+
+You need:
+
+- A framework request or run scope. If the framework does not create one yet, start with [Adding Scopes](/integrate-into-frameworks/adding-scopes).
+- A stable tool invocation boundary, such as a callback dispatcher, tool registry, or tool adapter.
+- A JSON-compatible projection of tool arguments, results, and optional result
+  annotations.
+- A subscriber or exporter that can verify emitted tool events.
+
+## Integration Pattern
+
+Follow this sequence to keep framework work attached to the expected runtime context.
+
+1. Enter or inherit the active framework scope.
+2. Capture the current scope handle at the tool boundary.
+3. Route the real tool callback through the managed tool execute helper.
+4. Forward the framework's stable tool-call ID when one is available.
+5. Keep framework-owned clients, callbacks, streams, and handles outside the emitted JSON payload.
+6. Return the tool result exactly as the framework expects.
+
+Managed wrappers are the first choice because NeMo Relay owns the full call boundary. That gives subscribers complete start and end events, lets execution intercepts wrap the real callback, and keeps guardrails and request intercepts in the normal middleware order.
+
+## Concrete Tool Example
+
+The examples below wrap one framework tool callback and attach it to the active parent scope.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from typing import TypedDict
+
+import nemo_relay
+
+class SearchArgs(TypedDict):
+    query: str
+
+class SearchResult(TypedDict):
+    hits: int
+    echo: SearchArgs
+
+async def framework_tool(tool_name: str, raw_args: SearchArgs) -> SearchResult:
+    parent = nemo_relay.scope.get_handle()
+
+    async def invoke(args: SearchArgs) -> nemo_relay.ToolExecutionResult[SearchResult]:
+        return nemo_relay.ToolExecutionResult({"hits": 2, "echo": args})
+
+    execution_result = await nemo_relay.tools.execute(
+        tool_name,
+        raw_args,
+        invoke,
+        handle=parent,
+    )
+    return execution_result.result
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```ts
+import { getHandle, toolCallExecute, type ScopeHandle } from 'nemo-relay-node';
+
+type SearchArgs = { query: string };
+type SearchResult = { hits: number; echo: SearchArgs };
+
+export async function frameworkTool(toolName: string, rawArgs: SearchArgs): Promise<SearchResult> {
+  const parent: ScopeHandle = getHandle();
+
+  const executionResult = await toolCallExecute(
+    toolName,
+    rawArgs,
+    async (args: SearchArgs) => ({ result: { hits: 2, echo: args } }),
+    parent,
+    null,
+    null,
+    null,
+  );
+  return executionResult.result as SearchResult;
+}
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::api::scope::get_handle;
+use nemo_relay::api::tool::{tool_call_execute, ToolCallExecuteParams, ToolExecutionResult};
+use serde_json::json;
+use std::sync::Arc;
+
+async fn run_framework_tool() -> anyhow::Result<serde_json::Value> {
+    let parent = get_handle()?;
+    let args = json!({"query": "weather"});
+
+    let result = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("search")
+            .args(args)
+            .func(Arc::new(|input| Box::pin(async move {
+                Ok(ToolExecutionResult::new(json!({"hits": 2, "echo": input})))
+            })))
+            .parent(parent)
+            .build(),
+    )
+    .await?;
+
+    Ok(result.result)
+}
+```
+</Tab>
+
+</Tabs>
+
+## Preserve Tool-Call Identity
+
+Pass one stable invocation ID to the managed execute helper when the framework,
+model provider, or transport already assigned one. Relay places the exact value
+on both the tool start and tool end events, including error and cancellation end
+events, before the general event-sanitizer chain runs. An event sanitizer can
+redact or remove it with the rest of `category_profile`. Relay does not generate
+or infer an external ID when you omit it.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+result = await nemo_relay.tools.execute(
+    tool_name,
+    raw_args,
+    invoke,
+    handle=parent,
+    tool_call_id=framework_call_id,
+)
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```ts
+const result = await toolCallExecute(
+  toolName,
+  rawArgs,
+  invoke,
+  parent,
+  null,
+  null,
+  null,
+  frameworkCallId,
+);
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+let result = tool_call_execute(
+    ToolCallExecuteParams::builder()
+        .name(tool_name)
+        .args(args)
+        .func(callback)
+        .parent(parent)
+        .tool_call_id(framework_call_id)
+        .build(),
+)
+.await?;
+```
+</Tab>
+</Tabs>
+
+Choose the ID at the application boundary:
+
+- For a model-originated tool invocation, use the model or harness tool-use ID
+  that correlates the request with its eventual result.
+- For direct JSON-RPC instrumentation, you can normalize the request ID to a
+  string and use it as the tool-call ID.
+- If both an execution ID and a transport request ID matter, use one stable
+  execution ID as `tool_call_id` and keep the transport ID in application-owned
+  metadata. Do not concatenate or infer identifiers in Relay middleware.
+
+The tool-call ID correlates records for one invocation; it does not establish
+cross-process parentage. Carry an authenticated Relay propagation context
+separately when work crosses a process boundary. See
+[Cross-Process Propagation](/about-nemo-relay/concepts/scopes#cross-process-propagation).
+
+Conditional guardrail rejection happens before Relay creates the managed tool
+span, so a rejected call emits no tool start/end pair. The standalone rejection
+mark is not assigned the managed tool-call ID.
+
+## Use the Same Contract for Local and Remote Tools
+
+Relay does not need a separate execution API for MCP-backed or other remote
+tools. Place the existing client callback behind the same managed tool boundary
+as a local callback, then preserve protocol data instead of translating it into
+Relay-specific fields.
+
+| Application or protocol value | Relay mapping |
+| --- | --- |
+| Tool name and arguments | Managed execute `name` and `args` |
+| Model or harness tool-use ID | Managed execute `tool_call_id` |
+| Complete MCP `CallToolResult` | Application-visible tool result, including `content`, `structuredContent`, `_meta`, and `isError` |
+| JSON-RPC request ID when it is not the chosen tool-call ID | Application-owned metadata |
+| Valid `isError: true` result | Successful callback result data; do not raise it as a transport failure |
+| Transport, protocol, or dispatch failure | Callback error path |
+| Authenticated cross-process Relay parent | Separately imported propagation context |
+
+This keeps local and remote tools in one middleware registry and one lifecycle
+path. The application still owns client construction, discovery, transport,
+authentication, request-ID selection, and validation of inbound propagation
+context. Relay does not infer that a callback is remote, inspect tool names to
+detect a protocol, or operate as a proxy.
+
+## When to Use Fallback APIs
+
+Use explicit lifecycle APIs only when the framework owns the real tool invocation internally and exposes only start and finish hooks. In that case, the integration must preserve the returned handle and call the matching end helper on every success and failure path.
+
+Use standalone request-intercept or conditional-execution helpers when the framework needs only partial middleware behavior before it continues down its own invocation path. Refer to [Code Examples](/integrate-into-frameworks/code-examples#fallback-explicit-api-calls) for those fallback surfaces.
+
+## Validate the Tool Wrapper
+
+Run one framework tool path and check:
+
+- The integration unwraps `ToolExecutionResult.result`, and the application
+  receives the same tool result as before.
+- Subscribers see one tool start event and one matching tool end event.
+- Tool events share the same root scope UUID as the framework request.
+- Tool start and end events carry the same framework tool-call ID when supplied.
+- Global and scope-local tool middleware run exactly once.
+- Framework-owned objects do not appear in emitted JSON payloads.
+
+## Common Issues
+
+Check these symptoms first when the workflow does not behave as expected.
+
+- **Tool events appear without parentage**: Pass the active scope handle or ensure the framework tool runs inside a NeMo Relay scope.
+- **Tool events cannot be matched to the framework invocation**: Pass the framework's stable tool-call ID to the managed execute helper.
+- **Middleware does not run**: The framework still calls the real tool callback directly.
+- **Payload serialization fails**: Project framework objects into
+  JSON-compatible tool arguments, results, and annotations before NeMo Relay
+  sees them.
+- **A fallback emits incomplete spans**: Manual start and end lifecycle calls must use the same handle.
+
+## Next Steps
+
+Use these links to continue from this workflow into the next related task.
+
+- Add model-provider integration with [Wrap LLM Calls](/integrate-into-frameworks/wrap-llm-calls).
+- Add request ownership with [Adding Scopes](/integrate-into-frameworks/adding-scopes).
+- Use [Handle Non-Serializable Data](/integrate-into-frameworks/non-serializable-data) when framework objects need ID-based lookup.

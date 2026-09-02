@@ -1,0 +1,183 @@
+---
+title: "Advanced Configuration"
+description: "Control plugin multiplicity, reports, replacement, and teardown across bindings."
+position: 8
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+After one component works, the difficult questions are ownership questions: whether the
+kind can appear more than once, how a replacement interacts with the active report, and
+which API removes active behavior and which removes the implementation from future lookup.
+
+## Multiple Component Instances
+
+Rust language-binding plugins return `true` from `allows_multiple_components` by default.
+A singleton implementation should override it to return false. Python and Node.js custom
+plugin objects do not expose a separate multiplicity hook in their current public
+interfaces, so design and test their component behavior with the binding contract rather
+than copying a Rust-only method into them.
+
+When multiple components are allowed, each receives a separate component config and
+[registration context](/build-plugins/fundamentals/plugin-context). Give an instance
+an operator-facing identity such as a region or tenant only when diagnostics and
+external resources need it. Registration names remain
+local; Relay performs qualification and cleanup.
+
+## Replacement and Reports
+
+Initialization replaces active configuration as a
+[transaction](/build-plugins/fundamentals/plugin-shape). Validation and new
+registration run before Relay commits the replacement. If a callback fails, Relay
+removes partial new registrations and attempts to retain or restore the last proven
+configuration. A cleanup failure is more serious: the process can retain a runtime
+diagnostic report and refuse later mutation because it can no longer prove that stale
+callbacks are gone.
+
+An activation-owned conditional middleware guardrail participates in the same
+transaction. Relay removes a partially registered gate if later component registration
+fails. A successful replacement removes the previous component's gate during teardown
+and installs the replacement gate with the new component.
+
+The report accessor is a snapshot, not a live inspection of every registry. The kind-listing
+accessor answers a different question: which implementations can future component
+documents reference? An inactive or disabled kind can appear in that list, and an active
+component can keep running after its kind is deregistered until configuration is cleared.
+
+## Own the Complete Host Lifecycle
+
+The host, rather than the plugin implementation, owns kind registration and active
+configuration. These complete lifecycle skeletons show where validation, report
+inspection, clearing, and deregistration belong. Put the clear operation in a guaranteed
+cleanup path so an application exception does not leave middleware installed.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+implementation = DocumentationPlugin()
+plugin.register("documentation-plugin", implementation)
+assert "documentation-plugin" in plugin.list_kinds()
+
+preflight = plugin.validate(plugin_config)
+if any(item["level"] == "error" for item in preflight["diagnostics"]):
+    raise ValueError(preflight["diagnostics"])
+
+try:
+    report = await plugin.initialize(plugin_config)
+    print("active report:", report)
+    assert plugin.report() is not None
+    await run_application_work()
+finally:
+    await plugin.clear_async()
+    assert plugin.deregister("documentation-plugin")
+```
+
+`clear_async` is the correct operation inside this running event loop. Calling the
+synchronous `clear()` here raises instead of blocking the loop.
+</Tab>
+<Tab title="Node.js" language="node">
+```js
+plugin.register('documentation-plugin', documentationPlugin);
+if (!plugin.listKinds().includes('documentation-plugin')) {
+  throw new Error('plugin kind was not registered');
+}
+
+const preflight = plugin.validate(pluginConfig);
+if (preflight.diagnostics.some((item) => item.level === 'error')) {
+  throw new Error(JSON.stringify(preflight.diagnostics));
+}
+
+try {
+  const report = await plugin.initialize(pluginConfig);
+  console.log('active report:', report);
+  if (plugin.report() === null) throw new Error('active report is missing');
+  await runApplicationWork();
+} finally {
+  await relay.flushSubscribers();
+  plugin.clear();
+  if (!plugin.deregister('documentation-plugin')) {
+    throw new Error('plugin kind was not deregistered');
+  }
+}
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+register_plugin(Arc::new(DocumentationPlugin))?;
+assert!(list_plugin_kinds().iter().any(|kind| kind == "documentation-plugin"));
+
+let preflight = validate_plugin_config(&plugin_config);
+if preflight.diagnostics.iter().any(|item| {
+    matches!(item.level, DiagnosticLevel::Error)
+}) {
+    return Err("plugin configuration failed validation".into());
+}
+
+let report = initialize_plugins(plugin_config).await?;
+println!("active report: {report:?}");
+assert!(active_plugin_report().is_some());
+
+let work_result = run_application_work().await;
+let clear_result = clear_plugin_configuration();
+clear_result?;
+assert!(deregister_plugin("documentation-plugin"));
+work_result?;
+```
+
+A singleton Rust implementation makes multiplicity explicit:
+
+```rust
+fn allows_multiple_components(&self) -> bool {
+    false
+}
+```
+
+`initialize_plugins` resolves the supplied document with discovered `plugins.toml`
+configuration before it activates the result. `initialize_plugins_exact` is an internal
+escape hatch for hosts that have already resolved a `PluginConfig` and need Relay to
+apply those values without discovery or layering.
+</Tab>
+</Tabs>
+
+## Teardown in the Correct Order
+
+Use the following order so active callbacks cannot outlive their implementation:
+
+1. Stop sending new managed calls and let in-flight plugin callbacks settle. In Node.js,
+   await `relay.flushSubscribers()` before clearing so queued event and scope-end
+   sanitizers finish while their component still owns their callbacks.
+2. Clear active configuration. In Python, use `await plugin.clear_async()` whenever an
+   event loop is running; the synchronous `clear()` raises instead of blocking that loop.
+   Rust checks the returned `Result`, and Node.js calls `plugin.clear()` after the flush.
+3. Inspect the report after clear. A clean clear removes the active report; a failed
+   teardown can retain bounded runtime diagnostics for investigation.
+4. Deregister the plugin kind only after active behavior is gone. Deregistration affects
+   future validation and initialization, not registrations already committed to the
+   runtime.
+5. Confirm the kind no longer appears in `list_plugin_kinds`, `list_kinds`, or `listKinds`,
+   then repeat a representative call and prove the plugin effect is absent.
+
+Success means instance multiplicity is intentional, reports are interpreted separately
+from registry state, async teardown never blocks its event loop, and the application can
+prove both active registrations and future kind lookup have been removed.
+
+## Configure Registration Control
+
+The complete language-binding examples define the following optional group:
+
+| Field | Default | Validation |
+|---|---|---|
+| `enabled` | `false` | Must be a Boolean value. |
+| `kinds` | `["subscriber"]` | Must contain at least one supported global registration kind. |
+| `registration_name` | `"documentation-controlled-subscriber"` | Must be a nonempty effective target name. |
+| `reason` | `"disabled by documentation plugin"` | Must be a nonempty operator-facing explanation. |
+
+Keep the feature disabled unless the host deliberately supplies a target from
+runtime-registration discovery. Do not copy an effective name into long-lived
+configuration or reuse it after a process restart or plugin configuration reload. A host
+that generates plugin configuration dynamically can discover the target, insert its
+effective name, and initialize the component in the same runtime activation.
+
+The example uses a constant-result callback because the component owns the gate for its
+complete activation. Use the application-level API for a timer or health check that
+changes eligibility without replacing plugin configuration.

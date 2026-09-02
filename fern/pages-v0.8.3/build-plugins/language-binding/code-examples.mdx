@@ -1,0 +1,126 @@
+---
+title: "Runnable Examples"
+description: "Run equivalent Python, Node.js, and Rust language-binding plugin hosts."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+The checked `examples/language-binding-plugin` directory contains one shared
+configuration and three small hosts. Run commands from that directory so relative paths
+and package resolution match the tested workflow.
+
+The executable in each language remains an end-to-end learning path. Its tests are
+deliberately narrower: each test creates or directly captures only the plugin state it
+needs, asserts one behavior, and cleans up its registrations. You can therefore run any
+test by name without relying on test order or on another example having prepared files,
+configuration, or process state.
+
+## Shared Registration-Control Configuration
+
+All three hosts include the same disabled-by-default configuration group:
+
+```json
+{
+  "registration_control": {
+    "enabled": false,
+    "kinds": ["subscriber"],
+    "registration_name": "documentation-controlled-subscriber",
+    "reason": "disabled by documentation plugin"
+  }
+}
+```
+
+The atomic tests confirm that the default is valid, each required value has a
+field-specific diagnostic, enabling the group registers the expected gate, and clearing
+the plugin restores the target for future snapshots. The host must replace the example
+target with an effective name discovered in the current activation before enabling the
+group against application middleware.
+
+## Python Host
+
+Run and inspect the Python host as follows:
+
+1. Build the repository Python binding as required by the normal development setup, then
+   run the example test and host.
+
+   ```bash
+   cd python
+   uv run --locked --group test pytest
+   uv run python main.py
+   ```
+
+2. Confirm that the async context clears configuration even when the representative work
+   raises. The example deliberately uses `clear_async` rather than blocking the running
+   event loop.
+
+Success has the same observable report and call behavior as the Rust host, followed by a
+clean report and successful deregistration.
+
+## Node.js Host
+
+Run and inspect the Node.js host as follows:
+
+1. Build the repository Node binding through the normal `just build-node` workflow, then
+   run the example test and host.
+
+   ```bash
+   cd node
+   npm test
+   npm start
+   ```
+
+2. Confirm that promise-returning middleware is awaited, the LLM request outcome retains
+   `annotated`, and stream output preserves chunk order. The host uses the public
+   `nemo-relay-node/typed` stream wrapper, which owns the native stream bridge; plugin
+   callbacks receive an array of downstream chunks rather than a lazy downstream stream.
+   Before it clears the component, it awaits `relay.flushSubscribers()` so queued scope-end
+   sanitizers finish before their callbacks are deregistered.
+
+## Rust Host
+
+Run and inspect the Rust host as follows:
+
+1. Run the Rust example and its lifecycle test.
+
+   ```bash
+   cd rust
+   cargo nextest run --locked
+   cargo run --locked
+   ```
+
+2. Read the printed invalid report, active report, canonical allowed-tool result, rewritten LLM
+   headers, streamed chunks, and teardown confirmation.
+
+Success means the invalid configuration reports `documentation-plugin.unsupported_mode`,
+the valid report is active, representative tool, LLM, stream, and event paths carry the
+documentation behavior, and the final kind list no longer contains the example.
+
+## Compare the Host Output
+
+The three hosts intentionally share the complete safe plugin surface instead of
+showcasing unrelated language-specific features. Use them to compare API spelling and async
+mechanics while relying on the shared
+[PluginContext](/build-plugins/fundamentals/plugin-context) contract for semantics.
+
+All three hosts print the same evidence with binding-specific report formatting. The
+following normalized transcript omits unrelated trace context and highlights the
+diagnostic code, rewritten tool input, rewritten model headers, transformed stream
+chunks, and final teardown line:
+
+```text
+registered: documentation-plugin present
+invalid: documentation-plugin.unsupported_mode at requests.mode
+active: documentation-plugin enabled
+tool: {"result":{"value":1,"plugin_tag":"documentation"},"annotation":{"source":"application"}}
+llm: {"headers":{"x-nemo-relay-plugin":"documentation"}}
+stream: {"chunk":1,"plugin_stream":true}
+stream: {"chunk":2,"plugin_stream":true}
+teardown: complete
+```
+
+The exact report debug representation is not a compatibility surface, so tests assert
+its diagnostic and component fields rather than matching the whole printed line. The
+tool callback returns a `ToolExecutionResult`; each host checks its business payload
+through `.result` and verifies that the optional `.annotation` survives both execution
+wrappers. LLM and stream values remain their existing application-visible JSON values.

@@ -1,0 +1,78 @@
+---
+title: "Struct Histogram Boundaries"
+sidebar-title: "HistogramBoundaries"
+description: "Explicit histogram bucket boundaries that are finite and strictly increasing."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct HistogramBoundaries(/* private fields */);
+```
+
+Explicit histogram bucket boundaries that are finite and strictly increasing.
+
+## Implementations
+
+### `impl HistogramBoundaries`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-histogramboundaries\">HistogramBoundaries</a>"}} /></pre>
+
+#### `values`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn values(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>&gt;"}} /></pre>
+
+Return the validated boundaries as floating-point values.
+
+## Trait Implementations
+
+### `impl Clone for HistogramBoundaries`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-histogramboundaries\">HistogramBoundaries</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-histogramboundaries\">HistogramBoundaries</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for HistogramBoundaries`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-histogramboundaries\">HistogramBoundaries</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
+
+### `impl PartialEq for HistogramBoundaries`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-histogramboundaries\">HistogramBoundaries</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-histogramboundaries\">HistogramBoundaries</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl TryFrom<Vec<f64>> for HistogramBoundaries`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.TryFrom.html\">TryFrom</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>&gt;&gt; for <a href=\"struct-histogramboundaries\">HistogramBoundaries</a>"}} /></pre>
+
+#### `Error`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.TryFrom.html#associatedtype.Error\">Error</a> = <a href=\"struct-metricvalidationerror\">MetricValidationError</a>"}} /></pre>
+
+#### `try_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.TryFrom.html#tymethod.try_from\">try_from</a>(\n    boundaries: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-histogramboundaries\">HistogramBoundaries</a>, &lt;<a href=\"struct-histogramboundaries\">HistogramBoundaries</a> as <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.TryFrom.html\">TryFrom</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>&gt;&gt;&gt;::<a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.TryFrom.html#associatedtype.Error\">Error</a>&gt;"}} /></pre>
+
+### `impl StructuralPartialEq for HistogramBoundaries`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"struct-histogramboundaries\">HistogramBoundaries</a>"}} /></pre>

@@ -1,0 +1,124 @@
+---
+title: "Struct Running Stats"
+sidebar-title: "RunningStats"
+description: "Streaming statistics tracker combining Welford's online algorithm for mean/variance with a TDigest for streaming percentile estimation."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct RunningStats &#123;\n    pub count: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>,\n    pub mean: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>,\n    pub m2: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>,\n    pub digest: TDigest,\n&#125;"}} /></pre>
+
+Streaming statistics tracker combining Welford's online algorithm for mean/variance with a TDigest for streaming percentile estimation.
+
+This replaces NAT's batch `MetricsAccumulator` which stores all raw samples. `RunningStats` provides O(1) memory usage with `merge()` support for incremental trie updates.
+
+## Fields
+
+### `count: u64`
+
+Number of samples added.
+
+### `mean: f64`
+
+Running mean (Welford).
+
+### `m2: f64`
+
+Sum of squared differences from the mean (Welford M2).
+
+### `digest: TDigest`
+
+TDigest for streaming percentile estimation.
+
+Uses custom serde to handle NaN `min`/`max` in empty digests.
+
+## Implementations
+
+### `impl RunningStats`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-runningstats\">RunningStats</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new() -&gt; Self"}} /></pre>
+
+Creates a new empty `RunningStats`.
+
+#### `has_samples`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn has_samples(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Returns `true` if any samples have been added.
+
+#### `add_sample`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn add_sample(&amp;mut self, value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>)"}} /></pre>
+
+Adds a single sample, updating both Welford accumulators and TDigest.
+
+Welford's online algorithm maintains running mean and M2 (sum of squared differences from the mean). TDigest is updated via `merge_unsorted` which returns a new digest (it consumes `self` by value).
+
+#### `merge`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn merge(&amp;mut self, other: &amp;<a href=\"struct-runningstats\">RunningStats</a>)"}} /></pre>
+
+Merges another `RunningStats` into this one using parallel Welford merge and TDigest `merge_digests`.
+
+If `other` is empty, this is a no-op.
+
+#### `compute_metrics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn compute_metrics(&amp;self) -&gt; <a href=\"../data_models/struct-predictionmetrics\">PredictionMetrics</a>"}} /></pre>
+
+Computes `PredictionMetrics` from the current accumulator state.
+
+Returns `PredictionMetrics::default()` if no samples have been added. Percentiles (p50, p90, p95) are estimated from the TDigest.
+
+## Trait Implementations
+
+### `impl Clone for RunningStats`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-runningstats\">RunningStats</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-runningstats\">RunningStats</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for RunningStats`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-runningstats\">RunningStats</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for RunningStats`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-runningstats\">RunningStats</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for RunningStats`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"struct-runningstats\">RunningStats</a>"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl Serialize for RunningStats`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-runningstats\">RunningStats</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>

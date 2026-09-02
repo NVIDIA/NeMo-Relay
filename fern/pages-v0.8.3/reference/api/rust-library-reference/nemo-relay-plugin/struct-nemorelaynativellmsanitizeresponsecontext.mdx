@@ -1,0 +1,54 @@
+---
+title: "Struct Nemo Relay Native LlmSanitize Response Context"
+sidebar-title: "NemoRelayNativeLlmSanitizeResponseContext"
+description: "Per-call response sanitizer context passed over the native ABI."
+position: 40
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct NemoRelayNativeLlmSanitizeResponseContext &#123;\n    pub codec_kind: <a href=\"enum-nemorelaynativellmcodeckind\">NemoRelayNativeLlmCodecKind</a>,\n    pub codec_id: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>,\n    pub codec: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativellmresponsecodec\">NemoRelayNativeLlmResponseCodec</a>,\n&#125;"}} /></pre>
+
+Per-call response sanitizer context passed over the native ABI.
+
+## Fields
+
+### `codec_kind: NemoRelayNativeLlmCodecKind`
+
+Discriminator for the active codec.
+
+### `codec_id: *const NemoRelayNativeString`
+
+Optional borrowed codec identifier.
+
+### `codec: *const NemoRelayNativeLlmResponseCodec`
+
+Borrowed response codec capability, or null when no codec is active.
+
+## Trait Implementations
+
+### `impl Clone for NemoRelayNativeLlmSanitizeResponseContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-nemorelaynativellmsanitizeresponsecontext\">NemoRelayNativeLlmSanitizeResponseContext</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-nemorelaynativellmsanitizeresponsecontext\">NemoRelayNativeLlmSanitizeResponseContext</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for NemoRelayNativeLlmSanitizeResponseContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-nemorelaynativellmsanitizeresponsecontext\">NemoRelayNativeLlmSanitizeResponseContext</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Copy for NemoRelayNativeLlmSanitizeResponseContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-nemorelaynativellmsanitizeresponsecontext\">NemoRelayNativeLlmSanitizeResponseContext</a>"}} /></pre>

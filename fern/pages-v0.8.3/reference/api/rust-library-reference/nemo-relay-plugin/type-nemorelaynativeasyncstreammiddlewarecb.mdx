@@ -1,0 +1,16 @@
+---
+title: "Type Alias Nemo Relay Native Async Stream Middleware Cb"
+sidebar-title: "NemoRelayNativeAsyncStreamMiddlewareCb"
+description: "Incremental native LLM stream intercept callback."
+position: 109
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type NemoRelayNativeAsyncStreamMiddlewareCb = unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, invocation_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, next: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasyncnext\">NemoRelayNativeAsyncNext</a>, stream: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasyncstream\">NemoRelayNativeAsyncStream</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>;"}} /></pre>
+
+Incremental native LLM stream intercept callback.
+
+The callback owns `next` and `stream` and must release each exactly once. It may push chunks before returning or retain the handles and return `Pending`; no implicit timeout is applied. Relay can invoke separate middleware calls concurrently without stable OS-thread affinity. Retained handles may be used from a plugin-owned thread, while callbacks supplied to `async_next_invoke_stream` run on a Relay runtime worker. The output stream owns the callback lifetime: `next` may be invoked repeatedly or concurrently until that stream finishes, rejects, or is cancelled, and each invocation has independent callback state. Relay rejects or cancels unfinished and later invocations after settlement. The plugin must synchronize shared `user_data` and callback state and serialize each handle's final release after its last operation returns.

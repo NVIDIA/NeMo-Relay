@@ -1,0 +1,222 @@
+---
+title: "PluginContext"
+description: "Use every safe plugin registration surface and preserve Relay execution semantics."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+`PluginContext` is the component-scoped bridge between validated configuration and the
+Relay runtime. It qualifies each registration name, applies priority and chain controls,
+tracks ownership for rollback, and exposes the same 17 registration surfaces to
+language-binding, native typed, and worker plugins.
+
+## Registration Surface
+
+| Family | Registration | Callback Responsibility |
+|---|---|---|
+| Events | Subscriber | Observe each emitted event. Native subscribers are synchronous; other binding and worker callback forms follow their SDK contract. A subscriber must not mutate the event. |
+| Events | Metadata injector | Return flat key/value additions for `Event.metadata` without mutating the Event snapshot. |
+| Events | Mark sanitizer | Return replacement `data`, `category_profile`, and `metadata` fields for the emitted mark event. |
+| Events | Scope-start sanitizer | Return replacement observability fields for the emitted scope-start event. |
+| Events | Scope-end sanitizer | Return replacement observability fields for the emitted scope-end event. |
+| Runtime control | Conditional middleware guardrail | Return a reason to make a matching global registration ineligible for future snapshots, or no reason to leave it enabled. |
+| Tool | Request sanitizer | Sanitize the request recorded in start events without changing the request passed to real execution. |
+| Tool | Response sanitizer | Sanitize the result recorded in end events without changing the application result. |
+| Tool | Conditional guardrail | Allow or block real execution from the tool name and request. |
+| Tool | Request intercept | Rewrite the real request and optionally affect later request intercepts through registration-time `break_chain`. |
+| Tool | Execution intercept | Receive a continuation, call it zero, one, or multiple times, and return an execution outcome. |
+| LLM | Request sanitizer | Sanitize request observability with the structured LLM context and its codec handle. |
+| LLM | Response sanitizer | Sanitize response observability with the structured LLM context and its codec handle. |
+| LLM | Conditional guardrail | Allow or block real model execution from the provider request. The current callback contract does not receive a separate model name or annotation argument. |
+| LLM | Request intercept | Return the complete request-intercept outcome, preserving or deliberately replacing annotations. |
+| LLM | Execution intercept | Wrap unary execution through a continuation and return provider-response JSON. |
+| LLM | Stream execution intercept | Transform response chunks while preserving order, cancellation, and error behavior. Native and worker SDKs expose a lazy stream; the Node.js language binding currently supplies the downstream chunks as an array. |
+
+Sanitize guardrails change emitted observability payloads only. They do not rewrite the
+arguments given to a tool or model and do not change the value returned to the
+application. Request and execution intercepts are different: they participate in the
+real call path. Use a sanitizer for redaction and an intercept for policy or routing that
+must affect execution.
+
+Conditional middleware guardrails are also lifecycle-owned. `PluginContext` qualifies
+their local gate names and removes them during failed activation or component teardown.
+Their target must be a discovered effective global registration name. Refer to
+[Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
+for discovery, snapshot timing, and dynamic runtime controls.
+
+The registration method differs by SDK, as shown in the following table:
+
+| SDK | Method | Gate Decision |
+|---|---|---|
+| Python language binding | `register_conditional_middleware_guardrail` | Callback returns a reason or `None`. |
+| Node.js language binding | `registerConditionalMiddlewareGuardrail` | Callback returns a reason or `null`. |
+| Rust language binding | `register_conditional_middleware_guardrail` | Callback returns an optional reason. |
+| Rust native plugin | `register_conditional_middleware_guardrail` | Callback returns an optional reason. |
+| Python worker | `register_conditional_middleware_guardrail` | Sync or async callback returns a reason or `None`. |
+| Rust worker | `register_conditional_middleware_guardrail` | Async callback returns an optional reason. |
+
+Each method accepts a component-local gate name, a nonempty set of registration kinds,
+the target's effective global name, and the callback. Context methods
+do not return a deregistration handle because Relay owns cleanup. Runtime-level native
+and worker methods return an activation-owned handle for explicit dynamic
+deregistration.
+
+## Names, Priority, and `break_chain`
+
+Registration names need only be unique inside the component. Relay qualifies them with
+component ownership so multiple components do not need to invent global prefixes.
+Middleware from global and visible scope-local registries is merged in priority order.
+Choose priorities as part of the configuration contract when ordering changes behavior.
+
+`break_chain` belongs to request-intercept registration. When an intercept runs and its
+flag is true, later request intercepts do not run for that call. It is not a general
+guardrail short circuit and it does not prevent execution of the rewritten request.
+Document this setting whenever operators can control it, because a seemingly harmless
+priority change can decide which transformations are visible downstream.
+
+## Outcomes, Annotations, and Accounting
+
+Managed tool callbacks and tool continuations return `ToolExecutionResult`: an
+application-owned `result` and optional opaque `annotation`. Tool execution intercepts
+return `ToolExecutionInterceptOutcome`, which preserves that pair and adds Relay-owned
+pending marks. Tool response sanitizers receive only `result`; they cannot read or
+rewrite the annotation. LLM request intercepts use a different outcome containing the
+provider request, its optional normalized annotation, pending marks, and optimization
+contributions. None of this accounting belongs in the tool result, LLM response, or
+stream chunk. Unary LLM execution intercepts return response JSON, and stream intercepts
+return response chunks.
+
+An LLM request intercept must return both the request and its annotated form. Preserve
+the annotation unchanged unless the plugin intentionally creates an equivalent updated
+annotation. Dropping it can remove normalized payloads or downstream metadata even when
+the visible request still looks correct.
+
+The distinction is easiest to see in code. Each wrapper forwards both fields from the
+downstream result, then adds the pending mark without exposing it to the application.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+async def tool_execution(_name, args, next_call):
+    downstream = await next_call(args)
+    return ToolExecutionInterceptOutcome(
+        downstream.result,
+        [PendingMarkSpec("plugin.tool.complete")],
+        annotation=downstream.annotation,
+    )
+
+context.register_tool_execution_intercept(
+    "tool_execution", execution_priority, tool_execution
+)
+```
+</Tab>
+<Tab title="Node.js" language="node">
+```js
+context.registerToolExecutionIntercept(
+  'tool_execution',
+  executionPriority,
+  async (args, next) => {
+    const downstream = await next(args);
+    return {
+      ...downstream,
+      pendingMarks: [{ name: 'plugin.tool.complete' }],
+    };
+  },
+);
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+context.register_tool_execution_intercept(
+    "tool_execution",
+    execution_priority,
+    move |_name, request, next| async move {
+        Ok(ToolExecutionInterceptOutcome::from(next.call(request).await?)
+            .with_pending_mark(
+                PendingMarkSpec::builder()
+                    .name("plugin.tool.complete")
+                    .category(EventCategory::custom())
+                    .data(json!({ "source": "documentation" }))
+                    .build(),
+            ))
+    },
+)?;
+```
+</Tab>
+</Tabs>
+
+The application receives the `ToolExecutionResult`, including its optional annotation,
+from the tool path and provider JSON from the LLM paths. Relay consumes pending marks and
+optimization contributions when it emits events. They are not properties to splice into
+an application result.
+
+LLM sanitizers receive a structured context whose codec state can be absent, built-in,
+runtime-resolved, or opaque. In-process callbacks can resolve the active codec directly.
+Worker callbacks receive an invocation-scoped asynchronous proxy that calls the host for
+directional encode or decode operations. A codec can be unavailable or opaque, so a
+sanitizer needs a safe fallback that redacts the original JSON envelope.
+
+The following native SDK request sanitizer resolves the active codec when one exists,
+redacts the normalized annotation, encodes it back into the provider envelope, and still
+redacts the envelope's ordinary `content`. If the codec is absent or opaque, the content
+fallback remains safe. The worker equivalents appear in
+[Middleware and Continuations](/build-plugins/workers/middleware-and-continuations).
+
+```rust
+context.register_llm_sanitize_request_guardrail(
+    "llm_request_sanitizer",
+    10,
+    move |mut request, codec_context| {
+        let redact_keys = redact_keys.clone();
+        async move {
+            if let Some(codec) = codec_context.resolve_codec() {
+                let annotated = codec.decode(&request)?;
+                let redacted = serde_json::to_value(annotated)
+                    .map(|value| redact_json(value, &redact_keys))
+                    .and_then(serde_json::from_value)
+                    .map_err(|error| error.to_string())?;
+                request = codec.encode(&redacted, &request)?;
+            }
+            request.content = redact_json(request.content, &redact_keys);
+            Ok(Some(request))
+        }
+    },
+)?;
+```
+
+Returning `None` from an LLM sanitizer means no sanitized replacement is available. It
+does not block the call. A conditional execution guardrail is the surface that returns
+an optional block reason and prevents the real callback when that reason is present.
+
+## Continuations and Streams
+
+An execution continuation represents the rest of the real call path. Calling it zero
+times replaces or blocks downstream execution. Calling it once is the normal wrapper
+pattern. Calling it multiple times can implement retry, comparison, or speculative work,
+but every call can repeat provider charges, tool side effects, events, and downstream
+middleware. SDK continuations support concurrent use where their type permits it; each
+invocation retains the captured scope snapshot so parentage remains correct.
+
+Cancellation is cooperative. When the owner callback completes or Relay cancels the
+managed call, outstanding worker continuation invocations are cancelled and late work
+must be abandoned. Native and worker stream intercepts should request downstream
+execution only when needed, transform chunks as they arrive, and stop promptly when the
+consumer drops or cancellation arrives. The Node.js language-binding callback receives
+all downstream chunks after `next(request)` resolves, so it can preserve ordering and
+transform chunks but does not provide the same lazy downstream boundary.
+
+## Runtime Helpers
+
+Native and worker SDK contexts also expose a runtime handle. It can emit marks, inspect
+the current scope, push and pop scopes, create and drop isolated scope stacks, bind a
+captured stack while work runs, and restore the previous stack afterward. The exact
+helper names reflect synchronous Rust, asynchronous worker, and Python context-manager
+idioms, but the ownership rule is shared: every push has a cleanup path, isolated stacks
+are dropped, and prior thread or task context is restored even when the callback fails.
+
+Use scoped guards or `try`/`finally` around manual stack changes. Emitting a mark or
+creating an isolated scope is observable runtime behavior, so configuration should make
+those features explicit. Successful verification shows the mark under the expected
+scope, confirms that an isolated stack has no accidental parent from the caller, and
+confirms that later application work resumes on its original stack.

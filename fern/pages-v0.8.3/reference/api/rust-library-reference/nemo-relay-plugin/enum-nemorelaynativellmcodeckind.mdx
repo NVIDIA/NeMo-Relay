@@ -1,0 +1,93 @@
+---
+title: "Enum Nemo Relay Native LlmCodec Kind"
+sidebar-title: "NemoRelayNativeLlmCodecKind"
+description: "Discriminator for the codec supplied to an LLM sanitizer over the native ABI."
+position: 78
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+#[repr(u32)]pub enum NemoRelayNativeLlmCodecKind {
+    None = 0,
+    BuiltIn = 1,
+    Runtime = 2,
+    Opaque = 3,
+}
+```
+
+Discriminator for the codec supplied to an LLM sanitizer over the native ABI.
+
+## Variants
+
+### `None = 0`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "None = 0"}} /></pre>
+
+No codec was active for this call.
+
+### `BuiltIn = 1`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "BuiltIn = 1"}} /></pre>
+
+A Relay built-in codec was active.
+
+### `Runtime = 2`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Runtime = 2"}} /></pre>
+
+A runtime-registered codec was active.
+
+### `Opaque = 3`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Opaque = 3"}} /></pre>
+
+A codec was active but has no registered identity.
+
+## Trait Implementations
+
+### `impl Clone for NemoRelayNativeLlmCodecKind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-nemorelaynativellmcodeckind\">NemoRelayNativeLlmCodecKind</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-nemorelaynativellmcodeckind\">NemoRelayNativeLlmCodecKind</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for NemoRelayNativeLlmCodecKind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-nemorelaynativellmcodeckind\">NemoRelayNativeLlmCodecKind</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl PartialEq for NemoRelayNativeLlmCodecKind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-nemorelaynativellmcodeckind\">NemoRelayNativeLlmCodecKind</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-nemorelaynativellmcodeckind\">NemoRelayNativeLlmCodecKind</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Copy for NemoRelayNativeLlmCodecKind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-nemorelaynativellmcodeckind\">NemoRelayNativeLlmCodecKind</a>"}} /></pre>
+
+### `impl Eq for NemoRelayNativeLlmCodecKind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"enum-nemorelaynativellmcodeckind\">NemoRelayNativeLlmCodecKind</a>"}} /></pre>
+
+### `impl StructuralPartialEq for NemoRelayNativeLlmCodecKind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-nemorelaynativellmcodeckind\">NemoRelayNativeLlmCodecKind</a>"}} /></pre>

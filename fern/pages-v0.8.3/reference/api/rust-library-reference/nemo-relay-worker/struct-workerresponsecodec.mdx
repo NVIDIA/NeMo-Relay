@@ -1,0 +1,42 @@
+---
+title: "Struct Worker Response Codec"
+sidebar-title: "WorkerResponseCodec"
+description: "Invocation-scoped proxy for the active LLM response codec."
+position: 35
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct WorkerResponseCodec { /* private fields */ }
+```
+
+Invocation-scoped proxy for the active LLM response codec.
+
+## Implementations
+
+### `impl WorkerResponseCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-workerresponsecodec\">WorkerResponseCodec</a>"}} /></pre>
+
+#### `decode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn decode(&amp;self, response: &amp;<a href=\"type-json\">Json</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;"}} /></pre>
+
+Decodes an opaque response into its normalized representation.
+
+## Trait Implementations
+
+### `impl Clone for WorkerResponseCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-workerresponsecodec\">WorkerResponseCodec</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-workerresponsecodec\">WorkerResponseCodec</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

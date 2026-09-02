@@ -1,0 +1,63 @@
+---
+title: "nemo_relay.runtime_registrations"
+sidebar-title: "runtime_registrations"
+description: "Dynamic eligibility controls for global runtime registrations."
+position: 13
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/nemo_relay/runtime_registrations.py`.
+
+Module `nemo_relay.runtime_registrations`.
+
+Dynamic eligibility controls for global runtime registrations.
+
+## Classes
+
+### `RuntimeRegistrationKind(StrEnum)`
+
+Global runtime registration surfaces that can be gated.
+
+### `RuntimeRegistrationOwnerKind(StrEnum)`
+
+Owner categories reported by runtime registration discovery.
+
+### `RuntimeRegistrationOwner`
+
+Owner metadata for a discovered runtime registration.
+
+### `RuntimeRegistrationIdentity`
+
+Structured identity for a global gateable registration.
+
+## Functions
+
+### `register_conditional_middleware_guardrail`
+
+```python
+def register_conditional_middleware_guardrail(name: str, kinds: set[RuntimeRegistrationKind], registration_name: str, guardrail: ConditionalMiddlewareGuardrail) -> None
+```
+
+Register a global gate for registrations matching kind and effective name.
+
+### `deregister_conditional_middleware_guardrail`
+
+```python
+def deregister_conditional_middleware_guardrail(name: str) -> bool
+```
+
+Remove a named global registration gate.
+
+### `list_runtime_registrations`
+
+```python
+def list_runtime_registrations(kinds: Iterable[RuntimeRegistrationKind] | None = None) -> list[RuntimeRegistrationIdentity]
+```
+
+List a deterministic snapshot of global gateable registrations.
+
+## Type Aliases And Constants
+
+- `ConditionalMiddlewareGuardrail`
+
