@@ -29,7 +29,7 @@ HERMES_REPOSITORY = "https://github.com/NousResearch/hermes-agent.git"
 HERMES_REF = "v2026.8.19"
 HERMES_COMMIT = "fcbd1076a93841fa88855acce810e342a5b78101"
 SWITCHYARD_REPOSITORY = "https://github.com/NVIDIA-NeMo/Switchyard.git"
-SWITCHYARD_COMMIT = "5e30df40dddc4c19c8ea976efbc2ff58b4bd023b"
+SWITCHYARD_COMMIT = "7a72c0667774244d66a8b631e375c9d6e393bf57"
 SAFE_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}")
 DIRECT_PROVIDER_BASE_URL = "https://inference-api.nvidia.com/v1"
 

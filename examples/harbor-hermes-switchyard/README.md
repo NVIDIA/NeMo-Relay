@@ -11,9 +11,9 @@ completed run roots without mutating them.
 
 | Dependency | Input used by this example |
 |---|---|
-| NeMo Relay | Official PyPI release `nemo-relay==0.8.2`, installed by digest as a `manylinux2014_x86_64` wheel. |
+| NeMo Relay | Official PyPI release `nemo-relay==0.8.3`, installed by digest as a `manylinux2014_x86_64` wheel. |
 | Hermes | `NousResearch/hermes-agent`, release `v2026.8.19` (commit `fcbd1076a93841fa88855acce810e342a5b78101`), which includes PR #77915. |
-| Switchyard | `NVIDIA-NeMo/Switchyard`, detached commit `5e30df40dddc4c19c8ea976efbc2ff58b4bd023b` from PR #528 (open, branch `bbednarski/relay-plugin-runner`). |
+| Switchyard | `NVIDIA-NeMo/Switchyard`, detached commit `7a72c0667774244d66a8b631e375c9d6e393bf57` from `main` (PR #528 merged). |
 | Harbor | `harbor==0.20.0`, official registry export of `terminal-bench@2.0`. |
 
 Every source checkout is detached and verified. The Hermes installer is
