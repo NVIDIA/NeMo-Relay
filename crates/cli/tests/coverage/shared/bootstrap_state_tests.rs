@@ -274,7 +274,7 @@ fn unhealthy_owned_gateway_is_force_killed_after_the_grace_period() {
     let mut command = std::process::Command::new("sh");
     command.args([
         "-c",
-        "trap '' TERM; sh -c 'trap \"\" TERM; while :; do sleep 60; done' & echo $! > \"$1\"; wait",
+        "sh -c 'trap \"\" TERM; while :; do sleep 60; done' & echo $! > \"$1\"; wait",
         "sh",
         child_pid_path.to_str().unwrap(),
     ]);

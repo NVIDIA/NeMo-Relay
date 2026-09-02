@@ -344,14 +344,14 @@ fn terminate_owned_gateway_process(pid: u32) -> Result<bool, String> {
     }
 
     log_unhealthy_gateway_termination_started(pid);
-    signal_gateway_process_group(pid, libc::SIGTERM)?;
-    if wait_for_process_exit(pid, UNHEALTHY_GATEWAY_TERMINATION_TIMEOUT) {
+    let target = signal_gateway_process_group(pid, libc::SIGTERM)?;
+    if wait_for_termination(target, UNHEALTHY_GATEWAY_TERMINATION_TIMEOUT) {
         return Ok(true);
     }
 
     log_unhealthy_gateway_termination_escalated(pid);
-    signal_gateway_process_group(pid, libc::SIGKILL)?;
-    if wait_for_process_exit(pid, UNHEALTHY_GATEWAY_TERMINATION_TIMEOUT) {
+    signal_gateway_termination_target(target, libc::SIGKILL)?;
+    if wait_for_termination(target, UNHEALTHY_GATEWAY_TERMINATION_TIMEOUT) {
         Ok(true)
     } else {
         Err(format!(
@@ -382,12 +382,19 @@ fn owner_process_identity_matches(owner: &OwnerRecord) -> bool {
 }
 
 #[cfg(unix)]
-fn signal_gateway_process_group(pid: i32, signal: i32) -> Result<(), String> {
+#[derive(Clone, Copy)]
+enum GatewayTerminationTarget {
+    ProcessGroup(i32),
+    Process(i32),
+}
+
+#[cfg(unix)]
+fn signal_gateway_process_group(pid: i32, signal: i32) -> Result<GatewayTerminationTarget, String> {
     // Detached gateways call setsid, making their PID the process-group ID.
     // Fall back to the direct PID for an older or otherwise non-detached sidecar.
     let group_result = unsafe { libc::kill(-pid, signal) };
     if group_result == 0 {
-        return Ok(());
+        return Ok(GatewayTerminationTarget::ProcessGroup(pid));
     }
     let group_error = std::io::Error::last_os_error();
     if group_error.raw_os_error() != Some(libc::ESRCH) {
@@ -396,13 +403,31 @@ fn signal_gateway_process_group(pid: i32, signal: i32) -> Result<(), String> {
         ));
     }
     if unsafe { libc::kill(pid, signal) } == 0 {
-        Ok(())
+        Ok(GatewayTerminationTarget::Process(pid))
     } else {
         let error = std::io::Error::last_os_error();
         (error.raw_os_error() == Some(libc::ESRCH))
-            .then_some(())
+            .then_some(GatewayTerminationTarget::Process(pid))
             .ok_or_else(|| format!("failed to signal managed Relay gateway process {pid}: {error}"))
     }
+}
+
+#[cfg(unix)]
+fn signal_gateway_termination_target(
+    target: GatewayTerminationTarget,
+    signal: i32,
+) -> Result<(), String> {
+    let (pid, target_pid) = match target {
+        GatewayTerminationTarget::ProcessGroup(pid) => (pid, -pid),
+        GatewayTerminationTarget::Process(pid) => (pid, pid),
+    };
+    if unsafe { libc::kill(target_pid, signal) } == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    (error.raw_os_error() == Some(libc::ESRCH))
+        .then_some(())
+        .ok_or_else(|| format!("failed to signal managed Relay gateway process {pid}: {error}"))
 }
 
 #[cfg(unix)]
@@ -412,12 +437,20 @@ fn process_is_running(pid: i32) -> bool {
 }
 
 #[cfg(unix)]
-fn wait_for_process_exit(pid: i32, timeout: Duration) -> bool {
+fn wait_for_termination(target: GatewayTerminationTarget, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
-    while process_is_running(pid) && Instant::now() < deadline {
+    while termination_target_is_running(target) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(50));
     }
-    !process_is_running(pid)
+    !termination_target_is_running(target)
+}
+
+#[cfg(unix)]
+fn termination_target_is_running(target: GatewayTerminationTarget) -> bool {
+    match target {
+        GatewayTerminationTarget::ProcessGroup(pid) => process_is_running(-pid),
+        GatewayTerminationTarget::Process(pid) => process_is_running(pid),
+    }
 }
 
 #[cfg(windows)]
