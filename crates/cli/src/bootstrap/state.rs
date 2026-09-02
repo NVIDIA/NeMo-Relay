@@ -30,7 +30,7 @@ pub(super) struct OwnerRecord {
     bootstrap_protocol: u64,
     pid: u32,
     #[serde(default)]
-    process_start_time: Option<u64>,
+    process_identity: Option<u64>,
     url: String,
     shutdown_token: String,
     bootstrap_fingerprint: Option<String>,
@@ -50,7 +50,7 @@ impl OwnerRecord {
             version: env!("CARGO_PKG_VERSION").into(),
             bootstrap_protocol: BOOTSTRAP_PROTOCOL_VERSION,
             pid,
-            process_start_time: process_start_time(pid),
+            process_identity: process_identity(pid),
             url: url.into(),
             shutdown_token: shutdown_token.into(),
             bootstrap_fingerprint: fingerprint.map(str::to_owned),
@@ -360,24 +360,77 @@ fn terminate_owned_gateway_process(pid: u32) -> Result<bool, String> {
     }
 }
 
-#[cfg(any(unix, windows))]
-fn process_start_time(pid: u32) -> Option<u64> {
-    use sysinfo::{Pid, System};
-
-    let system = System::new_all();
-    system
-        .process(Pid::from_u32(pid))
-        .map(|process| process.start_time())
+#[cfg(target_os = "linux")]
+fn process_identity(pid: u32) -> Option<u64> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // `comm` is parenthesized and may contain spaces, so process fields only
+    // after the final `)` character.
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        // Field 22 is process start time in clock ticks. The first field here
+        // is field 3 (`state`).
+        .nth(19)?
+        .parse()
+        .ok()
 }
 
-#[cfg(not(any(unix, windows)))]
-fn process_start_time(_pid: u32) -> Option<u64> {
+#[cfg(target_os = "macos")]
+fn process_identity(pid: u32) -> Option<u64> {
+    let pid = i32::try_from(pid).ok()?;
+    // SAFETY: `info` is initialized and passed with its exact size for the
+    // documented PROC_PIDTBSDINFO query.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let result = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&raw mut info).cast(),
+            i32::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).ok()?,
+        )
+    };
+    (result == std::mem::size_of::<libc::proc_bsdinfo>() as i32)
+        .then(|| {
+            info.pbi_start_tvsec
+                .checked_mul(1_000_000)?
+                .checked_add(info.pbi_start_tvusec)
+        })
+        .flatten()
+}
+
+#[cfg(windows)]
+fn process_identity(pid: u32) -> Option<u64> {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    // A handle keeps the queried process instance stable while its creation
+    // identity is read, even if this PID is recycled concurrently.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return None;
+    }
+    let mut creation: FILETIME = unsafe { std::mem::zeroed() };
+    let mut exit: FILETIME = unsafe { std::mem::zeroed() };
+    let mut kernel: FILETIME = unsafe { std::mem::zeroed() };
+    let mut user: FILETIME = unsafe { std::mem::zeroed() };
+    let result =
+        unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) };
+    unsafe { CloseHandle(handle) };
+    (result != 0)
+        .then(|| (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn process_identity(_pid: u32) -> Option<u64> {
     None
 }
 
 fn owner_process_identity_matches(owner: &OwnerRecord) -> bool {
-    owner.process_start_time.is_some_and(|start_time| {
-        process_start_time(owner.pid).is_some_and(|current| current == start_time)
+    owner.process_identity.is_some_and(|identity| {
+        process_identity(owner.pid).is_some_and(|current| current == identity)
     })
 }
 
@@ -485,7 +538,7 @@ fn terminate_owned_gateway_process(pid: u32) -> Result<bool, String> {
 
 #[cfg(windows)]
 fn windows_process_is_running(pid: u32) -> bool {
-    process_start_time(pid).is_some()
+    process_identity(pid).is_some()
 }
 
 #[cfg(windows)]

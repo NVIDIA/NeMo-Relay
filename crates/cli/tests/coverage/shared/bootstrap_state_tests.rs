@@ -23,6 +23,20 @@ fn owner_records_are_versioned_endpoint_scoped_and_round_trip() {
     assert_eq!(lock_name("not a url/with spaces"), "not_a_url_with_spaces");
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[test]
+fn live_owner_record_uses_a_process_instance_identity() {
+    let owner = OwnerRecord::new(
+        std::process::id(),
+        "http://127.0.0.1:47632",
+        "shutdown",
+        Some("fingerprint"),
+    );
+
+    assert!(owner.process_identity.is_some());
+    assert!(owner_process_identity_matches(&owner));
+}
+
 #[test]
 fn recovery_records_preserve_pending_and_ready_attempts() {
     let dir = tempfile::tempdir().unwrap();
