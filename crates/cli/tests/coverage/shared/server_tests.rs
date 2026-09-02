@@ -483,11 +483,12 @@ async fn healthz_returns_ok() {
 }
 
 #[tokio::test]
-async fn healthz_rejects_a_different_persistent_gateway_fingerprint() {
+async fn healthz_accepts_a_different_persistent_gateway_fingerprint() {
+    let challenge_key = BootstrapChallengeKey::from_bytes(b"test challenge key");
     let app = router_with_state(AppState::new_with_bootstrap(
         test_config(),
         Some("expected-fingerprint".into()),
-        Some(BootstrapChallengeKey::from_bytes(b"test challenge key")),
+        Some(challenge_key.clone()),
         false,
         None,
         None,
@@ -501,16 +502,32 @@ async fn healthz_rejects_a_different_persistent_gateway_fingerprint() {
                     "x-nemo-relay-bootstrap-fingerprint",
                     "different-fingerprint",
                 )
+                .header(
+                    "x-nemo-relay-bootstrap-nonce",
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-nemo-relay-bootstrap-proof")
+            .unwrap(),
+        challenge_key
+            .proof(
+                "different-fingerprint",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            )
+            .as_str()
+    );
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(body["status"], json!("incompatible"));
+    assert_eq!(body["status"], json!("ok"));
     assert!(body.get("bootstrap_fingerprint").is_none());
 }
 
