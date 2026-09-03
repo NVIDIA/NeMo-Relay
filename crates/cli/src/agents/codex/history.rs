@@ -21,8 +21,9 @@
 //! upstream, editing the database directly is the only available mechanism.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
@@ -262,20 +263,40 @@ fn require_sqlite3() -> Result<(), String> {
 fn run_sqlite(database: &Path, sql: &str) -> Result<String, String> {
     // `.timeout` rather than `PRAGMA busy_timeout`: the pragma emits its value
     // as a result row, which would contaminate the rows callers parse.
-    let output = Command::new("sqlite3")
+    let mut child = Command::new("sqlite3")
+        // Stop at a failed `BEGIN IMMEDIATE`. Otherwise the SQLite shell keeps
+        // running subsequent statements and masks a lock error with a failed
+        // `COMMIT`, notably on Windows.
+        .arg("-bail")
         .arg("-noheader")
         .arg("-batch")
         .arg("-cmd")
         .arg(format!(".timeout {BUSY_TIMEOUT_MS}"))
         .arg(database)
-        .arg(sql)
-        .output()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|error| {
             format!(
                 "failed to run sqlite3 against {}: {error}",
                 database.display()
             )
         })?;
+    let mut stdin = child.stdin.take().expect("piped sqlite3 stdin");
+    stdin.write_all(sql.as_bytes()).map_err(|error| {
+        format!(
+            "failed to write SQL to sqlite3 for {}: {error}",
+            database.display()
+        )
+    })?;
+    drop(stdin);
+    let output = child.wait_with_output().map_err(|error| {
+        format!(
+            "failed to wait for sqlite3 against {}: {error}",
+            database.display()
+        )
+    })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stderr = stderr.trim();

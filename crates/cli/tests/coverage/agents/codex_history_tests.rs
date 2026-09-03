@@ -4,8 +4,9 @@
 //! Coverage for the experimental Codex thread-history provider migration.
 
 use std::ffi::OsStr;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use tempfile::TempDir;
 
@@ -474,20 +475,24 @@ fn migrate_fails_cleanly_while_another_writer_holds_the_lock() {
     let scope = CodexHistoryScope::enter(&[("thread-a", OPENAI_PROVIDER)]);
     // Stands in for a running Codex: an open write transaction on the database.
     let mut holder = Command::new("sqlite3")
+        .arg("-batch")
         .arg(scope.database())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
         .spawn()
         .expect("sqlite3 spawns");
-    {
-        use std::io::Write;
-        let stdin = holder.stdin.as_mut().expect("sqlite3 stdin");
-        writeln!(stdin, "BEGIN IMMEDIATE;").expect("write lock statement");
-        stdin.flush().expect("flush lock statement");
-    }
-    // Give the holder time to take the lock before competing for it.
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    let mut stdout = BufReader::new(holder.stdout.take().expect("sqlite3 stdout"));
+    let stdin = holder.stdin.as_mut().expect("sqlite3 stdin");
+    writeln!(stdin, "BEGIN IMMEDIATE;").expect("write lock statement");
+    writeln!(stdin, "SELECT 'lock-acquired';").expect("write lock readiness marker");
+    stdin.flush().expect("flush lock statements");
+
+    let mut ready = String::new();
+    stdout
+        .read_line(&mut ready)
+        .expect("read lock readiness marker");
+    assert_eq!(ready.trim(), "lock-acquired", "writer acquired its lock");
 
     let error = migrate_to_relay(/*dry_run*/ false, /*database*/ None)
         .expect_err("a locked database is an error");
