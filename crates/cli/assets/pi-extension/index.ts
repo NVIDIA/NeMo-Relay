@@ -748,7 +748,10 @@ function toolResultText(content: unknown): string | null {
   let foundText = false;
 
   const append = (value: string): void => {
-    const kept = value.slice(0, Math.max(0, MAX_CONTENT_CHARS - text.length));
+    const kept = sliceAtCodePointBoundary(
+      value,
+      Math.max(0, MAX_CONTENT_CHARS - text.length),
+    );
     text += kept;
     omittedChars += value.length - kept.length;
   };
@@ -765,8 +768,24 @@ function toolResultText(content: unknown): string | null {
   return omittedChars === 0 ? text : `${text}... [truncated ${omittedChars} chars]`;
 }
 
+/** Return at most limit UTF-16 units without splitting a surrogate pair. */
+function sliceAtCodePointBoundary(value: string, limit: number): string {
+  let end = Math.min(value.length, limit);
+  if (
+    end > 0 &&
+    end < value.length &&
+    value.charCodeAt(end - 1) >= 0xd800 &&
+    value.charCodeAt(end - 1) <= 0xdbff &&
+    value.charCodeAt(end) >= 0xdc00 &&
+    value.charCodeAt(end) <= 0xdfff
+  ) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 function truncate(value: string): string {
-  return value.length <= MAX_CONTENT_CHARS
-    ? value
-    : `${value.slice(0, MAX_CONTENT_CHARS)}... [truncated ${value.length - MAX_CONTENT_CHARS} chars]`;
+  if (value.length <= MAX_CONTENT_CHARS) return value;
+  const kept = sliceAtCodePointBoundary(value, MAX_CONTENT_CHARS);
+  return `${kept}... [truncated ${value.length - kept.length} chars]`;
 }

@@ -77,4 +77,15 @@ describe('tool result projection', () => {
     assert.equal(post.result.content, `${prefix}\nB... [truncated 1 chars]`);
     assert.doesNotMatch(post.result.content, /binary-image-data/);
   });
+
+  it('does not split Unicode surrogate pairs at the truncation boundary', async () => {
+    const prefix = 'a'.repeat(1999);
+    const value = `${prefix}😀tail`;
+
+    for (const result of [value, { content: [{ type: 'text', text: value }] }]) {
+      ctx.posts.length = 0;
+      const post = await project(result);
+      assert.equal(post.result.content, `${prefix}... [truncated 6 chars]`);
+    }
+  });
 });
