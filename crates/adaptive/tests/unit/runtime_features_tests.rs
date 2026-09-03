@@ -534,15 +534,16 @@ async fn telemetry_feature_registers_subscriber_and_starts_drain_task() {
         feature.register(&mut ctx).await.unwrap();
         ctx.finish()
     };
-    assert!(runtime.drain_handle.is_some());
+    assert!(runtime.drain_task.is_some());
     assert_subscriber_registered(&name);
 
     rollback_registrations(&mut registrations);
     assert_subscriber_absent(&name);
     let handle = runtime
-        .drain_handle
+        .drain_task
         .take()
-        .expect("telemetry registration must start a drain task");
+        .expect("telemetry registration must start a drain task")
+        .handle;
     drop(runtime);
     tokio::time::timeout(Duration::from_secs(1), handle)
         .await
@@ -712,8 +713,7 @@ async fn adaptive_runtime_register_survives_hot_cache_seed_failures() {
         pending_events: Arc::new(AtomicUsize::new(0)),
         event_tx: Some(event_tx),
         event_rx: Some(event_rx),
-        drain_handle: None,
-        drain_runtime: None,
+        drain_task: None,
         registered: false,
         runtime_id: Uuid::now_v7(),
         bound_scopes: Arc::new(RwLock::new(HashSet::new())),
@@ -772,7 +772,7 @@ async fn adaptive_runtime_register_rolls_back_when_telemetry_receiver_is_missing
         matches!(err, AdaptiveError::Internal(message) if message.contains("telemetry already registered"))
     );
     assert!(!runtime.registered);
-    assert!(runtime.drain_handle.is_none());
+    assert!(runtime.drain_task.is_none());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1042,9 +1042,12 @@ async fn adaptive_runtime_register_feature_rolls_back_partial_registrations_and_
             .unwrap();
         runtime.registrations = ctx.finish();
     }
-    runtime.drain_handle = Some(tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(60)).await;
-    }));
+    runtime.drain_task = Some(TelemetryDrainTask {
+        handle: tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }),
+        runtime: tokio::runtime::Handle::current(),
+    });
     runtime.registered = true;
 
     let mut feature: Box<dyn AdaptiveFeature> = Box::new(PartiallyFailingFeature);
@@ -1052,7 +1055,7 @@ async fn adaptive_runtime_register_feature_rolls_back_partial_registrations_and_
 
     assert!(matches!(err, AdaptiveError::Internal(message) if message.contains("feature boom")));
     assert!(!runtime.registered);
-    assert!(runtime.drain_handle.is_none());
+    assert!(runtime.drain_task.is_none());
     assert!(runtime.registrations.is_empty());
     assert_subscriber_absent("existing_feature");
     assert_subscriber_absent("partial_feature");
@@ -1372,6 +1375,26 @@ async fn adaptive_runtime_shutdown_drains_queued_telemetry() {
     runtime.shutdown().await.unwrap();
 
     assert_eq!(backend.list_runs_dyn(agent_id).await.unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn adaptive_runtime_shutdown_aborts_stalled_telemetry_after_timeout() {
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
+        .await
+        .unwrap();
+    let handle = tokio::spawn(std::future::pending::<()>());
+    let abort_handle = handle.abort_handle();
+    runtime.drain_task = Some(TelemetryDrainTask {
+        handle,
+        runtime: tokio::runtime::Handle::current(),
+    });
+    let started = tokio::time::Instant::now();
+
+    runtime.shutdown().await.unwrap();
+    tokio::task::yield_now().await;
+
+    assert!(started.elapsed() >= TELEMETRY_DRAIN_TIMEOUT);
+    assert!(abort_handle.is_finished());
 }
 
 #[tokio::test(flavor = "current_thread")]

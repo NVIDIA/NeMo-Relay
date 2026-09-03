@@ -69,12 +69,16 @@ pub struct AdaptiveRuntime {
     pending_events: Arc<AtomicUsize>,
     event_tx: Option<tokio::sync::mpsc::UnboundedSender<Event>>,
     event_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Event>>,
-    drain_handle: Option<tokio::task::JoinHandle<()>>,
-    drain_runtime: Option<tokio::runtime::Handle>,
+    drain_task: Option<TelemetryDrainTask>,
     registered: bool,
     runtime_id: Uuid,
     bound_scopes: Arc<RwLock<HashSet<Uuid>>>,
     registrations: Vec<ComponentRegistration>,
+}
+
+struct TelemetryDrainTask {
+    handle: tokio::task::JoinHandle<()>,
+    runtime: tokio::runtime::Handle,
 }
 
 impl fmt::Debug for AdaptiveRuntime {
@@ -162,8 +166,7 @@ impl<'a> RegistrationContext<'a> {
         handle: tokio::task::JoinHandle<()>,
         runtime: tokio::runtime::Handle,
     ) {
-        self.runtime.drain_handle = Some(handle);
-        self.runtime.drain_runtime = Some(runtime);
+        self.runtime.drain_task = Some(TelemetryDrainTask { handle, runtime });
     }
 
     fn finish(self) -> Vec<ComponentRegistration> {
@@ -228,8 +231,7 @@ impl AdaptiveRuntime {
             pending_events: Arc::new(AtomicUsize::new(0)),
             event_tx: Some(event_tx),
             event_rx: Some(event_rx),
-            drain_handle: None,
-            drain_runtime: None,
+            drain_task: None,
             registered: false,
             runtime_id: Uuid::now_v7(),
             bound_scopes: Arc::new(RwLock::new(HashSet::new())),
@@ -508,10 +510,9 @@ impl AdaptiveRuntime {
             let mut just_registered = ctx.finish();
             rollback_registrations(&mut just_registered);
             rollback_registrations(&mut self.registrations);
-            if let Some(handle) = self.drain_handle.take() {
-                handle.abort();
+            if let Some(task) = self.drain_task.take() {
+                task.handle.abort();
             }
-            self.drain_runtime.take();
             self.registered = false;
             return Err(error);
         }
@@ -528,6 +529,12 @@ impl AdaptiveRuntime {
     ///
     /// # Errors
     /// Returns any rollback error surfaced by the hosted plugin system.
+    ///
+    /// # Runtime lifecycle
+    /// This method returns before the telemetry drain finishes. Callers using a
+    /// Tokio `current_thread` runtime must keep that runtime alive and driven
+    /// until the drain completes. Call [`Self::shutdown`] when completion must
+    /// be observed before the runtime is dropped.
     pub fn deregister(&mut self) -> Result<()> {
         rollback_registrations(&mut self.registrations);
         if let Ok(mut guard) = self.bound_scopes.write() {
@@ -537,30 +544,24 @@ impl AdaptiveRuntime {
         // finish naturally. The synchronous API cannot await it, so supervise
         // the detached drain with the same bounded timeout as shutdown.
         self.event_tx.take();
-        if let Some(handle) = self.drain_handle.take() {
-            if let Some(runtime) = self.drain_runtime.take() {
-                runtime.spawn(async move {
-                    let mut handle = handle;
-                    if tokio::time::timeout(TELEMETRY_DRAIN_TIMEOUT, &mut handle)
-                        .await
-                        .is_err()
-                    {
-                        log::warn!(
-                            target: "nemo_relay.runtime",
-                            event = "adaptive_telemetry_drain_timeout";
-                            "Adaptive runtime deregistration timed out while draining telemetry; aborting remaining work"
-                        );
-                        handle.abort();
-                    }
-                });
-            } else {
-                log::warn!(
-                    target: "nemo_relay.runtime",
-                    event = "adaptive_telemetry_drain_aborted";
-                    "Adaptive runtime deregistration has no stored Tokio runtime; aborting telemetry drain"
-                );
-                handle.abort();
-            }
+        if let Some(task) = self.drain_task.take() {
+            let TelemetryDrainTask {
+                mut handle,
+                runtime,
+            } = task;
+            runtime.spawn(async move {
+                if tokio::time::timeout(TELEMETRY_DRAIN_TIMEOUT, &mut handle)
+                    .await
+                    .is_err()
+                {
+                    log::warn!(
+                        target: "nemo_relay.runtime",
+                        event = "adaptive_telemetry_drain_timeout";
+                        "Adaptive runtime deregistration timed out while draining telemetry; aborting remaining work"
+                    );
+                    handle.abort();
+                }
+            });
         }
         self.registered = false;
         Ok(())
@@ -581,9 +582,8 @@ impl AdaptiveRuntime {
         }
         self.event_tx.take();
         self.registered = false;
-        self.drain_runtime.take();
 
-        if let Some(mut handle) = self.drain_handle.take()
+        if let Some(TelemetryDrainTask { mut handle, .. }) = self.drain_task.take()
             && tokio::time::timeout(TELEMETRY_DRAIN_TIMEOUT, &mut handle)
                 .await
                 .is_err()
