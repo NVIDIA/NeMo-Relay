@@ -371,7 +371,7 @@ function renderGateway() {
 }
 
 function initializeGateway() {
-  if (!benchmark.gateway || !benchmark.gateway.length) {
+  if (!benchmark.gateway?.length) {
     byId("gateway-section").hidden = true;
     return;
   }

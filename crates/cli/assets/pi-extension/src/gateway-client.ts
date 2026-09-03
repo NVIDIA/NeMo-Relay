@@ -110,34 +110,8 @@ export async function postHook(
       signal: controller.signal,
     });
 
-    if (response.ok) {
-      // An allow body is `{}` unless a request intercept rewrote the arguments -- so a body we
-      // cannot read is NOT a plain allow. It may have carried a transform, and treating it as an
-      // empty allow would run the original arguments while silently discarding a policy decision:
-      // exactly the failure a refused transform blocks the call to prevent. An unreadable success
-      // is an infrastructure fault, resolved by `NEMO_RELAY_PI_FAIL` like any other.
-      const body = await safeJson(response);
-      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-        return {
-          kind: 'fault',
-          origin: 'response',
-          detail: 'gateway returned a success body that is not a JSON object',
-        };
-      }
-      return { kind: 'allow', body };
-    }
-
-    if (response.status === 403) {
-      const body = await safeJson(response);
-      const error = body?.error;
-      if (error?.type === GUARDRAIL_REJECTION_TYPE && typeof error.reason === 'string') {
-        return { kind: 'block', reason: error.reason };
-      }
-      // A 403 without the guardrail marker is an authorization fault, not a
-      // policy decision; do not present it to the model as one.
-      return { kind: 'fault', origin: 'response', detail: `gateway returned 403 without a guardrail reason` };
-    }
-
+    if (response.ok) return allowedOutcome(response);
+    if (response.status === 403) return forbiddenOutcome(response);
     return { kind: 'fault', origin: 'response', detail: `gateway returned HTTP ${response.status}` };
   } catch (error) {
     const timedOut = error instanceof Error && error.name === 'AbortError';
@@ -151,6 +125,27 @@ export async function postHook(
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function allowedOutcome(response: Response): Promise<HookOutcome> {
+  const body = await safeJson(response);
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    return {
+      kind: 'fault',
+      origin: 'response',
+      detail: 'gateway returned a success body that is not a JSON object',
+    };
+  }
+  return { kind: 'allow', body };
+}
+
+async function forbiddenOutcome(response: Response): Promise<HookOutcome> {
+  const body = await safeJson(response);
+  const error = body?.error;
+  if (error?.type === GUARDRAIL_REJECTION_TYPE && typeof error.reason === 'string') {
+    return { kind: 'block', reason: error.reason };
+  }
+  return { kind: 'fault', origin: 'response', detail: 'gateway returned 403 without a guardrail reason' };
 }
 
 /**

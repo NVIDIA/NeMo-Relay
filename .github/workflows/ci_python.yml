@@ -456,7 +456,7 @@ jobs:
           else
             venv_python="${RUNNER_TEMP}/nemo-relay-wheel-venv/bin/python"
           fi
-          uv pip install --python "$venv_python" --no-deps "$wheel"
+          uv pip install --python "$venv_python" --no-deps --no-index "$wheel"
           "$venv_python" -c "import nemo_relay"
 
       - name: Download matching musllinux Python wheel artifact
@@ -508,6 +508,7 @@ jobs:
           uv pip install \
             --python "${RUNNER_TEMP}/nemo-relay-sdist-venv/bin/python" \
             --no-deps \
+            --no-index \
             "$sdist"
           "${RUNNER_TEMP}/nemo-relay-sdist-venv/bin/python" -c "import nemo_relay"
 
@@ -520,6 +521,8 @@ jobs:
           uv venv --python "$(uv python find)" "${RUNNER_TEMP}/nemo-relay-plugin-venv"
           uv pip install \
             --python "${RUNNER_TEMP}/nemo-relay-plugin-venv/bin/python" \
+            --no-deps \
+            --no-index \
             "$wheel"
           "${RUNNER_TEMP}/nemo-relay-plugin-venv/bin/python" -c \
             "import nemo_relay_plugin._proto.plugin_worker_pb2_grpc"

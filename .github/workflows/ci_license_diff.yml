@@ -89,7 +89,7 @@ jobs:
           printf 'compare_ref=%s\n' "$compare_ref" >> "$GITHUB_OUTPUT"
 
           set +e
-          uv run --no-project --python ${{ steps.ci-config.outputs.default_python_version }} python scripts/licensing/license_diff.py --base-ref "$compare_ref" > license-diff.md 2> license-diff.status
+          uv run --no-project --offline --python ${{ steps.ci-config.outputs.default_python_version }} python scripts/licensing/license_diff.py --base-ref "$compare_ref" > license-diff.md 2> license-diff.status
           diff_status=$?
           set -e
           printf 'diff_status=%s\n' "$diff_status" >> "$GITHUB_OUTPUT"

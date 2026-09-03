@@ -377,7 +377,8 @@ export function decideRedirect(
 /** Read redirection configuration from the environment the launcher sets. */
 export function redirectConfigFromEnv(gatewayUrl: string): RedirectConfig {
   const raw = process.env.NEMO_RELAY_PI_REDIRECT;
-  const mode = raw === 'off' ? 'off' : raw === 'force' ? 'force' : 'match';
+  let mode: RedirectConfig['mode'] = 'match';
+  if (raw === 'off' || raw === 'force') mode = raw;
   // Spread conditionally rather than assigning `undefined`: the package builds
   // under `exactOptionalPropertyTypes`, where an explicit `undefined` is not
   // the same as an absent key.

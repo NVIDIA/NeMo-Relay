@@ -295,7 +295,7 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -e
-          cargo build --release --target "${{ matrix.target }}" -p nemo-relay-cli
+          cargo build --locked --release --target "${{ matrix.target }}" -p nemo-relay-cli
 
       - name: Build CLI release binary in manylinux
         if: ${{ matrix.build_image != '' }}
@@ -449,7 +449,7 @@ jobs:
             venv_python="${RUNNER_TEMP}/nemo-relay-cli-venv/bin/python"
             venv_cli="${RUNNER_TEMP}/nemo-relay-cli-venv/bin/nemo-relay"
           fi
-          uv pip install --python "$venv_python" --no-deps "$wheel"
+          uv pip install --python "$venv_python" --no-deps --no-index "$wheel"
           wheel_version="$("$venv_cli" --version)"
           if [ "$binary_version" != "$wheel_version" ]; then
             echo "Error: CLI binary reports '$binary_version' but wheel reports '$wheel_version'" >&2

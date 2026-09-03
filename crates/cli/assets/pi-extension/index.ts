@@ -728,16 +728,31 @@ function summarize(result: unknown, isError: boolean): unknown {
   if (typeof result === 'string') return { content: truncate(result) };
   if (typeof result === 'object') {
     const record = result as Record<string, unknown>;
-    const content = record.content ?? record.output ?? record.text;
     return {
-      content:
-        typeof content === 'string'
-          ? truncate(content)
-          : `Tool ${isError ? 'failed' : 'completed'}.`,
+      content: summaryContent(record, isError),
       result_keys: Object.keys(record).slice(0, 20),
     };
   }
-  return { content: truncate(String(result)) };
+  return { content: primitiveSummary(result) };
+}
+
+function summaryContent(result: Record<string, unknown>, isError: boolean): string {
+  const content = result.content ?? result.output ?? result.text;
+  return typeof content === 'string'
+    ? truncate(content)
+    : `Tool ${isError ? 'failed' : 'completed'}.`;
+}
+
+function primitiveSummary(result: unknown): string {
+  switch (typeof result) {
+    case 'boolean':
+    case 'number':
+    case 'bigint':
+    case 'symbol':
+      return truncate(String(result));
+    default:
+      return 'Tool completed with an unsupported result type.';
+  }
 }
 
 function truncate(value: string): string {
