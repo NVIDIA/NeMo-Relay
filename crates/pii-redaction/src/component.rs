@@ -193,7 +193,7 @@ pub struct BuiltinBackendConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_paths: Vec<String>,
     /// JSON-pointer glob paths to sanitize. A whole `*` segment matches one
-    /// object key or array index; matching is not recursive.
+    /// object key or array index, while `**` matches zero or more segments.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_path_globs: Vec<String>,
     /// Regex pattern used when `action = "regex_replace"` or `action = "redact"`.

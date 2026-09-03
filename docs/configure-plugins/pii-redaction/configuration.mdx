@@ -234,7 +234,7 @@ The `builtin` section contains:
 | --- | --- |
 | `action` | Sanitization action. Current values are `remove`, `redact`, `regex_replace`, `hash`, and `mask`. |
 | `target_paths` | Exact RFC 6901 JSON-pointer paths to sanitize. Empty together with `target_path_globs` means every matching string leaf. |
-| `target_path_globs` | Restricted JSON-pointer glob paths. A whole `*` segment matches exactly one object key or array index. |
+| `target_path_globs` | Restricted JSON-pointer glob paths. A whole `*` segment matches one object key or array index; a whole `**` segment matches zero or more. |
 | `pattern` | Regex pattern used when `action = "regex_replace"` or `action = "redact"`. |
 | `detector` | Optional built-in matcher preset. Current values are `email`, `phone`, `api_key`, `ip_address`, `ipv6`, `url`, `uuid`, `bearer_token`, `jwt`, `credit_card`, `aws_access_key_id`, `aws_secret_access_key`, `gcp_api_key`, and `azure_storage_account_key`. |
 | `replacement` | Replacement text used when `action = "regex_replace"` or `action = "redact"`. Defaults to `[REDACTED]`. |
@@ -378,10 +378,11 @@ When `detector` is set and you do not specify `unmasked_prefix` or
 
 `target_paths` are exact RFC 6901 JSON-pointer matches. `target_path_globs`
 adds a restricted, opt-in selector language: a whole `*` segment matches one
-object key or array index. Exact paths and glob paths are combined.
-Within `target_path_globs`, `*` is a wildcard only when it is the complete
-pointer segment. Segments such as `content*` and `foo*bar` match those literal
-object keys.
+object key or array index, while a whole `**` segment matches zero or more
+segments. Exact paths and glob paths are combined.
+Within `target_path_globs`, `*` and `**` are wildcards only when each is a
+complete pointer segment. Segments such as `content*` and `foo*bar` match
+those literal object keys.
 
 For example, these selectors cover every message and provider-output text
 block without capping the number of array items:
@@ -393,12 +394,26 @@ target_path_globs = [
 ]
 ```
 
-Globs are not recursive: `/output/*` selects only a direct child of `output`.
-It does not select `/output/0/content/0/text`; use
-`/output/*/content/*/text` for that shape. Relay does not support `**`,
-predicates, or arbitrary JSONPath expressions. `target_paths = ["/*"]`
+`/output/*` selects only a direct child of `output`. It does not select
+`/output/0/content/0/text`; use `/output/*/content/*/text` for that shape.
+Use `/messages/**` to select `messages` and every descendant, including nested
+provider-native values. Relay does not support predicates or arbitrary JSONPath
+expressions. `target_paths = ["/*"]`
 continues to select a literal `*` object key; use `target_path_globs = ["/*"]`
 when `*` should be a wildcard.
+
+Use `**` with `action = "redact"` and a whole-string pattern when the policy
+must redact every string value below a stable root while preserving objects,
+arrays, and field names. This also redacts structural string values such as
+roles, types, and identifiers.
+
+```toml
+[components.config.profiles.builtin]
+action = "redact"
+pattern = '(?s)^.*$'
+replacement = "[REDACTED]"
+target_path_globs = ["/messages/**"]
+```
 
 Relay validates every configured path as RFC 6901 syntax before activating the
 component. The empty string selects the document root. Every other pointer must

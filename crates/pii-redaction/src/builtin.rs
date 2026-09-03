@@ -37,7 +37,7 @@ pub(super) struct CompiledBuiltinBackend {
     trajectory: Option<TrajectorySanitizer>,
 }
 
-/// Compiled exact-pointer and single-segment glob selectors.
+/// Compiled exact-pointer and glob selectors.
 #[derive(Clone)]
 struct TargetPathMatcher {
     selectors: Vec<TargetPathSelector>,
@@ -53,6 +53,7 @@ enum TargetPathSelector {
 enum TargetPathSegment {
     Exact(String),
     Any,
+    Recursive,
 }
 
 impl TargetPathMatcher {
@@ -65,18 +66,19 @@ impl TargetPathMatcher {
             .iter()
             .map(|path| {
                 json_pointer_segments(path).map(|segments| {
-                    if segments.iter().all(|segment| segment != "*") {
+                    if segments
+                        .iter()
+                        .all(|segment| !matches!(segment.as_str(), "*" | "**"))
+                    {
                         TargetPathSelector::Exact(segments)
                     } else {
                         TargetPathSelector::Glob(
                             segments
                                 .into_iter()
-                                .map(|segment| {
-                                    if segment == "*" {
-                                        TargetPathSegment::Any
-                                    } else {
-                                        TargetPathSegment::Exact(segment)
-                                    }
+                                .map(|segment| match segment.as_str() {
+                                    "*" => TargetPathSegment::Any,
+                                    "**" => TargetPathSegment::Recursive,
+                                    _ => TargetPathSegment::Exact(segment),
                                 })
                                 .collect(),
                         )
@@ -101,13 +103,7 @@ impl TargetPathMatcher {
     fn matches(&self, path_segments: &[String]) -> bool {
         self.selectors.iter().any(|selector| match selector {
             TargetPathSelector::Exact(segments) => segments == path_segments,
-            TargetPathSelector::Glob(segments) => {
-                segments.len() == path_segments.len()
-                    && segments.iter().zip(path_segments).all(|(selector, segment)| {
-                        matches!(selector, TargetPathSegment::Any)
-                            || matches!(selector, TargetPathSegment::Exact(value) if value == segment)
-                    })
-            }
+            TargetPathSelector::Glob(segments) => glob_matches(segments, path_segments),
         })
     }
 
@@ -155,6 +151,7 @@ impl TargetPathMatcher {
             };
             match first {
                 Some(TargetPathSegment::Any) => true,
+                Some(TargetPathSegment::Recursive) => true,
                 Some(TargetPathSegment::Exact(segment)) => matches!(
                     segment.as_str(),
                     "message" | "tool_calls" | "finish_reason" | "api_specific"
@@ -162,6 +159,19 @@ impl TargetPathMatcher {
                 None => false,
             }
         })
+    }
+}
+
+fn glob_matches(pattern: &[TargetPathSegment], path: &[String]) -> bool {
+    match pattern.split_first() {
+        None => path.is_empty(),
+        Some((TargetPathSegment::Recursive, rest)) => {
+            (0..=path.len()).any(|index| glob_matches(rest, &path[index..]))
+        }
+        Some((TargetPathSegment::Any, rest)) => !path.is_empty() && glob_matches(rest, &path[1..]),
+        Some((TargetPathSegment::Exact(value), rest)) => {
+            path.first() == Some(value) && glob_matches(rest, &path[1..])
+        }
     }
 }
 
@@ -1183,5 +1193,57 @@ mod tests {
             "0".to_string(),
             "content".to_string(),
         ]));
+    }
+
+    #[test]
+    fn recursive_target_path_glob_matches_every_message_descendant() {
+        let matcher = TargetPathMatcher::new(&[], &["/messages/**".to_string()]).unwrap();
+
+        assert!(matcher.matches(&["messages".to_string()]));
+        assert!(matcher.matches(&[
+            "messages".to_string(),
+            "0".to_string(),
+            "value".to_string(),
+            "output".to_string(),
+            "0".to_string(),
+            "text".to_string(),
+        ]));
+        assert!(!matcher.matches(&["output".to_string()]));
+    }
+
+    #[test]
+    fn recursive_target_path_glob_redacts_all_message_strings_and_preserves_shape() {
+        let backend = CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "redact".to_string(),
+                pattern: Some("(?s)^.*$".to_string()),
+                replacement: Some("[REDACTED]".to_string()),
+                target_path_globs: vec!["/messages/**".to_string()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap();
+
+        let sanitized = backend.sanitize_json_preorder_dfs(serde_json::json!({
+            "messages": [{
+                "role": "provider_native",
+                "parts": [{
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_123",
+                    "output": [{"type": "input_text", "text": "secret tool output"}]
+                }]
+            }],
+            "model": "gpt-5.6-sol"
+        }));
+
+        assert_eq!(sanitized["messages"][0]["role"], "[REDACTED]");
+        assert_eq!(sanitized["messages"][0]["parts"][0]["type"], "[REDACTED]");
+        assert_eq!(
+            sanitized["messages"][0]["parts"][0]["output"][0]["text"],
+            "[REDACTED]"
+        );
+        assert!(sanitized["messages"][0]["parts"].is_array());
+        assert_eq!(sanitized["model"], "gpt-5.6-sol");
     }
 }
