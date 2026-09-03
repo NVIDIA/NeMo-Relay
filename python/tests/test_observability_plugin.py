@@ -15,7 +15,15 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 from plugin_host_test_helper import validate_plugin_config
 
-from nemo_relay import ScopeType, plugin, scope, subscribers
+from nemo_relay import (
+    PropagationContext,
+    ScopeType,
+    create_scope_stack_from_propagation,
+    plugin,
+    scope,
+    subscribers,
+    use_scope_stack,
+)
 from nemo_relay.observability import (
     OBSERVABILITY_PLUGIN_KIND,
     AtifConfig,
@@ -537,6 +545,37 @@ class TestObservabilityConfigHelpers:
             assert (tmp_path / f"nemo-relay-atif-{handle.uuid}.json").exists()
         finally:
             scope.pop(handle)
+
+    async def test_atif_can_use_propagation_root_as_run_session_id(self, tmp_path):
+        request_id = "018f47a4-3af7-7d94-8e61-9f0f89b5d312"
+        stack = create_scope_stack_from_propagation(PropagationContext(request_id, request_id))
+        activation = await plugin.initialize(
+            plugin.PluginConfig(
+                components=[
+                    ComponentSpec(
+                        ObservabilityConfig(
+                            atif=AtifConfig(
+                                enabled=True,
+                                output_directory=str(tmp_path),
+                                filename_template="trajectory-{session_id}.json",
+                            )
+                        )
+                    )
+                ]
+            )
+        )
+        try:
+            with use_scope_stack(stack):
+                with scope.scope("python-propagated-agent", ScopeType.Agent) as handle:
+                    scope.event("python-mark", handle=handle, data={"step": 1})
+        finally:
+            await activation.close()
+
+        trajectory_path = tmp_path / f"trajectory-{handle.uuid}.json"
+        trajectory = json.loads(trajectory_path.read_text())
+        assert trajectory["session_id"] == request_id
+        assert trajectory["trajectory_id"] == handle.uuid
+        assert trajectory["extra"]["nemo_relay"]["session_instance_id"] == request_id
 
     async def test_atif_non_string_metadata_is_reported_on_failed_close(self, tmp_path):
         activation = await plugin.initialize(

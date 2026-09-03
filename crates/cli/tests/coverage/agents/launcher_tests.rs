@@ -98,6 +98,30 @@ fn infers_agent_from_command_or_uses_override() {
     assert_eq!(agent, CodingAgent::ClaudeCode);
 }
 
+// pi was added to `CodingAgent` without being added here, so `nemo-relay run -- pi`
+// failed while the identical Claude and Codex forms worked -- and the error named
+// only those two, so nothing pointed at the cause.
+#[test]
+fn infers_pi_from_a_bare_name_a_path_or_a_windows_suffix() {
+    for command in [
+        "pi",
+        "/usr/local/bin/pi",
+        "PI",
+        "pi.exe",
+        r"C:\tools\pi.cmd",
+    ] {
+        assert_eq!(
+            CodingAgent::infer(command),
+            Some(CodingAgent::Pi),
+            "should infer pi from {command}"
+        );
+    }
+    // Not a false positive magnet: only the exact basename counts.
+    for command in ["pip", "pipx", "mypi", "pi-sbx"] {
+        assert_eq!(CodingAgent::infer(command), None, "{command} is not pi");
+    }
+}
+
 #[test]
 fn uses_configured_command_when_no_argv_is_supplied() {
     let agents = AgentConfigs {
@@ -341,6 +365,253 @@ fn prepares_codex_config_overrides() {
         assert_eq!(entries.last(), Some(&current_exe_dir));
     }
     prepared.restore().unwrap();
+}
+
+#[test]
+fn prepares_codex_config_overrides_in_exec_scope() {
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Codex,
+        vec![
+            "codex".into(),
+            "--profile".into(),
+            "root".into(),
+            "exec".into(),
+            "--config".into(),
+            "mcp_servers.example.url=\"http://127.0.0.1:9902\"".into(),
+            "inspect the workspace".into(),
+        ],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    let exec_index = prepared.argv.iter().position(|arg| arg == "exec").unwrap();
+    let provider_index = prepared
+        .argv
+        .iter()
+        .position(|arg| arg == "model_provider=\"nemo-relay-openai\"")
+        .unwrap();
+    assert!(provider_index > exec_index);
+    assert!(
+        provider_index
+            < prepared
+                .argv
+                .iter()
+                .position(|arg| arg.starts_with("mcp_servers.example.url="))
+                .unwrap()
+    );
+}
+
+#[test]
+fn prepares_codex_config_overrides_after_full_auto_in_exec_scope() {
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Codex,
+        vec![
+            "codex".into(),
+            "--full-auto".into(),
+            "exec".into(),
+            "--config".into(),
+            "mcp_servers.example.url=\"http://127.0.0.1:9902\"".into(),
+            "inspect the workspace".into(),
+        ],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    let exec_index = prepared.argv.iter().position(|arg| arg == "exec").unwrap();
+    let provider_index = prepared
+        .argv
+        .iter()
+        .position(|arg| arg == "model_provider=\"nemo-relay-openai\"")
+        .unwrap();
+    assert!(provider_index > exec_index);
+    assert!(
+        provider_index
+            < prepared
+                .argv
+                .iter()
+                .position(|arg| arg.starts_with("mcp_servers.example.url="))
+                .unwrap()
+    );
+}
+
+#[test]
+fn prepares_codex_config_overrides_in_fork_scope() {
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Codex,
+        vec![
+            "codex".into(),
+            "exec".into(),
+            "--model".into(),
+            "gpt-5.4".into(),
+            "fork".into(),
+            "0198d672-f123-4567-89ab-cdef01234567".into(),
+            "--config".into(),
+            "mcp_servers.example.url=\"http://127.0.0.1:9902\"".into(),
+            "continue".into(),
+        ],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    let fork_index = prepared.argv.iter().position(|arg| arg == "fork").unwrap();
+    let provider_index = prepared
+        .argv
+        .iter()
+        .position(|arg| arg == "model_provider=\"nemo-relay-openai\"")
+        .unwrap();
+    assert!(provider_index > fork_index);
+    assert!(
+        provider_index
+            < prepared
+                .argv
+                .iter()
+                .position(|arg| arg == "0198d672-f123-4567-89ab-cdef01234567")
+                .unwrap()
+    );
+}
+
+#[test]
+fn prepares_codex_config_overrides_in_resume_scope() {
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Codex,
+        vec![
+            "codex".into(),
+            "exec".into(),
+            "resume".into(),
+            "0198d672-f123-4567-89ab-cdef01234567".into(),
+            "--config".into(),
+            "mcp_servers.example.url=\"http://127.0.0.1:9902\"".into(),
+            "continue".into(),
+        ],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    let resume_index = prepared
+        .argv
+        .iter()
+        .position(|arg| arg == "resume")
+        .unwrap();
+    let provider_index = prepared
+        .argv
+        .iter()
+        .position(|arg| arg == "model_provider=\"nemo-relay-openai\"")
+        .unwrap();
+    assert!(provider_index > resume_index);
+    assert!(
+        provider_index
+            < prepared
+                .argv
+                .iter()
+                .position(|arg| arg == "0198d672-f123-4567-89ab-cdef01234567")
+                .unwrap()
+    );
+}
+
+#[test]
+fn prepares_codex_config_overrides_in_review_scope() {
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Codex,
+        vec![
+            "codex".into(),
+            "exec".into(),
+            "--model".into(),
+            "gpt-5.4".into(),
+            "review".into(),
+            "--config".into(),
+            "mcp_servers.example.url=\"http://127.0.0.1:9902\"".into(),
+            "inspect the workspace".into(),
+        ],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    let review_index = prepared
+        .argv
+        .iter()
+        .position(|argument| argument == "review")
+        .unwrap();
+    let provider_index = prepared
+        .argv
+        .iter()
+        .position(|argument| argument == "model_provider=\"nemo-relay-openai\"")
+        .unwrap();
+    assert!(provider_index > review_index);
+    assert!(
+        provider_index
+            < prepared
+                .argv
+                .iter()
+                .position(|argument| argument.starts_with("mcp_servers.example.url="))
+                .unwrap()
+    );
+}
+
+#[test]
+fn prepares_codex_config_at_root_for_non_exec_command_with_exec_argument() {
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Codex,
+        vec!["codex".into(), "mcp".into(), "remove".into(), "exec".into()],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(prepared.argv[0], "codex");
+    assert_eq!(prepared.argv[1], "--config");
+    let provider_index = prepared
+        .argv
+        .iter()
+        .position(|argument| argument == "model_provider=\"nemo-relay-openai\"")
+        .unwrap();
+    let mcp_index = prepared
+        .argv
+        .iter()
+        .position(|argument| argument == "mcp")
+        .unwrap();
+    assert!(provider_index < mcp_index);
+    assert_eq!(&prepared.argv[mcp_index..], ["mcp", "remove", "exec"]);
 }
 
 #[test]
@@ -1680,4 +1951,261 @@ fn make_executable(path: &Path) {
     let mut permissions = std::fs::metadata(path).unwrap().permissions();
     permissions.set_mode(0o755);
     std::fs::set_permissions(path, permissions).unwrap();
+}
+
+// The extension redirects pi's model traffic only when the gateway forwards to the endpoint the
+// selected model would otherwise call. It cannot discover that on its own -- the gateway resolves
+// one upstream per API family from static configuration and strips client-supplied dispatch
+// headers -- so the launcher has to tell it. Without these two variables the extension has no safe
+// basis to redirect and deliberately stays put, which shows up as a session with no LLM spans.
+#[test]
+fn pi_launch_passes_the_gateway_upstreams_the_extension_redirects_against() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let extension = write_relay_pi_package(&temp.path().join("checkout"));
+    // Pin pi's agent directory at an empty one: the launcher now falls back to a
+    // user-scope install, so a developer's own would otherwise decide this result.
+    let empty_agent_dir = temp.path().join("agent");
+    std::fs::create_dir_all(&empty_agent_dir).unwrap();
+    let _env = EnvScope::set(&[
+        (
+            crate::agents::pi::launch::PI_EXTENSION_PATH_ENV,
+            Some(extension.as_os_str()),
+        ),
+        (
+            crate::agents::pi::doctor::PI_AGENT_DIR_ENV,
+            Some(empty_agent_dir.as_os_str()),
+        ),
+    ]);
+
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig {
+            openai_base_url: "https://integrate.api.nvidia.com/v1".into(),
+            anthropic_base_url: "https://anthropic.internal.example/".into(),
+            ..GatewayConfig::default()
+        },
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Pi,
+        vec!["pi".into()],
+        "http://127.0.0.1:4040",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    let env = |name: &str| {
+        prepared
+            .env
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+    assert_eq!(
+        env(crate::agents::pi::launch::PI_OPENAI_UPSTREAM_ENV),
+        Some("https://integrate.api.nvidia.com/v1"),
+    );
+    assert_eq!(
+        env(crate::agents::pi::launch::PI_ANTHROPIC_UPSTREAM_ENV),
+        Some("https://anthropic.internal.example/"),
+    );
+    assert_eq!(
+        env(crate::agents::pi::launch::PI_GATEWAY_URL_ENV),
+        Some("http://127.0.0.1:4040"),
+    );
+
+    // The note has to state the condition, not promise LLM spans: a model on any other provider
+    // keeps calling its own endpoint.
+    let note = prepared.notes.join(" ");
+    assert!(
+        note.contains("https://integrate.api.nvidia.com/v1"),
+        "the launch note should name the upstream redirection is judged against: {note}"
+    );
+}
+
+/// A directory pi resolves as this extension: a manifest naming it, beside an
+/// entry point. Returns the entry point, which is what `-e` is pointed at.
+fn write_relay_pi_package(dir: &std::path::Path) -> std::path::PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("package.json"), r#"{"name": "nemo-relay-pi"}"#).unwrap();
+    let entry = dir.join("index.ts");
+    std::fs::write(&entry, "export default () => {};").unwrap();
+    entry
+}
+
+// The install routes the README documents -- `pi install <path>` and a file drop
+// into `~/.pi/agent/extensions/` -- set no environment variable, and no document
+// tells a user to set one. While launching read only that variable, `doctor`
+// reported the extension as ready and the launcher refused to start.
+#[test]
+fn pi_launch_finds_a_user_scope_install_without_an_environment_variable() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    let installed = agent_dir.join("extensions").join("nemo-relay");
+    write_relay_pi_package(&installed);
+    let _env = EnvScope::set(&[
+        (crate::agents::pi::launch::PI_EXTENSION_PATH_ENV, None),
+        (
+            crate::agents::pi::doctor::PI_AGENT_DIR_ENV,
+            Some(agent_dir.as_os_str()),
+        ),
+    ]);
+
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Pi,
+        vec!["pi".into()],
+        "http://127.0.0.1:4040",
+        &ResolvedConfig::default(),
+        false,
+    )
+    .unwrap();
+
+    // pi de-duplicates the merged command-line and discovered extension sets by
+    // canonical path, so passing `-e` for something it would have found anyway
+    // loads it once -- and keeps the load working under `--no-extensions`.
+    let rendered = installed.display().to_string();
+    assert!(
+        prepared
+            .argv
+            .windows(2)
+            .any(|pair| pair[0] == "-e" && pair[1] == rendered),
+        "a user-scope install must be launchable: {:?}",
+        prepared.argv
+    );
+}
+
+// `-e` adds to pi's set rather than replacing it, and pi de-duplicates by path, not by package,
+// so a second distinct copy loads beside the launched one and every hook is posted twice -- each
+// turn closed as superseded by its own duplicate. Nothing suppresses discovery from here without
+// also dropping the user's own extensions, so the launch is refused and both copies are named.
+#[test]
+fn pi_launch_refuses_when_two_copies_would_load() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let explicit = write_relay_pi_package(&temp.path().join("checkout"));
+    let agent_dir = temp.path().join("agent");
+    let installed = agent_dir.join("extensions").join("nemo-relay");
+    write_relay_pi_package(&installed);
+    let _env = EnvScope::set(&[
+        (
+            crate::agents::pi::launch::PI_EXTENSION_PATH_ENV,
+            Some(explicit.as_os_str()),
+        ),
+        (
+            crate::agents::pi::doctor::PI_AGENT_DIR_ENV,
+            Some(agent_dir.as_os_str()),
+        ),
+    ]);
+
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Pi,
+        vec!["pi".into()],
+        "http://127.0.0.1:4040",
+        &ResolvedConfig::default(),
+        false,
+    );
+
+    let Err(error) = prepared else {
+        panic!("a second distinct copy must refuse the launch");
+    };
+    let message = error.to_string();
+    // Both paths, because the user has to pick one and cannot without knowing where they are.
+    assert!(
+        message.contains(&explicit.display().to_string())
+            && message.contains(&installed.display().to_string()),
+        "the launch error should name both copies: {message}"
+    );
+}
+
+// The note describes a *second* copy, so it must not fire for a project entry pi's settings
+// switch off (it never loads) nor for one that canonicalizes to the launched package (pi
+// de-duplicates by path, so it loads once).
+#[test]
+fn a_project_copy_that_cannot_double_the_trace_is_not_noted() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let shared = project.join(".pi").join("extensions").join("nemo-relay");
+    write_relay_pi_package(&shared);
+    // A project settings entry pointing at a copy whose extensions are filtered off.
+    std::fs::create_dir_all(project.join(".pi")).unwrap();
+    write_relay_pi_package(&project.join("off"));
+    std::fs::write(
+        project.join(".pi").join("settings.json"),
+        r#"{"packages": [{"source": "../off", "extensions": []}]}"#,
+    )
+    .unwrap();
+    let empty_agent_dir = temp.path().join("agent");
+    std::fs::create_dir_all(&empty_agent_dir).unwrap();
+    // Launch the very copy the project holds, so the remaining project site is the same package.
+    let _env = EnvScope::set(&[
+        (
+            crate::agents::pi::launch::PI_EXTENSION_PATH_ENV,
+            Some(shared.as_os_str()),
+        ),
+        (
+            crate::agents::pi::doctor::PI_AGENT_DIR_ENV,
+            Some(empty_agent_dir.as_os_str()),
+        ),
+    ]);
+    let previous = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project).unwrap();
+
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Pi,
+        vec!["pi".into()],
+        "http://127.0.0.1:4040",
+        &ResolvedConfig::default(),
+        false,
+    );
+
+    std::env::set_current_dir(previous).unwrap();
+    let prepared = prepared.expect("the same package reached twice is one copy");
+    let notes = prepared.notes.join(" ");
+    assert!(
+        !notes.contains("second copy of this extension under the project"),
+        "neither project site can double the trace: {notes}"
+    );
+}
+
+// `-e` is never trust-gated. Promoting a project-scoped install to it would run
+// repository code pi itself declined to trust, which is the failure the preflight
+// exists to warn about rather than to work around.
+#[test]
+fn pi_launch_refuses_to_promote_a_project_scoped_install() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    write_relay_pi_package(&project.join(".pi").join("extensions").join("nemo-relay"));
+    let empty_agent_dir = temp.path().join("agent");
+    std::fs::create_dir_all(&empty_agent_dir).unwrap();
+    let _env = EnvScope::set(&[
+        (crate::agents::pi::launch::PI_EXTENSION_PATH_ENV, None),
+        (
+            crate::agents::pi::doctor::PI_AGENT_DIR_ENV,
+            Some(empty_agent_dir.as_os_str()),
+        ),
+    ]);
+    let previous = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project).unwrap();
+
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Pi,
+        vec!["pi".into()],
+        "http://127.0.0.1:4040",
+        &ResolvedConfig::default(),
+        false,
+    );
+
+    std::env::set_current_dir(previous).unwrap();
+    let Err(error) = prepared else {
+        panic!("a project-scoped install must not be promoted to `-e`");
+    };
+    assert!(
+        error.to_string().contains("trust-gated"),
+        "the launch error should say why the install it can see was not used: {error}"
+    );
 }

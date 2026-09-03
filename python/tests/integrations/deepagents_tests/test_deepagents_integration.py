@@ -277,6 +277,49 @@ def test_model_call_routes_through_langchain_execution_middleware(
 
 
 @pytest.mark.parametrize("use_async", [False, True])
+def test_model_call_preserves_multi_block_system_message(
+    use_async: bool,
+    deepagents_integration_module: types.ModuleType,
+):
+    from langchain.agents.middleware import ModelRequest, ModelResponse
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+    content_blocks = [
+        {"type": "text", "text": "first"},
+        {"type": "text", "text": "second"},
+        {"type": "text", "text": "third"},
+        {"type": "text", "text": "fourth"},
+    ]
+    request = ModelRequest(
+        model=_mock_deepagents_chat_model([AIMessage(content="unused")]),
+        system_message=SystemMessage(content_blocks=content_blocks),
+        messages=[HumanMessage(content="hello")],
+    )
+    seen_request: dict[str, ModelRequest[Any]] = {}
+
+    def handler(next_request: ModelRequest[Any]) -> ModelResponse[Any]:
+        seen_request["request"] = next_request
+        return ModelResponse(result=[AIMessage(content="done")])
+
+    async def async_handler(next_request: ModelRequest[Any]) -> ModelResponse[Any]:
+        return handler(next_request)
+
+    middleware = deepagents_integration_module.NemoRelayDeepAgentsMiddleware()
+    if use_async:
+        response = asyncio.run(middleware.awrap_model_call(request, async_handler))
+    else:
+        response = middleware.wrap_model_call(request, handler)
+
+    assert response.result[0].content == "done"
+    assert seen_request["request"].system_message is not None
+    assert seen_request["request"].system_message.content == content_blocks
+    assert len(seen_request["request"].messages) == 1
+    assert seen_request["request"].messages[0].content == "hello"
+    assert request.system_message is not None
+    assert request.system_message.content == content_blocks
+
+
+@pytest.mark.parametrize("use_async", [False, True])
 def test_tool_call_routes_through_langchain_execution_middleware(
     use_async: bool,
     monkeypatch: pytest.MonkeyPatch,

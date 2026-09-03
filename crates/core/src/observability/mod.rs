@@ -469,10 +469,10 @@ pub(crate) fn push_session_identity_attributes(
             agent_kind.to_string(),
         ));
     }
-    if let Ok(stack) = crate::api::runtime::current_scope_stack().read() {
+    if let Some(root_uuid) = event.propagation_root_uuid() {
         attributes.push(KeyValue::new(
             "nemo_relay.session.instance_id",
-            stack.root_uuid().to_string(),
+            root_uuid.to_string(),
         ));
     }
 }

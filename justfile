@@ -579,6 +579,14 @@ set_node_package_versions() {
     set_npm_package_version crates/node/package.json package-lock.json "$version" crates/node
     set_npm_package_version integrations/openclaw/package.json package-lock.json "$version" integrations/openclaw
     set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$version"
+    # `nemo-relay-pi` is private and not published, so this bump changes nothing today. It is here
+    # so the version cannot already be stale on the day that changes: a workspace member absent
+    # from this list drifts silently, with no lockfile mismatch and no CI failure to catch it.
+    #
+    # The manifest is written at its real path rather than through `integrations/pi`'s symlink to
+    # it. A checkout without symlink support leaves a text stub there, and writing through that
+    # would overwrite the link target's path with a manifest instead of bumping anything.
+    set_npm_package_version crates/cli/assets/pi-extension/package.json package-lock.json "$version" integrations/pi
 }
 
 set_node_package_version() {
@@ -1152,6 +1160,7 @@ clean:
         integrations/openclaw/.test-dist \
         integrations/openclaw/dist \
         integrations/openclaw/node_modules \
+        integrations/pi/node_modules \
         node_modules \
         docs/_build/ \
         docs/reference/api/**/_generated/ \
@@ -1604,8 +1613,23 @@ test-openclaw:
     npm run test:live --workspace=nemo-relay-openclaw
     npm run pack:check --workspace=nemo-relay-openclaw
 
+# --set [ci=true|false]
+test-pi:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    if is_true "{{ ci }}"; then
+        npm ci --ignore-scripts
+    else
+        npm install --ignore-scripts
+    fi
+    # No `build-debug` for the Node binding: the pi extension is a sidecar HTTP
+    # client and loads no native addon, so nothing here depends on it.
+    npm run typecheck --workspace=nemo-relay-pi
+    npm test --workspace=nemo-relay-pi
+
 # --set [output_dir=<path>] [ci=true|false]
-test-all: test-rust test-python test-python-langchain test-go test-node test-openclaw
+test-all: test-rust test-python test-python-langchain test-go test-node test-openclaw test-pi
 
 # [version] or --set ref_name=<version>
 set-version version="":
@@ -1839,8 +1863,10 @@ package-openclaw:
 package-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
-    # Uses the workspace version from Cargo.toml, then writes the Python package
-    # version into pyproject.toml using PEP 440 before building a platform wheel.
+    # An explicit ref_name is synced into the Cargo workspace version first,
+    # so the compiled extension embeds the same version reported by the
+    # Python package, then written into pyproject.toml using PEP 440 before
+    # building a platform wheel.
     output_dir="{{ output_dir }}"
     linux_glibc_version="{{ linux_glibc_version }}"
     export_uv_python_runtime
@@ -1856,6 +1882,7 @@ package-python:
         set_python_package_version "${version}+${sha}" true
     else
         echo "Using explicit version {{ ref_name }}"
+        set_cargo_workspace_version "{{ ref_name }}"
         set_python_package_version "{{ ref_name }}" true
     fi
     build_args=()

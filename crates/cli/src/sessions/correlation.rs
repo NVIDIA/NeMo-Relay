@@ -298,6 +298,7 @@ pub(super) fn event_agent_kind(event: &NormalizedEvent) -> AgentKind {
     match event {
         NormalizedEvent::AgentStarted(event)
         | NormalizedEvent::AgentEnded(event)
+        | NormalizedEvent::TurnStarted(event)
         | NormalizedEvent::TurnEnded(event)
         | NormalizedEvent::PromptSubmitted(event)
         | NormalizedEvent::Compaction(event)

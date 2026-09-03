@@ -655,7 +655,16 @@ impl MetricEventProcessor {
     }
 
     fn process_validated(&mut self, event: &Event, measurements: &[ValidatedMetricMeasurement]) {
-        if let Err(error) = self.record_envelope(measurements) {
+        let mut measurements = measurements.to_vec();
+        if let Some(root_uuid) = event.propagation_root_uuid() {
+            for measurement in &mut measurements {
+                measurement.attributes.insert(
+                    "nemo_relay.session.instance_id".to_string(),
+                    AttributeValue::String(root_uuid.to_string()),
+                );
+            }
+        }
+        if let Err(error) = self.record_envelope(&measurements) {
             self.reject(event, error.kind, error.message);
         }
     }

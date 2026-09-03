@@ -62,9 +62,9 @@ HTTP and HTTPS default ports are realized, repeated and trailing path slashes
 are normalized, and standardized loopback hosts such as `localhost`, names
 under `.localhost`, `127.0.0.0/8`, and `::1` are equivalent. Relay does not use
 DNS resolution for this comparison, and query strings remain significant.
-Rooted Relay propagation continues the Relay-derived trace across the import
-boundary. Rootless propagation retains Relay event parentage but starts a new
-OpenTelemetry trace from the first local event. Carry W3C `traceparent` and
+Relay propagation continues the Relay-derived trace across the import boundary
+by default. Use `capture_rootless_propagation_context()` only when a receiver
+must start a new OpenTelemetry trace. Carry W3C `traceparent` and
 `tracestate` alongside Relay propagation when an integration also needs to
 preserve upstream OpenTelemetry sampling or vendor state.
 

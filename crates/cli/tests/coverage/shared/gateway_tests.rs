@@ -20,6 +20,15 @@ fn test_http_client() -> Client {
     Client::new()
 }
 
+/// Mirrors the production client used for caller-named destinations.
+fn test_http_client_no_redirect() -> Client {
+    crate::test_support::enable_operational_logs();
+    Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("test client configuration is valid")
+}
+
 fn environment_authorization() -> crate::provider_auth::ProviderRequestAuthorization {
     crate::provider_auth::ProviderRequestAuthorization {
         source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
@@ -1080,6 +1089,7 @@ async fn streaming_provider_error_does_not_poison_the_next_request() {
             source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
             allow_environment_provider_auth: false,
         },
+        client_named_upstream: false,
     };
     let func = build_streaming_func(
         state,
@@ -1149,6 +1159,7 @@ async fn buffered_body_read_failure_stays_structured() {
             source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
             allow_environment_provider_auth: false,
         },
+        client_named_upstream: false,
     };
     let func = build_buffered_func(
         state,
@@ -1201,6 +1212,7 @@ async fn buffered_invalid_json_becomes_safe_upstream_failure() {
             source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
             allow_environment_provider_auth: false,
         },
+        client_named_upstream: false,
     };
     let func = build_buffered_func(
         state,
@@ -1400,6 +1412,7 @@ fn build_llm_gateway_start_uses_alignment_identifiers_and_metadata() {
             source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
             allow_environment_provider_auth: true,
         },
+        client_named_upstream: false,
     };
 
     let start = build_llm_gateway_start(&prepared);
@@ -1978,6 +1991,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         require_provider_client_token: false,
         transparent_proxy_credential: None,
         http: test_http_client(),
+        http_no_redirect: test_http_client_no_redirect(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         bootstrap_shutdown: None,
@@ -2016,6 +2030,7 @@ async fn models_rejects_non_get_requests_directly() {
         require_provider_client_token: false,
         transparent_proxy_credential: None,
         http: test_http_client(),
+        http_no_redirect: test_http_client_no_redirect(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         bootstrap_shutdown: None,
@@ -2271,3 +2286,175 @@ async fn streaming_body_records_final_response_for_turn_output() {
 // `llm_stream_call_execute`. The runtime now owns stream-end lifecycle (start/end events emitted
 // by `LlmStreamWrapper`); core tests cover that contract, and the gateway no longer carries a
 // stream preview/truncation helper.
+
+/// A routing directive addressed to this gateway must not travel to the provider.
+///
+/// It names infrastructure and means nothing to any provider API, so forwarding it would be
+/// leaking a detail of our own deployment into a third party's request log.
+#[test]
+fn the_client_named_upstream_header_is_not_forwarded_upstream() {
+    let headers = HeaderMap::new();
+
+    assert!(!should_forward_request_header(
+        &HeaderName::from_static(crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER),
+        &headers
+    ));
+}
+
+/// A named upstream is composed with the request path by the same code that composes a
+/// configured one, so an operator's `/v1` prefix is not doubled.
+#[test]
+fn a_named_upstream_is_the_destination_the_client_would_have_called() {
+    // Relay registers its own root as pi's base, so pi's OpenAI SDK sends `/chat/completions`.
+    // The named base is joined to that path untouched: the point is to reach the endpoint the
+    // client would have reached on its own, and `/v1` reconciliation is a rule for *configured*
+    // bases, where the operator may or may not have included it.
+    for (base, expected) in [
+        // Already carries `/v1`, as pi's NVIDIA catalog entry does.
+        (
+            "https://integrate.api.nvidia.com/v1",
+            "https://integrate.api.nvidia.com/v1/chat/completions",
+        ),
+        // Does not. Normalizing would send this to `/v1/chat/completions`, which is not where
+        // pi would have gone.
+        (
+            "https://api.example.com",
+            "https://api.example.com/chat/completions",
+        ),
+        // A trailing slash must not double up.
+        (
+            "https://api.example.com/",
+            "https://api.example.com/chat/completions",
+        ),
+        // A base with its own path prefix keeps it.
+        (
+            "https://api.example.com/inference/v1",
+            "https://api.example.com/inference/v1/chat/completions",
+        ),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+            HeaderValue::from_str(base).unwrap(),
+        );
+
+        let named = crate::gateway::routes::client_named_upstream_url(
+            crate::gateway::routes::ProviderRoute::OpenAiChatCompletions,
+            &headers,
+            "/chat/completions",
+            true,
+        );
+        assert!(
+            matches!(
+                &named,
+                crate::agents::pi::alignment::NamedUpstream::Named(url) if url == expected
+            ),
+            "{base} should reach {expected}"
+        );
+    }
+}
+
+/// The gateway falls back to configured routing rather than failing, so an unauthenticated
+/// caller simply does not get a say.
+#[test]
+fn an_unauthenticated_caller_gets_no_named_upstream() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+        HeaderValue::from_static("https://integrate.api.nvidia.com/v1"),
+    );
+
+    assert!(matches!(
+        crate::gateway::routes::client_named_upstream_url(
+            crate::gateway::routes::ProviderRoute::OpenAiChatCompletions,
+            &headers,
+            "/chat/completions",
+            false,
+        ),
+        crate::agents::pi::alignment::NamedUpstream::Absent
+    ));
+}
+
+/// A destination that is named but refused must not fall back to configured routing.
+///
+/// The caller registered this gateway as its provider and is sending a prompt and a provider
+/// credential meant for the endpoint it named. Treating a refusal like an absent header would
+/// forward both to the configured OpenAI or Anthropic upstream -- a different company.
+#[test]
+fn a_refused_named_upstream_is_rejected_rather_than_rerouted() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+        HeaderValue::from_static("http://onprem.example.com/v1"),
+    );
+
+    assert!(matches!(
+        crate::gateway::routes::client_named_upstream_url(
+            crate::gateway::routes::ProviderRoute::OpenAiChatCompletions,
+            &headers,
+            "/chat/completions",
+            true,
+        ),
+        crate::agents::pi::alignment::NamedUpstream::Rejected(_)
+    ));
+}
+
+/// The `/v1/models` route resolves a named upstream too, so it has to refuse one the same way.
+///
+/// Covered separately from the passthrough path because it is a second, hand-rolled copy of the
+/// same resolution: it does not share `prepare_gateway_request`, so a fix applied only there
+/// would leave this route silently rerouting to the configured provider.
+#[tokio::test]
+async fn models_refuses_an_unusable_named_upstream() {
+    let config = GatewayConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        // Nothing must reach this. If the refusal fell back to configured routing, the request
+        // would be sent here instead of failing.
+        openai_base_url: "http://127.0.0.1:1".into(),
+        openai_auth_header: None,
+        anthropic_base_url: "http://127.0.0.1:1".into(),
+        anthropic_auth_header: None,
+        metadata: None,
+        plugin_config: None,
+        max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+    };
+    let state = AppState {
+        config: config.clone(),
+        bootstrap_fingerprint: None,
+        bootstrap_challenge_key: None,
+        require_provider_client_token: false,
+        transparent_proxy_credential: Some(
+            crate::provider_auth::TransparentProxyCredential::from_static("nrp_models_named"),
+        ),
+        http: test_http_client(),
+        http_no_redirect: test_http_client_no_redirect(),
+        sessions: SessionManager::new(config),
+        last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
+        bootstrap_shutdown: None,
+        instance_id: "test-instance".into(),
+        bootstrap_tls: None,
+        local_address: None,
+    };
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/v1/models")
+        .header(
+            crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+            "nrp_models_named",
+        )
+        // Plain http to a host that is not loopback: refused.
+        .header(
+            crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+            "http://onprem.example.com/v1",
+        )
+        .body(Body::empty())
+        .unwrap();
+
+    let error = models(State(state), request).await.unwrap_err();
+
+    assert!(
+        matches!(error, crate::error::CliError::InvalidPayload(_)),
+        "a named destination that cannot be used must fail the request: {error}"
+    );
+}

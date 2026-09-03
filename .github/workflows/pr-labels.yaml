@@ -95,9 +95,9 @@ jobs:
             esac
           done
 
-          if (( changed_lines <= 10 )); then
+          if (( changed_lines <= 25 )); then
             size_label="size:XS"
-          elif (( changed_lines <= 100 )); then
+          elif (( changed_lines <= 250 )); then
             size_label="size:S"
           elif (( changed_lines <= 500 )); then
             size_label="size:M"

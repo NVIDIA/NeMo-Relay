@@ -49,9 +49,13 @@ def test_propagation_context_capture_and_constructor_validation():
     root_uuid = str(uuid.uuid4())
 
     with nemo_relay.scope.scope("sender", nemo_relay.ScopeType.Agent) as sender:
-        rootless = nemo_relay.capture_propagation_context()
+        rooted_default = nemo_relay.capture_propagation_context()
+        rootless = nemo_relay.capture_rootless_propagation_context()
         rooted = nemo_relay.capture_propagation_context_with_root(root_uuid)
 
+    assert rooted_default.version == 1
+    assert rooted_default.root_uuid == sender.uuid
+    assert rooted_default.parent_uuid == sender.uuid
     assert rootless.version == 1
     assert rootless.root_uuid is None
     assert rootless.parent_uuid == sender.uuid

@@ -362,7 +362,7 @@ Unknown `category_profile` keys MUST be preserved verbatim by consumers. Adding 
 
 Emitters choose per event. A single stream MAY contain events in both forms.
 
-**Why microseconds and not nanoseconds.** JSON numbers are IEEE 754 doubles with 53 bits of integer precision (~9 × 10¹⁵). Nanoseconds since epoch for 2026 is ~1.76 × 10¹⁸ — exceeds safe integer range. Microseconds fits safely and remains precise enough for agent-scope event correlation.
+**Why microseconds and not nanoseconds.** JSON numbers are IEEE 754 doubles with 53 bits of integer precision (~9 × 10¹⁵). A nanosecond epoch timestamp in 2026 (~1.76 × 10¹⁸) exceeds that safe-integer range. A microsecond timestamp fits and remains precise enough for agent-scope event correlation.
 
 <Warning title="Normalize Timestamps Before Sorting">
   Events are emitted in wall-clock order. Delivery from subscriber callbacks MAY arrive out-of-order for concurrent operations. Consumers MUST sort by `timestamp` before processing. When sorting a mixed-format stream, consumers MUST normalize both forms to a common representation (typically integer microseconds) before comparison — lexicographic string vs integer comparison is undefined.

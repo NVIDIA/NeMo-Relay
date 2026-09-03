@@ -51,3 +51,9 @@ reason must be nonempty. When registration control is enabled, `registration_nam
 and `allowed_registration_name` must differ. Refer to
 [Conditional Middleware Guardrails](../../docs/about-nemo-relay/concepts/conditional-middleware-guardrails.mdx)
 before enabling it against a discovered runtime target.
+
+The `documentation_tool_request` intercept **adds** keys to a tool's arguments.
+That is fine in process, but the pi extension accepts only a rewrite that
+preserves the argument shape, so running pi against a gateway with this example
+enabled blocks every tool call. See the argument-transform notes in
+`docs/nemo-relay-cli/pi.mdx`.

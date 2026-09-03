@@ -31,7 +31,7 @@ use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use crate::agents::shared::adapters::{claude_code, codex};
+use crate::agents::shared::adapters::{claude_code, codex, pi};
 use crate::configuration::{
     BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, GatewayConfig, HOOK_CLIENT_TOKEN_HEADER,
     ManagedBootstrapIdentity,
@@ -54,6 +54,8 @@ pub(crate) struct AppState {
     pub(crate) transparent_proxy_credential:
         Option<crate::provider_auth::TransparentProxyCredential>,
     pub(crate) http: Client,
+    /// Client for caller-named destinations; does not follow redirects. See `upstream_client`.
+    pub(crate) http_no_redirect: Client,
     pub(crate) sessions: SessionManager,
     pub(crate) last_activity: Arc<Mutex<Instant>>,
     pub(crate) bootstrap_shutdown: Option<BootstrapShutdown>,
@@ -507,6 +509,20 @@ impl AppState {
             .read_timeout(HTTP_READ_TIMEOUT)
             .build()
             .expect("gateway HTTP client configuration is valid");
+        // A second client for destinations the caller named, which must not follow redirects.
+        //
+        // Validation applies to the URL that was named; a redirect names a different one, and
+        // reqwest would follow up to ten of them. Its sensitive-header stripping does not help
+        // here either -- it covers `Authorization` across origins, and provider keys travel in
+        // `x-api-key` and friends, which are ordinary headers to it. So a validated `https`
+        // endpoint could 307 a caller's provider key to any host, including over plain http.
+        let http_no_redirect = Client::builder()
+            .connect_timeout(HTTP_CONNECT_TIMEOUT)
+            .timeout(HTTP_REQUEST_TIMEOUT)
+            .read_timeout(HTTP_READ_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("gateway HTTP client configuration is valid");
         Self {
             config,
             bootstrap_fingerprint,
@@ -514,6 +530,7 @@ impl AppState {
             require_provider_client_token,
             transparent_proxy_credential,
             http,
+            http_no_redirect,
             sessions,
             last_activity: Arc::new(Mutex::new(Instant::now())),
             bootstrap_shutdown,
@@ -633,6 +650,7 @@ fn router_with_state(state: AppState) -> Router {
         .route("/bootstrap/shutdown", post(shutdown_bootstrap_sidecar))
         .route("/hooks/codex", post(codex_hook))
         .route("/hooks/claude-code", post(claude_code_hook))
+        .route("/hooks/pi", post(pi_hook))
         .route("/responses", post(gateway::passthrough))
         .route("/chat/completions", post(gateway::passthrough))
         .route("/models", get(gateway::models))
@@ -898,7 +916,7 @@ struct ServerPluginActivation {
     _snapshots: Vec<Arc<DynamicPluginActivationSnapshot>>,
 }
 
-const REMOVED_SWITCHYARD_MESSAGE: &str = "the built-in Switchyard service integration was removed in NeMo Relay >=0.8.0; remove this `[[components]]` entry and follow the NeMo Relay Switchyard migration guide for the Switchyard-owned dynamic plugin: https://docs.nvidia.com/nemo/relay/reference/migration-guides#migrate-to-the-switchyard-owned-dynamic-plugin";
+const REMOVED_SWITCHYARD_MESSAGE: &str = "the built-in Switchyard service integration was removed in NeMo Relay >=0.8.0; remove this `[[components]]` entry and refer to the NeMo Relay migration guides for current Switchyard migration information: https://docs.nvidia.com/nemo/relay/reference/migration-guides";
 
 impl ServerPluginActivation {
     fn clear(mut self) -> Result<(), CliError> {
@@ -1111,6 +1129,34 @@ async fn claude_code_hook(
         }));
     }
     Ok(Json(outcome.response))
+}
+
+// Handles pi extension hooks. pi has no native hook-config file, so these arrive from a NeMo
+// Relay-authored extension rather than from pi itself. Events are committed before the response
+// so a conditional-execution guardrail rejection surfaces as HTTP 403 and the extension can turn
+// it into pi's `{block, reason}` before the tool runs.
+//
+// This is the one hook route that does not call `authorize_hook_request`. The extension posts from
+// inside pi's process, and on the standalone-daemon route nothing hands it a bootstrap or
+// transparent-proxy token, so requiring one here would break the documented setup. Closing that gap
+// means giving the extension a credential first; see `SessionManager::apply_events`.
+async fn pi_hook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, CliError> {
+    state.touch();
+    let Json(payload) = payload.map_err(hook_payload_rejection)?;
+    let outcome = pi::adapt(payload, &headers);
+    let effects = state
+        .sessions
+        .apply_events(&headers, outcome.events)
+        .await?;
+    // pi is the one agent whose hook response can carry a rewritten payload back: its `tool_call`
+    // hook documents in-place mutation of `input`, so the extension can apply what a request
+    // intercept produced. Absent a rewrite the body stays `{}`, which is what an allow has always
+    // been, so an older extension keeps working unchanged.
+    Ok(Json(pi::response_with_effects(outcome.response, &effects)))
 }
 
 async fn authorize_hook_permission(

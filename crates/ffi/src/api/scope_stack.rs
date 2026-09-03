@@ -9,7 +9,7 @@ use super::{
 use crate::convert::str_to_c_string;
 use nemo_relay::api::runtime::{
     PropagationContext, capture_propagation_context, capture_propagation_context_with_root,
-    capture_traceparent, create_scope_stack_from_propagation,
+    capture_rootless_propagation_context, capture_traceparent, create_scope_stack_from_propagation,
 };
 use uuid::Uuid;
 
@@ -64,6 +64,36 @@ pub unsafe extern "C" fn nemo_relay_capture_propagation_context_json(
         return NemoRelayStatus::NullPointer;
     }
     match capture_propagation_context().and_then(|context| {
+        serde_json::to_value(context)
+            .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))
+    }) {
+        Ok(context) => {
+            unsafe { *out = json_to_c_string(&context) };
+            NemoRelayStatus::Ok
+        }
+        Err(error) => {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::from(&error)
+        }
+    }
+}
+
+/// Serialize the current causal parent without a propagation root.
+///
+/// The returned JSON must be freed with `nemo_relay_string_free`.
+///
+/// # Safety
+/// `out` must be a valid, writable pointer to a C-string output slot.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_capture_rootless_propagation_context_json(
+    out: *mut *mut c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    match capture_rootless_propagation_context().and_then(|context| {
         serde_json::to_value(context)
             .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))
     }) {

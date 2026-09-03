@@ -133,6 +133,14 @@ fn refresh(command: RefreshCommand) -> Result<ExitCode, CliError> {
     }
 }
 
+/// The hosts `integrations refresh` can act on, and where.
+///
+/// Marketplace hosts only. pi has no marketplace, so it was already a guaranteed no-op here --
+/// `persisted_state_exists` is false for it because its install writes into pi's own extension
+/// directory rather than a marketplace state file, and `local_install_exists` is false by
+/// construction, so every pi target reached `continue`. Naming the set keeps it that way
+/// deliberately instead of by coincidence, and keeps pi out of `registered_install_dirs`, a
+/// registry it never writes to.
 fn refresh_targets(
     install_dir: Option<&std::path::Path>,
 ) -> Result<Vec<(CodingAgent, PathBuf)>, CliError> {
@@ -141,12 +149,12 @@ fn refresh_targets(
         let install_dir = install_dir
             .canonicalize()
             .unwrap_or_else(|_| install_dir.to_path_buf());
-        for agent in CodingAgent::ALL {
+        for agent in CodingAgent::MARKETPLACE_HOSTS {
             targets.push((agent, install_dir.clone()));
         }
     } else {
         let default = crate::installation::marketplace::default_marketplace_install_dir();
-        for agent in CodingAgent::ALL {
+        for agent in CodingAgent::MARKETPLACE_HOSTS {
             targets.push((agent, default.clone()));
             for install_dir in crate::installation::marketplace::registered_install_dirs(agent)
                 .map_err(CliError::Install)?

@@ -84,9 +84,10 @@ fn scope_stack_propagation_entrypoints_round_trip_through_the_ffi() {
         );
         assert_eq!(
             nemo_relay_capture_traceparent(&mut captured_traceparent),
-            NemoRelayStatus::InvalidArg
+            NemoRelayStatus::Ok
         );
-        assert!(captured_traceparent.is_null());
+        assert!(!captured_traceparent.is_null());
+        nemo_relay_string_free(captured_traceparent);
 
         let rooted_context = CString::new(
             r#"{"version":1,"root_uuid":"018f13f0-7c1a-7a80-8000-000000000701","parent_uuid":"018f13f0-7c1a-7a80-8000-000000000702"}"#,

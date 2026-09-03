@@ -52,8 +52,9 @@ Plugin-managed files also expose selected correlation fields under
 `extra.nemo_relay`: `session_id` is the logical harness session ID,
 `session_instance_id` is Relay's root scope UUID, and `user_id` is present when
 session metadata contains a top-level string value. The top-level ATIF
-`session_id`, `trajectory_id`, `{session_id}` filename expansion, and remote
-session header remain trajectory-unique artifact identities for compatibility.
+`trajectory_id`, the historical `{session_id}` filename expansion, and the
+remote session header remain trajectory-unique artifact identities. A rooted
+propagation context uses its root as the serialized ATIF `session_id`.
 
 ## Fields
 
@@ -68,8 +69,26 @@ The following table describes the top-level ATIF settings:
 | `tool_definitions` | Omitted | Optional ATIF tool metadata. |
 | `extra` | Omitted | Optional ATIF agent metadata. |
 | `output_directory` | Current working directory | Directory containing trajectory files and the recovery copy when every configured remote destination fails. |
-| `filename_template` | `nemo-relay-atif-{session_id}.json` | Must contain `{session_id}`. Can contain `{metadata.<path>}` placeholders for metadata-based routing. |
+| `filename_template` | `nemo-relay-atif-{session_id}.json` | Must contain the historical `{session_id}` placeholder, which expands to the trajectory scope UUID. Can contain `{metadata.<path>}` placeholders for metadata-based routing. |
 | `storage` | Omitted | Optional list of remote storage destinations. When non-empty, trajectories are uploaded to every configured backend. If all fail for one trajectory, Relay writes a local recovery copy. Refer to [Remote Storage](#remote-storage). |
+
+### Run-Scoped Session IDs
+
+Capture the default propagation context when the current Relay root carries a
+run identifier such as an upstream UUID `request_id`:
+
+```toml
+[components.config.atif]
+enabled = true
+output_directory = "logs"
+filename_template = "trajectory-{session_id}.json"
+```
+
+For a top-level Agent scope, Relay emits the propagation root as the ATIF
+`session_id` and keeps the Agent scope UUID as `trajectory_id`. The filename,
+remote storage key, and remote session header continue to use the Agent scope
+UUID so multiple trajectories in one run cannot overwrite each other. Use
+rootless propagation when a receiver must start a new local session.
 
 ### Metadata-Based Paths
 
@@ -276,9 +295,12 @@ incomplete.
 
 To correlate ATIF with typed OpenTelemetry traces from the same run,
 join on NeMo Relay UUIDs. The plugin-managed ATIF `session_id` is the
-top-level trajectory root scope UUID. Each step's `extra.ancestry.function_id` is the event UUID,
-and `extra.ancestry.parent_id` is the parent event UUID. Trace spans expose the
-same values as `nemo_relay.uuid` and `nemo_relay.parent_uuid` attributes.
+propagated root UUID when one is present, otherwise the top-level trajectory
+scope UUID. The ATIF `trajectory_id` remains
+the top-level trajectory scope UUID. Each step's
+`extra.ancestry.function_id` is the event UUID, and
+`extra.ancestry.parent_id` is the parent event UUID. Trace spans expose the same
+values as `nemo_relay.uuid` and `nemo_relay.parent_uuid` attributes.
 
 When present, a step's `metrics` can carry `prompt_tokens`, `completion_tokens`,
 `cached_tokens` (cache read + write), and `cost_usd` (USD only); the trajectory

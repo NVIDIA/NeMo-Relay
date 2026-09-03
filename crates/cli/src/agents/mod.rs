@@ -5,6 +5,7 @@
 
 pub(crate) mod claude;
 pub(crate) mod codex;
+pub(crate) mod pi;
 pub(crate) mod shared;
 
 use semver::Version;
@@ -15,6 +16,7 @@ pub(crate) enum CodingAgent {
     /// `claude-code` remains an input alias for older Relay configuration.
     ClaudeCode,
     Codex,
+    Pi,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -26,16 +28,67 @@ pub(super) struct AgentDescriptor {
     hook_path: &'static str,
     version_product: &'static str,
     minimum_version: (u64, u64, u64),
+    /// The last `major.minor` this integration was actually verified against, for a
+    /// host whose minor releases can break the hook contract.
+    ///
+    /// `None` means the floor behaves like a floor: newer minors are additive and
+    /// nothing above it needs reporting. `Some` means the opposite -- above it, the
+    /// integration is untested rather than known-good, and saying so is the whole
+    /// point, because the failure it guards against is silent.
+    verified_through: Option<(u64, u64)>,
     hook_events: &'static [&'static str],
 }
 
+/// Why pi has no marketplace-plugin implementation.
+///
+/// Codex and Claude Code both install NeMo Relay through a plugin marketplace
+/// (`codex plugin add`, `claude plugin install`) backed by a generated manifest.
+/// pi has none of that: it has no `pi plugin` verb, no marketplace, and no MCP
+/// client for a plugin-owned server to serve. Extensions are installed with
+/// `pi install <source>` or by placing a file in an auto-discovered directory.
+///
+/// Rather than synthesize manifests pi will never read, the marketplace surface
+/// rejects pi explicitly and the gateway surface (hooks, launch, doctor) is
+/// implemented for real.
+///
+/// "No marketplace" is not "nothing to install into", and this constant used to
+/// imply otherwise. `nemo-relay install pi` writes a package directory into pi's
+/// own auto-discovery location (`agents::pi::install`), which is a real
+/// persistent install by a route that has no marketplace in it. What stays
+/// unsupported is everything below: a generated plugin manifest, a host
+/// registration verb, and a plugin-owned MCP server, none of which pi has a
+/// consumer for.
+pub(crate) const PI_MARKETPLACE_UNSUPPORTED: &str = "pi has no plugin marketplace; \
+     `nemo-relay install pi` writes the extension into pi's own auto-discovery directory \
+     instead, and `nemo-relay pi` runs pi against it";
+
+/// Reached only if a marketplace code path forgets to reject pi first.
+macro_rules! pi_marketplace_unreachable {
+    () => {
+        unreachable!("{}", PI_MARKETPLACE_UNSUPPORTED)
+    };
+}
+
 impl CodingAgent {
-    pub(crate) const ALL: [Self; 2] = [Self::ClaudeCode, Self::Codex];
+    pub(crate) const ALL: [Self; 3] = [Self::ClaudeCode, Self::Codex, Self::Pi];
+
+    /// Every agent Relay installs *through the plugin marketplace*.
+    ///
+    /// Not the same set as [`Self::ALL`], and the difference is load-bearing: pi has no
+    /// marketplace, so `PluginLayout::new` and everything reached from it is
+    /// `pi_marketplace_unreachable!()` for it. Anything that writes or reads marketplace state
+    /// for a set of hosts wants this constant, not `ALL` -- iterating `ALL` there panics.
+    ///
+    /// Named rather than filtered at each call site because the failure mode is silent until
+    /// it is loud: `ALL` compiles fine and reads naturally, and the panic only appears once a
+    /// host without a marketplace reaches the layout.
+    pub(crate) const MARKETPLACE_HOSTS: [Self; 2] = [Self::ClaudeCode, Self::Codex];
 
     const fn descriptor(self) -> AgentDescriptor {
         match self {
             Self::ClaudeCode => claude::DESCRIPTOR,
             Self::Codex => codex::DESCRIPTOR,
+            Self::Pi => pi::DESCRIPTOR,
         }
     }
 
@@ -104,10 +157,32 @@ impl CodingAgent {
         Ok(version)
     }
 
+    /// Why a version passes the floor and is still not one we have run against.
+    ///
+    /// Deliberately not folded into `validate_version_output`: that returns an error,
+    /// and an error blocks the launch (`process::launcher::validate_agent_version`).
+    /// Refusing to start on a version that probably works would be worse than the
+    /// silence it replaces -- the user would have to downgrade the agent to use
+    /// Relay at all. This reports; it does not gate.
+    pub(crate) fn unverified_version(self, version: &Version) -> Option<String> {
+        let (major, minor) = self.descriptor().verified_through?;
+        if (version.major, version.minor) <= (major, minor) {
+            return None;
+        }
+        Some(format!(
+            "{product} {version} is newer than the {product} {major}.{minor}.x this integration \
+             was verified against; {product} can change hook shapes in a minor release, and the \
+             symptom is missing spans rather than an error. Re-verify, or pin {product} {major}.\
+             {minor}.x",
+            product = self.descriptor().version_product,
+        ))
+    }
+
     fn parse_version(self, raw: &str) -> Option<Version> {
         match self {
             Self::ClaudeCode => claude::parse_version(raw),
             Self::Codex => codex::parse_version(raw),
+            Self::Pi => pi::parse_version(raw),
         }
     }
 
@@ -129,6 +204,7 @@ impl CodingAgent {
         match name {
             "claude" | "claude-code" => Some(Self::ClaudeCode),
             "codex" => Some(Self::Codex),
+            "pi" => Some(Self::Pi),
             _ => None,
         }
     }
@@ -159,6 +235,7 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
         match self {
             Self::Codex => &[".agents", "plugins", "marketplace.json"],
             Self::ClaudeCode => &[".claude-plugin", "marketplace.json"],
+            Self::Pi => pi_marketplace_unreachable!(),
         }
     }
 
@@ -166,6 +243,7 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
         match self {
             Self::Codex => &[".codex-plugin", "plugin.json"],
             Self::ClaudeCode => &[".claude-plugin", "plugin.json"],
+            Self::Pi => pi_marketplace_unreachable!(),
         }
     }
 
@@ -206,6 +284,7 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
                 "--scope".into(),
                 "user".into(),
             ],
+            Self::Pi => pi_marketplace_unreachable!(),
         }
     }
 
@@ -213,6 +292,7 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
         match self {
             Self::Codex => vec!["plugin".into(), "remove".into(), plugin_id.into()],
             Self::ClaudeCode => vec!["plugin".into(), "uninstall".into(), plugin_name.into()],
+            Self::Pi => pi_marketplace_unreachable!(),
         }
     }
 
@@ -228,6 +308,7 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
             Self::ClaudeCode => {
                 crate::installation::marketplace::host::claude_registration_report(options, runner)
             }
+            Self::Pi => Err(PI_MARKETPLACE_UNSUPPORTED.to_string()),
         }
     }
 
@@ -243,6 +324,7 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
             Self::ClaudeCode => format!(
                 "cannot safely replace or uninstall an existing Claude Code plugin because its MCP generation marker {problem}; close all Claude Code clients and standalone `nemo-relay mcp` processes, run `claude plugin uninstall nemo-relay-plugin` and `claude plugin marketplace remove nemo-relay-local`, remove the stale marketplace and state from the selected install directory, then run `nemo-relay install claude-code --force` to create a fenced install (and `nemo-relay uninstall claude-code` afterward if removal was intended)"
             ),
+            Self::Pi => pi_marketplace_unreachable!(),
         }
     }
 
@@ -268,6 +350,8 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
                     || plugin_root.join(".mcp.json").exists()
                     || generation_fence.exists()
             }
+            // pi installs nothing through this surface, so nothing to detect.
+            Self::Pi => false,
         }
     }
 
@@ -329,6 +413,7 @@ pub(crate) fn marketplace_manifest(
     match agent {
         CodingAgent::Codex => codex::assets::marketplace_manifest(marketplace, plugin),
         CodingAgent::ClaudeCode => claude::assets::marketplace_manifest(marketplace, plugin),
+        CodingAgent::Pi => pi_marketplace_unreachable!(),
     }
 }
 
@@ -336,6 +421,7 @@ pub(crate) fn plugin_manifest(agent: CodingAgent, plugin: &str) -> serde_json::V
     match agent {
         CodingAgent::Codex => codex::assets::plugin_manifest(plugin),
         CodingAgent::ClaudeCode => claude::assets::plugin_manifest(plugin),
+        CodingAgent::Pi => pi_marketplace_unreachable!(),
     }
 }
 
@@ -346,6 +432,8 @@ pub(crate) fn plugin_mcp_config(
     match agent {
         CodingAgent::Codex => codex::assets::mcp_config(server),
         CodingAgent::ClaudeCode => Ok(claude::assets::mcp_config(server)),
+        // pi ships no MCP client, so a plugin-owned server would have no consumer.
+        CodingAgent::Pi => Err(PI_MARKETPLACE_UNSUPPORTED.to_string()),
     }
 }
 
@@ -361,7 +449,7 @@ pub(crate) fn prepare_launch(
     agent: CodingAgent,
     launch: &mut crate::process::PreparedAgentLaunch,
     gateway_url: &str,
-    _resolved: &crate::configuration::ResolvedConfig,
+    resolved: &crate::configuration::ResolvedConfig,
     proxy_credential: &crate::provider_auth::TransparentProxyCredential,
     dry_run: bool,
 ) -> Result<(), crate::error::CliError> {
@@ -374,6 +462,10 @@ pub(crate) fn prepare_launch(
         CodingAgent::ClaudeCode => {
             claude::launch::prepare(launch, gateway_url, proxy_credential, dry_run)
         }
+        // pi is the only agent whose launcher needs the gateway's upstream configuration: its
+        // extension redirects model traffic only when the selected model already targets that
+        // upstream. See `pi::launch::prepare`.
+        CodingAgent::Pi => pi::launch::prepare(launch, gateway_url, &resolved.gateway),
     }
 }
 
@@ -388,6 +480,7 @@ pub(crate) const fn config(
     match agent {
         CodingAgent::ClaudeCode => &configs.claude,
         CodingAgent::Codex => &configs.codex,
+        CodingAgent::Pi => &configs.pi,
     }
 }
 
@@ -398,6 +491,7 @@ pub(crate) fn hook_status(
     match agent {
         CodingAgent::Codex => codex::doctor::hook_status(),
         CodingAgent::ClaudeCode => claude::doctor::hook_status(),
+        CodingAgent::Pi => pi::doctor::hook_status(),
     }
 }
 
@@ -428,6 +522,7 @@ pub(crate) fn snapshot_setup(agent: CodingAgent) -> Result<SetupSnapshot, String
     match agent {
         CodingAgent::Codex => snapshot_codex_setup().map(SetupSnapshot::Codex),
         CodingAgent::ClaudeCode => snapshot_claude_setup().map(SetupSnapshot::Claude),
+        CodingAgent::Pi => Err(PI_MARKETPLACE_UNSUPPORTED.to_string()),
     }
 }
 
@@ -449,6 +544,7 @@ pub(crate) fn setup_marketplace_plugin(
             install_codex_plugin_with_generation(gateway_url, plugin_root, generation_token)
         }
         CodingAgent::ClaudeCode => enable_claude_provider(gateway_url),
+        CodingAgent::Pi => Err(PI_MARKETPLACE_UNSUPPORTED.to_string()),
     }
 }
 
@@ -460,6 +556,7 @@ pub(crate) fn uninstall_marketplace_plugin(
     match agent {
         CodingAgent::Codex => uninstall_codex_plugin(gateway_url, plugin_root),
         CodingAgent::ClaudeCode => restore_claude_provider(gateway_url),
+        CodingAgent::Pi => Err(PI_MARKETPLACE_UNSUPPORTED.to_string()),
     }
 }
 
@@ -477,6 +574,7 @@ pub(crate) fn doctor_marketplace_plugin(
             generation_token,
         ),
         CodingAgent::ClaudeCode => doctor_plugin(CodingAgent::ClaudeCode, gateway_url, plugin_root),
+        CodingAgent::Pi => Err(PI_MARKETPLACE_UNSUPPORTED.to_string()),
     }
 }
 
@@ -490,6 +588,7 @@ pub(crate) fn doctor_marketplace_plugin_json(
         CodingAgent::ClaudeCode => {
             doctor_plugin_json(CodingAgent::ClaudeCode, gateway_url, plugin_root)
         }
+        CodingAgent::Pi => Err(PI_MARKETPLACE_UNSUPPORTED.to_string()),
     }
 }
 
@@ -500,6 +599,9 @@ pub(crate) fn install_integration(
     match agent {
         CodingAgent::Codex => codex::install::install(command),
         CodingAgent::ClaudeCode => claude::install::install(command),
+        // Not a marketplace install: pi auto-discovers a package directory under its own
+        // agent directory, so Relay writes one there instead of synthesizing a manifest.
+        CodingAgent::Pi => pi::install::install(command),
     }
 }
 
@@ -510,6 +612,7 @@ pub(crate) fn uninstall_integration(
     match agent {
         CodingAgent::Codex => codex::install::uninstall(command),
         CodingAgent::ClaudeCode => claude::install::uninstall(command),
+        CodingAgent::Pi => pi::install::uninstall(command),
     }
 }
 
@@ -521,7 +624,21 @@ pub(crate) fn detected_install_integrations(candidates: &[CodingAgent]) -> Vec<C
         .collect()
 }
 
-/// Returns hosts with persisted state, optionally including force-cleanup targets.
+/// Hosts with **marketplace plugin state** under `install_dir`.
+///
+/// With `include_local_install`, force-cleanup targets count as state too, so a stale local
+/// installation is still reachable by `uninstall --force`.
+///
+/// ⚠️ **pi is never in this list, and putting it there panics the doctor.** Every consumer
+/// feeds the result into marketplace-only code -- `PluginLayout::new` calls
+/// `marketplace_manifest_relative`, which is `unreachable!()` for pi -- so a pi here is not
+/// a wrong answer, it is an abort. That regression shipped once: teaching this function
+/// about pi so `uninstall all` could see a managed install also put pi in front of the
+/// readiness collector, and a single `nemo-relay install pi` then panicked `doctor` for
+/// *every* agent.
+///
+/// Use [`uninstallable_integrations`] for "what can Relay remove", which is the question
+/// that has a pi answer.
 pub(crate) fn installed_integrations(
     candidates: &[CodingAgent],
     install_dir: Option<&Path>,
@@ -533,6 +650,7 @@ pub(crate) fn installed_integrations(
     candidates
         .iter()
         .copied()
+        .filter(|agent| !matches!(agent, CodingAgent::Pi))
         .filter(|agent| {
             crate::installation::marketplace::persisted_state_exists(*agent, &install_dir)
                 || (include_local_install
@@ -542,6 +660,26 @@ pub(crate) fn installed_integrations(
                     ))
         })
         .collect()
+}
+
+/// Hosts with integration state Relay can remove, which is a wider question.
+///
+/// Marketplace state for Codex and Claude Code, and a Relay-managed extension directory for
+/// pi. Separate from [`installed_integrations`] because only one of the two questions has a
+/// pi answer, and answering both from one function is what broke `doctor`.
+///
+/// `include_local_install` is forwarded to [`installed_integrations`]. It does not gate pi:
+/// a Relay-managed extension directory *is* the local install, so it is always removable.
+pub(crate) fn uninstallable_integrations(
+    candidates: &[CodingAgent],
+    install_dir: Option<&Path>,
+    include_local_install: bool,
+) -> Vec<CodingAgent> {
+    let mut agents = installed_integrations(candidates, install_dir, include_local_install);
+    if candidates.contains(&CodingAgent::Pi) && pi::install::is_installed() {
+        agents.push(CodingAgent::Pi);
+    }
+    agents
 }
 
 pub(crate) fn doctor_integration(
@@ -796,6 +934,21 @@ pub(crate) fn doctor_plugin_json(
                 Some(trust),
             )
         }
+        // pi's hooks live inside a user-loaded extension rather than in a
+        // NeMo Relay-managed plugin root, so the only checkable fact here is
+        // whether that extension is discoverable.
+        CodingAgent::Pi => {
+            let extension = pi::doctor::extension_configured();
+            (
+                json!({
+                    "plugin_binary": plugin_binary,
+                    "sidecar_running": sidecar_running,
+                    "pi_extension_located": extension
+                }),
+                plugin_binary && extension,
+                None,
+            )
+        }
     };
     let mut report = json!({
         "ok": ok,
@@ -854,6 +1007,10 @@ fn doctor_ok(
             if !trust.ready() {
                 print_info("codex hook trust", &trust.summary());
             }
+        }
+        CodingAgent::Pi => {
+            ok &= print_check("pi extension located", pi::doctor::extension_configured());
+            print_info("pi hooks", &pi::doctor::hook_status()?);
         }
     }
     Ok(ok)

@@ -24,6 +24,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_pi:
+        description: 'Whether to run pi integration checks'
+        required: false
+        default: false
+        type: boolean
     secrets:
       CODECOV_TOKEN:
         required: false
@@ -123,6 +128,11 @@ jobs:
         if: ${{ inputs.run_openclaw }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just --set ci true test-openclaw
+
+      - name: Run pi integration checks
+        if: ${{ inputs.run_pi }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: just --set ci true test-pi
 
       - name: Upload Node coverage to Codecov
         uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0

@@ -27,6 +27,12 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
             subagent_end: &["subagentStop", "subagentEnd", "subagent_stop"],
             tool_start: &["preToolUse", "toolStarted", "tool_start"],
             tool_end: &["postToolUse", "toolEnded", "tool_end", "toolFailed"],
+            // Codex reports only the close of a turn (`Stop`); its turns stay
+            // lazily opened, and `PreCompact`/`PostCompact` are matched by the
+            // shared fallback rather than by an adapter-specific rule.
+            turn_start: &[],
+            turn_end: &["Stop", "stop"],
+            compaction: &[],
         },
     );
     AdapterOutcome {

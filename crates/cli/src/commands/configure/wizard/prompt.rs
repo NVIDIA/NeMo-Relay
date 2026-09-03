@@ -96,7 +96,67 @@ pub(super) async fn run(
         println!("    {}", path.display());
     }
     println!();
+    if answers.agents.contains(&CodingAgent::Pi) {
+        offer_pi_extension();
+    }
     continue_to_plugins(explicit_plugin_path)
+}
+
+/// Offer to install the pi extension when setup selected pi and pi has no copy.
+///
+/// pi is the one agent whose shortcut is not install-free. Claude Code and Codex take
+/// their hooks from the launcher, so setup is the last step they need; pi's hooks can only
+/// originate inside an extension, so `nemo-relay pi` fails on a clean machine until one
+/// exists. Without this the wizard would finish, congratulate the user, and then hand them
+/// a command that does not work.
+///
+/// Nothing here can fail the wizard. The configuration is already saved by this point, the
+/// install is optional, and a declined or broken install still leaves a working setup for
+/// the manual routes -- so every path prints how to do it later and returns.
+fn offer_pi_extension() {
+    if !crate::agents::pi::install::setup_install_available() {
+        return;
+    }
+    println!("  ℹ pi hooks originate inside the NeMo Relay pi extension, so `nemo-relay pi`");
+    println!("    needs it present. Relay can write it into pi's own extensions directory.");
+    println!();
+    match confirm_pi_extension_install() {
+        Ok(true) => run_pi_extension_install(),
+        Ok(false) => print_pi_extension_skipped(),
+        // An interrupted prompt is a skip, exactly as it is for plugin setup.
+        Err(error) if super::plugin_prompt_was_interrupted(&error) => print_pi_extension_skipped(),
+        Err(error) => {
+            println!("  Could not read a response ({error}).");
+            print_pi_extension_skipped();
+        }
+    }
+}
+
+fn confirm_pi_extension_install() -> Result<bool, dialoguer::Error> {
+    Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Install the NeMo Relay pi extension now?")
+        .default(true)
+        .interact()
+}
+
+fn run_pi_extension_install() {
+    let request = crate::installation::InstallRequest {
+        install_dir: None,
+        force: false,
+        dry_run: false,
+        skip_doctor: false,
+    };
+    if let Err(error) = crate::agents::pi::install::install(request) {
+        println!();
+        println!("  The pi extension was not installed: {error}");
+        print_pi_extension_skipped();
+    }
+}
+
+fn print_pi_extension_skipped() {
+    println!();
+    println!("  Install it later with `nemo-relay install pi`.");
+    println!();
 }
 
 /// After the base config is saved, offers to continue into plugin configuration in-process.
@@ -197,7 +257,10 @@ fn ask_agents(
     detected: &[CodingAgent],
     configured: &[CodingAgent],
 ) -> Result<Vec<CodingAgent>, CliError> {
-    let all_supported = [CodingAgent::ClaudeCode, CodingAgent::Codex];
+    // Every supported agent, not a hand-written pair. Saving an unscoped result replaces
+    // the whole `[agents]` table, so an agent missing from this list is removed from the
+    // user's config by a wizard that never offered it.
+    let all_supported = CodingAgent::ALL;
     let labels: Vec<String> = all_supported
         .iter()
         .map(|a| {
