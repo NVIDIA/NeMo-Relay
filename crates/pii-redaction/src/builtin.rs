@@ -188,7 +188,6 @@ enum BuiltinAction {
 #[derive(Clone)]
 struct BuiltinMatcher {
     regex: Arc<Regex>,
-    detector: Option<BuiltinDetector>,
 }
 
 impl BuiltinMatcher {
@@ -197,11 +196,6 @@ impl BuiltinMatcher {
         let mut cursor = 0;
         for matched in self.regex.find_iter(text) {
             let matched_text = matched.as_str();
-            if self.detector == Some(BuiltinDetector::AwsSecretAccessKey)
-                && is_hex_git_sha(matched_text)
-            {
-                continue;
-            }
             output.push_str(&text[cursor..matched.start()]);
             output.push_str(&replacement(matched_text));
             cursor = matched.end();
@@ -217,12 +211,6 @@ impl BuiltinMatcher {
             let matched = captures
                 .get(0)
                 .expect("regular-expression captures always include the full match");
-            let matched_text = matched.as_str();
-            if self.detector == Some(BuiltinDetector::AwsSecretAccessKey)
-                && is_hex_git_sha(matched_text)
-            {
-                continue;
-            }
             output.push_str(&text[cursor..matched.start()]);
             captures.expand(replacement, &mut output);
             cursor = matched.end();
@@ -1029,10 +1017,9 @@ fn sanitize_category_profile_with_backend(
         Err(_) => {
             log::warn!(
                 target: "nemo_relay.plugin",
-                event = "pii_llm_payload_omitted",
-                codec_kind = "annotated",
+                event = "pii_category_profile_omitted",
                 reason = "category profile redaction round-trip failure";
-                "PII redaction omitted an annotated LLM payload"
+                "PII redaction omitted a category profile"
             );
             None
         }
@@ -1209,12 +1196,7 @@ fn compile_builtin_matcher(
     })?;
     Ok(Some(Arc::new(BuiltinMatcher {
         regex: Arc::new(pattern),
-        detector,
     })))
-}
-
-fn is_hex_git_sha(value: &str) -> bool {
-    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn sanitize_serializable_with_backend<T>(
@@ -1262,7 +1244,7 @@ mod tests {
     }
 
     #[test]
-    fn detectors_ignore_embedded_api_key_prefixes_and_hex_git_shas() {
+    fn detectors_ignore_embedded_api_key_prefixes_and_redact_hex_aws_secrets() {
         let api_key_backend = CompiledBuiltinBackend::new(
             BuiltinBackendConfig {
                 action: "redact".to_string(),
@@ -1294,10 +1276,7 @@ mod tests {
         let aws_result = aws_backend.sanitize_json_preorder_dfs(serde_json::json!({
             "value": "sha 0123456789abcdef0123456789abcdef01234567 key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
         }));
-        assert_eq!(
-            aws_result["value"],
-            "sha 0123456789abcdef0123456789abcdef01234567 key [REDACTED]"
-        );
+        assert_eq!(aws_result["value"], "sha [REDACTED] key [REDACTED]");
     }
 
     #[test]
