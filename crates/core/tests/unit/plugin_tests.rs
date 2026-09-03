@@ -2691,6 +2691,21 @@ fn test_default_plugin_config_paths_order_user_system() {
     );
 }
 
+#[test]
+fn test_explicit_plugin_config_replaces_user_below_system() {
+    #[cfg(feature = "__skip-implicit-config")]
+    let _environment = TestConfigEnvironment::set(None);
+
+    let dir = tempfile::tempdir().unwrap();
+    let explicit = dir.path().join("explicit.toml");
+    let user = dir.path().join("user");
+
+    assert_eq!(
+        plugin_config_paths(Some(&explicit), Some(user)),
+        vec![explicit, system_config_dir().join("plugins.toml")],
+    );
+}
+
 #[cfg(feature = "__skip-implicit-config")]
 #[test]
 fn test_hook_skips_implicit_plugin_config_paths() {

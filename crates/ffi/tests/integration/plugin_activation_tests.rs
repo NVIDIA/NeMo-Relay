@@ -50,16 +50,16 @@ impl Drop for PluginDiscoveryTestEnv {
 }
 
 #[test]
-fn ffi_activation_layers_discovered_static_and_explicit_dynamic_plugins() {
+fn ffi_activation_explicit_config_replaces_discovered_user_config() {
     if std::env::var_os(DISCOVERY_CHILD_ENV).is_some() {
-        run_discovered_config_activation_test();
+        run_explicit_config_replacement_test();
         return;
     }
 
     let output = Command::new(std::env::current_exe().expect("current test executable"))
         .arg("--exact")
         .arg(
-            "plugin_activation_tests::ffi_activation_layers_discovered_static_and_explicit_dynamic_plugins",
+            "plugin_activation_tests::ffi_activation_explicit_config_replaces_discovered_user_config",
         )
         .arg("--nocapture")
         .env(DISCOVERY_CHILD_ENV, "1")
@@ -74,7 +74,7 @@ fn ffi_activation_layers_discovered_static_and_explicit_dynamic_plugins() {
     );
 }
 
-fn run_discovered_config_activation_test() {
+fn run_explicit_config_replacement_test() {
     DISCOVERED_STATIC_REGISTRATIONS.store(0, Ordering::SeqCst);
     DISCOVERED_STATIC_CALLBACKS.store(0, Ordering::SeqCst);
     *DISCOVERED_STATIC_CONFIG.lock().unwrap() = None;
@@ -88,7 +88,6 @@ fn run_discovered_config_activation_test() {
     let plugins_toml = user_config_dir.join("plugins.toml");
     std::fs::write(project_config_dir.join("plugins.toml"), "invalid = [")
         .expect("write ignored project plugin config");
-    std::fs::write(&plugins_toml, "invalid = [").expect("write invalid user plugin config");
     let _environment = PluginDiscoveryTestEnv::enter(environment.path(), &xdg_config_home);
 
     std::fs::write(
@@ -105,7 +104,7 @@ source = "user-file"
 "#
         ),
     )
-    .expect("write project plugin config");
+    .expect("write user plugin config");
 
     let plugin_kind = cstring(DISCOVERED_STATIC_PLUGIN_KIND);
     assert_eq!(
@@ -137,7 +136,15 @@ source = "user-file"
     );
     assert!(active);
 
-    write_and_assert_discovered_activation(&report, &plugins_toml);
+    assert_eq!(report["config"]["diagnostics"], json!([]));
+    assert_eq!(DISCOVERED_STATIC_REGISTRATIONS.load(Ordering::SeqCst), 0);
+    assert_eq!(DISCOVERED_STATIC_CONFIG.lock().unwrap().as_ref(), None);
+    assert!(plugin_kinds().iter().any(|kind| kind == "fixture_native"));
+
+    let intercepted = tool_request_intercepts("ffi-layered-tool", json!({"input": true}));
+    assert!(intercepted.get("file_static").is_none());
+    assert_eq!(intercepted["native_plugin"], true);
+    assert_eq!(DISCOVERED_STATIC_CALLBACKS.load(Ordering::SeqCst), 0);
 
     unsafe {
         assert_eq!(
@@ -156,45 +163,11 @@ source = "user-file"
         tool_request_intercepts("ffi-layered-tool", json!({"input": true})),
         json!({"input": true})
     );
-    assert_eq!(DISCOVERED_STATIC_CALLBACKS.load(Ordering::SeqCst), 1);
+    assert_eq!(DISCOVERED_STATIC_CALLBACKS.load(Ordering::SeqCst), 0);
     assert_eq!(
         unsafe { api::nemo_relay_deregister_plugin(plugin_kind.as_ptr()) },
         NemoRelayStatus::Ok
     );
-}
-
-#[track_caller]
-fn write_and_assert_discovered_activation(report: &Json, plugins_toml: &Path) {
-    // The file-only component and its config must survive the merge.
-    let diagnostics = report["config"]["diagnostics"]
-        .as_array()
-        .expect("diagnostics array");
-    assert_eq!(diagnostics.len(), 1);
-    assert!(diagnostics.iter().all(|diagnostic| {
-        diagnostic["level"] == "warning"
-            && diagnostic["code"] == "plugin.configuration_inherited"
-            && diagnostic.get("component").is_none()
-            && diagnostic.get("field").is_none()
-    }));
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic["message"]
-            .as_str()
-            .is_some_and(|message| message.contains(&plugins_toml.display().to_string()))
-    }));
-    assert_eq!(DISCOVERED_STATIC_REGISTRATIONS.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        DISCOVERED_STATIC_CONFIG.lock().unwrap().as_ref(),
-        Some(&json!({"source": "user-file"}))
-    );
-    assert!(plugin_kinds().iter().any(|kind| kind == "fixture_native"));
-
-    // Mutating the file after startup has no effect: discovery is one-shot.
-    std::fs::write(plugins_toml, "invalid = [").expect("mutate plugin config after startup");
-    let intercepted = tool_request_intercepts("ffi-layered-tool", json!({"input": true}));
-    assert_eq!(intercepted["file_static"], true);
-    assert_eq!(intercepted["static_saw_dynamic"], false);
-    assert_eq!(intercepted["native_plugin"], true);
-    assert_eq!(DISCOVERED_STATIC_CALLBACKS.load(Ordering::SeqCst), 1);
 }
 
 unsafe extern "C" fn discovered_static_register(
@@ -269,6 +242,12 @@ fn ffi_activation_loads_native_callbacks_and_removes_them_before_free() {
             api::nemo_relay_plugin_host_activation_close(activation),
             NemoRelayStatus::Ok
         );
+        let mut closed_report = ptr::null_mut();
+        assert_eq!(
+            api::nemo_relay_plugin_host_activation_report_json(activation, &mut closed_report),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(returned_json(closed_report), report);
         nemo_relay_plugin_host_activation_free(&mut activation);
     }
     assert!(!plugin_kinds().iter().any(|kind| kind == "fixture_native"));

@@ -18,8 +18,7 @@ use super::{
     validate_dynamic_plugin_config_schema,
 };
 use crate::plugin::{
-    PluginConfig, PluginError, Result, deduplicate_plugin_config_paths,
-    default_plugin_config_paths, resolve_plugin_config_with_explicit,
+    PluginConfig, PluginError, Result, plugin_config_paths, resolve_plugin_config_with_explicit,
 };
 
 const DYNAMIC_PLUGIN_STATE_FILENAME: &str = ".dynamic-plugins.json";
@@ -265,7 +264,7 @@ fn resolve_plugin_host_config_inner(
     reject_required_failures: bool,
 ) -> Result<ResolvedPluginHostConfig> {
     let resolved = resolve_plugin_config_with_explicit(programmatic, explicit_path)?;
-    let paths = plugin_config_paths(explicit_path);
+    let paths = plugin_config_paths(explicit_path, crate::plugin::user_config_dir());
     let files = read_plugin_files(&paths)?;
     let mut policy = DynamicPluginHostPolicy::default();
     let mut active = Vec::new();
@@ -389,7 +388,10 @@ fn validate_declaration(
 }
 
 fn effective_policy(explicit_path: Option<&Path>) -> Result<DynamicPluginHostPolicy> {
-    effective_policy_from_paths(&plugin_config_paths(explicit_path))
+    effective_policy_from_paths(&plugin_config_paths(
+        explicit_path,
+        crate::plugin::user_config_dir(),
+    ))
 }
 
 fn effective_policy_from_paths(paths: &[PathBuf]) -> Result<DynamicPluginHostPolicy> {
@@ -431,15 +433,6 @@ fn read_utf8_plugin_file(path: &Path) -> Result<String> {
             path.display()
         ))
     })
-}
-
-fn plugin_config_paths(explicit_path: Option<&Path>) -> Vec<PathBuf> {
-    let mut paths = explicit_path
-        .map(Path::to_path_buf)
-        .into_iter()
-        .collect::<Vec<_>>();
-    paths.extend(default_plugin_config_paths(crate::plugin::user_config_dir()));
-    deduplicate_plugin_config_paths(paths)
 }
 
 fn resolve_manifest_path(source: &Path, reference: &str) -> PathBuf {

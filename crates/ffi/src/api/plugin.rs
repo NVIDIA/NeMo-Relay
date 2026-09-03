@@ -226,6 +226,9 @@ pub unsafe extern "C" fn nemo_relay_plugin_initialize(
 
 /// Return the current report retained by an owned plugin-host activation.
 ///
+/// The report remains available after either a successful or failed close and
+/// is released only when the activation handle is freed.
+///
 /// # Safety
 /// `activation` must be a valid activation handle and `out_report_json`
 /// must be a valid non-null output pointer.

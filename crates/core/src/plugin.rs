@@ -1860,8 +1860,7 @@ pub(crate) fn resolve_plugin_config_with_explicit(
     explicit_path: Option<&Path>,
 ) -> Result<ResolvedPluginConfig> {
     let explicit_path = explicit_path.map(Path::to_path_buf);
-    let mut paths = explicit_path.iter().cloned().collect::<Vec<_>>();
-    paths.extend(default_plugin_config_paths(user_config_dir()));
+    let paths = plugin_config_paths(explicit_path.as_deref(), user_config_dir());
     let (file_value, mut sources) =
         merge_plugin_config_documents(read_plugin_config_files(paths)?)?
             .unwrap_or_else(|| (Json::Object(Map::new()), Vec::new()));
@@ -2222,6 +2221,27 @@ pub fn default_plugin_config_paths(user_dir: Option<PathBuf>) -> Vec<PathBuf> {
     }
     paths.push(system_config_dir().join("plugins.toml"));
     paths
+}
+
+/// Effective `plugins.toml` paths (lowest precedence first).
+///
+/// An explicit path replaces the ambient user path but remains below the
+/// operator-managed system path.
+pub(crate) fn plugin_config_paths(
+    explicit_path: Option<&Path>,
+    user_dir: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut paths = explicit_path
+        .map(Path::to_path_buf)
+        .into_iter()
+        .collect::<Vec<_>>();
+    let selected_user_dir = if explicit_path.is_some() {
+        None
+    } else {
+        user_dir
+    };
+    paths.extend(default_plugin_config_paths(selected_user_dir));
+    deduplicate_plugin_config_paths(paths)
 }
 
 #[cfg(feature = "__skip-implicit-config")]

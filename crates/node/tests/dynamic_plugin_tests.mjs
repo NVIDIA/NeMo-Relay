@@ -266,7 +266,7 @@ describe('dynamic plugin host', () => {
     assert.equal(plugin.validate.length, plugin.initialize.length);
   });
 
-  it('layers plugins.toml static base components with dynamic plugins', async () => {
+  it('replaces ambient user config with an explicit plugins.toml', async () => {
     const staticKind = 'node.fixture.static-base';
     const projectRoot = path.join(tempRoot, 'file-static-base-project');
     const isolatedUserConfig = path.join(projectRoot, 'xdg');
@@ -299,17 +299,9 @@ enabled = true
       activation = await initializePluginHostWithDeclarations({ version: 1, components: [] }, [
         activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef),
       ]);
-      const diagnostic = activation.report.config.diagnostics.find(
-        (candidate) =>
-          candidate.code === 'plugin.configuration_inherited' && candidate.message.endsWith(path.resolve(pluginsToml)),
-      );
-      assert.ok(diagnostic);
-      assert.equal(diagnostic.level, 'warning');
-      assert.equal(diagnostic.code, 'plugin.configuration_inherited');
-      assert.equal(diagnostic.component, undefined);
-      assert.equal(diagnostic.field, undefined);
+      assert.deepEqual(activation.report.config.diagnostics, []);
       const result = await executeTool('node_static_and_dynamic_tool');
-      assert.equal(result.result.staticBase, true);
+      assert.equal(Object.hasOwn(result.result, 'staticBase'), false);
       assert.equal(result.result.native_plugin_tool_execution, true);
     } finally {
       await activation?.close();
