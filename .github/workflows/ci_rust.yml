@@ -295,7 +295,7 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -e
-          cargo build --locked --release --target "${{ matrix.target }}" -p nemo-relay-cli
+          cargo build --offline --release --target "${{ matrix.target }}" -p nemo-relay-cli
 
       - name: Build CLI release binary in manylinux
         if: ${{ matrix.build_image != '' }}
