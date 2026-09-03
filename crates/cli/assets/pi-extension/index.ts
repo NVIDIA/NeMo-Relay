@@ -729,19 +729,63 @@ function summarize(result: unknown, isError: boolean): unknown {
   if (typeof result === 'object') {
     const record = result as Record<string, unknown>;
     const content = record.content ?? record.output ?? record.text;
+    const text = toolResultText(content);
     return {
-      content:
-        typeof content === 'string'
-          ? truncate(content)
-          : `Tool ${isError ? 'failed' : 'completed'}.`,
+      content: text === null ? `Tool ${isError ? 'failed' : 'completed'}.` : text,
       result_keys: Object.keys(record).slice(0, 20),
     };
   }
   return { content: truncate(String(result)) };
 }
 
+/** Extract and bound Pi's ordered text blocks without forwarding image or unknown parts. */
+function toolResultText(content: unknown): string | null {
+  if (typeof content === 'string') return truncate(content);
+  if (!Array.isArray(content)) return null;
+
+  let text = '';
+  let omittedChars = 0;
+  let foundText = false;
+
+  const append = (value: string): void => {
+    const kept = sliceAtCodePointBoundary(
+      value,
+      Math.max(0, MAX_CONTENT_CHARS - text.length),
+    );
+    text += kept;
+    omittedChars += value.length - kept.length;
+  };
+
+  for (const part of content) {
+    if (typeof part !== 'object' || part === null || Array.isArray(part)) continue;
+    const block = part as Record<string, unknown>;
+    if (block.type !== 'text' || typeof block.text !== 'string') continue;
+    if (foundText) append('\n');
+    append(block.text);
+    foundText = true;
+  }
+  if (!foundText) return null;
+  return omittedChars === 0 ? text : `${text}... [truncated ${omittedChars} chars]`;
+}
+
+/** Return at most limit UTF-16 units without splitting a surrogate pair. */
+function sliceAtCodePointBoundary(value: string, limit: number): string {
+  let end = Math.min(value.length, limit);
+  if (
+    end > 0 &&
+    end < value.length &&
+    value.charCodeAt(end - 1) >= 0xd800 &&
+    value.charCodeAt(end - 1) <= 0xdbff &&
+    value.charCodeAt(end) >= 0xdc00 &&
+    value.charCodeAt(end) <= 0xdfff
+  ) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 function truncate(value: string): string {
-  return value.length <= MAX_CONTENT_CHARS
-    ? value
-    : `${value.slice(0, MAX_CONTENT_CHARS)}... [truncated ${value.length - MAX_CONTENT_CHARS} chars]`;
+  if (value.length <= MAX_CONTENT_CHARS) return value;
+  const kept = sliceAtCodePointBoundary(value, MAX_CONTENT_CHARS);
+  return `${kept}... [truncated ${value.length - kept.length} chars]`;
 }
