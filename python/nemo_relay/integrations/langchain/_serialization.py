@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 LANGCHAIN_MODEL_RESPONSE_KEY = "__nemo_relay_integrations_langchain_model_response"
 _LANGCHAIN_MODELED_REQUEST_KEYS = {"messages", "model", "tool_choice", "tools"}
+_LANGCHAIN_PROVIDER = "langchain"
 _LC_TO_RELAY_MESSAGE_ROLE = {
     "human": "user",
     "ai": "assistant",
@@ -132,50 +133,93 @@ class LangChainCodec(LlmCodec):
         ]
 
     @classmethod
-    def _langchain_message_to_annotated(cls, message: BaseMessage) -> list[dict[str, Any]]:
-        content = message.content
+    def _langchain_content_to_annotated(cls, content: Any) -> str | list[dict[str, Any]]:
+        """Preserve one LangChain message while exposing its portable text blocks."""
         if content is None:
-            content = []
-        elif isinstance(content, str):
-            content = [content]
+            return ""
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            raise ValueError(f"Unsupported LangChain message content type: {type(content)}")
 
+        content_parts = []
+        for content_part in content:
+            if isinstance(content_part, str):
+                content_parts.append({"type": "text", "text": content_part})
+            elif (
+                isinstance(content_part, dict)
+                and content_part.get("type") == "text"
+                and isinstance(content_part.get("text"), str)
+            ):
+                content_parts.append(dict(content_part))
+            elif isinstance(content_part, dict):
+                content_parts.append(
+                    {
+                        "type": "provider_native",
+                        "provider": _LANGCHAIN_PROVIDER,
+                        "kind": str(content_part.get("type") or "content_block"),
+                        "value": dict(content_part),
+                    }
+                )
+            else:
+                raise ValueError(f"Unsupported LangChain message content part type: {type(content_part)}")
+        return content_parts
+
+    @staticmethod
+    def _annotated_content_to_langchain(content: Any) -> Any:
+        """Restore LangChain-native blocks after annotated request interception."""
+        if not isinstance(content, list):
+            return content
+
+        content_parts = []
+        for content_part in content:
+            if (
+                isinstance(content_part, dict)
+                and content_part.get("type") == "provider_native"
+                and content_part.get("provider") == _LANGCHAIN_PROVIDER
+            ):
+                value = content_part.get("value")
+                if not isinstance(value, str | dict):
+                    raise ValueError("LangChain provider-native content must contain a string or object value")
+                content_parts.append(value)
+            else:
+                content_parts.append(content_part)
+        return content_parts
+
+    @classmethod
+    def _langchain_message_to_annotated(cls, message: BaseMessage) -> dict[str, Any]:
+        content = message.content
         name = message.name
         role = _LC_TO_RELAY_MESSAGE_ROLE.get(message.type, message.type)
 
-        messages = []
-        for content_index, msg in enumerate(content):
-            relay_message: dict[str, Any] = {"role": role}
-            if isinstance(msg, str):
-                relay_message["content"] = msg
-            elif isinstance(msg, dict):
-                relay_message.update(msg)
-                if "content" not in relay_message:
-                    relay_message["content"] = relay_message.pop("text", "")
-            else:
-                raise ValueError(f"Unsupported LangChain message content type: {type(content)}")
+        relay_message: dict[str, Any] = {
+            "role": role,
+            "content": cls._langchain_content_to_annotated(content),
+        }
+        if name is not None:
+            relay_message["name"] = name
 
-            if name is not None:
-                relay_message["name"] = name
+        # Using getattr as we are inferring subclasses of BaseMessage based upon the role
+        if role == "assistant":
+            relay_message["tool_calls"] = cls._langchain_tool_calls_to_annotated(getattr(message, "tool_calls", []))
+        elif role == "tool":
+            relay_message["tool_call_id"] = getattr(message, "tool_call_id", "")
 
-            # Using getattr as we are inferring subclasses of BaseMessage based upon the role
-            if role == "assistant":
-                tool_calls = getattr(message, "tool_calls", []) if content_index == 0 else []
-                relay_message["tool_calls"] = cls._langchain_tool_calls_to_annotated(tool_calls)
-            elif role == "tool":
-                relay_message["tool_call_id"] = getattr(message, "tool_call_id", "")
-
-            messages.append(relay_message)
-
-        return messages
+        return relay_message
 
     @classmethod
     def _annotated_message_to_langchain(
         cls,
         message: dict[str, Any],
         provider_tool_calls: list[dict[str, Any]] | None = None,
+        original_message: BaseMessage | None = None,
     ) -> BaseMessage:
         role = message.get("role")
-        content = message.get("content", "")
+        content = (
+            original_message.content
+            if original_message is not None
+            else cls._annotated_content_to_langchain(message.get("content", ""))
+        )
         name = message.get("name")
 
         if role == "system":
@@ -193,6 +237,62 @@ class LangChainCodec(LlmCodec):
         raise ValueError(f"Unsupported annotated LangChain message role: {role!r}")
 
     @classmethod
+    def _original_messages(cls, original: LLMRequest) -> list[tuple[dict[str, Any], BaseMessage]]:
+        """Return original LangChain messages with their annotated representations."""
+        raw_messages = original.content.get("messages")
+        if not isinstance(raw_messages, list):
+            return []
+
+        return [(cls._langchain_message_to_annotated(message), message) for message in messages_from_dict(raw_messages)]
+
+    @staticmethod
+    def _message_content_matches(message: dict[str, Any], original_message: dict[str, Any]) -> bool:
+        """Return whether two messages have the same role, content, and tool result identity."""
+        return all(message.get(key) == original_message.get(key) for key in ("role", "content", "tool_call_id"))
+
+    @classmethod
+    def _original_messages_for_annotated(
+        cls,
+        messages: list[dict[str, Any]],
+        original_messages: list[tuple[dict[str, Any], BaseMessage]],
+    ) -> list[BaseMessage | None]:
+        """Match unchanged message content to its original LangChain representation."""
+        matches: list[BaseMessage | None] = [None] * len(messages)
+        matched_original_indexes: set[int] = set()
+
+        if len(messages) == len(original_messages):
+            for index, message in enumerate(messages):
+                original_annotated_message, original_langchain_message = original_messages[index]
+                if cls._message_content_matches(message, original_annotated_message):
+                    matches[index] = original_langchain_message
+                    matched_original_indexes.add(index)
+
+        for message_index, message in enumerate(messages):
+            if matches[message_index] is not None:
+                continue
+            candidate_indexes = [
+                original_index
+                for original_index, (original_annotated_message, _) in enumerate(original_messages)
+                if original_index not in matched_original_indexes
+                and cls._message_content_matches(message, original_annotated_message)
+            ]
+            if len(candidate_indexes) != 1:
+                continue
+            original_index = candidate_indexes[0]
+            matching_message_count = sum(
+                1
+                for candidate_index, candidate_message in enumerate(messages)
+                if matches[candidate_index] is None
+                and cls._message_content_matches(candidate_message, original_messages[original_index][0])
+            )
+            if matching_message_count != 1:
+                continue
+            matches[message_index] = original_messages[original_index][1]
+            matched_original_indexes.add(original_index)
+
+        return matches
+
+    @classmethod
     def _original_provider_tool_calls(cls, original: LLMRequest) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
         """Return assistant messages associated with their provider tool calls."""
         raw_messages = original.content.get("messages")
@@ -207,9 +307,8 @@ class LangChainCodec(LlmCodec):
                 if isinstance(candidate, list):
                     raw_tool_calls = candidate
             if raw_tool_calls is not None:
-                annotated_messages = cls._langchain_message_to_annotated(message)
-                if annotated_messages:
-                    provider_tool_calls.append((annotated_messages[0], raw_tool_calls))
+                annotated_message = cls._langchain_message_to_annotated(message)
+                provider_tool_calls.append((annotated_message, raw_tool_calls))
         return provider_tool_calls
 
     def _provider_tool_calls_for_message(
@@ -243,7 +342,7 @@ class LangChainCodec(LlmCodec):
         messages: list[dict[str, Any]] = []
         if isinstance(raw_messages, list):
             for message in messages_from_dict(raw_messages):
-                messages.extend(self._langchain_message_to_annotated(message))
+                messages.append(self._langchain_message_to_annotated(message))
 
         model = payload.get("model")
         tools = payload.get("tools")
@@ -262,16 +361,22 @@ class LangChainCodec(LlmCodec):
         """Encode annotated request edits back into a LangChain-shaped payload."""
         payload = dict(original.content)
         payload.update(annotated.extra)
+        messages = annotated.messages
+        original_messages = self._original_messages(original)
+        original_messages_by_annotated_index = self._original_messages_for_annotated(messages, original_messages)
         original_provider_tool_calls = self._original_provider_tool_calls(original)
         matched_original_messages: set[int] = set()
         encoded_messages = []
-        for message in annotated.messages:
+        for index, message in enumerate(messages):
+            original_message = original_messages_by_annotated_index[index]
             provider_tool_calls = None
             if message.get("role") == "assistant":
                 provider_tool_calls = self._provider_tool_calls_for_message(
                     message, original_provider_tool_calls, matched_original_messages
                 )
-            encoded_messages.append(self._annotated_message_to_langchain(message, provider_tool_calls))
+            encoded_messages.append(
+                self._annotated_message_to_langchain(message, provider_tool_calls, original_message)
+            )
         payload["messages"] = messages_to_dict(encoded_messages)
         if annotated.model is not None:
             payload["model"] = annotated.model
