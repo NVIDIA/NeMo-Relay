@@ -713,6 +713,7 @@ async fn adaptive_runtime_register_survives_hot_cache_seed_failures() {
         event_tx: Some(event_tx),
         event_rx: Some(event_rx),
         drain_handle: None,
+        drain_runtime: None,
         registered: false,
         runtime_id: Uuid::now_v7(),
         bound_scopes: Arc::new(RwLock::new(HashSet::new())),
@@ -1404,6 +1405,48 @@ async fn adaptive_runtime_deregister_drains_queued_telemetry() {
     .expect("deregistered telemetry drain must finish queued runs");
 
     assert_eq!(backend.list_runs_dyn(agent_id).await.unwrap().len(), 1);
+}
+
+#[test]
+fn adaptive_runtime_deregister_drains_telemetry_outside_block_on() {
+    let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.blocking_lock();
+    reset_global();
+
+    let agent_id = "deregister-outside-block-on-agent";
+    let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (mut runtime, backend) = tokio_runtime.block_on(async {
+        let mut runtime = AdaptiveRuntime::new(AdaptiveConfig {
+            agent_id: Some(agent_id.into()),
+            state: Some(StateConfig {
+                backend: BackendSpec::in_memory(),
+            }),
+            telemetry: Some(TelemetryComponentConfig::default()),
+            ..AdaptiveConfig::default()
+        })
+        .await
+        .unwrap();
+        runtime.register().await.unwrap();
+        let backend = runtime.backend.as_ref().unwrap().clone();
+        (runtime, backend)
+    });
+    queue_completed_agent_run(&mut runtime);
+
+    runtime.deregister().unwrap();
+
+    tokio_runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while backend.list_runs_dyn(agent_id).await.unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("deregistered telemetry drain must finish queued runs outside block_on");
+
+        assert_eq!(backend.list_runs_dyn(agent_id).await.unwrap().len(), 1);
+    });
 }
 
 fn queue_completed_agent_run(runtime: &mut AdaptiveRuntime) {
