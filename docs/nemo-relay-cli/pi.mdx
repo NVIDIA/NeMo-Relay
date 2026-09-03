@@ -263,10 +263,12 @@ recorded on the session scope rather than opening an empty turn to hold it.
 | `user_bash` | Tool span start named `user_bash`, and the inline shell gate |
 | *(after the `user_bash` verdict)* | `user_bash_end`, a tool span end. Synthesized by the extension the moment the gate decides, **before the command runs** — pi reports no completion for inline shell, so this span measures the policy decision and not the shell command's duration |
 
-**Tool results are truncated at 2000 characters** before the extension forwards
-them, with the overflow replaced by a `... [truncated N chars]` suffix. A
-guardrail or subscriber that reads a tool result sees the truncated form, so do
-not write policy that depends on the tail of a long result.
+For pi's structured tool results, the extension joins text parts in order and
+omits image and other non-text parts. **Tool-result text is truncated at 2000
+characters** before the extension forwards it. The overflow is replaced by a
+`... [truncated N chars]` suffix. A guardrail or subscriber that reads a tool
+result sees this bounded text projection, so do not write policy that depends on
+the tail of a long result or on non-text content.
 
 pi's `tool_execution_start` is deliberately not forwarded: it fires before
 argument validation and also for calls that never execute. `tool_result` is not
