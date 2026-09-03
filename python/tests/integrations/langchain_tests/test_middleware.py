@@ -554,6 +554,117 @@ def test_langchain_request_codec_preserves_multi_block_assistant_message():
     }
 
 
+def test_langchain_request_codec_preserves_unchanged_bare_string_content_parts():
+    from langchain_core.messages import HumanMessage, messages_from_dict, messages_to_dict
+
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec
+
+    original_content = ["first", {"type": "text", "text": "second"}]
+    request = nemo_relay.LLMRequest({}, {"messages": messages_to_dict([HumanMessage(content=original_content)])})
+
+    codec = LangChainCodec()
+    rebuilt = messages_from_dict(
+        cast(list[dict[str, Any]], codec.encode(codec.decode(request), request).content["messages"])
+    )
+
+    assert rebuilt[0].content == original_content
+
+
+def test_langchain_request_codec_uses_canonical_blocks_after_bare_string_content_edit():
+    from langchain_core.messages import HumanMessage, messages_from_dict, messages_to_dict
+
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec
+
+    request = nemo_relay.LLMRequest(
+        {},
+        {"messages": messages_to_dict([HumanMessage(content=["first", {"type": "text", "text": "second"}])])},
+    )
+
+    codec = LangChainCodec()
+    annotated = codec.decode(request)
+    message = dict(annotated.messages[0])
+    content = [dict(part) for part in cast(list[dict[str, Any]], message["content"])]
+    content[0]["text"] = "first from intercept"
+    message["content"] = content
+    annotated.messages = [message]
+    rebuilt = messages_from_dict(cast(list[dict[str, Any]], codec.encode(annotated, request).content["messages"]))
+
+    assert rebuilt[0].content == [
+        {"type": "text", "text": "first from intercept"},
+        {"type": "text", "text": "second"},
+    ]
+
+
+@pytest.mark.parametrize("message_list_edit", ["prepend", "append", "delete"])
+def test_langchain_request_codec_preserves_bare_strings_across_message_list_edits(message_list_edit: str):
+    from langchain_core.messages import AIMessage, HumanMessage, messages_from_dict, messages_to_dict
+
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec
+
+    request = nemo_relay.LLMRequest(
+        {},
+        {"messages": messages_to_dict([HumanMessage(content=["first"]), AIMessage(content=["second"])])},
+    )
+
+    codec = LangChainCodec()
+    annotated = codec.decode(request)
+    if message_list_edit == "prepend":
+        annotated.messages = [{"role": "system", "content": "new"}, *annotated.messages]
+    elif message_list_edit == "append":
+        annotated.messages = [*annotated.messages, {"role": "assistant", "content": "new", "tool_calls": []}]
+    else:
+        annotated.messages = annotated.messages[:1]
+    rebuilt = messages_from_dict(cast(list[dict[str, Any]], codec.encode(annotated, request).content["messages"]))
+
+    preserved_messages = [message for message in rebuilt if message.content != "new"]
+    assert preserved_messages[0].content == ["first"]
+    if message_list_edit != "delete":
+        assert preserved_messages[1].content == ["second"]
+
+
+def test_langchain_request_codec_preserves_bare_strings_after_name_edit():
+    from langchain_core.messages import HumanMessage, messages_from_dict, messages_to_dict
+
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec
+
+    request = nemo_relay.LLMRequest({}, {"messages": messages_to_dict([HumanMessage(content=["first"])])})
+
+    codec = LangChainCodec()
+    annotated = codec.decode(request)
+    message = dict(annotated.messages[0])
+    message["name"] = "renamed"
+    annotated.messages = [message]
+    rebuilt = messages_from_dict(cast(list[dict[str, Any]], codec.encode(annotated, request).content["messages"]))
+
+    assert rebuilt[0].name == "renamed"
+    assert rebuilt[0].content == ["first"]
+
+
+def test_langchain_request_codec_does_not_guess_bare_string_shape_for_ambiguous_messages():
+    from langchain_core.messages import HumanMessage, messages_from_dict, messages_to_dict
+
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec
+
+    request = nemo_relay.LLMRequest(
+        {},
+        {
+            "messages": messages_to_dict(
+                [
+                    HumanMessage(content=["same"]),
+                    HumanMessage(content=[{"type": "text", "text": "same"}]),
+                ]
+            )
+        },
+    )
+
+    codec = LangChainCodec()
+    annotated = codec.decode(request)
+    annotated.messages = annotated.messages[1:]
+    rebuilt = messages_from_dict(cast(list[dict[str, Any]], codec.encode(annotated, request).content["messages"]))
+
+    assert rebuilt[0].content == [{"type": "text", "text": "same"}]
+
+
 def test_langchain_request_codec_preserves_distinct_system_messages_and_native_blocks():
     from langchain_core.messages import HumanMessage, SystemMessage, messages_from_dict, messages_to_dict
 
