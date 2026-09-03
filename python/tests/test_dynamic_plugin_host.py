@@ -191,10 +191,12 @@ def test_removed_plugin_host_entry_points_are_not_exported():
     assert all(not hasattr(plugin, name) for name in retired)
 
 
-def test_validate_and_initialize_accept_the_same_arguments():
+def test_validate_initialize_and_activate_accept_the_same_arguments():
     initialize_parameters = tuple(inspect.signature(plugin.initialize).parameters.values())
     validate_parameters = tuple(inspect.signature(plugin.validate).parameters.values())
+    activate_parameters = tuple(inspect.signature(plugin.activate).parameters.values())
     assert initialize_parameters == validate_parameters
+    assert initialize_parameters == activate_parameters
 
 
 def test_validate_uses_core_report(
@@ -231,6 +233,23 @@ async def test_native_host_owns_callbacks_and_close_is_idempotent(
         lambda args: ToolExecutionResult({"args": args}),
     )
     assert result.result == {"args": {"input": True}}
+
+
+async def test_activate_closes_host_when_context_raises(
+    native_dynamic_plugin: _BuiltPlugin,
+    tmp_path: Path,
+):
+    plugins_toml = _write_plugins_toml(tmp_path, [(native_dynamic_plugin.manifest, {})])
+    activation = None
+
+    with pytest.raises(RuntimeError, match="application failed"):
+        async with plugin.activate(plugin.PluginConfig(), plugins_toml) as active:
+            activation = active
+            assert active.is_active
+            raise RuntimeError("application failed")
+
+    assert activation is not None
+    assert not activation.is_active
 
 
 async def test_discovered_configuration_layers_last(

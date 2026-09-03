@@ -62,15 +62,12 @@ preflight = plugin.validate(plugin_config)
 if any(item["level"] == "error" for item in preflight["config"]["diagnostics"]):
     raise ValueError(preflight["config"]["diagnostics"])
 
-activation = None
 try:
-    activation = await plugin.initialize(plugin_config)
-    print("active report:", activation.report)
-    assert activation.is_active
-    await run_application_work()
+    async with plugin.activate(plugin_config) as activation:
+        print("active report:", activation.report)
+        assert activation.is_active
+        await run_application_work()
 finally:
-    if activation is not None:
-        await activation.close()
     assert plugin.deregister("documentation-plugin")
 ```
 </Tab>

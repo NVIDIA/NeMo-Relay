@@ -87,12 +87,9 @@ if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
 async def main():
-    activation = await nemo_relay.plugin.initialize(plugin_config)
-    try:
+    async with nemo_relay.plugin.activate(plugin_config):
         # Run instrumented application work here.
         pass
-    finally:
-        await activation.close()
 
 asyncio.run(main())
 ```

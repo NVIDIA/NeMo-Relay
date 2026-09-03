@@ -63,19 +63,16 @@ async def main():
             config={"tag": "documentation"},
         )
     ])
-    activation = None
     try:
-        activation = await plugin.initialize(config)
-        print("activation:", activation.report)
-        result = await tools.execute(
-            "lookup",
-            {"id": 7},
-            lambda request: nemo_relay.ToolExecutionResult(request),
-        )
-        assert result.result == {"id": 7, "plugin_tag": "documentation"}
+        async with plugin.activate(config) as activation:
+            print("activation:", activation.report)
+            result = await tools.execute(
+                "lookup",
+                {"id": 7},
+                lambda request: nemo_relay.ToolExecutionResult(request),
+            )
+            assert result.result == {"id": 7, "plugin_tag": "documentation"}
     finally:
-        if activation is not None:
-            await activation.close()
         plugin.deregister("example.add-tag")
 
 asyncio.run(main())

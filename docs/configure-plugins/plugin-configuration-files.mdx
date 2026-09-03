@@ -183,11 +183,11 @@ from nemo_relay import plugin
 
 
 async def main() -> None:
-    activation = await plugin.initialize(
+    async with plugin.activate(
         {}, "path/to/plugins.toml"
-    )
-    async with activation:
+    ) as activation:
         # Run your host application while dynamic plugins are active.
+        print(activation.report)
         ...
 
 
@@ -197,6 +197,9 @@ asyncio.run(main())
 Core resolves manifest references relative to the declaring file, applies
 lifecycle state and trust policy, validates all selected plugins before loading
 code, and owns every resulting runtime through the returned activation handle.
+Use `plugin.activate(...)` when the host lifetime fits one `async with` block.
+Use `await plugin.initialize(...)` when the caller needs to retain and close the
+activation manually.
 
 The runtime reads only files named `plugins.toml` during default discovery.
 

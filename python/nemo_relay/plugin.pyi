@@ -3,6 +3,7 @@
 
 import os
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from types import TracebackType
 from typing import Literal, Protocol, Self, TypedDict
 
@@ -193,6 +194,10 @@ async def initialize(
     config: PluginConfig | JsonObject,
     additional_plugins_toml: str | os.PathLike[str] | None = None,
 ) -> PluginHostActivation: ...
+def activate(
+    config: PluginConfig | JsonObject,
+    additional_plugins_toml: str | os.PathLike[str] | None = None,
+) -> AbstractAsyncContextManager[PluginHostActivation]: ...
 def validate(
     config: PluginConfig | JsonObject,
     additional_plugins_toml: str | os.PathLike[str] | None = None,

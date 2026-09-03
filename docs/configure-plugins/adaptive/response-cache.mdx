@@ -113,8 +113,7 @@ def call_model(_request):
     }
 
 async def main():
-    activation = await nemo_relay.plugin.initialize(plugin_config)
-    try:
+    async with nemo_relay.plugin.activate(plugin_config):
         # Managed calls need no changes. The first call runs the provider;
         # an identical repeat can be served from the cache.
         request = nemo_relay.LLMRequest(
@@ -127,8 +126,6 @@ async def main():
         )
         await nemo_relay.llm.execute("openai", request, call_model)
         await nemo_relay.llm.execute("openai", request, call_model)
-    finally:
-        await activation.close()
 
 asyncio.run(main())
 ```
