@@ -102,8 +102,8 @@ class ProviderHandler(BaseHTTPRequestHandler):
         for frame in frames:
             # SONAR_IGNORE_START: the local benchmark server intentionally emits JSON fixture frames.
             self.wfile.write(f"{len(frame):X}\r\n".encode())
-            # SONAR_IGNORE_END
             self.wfile.write(frame)
+            # SONAR_IGNORE_END
             self.wfile.write(b"\r\n")
             self.wfile.flush()
         self.wfile.write(b"0\r\n\r\n")
