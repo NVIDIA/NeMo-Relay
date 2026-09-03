@@ -126,7 +126,7 @@ pub(crate) fn post_verified(
     let authority = loopback_authority(&host, port);
     let client_token = key.client_token();
     let tunnel = format!(
-        "GET /bootstrap/tunnel HTTP/1.1\r\nHost: {authority}\r\nX-NeMo-Relay-Bootstrap-Fingerprint: {bootstrap_fingerprint}\r\nX-NeMo-Relay-Bootstrap-Nonce: {nonce}\r\nX-NeMo-Relay-Bootstrap-Token: {client_token}\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\n\r\n"
+        "GET /bootstrap/tunnel HTTP/1.1\r\nHost: {authority}\r\nX-NeMo-Relay-Bootstrap-Fingerprint: {bootstrap_fingerprint}\r\nX-NeMo-Relay-Bootstrap-Nonce: {nonce}\r\n{BOOTSTRAP_CLIENT_TOKEN_HEADER}: {client_token}\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\n\r\n"
     );
     stream.write_all(tunnel.as_bytes()).map_err(|error| {
         VerifiedHttpError::before_payload(format!(

@@ -415,7 +415,10 @@ fn verified_hook_payload_is_not_sent_before_the_tls_tunnel_is_authenticated() {
 
     let request = String::from_utf8(request.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
     assert_eq!(
-        header(&request, "x-nemo-relay-bootstrap-token"),
+        header(
+            &request,
+            crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER
+        ),
         key.client_token()
     );
     assert!(
