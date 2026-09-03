@@ -110,8 +110,8 @@ export async function postHook(
       signal: controller.signal,
     });
 
-    if (response.ok) return allowedOutcome(response);
-    if (response.status === 403) return forbiddenOutcome(response);
+    if (response.ok) return await allowedOutcome(response);
+    if (response.status === 403) return await forbiddenOutcome(response);
     return { kind: 'fault', origin: 'response', detail: `gateway returned HTTP ${response.status}` };
   } catch (error) {
     const timedOut = error instanceof Error && error.name === 'AbortError';

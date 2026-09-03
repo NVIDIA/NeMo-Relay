@@ -300,7 +300,7 @@ jobs:
         run: |
           set -e
           # SONAR_IGNORE_START: dependencies were fetched from Cargo.lock before dynamic package metadata is applied.
-          cargo build --offline --release --target "${{ matrix.target }}" -p nemo-relay-cli
+          cargo build --locked --offline --release --target "${{ matrix.target }}" -p nemo-relay-cli
           # SONAR_IGNORE_END
 
       - name: Build CLI release binary in manylinux
@@ -317,7 +317,7 @@ jobs:
               curl --proto "=https" --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs | \
                 sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
               export PATH="$HOME/.cargo/bin:$PATH"
-              cargo build --release --target "${{ matrix.target }}" -p nemo-relay-cli
+              cargo build --locked --release --target "${{ matrix.target }}" -p nemo-relay-cli
             '
 
       - name: Stage CLI binary artifact
