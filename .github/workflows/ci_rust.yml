@@ -295,7 +295,7 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -e
-          cargo build --offline --release --target "${{ matrix.target }}" -p nemo-relay-cli
+          cargo build --offline --release --target "${{ matrix.target }}" -p nemo-relay-cli # NOSONAR: offline mode prevents dependency resolution or downloads while dynamic package metadata invalidates --locked.
 
       - name: Build CLI release binary in manylinux
         if: ${{ matrix.build_image != '' }}
@@ -449,7 +449,7 @@ jobs:
             venv_python="${RUNNER_TEMP}/nemo-relay-cli-venv/bin/python"
             venv_cli="${RUNNER_TEMP}/nemo-relay-cli-venv/bin/nemo-relay"
           fi
-          uv pip install --python "$venv_python" --no-deps --no-index "$wheel"
+          uv pip install --python "$venv_python" --no-deps --no-index "$wheel" # NOSONAR: local wheel with no dependencies or index access.
           wheel_version="$("$venv_cli" --version)"
           if [ "$binary_version" != "$wheel_version" ]; then
             echo "Error: CLI binary reports '$binary_version' but wheel reports '$wheel_version'" >&2

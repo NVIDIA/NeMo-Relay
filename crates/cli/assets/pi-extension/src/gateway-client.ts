@@ -115,9 +115,9 @@ export async function postHook(
     return { kind: 'fault', origin: 'response', detail: `gateway returned HTTP ${response.status}` };
   } catch (error) {
     const timedOut = error instanceof Error && error.name === 'AbortError';
-    const detail = timedOut
-      ? `gateway did not respond within ${config.timeoutMs}ms`
-      : `gateway request failed: ${error instanceof Error ? error.message : String(error)}`;
+    let detail = `gateway request failed: ${String(error)}`;
+    if (error instanceof Error) detail = `gateway request failed: ${error.message}`;
+    if (timedOut) detail = `gateway did not respond within ${config.timeoutMs}ms`;
     // A timeout is not an unreachable gateway. It may be up and slow, and because posts are
     // serialized a gate also waits out everything queued ahead of it -- so the remedy is the
     // timeout value or the gateway's speed, not the socket.

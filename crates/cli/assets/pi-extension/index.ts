@@ -738,9 +738,9 @@ function summarize(result: unknown, isError: boolean): unknown {
 
 function summaryContent(result: Record<string, unknown>, isError: boolean): string {
   const content = result.content ?? result.output ?? result.text;
-  return typeof content === 'string'
-    ? truncate(content)
-    : `Tool ${isError ? 'failed' : 'completed'}.`;
+  if (typeof content === 'string') return truncate(content);
+  const status = isError ? 'failed' : 'completed';
+  return `Tool ${status}.`;
 }
 
 function primitiveSummary(result: unknown): string {

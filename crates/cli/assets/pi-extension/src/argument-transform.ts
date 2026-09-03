@@ -80,8 +80,8 @@ export function shapeViolation(current: unknown, next: unknown, path = 'input'):
 function objectShapeViolation(current: unknown, next: unknown, path: string): string | null {
   const currentRecord = current as Record<string, unknown>;
   const nextRecord = next as Record<string, unknown>;
-  const currentKeys = Object.keys(currentRecord).sort();
-  const nextKeys = Object.keys(nextRecord).sort();
+  const currentKeys = Object.keys(currentRecord).sort((left, right) => left.localeCompare(right));
+  const nextKeys = Object.keys(nextRecord).sort((left, right) => left.localeCompare(right));
   const added = nextKeys.filter((key) => !currentKeys.includes(key));
   const removed = currentKeys.filter((key) => !nextKeys.includes(key));
   if (added.length > 0) return `${path} added ${added.join(', ')}`;
@@ -121,7 +121,7 @@ export function decideTransform(
   current: Record<string, unknown>,
 ): TransformOutcome {
   const envelope = body?.tool_call;
-  if (!envelope || envelope.input === undefined) return { kind: 'none' };
+  if (envelope?.input === undefined) return { kind: 'none' };
 
   // The echoed id is what proves the transform belongs to the call we just posted, so it has to be
   // present and exact. Accepting a missing or non-string id would let a truncated or malformed body

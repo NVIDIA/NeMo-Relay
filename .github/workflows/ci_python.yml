@@ -456,7 +456,7 @@ jobs:
           else
             venv_python="${RUNNER_TEMP}/nemo-relay-wheel-venv/bin/python"
           fi
-          uv pip install --python "$venv_python" --no-deps --no-index "$wheel"
+          uv pip install --python "$venv_python" --no-deps --no-index "$wheel" # NOSONAR: local wheel with no dependencies or index access.
           "$venv_python" -c "import nemo_relay"
 
       - name: Download matching musllinux Python wheel artifact
@@ -505,10 +505,7 @@ jobs:
           sdist="$(find python-sdist -maxdepth 1 -name '*.tar.gz' -print -quit)"
           test -n "$sdist"
           uv venv --python "$(uv python find)" "${RUNNER_TEMP}/nemo-relay-sdist-venv"
-          uv pip install \
-            --python "${RUNNER_TEMP}/nemo-relay-sdist-venv/bin/python" \
-            --no-deps \
-            "$sdist"
+          uv pip install --python "${RUNNER_TEMP}/nemo-relay-sdist-venv/bin/python" --no-deps "$sdist" # NOSONAR: its only build dependency is exactly pinned in pyproject.toml.
           "${RUNNER_TEMP}/nemo-relay-sdist-venv/bin/python" -c "import nemo_relay"
 
       - name: Install and import Python plugin SDK wheel
@@ -518,10 +515,6 @@ jobs:
           wheel="$(find plugin-wheel -maxdepth 1 -name '*.whl' -print -quit)"
           test -n "$wheel"
           uv venv --python "$(uv python find)" "${RUNNER_TEMP}/nemo-relay-plugin-venv"
-          uv pip install \
-            --python "${RUNNER_TEMP}/nemo-relay-plugin-venv/bin/python" \
-            --no-deps \
-            --no-index \
-            "$wheel"
+          uv pip install --python "${RUNNER_TEMP}/nemo-relay-plugin-venv/bin/python" --no-deps --no-index "$wheel" # NOSONAR: local wheel with no dependencies or index access.
           "${RUNNER_TEMP}/nemo-relay-plugin-venv/bin/python" -c \
             "import nemo_relay_plugin._proto.plugin_worker_pb2_grpc"
