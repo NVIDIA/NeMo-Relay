@@ -38,8 +38,9 @@ use tower::ServiceExt;
 use super::*;
 use crate::configuration::BootstrapChallengeKey;
 use crate::error::CliError;
+use crate::gateway::tls::RelayTlsIdentity;
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
-use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
+use crate::test_support::{EnvScope, PLUGIN_CONFIG_TEST_LOCK};
 
 const GENERIC_TEST_PLUGIN_KIND: &str = "cli-test-generic-plugin";
 static GENERIC_TEST_PLUGIN_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
@@ -529,6 +530,110 @@ async fn healthz_accepts_a_different_persistent_gateway_fingerprint() {
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["status"], json!("ok"));
     assert!(body.get("bootstrap_fingerprint").is_none());
+}
+
+#[tokio::test]
+async fn healthz_rejects_a_missing_bootstrap_nonce() {
+    let app = router_with_state(AppState::new_with_bootstrap(
+        test_config(),
+        Some("expected-fingerprint".into()),
+        Some(BootstrapChallengeKey::from_bytes(b"test challenge key")),
+        false,
+        None,
+        None,
+    ));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/healthz")
+                .header(
+                    "x-nemo-relay-bootstrap-fingerprint",
+                    "different-fingerprint",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(
+        response
+            .headers()
+            .get("x-nemo-relay-bootstrap-proof")
+            .is_none()
+    );
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["status"], json!("incompatible"));
+}
+
+#[tokio::test]
+async fn bootstrap_tls_tunnel_requires_a_client_token_for_a_different_fingerprint() {
+    let temp = tempfile::tempdir().unwrap();
+    let _environment = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
+        ("HOME", Some(temp.path().as_os_str())),
+    ]);
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let identity = RelayTlsIdentity::load_or_create().unwrap();
+    let mut state = AppState::new_with_bootstrap(
+        test_config(),
+        Some("gateway-fingerprint".into()),
+        Some(key.clone()),
+        false,
+        None,
+        None,
+    );
+    state.bootstrap_tls = Some(identity.server_config().unwrap());
+    state.local_address = Some("127.0.0.1:1".parse().unwrap());
+    let app = router_with_state(state);
+    let nonce = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/bootstrap/tunnel")
+                .header("x-nemo-relay-bootstrap-fingerprint", "caller-fingerprint")
+                .header("x-nemo-relay-bootstrap-nonce", nonce)
+                .header(header::CONNECTION, "upgrade")
+                .header(header::UPGRADE, "nemo-relay-tls")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/bootstrap/tunnel")
+                .header("x-nemo-relay-bootstrap-fingerprint", "caller-fingerprint")
+                .header("x-nemo-relay-bootstrap-nonce", nonce)
+                .header(
+                    crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+                    key.client_token(),
+                )
+                .header(header::CONNECTION, "upgrade")
+                .header(header::UPGRADE, "nemo-relay-tls")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-nemo-relay-bootstrap-proof")
+            .unwrap(),
+        key.proof("caller-fingerprint", nonce).as_str()
+    );
 }
 
 #[tokio::test]

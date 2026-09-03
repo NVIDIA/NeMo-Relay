@@ -669,20 +669,25 @@ async fn bootstrap_tls_tunnel(
     else {
         return StatusCode::FORBIDDEN.into_response();
     };
-    let (Some(key), Some(tls), Some(local_address)) = (
-        state.bootstrap_challenge_key.as_ref(),
-        state.bootstrap_tls.clone(),
-        state.local_address,
-    ) else {
+    let Some(key) = state.bootstrap_challenge_key.as_ref() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    if headers
-        .get(http::header::UPGRADE)
+    let token_is_valid = headers
+        .get(BOOTSTRAP_CLIENT_TOKEN_HEADER)
         .and_then(|value| value.to_str().ok())
-        != Some("nemo-relay-tls")
+        .is_some_and(|token| key.verify_client_token(token));
+    if !token_is_valid
+        || headers
+            .get(http::header::UPGRADE)
+            .and_then(|value| value.to_str().ok())
+            != Some("nemo-relay-tls")
     {
         return StatusCode::FORBIDDEN.into_response();
     }
+    let (Some(tls), Some(local_address)) = (state.bootstrap_tls.clone(), state.local_address)
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
     let proof = key.proof(fingerprint, nonce);
     let upgrade = hyper::upgrade::on(&mut request);
     tokio::spawn(async move {

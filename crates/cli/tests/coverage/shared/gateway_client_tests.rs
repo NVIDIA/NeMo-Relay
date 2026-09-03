@@ -396,7 +396,7 @@ fn verified_hook_payload_is_not_sent_before_the_tls_tunnel_is_authenticated() {
         ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
         ("HOME", Some(temp.path().as_os_str())),
     ]);
-    crate::configuration::BootstrapChallengeKey::load().unwrap();
+    let key = crate::configuration::BootstrapChallengeKey::load().unwrap();
     crate::gateway::tls::RelayTlsIdentity::load_or_create().unwrap();
     let (url, request, server) = serve_once(
         b"HTTP/1.1 101 Switching Protocols\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n",
@@ -413,9 +413,14 @@ fn verified_hook_payload_is_not_sent_before_the_tls_tunnel_is_authenticated() {
     )
     .unwrap_err();
 
-    let request = request.recv_timeout(Duration::from_secs(2)).unwrap();
+    let request = String::from_utf8(request.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
+    assert_eq!(
+        header(&request, "x-nemo-relay-bootstrap-token"),
+        key.client_token()
+    );
     assert!(
         !request
+            .as_bytes()
             .windows(19)
             .any(|window| window == b"secret-hook-payload")
     );
