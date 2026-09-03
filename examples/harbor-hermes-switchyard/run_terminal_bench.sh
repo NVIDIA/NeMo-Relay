@@ -373,8 +373,8 @@ fi
     --agent harbor_hermes_agent:HarborHermesAgent \
     --model "openai/$hermes_caller_model" \
     --ak "repository_url=https://github.com/NousResearch/hermes-agent.git" \
-    --ak "repository_ref=v2026.8.19" \
-    --ak "commit=fcbd1076a93841fa88855acce810e342a5b78101" \
+    --ak "repository_ref=main" \
+    --ak "commit=48c0c3a873bc5adaf20c632b5b7630a4fac000b4" \
     --ak "relay_config_path=$run_root/runtime/plugins.toml" \
     --ak "switchyard_bundle_dir=$run_root/runtime/switchyard-plugin" \
     --ak "relay_wheel_path=$relay_wheel_path" \

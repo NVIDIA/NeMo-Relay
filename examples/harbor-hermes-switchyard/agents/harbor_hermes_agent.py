@@ -30,8 +30,8 @@ from typing_extensions import override
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _DEFAULT_HERMES_REPOSITORY = "https://github.com/NousResearch/hermes-agent.git"
-_DEFAULT_HERMES_REF = "v2026.8.19"
-_DEFAULT_HERMES_COMMIT = "fcbd1076a93841fa88855acce810e342a5b78101"
+_DEFAULT_HERMES_REF = "main"
+_DEFAULT_HERMES_COMMIT = "48c0c3a873bc5adaf20c632b5b7630a4fac000b4"
 _DEFAULT_SWITCHYARD_COMMIT = "7a72c0667774244d66a8b631e375c9d6e393bf57"
 _ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
 _MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}")
