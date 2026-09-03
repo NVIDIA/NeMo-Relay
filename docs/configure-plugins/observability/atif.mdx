@@ -324,10 +324,10 @@ Use plugin configuration when the application should let NeMo Relay own the ATIF
 dispatcher lifecycle. The following examples configure and activate the ATIF
 exporter through each supported language binding.
 
-`validate()` checks only the supplied in-memory object. `initialize()` also
-layers discovered `plugins.toml` configuration. For effective file-backed
-validation, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
-and run the gateway with the same configuration path that production uses.
+`validate()` resolves the same configuration layers as `initialize()` without
+loading plugin code or acquiring the activation lease. Use Rust `validate_exact()`
+when only the supplied static configuration should be checked. For complete
+layering rules, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
 
 <Tabs>
 <Tab title="Python" language="python">

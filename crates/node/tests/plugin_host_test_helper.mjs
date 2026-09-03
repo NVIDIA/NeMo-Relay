@@ -13,9 +13,7 @@ export function validate(config) {
 }
 
 export async function initialize(config, additionalPluginsToml) {
-  if (activation !== undefined) {
-    await activation.close();
-  }
+  await close();
   const nextActivation = await plugin.initialize(config, additionalPluginsToml);
   activation = nextActivation;
   return nextActivation.report.config;

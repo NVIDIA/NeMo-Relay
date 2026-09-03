@@ -41,12 +41,12 @@ describe('pii_redaction plugin helpers', () => {
     const report = plugin.validate({
       version: 1,
       components: [
-          piiRedaction.ComponentSpec({
-            ...piiRedaction.defaultConfig(),
-            input: false,
-            output: false,
-            builtin: piiRedaction.builtinConfig({ action: 'mask', detector: 'not_a_detector' }),
-          }),
+        piiRedaction.ComponentSpec({
+          ...piiRedaction.defaultConfig(),
+          input: false,
+          output: false,
+          builtin: piiRedaction.builtinConfig({ action: 'mask', detector: 'not_a_detector' }),
+        }),
       ],
     }).config;
     assert.deepEqual(

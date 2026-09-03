@@ -123,7 +123,7 @@ def test_validation_warns_about_unknown_field() -> None:
     assert diagnostics[0]["field"] == "unexpected"
 
 
-def test_disabled_component_configuration_is_still_validated(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_disabled_component_configuration_is_still_validated(tmp_path: Any, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     plugin.register("documentation-plugin", DocumentationPlugin())
@@ -194,7 +194,7 @@ async def test_registration_control_is_owned_by_activation(tmp_path: Any, monkey
         subscribers.deregister(target)
 
 
-async def test_activation_reports_no_diagnostics(active_plugin: ActivatedExample) -> None:
+async def test_activation_reports_no_diagnostics(active_plugin: ActivatedExample):
     assert active_plugin.report["config"]["diagnostics"] == []
 
 
@@ -274,7 +274,7 @@ async def test_runtime_events_do_not_depend_on_request_rewriting(
         plugin.deregister("documentation-plugin")
 
 
-async def test_teardown_removes_plugin_kind(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_teardown_removes_plugin_kind(tmp_path: Any, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     plugin.register("documentation-plugin", DocumentationPlugin())

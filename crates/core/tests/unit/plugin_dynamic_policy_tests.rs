@@ -36,6 +36,12 @@ fn matching_rules_and_id_overrides_apply_in_order() {
             ..Default::default()
         },
     });
+    let denied = evaluate_dynamic_plugin_host_policy(&policy, &manifest());
+    assert!(
+        !denied.policy_satisfied,
+        "kind rule must deny before override"
+    );
+
     policy.overrides.insert(
         "fixture.policy".into(),
         DynamicPluginHostPolicyEffect {

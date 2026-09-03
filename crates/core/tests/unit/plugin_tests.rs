@@ -1661,7 +1661,7 @@ fn test_checked_teardown_reports_unremoved_registrations() {
     let error = outcome.result.unwrap_err().to_string();
     assert!(error.contains("stale-callback"), "{error}");
     assert!(error.contains("deregistration refused"), "{error}");
-    assert!(test_plugin_host_report().is_none());
+    assert!(!plugin_configuration_is_active().unwrap());
     reset_global();
 }
 
@@ -1737,8 +1737,7 @@ fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
     assert_eq!(diagnostic.message, "HTTP 500");
     assert_eq!(diagnostic.session_id.as_deref(), Some("session-123"));
 
-    clear_plugin_configuration_inner();
-    assert!(test_plugin_host_report().is_none());
+    assert!(!plugin_configuration_is_active().unwrap());
     reset_global();
 }
 

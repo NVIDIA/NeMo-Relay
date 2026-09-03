@@ -2661,7 +2661,7 @@ def initialize(config: object, additional_plugins_toml: str | None = None) -> Aw
     ...
 
 def validate(config: object, additional_plugins_toml: str | None = None) -> _JsonObject:
-    """Validate dynamic plugins without activating them."""
+    """Validate static configuration and dynamic plugins without activating them."""
     ...
 
 def list_plugin_kinds() -> list[str]:

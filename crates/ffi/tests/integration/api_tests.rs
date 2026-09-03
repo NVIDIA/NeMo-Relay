@@ -123,7 +123,7 @@ unsafe fn activate_test_plugin_config(
     let _ = close_test_plugin_host();
     let mut activation = ptr::null_mut();
     if out_report_json.is_null() {
-        return unsafe {
+        let status = unsafe {
             api::nemo_relay_plugin_initialize(
                 config_json,
                 ptr::null(),
@@ -131,6 +131,12 @@ unsafe fn activate_test_plugin_config(
                 out_report_json,
             )
         };
+        if status == NemoRelayStatus::Ok {
+            *TEST_PLUGIN_HOST
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(activation as usize);
+        }
+        return status;
     }
     let mut host_report = ptr::null_mut();
     let status = unsafe {
@@ -190,7 +196,13 @@ fn close_test_plugin_host() -> NemoRelayStatus {
     };
     let mut activation = activation as *mut FfiPluginHostActivation;
     let status = unsafe { api::nemo_relay_plugin_host_activation_close(activation) };
-    unsafe { nemo_relay_plugin_host_activation_free(&mut activation) };
+    if status == NemoRelayStatus::Ok {
+        unsafe { nemo_relay_plugin_host_activation_free(&mut activation) };
+    } else {
+        *TEST_PLUGIN_HOST
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(activation as usize);
+    }
     status
 }
 

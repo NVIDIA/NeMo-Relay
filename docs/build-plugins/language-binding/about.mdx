@@ -200,7 +200,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .clone();
     let config = PluginConfig { components: vec![component], ..PluginConfig::default() };
 
-    let activation = initialize(config, None).await?;
+    let mut activation = initialize(config, None).await?;
     let result = async {
         println!("activation: {:?}", activation.report());
         let result = tool_call_execute(
@@ -255,7 +255,7 @@ each language binding:
 2. [Register Behavior](/build-plugins/language-binding/register-behavior) connects valid
    feature groups to component-owned registrations and verifies rollback.
 3. [Advanced Configuration](/build-plugins/language-binding/advanced-configuration)
-   covers multiple instances, host policy, reports, clearing, deregistration, and async
+   covers multiple instances, host policy, reports, activation close, deregistration, and async
    lifecycle differences.
 4. [Runnable Examples](/build-plugins/language-binding/code-examples) gives the clean
    commands and expected output for Rust, Python, and Node.js.

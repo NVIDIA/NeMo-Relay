@@ -703,6 +703,26 @@ describe('nemo-relay OpenClaw plugin shell', () => {
     assert.equal(modules.pluginHost.calls.close, 1);
   });
 
+  it('completes shutdown and warns when plugin host close fails', async () => {
+    const modules = createModules({ closeThrows: new Error('close failed') });
+    const api = createApi();
+
+    registerPlugin(api, async () => modules);
+    const service = api.calls.services[0];
+    assert.ok(service);
+    await service.start({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
+
+    await assert.doesNotReject(async () => {
+      await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
+    });
+    const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+    assert.equal(status.status.state, 'stopped');
+    assert.equal(modules.pluginHost.calls.close, 1);
+    assert.ok(
+      api.messages.warn.some((message) => message.includes('failed to close NeMo Relay plugin host: close failed')),
+    );
+  });
+
   it('does not statically import nemo-relay-node or OpenClaw private src paths', () => {
     const files = readBuiltJavaScriptFiles(new URL('../../', import.meta.url));
 
@@ -840,6 +860,7 @@ function createModules(
     validateDiagnostics?: Array<{ level: 'warning' | 'error'; code: string; message: string }>;
     validateThrows?: Error;
     initializeDiagnostics?: Array<{ level: 'warning' | 'error'; code: string; message: string }>;
+    closeThrows?: Error;
   } = {},
 ): TestModules {
   const nf = createNemoRelayRuntime();
@@ -881,6 +902,9 @@ function createModules(
           isActive: true,
           close: async () => {
             calls.close += 1;
+            if (params.closeThrows) {
+              throw params.closeThrows;
+            }
           },
           [Symbol.asyncDispose]: async () => {
             await activation.close();

@@ -5,9 +5,11 @@
 
 use super::*;
 
+use std::collections::BTreeSet;
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
+use nemo_relay::api::registry::{RuntimeRegistrationKind, list_runtime_registrations};
 use nemo_relay::plugin::rollback_registrations;
 use pyo3::types::PyModule;
 use serde_json::json;
@@ -48,6 +50,21 @@ fn with_event_loop<T>(py: Python<'_>, f: impl FnOnce(Bound<'_, PyAny>) -> T) -> 
         .unwrap();
     event_loop.call_method0("close").unwrap();
     result
+}
+
+struct ErrorFixturePluginRegistrations;
+
+impl Drop for ErrorFixturePluginRegistrations {
+    fn drop(&mut self) {
+        for kind in [
+            "demo.raising_validate",
+            "demo.invalid_diagnostics",
+            "demo.failing_register",
+            "demo.forced_failures",
+        ] {
+            let _ = deregister_plugin_py(kind);
+        }
+    }
 }
 
 #[test]
@@ -161,6 +178,7 @@ fn register_adds_plugin_management_bindings() {
 fn python_plugin_validation_and_initialization_cover_error_paths() {
     let _python = crate::test_support::init_python_test();
     let _plugin_test_state = lock_plugin_test_state_for_tests();
+    let _fixture_plugins = ErrorFixturePluginRegistrations;
     Python::attach(|py| {
         let helpers = load_module(
             py,
@@ -190,6 +208,9 @@ class GoodPlugin:
 
 async def initialize_plugin(module, config):
     return await module.initialize(config)
+
+async def close_activation(activation):
+    await activation.close()
 "#,
         );
         let module = PyModule::new(py, "_plugin_cov_errors").unwrap();
@@ -198,7 +219,7 @@ async def initialize_plugin(module, config):
         for (kind, class_name) in [
             ("demo.raising_validate", "RaisingValidatePlugin"),
             ("demo.invalid_diagnostics", "InvalidDiagnosticsPlugin"),
-            ("demo.failing_register", "FailingRegisterPlugin"),
+            ("demo.failing_register", "GoodPlugin"),
             ("demo.forced_failures", "GoodPlugin"),
         ] {
             register_plugin_py(
@@ -245,6 +266,45 @@ async def initialize_plugin(module, config):
 
         with_event_loop(py, |event_loop| {
             let failing_config = config_for("demo.failing_register");
+            let successful = helpers
+                .getattr("initialize_plugin")
+                .unwrap()
+                .call1((module.clone(), failing_config.bind(py)))
+                .unwrap();
+            let activation = event_loop
+                .call_method1("run_until_complete", (successful,))
+                .unwrap();
+            let subscriber_kinds = BTreeSet::from([RuntimeRegistrationKind::Subscriber]);
+            let subscriber_name = list_runtime_registrations(Some(&subscriber_kinds))
+                .unwrap()
+                .into_iter()
+                .find(|registration| {
+                    registration.local_name == "sub"
+                        && registration.owner.plugin_kind.as_deref()
+                            == Some("demo.failing_register")
+                })
+                .expect("successful fixture registration should expose its effective name")
+                .effective_name;
+            let close = helpers
+                .getattr("close_activation")
+                .unwrap()
+                .call1((activation,))
+                .unwrap();
+            event_loop
+                .call_method1("run_until_complete", (close,))
+                .unwrap();
+            assert!(deregister_plugin_py("demo.failing_register"));
+            register_plugin_py(
+                "demo.failing_register",
+                helpers
+                    .getattr("FailingRegisterPlugin")
+                    .unwrap()
+                    .call0()
+                    .unwrap()
+                    .unbind(),
+            )
+            .unwrap();
+
             let failing = helpers
                 .getattr("initialize_plugin")
                 .unwrap()
@@ -255,7 +315,7 @@ async def initialize_plugin(module, config):
                 .unwrap_err();
             assert!(error.to_string().contains("register boom"), "{error}");
             assert!(
-                !deregister_subscriber("nemo-relay-plugin.v1.demo.failing_register:1:sub").unwrap(),
+                !deregister_subscriber(&subscriber_name).unwrap(),
                 "failed initialization should roll back partial registrations"
             );
 
@@ -276,15 +336,6 @@ async def initialize_plugin(module, config):
             );
             drop(context_guard);
         });
-
-        for kind in [
-            "demo.raising_validate",
-            "demo.invalid_diagnostics",
-            "demo.failing_register",
-            "demo.forced_failures",
-        ] {
-            assert!(deregister_plugin_py(kind));
-        }
     });
 }
 

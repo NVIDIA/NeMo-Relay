@@ -136,13 +136,14 @@ char *report_json = NULL;
 FfiPluginHostActivation *activation = NULL;
 if (nemo_relay_plugin_initialize(config_json, NULL, &activation, &report_json) != NEMO_RELAY_STATUS_OK) {
     /* inspect nemo_relay_last_error() */
-}
-nemo_relay_string_free(report_json);
-/* Close, then free, the activation during process teardown. */
-if (nemo_relay_plugin_host_activation_close(activation) != NEMO_RELAY_STATUS_OK) {
-    /* inspect nemo_relay_last_error(); do not free an activation that did not close */
 } else {
-    nemo_relay_plugin_host_activation_free(&activation);
+    nemo_relay_string_free(report_json);
+    /* Close, then free, the activation during process teardown. */
+    if (nemo_relay_plugin_host_activation_close(activation) != NEMO_RELAY_STATUS_OK) {
+        /* inspect nemo_relay_last_error(); do not free an activation that did not close */
+    } else {
+        nemo_relay_plugin_host_activation_free(&activation);
+    }
 }
 ```
 

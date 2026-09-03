@@ -106,10 +106,10 @@ requests can be observed without provider-specific cache translation.
 The following examples configure and activate the Adaptive component through a
 language binding:
 
-`validate()` checks only the supplied in-memory object. `initialize()` also
-layers discovered `plugins.toml` configuration. For effective file-backed
-validation, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
-and run the gateway with the same configuration path that production uses.
+`validate()` resolves the same configuration layers as `initialize()` without
+loading plugin code or acquiring the activation lease. Use Rust `validate_exact()`
+when only the supplied static configuration should be checked. For complete
+layering rules, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -142,9 +142,15 @@ report = nemo_relay.plugin.validate(plugin_config)["config"]
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
-activation = asyncio.run(nemo_relay.plugin.initialize(plugin_config))
-# Retain the activation while adaptive behavior is needed, then close it during teardown.
-asyncio.run(activation.close())
+async def main():
+    activation = await nemo_relay.plugin.initialize(plugin_config)
+    try:
+        # Run instrumented application work here.
+        pass
+    finally:
+        await activation.close()
+
+asyncio.run(main())
 ```
 </Tab>
 
@@ -224,7 +230,7 @@ register_adaptive_component()?;
 let report = validate(plugin_config.clone(), None)?;
 assert!(!report.config.has_errors());
 
-let activation = initialize(plugin_config, None).await?;
+let mut activation = initialize(plugin_config, None).await?;
 
 // Run instrumented application work here.
 

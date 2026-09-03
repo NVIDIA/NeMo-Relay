@@ -42,14 +42,14 @@ and installs the replacement gate with the new component.
 The report accessor is a snapshot, not a live inspection of every registry. The kind-listing
 accessor answers a different question: which implementations can future component
 documents reference? An inactive or disabled kind can appear in that list, and an active
-component can keep running after its kind is deregistered until configuration is cleared.
+component can keep running after its kind is deregistered until its activation is closed.
 
 ## Own the Complete Host Lifecycle
 
 The host, rather than the plugin implementation, owns kind registration and active
 configuration. These complete lifecycle skeletons show where validation, report
-inspection, clearing, and deregistration belong. Put the clear operation in a guaranteed
-cleanup path so an application exception does not leave middleware installed.
+inspection, activation close, and deregistration belong. Put `activation.close()` in a
+guaranteed cleanup path so an application exception does not leave middleware installed.
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -113,7 +113,7 @@ if preflight.config.diagnostics.iter().any(|item| {
     return Err("plugin configuration failed validation".into());
 }
 
-let activation = initialize(plugin_config, None).await?;
+let mut activation = initialize(plugin_config, None).await?;
 println!("active report: {:?}", activation.report());
 assert!(activation.is_active());
 

@@ -19,7 +19,7 @@ manual subscribers. A common first path is:
 1. Instrument one scope, tool call, or LLM call in your application.
 2. Enable the Observability plugin with only one exporter, such as ATOF JSONL.
 3. Run one request through the instrumented path.
-4. Clear the plugin, or call the manual exporter's documented barrier.
+4. Close the activation, or call the manual exporter's documented barrier.
 5. Confirm the output before adding more exporters or sanitization rules.
 
 Observability in NeMo Relay starts with events. Scopes, marks, managed tool

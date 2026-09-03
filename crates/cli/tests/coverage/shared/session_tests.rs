@@ -434,7 +434,7 @@ fn routing_identity_enrichment_replaces_untrusted_reserved_headers() {
 }
 
 async fn install_test_atif_plugin(output_directory: &Path) {
-    let _ = test_close_plugin_host();
+    test_close_plugin_host().unwrap();
     std::fs::create_dir_all(output_directory).unwrap();
     let config: PluginConfig = serde_json::from_value(json!({
         "version": 1,
@@ -2557,7 +2557,7 @@ async fn empty_hook_marks_do_not_create_empty_atif_steps() {
 async fn inferred_skill_load_hook_marks_use_the_stable_event_contract() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
-    let _ = test_close_plugin_host();
+    test_close_plugin_host().unwrap();
     let atof_exporter = make_atof_test_exporter(&temp.path().join("atof"), "events.jsonl");
     let subscriber_name = "cli-inferred-skill-load-atof-test";
     let _ = deregister_subscriber(subscriber_name);

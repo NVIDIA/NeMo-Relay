@@ -497,9 +497,7 @@ enabled = true
 
   it('defensively clears a native activation during garbage collection', () => {
     const pluginModule = path.join(nodeDir, 'plugin.js');
-    const pluginsToml = writePluginHostConfig([
-      activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef),
-    ]);
+    const pluginsToml = writePluginHostConfig([activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef)]);
     const script = `
       import { createRequire } from 'node:module';
       const require = createRequire(${JSON.stringify(path.join(nodeDir, 'package.json'))});
@@ -554,9 +552,7 @@ enabled = true
       const wrapper = writeWorkerWrapper(workerBinary, pidFile, 'finalizer-worker');
       const manifestRef = writeWorkerManifest(wrapper, 'finalizer-worker');
       const pluginModule = path.join(nodeDir, 'plugin.js');
-      const pluginsToml = writePluginHostConfig([
-        activationSpec('fixture_worker', 'worker', manifestRef),
-      ]);
+      const pluginsToml = writePluginHostConfig([activationSpec('fixture_worker', 'worker', manifestRef)]);
       const script = `
         import { spawn } from 'node:child_process';
         import { readFileSync } from 'node:fs';

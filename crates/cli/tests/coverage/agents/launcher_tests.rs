@@ -1889,7 +1889,7 @@ async fn execute_live_run_reports_gateway_startup_error_when_health_check_fails(
     let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _cwd = crate::test_support::CwdTestScope::locked();
     let _env = EnvScope::without_managed_bootstrap();
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    nemo_relay::plugin::test_close_plugin_host().unwrap();
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),

@@ -139,6 +139,43 @@ func TestInitializePluginHostRejectsInvalidReportAndCleansUp(t *testing.T) {
 	runtime.KeepAlive(token)
 }
 
+func TestPluginHostActivationCloseFreesAfterClearFailure(t *testing.T) {
+	withPluginHostStubs(t)
+	token := new(byte)
+	ptr := unsafe.Pointer(token)
+	closeErr := errors.New("clear failed")
+	var cleanup []string
+	clearPluginHostActivation = func(got unsafe.Pointer) error {
+		if got != ptr {
+			t.Fatalf("clear pointer = %p, want %p", got, ptr)
+		}
+		cleanup = append(cleanup, "clear")
+		return closeErr
+	}
+	freePluginHostActivation = func(got unsafe.Pointer) {
+		if got != ptr {
+			t.Fatalf("free pointer = %p, want %p", got, ptr)
+		}
+		cleanup = append(cleanup, "free")
+	}
+
+	activation := newPluginHostActivation(ptr)
+	firstErr := activation.Close()
+	if !errors.Is(firstErr, closeErr) {
+		t.Fatalf("Close() error = %v, want %v", firstErr, closeErr)
+	}
+	if strings.Join(cleanup, ",") != "clear,free" {
+		t.Fatalf("cleanup calls = %v", cleanup)
+	}
+	if repeatedErr := activation.Close(); repeatedErr != firstErr {
+		t.Fatalf("repeated Close() error = %v, want cached %v", repeatedErr, firstErr)
+	}
+	if strings.Join(cleanup, ",") != "clear,free" {
+		t.Fatalf("repeated cleanup calls = %v", cleanup)
+	}
+	runtime.KeepAlive(token)
+}
+
 func TestNilPluginHostActivationCloseIsSafe(t *testing.T) {
 	var activation *PluginHostActivation
 	if err := activation.Close(); err != nil {

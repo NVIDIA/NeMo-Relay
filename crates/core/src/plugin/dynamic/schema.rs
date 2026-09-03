@@ -18,9 +18,11 @@ const DRAFT_7_URIS: [&str; 4] = [
     "https://json-schema.org/draft-07/schema",
     "https://json-schema.org/draft-07/schema#",
 ];
-const DRAFT_2020_12_URIS: [&str; 2] = [
+const DRAFT_2020_12_URIS: [&str; 4] = [
     "https://json-schema.org/draft/2020-12/schema",
+    "https://json-schema.org/draft/2020-12/schema#",
     "http://json-schema.org/draft/2020-12/schema",
+    "http://json-schema.org/draft/2020-12/schema#",
 ];
 
 /// Validates dynamic component configuration against its manifest-declared local schema.

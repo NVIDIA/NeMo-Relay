@@ -421,10 +421,7 @@ export declare function ComponentSpec(
  * @remarks Keep the returned activation alive while callbacks may run and call
  * `close()` or use `await using` for deterministic teardown.
  */
-export declare function initialize(
-  config: PluginConfig,
-  additionalPluginsToml?: string,
-): Promise<PluginHostActivation>;
+export declare function initialize(config: PluginConfig, additionalPluginsToml?: string): Promise<PluginHostActivation>;
 /**
  * Validate the plugin host without loading plugin code.
  *
@@ -436,10 +433,7 @@ export declare function initialize(
  * @returns Structured static and dynamic validation report.
  * @remarks Validation performs no activation and does not acquire the host lease.
  */
-export declare function validate(
-  config: PluginConfig,
-  additionalPluginsToml?: string,
-): PluginHostReport;
+export declare function validate(config: PluginConfig, additionalPluginsToml?: string): PluginHostReport;
 /**
  * List registered plugin kinds.
  *

@@ -190,7 +190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let report = validate(plugin_config.clone(), None)?;
     assert!(!report.config.has_errors());
 
-    let activation = initialize(plugin_config, None).await?;
+    let mut activation = initialize(plugin_config, None).await?;
     // Eligible deterministic repeats can now be served from the cache.
 
     activation.close()?;
