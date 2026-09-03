@@ -96,6 +96,28 @@ fn windows_verbatim_relay_paths_are_normalized_for_mcp_config() {
 }
 
 #[test]
+fn windows_verbatim_marketplace_paths_are_normalized_for_host_cli() {
+    use crate::installation::marketplace::host::marketplace_path_argument_for_platform;
+
+    assert_eq!(
+        marketplace_path_argument_for_platform(
+            Path::new(
+                r"\\?\C:\Users\sumahalingam\AppData\Local\nemo-relay\plugins\claude-code-marketplace"
+            ),
+            true,
+        ),
+        r"C:\Users\sumahalingam\AppData\Local\nemo-relay\plugins\claude-code-marketplace"
+    );
+    assert_eq!(
+        marketplace_path_argument_for_platform(
+            Path::new(r"\\?\UNC\server\share\nemo-relay\claude-code-marketplace"),
+            true,
+        ),
+        r"\\server\share\nemo-relay\claude-code-marketplace"
+    );
+}
+
+#[test]
 fn readiness_worker_returns_a_report_and_handles_channel_disconnects() {
     let dir = tempdir().unwrap();
     let readiness = collect_marketplace_readiness(
