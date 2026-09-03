@@ -305,7 +305,7 @@ async fn mcp_session_serves_stdio_and_stops_heartbeat_on_eof() {
 }
 
 #[tokio::test]
-async fn heartbeat_keeps_a_compatible_gateway_session_alive() {
+async fn heartbeat_keeps_a_differently_configured_gateway_session_alive() {
     let _plugin_guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let _bootstrap_home = BootstrapConfigHome::enter(&temp.path().join("xdg"));
@@ -316,11 +316,12 @@ async fn heartbeat_keeps_a_compatible_gateway_session_alive() {
         ..crate::configuration::GatewayConfig::default()
     };
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let fingerprint = "test-fingerprint";
+    let gateway_fingerprint = "existing-gateway-fingerprint";
+    let client_fingerprint = "new-client-fingerprint";
     let gateway = tokio::spawn(crate::server::serve_listener_with_bootstrap(
         listener,
         config,
-        fingerprint.into(),
+        gateway_fingerprint.into(),
         Some(shutdown_rx),
     ));
     let url = format!("http://{bind}");
@@ -328,7 +329,7 @@ async fn heartbeat_keeps_a_compatible_gateway_session_alive() {
         loop {
             let probe_url = url.clone();
             if tokio::task::spawn_blocking(move || {
-                crate::gateway::client::healthz_compatible(&probe_url, fingerprint)
+                crate::gateway::client::healthz_compatible(&probe_url, client_fingerprint)
             })
             .await
             .unwrap()
@@ -355,7 +356,7 @@ async fn heartbeat_keeps_a_compatible_gateway_session_alive() {
                 let observed_tx = observed_tx.clone();
                 async move {
                     let healthy = tokio::task::spawn_blocking(move || {
-                        crate::gateway::client::healthz_compatible(&url, fingerprint)
+                        crate::gateway::client::healthz_compatible(&url, client_fingerprint)
                     })
                     .await
                     .map_err(|error| {
