@@ -84,10 +84,10 @@ function loadIndexForTest({
     arch,
     report: processReport
       ? {
-            getReport() {
-              return processReport;
-            },
+          getReport() {
+            return processReport;
           },
+        }
       : null,
   };
 

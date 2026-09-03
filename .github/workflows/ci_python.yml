@@ -508,7 +508,6 @@ jobs:
           uv pip install \
             --python "${RUNNER_TEMP}/nemo-relay-sdist-venv/bin/python" \
             --no-deps \
-            --no-index \
             "$sdist"
           "${RUNNER_TEMP}/nemo-relay-sdist-venv/bin/python" -c "import nemo_relay"
 
