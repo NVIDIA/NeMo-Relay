@@ -262,6 +262,10 @@ jobs:
         with:
           tool: just@${{ steps.ci-config.outputs.just_version }}
 
+      - name: Fetch locked Rust dependencies
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: cargo fetch --locked --target "${{ matrix.target }}"
+
       - name: Set CLI binary version
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         env:
@@ -295,7 +299,9 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -e
-          cargo build --offline --release --target "${{ matrix.target }}" -p nemo-relay-cli # NOSONAR: offline mode prevents dependency resolution or downloads while dynamic package metadata invalidates --locked.
+          # SONAR_IGNORE_START: dependencies were fetched from Cargo.lock before dynamic package metadata is applied.
+          cargo build --offline --release --target "${{ matrix.target }}" -p nemo-relay-cli
+          # SONAR_IGNORE_END
 
       - name: Build CLI release binary in manylinux
         if: ${{ matrix.build_image != '' }}
@@ -449,7 +455,9 @@ jobs:
             venv_python="${RUNNER_TEMP}/nemo-relay-cli-venv/bin/python"
             venv_cli="${RUNNER_TEMP}/nemo-relay-cli-venv/bin/nemo-relay"
           fi
-          uv pip install --python "$venv_python" --no-deps --no-index "$wheel" # NOSONAR: local wheel with no dependencies or index access.
+          # SONAR_IGNORE_START: local wheel with no dependencies or index access.
+          uv pip install --python "$venv_python" --no-deps --no-index "$wheel"
+          # SONAR_IGNORE_END
           wheel_version="$("$venv_cli" --version)"
           if [ "$binary_version" != "$wheel_version" ]; then
             echo "Error: CLI binary reports '$binary_version' but wheel reports '$wheel_version'" >&2

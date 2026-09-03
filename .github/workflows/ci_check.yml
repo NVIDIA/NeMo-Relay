@@ -224,6 +224,8 @@ jobs:
       - name: Test binary package assembly
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: >-
-          uv run --no-project --offline --no-build python -m unittest # NOSONAR: offline mode makes this a no-network execution.
+          # SONAR_IGNORE_START: offline mode makes this a no-network execution.
+          uv run --no-project --offline --no-build python -m unittest
           scripts.tests.test_package_cli_bin
           scripts.tests.test_package_node_bin
+          # SONAR_IGNORE_END

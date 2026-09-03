@@ -456,7 +456,9 @@ jobs:
           else
             venv_python="${RUNNER_TEMP}/nemo-relay-wheel-venv/bin/python"
           fi
-          uv pip install --python "$venv_python" --no-deps --no-index "$wheel" # NOSONAR: local wheel with no dependencies or index access.
+          # SONAR_IGNORE_START: local wheel with no dependencies or index access.
+          uv pip install --python "$venv_python" --no-deps --no-index "$wheel"
+          # SONAR_IGNORE_END
           "$venv_python" -c "import nemo_relay"
 
       - name: Download matching musllinux Python wheel artifact
@@ -505,7 +507,11 @@ jobs:
           sdist="$(find python-sdist -maxdepth 1 -name '*.tar.gz' -print -quit)"
           test -n "$sdist"
           uv venv --python "$(uv python find)" "${RUNNER_TEMP}/nemo-relay-sdist-venv"
-          uv pip install --python "${RUNNER_TEMP}/nemo-relay-sdist-venv/bin/python" --no-deps "$sdist" # NOSONAR: its only build dependency is exactly pinned in pyproject.toml.
+          build_constraints="${RUNNER_TEMP}/nemo-relay-build-constraints.txt"
+          uv export --frozen --only-group dev --no-emit-project --no-emit-workspace --no-annotate --no-header --output-file "$build_constraints"
+          # SONAR_IGNORE_START: build constraints lock the sdist backend from uv.lock.
+          uv pip install --python "${RUNNER_TEMP}/nemo-relay-sdist-venv/bin/python" --build-constraints "$build_constraints" --no-deps "$sdist"
+          # SONAR_IGNORE_END
           "${RUNNER_TEMP}/nemo-relay-sdist-venv/bin/python" -c "import nemo_relay"
 
       - name: Install and import Python plugin SDK wheel
@@ -515,6 +521,11 @@ jobs:
           wheel="$(find plugin-wheel -maxdepth 1 -name '*.whl' -print -quit)"
           test -n "$wheel"
           uv venv --python "$(uv python find)" "${RUNNER_TEMP}/nemo-relay-plugin-venv"
-          uv pip install --python "${RUNNER_TEMP}/nemo-relay-plugin-venv/bin/python" --no-deps --no-index "$wheel" # NOSONAR: local wheel with no dependencies or index access.
+          plugin_requirements="${RUNNER_TEMP}/nemo-relay-plugin-requirements.txt"
+          uv export --frozen --package nemo-relay-plugin --no-dev --no-emit-project --no-emit-workspace --no-annotate --no-header --output-file "$plugin_requirements"
+          uv pip install --python "${RUNNER_TEMP}/nemo-relay-plugin-venv/bin/python" --require-hashes --no-deps -r "$plugin_requirements"
+          # SONAR_IGNORE_START: local wheel with no dependencies or index access.
+          uv pip install --python "${RUNNER_TEMP}/nemo-relay-plugin-venv/bin/python" --no-deps --no-index "$wheel"
+          # SONAR_IGNORE_END
           "${RUNNER_TEMP}/nemo-relay-plugin-venv/bin/python" -c \
             "import nemo_relay_plugin._proto.plugin_worker_pb2_grpc"
