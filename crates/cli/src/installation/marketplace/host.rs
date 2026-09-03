@@ -26,11 +26,27 @@ pub(super) fn run_host_marketplace_registration(
             "plugin".into(),
             "marketplace".into(),
             "add".into(),
-            marketplace_root.display().to_string(),
+            marketplace_path_argument_for_platform(marketplace_root, cfg!(windows)),
         ],
         options,
         runner,
     )
+}
+
+pub(crate) fn marketplace_path_argument_for_platform(
+    marketplace_root: &Path,
+    windows: bool,
+) -> String {
+    let path = marketplace_root.display().to_string();
+    if !windows {
+        return path;
+    }
+
+    if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(&path).to_owned()
+    }
 }
 
 pub(super) fn run_host_plugin_registration(
