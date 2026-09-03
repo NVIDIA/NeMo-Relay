@@ -729,15 +729,40 @@ function summarize(result: unknown, isError: boolean): unknown {
   if (typeof result === 'object') {
     const record = result as Record<string, unknown>;
     const content = record.content ?? record.output ?? record.text;
+    const text = toolResultText(content);
     return {
-      content:
-        typeof content === 'string'
-          ? truncate(content)
-          : `Tool ${isError ? 'failed' : 'completed'}.`,
+      content: text === null ? `Tool ${isError ? 'failed' : 'completed'}.` : text,
       result_keys: Object.keys(record).slice(0, 20),
     };
   }
   return { content: truncate(String(result)) };
+}
+
+/** Extract and bound Pi's ordered text blocks without forwarding image or unknown parts. */
+function toolResultText(content: unknown): string | null {
+  if (typeof content === 'string') return truncate(content);
+  if (!Array.isArray(content)) return null;
+
+  let text = '';
+  let omittedChars = 0;
+  let foundText = false;
+
+  const append = (value: string): void => {
+    const kept = value.slice(0, Math.max(0, MAX_CONTENT_CHARS - text.length));
+    text += kept;
+    omittedChars += value.length - kept.length;
+  };
+
+  for (const part of content) {
+    if (typeof part !== 'object' || part === null || Array.isArray(part)) continue;
+    const block = part as Record<string, unknown>;
+    if (block.type !== 'text' || typeof block.text !== 'string') continue;
+    if (foundText) append('\n');
+    append(block.text);
+    foundText = true;
+  }
+  if (!foundText) return null;
+  return omittedChars === 0 ? text : `${text}... [truncated ${omittedChars} chars]`;
 }
 
 function truncate(value: string): string {

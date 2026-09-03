@@ -422,11 +422,12 @@ the first event of the turn.
 
 ## What Is Not Represented
 
-**Tool results are truncated at 2000 characters** before they are forwarded, with
-the overflow replaced by a `... [truncated N chars]` suffix. The gateway
-therefore records what a tool returned, not necessarily all of it — a large file
-read or a long command output is cut. Raise `MAX_CONTENT_CHARS` in `index.ts` if
-a policy needs to see more.
+For pi's structured tool results, the extension joins text parts in order and
+omits image and other non-text parts. **Tool-result text is truncated at 2000
+characters** before it is forwarded. The overflow is replaced by a
+`... [truncated N chars]` suffix. The gateway therefore records a bounded text
+projection, not the complete result — a large file read or a long command output
+is cut. Raise `MAX_CONTENT_CHARS` in `index.ts` if a policy needs to see more.
 
 **Tool arguments are not truncated, and must not be.** The `tool_call` post is
 the gated one: a guardrail decides on exactly those arguments, and a request
