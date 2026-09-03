@@ -278,6 +278,8 @@ jobs:
             version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)+${GIT_COMMIT::8}"
           fi
           just set-cargo-version "$version"
+          # Refresh workspace package versions without changing resolved dependencies.
+          cargo metadata --offline --format-version 1 > /dev/null
           printf 'NEMO_RELAY_CLI_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
 
       - name: Install musl tools
