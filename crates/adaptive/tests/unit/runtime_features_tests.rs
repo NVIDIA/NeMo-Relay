@@ -1402,6 +1402,8 @@ async fn adaptive_runtime_deregister_drains_queued_telemetry() {
     })
     .await
     .expect("deregistered telemetry drain must finish queued runs");
+
+    assert_eq!(backend.list_runs_dyn(agent_id).await.unwrap().len(), 1);
 }
 
 fn queue_completed_agent_run(runtime: &mut AdaptiveRuntime) {

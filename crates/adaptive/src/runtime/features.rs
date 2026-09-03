@@ -526,10 +526,37 @@ impl AdaptiveRuntime {
             guard.clear();
         }
         // Remove every sender so the drain can process the queued events and
-        // finish naturally. Dropping the JoinHandle detaches that work because
-        // this synchronous API cannot await it.
+        // finish naturally. The synchronous API cannot await it, so supervise
+        // the detached drain with the same bounded timeout as shutdown.
         self.event_tx.take();
-        self.drain_handle.take();
+        if let Some(handle) = self.drain_handle.take() {
+            match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => {
+                    runtime.spawn(async move {
+                        let mut handle = handle;
+                        if tokio::time::timeout(TELEMETRY_DRAIN_TIMEOUT, &mut handle)
+                            .await
+                            .is_err()
+                        {
+                            log::warn!(
+                                target: "nemo_relay.runtime",
+                                event = "adaptive_telemetry_drain_timeout";
+                                "Adaptive runtime deregistration timed out while draining telemetry; aborting remaining work"
+                            );
+                            handle.abort();
+                        }
+                    });
+                }
+                Err(_) => {
+                    log::warn!(
+                        target: "nemo_relay.runtime",
+                        event = "adaptive_telemetry_drain_aborted";
+                        "Adaptive runtime deregistration has no Tokio runtime; aborting telemetry drain"
+                    );
+                    handle.abort();
+                }
+            }
+        }
         self.registered = false;
         Ok(())
     }
