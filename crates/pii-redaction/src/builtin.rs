@@ -209,6 +209,27 @@ impl BuiltinMatcher {
         output.push_str(&text[cursor..]);
         output
     }
+
+    fn replace_all_expanded(&self, text: &str, replacement: &str) -> String {
+        let mut output = String::with_capacity(text.len());
+        let mut cursor = 0;
+        for captures in self.regex.captures_iter(text) {
+            let matched = captures
+                .get(0)
+                .expect("regular-expression captures always include the full match");
+            let matched_text = matched.as_str();
+            if self.detector == Some(BuiltinDetector::AwsSecretAccessKey)
+                && is_hex_git_sha(matched_text)
+            {
+                continue;
+            }
+            output.push_str(&text[cursor..matched.start()]);
+            captures.expand(replacement, &mut output);
+            cursor = matched.end();
+        }
+        output.push_str(&text[cursor..]);
+        output
+    }
 }
 
 #[derive(Clone)]
@@ -569,7 +590,7 @@ impl CompiledBuiltinBackend {
                 pattern,
                 replacement,
             } => Some(Json::String(
-                pattern.replace_all(&text, |_| replacement.as_str().to_string()),
+                pattern.replace_all_expanded(&text, replacement),
             )),
         }
     }
@@ -1276,6 +1297,45 @@ mod tests {
         assert_eq!(
             aws_result["value"],
             "sha 0123456789abcdef0123456789abcdef01234567 key [REDACTED]"
+        );
+    }
+
+    #[test]
+    fn regex_replace_expands_numbered_and_named_captures() {
+        let numbered_backend = CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "regex_replace".to_string(),
+                pattern: Some("(token)-(\\d+)".to_string()),
+                replacement: Some("$1-[REDACTED]".to_string()),
+                target_paths: vec!["/value".to_string()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            numbered_backend.sanitize_json_preorder_dfs(serde_json::json!({
+                "value": "token-123"
+            }))["value"],
+            "token-[REDACTED]"
+        );
+
+        let named_backend = CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "regex_replace".to_string(),
+                pattern: Some("(?<kind>token)-(?<value>\\d+)".to_string()),
+                replacement: Some("${kind}-[REDACTED]".to_string()),
+                target_paths: vec!["/value".to_string()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            named_backend.sanitize_json_preorder_dfs(serde_json::json!({
+                "value": "token-123"
+            }))["value"],
+            "token-[REDACTED]"
         );
     }
 }
