@@ -3,6 +3,7 @@
 
 [profile.ci]
 junit = { path = "rust_junit_report.xml" }
+retries = { backoff = "fixed", count = 3, delay = "2s" }
 
 [[profile.ci.overrides]]
 filter = 'test(typed_async_llm_sanitize_context_decodes_all_builtin_identities) | test(typed_async_llm_sanitize_context_decodes_oci_genai_builtin_identity)'
