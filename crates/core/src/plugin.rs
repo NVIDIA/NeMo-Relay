@@ -1852,18 +1852,16 @@ async fn initialize_plugin_components_catching_panics(
         })?
 }
 
-/// Resolves a plugin host configuration from discovered files and an optional
-/// explicit file, then applies programmatic values as the highest-precedence
-/// layer.
-pub(crate) fn resolve_plugin_config_with_explicit(
+/// Resolves a plugin host configuration from already-read file documents, then
+/// applies programmatic values as the highest-precedence layer.
+pub(crate) fn resolve_plugin_config_documents(
     config: PluginConfig,
     explicit_path: Option<&Path>,
+    documents: Vec<(PathBuf, Json)>,
 ) -> Result<ResolvedPluginConfig> {
     let explicit_path = explicit_path.map(Path::to_path_buf);
-    let paths = plugin_config_paths(explicit_path.as_deref(), user_config_dir());
-    let (file_value, mut sources) =
-        merge_plugin_config_documents(read_plugin_config_files(paths)?)?
-            .unwrap_or_else(|| (Json::Object(Map::new()), Vec::new()));
+    let (file_value, mut sources) = merge_plugin_config_documents(documents)?
+        .unwrap_or_else(|| (Json::Object(Map::new()), Vec::new()));
     let mut value = file_value;
     layer_config(&mut value, plugin_config_overlay_value(&config)?);
     if let Some(explicit_path) = explicit_path {

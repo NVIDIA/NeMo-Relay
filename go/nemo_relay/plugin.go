@@ -263,7 +263,8 @@ const (
 
 // PluginHostActivation owns the runtime registrations, native libraries, and
 // workers created by Initialize. Copies share one activation
-// lifetime and may be closed safely from any copy.
+// lifetime and may be closed safely from any copy. Failed teardown leaves the
+// activation active so a later Close call can retry.
 //
 // Experimental: this API needs a production consumer before its lifecycle
 // contract is considered stable.
@@ -522,7 +523,6 @@ func finalizePluginHostActivation(state *pluginHostActivationState) {
 
 // Close removes callbacks and subscribers before unloading plugin libraries
 // and workers. It is safe to call Close repeatedly or on a nil activation.
-// Copies and repeated calls observe the same first teardown result.
 func (activation *PluginHostActivation) Close() error {
 	if activation == nil || activation.state == nil {
 		return nil
@@ -536,15 +536,23 @@ func (state *pluginHostActivationState) close() error {
 	if state.closed {
 		return state.closeErr
 	}
-	state.closed = true
 
 	ptr := state.ptr
-	state.ptr = nil
 	if ptr == nil {
+		state.closed = true
 		return nil
 	}
-	runtime.SetFinalizer(state, nil)
 	state.closeErr = clearPluginHostActivation(ptr)
+	if state.closeErr != nil {
+		active, err := pluginHostActivationIsActive(ptr)
+		if err != nil || active {
+			return state.closeErr
+		}
+	}
+
+	state.closed = true
+	state.ptr = nil
+	runtime.SetFinalizer(state, nil)
 	freePluginHostActivation(ptr)
 	return state.closeErr
 }

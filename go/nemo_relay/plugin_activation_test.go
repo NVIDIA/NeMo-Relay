@@ -139,7 +139,7 @@ func TestInitializePluginHostRejectsInvalidReportAndCleansUp(t *testing.T) {
 	runtime.KeepAlive(token)
 }
 
-func TestPluginHostActivationCloseFreesAfterClearFailure(t *testing.T) {
+func TestPluginHostActivationCloseRetriesWhileCoreRemainsActive(t *testing.T) {
 	withPluginHostStubs(t)
 	token := new(byte)
 	ptr := unsafe.Pointer(token)
@@ -150,7 +150,65 @@ func TestPluginHostActivationCloseFreesAfterClearFailure(t *testing.T) {
 			t.Fatalf("clear pointer = %p, want %p", got, ptr)
 		}
 		cleanup = append(cleanup, "clear")
+		if len(cleanup) == 1 {
+			return closeErr
+		}
+		return nil
+	}
+	pluginHostActivationIsActive = func(got unsafe.Pointer) (bool, error) {
+		if got != ptr {
+			t.Fatalf("is-active pointer = %p, want %p", got, ptr)
+		}
+		return true, nil
+	}
+	freePluginHostActivation = func(got unsafe.Pointer) {
+		if got != ptr {
+			t.Fatalf("free pointer = %p, want %p", got, ptr)
+		}
+		cleanup = append(cleanup, "free")
+	}
+
+	activation := newPluginHostActivation(ptr)
+	firstErr := activation.Close()
+	if !errors.Is(firstErr, closeErr) {
+		t.Fatalf("Close() error = %v, want %v", firstErr, closeErr)
+	}
+	if strings.Join(cleanup, ",") != "clear" {
+		t.Fatalf("cleanup calls = %v", cleanup)
+	}
+	if retryErr := activation.Close(); retryErr != nil {
+		t.Fatalf("retry Close() error = %v", retryErr)
+	}
+	if strings.Join(cleanup, ",") != "clear,clear,free" {
+		t.Fatalf("retry cleanup calls = %v", cleanup)
+	}
+	if repeatedErr := activation.Close(); repeatedErr != nil {
+		t.Fatalf("repeated Close() error = %v", repeatedErr)
+	}
+	if strings.Join(cleanup, ",") != "clear,clear,free" {
+		t.Fatalf("repeated cleanup calls = %v", cleanup)
+	}
+	runtime.KeepAlive(token)
+}
+
+func TestPluginHostActivationCloseFreesAfterTerminalClearFailure(t *testing.T) {
+	withPluginHostStubs(t)
+	token := new(byte)
+	ptr := unsafe.Pointer(token)
+	closeErr := errors.New("clear failed after teardown")
+	var cleanup []string
+	clearPluginHostActivation = func(got unsafe.Pointer) error {
+		if got != ptr {
+			t.Fatalf("clear pointer = %p, want %p", got, ptr)
+		}
+		cleanup = append(cleanup, "clear")
 		return closeErr
+	}
+	pluginHostActivationIsActive = func(got unsafe.Pointer) (bool, error) {
+		if got != ptr {
+			t.Fatalf("is-active pointer = %p, want %p", got, ptr)
+		}
+		return false, nil
 	}
 	freePluginHostActivation = func(got unsafe.Pointer) {
 		if got != ptr {

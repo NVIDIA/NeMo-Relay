@@ -256,6 +256,39 @@ attestation = "integrity_only"
 }
 
 #[test]
+fn static_plugin_policy_does_not_override_dynamic_attestation_policy() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugins_toml = temp.path().join("plugins.toml");
+    fs::write(
+        &plugins_toml,
+        r#"
+[plugins.policy.defaults]
+attestation = "integrity_only"
+"#,
+    )
+    .unwrap();
+    let programmatic = PluginConfig {
+        policy: crate::plugin::ConfigPolicy {
+            unsupported_value: crate::plugin::UnsupportedBehavior::Ignore,
+            ..crate::plugin::ConfigPolicy::default()
+        },
+        ..PluginConfig::default()
+    };
+
+    let resolved = resolve_plugin_host_config_inner(programmatic, Some(&plugins_toml), false)
+        .expect("static and dynamic policies should resolve independently");
+
+    assert_eq!(
+        resolved.config.policy.unsupported_value,
+        crate::plugin::UnsupportedBehavior::Ignore
+    );
+    assert_eq!(
+        resolved.policy.defaults.attestation,
+        Some(DynamicPluginAttestationMode::IntegrityOnly)
+    );
+}
+
+#[test]
 fn manifest_paths_and_validation_reports_preserve_fail_closed_selection() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("config/plugins.toml");

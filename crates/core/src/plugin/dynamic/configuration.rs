@@ -18,7 +18,7 @@ use super::{
     validate_dynamic_plugin_config_schema,
 };
 use crate::plugin::{
-    PluginConfig, PluginError, Result, plugin_config_paths, resolve_plugin_config_with_explicit,
+    PluginConfig, PluginError, Result, plugin_config_paths, resolve_plugin_config_documents,
 };
 
 const DYNAMIC_PLUGIN_STATE_FILENAME: &str = ".dynamic-plugins.json";
@@ -142,6 +142,12 @@ struct PluginFile {
     plugins: PluginFilePlugins,
 }
 
+struct PluginFileDocument {
+    source: PathBuf,
+    value: Json,
+    file: PluginFile,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct PluginFilePlugins {
     #[serde(default)]
@@ -263,16 +269,23 @@ fn resolve_plugin_host_config_inner(
     explicit_path: Option<&Path>,
     reject_required_failures: bool,
 ) -> Result<ResolvedPluginHostConfig> {
-    let resolved = resolve_plugin_config_with_explicit(programmatic, explicit_path)?;
     let paths = plugin_config_paths(explicit_path, crate::plugin::user_config_dir());
     let files = read_plugin_files(&paths)?;
+    let resolved = resolve_plugin_config_documents(
+        programmatic,
+        explicit_path,
+        files
+            .iter()
+            .map(|document| (document.source.clone(), document.value.clone()))
+            .collect(),
+    )?;
     let mut policy = DynamicPluginHostPolicy::default();
     let mut active = Vec::new();
     let mut reports = Vec::new();
     let mut seen_ids = HashSet::new();
     let mut declarations = Vec::new();
 
-    for (source, file) in files {
+    for PluginFileDocument { source, file, .. } in files {
         if let Some(file_policy) = file.plugins.policy {
             policy.merge_from(file_policy.into());
         }
@@ -388,20 +401,30 @@ fn validate_declaration(
     }
 }
 
-fn read_plugin_files(paths: &[PathBuf]) -> Result<Vec<(PathBuf, PluginFile)>> {
+fn read_plugin_files(paths: &[PathBuf]) -> Result<Vec<PluginFileDocument>> {
     let mut files = Vec::new();
     for source in paths {
         if !source.exists() {
             continue;
         }
         let raw = read_utf8_plugin_file(source)?;
-        let file = toml::from_str(&raw).map_err(|error| {
+        let table = raw.parse::<toml::Table>().map_err(|error| {
             PluginError::InvalidConfig(format!(
                 "invalid plugin TOML in {}: {error}",
                 source.display()
             ))
         })?;
-        files.push((source.clone(), file));
+        let file = table.clone().try_into().map_err(|error| {
+            PluginError::InvalidConfig(format!(
+                "invalid plugin TOML in {}: {error}",
+                source.display()
+            ))
+        })?;
+        files.push(PluginFileDocument {
+            source: source.clone(),
+            value: serde_json::to_value(table)?,
+            file,
+        });
     }
     Ok(files)
 }
