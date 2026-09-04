@@ -48,6 +48,7 @@ const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(300);
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) config: GatewayConfig,
+    #[allow(dead_code)]
     pub(crate) bootstrap_fingerprint: Option<String>,
     pub(crate) bootstrap_challenge_key: Option<BootstrapChallengeKey>,
     pub(crate) require_provider_client_token: bool,
@@ -682,18 +683,14 @@ async fn bootstrap_tls_tunnel(
     else {
         return StatusCode::FORBIDDEN.into_response();
     };
-    let fingerprint_matches = state
-        .bootstrap_fingerprint
-        .as_deref()
-        .is_some_and(|actual| bool::from(actual.as_bytes().ct_eq(fingerprint.as_bytes())));
-    let (Some(key), Some(tls), Some(local_address)) = (
-        state.bootstrap_challenge_key.as_ref(),
-        state.bootstrap_tls.clone(),
-        state.local_address,
-    ) else {
+    let Some(key) = state.bootstrap_challenge_key.as_ref() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    if !fingerprint_matches
+    let token_is_valid = headers
+        .get(BOOTSTRAP_CLIENT_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|token| key.verify_client_token(token));
+    if !token_is_valid
         || headers
             .get(http::header::UPGRADE)
             .and_then(|value| value.to_str().ok())
@@ -701,6 +698,10 @@ async fn bootstrap_tls_tunnel(
     {
         return StatusCode::FORBIDDEN.into_response();
     }
+    let (Some(tls), Some(local_address)) = (state.bootstrap_tls.clone(), state.local_address)
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
     let proof = key.proof(fingerprint, nonce);
     let upgrade = hyper::upgrade::on(&mut request);
     tokio::spawn(async move {
@@ -776,24 +777,20 @@ async fn healthz(State(state): State<AppState>, headers: HeaderMap) -> Response 
     let mut response_headers = HeaderMap::new();
     let compatible = match presented_fingerprint {
         None => true,
-        Some(expected) => {
-            let fingerprint_matches = state
-                .bootstrap_fingerprint
-                .as_deref()
-                .is_some_and(|actual| bool::from(actual.as_bytes().ct_eq(expected.as_bytes())));
+        Some(fingerprint) => {
+            // Persistent configuration does not determine whether an existing
+            // gateway can serve this MCP connection. Bind the caller's
+            // fingerprint into the proof without requiring it to match the
+            // gateway's configuration fingerprint.
             let nonce = headers
                 .get("x-nemo-relay-bootstrap-nonce")
                 .and_then(|value| value.to_str().ok())
                 .filter(|nonce| {
                     nonce.len() == 64 && nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
                 });
-            match (
-                fingerprint_matches,
-                nonce,
-                state.bootstrap_challenge_key.as_ref(),
-            ) {
-                (true, Some(nonce), Some(key)) => {
-                    let proof = key.proof(expected, nonce);
+            match (nonce, state.bootstrap_challenge_key.as_ref()) {
+                (Some(nonce), Some(key)) => {
+                    let proof = key.proof(fingerprint, nonce);
                     response_headers.insert(
                         "x-nemo-relay-bootstrap-proof",
                         HeaderValue::from_str(&proof).expect("bootstrap proof is an ASCII value"),

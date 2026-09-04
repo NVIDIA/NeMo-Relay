@@ -18,6 +18,7 @@ use crate::trie::serialization::TrieEnvelope;
 use crate::types::metadata::{AgentHints, MetadataEnvelope, ParallelHint};
 use crate::types::plan::{ExecutionPlan, ParallelGroup};
 use crate::types::records::RunRecord;
+use nemo_relay::api::event::{BaseEvent, EventCategory, ScopeCategory, ScopeEvent};
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
     llm_request_intercepts, llm_stream_call_execute,
@@ -533,15 +534,16 @@ async fn telemetry_feature_registers_subscriber_and_starts_drain_task() {
         feature.register(&mut ctx).await.unwrap();
         ctx.finish()
     };
-    assert!(runtime.drain_handle.is_some());
+    assert!(runtime.drain_task.is_some());
     assert_subscriber_registered(&name);
 
     rollback_registrations(&mut registrations);
     assert_subscriber_absent(&name);
     let handle = runtime
-        .drain_handle
+        .drain_task
         .take()
-        .expect("telemetry registration must start a drain task");
+        .expect("telemetry registration must start a drain task")
+        .handle;
     drop(runtime);
     tokio::time::timeout(Duration::from_secs(1), handle)
         .await
@@ -709,9 +711,9 @@ async fn adaptive_runtime_register_survives_hot_cache_seed_failures() {
         })),
         cache_diagnostics_tracker: Arc::new(RwLock::new(CacheDiagnosticsTracker::default())),
         pending_events: Arc::new(AtomicUsize::new(0)),
-        event_tx,
+        event_tx: Some(event_tx),
         event_rx: Some(event_rx),
-        drain_handle: None,
+        drain_task: None,
         registered: false,
         runtime_id: Uuid::now_v7(),
         bound_scopes: Arc::new(RwLock::new(HashSet::new())),
@@ -770,7 +772,7 @@ async fn adaptive_runtime_register_rolls_back_when_telemetry_receiver_is_missing
         matches!(err, AdaptiveError::Internal(message) if message.contains("telemetry already registered"))
     );
     assert!(!runtime.registered);
-    assert!(runtime.drain_handle.is_none());
+    assert!(runtime.drain_task.is_none());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1040,9 +1042,12 @@ async fn adaptive_runtime_register_feature_rolls_back_partial_registrations_and_
             .unwrap();
         runtime.registrations = ctx.finish();
     }
-    runtime.drain_handle = Some(tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(60)).await;
-    }));
+    runtime.drain_task = Some(TelemetryDrainTask {
+        handle: tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }),
+        runtime: tokio::runtime::Handle::current(),
+    });
     runtime.registered = true;
 
     let mut feature: Box<dyn AdaptiveFeature> = Box::new(PartiallyFailingFeature);
@@ -1050,7 +1055,7 @@ async fn adaptive_runtime_register_feature_rolls_back_partial_registrations_and_
 
     assert!(matches!(err, AdaptiveError::Internal(message) if message.contains("feature boom")));
     assert!(!runtime.registered);
-    assert!(runtime.drain_handle.is_none());
+    assert!(runtime.drain_task.is_none());
     assert!(runtime.registrations.is_empty());
     assert_subscriber_absent("existing_feature");
     assert_subscriber_absent("partial_feature");
@@ -1345,4 +1350,150 @@ async fn adaptive_runtime_shutdown_is_a_clean_noop_after_deregister() {
         .unwrap();
     runtime.deregister().unwrap();
     runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn adaptive_runtime_shutdown_drains_queued_telemetry() {
+    let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
+    reset_global();
+
+    let agent_id = "shutdown-drain-agent";
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig {
+        agent_id: Some(agent_id.into()),
+        state: Some(StateConfig {
+            backend: BackendSpec::in_memory(),
+        }),
+        telemetry: Some(TelemetryComponentConfig::default()),
+        ..AdaptiveConfig::default()
+    })
+    .await
+    .unwrap();
+    runtime.register().await.unwrap();
+    let backend = runtime.backend.as_ref().unwrap().clone();
+    queue_completed_agent_run(&mut runtime);
+
+    runtime.shutdown().await.unwrap();
+
+    assert_eq!(backend.list_runs_dyn(agent_id).await.unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn adaptive_runtime_shutdown_aborts_stalled_telemetry_after_timeout() {
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
+        .await
+        .unwrap();
+    let handle = tokio::spawn(std::future::pending::<()>());
+    let abort_handle = handle.abort_handle();
+    runtime.drain_task = Some(TelemetryDrainTask {
+        handle,
+        runtime: tokio::runtime::Handle::current(),
+    });
+    let started = tokio::time::Instant::now();
+
+    runtime.shutdown().await.unwrap();
+    tokio::task::yield_now().await;
+
+    assert!(started.elapsed() >= TELEMETRY_DRAIN_TIMEOUT);
+    assert!(abort_handle.is_finished());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn adaptive_runtime_deregister_drains_queued_telemetry() {
+    let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
+    reset_global();
+
+    let agent_id = "deregister-drain-agent";
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig {
+        agent_id: Some(agent_id.into()),
+        state: Some(StateConfig {
+            backend: BackendSpec::in_memory(),
+        }),
+        telemetry: Some(TelemetryComponentConfig::default()),
+        ..AdaptiveConfig::default()
+    })
+    .await
+    .unwrap();
+    runtime.register().await.unwrap();
+    let backend = runtime.backend.as_ref().unwrap().clone();
+    queue_completed_agent_run(&mut runtime);
+
+    runtime.deregister().unwrap();
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while backend.list_runs_dyn(agent_id).await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("deregistered telemetry drain must finish queued runs");
+
+    assert_eq!(backend.list_runs_dyn(agent_id).await.unwrap().len(), 1);
+}
+
+#[test]
+fn adaptive_runtime_deregister_drains_telemetry_outside_block_on() {
+    let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.blocking_lock();
+    reset_global();
+
+    let agent_id = "deregister-outside-block-on-agent";
+    let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (mut runtime, backend) = tokio_runtime.block_on(async {
+        let mut runtime = AdaptiveRuntime::new(AdaptiveConfig {
+            agent_id: Some(agent_id.into()),
+            state: Some(StateConfig {
+                backend: BackendSpec::in_memory(),
+            }),
+            telemetry: Some(TelemetryComponentConfig::default()),
+            ..AdaptiveConfig::default()
+        })
+        .await
+        .unwrap();
+        runtime.register().await.unwrap();
+        let backend = runtime.backend.as_ref().unwrap().clone();
+        (runtime, backend)
+    });
+    queue_completed_agent_run(&mut runtime);
+
+    runtime.deregister().unwrap();
+
+    tokio_runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while backend.list_runs_dyn(agent_id).await.unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("deregistered telemetry drain must finish queued runs outside block_on");
+
+        assert_eq!(backend.list_runs_dyn(agent_id).await.unwrap().len(), 1);
+    });
+}
+
+fn queue_completed_agent_run(runtime: &mut AdaptiveRuntime) {
+    let run_uuid = Uuid::now_v7();
+    let events = [
+        Event::Scope(ScopeEvent::new(
+            BaseEvent::builder().uuid(run_uuid).name("agent").build(),
+            ScopeCategory::Start,
+            Vec::new(),
+            EventCategory::agent(),
+            None,
+        )),
+        Event::Scope(ScopeEvent::new(
+            BaseEvent::builder().uuid(run_uuid).name("agent").build(),
+            ScopeCategory::End,
+            Vec::new(),
+            EventCategory::agent(),
+            None,
+        )),
+    ];
+    let tx = runtime.event_tx.as_ref().unwrap().clone();
+    for event in events {
+        runtime.pending_events.fetch_add(1, Ordering::SeqCst);
+        tx.send(event).unwrap();
+    }
+    drop(tx);
 }

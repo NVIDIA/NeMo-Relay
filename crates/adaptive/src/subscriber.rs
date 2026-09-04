@@ -29,6 +29,11 @@ pub(crate) fn create_subscriber_with_counter(
         pending_events.fetch_add(1, Ordering::SeqCst);
         if tx.send(event.clone()).is_err() {
             pending_events.fetch_sub(1, Ordering::SeqCst);
+            log::warn!(
+                target: "nemo_relay.runtime",
+                event = "adaptive_telemetry_event_dropped";
+                "Adaptive telemetry event dropped because the drain receiver is unavailable"
+            );
         }
     })
 }
