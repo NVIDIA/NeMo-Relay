@@ -96,22 +96,35 @@ pub(super) fn run_host_marketplace_removal(
 
 #[derive(Debug, Clone)]
 pub(crate) struct HostRegistrationReport {
-    pub(crate) host_plugin_registered: bool,
+    /// `None` means the host CLI could not determine whether the plugin is registered.
+    pub(crate) host_plugin_registered: Option<bool>,
     pub(crate) host_marketplace_registered: bool,
+    /// The registered Relay marketplace was identified but its snapshot could not be loaded.
+    pub(crate) host_marketplace_unloadable: bool,
 }
 
 impl HostRegistrationReport {
     pub(super) fn ok(&self) -> bool {
-        self.host_plugin_registered && self.host_marketplace_registered
+        self.host_plugin_registered == Some(true)
+            && self.host_marketplace_registered
+            && !self.host_marketplace_unloadable
+    }
+
+    pub(super) fn host_plugin_may_be_registered(&self) -> bool {
+        self.host_plugin_registered != Some(false)
     }
 
     #[cfg(test)]
     pub(super) fn to_json(&self) -> Value {
-        json!({
+        let mut report = json!({
             "ok": self.ok(),
             "host_plugin_registered": self.host_plugin_registered,
             "host_marketplace_registered": self.host_marketplace_registered
-        })
+        });
+        if self.host_marketplace_unloadable {
+            report["host_marketplace_unloadable"] = Value::Bool(true);
+        }
+        report
     }
 }
 
@@ -126,8 +139,12 @@ pub(super) fn validate_host_registration(
         Ok(report)
     } else {
         let mut missing = Vec::new();
-        if !report.host_plugin_registered {
-            missing.push(format!("{PLUGIN_NAME}@{MARKETPLACE_NAME} host plugin"));
+        match report.host_plugin_registered {
+            Some(false) => missing.push(format!("{PLUGIN_NAME}@{MARKETPLACE_NAME} host plugin")),
+            None => missing.push(format!(
+                "{PLUGIN_NAME}@{MARKETPLACE_NAME} host plugin registration could not be determined"
+            )),
+            Some(true) => {}
         }
         if !report.host_marketplace_registered {
             missing.push(format!("{MARKETPLACE_NAME} host marketplace"));
@@ -147,8 +164,9 @@ pub(super) fn host_registration_report(
 ) -> Result<HostRegistrationReport, String> {
     if options.dry_run {
         return Ok(HostRegistrationReport {
-            host_plugin_registered: true,
+            host_plugin_registered: Some(true),
             host_marketplace_registered: true,
+            host_marketplace_unloadable: false,
         });
     }
     require_host_cli(host, options, runner)?;
@@ -160,8 +178,9 @@ pub(crate) fn claude_registration_report(
     runner: &dyn CommandRunner,
 ) -> Result<HostRegistrationReport, String> {
     Ok(HostRegistrationReport {
-        host_plugin_registered: claude_plugin_registered(options, runner)?,
+        host_plugin_registered: Some(claude_plugin_registered(options, runner)?),
         host_marketplace_registered: claude_marketplace_registered(options, runner)?,
+        host_marketplace_unloadable: false,
     })
 }
 
@@ -169,9 +188,22 @@ pub(crate) fn codex_registration_report(
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<HostRegistrationReport, String> {
+    let host_plugin_registered = match codex_plugin_registered(options, runner) {
+        Ok(registered) => registered,
+        Err(error) if is_dangling_codex_marketplace_error(&error) => {
+            return Ok(HostRegistrationReport {
+                host_plugin_registered: None,
+                host_marketplace_registered: true,
+                host_marketplace_unloadable: true,
+            });
+        }
+        Err(error) => return Err(error),
+    };
+
     Ok(HostRegistrationReport {
-        host_plugin_registered: codex_plugin_registered(options, runner)?,
+        host_plugin_registered: Some(host_plugin_registered),
         host_marketplace_registered: codex_marketplace_registered(options, runner)?,
+        host_marketplace_unloadable: false,
     })
 }
 
@@ -250,6 +282,16 @@ fn codex_marketplace_registered(
         .lines()
         .filter_map(|line| line.split_whitespace().next())
         .any(|name| name == MARKETPLACE_NAME))
+}
+
+fn is_dangling_codex_marketplace_error(error: &str) -> bool {
+    let plugin_list_snapshot_error = "failed to load configured marketplace snapshot(s):";
+    let marketplace = format!("`{MARKETPLACE_NAME}`");
+    let invalid_manifest = "marketplace root does not contain a supported manifest";
+    error.contains(plugin_list_snapshot_error)
+        && error
+            .lines()
+            .any(|line| line.contains(&marketplace) && line.contains(invalid_manifest))
 }
 
 fn plugin_entry_matches(entry: &Value) -> bool {

@@ -812,6 +812,7 @@ fn failed_integration_readiness(
         relay: None,
         host_plugin_registered: None,
         host_marketplace_registered: None,
+        host_marketplace_unloadable: false,
         plugin_setup: None,
     };
     readiness.push("Host readiness", Err(details.to_string()));
