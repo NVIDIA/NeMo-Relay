@@ -42,7 +42,10 @@ pub(super) unsafe fn activate_test_plugin_config(
     config_json: *const c_char,
     out_report_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
-    let _ = close_test_plugin_host();
+    let close_status = close_test_plugin_host();
+    if close_status != NemoRelayStatus::Ok {
+        return close_status;
+    }
     let mut activation = ptr::null_mut();
     if out_report_json.is_null() {
         let status = unsafe {
