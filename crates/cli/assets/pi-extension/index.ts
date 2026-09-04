@@ -735,7 +735,19 @@ function summarize(result: unknown, isError: boolean): unknown {
       result_keys: Object.keys(record).slice(0, 20),
     };
   }
-  return { content: truncate(String(result)) };
+  return { content: primitiveSummary(result, isError) };
+}
+
+function primitiveSummary(result: unknown, isError: boolean): string {
+  switch (typeof result) {
+    case 'boolean':
+    case 'number':
+    case 'bigint':
+    case 'symbol':
+      return truncate(String(result));
+    default:
+      return `Tool ${isError ? 'failed' : 'completed'} with an unsupported result type.`;
+  }
 }
 
 /** Extract and bound Pi's ordered text blocks without forwarding image or unknown parts. */

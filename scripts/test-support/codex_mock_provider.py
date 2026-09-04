@@ -491,7 +491,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if response_stream is not None:
             for event in response_stream:
+                # SONAR_IGNORE_START: the local mock intentionally emits caller-provided test events.
                 self.wfile.write(f"data: {json.dumps(event)}\n\n".encode())
+                # SONAR_IGNORE_END
             self.wfile.write(b"data: [DONE]\n\n")
         elif chat_stream is not None:
             for event in chat_stream:

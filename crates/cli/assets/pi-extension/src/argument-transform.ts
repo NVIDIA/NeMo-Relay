@@ -72,33 +72,40 @@ export function shapeViolation(current: unknown, next: unknown, path = 'input'):
   if (currentType !== nextType) {
     return `${path} changed type from ${currentType} to ${nextType}`;
   }
-  if (currentType === 'object') {
-    const currentKeys = Object.keys(current as object).sort();
-    const nextKeys = Object.keys(next as object).sort();
-    const added = nextKeys.filter((key) => !currentKeys.includes(key));
-    const removed = currentKeys.filter((key) => !nextKeys.includes(key));
-    if (added.length > 0) return `${path} added ${added.join(', ')}`;
-    if (removed.length > 0) return `${path} removed ${removed.join(', ')}`;
-    for (const key of currentKeys) {
-      const violation = shapeViolation(
-        (current as Record<string, unknown>)[key],
-        (next as Record<string, unknown>)[key],
-        `${path}.${key}`,
-      );
-      if (violation) return violation;
-    }
-    return null;
+  if (currentType === 'object') return objectShapeViolation(current, next, path);
+  if (currentType === 'array') return arrayShapeViolation(current, next, path);
+  return null;
+}
+
+function objectShapeViolation(current: unknown, next: unknown, path: string): string | null {
+  const currentRecord = current as Record<string, unknown>;
+  const nextRecord = next as Record<string, unknown>;
+  const currentKeys = Object.keys(currentRecord).sort((left, right) => left.localeCompare(right));
+  const nextKeys = Object.keys(nextRecord).sort((left, right) => left.localeCompare(right));
+  const added = nextKeys.filter((key) => !currentKeys.includes(key));
+  const removed = currentKeys.filter((key) => !nextKeys.includes(key));
+  if (added.length > 0) return `${path} added ${added.join(', ')}`;
+  if (removed.length > 0) return `${path} removed ${removed.join(', ')}`;
+  return firstViolation(currentKeys, (key) =>
+    shapeViolation(currentRecord[key], nextRecord[key], `${path}.${key}`),
+  );
+}
+
+function arrayShapeViolation(current: unknown, next: unknown, path: string): string | null {
+  const currentItems = current as unknown[];
+  const nextItems = next as unknown[];
+  if (currentItems.length !== nextItems.length) {
+    return `${path} changed length from ${currentItems.length} to ${nextItems.length}`;
   }
-  if (currentType === 'array') {
-    const currentItems = current as unknown[];
-    const nextItems = next as unknown[];
-    if (currentItems.length !== nextItems.length) {
-      return `${path} changed length from ${currentItems.length} to ${nextItems.length}`;
-    }
-    for (const [index, item] of currentItems.entries()) {
-      const violation = shapeViolation(item, nextItems[index], `${path}[${index}]`);
-      if (violation) return violation;
-    }
+  return firstViolation(currentItems, (item, index) =>
+    shapeViolation(item, nextItems[index], `${path}[${index}]`),
+  );
+}
+
+function firstViolation<T>(items: T[], check: (item: T, index: number) => string | null): string | null {
+  for (const [index, item] of items.entries()) {
+    const violation = check(item, index);
+    if (violation) return violation;
   }
   return null;
 }
@@ -114,7 +121,7 @@ export function decideTransform(
   current: Record<string, unknown>,
 ): TransformOutcome {
   const envelope = body?.tool_call;
-  if (!envelope || envelope.input === undefined) return { kind: 'none' };
+  if (envelope?.input === undefined) return { kind: 'none' };
 
   // The echoed id is what proves the transform belongs to the call we just posted, so it has to be
   // present and exact. Accepting a missing or non-string id would let a truncated or malformed body

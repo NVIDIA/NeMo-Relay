@@ -262,6 +262,10 @@ jobs:
         with:
           tool: just@${{ steps.ci-config.outputs.just_version }}
 
+      - name: Fetch locked Rust dependencies
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: cargo fetch --locked --target "${{ matrix.target }}"
+
       - name: Set CLI binary version
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         env:
@@ -274,6 +278,8 @@ jobs:
             version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)+${GIT_COMMIT::8}"
           fi
           just set-cargo-version "$version"
+          # Refresh workspace package versions without changing resolved dependencies.
+          cargo metadata --offline --format-version 1 > /dev/null
           printf 'NEMO_RELAY_CLI_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
 
       - name: Install musl tools
@@ -295,7 +301,9 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -e
-          cargo build --release --target "${{ matrix.target }}" -p nemo-relay-cli
+          # SONAR_IGNORE_START: dependencies were fetched from Cargo.lock before dynamic package metadata is applied.
+          cargo build --locked --offline --release --target "${{ matrix.target }}" -p nemo-relay-cli
+          # SONAR_IGNORE_END
 
       - name: Build CLI release binary in manylinux
         if: ${{ matrix.build_image != '' }}
@@ -311,7 +319,7 @@ jobs:
               curl --proto "=https" --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs | \
                 sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
               export PATH="$HOME/.cargo/bin:$PATH"
-              cargo build --release --target "${{ matrix.target }}" -p nemo-relay-cli
+              cargo build --locked --release --target "${{ matrix.target }}" -p nemo-relay-cli
             '
 
       - name: Stage CLI binary artifact
@@ -449,7 +457,9 @@ jobs:
             venv_python="${RUNNER_TEMP}/nemo-relay-cli-venv/bin/python"
             venv_cli="${RUNNER_TEMP}/nemo-relay-cli-venv/bin/nemo-relay"
           fi
-          uv pip install --python "$venv_python" --no-deps "$wheel"
+          # SONAR_IGNORE_START: local wheel with no dependencies or index access.
+          uv pip install --python "$venv_python" --no-deps --no-index "$wheel"
+          # SONAR_IGNORE_END
           wheel_version="$("$venv_cli" --version)"
           if [ "$binary_version" != "$wheel_version" ]; then
             echo "Error: CLI binary reports '$binary_version' but wheel reports '$wheel_version'" >&2

@@ -29,11 +29,13 @@ function serve(handler) {
     });
     req.on('end', () => {
       received.push({ url: req.url, headers: req.headers, body: JSON.parse(body || '{}') });
-      const { status, payload, raw, delayMs } = handler(received.at(-1));
+      const { status, payload, raw, delayMs, bodyDelayMs } = handler(received.at(-1));
       const send = () => {
         res.writeHead(status, { 'content-type': 'application/json' });
         // `raw` lets a case emit a body JSON.parse cannot read.
-        res.end(raw ?? JSON.stringify(payload ?? {}));
+        const body = raw ?? JSON.stringify(payload ?? {});
+        if (bodyDelayMs) setTimeout(() => res.end(body), bodyDelayMs);
+        else res.end(body);
       };
       if (delayMs) setTimeout(send, delayMs);
       else send();
@@ -63,6 +65,7 @@ describe('gateway client wire contract', () => {
     ctx = serve((request) => {
       const name = request.body.hook_event_name;
       if (name === 'slow') return { status: 200, payload: {}, delayMs: 500 };
+      if (name === 'slow-body') return { status: 200, payload: {}, bodyDelayMs: 500 };
       if (name === 'bad-json') return { status: 200, raw: '{ truncated' };
       if (name === 'array-body') return { status: 200, payload: [] };
       if (name === 'string-body') return { status: 200, payload: 'ok' };
@@ -147,6 +150,15 @@ describe('gateway client wire contract', () => {
     assert.equal(outcome.kind, 'fault');
     assert.match(outcome.detail, /did not respond within 50ms/);
     assert.equal(outcome.origin, 'timeout', 'slow is not the same as absent');
+  });
+
+  it('keeps the timeout active while reading the response body', async () => {
+    const outcome = await postHook(baseConfig(url, { timeoutMs: 50 }), {
+      hook_event_name: 'slow-body',
+    });
+    assert.equal(outcome.kind, 'fault');
+    assert.match(outcome.detail, /did not respond within 50ms/);
+    assert.equal(outcome.origin, 'timeout');
   });
 
   it('reports an unreachable gateway as a fault', async () => {
