@@ -63,6 +63,13 @@ describe('tool result projection', () => {
     assert.equal(post.status, 'error');
   });
 
+  it('preserves the error state for unsupported result types', async () => {
+    const post = await project(() => undefined, true);
+
+    assert.equal(post.result.content, 'Tool failed with an unsupported result type.');
+    assert.equal(post.status, 'error');
+  });
+
   it('joins text in order, omits images, and bounds the aggregate', async () => {
     const prefix = 'a'.repeat(1998);
     const post = await project({

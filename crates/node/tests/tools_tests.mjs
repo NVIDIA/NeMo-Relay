@@ -1123,7 +1123,7 @@ describe('Tool intercepts', () => {
     const lateGate = new Promise((resolve) => {
       releaseLateContext = resolve;
     });
-    let lateContext;
+    let lateContext = Promise.resolve(baseline);
 
     await toolCallExecuteAsync('scope_replacement_expiry_tool', {}, async () => {
       lib.setThreadScopeStack(replacementStack);

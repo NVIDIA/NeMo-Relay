@@ -89,7 +89,9 @@ class ProviderHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
+        # SONAR_IGNORE_START: the local benchmark server intentionally echoes JSON fixtures.
         self.wfile.write(body)
+        # SONAR_IGNORE_END
 
     def _send_stream(self, frames: Iterable[bytes]) -> None:
         self.send_response(200)
@@ -98,8 +100,10 @@ class ProviderHandler(BaseHTTPRequestHandler):
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
         for frame in frames:
+            # SONAR_IGNORE_START: the local benchmark server intentionally emits JSON fixture frames.
             self.wfile.write(f"{len(frame):X}\r\n".encode())
             self.wfile.write(frame)
+            # SONAR_IGNORE_END
             self.wfile.write(b"\r\n")
             self.wfile.flush()
         self.wfile.write(b"0\r\n\r\n")

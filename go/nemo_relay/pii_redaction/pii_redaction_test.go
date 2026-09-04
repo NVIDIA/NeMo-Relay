@@ -9,6 +9,7 @@ func TestPiiRedactionShorthandHelpers(t *testing.T) {
 	config := NewConfig()
 	config.Codec = "openai_chat"
 	builtin := NewBuiltinConfig()
+	builtin.TargetPaths = []string{"/messages/0/content"}
 	config.Builtin = &builtin
 
 	component := Component(config)

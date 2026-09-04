@@ -664,23 +664,31 @@ fn entry_filters_extensions(entry: &serde_json::Value, path: &Path) -> SettingsF
 /// `core/package-manager.ts:760-777`).
 fn entry_verdict(entry: &str, patterns: &[&str], autoload_off: bool) -> SettingsFilter {
     if autoload_off {
-        let mut decided = SettingsFilter::Excluded;
-        for pattern in patterns {
-            match classify_pattern(pattern, entry) {
-                PatternEffect::Unknown => return SettingsFilter::Undecided,
-                PatternEffect::Names(enabled) => {
-                    decided = if enabled {
-                        SettingsFilter::Loads
-                    } else {
-                        SettingsFilter::Excluded
-                    };
-                }
-                PatternEffect::Silent => {}
-            }
-        }
-        return decided;
+        return autoload_disabled_entry_verdict(entry, patterns);
     }
 
+    normal_entry_verdict(entry, patterns)
+}
+
+fn autoload_disabled_entry_verdict(entry: &str, patterns: &[&str]) -> SettingsFilter {
+    let mut decided = SettingsFilter::Excluded;
+    for pattern in patterns {
+        match classify_pattern(pattern, entry) {
+            PatternEffect::Unknown => return SettingsFilter::Undecided,
+            PatternEffect::Names(enabled) => {
+                decided = if enabled {
+                    SettingsFilter::Loads
+                } else {
+                    SettingsFilter::Excluded
+                };
+            }
+            PatternEffect::Silent => {}
+        }
+    }
+    decided
+}
+
+fn normal_entry_verdict(entry: &str, patterns: &[&str]) -> SettingsFilter {
     let mut force_excluded = false;
     let mut force_included = false;
     let mut includes = 0_usize;

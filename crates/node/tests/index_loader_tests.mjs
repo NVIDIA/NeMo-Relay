@@ -82,14 +82,13 @@ function loadIndexForTest({
   const fakeProcess = {
     platform,
     arch,
-    report:
-      processReport === null
-        ? null
-        : {
-            getReport() {
-              return processReport;
-            },
+    report: processReport
+      ? {
+          getReport() {
+            return processReport;
           },
+        }
+      : null,
   };
 
   vm.runInNewContext(
