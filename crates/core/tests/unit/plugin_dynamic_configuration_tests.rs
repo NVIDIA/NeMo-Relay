@@ -256,6 +256,30 @@ attestation = "integrity_only"
 }
 
 #[test]
+fn plugin_file_loading_skips_only_missing_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing.toml");
+    assert!(read_plugin_files(&[missing]).unwrap().is_empty());
+
+    let blocker = temp.path().join("not-a-directory");
+    fs::write(&blocker, "blocker").unwrap();
+    let inaccessible = blocker.join("plugins.toml");
+    let error = read_plugin_files(&[inaccessible])
+        .err()
+        .expect("non-missing inspection errors must fail closed");
+    assert!(
+        matches!(error, PluginError::InvalidConfig(_)),
+        "unexpected error: {error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("failed to inspect plugin configuration"),
+        "{error}"
+    );
+}
+
+#[test]
 fn static_plugin_policy_does_not_override_dynamic_attestation_policy() {
     let temp = tempfile::tempdir().unwrap();
     let plugins_toml = temp.path().join("plugins.toml");

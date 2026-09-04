@@ -404,8 +404,15 @@ fn validate_declaration(
 fn read_plugin_files(paths: &[PathBuf]) -> Result<Vec<PluginFileDocument>> {
     let mut files = Vec::new();
     for source in paths {
-        if !source.exists() {
-            continue;
+        match std::fs::symlink_metadata(source) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(PluginError::InvalidConfig(format!(
+                    "failed to inspect plugin configuration {}: {error}",
+                    source.display()
+                )));
+            }
         }
         let raw = read_utf8_plugin_file(source)?;
         let table = raw.parse::<toml::Table>().map_err(|error| {
