@@ -25,7 +25,7 @@ Action applied to matching string leaves.
 
 ### `target_paths: Vec<String>`
 
-Exact RFC 6901 JSON-pointer paths to sanitize. Empty together with [`Self::target_path_globs`](/reference/api/rust-library-reference/nemo-relay-pii-redaction/component/struct-builtinbackendconfig) means every string leaf.
+Exact RFC 6901 JSON-pointer paths to sanitize. Empty together with [`Self::target_path_globs`](/reference/api/rust-library-reference/nemo-relay-pii-redaction/component/struct-builtinbackendconfig) means every string leaf, except that `action = "remove"` requires an explicit selector.
 
 ### `target_path_globs: Vec<String>`
 

@@ -131,6 +131,10 @@ A [`Result`](/reference/api/rust-library-reference/nemo-relay-adaptive/error/typ
 
 Returns any rollback error surfaced by the hosted plugin system.
 
+##### Runtime lifecycle
+
+This method returns before the telemetry drain finishes. Callers using a Tokio `current_thread` runtime must keep that runtime alive and driven until the drain completes. Call [`Self::shutdown`](/reference/api/rust-library-reference/nemo-relay-adaptive/struct-adaptiveruntime) when completion must be observed before the runtime is dropped.
+
 #### `shutdown`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn shutdown(self) -&gt; <a href=\"error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
@@ -143,7 +147,7 @@ A [`Result`](/reference/api/rust-library-reference/nemo-relay-adaptive/error/typ
 
 ##### Errors
 
-Propagates any error returned by [`Self::deregister`](/reference/api/rust-library-reference/nemo-relay-adaptive/struct-adaptiveruntime).
+This method currently always returns `Ok(())` after deregistering features and either draining or aborting telemetry work.
 
 ## Trait Implementations
 
