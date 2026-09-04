@@ -103,6 +103,12 @@ pub(crate) async fn run(server_args: &GatewayOverrides) -> Result<ExitCode, CliE
     }
 }
 
+/// Serves the existing no-tools MCP stdio surface after an external daemon lease is ready.
+pub(crate) async fn serve_daemon_stdio() -> Result<(), CliError> {
+    let frames = transport::spawn_stdin_reader()?;
+    session::run_without_gateway(frames, tokio::io::stdout()).await
+}
+
 /// Builds the host-independent persistent MCP launch contract.
 ///
 /// Host adapters add only schema-specific activation and environment-forwarding fields. Keeping

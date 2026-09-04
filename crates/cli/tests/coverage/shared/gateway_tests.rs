@@ -1893,6 +1893,75 @@ fn chatgpt_jwt_routes_to_chatgpt_backend_when_no_api_key() {
         .as_deref(),
         Some("https://chatgpt.com/backend-api/codex/responses")
     );
+    assert_eq!(
+        gateway_upstream_url_override_with_openai_key_state(
+            ProviderRoute::OpenAiResponses,
+            &headers,
+            "/backend-api/codex/responses",
+            false,
+        )
+        .as_deref(),
+        Some("https://chatgpt.com/backend-api/codex/responses")
+    );
+}
+
+#[test]
+fn daemon_generic_openai_paths_keep_the_administrator_upstream() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer at-caller-controlled-token"),
+    );
+    let config = GatewayConfig {
+        openai_base_url: "https://administrator.example/v1".into(),
+        ..GatewayConfig::default()
+    };
+
+    assert_eq!(
+        daemon_provider_upstream_url(&headers, "/responses?client=pi", &config)
+            .unwrap()
+            .as_deref(),
+        Some("https://administrator.example/v1/responses?client=pi")
+    );
+    assert_eq!(
+        daemon_provider_upstream_url(
+            &headers,
+            "/backend-api/codex/responses?client=codex",
+            &config,
+        )
+        .unwrap()
+        .as_deref(),
+        Some("https://chatgpt.com/backend-api/codex/responses?client=codex")
+    );
+}
+
+#[test]
+fn authenticated_daemon_pi_route_uses_the_exact_named_provider_endpoint() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+        HeaderValue::from_static("https://custom.example/inference/v1"),
+    );
+
+    assert_eq!(
+        daemon_provider_upstream_url(
+            &headers,
+            "/chat/completions?client=pi",
+            &GatewayConfig::default(),
+        )
+        .unwrap()
+        .as_deref(),
+        Some("https://custom.example/inference/v1/chat/completions?client=pi")
+    );
+
+    headers.insert(
+        crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+        HeaderValue::from_static("http://remote.example/v1"),
+    );
+    assert!(
+        daemon_provider_upstream_url(&headers, "/chat/completions", &GatewayConfig::default(),)
+            .is_err()
+    );
 }
 
 #[test]

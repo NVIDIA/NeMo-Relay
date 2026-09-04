@@ -926,7 +926,7 @@ where
     })
 }
 
-struct ServerPluginActivation {
+pub(crate) struct ServerPluginActivation {
     host: PluginHostActivation,
     // The CLI attests and snapshots managed Python environments. The core host
     // owns plugin code and registration lifetimes; retaining snapshots here
@@ -937,7 +937,7 @@ struct ServerPluginActivation {
 const REMOVED_SWITCHYARD_MESSAGE: &str = "the built-in Switchyard service integration was removed in NeMo Relay >=0.8.0; remove this `[[components]]` entry and refer to the NeMo Relay migration guides for current Switchyard migration information: https://docs.nvidia.com/nemo/relay/reference/migration-guides";
 
 impl ServerPluginActivation {
-    fn clear(mut self) -> Result<(), CliError> {
+    pub(crate) fn clear(mut self) -> Result<(), CliError> {
         self.host
             .close()
             .map_err(|error| CliError::Config(format!("plugin teardown failed: {error}")))
@@ -1077,6 +1077,13 @@ async fn activate_server_plugins(
         host,
         _snapshots: snapshots,
     }))
+}
+
+pub(crate) async fn initialize_plugin_host(
+    config: Option<Value>,
+    dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
+) -> Result<Option<ServerPluginActivation>, CliError> {
+    activate_server_plugins(config, dynamic_plugins).await
 }
 
 // Normalizes a Codex hook payload, applies all resulting events before responding, and returns the

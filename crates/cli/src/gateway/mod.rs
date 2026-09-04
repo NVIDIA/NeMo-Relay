@@ -44,6 +44,82 @@ use crate::error::CliError;
 use crate::server::AppState;
 use crate::sessions::{GatewayCallPrep, GatewaySessionFinish, SessionManager};
 
+/// Builds the same correlation input used by the foreground gateway without selecting its
+/// response-reencoding delivery path. Daemon workers use this before handing the provider body to
+/// the raw frame transport.
+pub(crate) fn daemon_gateway_start(
+    headers: &HeaderMap,
+    path: &str,
+    request_json: Value,
+    streaming: bool,
+) -> Option<crate::sessions::LlmGatewayStart> {
+    let provider = ProviderRoute::from_path(path)?;
+    Some(request::build_llm_gateway_start_from_parts(
+        headers,
+        path,
+        provider,
+        request_json,
+        streaming,
+    ))
+}
+
+/// Resolves the provider destination for an authenticated daemon delivery.
+///
+/// The explicit ChatGPT-shaped Responses path retains the personal gateway's Codex alignment
+/// behavior for compatibility. Other paths honor Pi's validated named-upstream header; a bearer
+/// token alone never selects a different authority.
+pub(crate) fn daemon_provider_upstream_url(
+    headers: &HeaderMap,
+    path_and_query: &str,
+    config: &crate::configuration::GatewayConfig,
+) -> Result<Option<String>, CliError> {
+    let path = path_and_query
+        .split_once('?')
+        .map_or(path_and_query, |(path, _)| path);
+    let Some(provider) = ProviderRoute::from_path(path) else {
+        return Ok(None);
+    };
+    if path == "/backend-api/codex/responses"
+        && let Some(destination) =
+            gateway_upstream_url_override(provider, headers, path_and_query, true, config)
+    {
+        return Ok(Some(destination));
+    }
+    match client_named_upstream_url(provider, headers, path_and_query, true) {
+        crate::agents::pi::alignment::NamedUpstream::Named(destination) => Ok(Some(destination)),
+        crate::agents::pi::alignment::NamedUpstream::Rejected(reason) => {
+            Err(CliError::InvalidPayload(reason.to_owned()))
+        }
+        crate::agents::pi::alignment::NamedUpstream::Absent => {
+            Ok(Some(provider.upstream_url(config, path_and_query)))
+        }
+    }
+}
+
+/// Applies the personal gateway's agent-auth replacement rules to a daemon provider request.
+pub(crate) fn daemon_provider_forward_headers(
+    headers: &HeaderMap,
+    path: &str,
+    config: &crate::configuration::GatewayConfig,
+) -> Option<HeaderMap> {
+    let provider = ProviderRoute::from_path(path)?;
+    Some(strip_replaceable_agent_auth_headers(
+        headers,
+        provider,
+        true,
+        provider.configured_auth_header(config),
+    ))
+}
+
+/// Returns the exact credential-safe request-header view exposed to daemon-worker middleware.
+///
+/// The worker uses this same view when applying middleware diffs to the original `HeaderMap`, so
+/// headers hidden from middleware remain opaque and unchanged while unmodified multi-value
+/// headers retain their original representation.
+pub(crate) fn daemon_observable_headers(headers: &HeaderMap) -> serde_json::Map<String, Value> {
+    response::observable_headers(headers)
+}
+
 #[cfg(test)]
 #[path = "../../tests/coverage/shared/gateway_tests.rs"]
 mod tests;

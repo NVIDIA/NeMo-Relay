@@ -361,6 +361,143 @@ impl Drop for PluginConfigDiscoveryScope {
     }
 }
 
+#[test]
+fn managed_worker_configuration_ignores_user_files_and_non_secret_environment() {
+    let temp = tempfile::tempdir().unwrap();
+    let user_home = temp.path().join("user");
+    let user_directory = user_home.join("nemo-relay");
+    let system_directory = temp.path().join("system");
+    std::fs::create_dir_all(&user_directory).unwrap();
+    std::fs::create_dir_all(&system_directory).unwrap();
+    std::fs::write(
+        user_directory.join("config.toml"),
+        "invalid user config = [",
+    )
+    .unwrap();
+    std::fs::write(
+        user_directory.join(PLUGINS_TOML),
+        "invalid user plugins = [",
+    )
+    .unwrap();
+
+    let system_config = system_directory.join("config.toml");
+    let system_plugins = system_directory.join(PLUGINS_TOML);
+    std::fs::write(
+        &system_config,
+        r#"
+[gateway]
+max_hook_payload_bytes = 1234
+max_passthrough_body_bytes = 5678
+
+[upstream]
+openai_base_url = "https://admin.example/openai"
+openai_auth_header = "Bearer admin-file-openai"
+anthropic_base_url = "https://admin.example/anthropic"
+anthropic_auth_header = "Basic admin-file-anthropic"
+"#,
+    )
+    .unwrap();
+    std::fs::write(&system_plugins, "version = 1\ncomponents = []\n").unwrap();
+
+    let _environment = crate::test_support::EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(user_home.as_os_str())),
+        ("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", None),
+        (
+            "NEMO_RELAY_GATEWAY_BIND",
+            Some(std::ffi::OsStr::new("0.0.0.0:9999")),
+        ),
+        (
+            "NEMO_RELAY_OPENAI_BASE_URL",
+            Some(std::ffi::OsStr::new("https://user.example/openai")),
+        ),
+        (
+            "NEMO_RELAY_ANTHROPIC_BASE_URL",
+            Some(std::ffi::OsStr::new("https://user.example/anthropic")),
+        ),
+        (
+            "NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES",
+            Some(std::ffi::OsStr::new("1")),
+        ),
+        (
+            "NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES",
+            Some(std::ffi::OsStr::new("2")),
+        ),
+        (
+            "NEMO_RELAY_OPENAI_AUTH_HEADER",
+            Some(std::ffi::OsStr::new("Bearer managed-env-openai")),
+        ),
+        (
+            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+            Some(std::ffi::OsStr::new("Basic managed-env-anthropic")),
+        ),
+    ]);
+
+    let managed =
+        resolve_managed_worker_config_from_paths(system_config, system_plugins.clone()).unwrap();
+
+    assert_eq!(managed.plugin_config_path, system_plugins);
+    assert_eq!(
+        managed.resolved.gateway.openai_base_url,
+        "https://admin.example/openai"
+    );
+    assert_eq!(
+        managed.resolved.gateway.anthropic_base_url,
+        "https://admin.example/anthropic"
+    );
+    assert_eq!(
+        managed.resolved.gateway.openai_auth_header.as_deref(),
+        Some("Bearer managed-env-openai")
+    );
+    assert_eq!(
+        managed.resolved.gateway.anthropic_auth_header.as_deref(),
+        Some("Basic managed-env-anthropic")
+    );
+    assert_eq!(
+        managed.resolved.gateway.bind,
+        "127.0.0.1:4040".parse().unwrap()
+    );
+    assert_eq!(managed.resolved.gateway.max_hook_payload_bytes, 1234);
+    assert_eq!(managed.resolved.gateway.max_passthrough_body_bytes, 5678);
+    assert_eq!(
+        managed.resolved.gateway.plugin_config,
+        Some(json!({ "components": [], "version": 1 }))
+    );
+    assert!(managed.resolved.dynamic_plugins.is_empty());
+}
+
+#[test]
+fn managed_worker_dynamic_plugin_loading_ignores_user_lifecycle_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let user_home = temp.path().join("user");
+    let user_directory = user_home.join("nemo-relay");
+    let system_directory = temp.path().join("system");
+    std::fs::create_dir_all(&user_directory).unwrap();
+    std::fs::create_dir_all(&system_directory).unwrap();
+    std::fs::write(
+        user_directory.join(".dynamic-plugins.json"),
+        "invalid user lifecycle state",
+    )
+    .unwrap();
+
+    let system_config = system_directory.join("config.toml");
+    let system_plugins = system_directory.join(PLUGINS_TOML);
+    std::fs::write(&system_config, "").unwrap();
+    std::fs::write(&system_plugins, "version = 1\ncomponents = []\n").unwrap();
+    let _environment = crate::test_support::EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(user_home.as_os_str())),
+        ("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", None),
+        ("NEMO_RELAY_OPENAI_AUTH_HEADER", None),
+        ("NEMO_RELAY_ANTHROPIC_AUTH_HEADER", None),
+    ]);
+
+    let managed = resolve_managed_worker_config_from_paths(system_config, system_plugins).unwrap();
+    let active =
+        active_dynamic_plugin_components(Some(&managed.plugin_config_path), &managed.resolved)
+            .unwrap();
+
+    assert!(active.is_empty());
+}
+
 #[cfg(feature = "__skip-implicit-config")]
 #[test]
 fn test_hook_skips_implicit_config_but_retains_explicit_config_and_environment() {

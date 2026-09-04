@@ -90,6 +90,7 @@ fn easy_path_setup_inherits_explicit_plugin_target() {
 #[test]
 fn operational_command_names_cover_logging_exempt_commands() {
     for (args, expected) in [
+        (vec!["nemo-relay", "daemon"], "daemon"),
         (vec!["nemo-relay", "codex"], "codex"),
         (vec!["nemo-relay", "pi"], "pi"),
         (vec!["nemo-relay", "config"], "config"),
@@ -363,6 +364,299 @@ fn cli_parses_native_mcp_subcommand_and_bind_override() {
     assert_eq!(cli.server.bind.unwrap().to_string(), "127.0.0.1:4041");
 
     assert!(Cli::try_parse_from(["nemo-relay", "mcp", "--agent", "codex"]).is_err());
+}
+
+#[test]
+fn cli_parses_daemon_server_defaults_and_pass_through() {
+    let cli = Cli::try_parse_from(["nemo-relay", "daemon"]).unwrap();
+    let Some(Command::Daemon(command)) = cli.command else {
+        panic!("expected daemon command");
+    };
+    assert_eq!(command.bind, std::net::Ipv4Addr::LOCALHOST);
+    assert_eq!(command.port, 47_632);
+    assert!(!command.pass_through);
+    assert!(command.client_token_file.is_none());
+    assert!(command.command.is_none());
+
+    let cli = Cli::try_parse_from(["nemo-relay", "daemon", "--pass-through"]).unwrap();
+    let Some(Command::Daemon(command)) = cli.command else {
+        panic!("expected daemon command");
+    };
+    assert!(command.pass_through);
+
+    let cli = Cli::try_parse_from([
+        "nemo-relay",
+        "daemon",
+        "--client-token-file",
+        "/etc/nemo-relay/client-tokens",
+    ])
+    .unwrap();
+    let Some(Command::Daemon(command)) = cli.command else {
+        panic!("expected daemon command");
+    };
+    assert_eq!(
+        command.client_token_file.as_deref(),
+        Some(std::path::Path::new("/etc/nemo-relay/client-tokens"))
+    );
+
+    let cli = Cli::try_parse_from([
+        "nemo-relay",
+        "daemon",
+        "--advertise-address",
+        "https://relay.example.com:443",
+        "--tls-cert",
+        "/etc/nemo-relay/tls.crt",
+        "--tls-key",
+        "/etc/nemo-relay/tls.key",
+    ])
+    .unwrap();
+    let Some(Command::Daemon(command)) = cli.command else {
+        panic!("expected daemon command");
+    };
+    assert_eq!(
+        command.tls_cert.as_deref(),
+        Some(std::path::Path::new("/etc/nemo-relay/tls.crt"))
+    );
+    assert_eq!(
+        command.tls_key.as_deref(),
+        Some(std::path::Path::new("/etc/nemo-relay/tls.key"))
+    );
+    assert!(
+        Cli::try_parse_from([
+            "nemo-relay",
+            "daemon",
+            "--tls-cert",
+            "/etc/nemo-relay/tls.crt",
+        ])
+        .is_err()
+    );
+}
+
+#[test]
+fn cli_requires_explicit_valid_daemon_targets_for_clients() {
+    for arguments in [
+        vec!["nemo-relay", "daemon", "mcp"],
+        vec!["nemo-relay", "daemon", "hook", "codex"],
+        vec!["nemo-relay", "daemon", "worker"],
+        vec![
+            "nemo-relay",
+            "daemon",
+            "mcp",
+            "--daemon-address",
+            "http://relay.example.com:47632",
+        ],
+        vec![
+            "nemo-relay",
+            "daemon",
+            "mcp",
+            "--daemon-address",
+            "https://relay.example.com",
+        ],
+        vec![
+            "nemo-relay",
+            "daemon",
+            "mcp",
+            "--daemon-address",
+            "https://0.0.0.0:47632",
+        ],
+    ] {
+        assert!(Cli::try_parse_from(arguments).is_err());
+    }
+
+    for address in [
+        "http://127.0.0.1:47632",
+        "http://localhost:47632",
+        "https://relay.example.com:443",
+        "https://relay.example.com:8443",
+    ] {
+        assert!(
+            Cli::try_parse_from(["nemo-relay", "daemon", "mcp", "--daemon-address", address,])
+                .is_ok(),
+            "address should be accepted: {address}"
+        );
+    }
+}
+
+#[test]
+fn cli_rejects_daemon_listener_flags_for_daemon_clients() {
+    for arguments in [
+        vec![
+            "nemo-relay",
+            "daemon",
+            "--bind",
+            "127.0.0.1",
+            "mcp",
+            "--daemon-address",
+            "http://127.0.0.1:47632",
+        ],
+        vec![
+            "nemo-relay",
+            "daemon",
+            "--port",
+            "47633",
+            "worker",
+            "--daemon-address",
+            "http://127.0.0.1:47632",
+        ],
+        vec![
+            "nemo-relay",
+            "daemon",
+            "--advertise-address",
+            "https://relay.example.com:443",
+            "hook",
+            "codex",
+            "--daemon-address",
+            "http://127.0.0.1:47632",
+        ],
+        vec![
+            "nemo-relay",
+            "daemon",
+            "--pass-through",
+            "mcp",
+            "--daemon-address",
+            "http://127.0.0.1:47632",
+        ],
+    ] {
+        assert!(
+            Cli::try_parse_from(arguments).is_err(),
+            "daemon listener flags must not be accepted by a daemon client subcommand"
+        );
+    }
+}
+
+#[test]
+fn cli_parses_managed_hook_agent_and_failure_policy() {
+    let cli = Cli::try_parse_from([
+        "nemo-relay",
+        "daemon",
+        "hook",
+        "claude",
+        "--daemon-address",
+        "https://relay.example.com:8443",
+        "--fail-closed",
+    ])
+    .unwrap();
+    let Some(Command::Daemon(command)) = cli.command else {
+        panic!("expected daemon command");
+    };
+    let Some(daemon::DaemonSubcommand::Hook(hook)) = command.command else {
+        panic!("expected daemon hook command");
+    };
+    assert_eq!(hook.agent, AgentArg::Claude);
+    assert!(hook.fail_closed);
+    assert!(!hook.fail_open);
+
+    assert!(
+        Cli::try_parse_from([
+            "nemo-relay",
+            "daemon",
+            "hook",
+            "pi",
+            "--daemon-address",
+            "http://127.0.0.1:47632",
+            "--fail-open",
+            "--fail-closed",
+        ])
+        .is_err()
+    );
+}
+
+#[test]
+fn cli_worker_defaults_to_loopback_with_an_implicit_ephemeral_port() {
+    let cli = Cli::try_parse_from([
+        "nemo-relay",
+        "daemon",
+        "worker",
+        "--daemon-address",
+        "http://127.0.0.1:47632",
+    ])
+    .unwrap();
+    let Some(Command::Daemon(command)) = cli.command else {
+        panic!("expected daemon command");
+    };
+    let Some(daemon::DaemonSubcommand::Worker(worker)) = command.command else {
+        panic!("expected daemon worker command");
+    };
+    assert_eq!(worker.bind, std::net::Ipv4Addr::LOCALHOST);
+    assert_eq!(worker.port, None);
+
+    for arguments in [
+        vec![
+            "nemo-relay",
+            "daemon",
+            "worker",
+            "--daemon-address",
+            "http://127.0.0.1:47632",
+            "--bind",
+            "192.0.2.1",
+        ],
+        vec![
+            "nemo-relay",
+            "daemon",
+            "worker",
+            "--daemon-address",
+            "http://127.0.0.1:47632",
+            "--port",
+            "0",
+        ],
+    ] {
+        assert!(Cli::try_parse_from(arguments).is_err());
+    }
+}
+
+#[test]
+fn cli_parses_managed_bundle_creation_as_an_ambient_config_free_command() {
+    let cli = Cli::try_parse_from([
+        "nemo-relay",
+        "daemon",
+        "managed-bundle",
+        "--output",
+        "/srv/nemo-relay/bundle-v1",
+        "--daemon-address",
+        "https://relay.example.com:443",
+        "--dispatcher-command",
+        "/opt/nvidia/bin/nemo-relay-dispatch",
+        "--platform",
+        "linux",
+        "--agent",
+        "codex",
+        "--agent",
+        "claude",
+    ])
+    .unwrap();
+    let command = cli.command.unwrap();
+    assert!(command.skips_logging());
+    let Command::Daemon(command) = command else {
+        panic!("expected daemon command");
+    };
+    let Some(daemon::DaemonSubcommand::ManagedBundle(bundle)) = command.command else {
+        panic!("expected managed-bundle command");
+    };
+    assert_eq!(bundle.output, PathBuf::from("/srv/nemo-relay/bundle-v1"));
+    assert_eq!(
+        bundle.dispatcher_command,
+        "/opt/nvidia/bin/nemo-relay-dispatch"
+    );
+    assert_eq!(bundle.platform, daemon::ManagedPlatformArg::Linux);
+    assert_eq!(bundle.agents, [AgentArg::Codex, AgentArg::Claude]);
+
+    assert!(
+        Cli::try_parse_from([
+            "nemo-relay",
+            "daemon",
+            "managed-bundle",
+            "--output",
+            "/srv/nemo-relay/bundle-v1",
+            "--daemon-address",
+            "https://relay.example.com:443",
+            "--dispatcher-command",
+            "/opt/nvidia/bin/nemo-relay-dispatch",
+            "--platform",
+            "linux",
+        ])
+        .is_err(),
+        "at least one explicit managed agent is required"
+    );
 }
 
 #[test]
@@ -916,4 +1210,63 @@ fn install_dir_is_cleared_for_pi_under_all_and_kept_everywhere_else() {
         "named explicitly, the flag is the user's stated intent and must still error"
     );
     assert_eq!(install::scoped_for(CodingAgent::Pi, all, None), None);
+}
+
+#[test]
+fn doctor_accepts_a_managed_bundle_without_changing_personal_install_flags() {
+    const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let cli = Cli::try_parse_from([
+        "nemo-relay",
+        "doctor",
+        "--managed-bundle",
+        "/opt/nvidia/nemo-relay-managed-v1",
+        "--managed-bundle-sha256",
+        DIGEST,
+        "--json",
+    ])
+    .unwrap();
+    let command = cli.command.unwrap();
+    assert!(command.skips_logging());
+    let Command::Doctor(command) = command else {
+        panic!("expected doctor command");
+    };
+    assert_eq!(
+        command.managed_bundle,
+        Some(PathBuf::from("/opt/nvidia/nemo-relay-managed-v1"))
+    );
+    assert_eq!(command.managed_bundle_sha256.unwrap().to_string(), DIGEST);
+    assert!(command.json);
+
+    for arguments in [
+        vec![
+            "nemo-relay",
+            "doctor",
+            "--managed-bundle",
+            "/managed",
+            "--plugin",
+            "codex",
+            "--managed-bundle-sha256",
+            DIGEST,
+        ],
+        vec![
+            "nemo-relay",
+            "doctor",
+            "--managed-bundle",
+            "/managed",
+            "--managed-bundle-sha256",
+            DIGEST,
+            "--offline",
+        ],
+        vec!["nemo-relay", "doctor", "--managed-bundle", "/managed"],
+        vec![
+            "nemo-relay",
+            "doctor",
+            "--managed-bundle",
+            "/managed",
+            "--managed-bundle-sha256",
+            "ABCDEF",
+        ],
+    ] {
+        assert!(Cli::try_parse_from(arguments).is_err());
+    }
 }

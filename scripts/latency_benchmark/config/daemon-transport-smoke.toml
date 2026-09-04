@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+protocols = ["http1", "http2"]
+providers = ["openai", "anthropic"]
+response_bytes = [16384]
+events = 128
+concurrency = [1]
+warmup_seconds = 0
+duration_seconds = 1
+event_delay_micros = 0
+cancel_every = 0
+slow_streams = 0
+slow_event_delay_millis = 0

@@ -113,6 +113,49 @@ pub(crate) fn resolve_server_config(args: &GatewayOverrides) -> Result<ResolvedC
     Ok(resolved)
 }
 
+/// Administrator-controlled configuration for a daemon-managed worker.
+///
+/// The worker must be identical for every user routed through the same managed deployment, so it
+/// cannot consult the per-user configuration layer. `plugin_config_path` is retained so dynamic
+/// plugin lifecycle state is loaded from the same system scope as the resolved plugin document.
+#[derive(Debug, Clone)]
+pub(crate) struct ManagedWorkerConfig {
+    pub(crate) resolved: ResolvedConfig,
+    pub(crate) plugin_config_path: PathBuf,
+}
+
+/// Resolves daemon-worker configuration exclusively from the platform system configuration.
+pub(crate) fn resolve_managed_worker_config() -> Result<ManagedWorkerConfig, CliError> {
+    let system_directory = system_config_dir();
+    resolve_managed_worker_config_from_paths(
+        system_directory.join("config.toml"),
+        system_directory.join(PLUGINS_TOML),
+    )
+}
+
+fn resolve_managed_worker_config_from_paths(
+    config_path: PathBuf,
+    plugin_config_path: PathBuf,
+) -> Result<ManagedWorkerConfig, CliError> {
+    let resolved = load_config_from_paths(
+        vec![(config_path, false)],
+        vec![plugin_config_path.clone()],
+        apply_managed_worker_env_config,
+    )?;
+    enforce_required_dynamic_plugin_startup(Some(&plugin_config_path), &resolved)?;
+    log::info!(
+        target: "nemo_relay.configuration",
+        event = "configuration_resolved",
+        mode = "managed_worker",
+        dynamic_plugin_count = resolved.dynamic_plugins.len();
+        "Managed worker configuration resolved"
+    );
+    Ok(ManagedWorkerConfig {
+        resolved,
+        plugin_config_path,
+    })
+}
+
 /// Resolves only operational logging from the normal config discovery scope.
 ///
 /// This intentionally avoids plugin discovery and activation so logging can be initialized before
@@ -1115,9 +1158,27 @@ fn load_shared_config(
     explicit: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
 ) -> Result<ResolvedConfig, CliError> {
+    let config_paths = config_paths(explicit)
+        .into_iter()
+        .map(|path| {
+            let required = explicit == Some(&path);
+            (path, required)
+        })
+        .collect();
+    load_config_from_paths(
+        config_paths,
+        plugin_config_paths(explicit, plugin_config_path),
+        apply_env_config,
+    )
+}
+
+fn load_config_from_paths(
+    config_paths: Vec<(PathBuf, bool)>,
+    plugin_config_paths: Vec<PathBuf>,
+    apply_environment: fn(&mut GatewayConfig) -> Result<(), CliError>,
+) -> Result<ResolvedConfig, CliError> {
     let mut merged = toml::Value::Table(toml::map::Map::new());
-    for path in config_paths(explicit) {
-        let required = explicit == Some(&path);
+    for (path, required) in config_paths {
         let Some(raw) = read_config_file(&path, required, "configuration")? else {
             continue;
         };
@@ -1144,14 +1205,14 @@ fn load_shared_config(
         }
         merge_gateway_config_toml(&mut merged, parsed);
     }
-    let plugin_toml = load_plugin_toml_config(explicit, plugin_config_path)?;
+    let plugin_toml = load_plugin_toml_config_from_paths(plugin_config_paths)?;
     let mut resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         ..ResolvedConfig::default()
     };
     apply_file_config(&mut resolved, merged)?;
     apply_plugin_toml_config(&mut resolved, plugin_toml);
-    apply_env_config(&mut resolved.gateway)?;
+    apply_environment(&mut resolved.gateway)?;
     Ok(resolved)
 }
 
@@ -1384,13 +1445,6 @@ struct FileDynamicPluginConfig {
     manifest: String,
     #[serde(default)]
     config: Option<Map<String, Value>>,
-}
-
-fn load_plugin_toml_config(
-    explicit: Option<&PathBuf>,
-    plugin_config_path: Option<&PathBuf>,
-) -> Result<Option<PluginTomlConfig>, CliError> {
-    load_plugin_toml_config_from_paths(plugin_config_paths(explicit, plugin_config_path))
 }
 
 /// Returns the plugin configuration paths selected by the same rules as runtime resolution.
@@ -1669,6 +1723,25 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
     if let Ok(value) = std::env::var("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES") {
         config.max_passthrough_body_bytes =
             parse_env_body_limit("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES", &value)?;
+    }
+    Ok(())
+}
+
+// Managed workers accept provider secrets from their inherited environment but never allow a
+// user's environment to change administrator-selected endpoints, limits, or listener settings.
+// `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are intentionally read later at request forwarding time.
+fn apply_managed_worker_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
+    if let Ok(value) = std::env::var("NEMO_RELAY_OPENAI_AUTH_HEADER") {
+        config.openai_auth_header = Some(validate_auth_header(
+            "NEMO_RELAY_OPENAI_AUTH_HEADER",
+            value,
+        )?);
+    }
+    if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER") {
+        config.anthropic_auth_header = Some(validate_auth_header(
+            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+            value,
+        )?);
     }
     Ok(())
 }

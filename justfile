@@ -1220,6 +1220,37 @@ latency-benchmark *benchmark_args:
 test-latency-benchmark:
     uv run --locked python -m pytest scripts/latency_benchmark/tests
 
+# Small deterministic daemon transport check. Informational timings; stream integrity is required.
+daemon-transport-benchmark-smoke:
+    cargo run --locked --release \
+        --manifest-path scripts/latency_benchmark/daemon_transport/Cargo.toml \
+        --target-dir target/daemon-transport-driver \
+        -- smoke \
+        --output target/benchmark-results/daemon-transport-smoke.json
+
+# Opt-in sustained daemon transport benchmark against already-running topology endpoints.
+[positional-arguments]
+daemon-transport-benchmark *benchmark_args:
+    cargo run --locked --release \
+        --manifest-path scripts/latency_benchmark/daemon_transport/Cargo.toml \
+        --target-dir target/daemon-transport-driver \
+        -- load "$@"
+
+# Deterministic provider used by the opt-in daemon transport benchmark.
+[positional-arguments]
+daemon-transport-benchmark-provider *provider_args:
+    cargo run --locked --release \
+        --manifest-path scripts/latency_benchmark/daemon_transport/Cargo.toml \
+        --target-dir target/daemon-transport-driver \
+        -- provider "$@"
+
+# Build the current size-optimized release and an isolated opt-level=3 candidate.
+daemon-transport-benchmark-build-candidates:
+    cargo build --locked --release -p nemo-relay-cli
+    CARGO_PROFILE_RELEASE_OPT_LEVEL=3 cargo build --locked --release \
+        --target-dir target/daemon-benchmark-opt3 \
+        -p nemo-relay-cli
+
 # --set [output_dir=<path>] [ci=true|false]
 test-rust:
     #!/usr/bin/env bash
@@ -1627,6 +1658,8 @@ test-pi:
     # client and loads no native addon, so nothing here depends on it.
     npm run typecheck --workspace=nemo-relay-pi
     npm test --workspace=nemo-relay-pi
+    node_modules/.bin/tsc -p crates/cli/src/daemon/managed/pi_extension/tsconfig.json --noEmit
+    node --test crates/cli/tests/managed_pi_extension_tests.mjs
 
 # --set [output_dir=<path>] [ci=true|false]
 test-all: test-rust test-python test-python-langchain test-go test-node test-openclaw test-pi

@@ -19,6 +19,19 @@ pub(crate) struct DoctorCommand {
     pub(crate) plugin: Option<InstallTarget>,
     #[arg(long, requires = "plugin")]
     pub(crate) install_dir: Option<PathBuf>,
+    /// Validate only an administrator-managed daemon bundle and its managed environment.
+    #[arg(
+        long,
+        requires = "managed_bundle_sha256",
+        conflicts_with_all = ["agent", "plugin", "install_dir", "offline"]
+    )]
+    pub(crate) managed_bundle: Option<PathBuf>,
+    /// Trusted canonical bundle SHA-256 emitted when the managed bundle was created.
+    ///
+    /// This value must be provisioned separately by an administrator. Digest values stored inside
+    /// the bundle are never used as its trust root.
+    #[arg(long, requires = "managed_bundle")]
+    pub(crate) managed_bundle_sha256: Option<crate::daemon::managed::ManagedBundleDigest>,
     #[arg(long)]
     pub(crate) json: bool,
     #[arg(
@@ -39,6 +52,16 @@ pub(super) async fn execute(
     server: &super::serve::ServerArgs,
     logging_fallback_error: Option<&CliError>,
 ) -> Result<ExitCode, CliError> {
+    if let Some(bundle) = command.managed_bundle {
+        let expected_sha256 = command
+            .managed_bundle_sha256
+            .expect("clap requires a managed bundle SHA-256");
+        return crate::diagnostics::run_managed_bundle_doctor(
+            &bundle,
+            &expected_sha256,
+            command.json,
+        );
+    }
     if let Some(plugin) = command.plugin {
         return execute_plugin_doctor(plugin, command.install_dir, command.json);
     }

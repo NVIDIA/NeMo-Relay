@@ -158,6 +158,11 @@ jobs:
           fi
           just "${args[@]}" test-rust
 
+      - name: Run daemon transport benchmark smoke check
+        if: ${{ matrix.platform == 'linux-amd64' }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: just daemon-transport-benchmark-smoke
+
       - name: Upload Rust coverage to Codecov
         if: ${{ matrix.platform != 'windows-arm64' }}
         uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0

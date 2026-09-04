@@ -76,6 +76,34 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
     out
 }
 
+pub(crate) fn format_managed_bundle_human(report: &ManagedBundleDoctorReport) -> String {
+    let bundle = &report.managed_bundle;
+    let mut output = format!(
+        "\n  NeMo Relay {}\n  ─────────────────────────────────────────────\n\n  Managed daemon bundle\n    {}  Managed bundle  {}\n          path     {}\n          sha256   {}\n\n",
+        report.binary_version,
+        format_status(bundle.status),
+        bundle.details,
+        bundle.path,
+        bundle.expected_sha256,
+    );
+    if matches!(bundle.status, Status::Fail) {
+        output.push_str("  Managed bundle validation FAILED; see details above.\n");
+    } else {
+        output.push_str("  Managed bundle validation passed.\n");
+    }
+    output
+}
+
+pub(crate) fn format_managed_bundle_json(
+    report: &ManagedBundleDoctorReport,
+) -> Result<String, CliError> {
+    serde_json::to_string_pretty(report).map_err(|error| {
+        CliError::Config(format!(
+            "could not serialize managed bundle doctor report: {error}"
+        ))
+    })
+}
+
 pub(super) fn format_human_header(out: &mut String, report: &DoctorReport) {
     out.push_str(&format!("\n  NeMo Relay {}\n", report.binary_version));
     out.push_str("  ─────────────────────────────────────────────\n");

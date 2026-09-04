@@ -32,6 +32,20 @@ where
     }
 }
 
+/// Serves the no-tools MCP protocol when lifecycle is owned by the brokered daemon client.
+pub(super) async fn run_without_gateway<W>(
+    mut frames: super::transport::FrameReceiver,
+    mut writer: W,
+) -> Result<(), CliError>
+where
+    W: AsyncWrite + Unpin,
+{
+    while let Some(frame) = frames.recv().await {
+        write_response(evaluate_frame(&frame?), &mut writer).await?;
+    }
+    Ok(())
+}
+
 async fn write_response<W>(action: FrameAction, writer: &mut W) -> Result<(), CliError>
 where
     W: AsyncWrite + Unpin,
