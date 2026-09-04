@@ -1,0 +1,120 @@
+---
+title: "Struct Response Cache Config"
+sidebar-title: "ResponseCacheConfig"
+description: "Configuration for the adaptive plugin's exact-match LLM response and opt-in tool-result cache feature."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ResponseCacheConfig &#123;\n    pub ttl_seconds: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>,\n    pub namespace: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    pub bypass_rate: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>,\n    pub cache_nondeterministic: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub key_strategy: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub header_allowlist: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub backend: <a href=\"../response_cache/config/struct-backendconfig\">BackendConfig</a>,\n    pub tools: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../response_cache/config/struct-toolcacheconfig\">ToolCacheConfig</a>&gt;,\n&#125;"}} /></pre>
+
+Configuration for the adaptive plugin's exact-match LLM response and opt-in tool-result cache feature.
+
+## Fields
+
+### `ttl_seconds: u64`
+
+How long a stored answer stays reusable, in seconds.
+
+### `namespace: String`
+
+Required, non-empty trust-domain partition folded into every key.
+
+One response-cache namespace must not span mutually untrusted tenants or upstreams. The empty default is an unconfigured sentinel rejected when the response-cache section is enabled.
+
+### `priority: i32`
+
+Execution-intercept priority; lower runs first/outermost (default `50`).
+
+### `bypass_rate: f64`
+
+Probability in `[0.0, 1.0]` of skipping the cache and running live.
+
+### `cache_nondeterministic: bool`
+
+Cache nondeterministic requests too. Set `false` to cache only requests explicitly pinned deterministic (`temperature` = 0) - absent or unreadable temperatures count as nondeterministic.
+
+### `key_strategy: String`
+
+Key strategy. Only [`KEY_STRATEGY_EXACT_REQUEST`](/reference/api/rust-library-reference/nemo-relay-adaptive/response_cache/config/constant-key-strategy-exact-request) is supported.
+
+### `header_allowlist: Vec<String>`
+
+Request headers (case-insensitive) folded into the key; never auth headers.
+
+### `backend: BackendConfig`
+
+Storage backend selection.
+
+### `tools: Option<ToolCacheConfig>`
+
+Opt-in tool-result cache configuration.
+
+## Implementations
+
+### `impl ResponseCacheConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-responsecacheconfig\">ResponseCacheConfig</a>"}} /></pre>
+
+#### `ttl`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn ttl(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/time/struct.Duration.html\">Duration</a>"}} /></pre>
+
+TTL as a [`std::time::Duration`](https://doc.rust-lang.org/1.96.1/core/time/struct.Duration.html).
+
+## Trait Implementations
+
+### `impl Clone for ResponseCacheConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-responsecacheconfig\">ResponseCacheConfig</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-responsecacheconfig\">ResponseCacheConfig</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for ResponseCacheConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-responsecacheconfig\">ResponseCacheConfig</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for ResponseCacheConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-responsecacheconfig\">ResponseCacheConfig</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for ResponseCacheConfigwhere ResponseCacheConfig: Default,`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"struct-responsecacheconfig\">ResponseCacheConfig</a>where\n    <a href=\"struct-responsecacheconfig\">ResponseCacheConfig</a>: <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a>,"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl EditorConfig for ResponseCacheConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../nemo-relay/config_editor/trait-editorconfig\">EditorConfig</a> for <a href=\"struct-responsecacheconfig\">ResponseCacheConfig</a>"}} /></pre>
+
+#### `editor_schema`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay/config_editor/trait-editorconfig\">editor_schema</a>() -&gt; &amp;'static <a href=\"../../nemo-relay/config_editor/struct-editorschema\">EditorSchema</a>"}} /></pre>
+
+### `impl Serialize for ResponseCacheConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-responsecacheconfig\">ResponseCacheConfig</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>

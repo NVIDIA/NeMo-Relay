@@ -1,0 +1,223 @@
+---
+title: "Runtime Events and Scopes"
+description: "Emit native marks and manage scope stacks with reliable cleanup."
+position: 25
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+The native runtime handle lets plugin middleware participate in Relay's
+[event hierarchy](/about-nemo-relay/concepts/events)
+without linking the host runtime crate. The example's `runtime` group emits a configured
+mark, opens and closes a child scope, and optionally creates an isolated
+[scope stack](/about-nemo-relay/concepts/scopes).
+
+## Preserve Stack Ownership
+
+A scope stack determines visible scope-local middleware, event parentage, and cleanup.
+Typed async middleware captures the callback's stack and restores it around every future
+and stream poll. The example inspects the current scope, then uses the isolated stack's
+`with_current` helper to bind it for a synchronous closure and restore the previous
+thread binding afterward. Child tasks created with `tokio::spawn` do not automatically
+inherit Relay scope context, so a plugin that deliberately moves work into a new task or
+thread must use the explicit capture and binding helpers.
+
+An isolated stack begins with its own root and is appropriate only when the emitted work
+should not be a child of the managed application call. The example creates the stack,
+binds it, pushes and pops its child scope, restores the previous binding, and drops the
+isolated stack through the typed guards. Those guards perform the same cleanup if the
+closure returns an error.
+
+```rust
+pub(crate) fn emit_configured_runtime_events(
+    runtime: &PluginRuntime,
+    tag: &str,
+    config: &RuntimeConfig,
+) -> nemo_relay_plugin::Result<()> {
+    let _current_scope = runtime.current_scope()?;
+    if config.emit_marks {
+        runtime.emit_mark(
+            "example.native.request.seen",
+            Some(&json!({ "tag": tag })),
+            None,
+        )?;
+    }
+
+    let mut scope = runtime.scope(
+        "example.native.request",
+        ScopeType::Custom,
+        Some(&json!({ "tag": tag })),
+        None,
+        None,
+    )?;
+    scope.close(Some(&json!({ "done": true })), None)?;
+
+    if config.emit_isolated_scope {
+        let isolated = runtime.create_scope_stack()?;
+        isolated.with_current(|| {
+            if config.emit_marks {
+                runtime.emit_mark(
+                    "example.native.isolated.mark",
+                    Some(&json!({ "tag": tag })),
+                    None,
+                )?;
+            }
+            let mut child = runtime.scope(
+                "example.native.isolated.scope",
+                ScopeType::Custom,
+                None,
+                Some(&json!({ "visibility": "isolated" })),
+                None,
+            )?;
+            child.close(Some(&json!({ "done": true })), None)
+        })?;
+    }
+    Ok(())
+}
+```
+
+`runtime.scope` returns an owning guard. Calling `close` supplies the end-event output;
+dropping an unclosed guard still follows the SDK cleanup path. `with_current` restores
+the prior stack after either `Ok` or `Err`, and dropping `isolated` releases the stack.
+
+## Emit Typed Telemetry and Read Diagnostics
+
+Use `emit_mark_with_options` when a mark needs a data schema or log severity. Use
+`emit_metric` to create a validated Relay metric mark rather than constructing the
+reserved metric schema yourself. The following code adds metadata to a policy mark and
+then reads one runtime diagnostic:
+
+```rust
+let schema = DataSchema::builder()
+    .name("example.policy.decision")
+    .version("1")
+    .build();
+runtime.emit_mark_with_options(
+    "example.native.policy_decision",
+    Some(&json!({ "allowed": true })),
+    None,
+    Some(&schema),
+    Some(LogSeverity::Info),
+)?;
+
+let diagnostics = runtime.runtime_diagnostics()?;
+if let Some(diagnostic) = diagnostics.get("otel.metric_mark_invalid") {
+    eprintln!("{} occurred {} times", diagnostic.message, diagnostic.count);
+}
+```
+
+The diagnostic snapshot is bounded and ordered by code. It is a host-level view, so it
+does not identify the plugin that recorded a diagnostic. These operations require the
+native host ABI v4 extensions.
+
+## Control Global Runtime Registrations
+
+Native host ABI v4 adds activation-owned registration discovery and conditional
+middleware guardrail control. `PluginRuntime::list_runtime_registrations`
+returns structured global identities. A background plugin task can call
+`register_conditional_middleware_guardrail`, retain the returned opaque handle,
+and call `deregister_conditional_middleware_guardrail` when the target should
+be eligible for future snapshots again.
+
+Relay evaluates the callback synchronously in the trusted in-process plugin and
+fails open if the callback reports an ABI error. The plugin can remove only gates
+owned by its activation, and Relay removes remaining gates and releases their
+callback state before unloading the library. Use
+`PluginContext::register_conditional_middleware_guardrail` for a gate that must
+exist as part of the initial registration transaction.
+
+The following registration uses the example's validated, disabled-by-default
+`registration_control` group:
+
+```rust
+if config.registration_control.enabled {
+    let kinds = config.registration_control.kinds.iter().copied().collect();
+    let blocked_registration_name = config.registration_control.registration_name.clone();
+    let callback_registration_name = blocked_registration_name.clone();
+    let reason = config.registration_control.reason.clone();
+    context.register_conditional_middleware_guardrail(
+        "documentation_registration_control_block",
+        &kinds,
+        &blocked_registration_name,
+        move |_, registration_name| {
+            (registration_name == callback_registration_name)
+                .then(|| reason.clone())
+        },
+    )?;
+    context.register_conditional_middleware_guardrail(
+        "documentation_registration_control_allow",
+        &kinds,
+        &config.registration_control.allowed_registration_name,
+        |_, _| None,
+    )?;
+}
+```
+
+The first callback returns a reason and disables its matching registration. The second
+callback returns `None` and leaves its matching registration enabled. The callback
+registration functions are an append-only native ABI v4 extension; the original
+constant-reason v4 slots remain at their existing offsets for binary compatibility.
+Refer to
+[Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
+for the complete discovery, ordering, snapshot, and cleanup contract.
+
+## Configure the SDK Executor
+
+`NativePlugin::executor_config` supplies the plugin-wide default. The SDK default and the
+example default are two worker threads. `executor_config_for_component` can derive a
+component override; the standard implementation recognizes a positive
+`executor.worker_threads` integer. Because the example schema rejects unknown values, it
+declares the executor object even though the object is owned by the SDK contract.
+
+More workers help only when measured async I/O leaves callbacks queued. They do not make
+CPU-bound or blocking callbacks safe. A host with many active native components has one
+executor per component, so an unnecessarily large value multiplies thread use.
+
+```rust
+impl NativePlugin for ExampleNativePlugin {
+    fn executor_config(&self) -> NativeExecutorConfig {
+        NativeExecutorConfig { worker_threads: 2 }
+    }
+
+    fn validate(&self, config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        let mut diagnostics = config::validate(config);
+        if let Err(message) = self.executor_config_for_component(config) {
+            diagnostics.push(ConfigDiagnostic {
+                level: DiagnosticLevel::Error,
+                code: "examples.rust_native_policy.invalid_executor".into(),
+                component: Some("examples.rust_native_policy".into()),
+                field: Some("executor.worker_threads".into()),
+                message,
+            });
+        }
+        diagnostics
+    }
+}
+```
+
+With no component override, this implementation creates two executor workers. With
+`executor.worker_threads = 4`, the standard component resolver creates four. Zero,
+negative, fractional, and nonnumeric values become validation errors before the SDK
+creates an executor.
+
+## Verify Runtime Cleanup
+
+Use the following procedure to verify parentage, restoration, executor settings, and
+failure cleanup:
+
+1. Activate `runtime.emit_marks = true` and `emit_isolated_scope = true` with two executor
+   workers.
+2. Run a managed call inside a named scope. Confirm the plugin mark and ordinary child
+   scope use that call as their parent.
+3. Confirm the isolated scope uses its new root and has no accidental parent from the
+   caller.
+4. In a host integration test, make one runtime operation fail after a push. Confirm the
+   scope guard closes the scope, `with_current` restores the former stack, and dropping
+   the isolated stack releases its host handle.
+5. Run unrelated work on the same runtime thread and confirm its current stack is
+   unchanged. Then clear the plugin and wait for active callbacks to finish before
+   unloading the library.
+
+Success means event parentage is intentional, no scope or isolated stack leaks on
+failure, later work regains its original context, and unload begins only after callback
+ownership has ended.

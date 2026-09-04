@@ -1,0 +1,502 @@
+---
+title: "PII Redaction Configuration"
+sidebar-title: "Configuration"
+description: "Configure PII redaction actions, detectors, targets, and backend modes."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use this page when you want to configure the built-in PII redaction plugin
+component. The component kind is `pii_redaction`.
+
+The CLI and primary language bindings register this component. Direct Rust
+applications must call
+`nemo_relay_pii_redaction::component::register_pii_redaction_component()`
+before they validate or initialize a `pii_redaction` component.
+
+For plugin file discovery, precedence, merge behavior, editor controls, and
+gateway conflict rules, refer to
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
+
+<Note>
+NeMo Relay plugin configuration uses the generic plugin document shape, so
+field names stay `snake_case` in every binding and in `plugins.toml`.
+
+</Note>
+
+## Relation to Raw Middleware
+
+This plugin uses the same sanitize-guardrail middleware family documented in
+[Middleware](/about-nemo-relay/concepts/middleware).
+
+The difference between raw middleware and `pii_redaction` is the layer of
+abstraction:
+
+- Raw middleware asks you to register sanitize callbacks directly in code.
+- `pii_redaction` gives you a first-party, config-driven privacy contract on
+  top of those same runtime hooks.
+
+Choose `pii_redaction` when you want a reusable built-in policy surface.
+Choose raw middleware when you need bespoke callback logic that does not fit
+the plugin contract.
+
+## Plugin Versus Middleware
+
+Use this matrix when deciding whether to use the built-in `pii_redaction`
+plugin or raw sanitize-guardrail middleware directly.
+
+| Area | `pii_redaction` Plugin | Raw Middleware |
+| --- | --- | --- |
+| Primary UX | Declarative config through `plugins.toml`, bindings helpers, and the CLI editor | Callback registration in application code |
+| Best fit | Reusable privacy policy shared across apps or teams | App-specific logic tied to runtime state or custom heuristics |
+| Built-in actions | `remove`, `redact`, `regex_replace`, `hash`, `mask` | You implement the behavior yourself |
+| Built-in detectors | Supported | You implement the matcher yourself |
+| Codec-aware LLM handling | Supported for the documented codecs | You handle normalization and provider shapes yourself |
+| Validation and editor support | Supported | Not provided |
+| Cross-runtime consistency | First-party contract across Relay surfaces | Depends on each app's callback code |
+| Flexibility | Limited to the plugin contract | Full control over sanitize behavior |
+| When to choose it | You want the fastest path to a supported privacy surface | You need behavior the plugin contract does not express |
+
+## Component Shape
+
+The top-level PII redaction object contains:
+
+| Field | Purpose |
+| --- | --- |
+| `version` | PII redaction config schema version. Defaults to `1`. |
+| `mode` | Backend mode. Current values are `builtin` and `local_model`. Defaults to `builtin`. |
+| `input` | Enables managed LLM request sanitization and non-tool, non-LLM scope-start field sanitization. Defaults to `true`. |
+| `output` | Enables managed LLM response sanitization and non-tool, non-LLM scope-end field sanitization. Defaults to `true`. |
+| `mark` | Enables mark `data`, `category_profile`, and `metadata` sanitization. Defaults to `true`. |
+| `tool_input` | Enables sanitization of emitted tool-request observability payloads. Defaults to `true`. |
+| `tool_output` | Enables sanitization of emitted `ToolExecutionResult.result` and `ToolExecutionResult.annotation` observability values. Defaults to `true`. |
+| `priority` | Guardrail priority. Lower values run earlier. Defaults to `100`. |
+| `codec` | Optional compatibility fallback for legacy/manual managed LLM calls that do not expose an active codec. |
+| `profiles` | Ordered redaction profiles. Each profile selects `builtin` or `local_model`; enabled profiles cover every supported sanitization surface. |
+| `builtin` | Built-in backend settings used when `mode = "builtin"`. |
+| `local` | Local-backend settings used when `mode = "local_model"`. |
+| `policy` | Component-local handling for unknown fields and unsupported values. |
+
+At least one managed redaction surface must be enabled.
+
+Use either the legacy single-policy fields (`mode`, surface flags, `priority`,
+`builtin`, and `local`) or `profiles`, but not both. The component-wide
+`codec`, `version`, and `policy` fields remain valid with `profiles`.
+
+In profile-array mode, profiles execute by ascending priority and use array
+order to break ties. Relay assigns internal names such as `profile_0`, so
+profiles do not require IDs. Disabled profiles are validated but do not
+register callbacks. Profile lists concatenate during config layering, with
+higher-precedence profiles placed before lower-precedence profiles.
+
+### Mixed-Provider Gateway Example
+
+For a gateway that routes requests to more than one supported provider, omit
+`codec`. Relay selects the active codec for each managed call, so the same
+policy safely applies to OpenAI Chat, OpenAI Responses, Anthropic Messages, and
+Gemini `generateContent` traffic:
+
+```toml
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[components.config]
+
+[[components.config.profiles]]
+mode = "builtin"
+priority = 80
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "email"
+target_paths = ["/messages/0/content", "/message"]
+```
+
+Use `codec = "openai_chat"` only as a compatibility fallback for a legacy
+manual call where Relay cannot identify an active codec. It is ignored when a
+managed call supplies any active codec. Request policies use that codec's
+resolved decode/encode capability, including runtime and opaque codecs.
+Normalized response projection currently requires a recognized built-in codec
+because response codec capabilities are decode-only.
+
+## Backend Support
+
+The following table compares the available PII redaction backends:
+
+| Area | `builtin` | `local_model` |
+| --- | --- | --- |
+| Built-in component kind and config validation | Supported | Supported |
+| Managed LLM `input` | Supported | Not implemented |
+| Managed LLM `output` | Supported | Not implemented |
+| Mark and generic scope event fields | Supported | Not implemented |
+| Managed `tool_input` | Supported | Not implemented |
+| Managed `tool_output` | Supported | Not implemented |
+| Built-in actions | `remove`, `redact`, `regex_replace`, `hash`, `mask` | N/A |
+| Codec support | `openai_chat`, `openai_responses`, `anthropic_messages`, `oci_genai`, `gemini_generate_content` | Runtime-specific future implementation |
+| Runtime availability | Any runtime that includes the `nemo-relay-pii-redaction` plugin crate | Runtimes that install a local backend provider |
+
+## Built-in Mode
+
+Use `builtin` mode when NeMo Relay should sanitize emitted observability
+payloads with a deterministic first-party backend.
+
+This is the recommended mode when the privacy behavior is common enough to be
+described declaratively with built-in actions, detector presets, target
+selectors, and supported codecs.
+
+### Requirements
+
+To use `mode = "builtin"`:
+
+- `builtin` settings are required.
+- Set `codec` only when legacy/manual managed LLM calls need a fallback codec.
+- `builtin.action` must be `remove`, `redact`, `regex_replace`, `hash`, or `mask`.
+- `builtin.action = "remove"` requires at least one entry in `builtin.target_paths`
+  or `builtin.target_path_globs`.
+- `builtin.pattern` or `builtin.detector` is required when `builtin.action = "regex_replace"` or `builtin.action = "redact"`.
+
+### Composed `plugins.toml` Example
+
+You can write this config directly in `plugins.toml`, or create and edit it
+through the CLI with `nemo-relay plugins edit`. For plugin file discovery,
+precedence, merge behavior, and editor controls, refer to
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[components.config]
+version = 1
+
+[[components.config.profiles]]
+mode = "builtin"
+priority = 80
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "email"
+
+[[components.config.profiles]]
+mode = "builtin"
+priority = 90
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "api_key"
+
+[components.config.policy]
+unknown_component = "warn"
+unknown_field = "warn"
+unsupported_value = "error"
+```
+
+This example applies email redaction before API-key redaction to marks, LLM
+and tool observability payloads, and scope metadata. `[REDACTED]` is already
+the default replacement for `redact`, so no `replacement` field is needed.
+
+Legacy single-policy configurations may still use `mark` and the other
+surface flags. Profile-array configurations intentionally do not expose those
+flags: every enabled profile owns the complete pre-subscriber sanitization
+boundary.
+
+### CLI Editor Support
+
+The NeMo Relay CLI plugin editor now exposes `pii_redaction` directly through
+`nemo-relay plugins edit`.
+
+Use the editor when you want to:
+
+- Toggle the component on or off
+- Choose `builtin` or `local_model`
+- Add and order multiple redaction profiles
+- Enable or disable individual profiles
+- Set the LLM `codec`
+- Edit `builtin` action settings such as `action`, `target_paths`,
+  `target_path_globs`, `pattern`, `detector`, `replacement`, and masking fields
+- Edit `local.backend` for a runtime-provided future local-model backend
+
+The editor preserves unknown fields when it rewrites an existing
+`pii_redaction` component, so future or runtime-specific settings are not
+discarded by the interactive edit flow.
+
+If your policy needs callback code instead of editor or configuration fields,
+use raw middleware.
+
+## Built-in Settings
+
+The `builtin` section contains:
+
+| Field | Purpose |
+| --- | --- |
+| `action` | Sanitization action. Current values are `remove`, `redact`, `regex_replace`, `hash`, and `mask`. |
+| `target_paths` | Exact RFC 6901 JSON-pointer paths to sanitize. Empty together with `target_path_globs` means every matching string leaf, except when `action = "remove"`. |
+| `target_path_globs` | Restricted JSON-pointer glob paths. A whole `*` segment matches exactly one object key or array index. |
+| `pattern` | Regex pattern used when `action = "regex_replace"` or `action = "redact"`. |
+| `detector` | Optional built-in matcher preset. Current values are `email`, `phone`, `api_key`, `ip_address`, `ipv6`, `url`, `uuid`, `bearer_token`, `jwt`, `credit_card`, `aws_access_key_id`, `aws_secret_access_key`, `gcp_api_key`, and `azure_storage_account_key`. |
+| `replacement` | Replacement text used when `action = "regex_replace"` or `action = "redact"`. Defaults to `[REDACTED]`. |
+| `mask_char` | Masking token used when `action = "mask"`. Defaults to `*`. |
+| `unmasked_prefix` | Leading character count to keep when `action = "mask"`. Defaults to `0`, unless a detector-specific masking preset is active. |
+| `unmasked_suffix` | Trailing character count to keep when `action = "mask"`. Defaults to `0`, unless a detector-specific masking preset is active. |
+
+## Typed Metric Marks
+
+Relay recognizes marks that use its `nemo.relay.metric_measurements` schema as
+typed metric envelopes. PII sanitization preserves the measurement name, kind,
+value type, numeric value, and histogram boundaries so the OpenTelemetry metric
+exporter can validate and export the mark.
+
+The plugin sanitizes optional text without invalidating the envelope:
+
+- With neither `target_paths` nor `target_path_globs`, measurement descriptions and string-valued metric
+  attributes follow the configured built-in action.
+- With target selectors, those fields are sanitized only when their
+  payload-relative JSON Pointer matches, such as
+  `/measurements/0/description` or `/measurements/0/attributes/owner`.
+- With `action = "remove"`, targeting a whole string-array attribute removes
+  that attribute. Targeting an individual element removes that element and
+  compacts the remaining array; Relay cannot use a `null` placeholder because
+  typed OpenTelemetry metric attributes must remain valid homogeneous arrays.
+- Numeric and boolean metric attributes remain analytical telemetry.
+
+The `trajectory_context` preset replaces descriptions and string-valued
+attributes with its configured replacement while retaining the required metric
+fields. That preset does not accept target selectors. Its
+`custom_mark_payload_policy` applies only to opaque marks in the `custom`
+category; it does not control Relay typed metric envelopes.
+
+On every mark, the preset preserves the reserved `nemo_relay.log.severity`
+metadata field in canonical form when it contains a supported severity. For
+opaque custom marks using `redact_all_leaves`, unsupported severity values and
+all other string leaves remain redacted.
+
+## Action Semantics
+
+### `remove`
+
+`remove` is structural.
+
+Configure at least one `target_paths` or `target_path_globs` selector when
+using `remove`. Relay rejects an unscoped `remove` policy during validation to
+prevent accidental removal of every string value in the selected surfaces.
+
+When a target matches:
+
+- Object fields are removed.
+- Array elements become `null` on JSON-native surfaces. If a normalized LLM
+  array removal cannot be safely re-encoded, Relay omits the event payload and
+  its annotation instead.
+- Targeted scalar or root values become `null`.
+
+### `regex_replace`
+
+`regex_replace` applies the configured regex to matching string leaves and
+replaces matches with the configured `replacement`.
+
+If you set `detector` instead of `pattern`, the built-in backend uses the
+detector's stock matcher regex.
+
+### `redact`
+
+`redact` is the deterministic whole-match replacement lane.
+
+It uses the same `pattern` or `detector` matcher flow as `regex_replace`, but
+defaults the replacement token to `[REDACTED]` and is intended for cases where
+you do not want to preserve any matched secret characters.
+
+Use `redact` when you want:
+
+- credential-style secrets fully replaced
+- a consistent redaction token across detectors
+- clearer policy intent than a custom `regex_replace`
+
+### `hash`
+
+`hash` replaces matching string leaves with their SHA-256 hex digest.
+
+When `pattern` or `detector` is set, `hash` only replaces the matching
+substring instead of hashing the entire string leaf.
+
+### `mask`
+
+`mask` replaces the middle portion of each matching string leaf with the
+configured `mask_char`.
+
+Use `unmasked_prefix` and `unmasked_suffix` when you want to preserve a small
+leading or trailing segment for correlation or debugging, such as the last four
+characters of a token.
+
+When `pattern` or `detector` is set, `mask` only masks matching substrings
+inside the string leaf.
+
+When `detector` is set and you do not specify `unmasked_prefix` or
+`unmasked_suffix`, the built-in backend applies detector-aware defaults:
+
+- `email`: Preserves the domain and the first local-part character
+- `phone`: Preserves the last four digits while keeping separators intact
+- `api_key`: Preserves the vendor-style prefix such as `sk-` and the last four characters
+- `ip_address`: Preserves the last octet
+- `ipv6`: Preserves the last segment
+- `url`: Preserves the scheme and host, then collapses the path/query tail
+- `uuid`: Preserves the last four characters
+- `bearer_token`: Preserves the auth scheme and the last four characters
+- `jwt`: Preserves the header segment and the tail of the signature
+- `credit_card`: Preserves the last four digits while keeping separators intact
+- `aws_access_key_id`: Preserves the provider prefix and the last four characters
+- `aws_secret_access_key`: Preserves the last four characters
+- `gcp_api_key`: Preserves the `AIza`-style prefix and the last four characters
+- `azure_storage_account_key`: Preserves the last four characters
+
+## Path Semantics
+
+`target_paths` are exact RFC 6901 JSON-pointer matches. `target_path_globs`
+adds a restricted, opt-in selector language: a whole `*` segment matches one
+object key or array index. Exact paths and glob paths are combined.
+Within `target_path_globs`, `*` is a wildcard only when it is the complete
+pointer segment. Segments such as `content*` and `foo*bar` match those literal
+object keys.
+
+For example, these selectors cover every message and provider-output text
+block without capping the number of array items:
+
+```toml
+target_path_globs = [
+  "/messages/*/content/*/text",
+  "/output/*/content/*/text",
+]
+```
+
+Globs are not recursive: `/output/*` selects only a direct child of `output`.
+It does not select `/output/0/content/0/text`; use
+`/output/*/content/*/text` for that shape. Relay does not support `**`,
+predicates, or arbitrary JSONPath expressions. `target_paths = ["/*"]`
+continues to select a literal `*` object key; use `target_path_globs = ["/*"]`
+when `*` should be a wildcard.
+
+Relay validates every configured path as RFC 6901 syntax before activating the
+component. The empty string selects the document root. Every other pointer must
+start with `/`, and `~` escapes must use `~0` for `~` or `~1` for `/`. Invalid
+pointers prevent activation instead of silently leaving the intended values
+unsanitized.
+
+The plugin uses different payload boundaries for tools and LLMs:
+
+- Tools use JSON-native payloads. Paths point into the emitted tool args
+  directly. For built-in action policies, including detector-backed policies,
+  tool response paths apply independently to the emitted
+  `ToolExecutionResult.result` and `ToolExecutionResult.annotation` JSON
+  documents. A path is relative to each document; it does not start with
+  `/result` or `/annotation`.
+- LLM requests use the active resolved codec for that managed call. LLM
+  responses use the active built-in codec for normalized projection. Prefer
+  normalized Relay paths such as:
+  - `/headers/authorization` for an exact request header field
+  - `/messages/0/content` for request message content
+  - `/message` for the normalized assistant response text
+- Marks and non-tool, non-LLM scopes sanitize `data`, `category_profile`, and
+  `metadata` as separate JSON values. A target path is evaluated independently
+  inside each value; it does not start with `/data`, `/category_profile`, or
+  `/metadata`.
+
+The current implementation also preserves provider-shaped response-path
+compatibility for the supported built-in codecs, but normalized LLM paths are
+the recommended contract for new configuration. If normalized paths are
+configured and Relay cannot resolve a request codec or cannot project a
+response through a recognized built-in or compatible fallback codec, the LLM
+event payload and its annotation are omitted rather than emitting unsanitized
+content. In particular, a manual LLM call with normalized target selectors, no
+active codec, and no configured `codec` fallback omits both the payload and its
+annotation.
+
+## Decision Rule
+
+Use `pii_redaction` for reusable, config-driven privacy behavior. Use raw
+middleware when the policy depends on application-specific runtime state or
+custom callback logic. Refer to [Plugin Versus Middleware](#plugin-versus-middleware)
+for the full comparison.
+
+## Detector Presets
+
+The built-in detector presets are grouped into three deterministic families:
+
+**Common PII**
+
+- `email`
+- `phone`
+- `ip_address`
+- `ipv6`
+- `url`
+
+**Structured Secrets**
+
+- `api_key`
+- `uuid`
+- `bearer_token`
+- `jwt`
+- `credit_card`
+
+`bearer_token` is heuristic rather than vendor-specific. It can still match
+benign bearer-style values, so prefer a narrower detector when you know the
+credential family.
+
+**Cloud Credentials**
+
+- `aws_access_key_id`
+- `aws_secret_access_key`
+- `gcp_api_key`
+- `azure_storage_account_key`
+
+They are deterministic regex-backed helpers, not model inference.
+
+For actions other than `remove`, if both target-selector lists are empty, the
+built-in backend sanitizes every matching string leaf in the selected payload
+boundary. The `remove` action requires at least one selector.
+
+## Observability Semantics
+
+The built-in plugin uses sanitize guardrails and event sanitizers.
+
+That means:
+
+- The real provider request and response values are unchanged.
+- The emitted NeMo Relay start, end, or mark event observability fields are
+  sanitized.
+- `annotated_response` is regenerated from the sanitized end-event payload when
+  the active response codec can decode that payload.
+- Subscribers and exporters consume only the sanitized canonical event stream.
+  Each exporter can omit or transform fields as part of its normal projection,
+  but raw values removed by the plugin do not bypass the sanitizer.
+
+For built-in action policies, including detector-backed policies, the PII
+redaction scope sanitizer leaves `data` and typed `category_profile` fields
+unchanged on tool and LLM scope events because the specialized sanitizer already
+owns that lifecycle boundary. It sanitizes `metadata` independently. When
+`tool_output` is enabled, the tool scope-end sanitizer also sanitizes only
+`category_profile.tool_result_annotation`; the other typed tool profile
+fields remain unchanged. This prevents repeated hashing or masking. Other scope
+categories use `input` for starts and `output` for ends.
+
+## Local Model Mode
+
+`local_model` is reserved for a future in-process local-model backend.
+
+### Current Status
+
+The current local-model status is:
+
+- The plugin contract accepts `mode = "local_model"`.
+- The `local` section supports:
+  - `backend`
+  - `model_id`
+  - `detector_profile`
+  - `allow_network`
+  - `max_latency_ms`
+- Actual behavior depends on a runtime-installed local backend provider.
+
+Without a provider, runtimes report the local backend as unavailable during
+plugin initialization.

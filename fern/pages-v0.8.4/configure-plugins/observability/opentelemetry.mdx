@@ -1,0 +1,894 @@
+---
+title: "OpenTelemetry"
+description: "Export NeMo Relay traces, logs, and metrics through OpenTelemetry Protocol endpoints."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use the `opentelemetry` section to configure independent OpenTelemetry Protocol
+(OTLP) trace, log, and metric pipelines. OpenTelemetry support is always
+included; no Cargo feature enables or disables it.
+
+Relay classifies each sanitized event before OTLP signal fan-out:
+
+| Signal | Relay Input | OTLP Destination |
+|---|---|---|
+| Traces | Scope lifecycles and projection-specific non-metric mark handling | `/v1/traces` |
+| Logs | Non-metric marks | `/v1/logs` |
+| Metrics | Marks with the Relay-owned `nemo.relay.metric_measurements` schema | `/v1/metrics` |
+
+Scope events maintain lineage for log correlation, but Relay does not export
+them as log records or metric measurements. Metric marks do not fall back to
+logs or traces when metric export is disabled. A valid mark with the reserved
+metric schema routes exclusively to metrics. An invalid reserved metric mark
+reaches no OTLP signal and produces a rate-limited operational diagnostic.
+Other marks retain the existing projection-specific trace behavior and can be
+exported as logs.
+
+<Note>
+The metric schema is a NeMo Relay routing contract, not an ATOF-wide metric
+semantic. ATOF remains at version `0.1`, treats `data_schema` as opaque, and
+defaults mark `data_schema` to `null`. A future specification discussion can
+evaluate standardizing metric routing, timestamps, aggregation, and exemplars.
+</Note>
+
+## Trace Projections
+
+Each endpoint selects one fixed semantic projection:
+
+| Type | Projection |
+|---|---|
+| `full` | Complete NeMo Relay projection, including `nemo_relay.*` attributes and native handling for non-metric marks. |
+| `gen_ai` | OpenTelemetry GenAI semantic conventions only. |
+| `openinference` | OpenInference-compatible spans with the existing default handling for non-metric marks. |
+
+You can repeat a type or combine types. Each endpoint owns an independent exporter
+and can use a different endpoint.
+
+The `gen_ai` projection targets the
+[OpenTelemetry GenAI semantic-conventions v1.42-era snapshot](https://github.com/open-telemetry/semantic-conventions-genai/tree/43633a68ef8f8ed87a1d5eb205990311ca708bf1).
+Use that pinned snapshot when comparing emitted operation and attribute names
+with collector or backend schemas.
+
+NeMo Relay uses the currently vendored OpenTelemetry Rust SDK (`0.32`). It
+deterministically derives
+compliant trace and span IDs from Relay lifecycle UUIDs, so endpoints that
+receive the same event stream use the same identifiers and parentage. Different
+endpoint types must therefore use independent OTLP destinations; configuring
+them with the same endpoint and transport is rejected to prevent identifier
+collisions at the receiver. Duplicate detection compares canonical destinations:
+HTTP and HTTPS default ports are realized, repeated and trailing path slashes
+are normalized, and standardized loopback hosts such as `localhost`, names
+under `.localhost`, `127.0.0.0/8`, and `::1` are equivalent. Relay does not use
+DNS resolution for this comparison, and query strings remain significant.
+Rooted Relay propagation continues the Relay-derived trace across the import
+boundary. Rootless propagation retains Relay event parentage but starts a new
+OpenTelemetry trace from the first local event. Carry W3C `traceparent` and
+`tracestate` alongside Relay propagation when an integration also needs to
+preserve upstream OpenTelemetry sampling or vendor state.
+
+## `plugins.toml` Example
+
+The following version-4 configuration exports a `gen_ai` trace and derives log
+and metric destinations from the trace destination.
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "gen_ai"
+endpoint = "http://localhost:4318/v1/traces"
+transport = "http_binary"
+service_name = "agent-service"
+promote_metadata_prefixes = ["app."]
+promote_resource_metadata_prefixes = ["deployment."]
+max_queue_size = 4096
+max_export_batch_size = 512
+scheduled_delay_millis = 1000
+completed_span_context_ttl_millis = 60000
+
+[components.config.opentelemetry.endpoints.header_env]
+authorization = "OTEL_AUTHORIZATION"
+
+[components.config.opentelemetry.endpoints.resource_attributes]
+"nv.project" = "observability-dev"
+
+[components.config.opentelemetry.logs]
+enabled = true
+completed_span_context_ttl_millis = 60000
+minimum_severity = "info"
+
+[components.config.opentelemetry.metrics]
+enabled = true
+temporality = "cumulative"
+```
+
+Relay replaces the terminal `/v1/traces` with `/v1/logs` and `/v1/metrics`.
+Derived destinations copy the trace endpoint's transport, authentication,
+resource attributes, service identity, instrumentation scope, and timeout. In
+this example, all three signals use the same authorization and `nv.project`
+routing value.
+
+When `enabled = true`, configure at least one trace endpoint or an enabled
+signal with explicit endpoints. NeMo Relay constructs every endpoint before
+registering subscribers. An invalid endpoint is skipped with an activation
+warning while valid endpoints register. Activation fails when no trace, log,
+or metric endpoint can be registered. A delivery failure from one exporter does
+not stop application work or delivery to the other exporters.
+
+## Trace Endpoint Fields
+
+| Field | Default | Notes |
+|---|---|---|
+| `type` | Required | `full`, `gen_ai`, or `openinference`. |
+| `endpoint` | Required | Nonblank OTLP endpoint. For OTLP/HTTP, Relay appends `/v1/traces` when the endpoint contains only a scheme, host, and optional port with no explicit path. Add a trailing `/` to export traces to the root path. Any other explicit path is preserved. gRPC endpoints are always preserved. |
+| `transport` | `http_binary` | `http_binary` or `grpc`. |
+| `service_name` | `unknown_service` | `service.name` resource attribute. |
+| `service_namespace` | Omitted | Optional `service.namespace`. |
+| `service_version` | Omitted | Optional `service.version`. |
+| `instrumentation_scope` | `opentelemetry` | Instrumentation scope name. |
+| `timeout_millis` | `3000` | OTLP request timeout. |
+| `max_queue_size` | Environment or `2048` | Maximum completed spans buffered before this endpoint drops new spans. |
+| `max_export_batch_size` | Environment or `512` | Maximum spans exported in one batch; capped at the effective queue size. |
+| `scheduled_delay_millis` | Environment or `5000` ms | Maximum delay before this endpoint exports a non-full batch. A full batch exports sooner. |
+| `completed_span_context_ttl_millis` | `60000` | Positive duration for retaining completed scopes' trace context for late marks. |
+| `headers` | `{}` | String-to-string exporter headers. |
+| `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
+| `resource_attributes` | `{}` | String-to-string resource attributes. |
+| `mark_projection` | `inherit` | Mark representation for `full` and `openinference`: `inherit`, `event`, or `tool`. |
+| `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
+| `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
+| `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
+| `promote_resource_metadata_prefixes` | `[]` | Literal prefixes that select root Scope-start metadata to copy to OTLP resource attributes. Each unique effective resource retains an exporter pipeline for the subscriber lifetime. |
+
+## Event Metadata Promotion
+
+Set `promote_metadata_prefixes` on a trace endpoint to copy selected keys from
+the final sanitized Event metadata into that endpoint's OpenTelemetry output.
+The setting defaults to an empty list, so Relay does not promote metadata unless
+you configure at least one prefix.
+
+| Behavior | Contract |
+|---|---|
+| Promotion prefixes | ASCII letters, numbers, underscores, and hyphens in nonempty segments separated by single dots, with an optional trailing dot. Matching is literal and case-sensitive. |
+| Supported values | Strings, booleans, signed 64-bit integers, floating-point numbers, empty arrays, and homogeneous arrays containing one supported primitive type. |
+| Rejected values | Nulls, objects, nested arrays, mixed-type arrays, and integers outside the signed 64-bit range. |
+| Scope lifecycle | A Scope-end key is authoritative when Relay constructs the final span. When Scope-end omits the key, the Scope-start value remains. |
+| OpenTelemetry collisions | Projection-owned attributes always win. For `full` and `openinference`, configured attribute-mapping aliases also win over promoted metadata. |
+
+For example, `"app."`, `"app_"`, and `"app-"` are valid literal prefixes.
+Leading or repeated dots, whitespace, other punctuation, and glob expressions
+such as `"app.*"` are rejected.
+
+Matching is case-sensitive and compares the beginning of each key literally.
+Relay does not infer a dot or metadata-key segment boundary. For example,
+`"app."` selects `app.name` and `app.version`, but not `app_name`. The broader
+`"app"` prefix selects all three keys.
+Configure the narrowest prefix that selects the metadata you intend to export.
+
+Scope-start and Scope-end are separate Event records. When Scope-end completes
+the span, a metadata key present on that Event replaces the corresponding
+promoted Scope-start value. Mark metadata is promoted to the attributes of the
+projected span event or tool span. The `gen_ai` projection continues to omit
+Marks.
+
+Promotion supports strings, booleans, signed 64-bit integers, floating-point
+numbers, empty arrays, and homogeneous arrays of those primitive types. Relay
+omits rejected values and records one bounded runtime diagnostic per rejected
+key. The diagnostic code is
+`otel.metadata_promotion_value_unsupported.<metadata-key>`, its message contains
+the key and rejection reason, and its count is the number of occurrences for
+that key. Relay does not record the rejected value or stop trace export. Match
+the `otel.metadata_promotion_value_unsupported.` prefix to monitor rejected span
+metadata keys.
+
+Projection-owned attributes take precedence over promoted metadata with the
+same key. For `full` and `openinference`, configured attribute-mapping aliases
+also take precedence. Relay also omits selected
+keys in namespaces owned by Relay or supported semantic projections:
+`nemo_relay.`, `gen_ai.`, `error.`, `exception.`, `input.`, `output.`, `llm.`,
+`openinference.`, `server.`, `service.`, `session.`, `tool.`, `tool_call.`, and
+`user.`. Relay omits the bare `metadata` key as well. Rejected keys produce a
+rate-limited operational diagnostic without dropping the Event or span.
+
+Promotion does not modify the Event or ATOF payload. In OTLP trace output only,
+Relay removes successfully promoted keys from serialized Relay metadata
+attributes. This applies to every Scope-start, Scope-end, and Mark event, and
+also to OpenInference's `metadata` JSON attribute. Resource-promotion prefixes
+participate in that filtering for every event even though only a trace root's
+Scope-start metadata can create resource attributes. Keys that cannot be
+promoted, including values overridden by configured resource attributes, remain
+in serialized metadata. Use `resource_attributes` instead for static values
+that must be attached to every span from an endpoint.
+
+## Root Resource Metadata Promotion
+
+Set `promote_resource_metadata_prefixes` to derive resource attributes from the
+sanitized metadata on a trace root's Scope-start Event. Every span and scoped
+mark in that trace uses the same resource; child metadata and later root
+metadata changes do not modify it. The prefixes and supported value types match
+`promote_metadata_prefixes`.
+
+Configured `service_name`, `service_namespace`, `service_version`, and explicit
+`resource_attributes` take precedence over promoted metadata with the same key.
+Each distinct effective resource creates a retained OTLP trace pipeline, so use
+only controlled, low-cardinality values such as deployment, region, or cluster
+identity. Do not promote request, tenant, or user identifiers.
+
+Relay records two bounded runtime diagnostics for this setting. A rejected value
+produces `otel.resource_metadata_promotion_value_unsupported.<metadata-key>`.
+A failed resource-pipeline construction produces
+`otel.resource_metadata_pipeline_build_failed`; Relay then exports the trace
+through the endpoint's configured resource instead. Match both the
+`otel.metadata_promotion_value_unsupported.` and
+`otel.resource_metadata_promotion_value_unsupported.` prefixes to monitor all
+rejected metadata keys.
+
+## Log and Metric Endpoint Resolution
+
+An enabled `logs` or `metrics` section can omit `endpoints`. Relay then derives
+one signal endpoint from every trace endpoint:
+
+- A bare HTTP authority, with or without a root trailing `/`, gains `/v1/logs`
+  or `/v1/metrics`.
+- A terminal `/v1/traces`, including one below a path prefix, is replaced with
+  the signal path. Query parameters are preserved.
+- A gRPC endpoint reuses its authority without path rewriting.
+- A trace endpoint with any other custom path cannot be derived. Configure
+  signal endpoints explicitly in that case.
+
+An explicit nonempty signal endpoint list replaces derivation. Relay preserves
+an explicit custom signal path exactly, but rejects an obvious standard path
+for another signal, such as `/v1/traces` in a log endpoint. An explicit empty
+list is invalid when the signal is enabled.
+
+The following example sends logs to a custom intake path while metrics continue
+to derive from the trace endpoint:
+
+```toml
+[components.config.opentelemetry.logs]
+enabled = true
+
+[[components.config.opentelemetry.logs.endpoints]]
+endpoint = "https://collector.example/custom/log-intake"
+transport = "http_binary"
+service_name = "agent-service"
+
+[components.config.opentelemetry.metrics]
+enabled = true
+```
+
+The signal endpoint fields are `endpoint`, `transport`, `headers`,
+`header_env`, `resource_attributes`, `service_name`, `service_namespace`,
+`service_version`, `instrumentation_scope`, and `timeout_millis`. Their defaults
+match the corresponding trace fields. Each signal rejects duplicate
+destinations within that signal. Logs, metrics, and traces can share the same
+authority because OTLP treats them as different signals.
+
+## Trace Batch Processor Configuration
+
+Configure batch processing independently on each endpoint with
+`max_queue_size`, `max_export_batch_size`, and `scheduled_delay_millis`.
+When an endpoint omits a field, the corresponding standard OpenTelemetry
+environment variable applies process-wide. If neither is set, the SDK default
+applies.
+
+The precedence for each setting is endpoint value, then environment variable,
+then SDK default. Set environment variables before the plugin activates.
+
+| Variable | Default | Notes |
+|---|---:|---|
+| `OTEL_BSP_MAX_QUEUE_SIZE` | `2048` | Maximum completed spans buffered per endpoint. |
+| `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` | `512` | Maximum spans exported in one batch; capped at the queue size. |
+| `OTEL_BSP_SCHEDULE_DELAY` | `5000` ms | Maximum delay before exporting a non-full batch. |
+
+Endpoint values must be positive integers. If both endpoint size fields are
+set, `max_export_batch_size` must not exceed `max_queue_size`. When one size is
+inherited, the SDK caps the effective batch size at the effective queue size.
+The SDK falls back to its default for malformed environment values. Queue and
+batch sizes count spans, not bytes.
+
+## Completed Scope Lineage Retention
+
+Trace endpoints retain a completed scope's trace and parent span context for
+`completed_span_context_ttl_millis` after its scope-end event. A late mark in
+that window remains attached to the original trace and parent span. When the
+TTL expires, Relay emits subsequent marks as orphan spans and records the
+`otel.completed_span_context_expired` runtime diagnostic when it purges expired
+contexts.
+
+Keep closed scope handles only for short deferred follow-up work. Prefer
+emitting an event before the scope closes, or create a new active scope for
+later work. Increasing the TTL retains more completed contexts: memory grows
+with the completed-scope rate, TTL, and number of configured trace endpoints.
+
+OTLP logs use the same TTL-based completed-scope lineage behavior. Configure
+`opentelemetry.logs.completed_span_context_ttl_millis` independently when log
+export is enabled. Metrics do not retain completed-scope parent context. Do not
+rely on a closed scope handle for long-running follow-up work; emit the mark
+before closing the scope or use an active/new scope instead.
+
+If an endpoint's explicit batch settings are invalid, Relay skips that endpoint
+and records an `observability.invalid_otel_endpoint` configuration warning with
+its `opentelemetry.endpoints[N]` field. Other valid endpoints continue to
+activate. Activation still fails when no trace, log, or metric endpoint can be
+registered.
+
+Relay also skips and logs any trace endpoint that fails during exporter
+construction. This includes malformed collector destinations that cannot be
+detected during configuration validation.
+
+Relay's thread-based batch processor exports serially, so it does not expose
+the SDK's concurrent-export setting. It also does not expose a separate batch
+processor export timeout; use the endpoint's `timeout_millis` to bound each
+OTLP request.
+
+<Warning>
+**Known limitation: OTLP partial success is not reported.** A collector can
+return a successful OTLP response while rejecting individual spans, log
+records, or metric data points. With the vendored OpenTelemetry exporter,
+Relay treats that response as successful: it does not add a runtime diagnostic,
+and `force_flush()` and `shutdown()` can succeed. Monitor collector-side logs
+and rejection metrics when investigating missing telemetry.
+</Warning>
+
+<Warning>
+A full queue drops completed spans instead of applying backpressure to
+application work. Bursts can therefore drop spans that finish late, including
+an enclosing root span, and leave an incomplete trace in the backend.
+
+The OpenTelemetry SDK logs
+`BatchSpanProcessor.SpanDroppingStarted` at warning level when each endpoint
+first drops a span. It suppresses additional first-drop warnings for that
+endpoint to avoid a log storm. During graceful shutdown, it logs
+`BatchSpanProcessor.SpansDropped` with the endpoint processor's exact
+`dropped_span_count` and `max_queue_size`.
+
+For plugin-managed exporters, NeMo Relay also records `otel.spans_dropped` in the
+active plugin report's `runtime_diagnostics`. Its `count` is the exact number
+of dropped spans, `field` identifies the affected
+`opentelemetry.traces[N].endpoint`, and `message` includes the configured
+endpoint origin (scheme, host, and port), without URL credentials, paths, query
+parameters, or fragments. If spans were dropped, clearing the plugin returns a delivery
+failure error and retains the diagnostic for inspection. This error does not
+disable later plugin configuration.
+</Warning>
+
+Increasing an endpoint's `max_queue_size`, or the process-wide
+`OTEL_BSP_MAX_QUEUE_SIZE` fallback, can reduce the risk for a known burst size,
+but a finite queue does not guarantee lossless telemetry. Always clear the
+plugin during graceful shutdown so NeMo Relay can record the final drop count
+and the SDK can attempt to export queued spans.
+
+## Endpoint Capacity and Sizing
+
+NeMo Relay does not impose a maximum number of OpenTelemetry endpoints.
+Each trace, log, or metric endpoint owns an exporter, signal provider,
+processor or reader, and exporter runtime resources. Nothing in those export
+stacks is shared between endpoints. Queue capacity and memory are per endpoint,
+and total export traffic grows with the endpoint count.
+
+Typical deployments need one to three endpoints. Validate configurations with
+tens or hundreds of endpoints against the process limits for threads, memory,
+and network egress before deploying them.
+
+Use `header_env` for secrets so configuration files contain only environment
+variable names. Each variable contains the complete header value. NeMo Relay
+validates variable names without reading their values, then resolves and
+snapshots the values when the plugin activates. Every referenced variable name
+must be nonblank and have no surrounding whitespace. Its value must be set and
+nonblank, with no surrounding whitespace, when the component activates. A header name
+cannot appear in both `headers` and `header_env`, including names that differ
+only by ASCII case. Reactivate the plugin to pick up a changed environment
+value.
+
+Process-global `OTEL_EXPORTER_OTLP_HEADERS`,
+`OTEL_EXPORTER_OTLP_TRACES_HEADERS`, `OTEL_EXPORTER_OTLP_LOGS_HEADERS`, and
+`OTEL_EXPORTER_OTLP_METRICS_HEADERS` are rejected because they cannot be
+isolated between endpoints. Put non-secret values in each endpoint's `headers`
+map and secret variable references in `header_env`.
+
+`full` and `openinference` endpoints retain the legacy mark and attribute-alias
+controls shown above. `gen_ai` is standards-only: it ignores those controls and
+does not emit Relay-private attributes. `semantic_selector` and
+`capture_content` are unsupported.
+
+On a successful tool end span with a present, non-null annotation, the `full`
+and `openinference` projections emit the opaque value as one JSON string
+attribute named `nemo_relay.tool.result.annotation`. Relay does not flatten the
+annotation's application-defined keys. The `gen_ai` projection omits this
+Relay-private attribute.
+
+## Emit Log and Metric Marks
+
+Rust, Python, and Node.js generic mark APIs accept optional `data_schema` and
+`severity` values. Prefer the typed metric helper rather than constructing the
+reserved schema by hand: `metric` in Rust, Python, and Node.js. The helper
+validates the complete measurement group before publishing the mark. The
+exporter validates the sanitized payload again before recording any measurement.
+
+The following examples emit one warning log mark and one metric mark:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay import LogSeverity, MetricKind, MetricMeasurement, MetricValueType
+from nemo_relay import scope
+
+scope.event(
+    "budget-nearly-exhausted",
+    data={"remaining_tokens": 128},
+    severity=LogSeverity.Warn,
+)
+
+scope.metric(
+    "tokenomics",
+    [
+        MetricMeasurement(
+            "example.tokens.saved",
+            MetricKind.Counter,
+            MetricValueType.U64,
+            42,
+            unit="{token}",
+            description="Tokens avoided",
+            attributes={"model": "example-model"},
+        )
+    ],
+)
+```
+</Tab>
+<Tab title="Node.js" language="javascript">
+```javascript
+const {
+  event,
+  metric,
+  LogSeverity,
+  MetricKind,
+  MetricValueType,
+} = require("nemo-relay-node");
+
+event(
+  "budget-nearly-exhausted",
+  null,
+  { remaining_tokens: 128 },
+  null,
+  null,
+  null,
+  LogSeverity.Warn,
+);
+
+metric("tokenomics", [{
+  name: "example.tokens.saved",
+  kind: MetricKind.Counter,
+  valueType: MetricValueType.U64,
+  value: 42,
+  unit: "{token}",
+  description: "Tokens avoided",
+  attributes: { model: "example-model" },
+}]);
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::api::{
+    event::{LogSeverity, MetricKind, MetricMeasurement, MetricValueType},
+    scope::{self, EmitMarkEventParams, EmitMetricEventParams},
+};
+use serde_json::json;
+
+scope::event(
+    EmitMarkEventParams::builder()
+        .name("budget-nearly-exhausted")
+        .data(json!({"remaining_tokens": 128}))
+        .severity(LogSeverity::Warn)
+        .build(),
+)?;
+
+scope::metric(
+    EmitMetricEventParams::builder()
+        .name("tokenomics")
+        .measurements(vec![
+            MetricMeasurement::builder()
+                .name("example.tokens.saved")
+                .kind(MetricKind::Counter)
+                .value_type(MetricValueType::U64)
+                .value(json!(42_u64))
+                .unit("{token}")
+                .description("Tokens avoided")
+                .attributes(json!({"model": "example-model"}))
+                .build(),
+        ])
+        .build(),
+)?;
+```
+</Tab>
+</Tabs>
+
+Mark sanitizers run for both calls. Routing uses the immutable `data_schema`
+after sanitization, and a metric mark never falls back to the log pipeline.
+
+## Log Export
+
+The log pipeline exports one OTLP `LogRecord` for each sanitized non-metric
+mark. Marks with `data_schema = null` and marks with an application-defined
+schema are logs. Any mark that uses the reserved
+`nemo.relay.metric_measurements` schema name is routed away from logs,
+including unsupported schema versions and invalid metric payloads. Scope start
+and end events update the lineage used for correlation but do not become log
+records.
+
+Use the typed severity argument on the generic mark API. Relay stores it in
+sanitizer-visible metadata as `nemo_relay.log.severity`. The typed argument
+overrides that metadata key and requires metadata to be an object. After mark
+sanitizers run, Relay parses the remaining key, defaults an absent key to
+`info`, and drops a log record with an invalid value. Supported values are
+`trace`, `debug`, `info`, `warn`, and `error`; `warning` is accepted as an
+alias for `warn`.
+
+The `logs` section applies these processing settings to every log endpoint:
+
+| Field | Default | Notes |
+|---|---|---|
+| `minimum_severity` | `info` | Independent telemetry-log threshold. It does not inherit process logging settings. |
+| `max_queue_size` | `2048` | Maximum queued log records. |
+| `max_export_batch_size` | `512` | Maximum records in one batch; must not exceed the queue size. |
+| `scheduled_delay_millis` | `1000` | Maximum delay before exporting a partial batch. |
+| `completed_span_context_ttl_millis` | `60000` | Positive duration for retaining completed scope parent context for late logs. Contexts exactly at the TTL boundary remain linked. |
+
+Relay maps the event timestamp to the log timestamp and post-sanitization
+processing time to the observed timestamp. Sanitized `data` becomes the
+structured body. An absent or top-level JSON `null` payload has no body; a
+nested JSON `null` becomes the string `"null"` because OTLP `AnyValue` has no
+null variant.
+
+The log attributes preserve the mark name, UUID, optional parent UUID,
+category and category profile, schema, sanitized metadata, and ATOF version
+under `nemo_relay.*` keys. A mark in a resolvable active or completed scope
+receives trace and span context. An orphan mark receives no invented trace
+context. Relay leaves OTLP `event_name` unset with the currently vendored
+OpenTelemetry SDK (`0.32`) and retains the dynamic name in
+`nemo_relay.mark.name`.
+
+<Warning>
+Telemetry logs are separate from NeMo Relay's operational stderr and file
+logging. `minimum_severity` does not inherit `NEMO_RELAY_LOG`, and operational
+diagnostics are not fed back into ATOF or OTLP.
+</Warning>
+
+## Metric Export
+
+The metric pipeline consumes only sanitized marks with this exact schema:
+
+```json
+{
+  "data_schema": {
+    "name": "nemo.relay.metric_measurements",
+    "version": "1"
+  },
+  "data": {
+    "measurements": [
+      {
+        "name": "example.tokens.saved",
+        "kind": "counter",
+        "value_type": "u64",
+        "value": 42,
+        "unit": "{token}",
+        "description": "Tokens avoided",
+        "attributes": {"model": "example-model"},
+        "boundaries": null
+      }
+    ]
+  }
+}
+```
+
+A mark with the reserved schema name and an unsupported version or invalid
+payload is dropped from both logs and metrics. Relay emits a rate-limited
+operational diagnostic without creating another ATOF or OTLP event.
+
+The `measurements` array is required and nonempty, and unknown fields are
+rejected. Each measurement is an SDK recording operation, not a pre-aggregated
+OTLP point:
+
+| Kind | Allowed `value_type` | Recording Semantics |
+|---|---|---|
+| `counter` | `u64`, or nonnegative finite `f64` | Addition |
+| `up_down_counter` | `i64`, or finite `f64` | Signed addition |
+| `gauge` | `u64`, `i64`, or finite `f64` | Current value |
+| `histogram` | `u64`, or finite `f64` | Distribution sample |
+
+Unsigned values must not exceed `i64::MAX`, which prevents loss in the pinned
+OTLP conversion. Metric names must be 1 to 255 ASCII bytes, start with a letter,
+and contain only letters, digits, `_`, `.`, `-`, or `/`. Units must be ASCII
+and at most 63 bytes. Optional histogram boundaries can include negative
+values, but every boundary must be finite, strictly increasing, unique, and the
+list can contain at most 64 entries.
+
+Attributes can contain strings, Booleans, signed integers, finite doubles, and
+homogeneous nonempty arrays of those primitive types. Blank keys, nulls,
+nested objects, mixed arrays, and unsigned integers above `i64::MAX` are
+invalid. Do not use event UUIDs, timestamps, metadata, trace IDs, or other
+high-cardinality values as metric attributes.
+
+Relay treats the complete mark atomically. It records no measurements from the
+mark when a measurement is invalid, an instrument descriptor conflicts, or an
+instrument limit would be exceeded. Instrument names compare
+case-insensitively, and a name must retain its kind, numeric type, unit,
+description, and histogram boundaries for the lifetime of that destination.
+
+The `metrics` section applies these settings to every metric endpoint:
+
+| Field | Default | Notes |
+|---|---|---|
+| `export_interval_millis` | `60000` | Periodic collection interval. |
+| `temporality` | `cumulative` | `cumulative`, `delta`, or `low_memory`. |
+| `max_instruments` | `256` | Retained instrument descriptors per destination. |
+| `cardinality_limit` | `2000` | SDK series limit per instrument. |
+
+Metric points use SDK collection timestamps. The currently vendored
+OpenTelemetry SDK (`0.32`) cannot preserve the source mark timestamp or attach
+a trace-linked exemplar through this path. Relay does not emulate correlation
+with high-cardinality attributes.
+
+## GenAI Projection
+
+The `gen_ai` endpoint uses these operation names:
+
+| Relay scope | OpenTelemetry operation |
+|---|---|
+| Agent | `invoke_agent` |
+| LLM | `chat`, `generate_content`, or `text_completion` |
+| Tool | `execute_tool` |
+| Embedder | `embeddings` |
+| Retriever | `retrieval` |
+
+Marks are omitted. Relay scope types without GenAI semantics are emitted as
+minimal internal spans so that the original span parentage is preserved. This
+projection never emits `nemo_relay.*` fields. LLM spans include the
+`gen_ai.system_instructions`, `gen_ai.input.messages`, and
+`gen_ai.output.messages` attributes as JSON strings that follow the
+OpenTelemetry GenAI schemas. Each attribute is emitted only when its normalized
+instructions, messages, or response content is present. Redact sensitive
+content with an LLM or event sanitizer. Tool and retrieval payloads are not
+exported. Set top-level `enable_full_payloads = true` to retain complete
+sanitized LLM request history on every start span.
+
+### Error Type Mapping
+
+For managed LLM, tool, and stream failures, NeMo Relay maps structured
+`FlowError` values to the OpenTelemetry `error.type` attribute:
+
+| Relay error | `error.type` |
+|---|---|
+| `AlreadyExists` | `already_exists` |
+| `NotFound` | `not_found` |
+| `InvalidArgument` | `invalid_argument` |
+| `ScopeStackEmpty` | `scope_stack_empty` |
+| `GuardrailRejected` | `guardrail_rejected` |
+| Upstream connection failure | `connection_error` |
+| Upstream timeout | `timeout` |
+| Upstream retryable status | `retryable_status` |
+| Upstream context-window failure | `context_window` |
+| Upstream model unavailable | `model_unavailable` |
+| Upstream authentication failure | `authentication` |
+| Upstream invalid request | `invalid_request` |
+| Other upstream failure | `upstream_error` |
+| `Internal` | `internal_error` |
+| Binding callback exception | `internal_error` |
+
+External application and callback exceptions that do not have a more specific
+`FlowError` classification emit `internal_error`. Python and JavaScript callback
+boundaries also preserve the exception class separately, and both the `full`
+and `gen_ai` projections emit an `exception` span event with `exception.type`.
+NeMo Relay does not inspect error messages to recover exception class names.
+When an errored parent span has no useful classification of its own, it
+inherits the failed descendant's `error.type` and exception type. When no
+structured `FlowError` is available, such as a cancellation or dropped
+execution, the projection emits `_OTHER`. Caller-provided `error.type` and
+`exception.type` metadata take precedence over values derived from `FlowError`.
+
+`FlowError` is an exhaustive Rust enum. Rust callers upgrading to this release
+must handle the new `CallbackException` variant in exhaustive matches. It maps
+to the same internal status as `Internal`, while retaining `exception_type` for
+observability projection.
+
+## Direct Subscribers
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay import OpenTelemetryConfig, OpenTelemetrySubscriber
+
+config = OpenTelemetryConfig(
+    "gen_ai",
+    "http://localhost:4318/v1/traces",
+)
+config.service_name = "agent-service"
+subscriber = OpenTelemetrySubscriber(config)
+```
+</Tab>
+<Tab title="Node.js" language="javascript">
+```javascript
+const { OpenTelemetrySubscriber } = require("nemo-relay-node");
+
+const subscriber = new OpenTelemetrySubscriber({
+  type: "gen_ai",
+  endpoint: "http://localhost:4318/v1/traces",
+  serviceName: "agent-service",
+});
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::observability::OpenTelemetryType;
+use nemo_relay::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
+
+let config = OpenTelemetryConfig::new(
+    OpenTelemetryType::GenAi,
+    "http://localhost:4318/v1/traces",
+)
+.with_service_name("agent-service");
+let subscriber = OpenTelemetrySubscriber::new(config)?;
+```
+</Tab>
+</Tabs>
+
+The log and metric equivalents are `OpenTelemetryLogConfig` with
+`OpenTelemetryLogSubscriber`, and `OpenTelemetryMetricConfig` with
+`OpenTelemetryMetricSubscriber`. Each config takes one required endpoint and
+exposes the signal settings documented above. Bare OTLP/HTTP authorities gain
+the corresponding standard signal path. Rust, Python, and Node.js expose the
+same three independently managed subscriber kinds. The C FFI remains
+experimental and source-first.
+
+Direct construction creates one independently managed exporter. Register the
+subscriber before instrumented work. During graceful teardown, deregister it,
+call the binding's force-flush method (`force_flush()` or `forceFlush()`), and
+then call `shutdown()`. Force flush first crosses Relay's subscriber barrier
+and then flushes the provider. Log shutdown drains the batch queue. Metric
+shutdown performs the reader's final collection; it does not add a second
+metric flush. For direct trace and log subscribers, a successful force flush
+updates `runtime_diagnostics()` with any batch queue drops observed so far; the
+diagnostic count remains cumulative through later flushes and shutdown.
+
+### Log and Metric Subscriber Lifecycle
+
+The following examples create and register direct log and metric subscribers,
+inspect runtime diagnostics, and perform graceful teardown.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay import (
+    OpenTelemetryLogConfig,
+    OpenTelemetryLogSubscriber,
+    OpenTelemetryMetricConfig,
+    OpenTelemetryMetricSubscriber,
+)
+
+logs = OpenTelemetryLogSubscriber(
+    OpenTelemetryLogConfig("http://localhost:4318/v1/logs")
+)
+metrics = OpenTelemetryMetricSubscriber(
+    OpenTelemetryMetricConfig("http://localhost:4318/v1/metrics")
+)
+logs.register("otlp-logs")
+metrics.register("otlp-metrics")
+try:
+    # Run instrumented work here.
+    for diagnostic in logs.runtime_diagnostics().entries:
+        print(diagnostic.code, diagnostic.message)
+finally:
+    logs.deregister("otlp-logs")
+    logs.force_flush()
+    logs.shutdown()
+    metrics.deregister("otlp-metrics")
+    metrics.force_flush()
+    metrics.shutdown()
+```
+</Tab>
+<Tab title="Node.js" language="javascript">
+```javascript
+const {
+  OpenTelemetryLogSubscriber,
+  OpenTelemetryMetricSubscriber,
+} = require("nemo-relay-node");
+
+const logs = new OpenTelemetryLogSubscriber({
+  endpoint: "http://localhost:4318/v1/logs",
+});
+const metrics = new OpenTelemetryMetricSubscriber({
+  endpoint: "http://localhost:4318/v1/metrics",
+});
+logs.register("otlp-logs");
+metrics.register("otlp-metrics");
+try {
+  // Run instrumented work here.
+  for (const diagnostic of logs.runtimeDiagnostics()) {
+    console.error(diagnostic.code, diagnostic.message);
+  }
+} finally {
+  logs.deregister("otlp-logs");
+  logs.forceFlush();
+  logs.shutdown();
+  metrics.deregister("otlp-metrics");
+  metrics.forceFlush();
+  metrics.shutdown();
+}
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::observability::{
+    otel_logs::{OpenTelemetryLogConfig, OpenTelemetryLogSubscriber},
+    otel_metrics::{OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber},
+};
+
+let logs = OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new(
+    "http://localhost:4318/v1/logs",
+))?;
+let metrics = OpenTelemetryMetricSubscriber::new(OpenTelemetryMetricConfig::new(
+    "http://localhost:4318/v1/metrics",
+))?;
+logs.register("otlp-logs")?;
+metrics.register("otlp-metrics")?;
+
+// Run instrumented work here.
+for diagnostic in logs.runtime_diagnostics().entries() {
+    eprintln!("{}: {}", diagnostic.code, diagnostic.message);
+}
+
+logs.deregister("otlp-logs")?;
+logs.force_flush()?;
+logs.shutdown()?;
+metrics.deregister("otlp-metrics")?;
+metrics.force_flush()?;
+metrics.shutdown()?;
+```
+</Tab>
+</Tabs>
+
+Every direct trace, log, and metric subscriber exposes a bounded runtime
+diagnostics snapshot: `runtime_diagnostics()` in Rust and Python,
+`runtimeDiagnostics()` in Node.js. It reports each runtime condition's stable
+code, occurrence count, and most recent message. C FFI callers use
+`nemo_relay_otel_subscriber_runtime_diagnostics_json`,
+`nemo_relay_otel_log_subscriber_runtime_diagnostics_json`, or
+`nemo_relay_otel_metric_subscriber_runtime_diagnostics_json`. Each writes a
+caller-owned bounded JSON array of diagnostic entries that the caller must
+release with `nemo_relay_string_free`. Use diagnostics to monitor rejected
+metric marks, capacity limits, and delivery failures without configuring the
+observability plugin. The plugin continues to include the same conditions in
+its runtime report.
+
+## Migrating from Version 3 to Version 4
+
+Version 4 adds the sibling `opentelemetry.logs` and
+`opentelemetry.metrics` sections. For the complete upgrade path and
+programmatic configuration, see
+[Migrating from Version 3 to Version 4](/configure-plugins/observability/configuration#migrating-from-version-3-to-version-4).
+
+## Version 2 to Version 3
+
+Version 3 replaces the separate version-2 sections:
+
+- Move the old `opentelemetry` fields into one endpoint with `type = "full"`.
+- Move the old `openinference` fields into the same section with
+  `type = "openinference"`.
+- Use `type = "gen_ai"` for standardized GenAI-only output.
+
+Version-2 OTLP section shapes are rejected when `version = 3`; NeMo Relay does
+not silently normalize them. For complete before-and-after configuration and
+binding API changes, refer to
+[Observability Configuration](/configure-plugins/observability/configuration#migrating-from-version-2).

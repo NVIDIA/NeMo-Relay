@@ -1,0 +1,33 @@
+---
+title: "Function register_subscriber"
+sidebar-title: "register_subscriber"
+description: "Register a global lifecycle event subscriber."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_subscriber(\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    callback: <a href=\"../runtime/callbacks/type-eventsubscriberfn\">EventSubscriberFn</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Register a global lifecycle event subscriber.
+
+The subscriber is added to the process-wide registry and receives every emitted scope, tool, LLM, and mark event until it is deregistered.
+
+## Parameters
+
+- `name`: Unique subscriber name in the global registry.
+- `callback`: Subscriber callback invoked for each emitted event.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) that is `Ok(())` when the subscriber was registered.
+
+## Errors
+
+Returns [`FlowError::AlreadyExists`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when another global subscriber is already registered under the same name.
+
+## Notes
+
+Global subscribers remain active across scopes until explicitly removed. Native event-producing APIs enqueue subscriber work and return without waiting for callbacks.

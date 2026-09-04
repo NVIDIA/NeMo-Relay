@@ -1,0 +1,16 @@
+---
+title: "Type Alias Nemo Relay Metric Kind"
+sidebar-title: "NemoRelayMetricKind"
+description: "Integer-backed OpenTelemetry instrument kind for one typed metric measurement."
+position: 90
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type NemoRelayMetricKind = <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>;"}} /></pre>
+
+Integer-backed OpenTelemetry instrument kind for one typed metric measurement.
+
+This is intentionally not a Rust enum because foreign callers can supply any `int32_t` value. Exported functions validate the value before converting it to the core metric kind. Zero is reserved as unspecified so a zero-initialized measurement cannot select a metric kind accidentally.

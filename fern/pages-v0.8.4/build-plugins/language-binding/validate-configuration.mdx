@@ -1,0 +1,336 @@
+---
+title: "Validate Configuration"
+description: "Return equivalent, actionable plugin diagnostics in Rust, Python, and Node.js."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+The example validator treats component configuration as one coherent contract. It
+requires strings and booleans where declared, accepts only `observe` or `enforce` for
+`requests.mode`, requires arrays of strings for block and redaction keys, verifies
+integer priorities, and reports every unknown component-local field under a stable code.
+
+Validation does not open a client, register middleware, emit an event, or alter active
+configuration. Relay validates disabled components too, which lets an operator stage a
+future component and discover its mistakes before rollout.
+
+## Return the Same Diagnostic Shape
+
+The following implementations return the same
+[diagnostic fields](/build-plugins/fundamentals/configuration-and-validation) while
+using each binding's native configuration types:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+def validate_documentation_config(config: dict[str, Any]) -> list[dict[str, str]]:
+    diagnostics: list[dict[str, str]] = []
+    allowed_top_level = {"tag", *GROUP_FIELDS}
+    for key in config.keys() - allowed_top_level:
+        diagnostics.append(_diagnostic(
+            "warning", "unknown_field", key,
+            f"unknown field '{key}' is not supported",
+        ))
+
+    for group, allowed in GROUP_FIELDS.items():
+        value = config.get(group)
+        if value is not None and not isinstance(value, dict):
+            diagnostics.append(_diagnostic(
+                "error", "invalid_config", group,
+                f"{group} must be an object",
+            ))
+            continue
+        if isinstance(value, dict):
+            for key in value.keys() - allowed:
+                field = f"{group}.{key}"
+                diagnostics.append(_diagnostic(
+                    "warning", "unknown_field", field,
+                    f"unknown field '{field}' is not supported",
+                ))
+
+    settings = normalized_config(config)
+    expected_types = {
+        "tag": str,
+        "observe.enabled": bool,
+        "observe.redact_keys": list,
+        "requests.enabled": bool,
+        "requests.mode": str,
+        "requests.blocked_tools": list,
+        "requests.blocked_models": list,
+        "requests.header_name": str,
+        "requests.header_value": str,
+        "requests.priority": int,
+        "requests.break_chain": bool,
+        "execution.enabled": bool,
+        "execution.priority": int,
+        "execution.emit_pending_marks": bool,
+        "runtime.emit_marks": bool,
+        "runtime.emit_isolated_scope": bool,
+    }
+    for field, expected in expected_types.items():
+        group, separator, key = field.partition(".")
+        value = settings[group][key] if separator else settings[group]
+        if type(value) is not expected:
+            diagnostics.append(_diagnostic(
+                "error", "invalid_config", field,
+                f"{field} must be a {expected.__name__}",
+            ))
+    for field in ("observe.redact_keys", "requests.blocked_tools", "requests.blocked_models"):
+        group, key = field.split(".")
+        value = settings[group][key]
+        if isinstance(value, list) and not all(isinstance(item, str) for item in value):
+            diagnostics.append(_diagnostic(
+                "error", "invalid_config", field,
+                f"{field} must contain only strings",
+            ))
+    if isinstance(settings["tag"], str) and not settings["tag"]:
+        diagnostics.append(_diagnostic(
+            "error", "invalid_tag", "tag", "tag must be a non-empty string",
+        ))
+    for field in ("requests.header_name", "requests.header_value"):
+        group, key = field.split(".")
+        if isinstance(settings[group][key], str) and not settings[group][key]:
+            diagnostics.append(_diagnostic(
+                "error", "invalid_header", field, f"{field} must be a non-empty string",
+            ))
+    if settings["requests"]["mode"] not in {"observe", "enforce"}:
+        diagnostics.append(_diagnostic(
+            "error", "unsupported_mode", "requests.mode",
+            "requests.mode must be either observe or enforce",
+        ))
+    return diagnostics
+
+class DocumentationPlugin:
+    def validate(self, config: dict[str, Any]) -> list[dict[str, str]]:
+        return validate_documentation_config(config)
+```
+</Tab>
+<Tab title="Node.js" language="node">
+```js
+function validateDocumentationConfig(config) {
+  const diagnostics = [];
+  const topLevel = new Set(['tag', ...Object.keys(GROUP_FIELDS)]);
+  for (const key of Object.keys(config)) {
+    if (!topLevel.has(key)) {
+      diagnostics.push(diagnostic(
+        'warning', 'unknown_field', key,
+        `unknown field '${key}' is not supported`,
+      ));
+    }
+  }
+  for (const [group, allowed] of Object.entries(GROUP_FIELDS)) {
+    const value = config[group];
+    if (value !== undefined
+        && (value === null || typeof value !== 'object' || Array.isArray(value))) {
+      diagnostics.push(diagnostic(
+        'error', 'invalid_config', group, `${group} must be an object`,
+      ));
+      continue;
+    }
+    for (const key of Object.keys(value ?? {})) {
+      if (!allowed.has(key)) {
+        const field = `${group}.${key}`;
+        diagnostics.push(diagnostic(
+          'warning', 'unknown_field', field,
+          `unknown field '${field}' is not supported`,
+        ));
+      }
+    }
+  }
+  const settings = normalizedConfig(config);
+  const fields = {
+    tag: settings.tag,
+    'observe.enabled': settings.observe.enabled,
+    'observe.redact_keys': settings.observe.redact_keys,
+    'requests.enabled': settings.requests.enabled,
+    'requests.mode': settings.requests.mode,
+    'requests.blocked_tools': settings.requests.blocked_tools,
+    'requests.blocked_models': settings.requests.blocked_models,
+    'requests.header_name': settings.requests.header_name,
+    'requests.header_value': settings.requests.header_value,
+    'requests.priority': settings.requests.priority,
+    'requests.break_chain': settings.requests.break_chain,
+    'execution.enabled': settings.execution.enabled,
+    'execution.priority': settings.execution.priority,
+    'execution.emit_pending_marks': settings.execution.emit_pending_marks,
+    'runtime.emit_marks': settings.runtime.emit_marks,
+    'runtime.emit_isolated_scope': settings.runtime.emit_isolated_scope,
+  };
+  const stringFields = new Set([
+    'tag', 'requests.mode', 'requests.header_name', 'requests.header_value',
+  ]);
+  const arrayFields = new Set([
+    'observe.redact_keys', 'requests.blocked_tools', 'requests.blocked_models',
+  ]);
+  const integerFields = new Set(['requests.priority', 'execution.priority']);
+  for (const [field, value] of Object.entries(fields)) {
+    const valid = stringFields.has(field)
+      ? typeof value === 'string'
+      : arrayFields.has(field)
+        ? Array.isArray(value) && value.every((item) => typeof item === 'string')
+        : integerFields.has(field)
+          ? Number.isInteger(value)
+          : typeof value === 'boolean';
+    if (!valid) {
+      diagnostics.push(diagnostic(
+        'error', 'invalid_config', field, `${field} has the wrong type`,
+      ));
+    }
+  }
+  if (typeof settings.tag === 'string' && settings.tag.length === 0) {
+    diagnostics.push(diagnostic(
+      'error', 'invalid_tag', 'tag', 'tag must be a non-empty string',
+    ));
+  }
+  for (const [field, value] of [
+    ['requests.header_name', settings.requests.header_name],
+    ['requests.header_value', settings.requests.header_value],
+  ]) {
+    if (typeof value === 'string' && value.length === 0) {
+      diagnostics.push(diagnostic(
+        'error', 'invalid_header', field, `${field} must be a non-empty string`,
+      ));
+    }
+  }
+  if (!new Set(['observe', 'enforce']).has(settings.requests.mode)) {
+    diagnostics.push(diagnostic(
+      'error', 'unsupported_mode', 'requests.mode',
+      'requests.mode must be either observe or enforce',
+    ));
+  }
+  return diagnostics;
+}
+
+const documentationPlugin = {
+  validate: validateDocumentationConfig,
+  register(config, context) {
+    const settings = normalizedConfig(config);
+    if (settings.observe.enabled) {
+      context.registerSubscriber('events', (event) => console.log(event.name));
+    }
+  },
+};
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+#[derive(Clone, Deserialize)]
+#[serde(default)]
+struct Settings {
+    tag: String,
+    observe: Observe,
+    requests: Requests,
+    execution: Execution,
+    runtime: Runtime,
+}
+
+fn parse(config: &Map<String, Json>) -> Result<Settings, String> {
+    serde_json::from_value(Json::Object(config.clone()))
+        .map_err(|error| error.to_string())
+}
+
+fn validate_with_policy(
+    &self,
+    config: &Map<String, Json>,
+    policy: &ConfigPolicy,
+) -> Vec<ConfigDiagnostic> {
+    let mut diagnostics = Vec::new();
+    report_unknown_fields(config, policy.unknown_field, &mut diagnostics);
+    let settings = match parse(config) {
+        Ok(settings) => settings,
+        Err(error) => {
+            diagnostics.push(diagnostic(
+                DiagnosticLevel::Error,
+                "invalid_config",
+                None,
+                error,
+            ));
+            return diagnostics;
+        }
+    };
+    if !matches!(settings.requests.mode.as_str(), "observe" | "enforce") {
+        diagnostics.push(diagnostic(
+            DiagnosticLevel::Error,
+            "unsupported_mode",
+            Some("requests.mode"),
+            "requests.mode must be either observe or enforce",
+        ));
+    }
+    if settings.tag.is_empty() {
+        diagnostics.push(diagnostic(
+            DiagnosticLevel::Error,
+            "invalid_tag",
+            Some("tag"),
+            "tag must be a non-empty string",
+        ));
+    }
+    for (field, value) in [
+        ("requests.header_name", &settings.requests.header_name),
+        ("requests.header_value", &settings.requests.header_value),
+    ] {
+        if value.is_empty() {
+            diagnostics.push(diagnostic(
+                DiagnosticLevel::Error,
+                "invalid_header",
+                Some(field),
+                format!("{field} must be a non-empty string"),
+            ));
+        }
+    }
+    diagnostics
+}
+```
+</Tab>
+</Tabs>
+
+The checked implementations continue beyond these excerpts by checking every boolean,
+integer, string, and string-array field. The important ordering is visible here: report
+unknown paths, deserialize or merge defaults, then apply semantic rules to the normalized
+value. A wrong object shape therefore produces a type diagnostic instead of an exception
+that escapes validation.
+
+Rust receives the host `ConfigPolicy` only through `validate_with_policy`. The default
+implementation calls `validate` and preserves existing custom-plugin behavior, so a Rust
+plugin that claims policy-controlled unknown-field diagnostics must override the policy
+method. Python and Node.js component hooks receive only component-local config; their
+example makes its unknown-field policy an explicit part of the implementation contract.
+
+One unsupported value returns equivalent data in every binding:
+
+```json
+{
+  "level": "error",
+  "code": "documentation-plugin.unsupported_mode",
+  "component": "documentation-plugin",
+  "field": "requests.mode",
+  "message": "requests.mode must be either observe or enforce"
+}
+```
+
+## Preflight the Effective Document
+
+Use the following procedure to prove that validation remains separate from activation:
+
+1. Register `documentation-plugin`, then call the binding's list function. Rust uses
+   `list_plugin_kinds`, Python uses `list_kinds`, and Node.js uses `listKinds`. The kind
+   should appear even though no component is active.
+2. Construct a component with `enabled = false` and `requests.mode = "invalid"`. Call
+   `validate_plugin_config`, `plugin.validate`, or `plugin.validate`. Confirm the report
+   contains `documentation-plugin.unsupported_mode` and that the active report remains
+   unchanged.
+3. Correct the mode, give `requests.priority` a string, and confirm the error identifies
+   that field. Restore the integer, add an unknown key, and confirm that the Python and
+   Node.js examples return their documented warning while the Rust example follows the
+   supplied `ConfigPolicy`.
+4. Validate the shared correct configuration. The report should have no error-level
+   diagnostics.
+5. Remember that `initialize` also layers discovered `plugins.toml` configuration. In a
+   deployment that uses [file discovery](/configure-plugins/plugin-configuration-files),
+   validate the effective startup source rather than assuming an isolated in-memory
+   report describes the final activation.
+
+Success means every binding catches the same invalid values before registration, a
+disabled component remains visible to validation, diagnostics are stable enough for
+automation, and the valid configuration proceeds to registration without a second
+interpretation of its fields.

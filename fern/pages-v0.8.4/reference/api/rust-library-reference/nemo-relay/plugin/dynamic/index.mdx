@@ -1,0 +1,73 @@
+---
+title: "Module dynamic"
+sidebar-title: "dynamic"
+description: "Dynamic plugin control-plane and registry model."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Dynamic plugin control-plane and registry model.
+
+This module owns the durable control-plane record shape for dynamic plugins. Authored manifest parsing/validation and in-memory registry mutation logic live in dedicated submodules so those responsibilities do not accumulate in one file as the feature grows.
+
+## Structs
+
+- [DynamicPluginActivationSpec](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginactivationspec): One dynamic plugin component to load and activate in an embedding host.
+- [DynamicPluginFailure](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginfailure): One structured recent failure summary.
+- [DynamicPluginManifest](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginmanifest): Authored `relay-plugin.toml` manifest.
+- [DynamicPluginManifestCapabilities](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginmanifestcapabilities): Capability declarations for authored manifests.
+- [DynamicPluginManifestCompat](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginmanifestcompat): Compatibility block for `relay-plugin.toml`.
+- [DynamicPluginManifestConfigSchema](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginmanifestconfigschema): Static configuration schema block for authored manifests.
+- [DynamicPluginManifestDefaults](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginmanifestdefaults): Defaults block for authored manifests.
+- [DynamicPluginManifestIntegrity](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginmanifestintegrity): Integrity/authenticity evidence block for authored manifests.
+- [DynamicPluginManifestPlugin](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginmanifestplugin): Plugin identity block for `relay-plugin.toml`.
+- [DynamicPluginManifestRustDynamicLoad](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginmanifestrustdynamicload): Native shared-library authored load block.
+- [DynamicPluginManifestSource](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginmanifestsource): Source block for authored manifests.
+- [DynamicPluginManifestWorkerLoad](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginmanifestworkerload): Worker lane authored load block.
+- [DynamicPluginMetadata](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginmetadata): Stable metadata for one durable plugin record.
+- [DynamicPluginRecord](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginrecord): Durable control-plane record for a dynamic plugin.
+- [DynamicPluginRegistry](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginregistry): In-memory dynamic plugin registry used by the control plane.
+- [DynamicPluginRuntimeStatus](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginruntimestatus): Observed runtime state for one plugin record.
+- [DynamicPluginRustCompatibility](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginrustcompatibility): Compatibility contract for native shared libraries.
+- [DynamicPluginRustLoadContract](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginrustloadcontract): Lane-specific load contract for native shared libraries.
+- [DynamicPluginSource](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginsource): Source and resolved artifact facts for a plugin.
+- [DynamicPluginSpec](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginspec): Desired-state fields owned by user-facing operations.
+- [DynamicPluginStatus](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginstatus): Durable observed state for a plugin record.
+- [DynamicPluginValidationStatus](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginvalidationstatus): Decomposed validation results for one plugin record.
+- [DynamicPluginWorkerCompatibility](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginworkercompatibility): Compatibility contract for worker plugins.
+- [DynamicPluginWorkerLoadContract](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginworkerloadcontract): Lane-specific load contract for worker plugins.
+- [NativePluginActivation](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-nativepluginactivation): Owns native dynamic libraries registered into the plugin registry.
+- [NativePluginLoadSpec](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-nativepluginloadspec): Native plugin load request derived from host dynamic-plugin state.
+- [PluginHostActivation](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-pluginhostactivation): Owns one process-wide dynamic plugin configuration and its loaded runtimes.
+- [WorkerPluginActivation](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-workerpluginactivation): Owns gRPC worker processes registered into the plugin registry.
+- [WorkerPluginLoadSpec](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-workerpluginloadspec): Worker plugin load request derived from host dynamic-plugin state.
+
+## Enums
+
+- [DynamicPluginAttestationMode](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginattestationmode): Host attestation policy mode.
+- [DynamicPluginCapability](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicplugincapability): Relay-enforced capability declared by a dynamic plugin.
+- [DynamicPluginCheckState](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicplugincheckstate): High-level verification state for one validation axis.
+- [DynamicPluginCompatibility](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicplugincompatibility): Lane-specific compatibility declarations and resolved compatibility facts.
+- [DynamicPluginFailurePhase](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginfailurephase): Recent failure phase for diagnostics and operator UX.
+- [DynamicPluginKind](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginkind): Plugin execution lane.
+- [DynamicPluginLoadContract](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginloadcontract): Runtime entry contract for the resolved plugin.
+- [DynamicPluginManifestLoad](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginmanifestload): Load block for authored manifests.
+- [DynamicPluginRuntimeState](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginruntimestate): Observed runtime state for a dynamic plugin.
+- [DynamicPluginStartupClass](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginstartupclass): Host policy startup classification for a plugin.
+- [WorkerRuntime](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-workerruntime): Managed runtime identity for worker-based plugins.
+
+## Constants
+
+- [DYNAMIC_PLUGIN_MANIFEST_FILENAME](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/constant-dynamic-plugin-manifest-filename): Canonical filename for authored Relay plugin manifests.
+
+## Functions
+
+- [load_native_plugins](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-load-native-plugins): Loads native dynamic plugins and registers their plugin kinds.
+- [load_worker_plugins](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-load-worker-plugins): Loads gRPC worker plugins and registers their plugin kinds.
+
+## Type Aliases
+
+- [DynamicPluginId](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/type-dynamicpluginid): Canonical identifier for one dynamic plugin record.

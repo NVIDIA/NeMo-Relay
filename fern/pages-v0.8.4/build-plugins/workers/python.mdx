@@ -1,0 +1,215 @@
+---
+title: "Python Worker"
+description: "Build, package, activate, verify, and remove the checked Python worker."
+position: 31
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+The `examples/python-grpc-worker-plugin` package uses the 0.8.0
+`nemo-relay-plugin` SDK and the shared documentation configuration. Its worker registers
+all 16 [surfaces](/build-plugins/workers/middleware-and-continuations), accepts
+synchronous and asynchronous callback forms where the
+Python SDK permits them, and relies on the SDK for protobuf stubs, the authenticated
+server, and cooperative task cancellation.
+
+## Test the Package
+
+Run the package's atomic tests before creating a managed environment:
+
+1. Enter the example directory and run its self-contained test project.
+
+   ```bash
+   cd examples/python-grpc-worker-plugin
+   uv run --locked --group test pytest
+   ```
+
+   Every test creates its own worker instance and mock host context, and any one test can
+   be selected by node ID without running the rest of the suite. The tests separate
+   configuration, JSON Schema, source digest, wheel packaging, registration metadata,
+   sanitizers, policies, request outcomes, continuations, streams, and runtime cleanup.
+   A digest mismatch is a packaging failure, not an activation warning.
+
+## Define the Installable Python Package
+
+Relay creates the managed environment from the package root named by the
+[manifest](/build-plugins/package-discoverable-plugins). A
+minimal `pyproject.toml` therefore needs a standard build backend, a package, and the
+0.8 worker SDK dependency:
+
+```toml
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nemo-relay-python-grpc-worker-example"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["nemo-relay-plugin>=0.8.0"]
+
+[dependency-groups]
+test = ["pytest>=8", "pytest-asyncio>=0.26"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nemo_relay_python_grpc_worker_example"]
+```
+
+The module entrypoint is an async function, not a server factory or a prebound port.
+Relay supplies the authenticated endpoint and activation credentials when it starts the
+managed command.
+
+## Configure the Snapshot Location
+
+Relay copies the worker runtime closure into an isolated activation snapshot before
+starting the worker. Set `NEMO_RELAY_PLUGIN_SNAPSHOT_DIR` in the environment that starts
+Relay to use a directory of your choice; Relay creates it when it does not exist. Choose a
+location outside every directory copied into a snapshot, including active plugin packages and
+external entrypoint directories:
+
+```powershell
+$env:NEMO_RELAY_PLUGIN_SNAPSHOT_DIR = "C:\\nrs"
+```
+
+```bash
+export NEMO_RELAY_PLUGIN_SNAPSHOT_DIR=/var/tmp/nrs
+```
+
+```python
+from nemo_relay_plugin import DiagnosticLevel, WorkerPlugin, serve_plugin
+
+class ExamplePythonWorker(WorkerPlugin):
+    plugin_id = "examples.python_grpc_worker"
+    allows_multiple_components = False
+
+    def validate(self, config):
+        return validate_config(config)
+
+    def register(self, ctx, config):
+        diagnostics = validate_config(config)
+        errors = [
+            item for item in diagnostics
+            if item.level == DiagnosticLevel.ERROR
+        ]
+        if errors:
+            raise ValueError(errors[0].message)
+        settings = normalized_config(config)
+        if settings["observe"]["enabled"]:
+            self._register_observation(
+                ctx, settings["tag"], settings["observe"]
+            )
+        if settings["requests"]["enabled"]:
+            self._register_requests(
+                ctx,
+                settings["tag"],
+                settings["requests"],
+                settings["execution"],
+            )
+        self._register_runtime(ctx, settings["tag"], settings["runtime"])
+        if settings["execution"]["enabled"]:
+            self._register_execution(ctx, settings["tag"], settings["execution"])
+
+async def main():
+    await serve_plugin(ExamplePythonWorker())
+```
+
+Relay calls validation before registration, but `register` still rejects invalid direct
+use instead of assuming every possible host followed the expected sequence.
+
+The corresponding manifest tells Relay to install this directory and import `main` from
+the installed module. Calculate the `<worker-source-sha256>` placeholder from the current
+`worker.py`; changing that file requires a new digest.
+
+```toml
+manifest_version = 1
+
+[plugin]
+id = "examples.python_grpc_worker"
+kind = "worker"
+
+[compat]
+relay = ">=0.8.0,<1.0"
+worker_protocol = "grpc-v1"
+
+[capabilities]
+items = ["plugin_worker", "config_schema"]
+
+[config_schema]
+path = "config.schema.json"
+
+[source]
+manifest_root = "."
+artifact = "nemo_relay_python_grpc_worker_example/worker.py"
+
+[integrity]
+sha256 = "sha256:<worker-source-sha256>"
+
+[load]
+runtime = "python"
+entrypoint = "nemo_relay_python_grpc_worker_example.worker:main"
+```
+
+The manifest uses `relay = ">=0.8.0,<1.0"` because Relay 0.8 changes the `grpc-v1`
+[tool-result boundary](/build-plugins/workers/grpc-v1-protocol). `ToolNext.call()`
+returns `ToolExecutionResult`, whose `result`
+contains the application payload and whose optional `annotation` remains adjacent opaque
+metadata. The protocol identifier stays `grpc-v1`, but workers built against earlier
+generated bindings cannot decode the current structural result messages.
+
+## Install and Activate the Package
+
+Use the following procedure to install the package into Relay's managed environment and
+start the worker:
+
+1. From `examples/python-grpc-worker-plugin`, create a clean temporary Relay state and
+   add the manifest.
+
+   ```bash
+   relay_tmp="$(mktemp -d)"
+   relay_config="$relay_tmp/gateway.toml"
+   : > "$relay_config"
+   nemo-relay --config "$relay_config" plugins add ./relay-plugin.toml
+   ```
+
+   `plugins add` creates an isolated managed environment and installs
+   `source.manifest_root` with pip. Set `NEMO_RELAY_PYTHON` only for this add operation
+   when Relay must use a non-default base interpreter. Standard pip index, proxy,
+   certificate, and wheelhouse variables control dependency resolution.
+
+2. Enable the component and start Relay.
+
+   ```bash
+   nemo-relay --config "$relay_config" plugins enable examples.python_grpc_worker
+   nemo-relay --config "$relay_config" --bind 127.0.0.1:4040
+   ```
+
+   The activation report should identify `examples.python_grpc_worker`, and the worker
+   handshake should advertise all 16 supported surfaces.
+
+## Verify Behavior and Clean Up
+
+Use the following procedure to verify each callback family and clean up the managed
+environment:
+
+1. Exercise one allowed and one blocked tool, one allowed and one blocked model, a unary
+   LLM continuation, and a multi-chunk stream. Confirm configured headers, sanitized
+   event fields, preserved annotations, pending marks, and lazy chunk transformation.
+2. Cancel a long-running async callback and abandon a worker stream. Confirm the SDK
+   task receives cancellation and the worker's `finally` cleanup runs. A synchronous
+   callback cannot be preempted, so the example keeps synchronous work bounded.
+3. Emit a mark, use a nested scope, create and bind an isolated stack, then force a
+   failure. Confirm the prior scope context is restored and the stack is dropped.
+4. Stop Relay with `Ctrl+C`, then remove the plugin and delete the temporary state from
+   the shell where `relay_tmp` and `relay_config` remain defined.
+
+   ```bash
+   nemo-relay --config "$relay_config" plugins remove examples.python_grpc_worker
+   rm -rf -- "$relay_tmp"
+   ```
+
+`plugins remove` deletes the Relay-managed environment. Copying a Python worker manifest
+into `plugins.toml` is not an equivalent installation path because no attested environment
+would exist. Success means the managed environment is created and later removed, every
+feature group has an observable call-path result, cancellation cleanup runs, and no
+worker process remains after shutdown.

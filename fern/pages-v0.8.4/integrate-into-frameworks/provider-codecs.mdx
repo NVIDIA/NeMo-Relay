@@ -1,0 +1,486 @@
+---
+title: "Provider Codecs"
+description: ""
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this guide when a framework integration needs NeMo Relay middleware, intercepts, or subscribers to reason about provider-specific LLM payloads through a stable annotated shape.
+
+## What You Build
+
+You will attach request and response codecs to a managed LLM wrapper so that:
+
+- Request intercepts can work with normalized instructions, messages, model names, tools, generation parameters, and tagged provider-specific fields
+- The provider callback still receives the provider payload that the framework expects
+- Response subscribers can receive normalized response annotations without changing the caller-visible provider response
+
+## Before You Start
+
+You need:
+
+- A framework LLM boundary that can call `llm.execute`, `llm.stream_execute`, `llmCallExecute`, `typedLlmExecute`, or `llm_call_execute`.
+- A provider payload that is JSON-compatible.
+- A matching built-in provider codec, or a custom codec that can preserve unmodeled provider fields.
+- Request intercepts or subscribers that benefit from normalized request or response data.
+
+## What Provider Codecs Are
+
+A provider codec is a pure data translator at the NeMo Relay LLM boundary.
+
+- An LLM request codec converts a raw provider request into a normalized annotated request, then encodes any annotated edits back into the original provider request.
+- An LLM response codec converts a raw provider response into a normalized response annotation for lifecycle events.
+
+Provider codecs let framework code keep using provider-native payloads while NeMo Relay middleware works against a shared annotated model. For application-facing type conversion, use [Using Codecs](/integrate-into-frameworks/using-codecs).
+
+## How Provider Codecs Work
+
+When a managed LLM call has a request codec:
+
+1. NeMo Relay calls `decode` before LLM request intercepts run.
+2. Request intercepts receive both the raw request and the annotated request.
+3. Intercepts edit provider-body fields through the annotated request and may
+   edit transport headers through the raw request. Raw `request.content` is
+   read-only while the codec is active.
+4. NeMo Relay calls `encode` to merge the annotated request back into the original raw request.
+5. Execution intercepts and the provider callback receive the encoded provider request.
+
+If a codec-aware intercept changes raw `request.content` or omits the returned
+annotation, Relay rejects the outcome before creating the LLM lifecycle. When
+no request codec is active, the raw request remains fully writable and is the
+provider-visible source of truth.
+
+Gateway interceptors must preserve the request's effective `stream` mode. The
+gateway chooses buffered or streaming response handling before request
+intercepts run and rejects changes between those modes before contacting the
+provider.
+
+When a managed LLM call has a response codec, NeMo Relay decodes the raw provider response for observability and attaches the result to the emitted LLM end event. The response codec does not rewrite the value returned to the application. Use [Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs) for response-only behavior and custom response codec examples.
+
+The built-in codecs guarantee
+`encode(decode(original), original) == original` at the JSON-value level. Their
+encoders compare an edited annotation with a decoded baseline and patch only
+changed fields. As a result, unchanged string-versus-block content, explicit
+nulls, legacy field names, ordered input items, metadata, and unknown fields
+remain untouched. Removing an unknown top-level key from `extra` removes it
+from the provider payload; adding or changing a key overlays it.
+
+Use the annotated request surfaces according to their ownership:
+
+- `instructions` for Anthropic `system` or OpenAI Responses `instructions`.
+- Portable `messages`, content parts, function calls and results, `tools`, and
+  `tool_choice` when the component has shared semantics.
+- Tagged `api_specific` fields for modeled controls that belong to Anthropic
+  Messages, OpenAI Chat Completions, OpenAI Responses, or OCI Generative AI.
+- `{ provider, kind, value }` native components for provider-only input items,
+  blocks, tools, tool choices, and future union members. `value` is the exact
+  provider JSON.
+- Top-level `extra` only for unknown future fields.
+
+Provider-native components are intentionally surface-bound. If an intercept
+places an Anthropic native block in an OpenAI request, or makes a portable edit
+that the target API cannot encode, Relay returns an explicit error before the
+provider callback.
+
+## Built-in Provider Codecs
+
+Use the built-in provider codecs when the framework payload already matches a supported provider API:
+
+- `OpenAIChatCodec`: OpenAI Chat Completions-compatible requests and responses.
+- `OpenAIResponsesCodec`: OpenAI Responses-compatible requests and responses.
+- `AnthropicMessagesCodec`: Anthropic Messages-compatible requests and responses.
+- `OCIGenAIChatCodec`: OCI Generative AI chat-compatible requests and responses
+  in the `GENERIC`, `COHERE`, and `COHEREV2` API formats.
+- `GeminiGenerateContentCodec`: Gemini `generateContent`-compatible requests and responses.
+
+## Provider Codec Roles
+
+Provider codecs have separate request and response roles:
+
+- `LlmCodec` decodes provider-specific requests into an annotated request form and encodes edits back into the provider request.
+- `LlmResponseCodec` decodes raw provider responses into annotated response data for lifecycle events.
+
+The built-in provider codecs expose the same core methods:
+
+| Codec | Python Import | Node.js Import | Methods |
+|---|---|---|---|
+| OpenAI Chat | `nemo_relay.codecs.OpenAIChatCodec` | `OpenAIChatCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
+| OpenAI Responses | `nemo_relay.codecs.OpenAIResponsesCodec` | `OpenAIResponsesCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
+| Anthropic Messages | `nemo_relay.codecs.AnthropicMessagesCodec` | `AnthropicMessagesCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
+| OCI Generative AI chat | `nemo_relay.codecs.OCIGenAIChatCodec` | `OCIGenAIChatCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
+| Gemini `generateContent` | `nemo_relay.codecs.GeminiGenerateContentCodec` | `GeminiGenerateContentCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
+
+Choose the provider codec that matches the payload shape the framework already sends to the provider. Do not translate to a different provider shape only to make the codec fit.
+
+The `nemo-relay` gateway selects the matching request codec automatically on the
+provider generation routes it proxies: `/v1/messages`, `/v1/chat/completions`,
+and `/v1/responses`, for both buffered and streaming calls. Gemini
+`generateContent` and OCI Generative AI chat do not yet have gateway routes,
+so use `GeminiGenerateContentCodec` or `OCIGenAIChatCodec` directly when a
+framework sends those payload shapes. Count-token, model, probe, and non-LLM
+passthrough routes do not use request codecs.
+
+## Example: Add a System Message with a Provider Codec
+
+This example uses a request intercept to edit the normalized request. The codec writes the edited messages back into the provider payload before the provider callback runs.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import nemo_relay
+from nemo_relay import LLMRequest
+from nemo_relay.codecs import OpenAIChatCodec
+
+def add_system_message(_name, request, annotated):
+    if annotated is None:
+        return nemo_relay.LLMRequestInterceptOutcome(request)
+
+    # Attributes of the annotated request can be re-assigned, but cannot be modified in-place.
+    # For example `annotated.messages.append(...)` would not work, but re-assigning
+    # `annotated.messages = annotated.messages + [...]` does work.
+    annotated.messages = [
+        {"role": "system", "content": "Answer with concise technical detail."},
+        *annotated.messages,
+    ]
+    return nemo_relay.LLMRequestInterceptOutcome(request, annotated)
+
+nemo_relay.intercepts.register_llm_request(
+    "framework.add_system_message",
+    10,
+    False,
+    add_system_message,
+)
+
+async def invoke_provider(request: LLMRequest):
+    return {
+        "id": "chatcmpl-demo",
+        "model": request.content["model"],
+        "choices": [
+            {"message": {"role": "assistant", "content": "Codec-enabled response."}},
+        ],
+    }
+
+codec = OpenAIChatCodec()
+request = LLMRequest(
+    {},
+    {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "Explain scopes."}],
+        "temperature": 0.2,
+    },
+)
+
+response = await nemo_relay.llm.execute(
+    "openai-chat",
+    request,
+    invoke_provider,
+    model_name="gpt-4o-mini",
+    codec=codec,
+    response_codec=codec,
+)
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```ts
+import {
+  OpenAIChatCodec,
+  registerLlmRequestIntercept,
+} from 'nemo-relay-node';
+import {
+  JsonPassthrough,
+  typedLlmExecute,
+} from 'nemo-relay-node/typed';
+
+registerLlmRequestIntercept(
+  'framework.add_system_message',
+  10,
+  false,
+  ({ request, annotated }) => {
+    if (!annotated) {
+      return { request, annotated };
+    }
+
+    return {
+      request,
+      annotated: {
+        ...annotated,
+        messages: [
+          { role: 'system', content: 'Answer with concise technical detail.' },
+          ...annotated.messages,
+        ],
+      },
+    };
+  },
+);
+
+const codec = new OpenAIChatCodec();
+const request = {
+  headers: {},
+  content: {
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: 'Explain scopes.' }],
+    temperature: 0.2,
+  },
+};
+
+const response = await typedLlmExecute(
+  'openai-chat',
+  request,
+  async (providerRequest) => ({
+    id: 'chatcmpl-demo',
+    model: providerRequest.content.model,
+    choices: [
+      { message: { role: 'assistant', content: 'Codec-enabled response.' } },
+    ],
+  }),
+  new JsonPassthrough(),
+  {
+    modelName: 'gpt-4o-mini',
+    codec,
+    responseCodec: codec,
+  },
+);
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
+use nemo_relay::codec::openai_chat::OpenAIChatCodec;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use serde_json::json;
+use std::sync::Arc;
+
+let request = LlmRequest {
+    headers: Default::default(),
+    content: json!({
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "Explain scopes."}],
+        "temperature": 0.2
+    }),
+};
+
+let request_codec: Arc<dyn LlmCodec> = Arc::new(OpenAIChatCodec);
+let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
+
+let response = llm_call_execute(
+    LlmCallExecuteParams::builder()
+        .name("openai-chat")
+        .request(request)
+        .func(Arc::new(|provider_request| Box::pin(async move {
+            Ok(json!({
+                "id": "chatcmpl-demo",
+                "model": provider_request.content["model"],
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "Codec-enabled response."
+                    }
+                }]
+            }))
+        })))
+        .model_name("gpt-4o-mini")
+        .codec(request_codec)
+        .response_codec(response_codec)
+        .build(),
+)
+.await?;
+```
+</Tab>
+
+</Tabs>
+
+## Example: Edit Provider-Specific and Native Data
+
+The tagged `api_specific` object is mutable. Python getters return JSON values,
+so retrieve, edit, and reassign the value. The same reassignment pattern works
+for a provider-native component inside `messages`.
+
+```python
+def tune_responses_request(_name, request, annotated):
+    if annotated is None:
+        return nemo_relay.LLMRequestInterceptOutcome(request)
+
+    api_specific = dict(annotated.api_specific or {})
+    if api_specific.get("api") == "openai_responses":
+        api_specific["background"] = True
+        api_specific["stream_options"] = {"include_obfuscation": False}
+        annotated.api_specific = api_specific
+
+    messages = list(annotated.messages)
+    for index, item in enumerate(messages):
+        if (
+            item.get("role") == "provider_native"
+            and item.get("provider") == "openai_responses"
+            and item.get("kind") == "reasoning"
+        ):
+            native_value = dict(item["value"])
+            native_value["encrypted_content"] = "updated-ciphertext"
+            messages[index] = {**item, "value": native_value}
+    annotated.messages = messages
+
+    # request.headers remains mutable; request.content is read-only here.
+    request.headers["x-request-policy"] = "codec-aware"
+    return nemo_relay.LLMRequestInterceptOutcome(request, annotated)
+```
+
+Native values are not normalized across providers. Keep the `provider` tag
+unchanged unless you also replace the entire component with a representation
+that the target codec owns.
+
+## Example: Write a Custom Framework Codec
+
+Use a custom codec when a framework uses a payload shape that does not directly match a built-in provider format. The codec decodes the framework shape into `AnnotatedLLMRequest`, and encodes edits back into the framework shape.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay import AnnotatedLLMRequest, LLMRequest
+from nemo_relay.codecs import LlmCodec
+
+class FrameworkChatCodec(LlmCodec):
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+        content = request.content
+        params = {}
+        if "temperature" in content:
+            params["temperature"] = content["temperature"]
+
+        return AnnotatedLLMRequest(
+            content.get("turns", []),
+            model=content.get("model_name"),
+            params=params or None,
+            tools=content.get("tool_specs"),
+            extra={"tenant_id": content.get("tenant_id")},
+        )
+
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+        content = {
+            **original.content,
+            "turns": annotated.messages,
+        }
+        if annotated.model is not None:
+            content["model_name"] = annotated.model
+        if annotated.params:
+            content.update(annotated.params)
+        if annotated.tools is not None:
+            content["tool_specs"] = annotated.tools
+        return LLMRequest(original.headers, content)
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```ts
+import type { JsonValue, LlmCodec } from 'nemo-relay-node/typed';
+
+type FrameworkRequest = {
+  headers: Record<string, JsonValue>;
+  content: {
+    turns?: JsonValue[];
+    model_name?: string;
+    temperature?: number;
+    tool_specs?: JsonValue;
+    tool_choice?: JsonValue;
+    tenant_id?: string;
+    [key: string]: JsonValue | undefined;
+  };
+};
+
+type AnnotatedRequest = {
+  messages?: JsonValue[];
+  model?: string | null;
+  params?: Record<string, JsonValue> | null;
+  tools?: JsonValue;
+  tool_choice?: JsonValue;
+  extra?: Record<string, JsonValue>;
+};
+
+const frameworkChatCodec: LlmCodec = {
+  decode(requestJson) {
+    const request = requestJson as FrameworkRequest;
+    const content = request.content;
+    return {
+      messages: content.turns ?? [],
+      model: content.model_name ?? null,
+      params: content.temperature === undefined ? null : {
+        temperature: content.temperature,
+      },
+      tools: content.tool_specs ?? null,
+      tool_choice: content.tool_choice ?? null,
+      extra: {
+        tenant_id: content.tenant_id ?? null,
+      },
+    };
+  },
+
+  encode(annotatedJson, originalJson) {
+    const annotated = annotatedJson as AnnotatedRequest;
+    const original = originalJson as FrameworkRequest;
+    const content = {
+      ...original.content,
+      turns: annotated.messages ?? [],
+    };
+    if (annotated.model !== null && annotated.model !== undefined) {
+      content.model_name = annotated.model;
+    }
+    if (annotated.params) {
+      Object.assign(content, annotated.params);
+    }
+    if (annotated.tools) {
+      content.tool_specs = annotated.tools;
+    }
+    return {
+      headers: original.headers,
+      content,
+    };
+  },
+};
+```
+</Tab>
+
+</Tabs>
+
+## Validation Checklist
+
+Use this checklist to confirm the implementation preserves the expected runtime
+contract.
+
+- Intercepts receive `annotated` only when the managed call supplies a request codec.
+- An unchanged annotation encodes to the exact original JSON value.
+- Portable edits preserve adjacent provider-native components and unknown fields.
+- Provider-specific edits use `api_specific`; `extra` is limited to unknown future top-level fields.
+- Provider-mismatched native components fail before the provider callback.
+- Response codecs are used only for event annotations, not caller-visible response rewriting.
+- Codec implementations are pure data transforms and do not perform provider I/O.
+- Framework-owned clients, sockets, streams, callbacks, and file handles stay outside codec results.
+
+## Migrate Raw Gateway Body Mutation
+
+The 0.6 request annotation expansion uses
+`nemo.relay.AnnotatedLlmRequest@2` and
+`nemo.relay.LlmRequestInterceptOutcome@2` at dynamic plugin boundaries. Rebuild
+Rust native plugins and Rust `grpc-v1` workers against NeMo Relay 0.6, and
+update Python workers to the 0.6 worker SDK. That release required a Relay 0.6
+compatibility floor. Relay 0.8 dynamic plugins must instead use
+`compat.relay = ">=0.8.0,<1.0"`, or another range that excludes every earlier
+Relay version. Relay enforces the current floor during manifest and registry
+validation, before loading the plugin.
+
+Gateway interceptors that mutate provider request bodies must now edit the
+annotation on the three generation routes. For example, replace
+`request.content["messages"] = messages` with
+`annotated.messages = messages`, and return the edited annotation with the raw
+request. Keep transport-only changes in `request.headers`. Relay rejects a raw
+body edit while the route codec is active, so the provider never receives an
+ambiguous mix of raw and annotated changes.
+
+## Next Steps
+
+Use these links to continue from this workflow into the next related task.
+
+- Use [Using Codecs](/integrate-into-frameworks/using-codecs) for typed value codecs.
+- Use [Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs) for response-only annotations and subscriber examples.
+- Use [Add Middleware](/instrument-applications/advanced-guide) before adding request transforms.
+- Use [Handle Non-Serializable Data](/integrate-into-frameworks/non-serializable-data) when the framework boundary includes SDK objects or streams that cannot pass through JSON payloads.

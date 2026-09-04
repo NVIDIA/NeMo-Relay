@@ -1,0 +1,56 @@
+---
+title: "Struct Scope Stack"
+sidebar-title: "ScopeStack"
+description: "Host-owned isolated scope stack returned by native scope-stack APIs."
+position: 59
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct ScopeStack<'a> { /* private fields */ }
+```
+
+Host-owned isolated scope stack returned by native scope-stack APIs.
+
+## Implementations
+
+### `impl<'a> ScopeStack<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"struct-scopestack\">ScopeStack</a>&lt;'a&gt;"}} /></pre>
+
+#### `as_ptr`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn as_ptr(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativescopestack\">NemoRelayNativeScopeStack</a>"}} /></pre>
+
+Returns the raw ABI pointer.
+
+#### `set_thread`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn set_thread(&amp;self) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Binds this stack to the current executor thread.
+
+Prefer [`PluginRuntime::bind_scope_stack_thread`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-pluginruntime) for synchronous code. Async middleware may pair this with a captured binding across an await. Capture the previous binding first and restore it after the future completes.
+
+#### `with_current`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_current&lt;F&gt;(&amp;self, f: F) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.FnOnce.html\">FnOnce</a>() -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;,"}} /></pre>
+
+Executes `f` while this stack is visible to host runtime APIs.
+
+## Trait Implementations
+
+### `impl Drop for ScopeStack<'_>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-scopestack\">ScopeStack</a>&lt;'_&gt;"}} /></pre>
+
+#### `drop`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>
+
+### `impl Send for ScopeStack<'_>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> for <a href=\"struct-scopestack\">ScopeStack</a>&lt;'_&gt;"}} /></pre>

@@ -122,16 +122,20 @@ experimental:
 products:
 - display-name: NeMo Relay
   slug: /
-  path: ./versions/v0.8.3.yml
+  path: ./versions/v0.8.4.yml
   versions:
-  - display-name: Latest (v0.8.3)
-    path: ./versions/v0.8.3.yml
+  - display-name: Latest (v0.8.4)
+    path: ./versions/v0.8.4.yml
     slug: latest
     availability: stable
   - display-name: dev
     path: ./versions/dev.yml
     slug: dev
     availability: beta
+  - display-name: v0.8.4
+    path: ./versions/v0.8.4.yml
+    slug: v0.8.4
+    availability: stable
   - display-name: v0.8.3
     path: ./versions/v0.8.3.yml
     slug: v0.8.3

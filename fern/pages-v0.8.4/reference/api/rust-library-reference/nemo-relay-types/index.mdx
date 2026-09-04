@@ -1,0 +1,24 @@
+---
+title: "nemo-relay-types"
+sidebar-title: "nemo-relay-types"
+description: "Shared serializable data model types for NeMo Relay."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Shared serializable data model types for NeMo Relay.
+
+This crate contains DTOs and wire-compatible type definitions used by the runtime and native plugin SDK. It intentionally does not contain runtime registries, dynamic loading, codecs, exporters, or process-global state.
+
+## Modules
+
+- [api](/reference/api/rust-library-reference/nemo-relay-types/api): Public runtime API data types. Shared API data types.
+- [codec](/reference/api/rust-library-reference/nemo-relay-types/codec): Normalized LLM request and response data types. Shared normalized LLM request and response data types.
+- [plugin](/reference/api/rust-library-reference/nemo-relay-types/plugin): Plugin configuration diagnostic data types. Shared plugin diagnostic data types.
+
+## Type Aliases
+
+- [Json](/reference/api/rust-library-reference/nemo-relay-types/type-json): Type alias for [`serde_json::Value`](https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html), used as the universal JSON representation throughout NeMo Relay APIs.

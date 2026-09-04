@@ -1,0 +1,28 @@
+---
+title: "Module optimization"
+sidebar-title: "optimization"
+description: "Plugin-neutral evidence recording for managed LLM calls. Managed, bounded LLM optimization accounting."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Plugin-neutral evidence recording for managed LLM calls. Managed, bounded LLM optimization accounting.
+
+## Structs
+
+- [LlmOptimizationRecorder](/reference/api/rust-library-reference/nemo-relay/api/optimization/struct-llmoptimizationrecorder): Cloneable capability for adding evidence to the current managed LLM call.
+
+## Constants
+
+- [MAX_LLM_OPTIMIZATION_CONTRIBUTIONS](/reference/api/rust-library-reference/nemo-relay/api/optimization/constant-max-llm-optimization-contributions): Maximum contributions retained for one LLM call.
+- [MAX_LLM_OPTIMIZATION_CONTRIBUTION_ATTEMPTS](/reference/api/rust-library-reference/nemo-relay/api/optimization/constant-max-llm-optimization-contribution-attempts): Maximum contribution records inspected before the recorder seals itself.
+- [MAX_LLM_OPTIMIZATION_CONTRIBUTION_BYTES](/reference/api/rust-library-reference/nemo-relay/api/optimization/constant-max-llm-optimization-contribution-bytes): Maximum serialized size of one complete contribution envelope.
+- [MAX_LLM_OPTIMIZATION_TOTAL_CONTRIBUTION_BYTES](/reference/api/rust-library-reference/nemo-relay/api/optimization/constant-max-llm-optimization-total-contribution-bytes): Maximum aggregate serialized size of all contribution envelopes for one call.
+
+## Functions
+
+- [current_llm_optimization_recorder](/reference/api/rust-library-reference/nemo-relay/api/optimization/fn-current-llm-optimization-recorder): Return a recorder for the current execution intercept, if it is managed by Relay.
+- [record_llm_optimization_contribution](/reference/api/rust-library-reference/nemo-relay/api/optimization/fn-record-llm-optimization-contribution): Best-effort shorthand for recording evidence on the current managed call.

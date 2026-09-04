@@ -1,0 +1,175 @@
+---
+title: "About gRPC Worker Plugins"
+description: "Choose a Python, Rust, or custom grpc-v1 worker implementation."
+position: 30
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+A worker plugin runs outside the Relay process and implements the stable `grpc-v1`
+service contract. It can register the same 15 subscriber and middleware surfaces as
+an in-process plugin, call continuations back in the host, use invocation-scoped codecs,
+and emit marks or manage scope stacks through host-runtime RPCs.
+
+Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. Tool callbacks
+and `ToolNext` continuations preserve an application `result` and optional opaque
+`annotation`; an execution intercept can add Relay-owned pending marks. Rebuild every
+SDK worker, regenerate custom protobuf bindings, and declare `compat.relay` beginning at
+`0.8.0`. The protocol remains named `grpc-v1`; this is a changed tool-result contract,
+not a new protocol family.
+
+Workers can add a data schema, log severity, and semantic category to a mark, emit validated metric
+measurements, and read the current host-level runtime diagnostics. These diagnostics are
+ordered by code and are not attributed to a particular plugin.
+
+Choose a worker when process or dependency isolation is worth the gRPC dispatch,
+JSON-envelope conversion, and scheduling cost on callback paths. The boundary limits the
+blast radius of a worker crash and keeps dependencies out of the application environment,
+but it is not a security sandbox. Relay authenticates a local endpoint with a per-activation
+token, and a worker is trusted to request host operations within that activation.
+
+## Choose the Implementation
+
+| Implementation | Development and Distribution Characteristics |
+|---|---|
+| Python SDK | Best fit for Python-only dependencies and rapid iteration. `plugins add` builds a Relay-managed environment from the package and records an attestation used at activation. Python workers cannot be activated by merely adding a manifest path to `plugins.toml`. |
+| Rust SDK | Best fit for a compiled, self-contained worker and Rust callback code. The executable is packaged directly and can be registered through a manifest reference or the CLI lifecycle. |
+| Custom command | Advanced path for another language or an existing service executable. It must implement every required `grpc-v1` lifecycle, authentication, envelope, cancellation, continuation, codec, and shutdown rule itself. The SDK tutorials do not apply to it. |
+
+Async Python and Rust callback work is cancelled cooperatively when the host caller times
+out, a stream consumer disconnects, or shutdown begins. Dropping a future or cancelling an
+`asyncio` task cannot preempt arbitrary blocking work or a separately spawned process.
+Keep blocking work off the SDK event loop, propagate cancellation, and put external
+cleanup in a guaranteed finalizer.
+
+## Let the SDK Own the Transport
+
+Worker authors implement `WorkerPlugin`; they do not implement the protobuf server in
+application code. `serve_plugin` reads the activation environment created by Relay,
+binds the authenticated local endpoint, performs handshake and health handling, and
+dispatches validation, registration, invocation, cancellation, and shutdown.
+
+## Configure the Snapshot Location
+
+Before starting a worker, Relay copies its runtime closure into an isolated activation
+snapshot. Set `NEMO_RELAY_PLUGIN_SNAPSHOT_DIR` in the environment that starts Relay to
+use a directory of your choice; Relay creates it when it does not exist. Choose a location
+outside every directory copied into a snapshot, including active plugin packages and external
+entrypoint or library directories. This applies to Python, Rust, and custom-command workers; it
+is particularly useful when the system temporary directory is too long or a deployment requires
+snapshots on controlled storage.
+
+```powershell
+$env:NEMO_RELAY_PLUGIN_SNAPSHOT_DIR = "C:\\nrs"
+```
+
+```bash
+export NEMO_RELAY_PLUGIN_SNAPSHOT_DIR=/var/tmp/nrs
+```
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import asyncio
+from nemo_relay_plugin import WorkerPlugin, serve_plugin
+
+class ExamplePythonWorker(WorkerPlugin):
+    plugin_id = "examples.python_grpc_worker"
+    allows_multiple_components = False
+
+    def validate(self, config):
+        return validate_config(config)
+
+    def register(self, context, config):
+        settings = normalized_config(config)
+        if settings["observe"]["enabled"]:
+            self._register_observation(
+                context, settings["tag"], settings["observe"]
+            )
+        if settings["requests"]["enabled"]:
+            self._register_requests(
+                context,
+                settings["tag"],
+                settings["requests"],
+                settings["execution"],
+            )
+        self._register_runtime(context, settings["tag"], settings["runtime"])
+        if settings["execution"]["enabled"]:
+            self._register_execution(context, settings["tag"], settings["execution"])
+
+async def main():
+    await serve_plugin(ExamplePythonWorker())
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay_worker::{
+    ConfigDiagnostic, Json, PluginContext, Result,
+    WorkerPlugin, WorkerSdkError, serve_plugin,
+};
+
+struct DocumentationWorker;
+
+impl WorkerPlugin for DocumentationWorker {
+    fn plugin_id(&self) -> &str {
+        "examples.rust_grpc_worker"
+    }
+
+    fn allows_multiple_components(&self) -> bool {
+        false
+    }
+
+    fn validate(&self, config: &Json) -> Vec<ConfigDiagnostic> {
+        validate_config(config)
+    }
+
+    fn register(&self, context: &mut PluginContext, config: &Json) -> Result<()> {
+        let settings = ExampleConfig::parse(config)
+            .map_err(WorkerSdkError::InvalidInput)?;
+        if settings.observe.enabled {
+            register_observation(context, &settings);
+        }
+        if settings.requests.enabled {
+            register_requests(context, &settings);
+        }
+        register_execution(context, &settings);
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    serve_plugin(DocumentationWorker).await
+}
+```
+</Tab>
+</Tabs>
+
+Both `register` methods are synchronous because they describe and return the component's
+registration set during activation. The callbacks they install can be asynchronous.
+The stable `plugin_id` must match the manifest ID and handshake identity; a mismatch
+causes activation to fail before any callback is routed.
+
+## Complete Path
+
+Follow these pages in order to build, activate, exercise, and stop a worker plugin:
+
+1. Use [Python Worker](/build-plugins/workers/python) when Relay should provision and own
+   the Python environment, or [Rust Worker](/build-plugins/workers/rust) for the checked
+   compiled counterpart.
+2. Implement all callback families with [Middleware and Continuations](/build-plugins/workers/middleware-and-continuations),
+   paying particular attention to repeated downstream calls and lazy streams.
+3. Use [Runtime Events and Scopes](/build-plugins/workers/runtime-events-and-scopes) for
+   marks, scope stacks, binding, restoration, and failure cleanup.
+4. Use the [grpc-v1 Protocol Reference](/build-plugins/workers/grpc-v1-protocol) to audit
+   an SDK or implement a custom command.
+
+The atomic Rust lifecycle test builds the executable in an isolated target directory,
+materializes and integrity-checks its manifest, completes worker activation, executes a
+managed tool call across `grpc-v1`, observes a host-runtime mark, and verifies orderly
+shutdown. The Rust and Python callback-contract tests then isolate the sanitizer,
+continuation, streaming, codec, cancellation, and scope-cleanup behavior. Merely
+starting a process and registering one intercept is not enough evidence.

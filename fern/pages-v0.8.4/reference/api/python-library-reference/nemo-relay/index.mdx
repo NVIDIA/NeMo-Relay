@@ -1,0 +1,198 @@
+---
+title: "nemo_relay"
+sidebar-title: "nemo-relay"
+description: "Python bindings for the NeMo Relay runtime."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/nemo_relay/__init__.pyi`.
+
+Module `nemo_relay`.
+
+Python bindings for the NeMo Relay runtime.
+
+## Classes
+
+### `DataSchema(TypedDict)`
+
+Schema identifier attached to an event's opaque data payload.
+
+### `EventSanitizeFields(TypedDict)`
+
+Observability fields returned by mark and scope event sanitizers.
+
+## Functions
+
+### `get_scope_stack`
+
+```python
+def get_scope_stack() -> ScopeStack
+```
+
+Return the current task's active scope stack.
+
+### `scope_stack_active`
+
+```python
+def scope_stack_active() -> bool
+```
+
+Report whether the current context already owns a scope stack.
+
+### `propagate_scope_to_thread`
+
+```python
+def propagate_scope_to_thread() -> ScopeStack
+```
+
+Capture the active scope stack for use in another thread.
+
+### `create_scope_stack`
+
+```python
+def create_scope_stack() -> ScopeStack
+```
+
+Create a new isolated scope stack.
+
+### `capture_propagation_context`
+
+```python
+def capture_propagation_context() -> PropagationContext
+```
+
+Capture the current Relay causal parent for application-managed transport.
+
+### `capture_propagation_context_with_root`
+
+```python
+def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationContext
+```
+
+Capture the current parent with an optional stable application session root.
+
+### `capture_traceparent`
+
+```python
+def capture_traceparent() -> str
+```
+
+Capture the current Relay context as a W3C `traceparent` value.
+
+### `create_scope_stack_from_propagation`
+
+```python
+def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeStack
+```
+
+Create an isolated stack seeded from a received propagation context.
+
+### `fork_asyncio_context`
+
+```python
+def fork_asyncio_context() -> contextvars.Context
+```
+
+Create an asyncio child context with an isolated Relay scope stack.
+
+### `use_scope_stack`
+
+```python
+def use_scope_stack(stack: ScopeStack)
+```
+
+Temporarily install `stack` in the current Python context.
+
+### `set_thread_scope_stack`
+
+```python
+def set_thread_scope_stack(stack: ScopeStack) -> None
+```
+
+Install a scope stack into the current thread's native runtime context.
+
+## Type Aliases And Constants
+
+- `Event`
+- `EventMetadata`
+- `EventMetadataInjectorCallback`
+- `EventMetadataScalar`
+- `EventMetadataValue`
+- `EventSanitizeGuardrail`
+- `Json`
+- `JsonObject`
+- `JsonPrimitive`
+- `JsonValue`
+- `LlmConditionalExecutionGuardrail`
+- `LlmExecutionIntercept`
+- `LlmRequestIntercept`
+- `LlmSanitizeRequestGuardrail`
+- `LlmSanitizeResponseGuardrail`
+- `LlmStreamExecutionIntercept`
+- `ToolConditionalExecutionGuardrail`
+- `ToolExecutionIntercept`
+- `ToolRequestIntercept`
+- `ToolSanitizeGuardrail`
+- `UnsupportedBehavior`
+
+## Re-exports
+
+- `AnnotatedLLMRequest`
+- `AnnotatedLLMResponse`
+- `AtifExporter`
+- `AtofExporter`
+- `AtofExporterConfig`
+- `AtofExporterMode`
+- `AtofStreamSinkConfig`
+- `LLMAttributes`
+- `LLMHandle`
+- `LLMRequest`
+- `LLMRequestInterceptOutcome`
+- `LlmCodecIdentity`
+- `LlmSanitizeRequestCodec`
+- `LlmSanitizeRequestContext`
+- `LlmSanitizeResponseCodec`
+- `LlmSanitizeResponseContext`
+- `LogSeverity`
+- `MarkEvent`
+- `MetricKind`
+- `MetricMeasurement`
+- `MetricTemporality`
+- `MetricValueType`
+- `OpenTelemetryConfig`
+- `OpenTelemetryLogConfig`
+- `OpenTelemetryLogSubscriber`
+- `OpenTelemetryMetricConfig`
+- `OpenTelemetryMetricSubscriber`
+- `OpenTelemetryRuntimeDiagnostic`
+- `OpenTelemetryRuntimeDiagnostics`
+- `OpenTelemetrySubscriber`
+- `PendingMarkSpec`
+- `PropagationContext`
+- `ScopeAttributes`
+- `ScopeEvent`
+- `ScopeHandle`
+- `ScopeStack`
+- `ScopeType`
+- `ToolAttributes`
+- `ToolExecutionInterceptOutcome`
+- `ToolExecutionResult`
+- `ToolHandle`
+- `adaptive`
+- `codecs`
+- `event_metadata`
+- `guardrails`
+- `intercepts`
+- `llm`
+- `model_pricing`
+- `observability`
+- `pii_redaction`
+- `plugin`
+- `scope`
+- `scope_local`
+- `subscribers`
+- `tools`
+- `typed`
+

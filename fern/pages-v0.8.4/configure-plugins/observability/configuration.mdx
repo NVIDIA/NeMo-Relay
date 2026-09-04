@@ -1,0 +1,255 @@
+---
+title: "Configuration"
+description: "Configure the built-in NeMo Relay observability plugin."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+The observability plugin consumes the canonical NeMo Relay event stream and
+can install ATOF, ATIF, and OpenTelemetry exporters.
+
+| Section | Purpose |
+|---|---|
+| `atof` | Writes or streams raw ATOF lifecycle events. |
+| `atif` | Writes completed ATIF agent trajectories. |
+| `opentelemetry` | Configures typed OTLP traces and optional log and metric pipelines. |
+
+Generated and programmatic observability configuration uses `version = 4`.
+Relay continues to accept version 3 for trace-only configuration.
+
+## Complete Example
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "./observability"
+filename = "events.jsonl"
+mode = "append"
+
+[components.config.atif]
+enabled = true
+agent_name = "NeMo Relay"
+model_name = "unknown"
+output_directory = "./observability"
+filename_template = "trajectory-{session_id}.json"
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "gen_ai"
+endpoint = "http://localhost:4318/v1/traces"
+service_name = "agent-service"
+
+[components.config.opentelemetry.logs]
+enabled = true
+minimum_severity = "info"
+
+[components.config.opentelemetry.metrics]
+enabled = true
+temporality = "cumulative"
+```
+
+When OpenTelemetry is enabled, configure at least one trace endpoint or an
+enabled log or metric section with explicit endpoints. In this example, Relay
+derives `http://localhost:4318/v1/logs` and
+`http://localhost:4318/v1/metrics` from the trace endpoint. An explicit
+nonempty signal endpoint list replaces derivation.
+
+Trace endpoint types can be combined. Repeated endpoint types can use the same
+endpoint and transport. Two different trace endpoint types must not use the
+same endpoint and transport: Relay
+rejects that configuration because their deterministic trace and span IDs would
+collide at the receiver. For `http_binary`, this comparison uses the effective
+trace destination, so a bare URL and the same URL with `/v1/traces` also
+collide. A root trailing `/` is an explicit root-path destination and does not
+collide with `/v1/traces`. The comparison realizes HTTP port `80` and HTTPS
+port `443`, collapses repeated path slashes, ignores a non-root trailing slash,
+and treats standardized
+loopback forms (`localhost`, names under `.localhost`, `127.0.0.0/8`, and `::1`)
+as the same host without resolving DNS. Query strings remain part of the
+destination. All endpoints are constructed before the plugin registers its
+fan-out subscriber.
+
+Destination collision validation is signal-aware. Duplicate destinations
+within logs or within metrics are rejected, while different OTLP signals can
+share an authority.
+
+## Full LLM Payloads
+
+By default, repeated LLM start events contain only the current user turn. Set
+`enable_full_payloads = true` at the top level of the observability component
+config to retain complete sanitized request input and annotations on every LLM
+start event. This disables turn filtering only; credential removal and
+sanitizers still apply.
+
+## Multi-Endpoint Lifecycle
+
+OpenTelemetry endpoint construction is isolated. An endpoint that cannot be
+constructed is skipped with an activation warning while valid endpoints
+activate and receive the event stream. Invalid batch settings also appear in
+the configuration report with their indexed `opentelemetry.endpoints[N]` field.
+Activation still fails when no trace, log, or metric endpoint can be registered.
+Structural configuration validation remains activation-blocking at the default
+policy. A previous active plugin configuration is preserved when possible, and
+the plugin host attempts to restore it if replacement fails after teardown
+begins.
+
+After activation, trace projections consume the event stream, while log and
+metric subscribers consume only their routed marks. A runtime delivery failure
+in one exporter does not stop application work or delivery to the other
+exporters. During teardown, NeMo Relay attempts to shut down every endpoint and
+returns the first teardown error after all attempts finish. Clear the plugin
+during graceful shutdown so queued subscriber work can drain and every
+exporter receives a teardown attempt.
+
+NeMo Relay shuts down OpenTelemetry endpoint providers sequentially. A slow or
+unreachable collector can delay `plugin.clear()` or process shutdown by
+approximately the OpenTelemetry SDK's five-second shutdown bound plus one
+endpoint export timeout. Use each endpoint's `timeout_millis` value to bound
+that export attempt. This timeout behavior does not make a full batch queue
+lossless; refer to [OpenTelemetry](/configure-plugins/observability/opentelemetry#trace-batch-processor-configuration)
+for queue sizing and drop-warning behavior.
+
+Top-level component `config` lists concatenate across configuration layers,
+with higher-precedence entries first. The observability destination lists
+`atof.sinks`, `opentelemetry.endpoints`,
+`opentelemetry.logs.endpoints`, `opentelemetry.metrics.endpoints`, and
+`atif.storage` follow the same rule for nonempty lists, so explicit-or-user,
+system, and programmatic layers can contribute destinations. An explicitly
+empty higher-precedence log or metric `endpoints` list instead clears inherited
+explicit endpoints. If that signal remains enabled, the resulting empty list
+fails validation; omit `endpoints` to derive destinations from trace endpoints.
+Arbitrary lists nested inside other structured values retain replacement
+semantics. List entries are not merged item by item.
+
+When library initialization discovers `plugins.toml` files, Relay emits one
+`plugin.configuration_inherited` warning per file. Each warning is written to
+the operational log and included in the initialization result and active plugin
+report. It names only the source path, never destination values or credentials.
+Relay continues with the layered destination set; validation or activation
+errors in that effective configuration still fail normally. Except for the
+signal-list clearing behavior above, changing or removing an inherited endpoint
+requires editing the layer that declares it.
+
+For complete layering rules, refer to
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files#precedence-and-merge-behavior).
+
+For exporter-specific fields and behavior, refer to:
+
+- [ATOF](/configure-plugins/observability/atof)
+- [ATIF](/configure-plugins/observability/atif)
+- [OpenTelemetry](/configure-plugins/observability/opentelemetry)
+- [OpenInference](/configure-plugins/observability/openinference)
+
+## Programmatic Configuration
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay import plugin
+from nemo_relay.observability import (
+    ComponentSpec,
+    ObservabilityConfig,
+    OpenTelemetryLogSectionConfig,
+    OpenTelemetryMetricSectionConfig,
+    OpenTelemetrySectionConfig,
+    OpenTelemetryEndpointConfig,
+)
+
+config = plugin.PluginConfig(
+    components=[
+        ComponentSpec(
+            ObservabilityConfig(
+                opentelemetry=OpenTelemetrySectionConfig(
+                    enabled=True,
+                    endpoints=[
+                        OpenTelemetryEndpointConfig(
+                            type="gen_ai",
+                            endpoint="http://localhost:4318/v1/traces",
+                            service_name="agent-service",
+                        )
+                    ],
+                    logs=OpenTelemetryLogSectionConfig(enabled=True),
+                    metrics=OpenTelemetryMetricSectionConfig(enabled=True),
+                ),
+                enable_full_payloads=True,
+            )
+        )
+    ]
+)
+```
+</Tab>
+<Tab title="Node.js" language="javascript">
+```javascript
+const observability = require("nemo-relay-node/observability");
+
+const component = observability.ComponentSpec({
+  version: 4,
+  opentelemetry: observability.openTelemetryConfig({
+    enabled: true,
+    endpoints: [
+      observability.openTelemetryEndpoint({
+        type: "gen_ai",
+        endpoint: "http://localhost:4318/v1/traces",
+        service_name: "agent-service",
+      }),
+    ],
+    logs: observability.openTelemetryLogConfig({ enabled: true }),
+    metrics: observability.openTelemetryMetricConfig({ enabled: true }),
+  }),
+  enable_full_payloads: true,
+});
+```
+</Tab>
+</Tabs>
+
+Validate programmatic configuration before initialization. Clear the plugin
+during graceful shutdown so every exporter gets a teardown attempt.
+
+## Migrating from Version 3 to Version 4
+
+Version 4 adds independent OTLP log and metric sections while preserving the
+version-3 trace endpoint list. Change `version = 3` to `version = 4`, then add
+`opentelemetry.logs` or `opentelemetry.metrics` only when needed. A version-4
+config without those sections remains trace-only. Version 3 continues to work
+for trace-only configurations and rejects either new signal section.
+
+## Migrating from Version 2
+
+Version 2 used independent `opentelemetry` and `openinference` sections.
+Version 3 replaces them with typed endpoints:
+
+- Convert the old `opentelemetry` section to a `full` endpoint.
+- Convert the old `openinference` section to an `openinference` endpoint.
+- Add a `gen_ai` endpoint for the standardized GenAI projection.
+
+Move `mark_projection`, `mark_exclude_names`, and `attribute_mappings` into
+each `full` or `openinference` endpoint; their legacy behavior is preserved.
+The `gen_ai` projection ignores those controls. `semantic_selector` and
+`capture_content` are unsupported. Version-2 OTLP shapes are rejected under
+version 3.
+
+The version change also makes `type` and `endpoint` required for every
+OpenTelemetry endpoint. The default `service_name` changes from `nemo-relay`
+to `unknown_service`, and the default instrumentation scope becomes
+`opentelemetry`. Move each old section's `headers` and `resource_attributes`
+maps into its new endpoint. Use `header_env` when a header value comes from an
+environment variable.
+
+For before-and-after TOML and Rust, Python, Node.js, and C API changes,
+refer to the [OpenTelemetry version-2-to-version-3 migration](/configure-plugins/observability/opentelemetry#version-2-to-version-3).

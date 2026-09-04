@@ -1,0 +1,20 @@
+---
+title: "Function nemo_relay_metric"
+sidebar-title: "nemo_relay_metric"
+description: "Emit an atomic metric measurement mark from typed C measurements."
+position: 73
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_metric(\n    name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    parent: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffiscopehandle\">FfiScopeHandle</a>,\n    measurements: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-nemorelaymetricmeasurement\">NemoRelayMetricMeasurement</a>,\n    measurements_len: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    metadata_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    timestamp_unix_micros: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i64.html\">i64</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Emit an atomic metric measurement mark from typed C measurements.
+
+`measurements` must reference `measurements_len` initialized entries. Each measurement's `value_type` selects the corresponding numeric value field. Relay validates the complete array before emitting any recording operation. Relay does not retain `measurements`, their strings, or histogram boundaries; caller-owned storage need only remain valid until this function returns.
+
+## Safety
+
+`name` must be a valid non-null C string. `measurements` must be non-null and valid for `measurements_len` reads when the length is nonzero. Every measurement name must be a valid C string; optional strings and JSON must be valid when non-null. A null `boundaries` pointer with zero length leaves boundaries unspecified, while a non-null pointer with zero length requests an explicit empty boundary list. For nonzero lengths, `boundaries` must reference `boundaries_len` doubles.

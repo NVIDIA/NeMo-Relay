@@ -1,0 +1,26 @@
+---
+title: "Function generate_retention_intent"
+sidebar-title: "generate_retention_intent"
+description: "Generate a retention intent from observed session timing distributions."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn generate_retention_intent(\n    session_duration: &amp;<a href=\"../profile/struct-distributionsummary\">DistributionSummary</a>,\n    inter_call_gap: &amp;<a href=\"../profile/struct-distributionsummary\">DistributionSummary</a>,\n    thresholds: &amp;<a href=\"struct-retentionthresholds\">RetentionThresholds</a>,\n) -&gt; <a href=\"../types/struct-retentionintent\">RetentionIntent</a>"}} /></pre>
+
+Generate a retention intent from observed session timing distributions.
+
+The median session duration determines the recommended retention tier. The median inter-call gap is copied into the returned intent for downstream policy decisions.
+
+## Parameters
+
+- `session_duration`: Observed session-duration distribution.
+- `inter_call_gap`: Observed inter-call-gap distribution.
+- `thresholds`: Tier thresholds used to classify the session duration.
+
+## Returns
+
+A [`RetentionIntent`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-retentionintent) summarizing the recommended retention policy.

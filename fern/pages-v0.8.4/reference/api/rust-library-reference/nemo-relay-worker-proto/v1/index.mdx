@@ -1,0 +1,92 @@
+---
+title: "Module v1"
+sidebar-title: "v1"
+description: "Generated protobuf and gRPC service definitions."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Generated protobuf and gRPC service definitions.
+
+## Modules
+
+- [invoke_request](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/invoke_request): Nested message and enum types in `InvokeRequest`.
+- [invoke_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/invoke_response): Nested message and enum types in `InvokeResponse`.
+- [llm_invocation](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/llm_invocation): Nested message and enum types in `LlmInvocation`.
+- [plugin_worker_client](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/plugin_worker_client): Generated client implementations.
+- [plugin_worker_server](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/plugin_worker_server): Generated server implementations.
+- [relay_host_runtime_client](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/relay_host_runtime_client): Generated client implementations.
+- [relay_host_runtime_server](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/relay_host_runtime_server): Generated server implementations.
+- [stream_chunk](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/stream_chunk): Nested message and enum types in `StreamChunk`.
+
+## Structs
+
+- [CancelInvocationRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-cancelinvocationrequest)
+- [ConditionalMiddlewareGuardrailRegistration](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-conditionalmiddlewareguardrailregistration)
+- [ConditionalMiddlewareInvocation](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-conditionalmiddlewareinvocation)
+- [CreateScopeStackRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-createscopestackrequest)
+- [CreateScopeStackResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-createscopestackresponse)
+- [DeregisterConditionalMiddlewareGuardrailRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-deregisterconditionalmiddlewareguardrailrequest)
+- [DeregisterConditionalMiddlewareGuardrailResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-deregisterconditionalmiddlewareguardrailresponse)
+- [DropScopeStackRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-dropscopestackrequest)
+- [EmitMarkRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-emitmarkrequest)
+- [EmptyResult](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-emptyresult)
+- [GetRuntimeDiagnosticsRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-getruntimediagnosticsrequest)
+- [GetRuntimeDiagnosticsResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-getruntimediagnosticsresponse)
+- [GuardrailResult](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-guardrailresult)
+- [HandshakeRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-handshakerequest)
+- [HandshakeResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-handshakeresponse)
+- [HealthRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-healthrequest)
+- [HealthResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-healthresponse)
+- [HostAck](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-hostack)
+- [InvokeRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-invokerequest)
+- [InvokeResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-invokeresponse)
+- [JsonEnvelope](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-jsonenvelope)
+- [JsonResult](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-jsonresult)
+- [JsonValue](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-jsonvalue): A lossless JSON value. The bytes MUST contain exactly one JSON value.
+- [ListRuntimeRegistrationsRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-listruntimeregistrationsrequest)
+- [ListRuntimeRegistrationsResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-listruntimeregistrationsresponse)
+- [LlmCodecDecodeRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-llmcodecdecoderequest)
+- [LlmCodecDecodeResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-llmcodecdecoderesponse)
+- [LlmCodecEncodeRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-llmcodecencoderequest)
+- [LlmCodecIdentity](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-llmcodecidentity)
+- [LlmInvocation](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-llminvocation)
+- [LlmNextRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-llmnextrequest)
+- [LlmRequestInterceptResult](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-llmrequestinterceptresult)
+- [LlmSanitizeRequestContext](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-llmsanitizerequestcontext)
+- [LlmSanitizeResponseContext](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-llmsanitizeresponsecontext)
+- [LlmStreamNextRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-llmstreamnextrequest)
+- [PopScopeRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-popscoperequest)
+- [PushScopeRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-pushscoperequest)
+- [PushScopeResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-pushscoperesponse)
+- [RegisterConditionalMiddlewareGuardrailRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-registerconditionalmiddlewareguardrailrequest)
+- [RegisterConditionalMiddlewareGuardrailResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-registerconditionalmiddlewareguardrailresponse)
+- [RegisterRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-registerrequest)
+- [RegisterResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-registerresponse)
+- [Registration](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-registration)
+- [RuntimeDiagnostic](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-runtimediagnostic)
+- [RuntimeRegistrationIdentity](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-runtimeregistrationidentity)
+- [RuntimeRegistrationOwner](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-runtimeregistrationowner)
+- [ScopeContext](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-scopecontext)
+- [ShutdownRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-shutdownrequest)
+- [StreamChunk](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-streamchunk)
+- [ToolExecutionInterceptOutcome](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-toolexecutioninterceptoutcome)
+- [ToolExecutionInterceptResult](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-toolexecutioninterceptresult)
+- [ToolExecutionResult](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-toolexecutionresult)
+- [ToolExecutionResultResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-toolexecutionresultresponse)
+- [ToolInvocation](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-toolinvocation)
+- [ToolNextRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-toolnextrequest)
+- [ValidateRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-validaterequest)
+- [ValidateResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-validateresponse)
+- [WorkerAck](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-workerack)
+- [WorkerError](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-workererror)
+
+## Enums
+
+- [LlmCodecKind](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/enum-llmcodeckind)
+- [RegistrationSurface](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/enum-registrationsurface)
+- [RuntimeRegistrationOwnerKind](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/enum-runtimeregistrationownerkind)
+- [ScopeType](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/enum-scopetype)

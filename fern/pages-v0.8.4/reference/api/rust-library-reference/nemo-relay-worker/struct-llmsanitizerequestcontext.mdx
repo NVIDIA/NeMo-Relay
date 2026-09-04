@@ -1,0 +1,46 @@
+---
+title: "Struct LlmSanitize Request Context"
+sidebar-title: "LlmSanitizeRequestContext"
+description: "Active codec context supplied to an LLM request sanitizer."
+position: 19
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct LlmSanitizeRequestContext &#123;\n    pub codec: <a href=\"enum-llmcodecidentity\">LlmCodecIdentity</a>,\n    /* private fields */\n&#125;"}} /></pre>
+
+Active codec context supplied to an LLM request sanitizer.
+
+## Fields
+
+### `codec: LlmCodecIdentity`
+
+Identity of the active codec.
+
+## Implementations
+
+### `impl LlmSanitizeRequestContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-llmsanitizerequestcontext\">LlmSanitizeRequestContext</a>"}} /></pre>
+
+#### `resolve_codec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn resolve_codec(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-workerrequestcodec\">WorkerRequestCodec</a>&gt;"}} /></pre>
+
+Resolves the active request codec for this callback.
+
+## Trait Implementations
+
+### `impl Clone for LlmSanitizeRequestContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-llmsanitizerequestcontext\">LlmSanitizeRequestContext</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-llmsanitizerequestcontext\">LlmSanitizeRequestContext</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

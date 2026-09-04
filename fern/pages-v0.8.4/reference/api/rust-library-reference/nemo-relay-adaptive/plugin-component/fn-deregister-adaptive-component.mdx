@@ -1,0 +1,25 @@
+---
+title: "Function deregister_adaptive_component"
+sidebar-title: "deregister_adaptive_component"
+slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/plugin_component/fn-deregister-adaptive-component"
+description: "Deregisters the adaptive component kind from the core plugin registry."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn deregister_adaptive_component() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Deregisters the adaptive component kind from the core plugin registry.
+
+This affects future validation and initialization only. Active adaptive runtime registrations remain until cleared or replaced.
+
+## Returns
+
+`true` when the adaptive component kind was removed from the registry and `false` when it was not registered.
+
+## Notes
+
+Active adaptive runtime registrations are not torn down by this function.

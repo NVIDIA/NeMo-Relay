@@ -1,0 +1,161 @@
+---
+title: "About Native Dynamic Plugins"
+description: "Decide when to run reusable Rust plugin behavior inside the Relay process."
+position: 20
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+A native dynamic plugin is a trusted Rust shared library that Relay loads into its own
+process. It follows the same validation and `PluginContext` contract as other plugins,
+but typed middleware crosses a stable C boundary without a worker process or gRPC JSON
+envelope. This model is appropriate when reusable callback behavior is sensitive to
+latency or throughput and the deployment can carry a platform-specific binary.
+
+<Warning>
+Native plugins are not sandboxed. They share the host address space, allocator boundary,
+and process fate. Load only reviewed artifacts, keep ABI ownership rules intact, and
+assume a native crash can terminate the Relay host.
+</Warning>
+
+## Version Contracts
+
+Three version values answer different questions:
+
+| Contract | Current Value | Meaning |
+|---|---|---|
+| Package manifest | `manifest_version = 1` | Shape of the authored `relay-plugin.toml` file. |
+| Manifest native API | `compat.native_api = "1"` | Native plugin package contract accepted by discovery and trust validation. |
+| C host-table ABI | v4 | Function table negotiated by the current `nemo-relay-plugin` SDK. The host also exposes frozen v3 and v2 tables for compatible older binaries. |
+
+Typed async middleware and SDK executor configuration require the 0.8 contract, so the
+checked example declares `compat.relay = ">=0.8.0,<1.0"` and depends on
+`nemo-relay-plugin` 0.8.0. A manifest that admits an older host cannot promise those
+surfaces.
+
+Relay 0.8 changes the native API 1 tool-result JSON contract without changing the v4
+host-table layout. A tool callback and `ToolNext` continuation now return
+`ToolExecutionResult`, which carries `result` and optional opaque `annotation`; an
+execution intercept returns that pair plus pending marks. Rebuild native plugins for
+this contract even though the negotiated host-table ABI remains v4.
+
+The v4 SDK also lets a plugin add a data schema and log severity to a mark, or emit
+validated metric measurements. `PluginRuntime::runtime_diagnostics()` returns the
+current host-level diagnostic snapshot. The snapshot is ordered by code and is not
+attributed to a particular plugin.
+
+## What the SDK Owns
+
+The Rust SDK exports the stable entry symbol, converts host-owned JSON handles into
+typed DTOs, registers all 16 plugin surfaces, and drives async middleware on one
+SDK-owned multi-thread Tokio runtime per configured component. A plugin can set a
+default executor size and accept a positive `executor.worker_threads` component
+override. The default is two workers; change it only after measuring queued async work
+and account for the number of native components in the host.
+
+Subscribers remain synchronous and run on Relay's subscriber dispatcher. Typed
+middleware returns futures and runs on the SDK executor. A callback has no stable OS
+thread affinity, separate invocations can overlap, and blocking an executor thread can
+delay unrelated calls from the same component.
+
+The checked-in `examples/rust-native-plugin` project is the end-to-end implementation.
+Its configuration, observation, request policy, execution wrappers, and runtime helpers
+are separated into modules so each following page can explain one responsibility
+without presenting a monolithic sample.
+
+## Implement the Native Plugin Entrypoint
+
+The root module is intentionally small. `validate` checks both the example settings and
+the SDK-owned executor override. `register` parses the same settings once, obtains the
+component runtime handle, and delegates each feature group. The export macro produces
+the `nemo_relay_register_plugin` symbol named in the manifest.
+
+```rust
+mod config;
+mod execution;
+mod observe;
+mod requests;
+mod runtime;
+
+use nemo_relay_plugin::{
+    ConfigDiagnostic, DiagnosticLevel, Json, NativeExecutorConfig,
+    NativePlugin, PluginContext,
+};
+use serde_json::Map;
+
+struct ExampleNativePlugin;
+
+impl NativePlugin for ExampleNativePlugin {
+    fn plugin_kind(&self) -> &str {
+        "examples.rust_native_policy"
+    }
+
+    fn executor_config(&self) -> NativeExecutorConfig {
+        NativeExecutorConfig { worker_threads: 2 }
+    }
+
+    fn allows_multiple_components(&self) -> bool {
+        false
+    }
+
+    fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        let mut diagnostics = config::validate(plugin_config);
+        if let Err(message) = self.executor_config_for_component(plugin_config) {
+            diagnostics.push(ConfigDiagnostic {
+                level: DiagnosticLevel::Error,
+                code: "examples.rust_native_policy.invalid_executor".into(),
+                component: Some("examples.rust_native_policy".into()),
+                field: Some("executor.worker_threads".into()),
+                message,
+            });
+        }
+        diagnostics
+    }
+
+    fn register(
+        &mut self,
+        plugin_config: &Map<String, Json>,
+        context: &mut PluginContext<'_>,
+    ) -> nemo_relay_plugin::Result<()> {
+        let config = config::ExampleConfig::parse(plugin_config)?;
+        let runtime = context.runtime();
+        observe::register(context, &config, &runtime)?;
+        requests::register(context, &config)?;
+        execution::register(context, &config, &runtime)?;
+        Ok(())
+    }
+}
+
+nemo_relay_plugin::nemo_relay_plugin!(
+    nemo_relay_register_plugin,
+    || ExampleNativePlugin
+);
+```
+
+The kind in `plugin_kind()` must match `[plugin].id` in `relay-plugin.toml`. Returning
+`false` from `allows_multiple_components` tells Relay to reject a document that tries to
+activate two configurations of this native implementation. The SDK owns registrations
+created through `context`; the plugin does not keep raw registry handles or unload them
+itself.
+
+## Complete Path
+
+Follow these pages in order to build, activate, exercise, and remove the native plugin:
+
+1. Follow [Build and Package](/build-plugins/native/build-and-package) to build the
+   `cdylib`, validate its schema and manifest, calculate integrity, and register it.
+2. Add observability behavior with [Observe and Sanitize](/build-plugins/native/observe-and-sanitize),
+   including subscribers and all three event sanitizer surfaces.
+3. Add policy and request rewriting with [Control Requests](/build-plugins/native/control-requests),
+   preserving annotations and making priority and `break_chain` explicit.
+4. Add tool, unary model, and lazy stream wrappers with [Wrap Execution](/build-plugins/native/wrap-execution).
+5. Verify marks, scopes, isolated stacks, cleanup, and executor control with
+   [Runtime Events and Scopes](/build-plugins/native/runtime-events-and-scopes).
+6. Consult [Native ABI Reference](/build-plugins/native/native-abi-reference) only when
+   implementing or auditing the raw boundary.
+
+Success is not merely a library that loads. The atomic lifecycle test builds the `cdylib`
+in an isolated target directory, materializes and integrity-checks its manifest, activates
+a valid component, executes a managed tool call, observes the runtime mark, and clears
+registrations before the library unloads. The focused configuration tests cover rejected
+input and schema shape; the scenario pages show the remaining callback contracts.

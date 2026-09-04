@@ -1,0 +1,82 @@
+---
+title: "Struct LlmSanitize Request Context"
+sidebar-title: "LlmSanitizeRequestContext"
+description: "Per-call codec context for LLM request sanitize guardrails."
+position: 12
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct LlmSanitizeRequestContext { /* private fields */ }
+```
+
+Per-call codec context for LLM request sanitize guardrails.
+
+The context distinguishes no codec, Relay built-ins, runtime-registered codecs, and active codecs with no stable identity.
+
+## Implementations
+
+### `impl LlmSanitizeRequestContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-llmsanitizerequestcontext\">LlmSanitizeRequestContext</a>"}} /></pre>
+
+#### `with_identity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_identity(codec: <a href=\"../enum-llmcodecidentity\">LlmCodecIdentity</a>) -&gt; Self"}} /></pre>
+
+Construct a context that carries only a codec identity.
+
+Identity-only contexts do not carry a codec handle, so [`Self::resolve_codec`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/struct-llmsanitizerequestcontext) returns `None` even when the identity describes an active codec.
+
+#### `for_request_codec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn for_request_codec(codec: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"../../../codec/traits/trait-llmcodec\">LlmCodec</a>&gt;&gt;) -&gt; Self"}} /></pre>
+
+Construct request-sanitizer context from the active request codec.
+
+#### `codec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn codec(&amp;self) -&gt; &amp;<a href=\"../enum-llmcodecidentity\">LlmCodecIdentity</a>"}} /></pre>
+
+Return the identity of the codec active for this payload direction.
+
+#### `resolve_codec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn resolve_codec(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"../../../codec/traits/trait-llmcodec\">LlmCodec</a>&gt;&gt;"}} /></pre>
+
+Resolve the active request codec.
+
+Returns `None` for contexts constructed with [`Self::with_identity`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/struct-llmsanitizerequestcontext).
+
+## Trait Implementations
+
+### `impl Clone for LlmSanitizeRequestContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-llmsanitizerequestcontext\">LlmSanitizeRequestContext</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-llmsanitizerequestcontext\">LlmSanitizeRequestContext</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for LlmSanitizeRequestContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-llmsanitizerequestcontext\">LlmSanitizeRequestContext</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, formatter: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for LlmSanitizeRequestContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-llmsanitizerequestcontext\">LlmSanitizeRequestContext</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"struct-llmsanitizerequestcontext\">LlmSanitizeRequestContext</a>"}} /></pre>

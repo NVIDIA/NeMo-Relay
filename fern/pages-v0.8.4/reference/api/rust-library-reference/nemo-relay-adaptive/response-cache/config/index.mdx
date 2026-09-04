@@ -1,0 +1,27 @@
+---
+title: "Module config"
+sidebar-title: "config"
+slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/response_cache/config"
+description: "Backend selection for the adaptive plugin's `response_cache` feature."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Backend selection for the adaptive plugin's `response_cache` feature.
+
+The `response_cache` section struct ([`crate::config::ResponseCacheConfig`](/reference/api/rust-library-reference/nemo-relay-adaptive/config/struct-responsecacheconfig)) lives in [`crate::config`](/reference/api/rust-library-reference/nemo-relay-adaptive/config) alongside the other `AdaptiveConfig` sections (`acg`, `adaptive_hints`, `tool_parallelism`). This module keeps the response-cache-specific backend config and the key-strategy constant next to the key/store code that consumes them.
+
+## Structs
+
+- [BackendConfig](/reference/api/rust-library-reference/nemo-relay-adaptive/response_cache/config/struct-backendconfig): Backend selection mirroring the adaptive [`crate::config::BackendSpec`](/reference/api/rust-library-reference/nemo-relay-adaptive/config/struct-backendspec) shape.
+- [ToolCacheConfig](/reference/api/rust-library-reference/nemo-relay-adaptive/response_cache/config/struct-toolcacheconfig): Opt-in tool-result cache configuration.
+- [ToolClass](/reference/api/rust-library-reference/nemo-relay-adaptive/response_cache/config/struct-toolclass): Policy shared by a class of tools.
+- [ToolOverride](/reference/api/rust-library-reference/nemo-relay-adaptive/response_cache/config/struct-tooloverride): Per-tool refinement applied after class resolution.
+
+## Constants
+
+- [DEFAULT_MAX_BYTES](/reference/api/rust-library-reference/nemo-relay-adaptive/response_cache/config/constant-default-max-bytes): Default in-memory byte budget: 256 MiB.
+- [KEY_STRATEGY_EXACT_REQUEST](/reference/api/rust-library-reference/nemo-relay-adaptive/response_cache/config/constant-key-strategy-exact-request): Exact-request key strategy identifier.

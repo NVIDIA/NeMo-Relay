@@ -1,0 +1,17 @@
+---
+title: "Function capture_propagation_context"
+sidebar-title: "capture_propagation_context"
+slug: "/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-capture-propagation-context"
+description: "Capture the current causal parent without asserting a session root."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn capture_propagation_context() -&gt; <a href=\"../../../error/type-result\">Result</a>&lt;<a href=\"struct-propagationcontext\">PropagationContext</a>&gt;"}} /></pre>
+
+Capture the current causal parent without asserting a session root.
+
+Importing the returned context preserves Relay event parentage but starts a new local OpenTelemetry trace. Use [`capture_propagation_context_with_root`](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-capture-propagation-context-with-root) when the receiver should participate in a Relay-derived trace rooted at a stable application UUID.

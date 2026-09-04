@@ -1,0 +1,132 @@
+---
+title: "Struct Dynamic Plugin Registry"
+sidebar-title: "DynamicPluginRegistry"
+description: "In-memory dynamic plugin registry used by the control plane."
+position: 15
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct DynamicPluginRegistry { /* private fields */ }
+```
+
+In-memory dynamic plugin registry used by the control plane.
+
+## Implementations
+
+### `impl DynamicPluginRegistry`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-dynamicpluginregistry\">DynamicPluginRegistry</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new() -&gt; Self"}} /></pre>
+
+Creates an empty dynamic plugin registry.
+
+#### `from_records`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_records(records: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-dynamicpluginrecord\">DynamicPluginRecord</a>&gt;) -&gt; <a href=\"../type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+Reconstructs a registry from previously persisted durable records.
+
+#### `get`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn get(&amp;self, plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"struct-dynamicpluginrecord\">DynamicPluginRecord</a>&gt;"}} /></pre>
+
+Returns the registered record for `plugin_id`, if present.
+
+#### `list`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn list(&amp;self, include_tombstoned: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;&amp;<a href=\"struct-dynamicpluginrecord\">DynamicPluginRecord</a>&gt;"}} /></pre>
+
+Lists records, hiding tombstones unless requested.
+
+#### `cloned_records`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn cloned_records(\n    &amp;self,\n    include_tombstoned: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-dynamicpluginrecord\">DynamicPluginRecord</a>&gt;"}} /></pre>
+
+Clones records for serialization or higher-level projection.
+
+#### `add`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn add(\n    &amp;mut self,\n    record: <a href=\"struct-dynamicpluginrecord\">DynamicPluginRecord</a>,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;&amp;<a href=\"struct-dynamicpluginrecord\">DynamicPluginRecord</a>&gt;"}} /></pre>
+
+Adds a new dynamic plugin record.
+
+This is a trusted internal control-plane API. Callers that start from an authored `relay-plugin.toml` manifest should prefer [`Self::add_manifest`](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginregistry) so the manifest contract is enforced before record creation.
+
+#### `add_manifest`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn add_manifest(\n    &amp;mut self,\n    manifest: <a href=\"struct-dynamicpluginmanifest\">DynamicPluginManifest</a>,\n    manifest_ref: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;&amp;<a href=\"struct-dynamicpluginrecord\">DynamicPluginRecord</a>&gt;"}} /></pre>
+
+Validates an authored manifest and registers the resulting dynamic plugin record.
+
+#### `enable`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn enable(&amp;mut self, plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
+
+Marks the plugin enabled in desired state.
+
+#### `disable`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn disable(&amp;mut self, plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
+
+Marks the plugin disabled in desired state.
+
+#### `remove`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn remove(&amp;mut self, plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
+
+Tombstones the plugin record and disables desired runtime realization.
+
+#### `update_validation_status`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn update_validation_status(\n    &amp;mut self,\n    plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    validation: <a href=\"struct-dynamicpluginvalidationstatus\">DynamicPluginValidationStatus</a>,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Replaces the current validation status without mutating desired state.
+
+#### `update_runtime_status`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn update_runtime_status(\n    &amp;mut self,\n    plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    runtime: <a href=\"struct-dynamicpluginruntimestatus\">DynamicPluginRuntimeStatus</a>,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Replaces the current runtime status without mutating desired state.
+
+#### `update_last_error`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn update_last_error(\n    &amp;mut self,\n    plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    last_error: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-dynamicpluginfailure\">DynamicPluginFailure</a>&gt;,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Records the most recent dynamic-plugin failure summary.
+
+#### `update_environment`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn update_environment(\n    &amp;mut self,\n    plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    environment_ref: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    environment: <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Replaces the resolved worker environment and its validation state.
+
+#### `update_policy_status`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn update_policy_status(\n    &amp;mut self,\n    plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    policy_satisfied: <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>,\n    startup_class: <a href=\"enum-dynamicpluginstartupclass\">DynamicPluginStartupClass</a>,\n    attestation_mode: <a href=\"enum-dynamicpluginattestationmode\">DynamicPluginAttestationMode</a>,\n    last_error: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-dynamicpluginfailure\">DynamicPluginFailure</a>&gt;,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Replaces the current host-policy outcome without mutating desired state.
+
+## Trait Implementations
+
+### `impl Debug for DynamicPluginRegistry`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-dynamicpluginregistry\">DynamicPluginRegistry</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for DynamicPluginRegistry`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-dynamicpluginregistry\">DynamicPluginRegistry</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"struct-dynamicpluginregistry\">DynamicPluginRegistry</a>"}} /></pre>

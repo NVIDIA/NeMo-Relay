@@ -1,0 +1,433 @@
+---
+title: "Middleware and Continuations"
+description: "Implement every worker middleware closure and downstream continuation path."
+position: 33
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Python and Rust workers expose the same registration model even though their closure
+syntax differs. The checked examples share configuration and observable behavior so a
+reader can compare runtime mechanics instead of reverse-engineering two unrelated
+demonstrations.
+
+## Callback Families
+
+| Family | Python Callback Form | Rust Callback Form | Required Result |
+|---|---|---|---|
+| Subscriber | Sync or async event callback. An async callback can await the worker runtime. | Synchronous `Fn(&Event)` callback. Keep its work bounded. | No result; observe only. |
+| Event metadata injector | Sync or async callback over an immutable Event snapshot. | Async closure over an immutable Event snapshot. | Flat key/value additions for `Event.metadata`. |
+| Event sanitizers | Sync or async callback over event and sanitizable fields. | Closure returning a future of `EventSanitizeFields`. | Replacement data, category profile, and metadata. |
+| Tool sanitizers and policy | Sync or async callback, normalized by the SDK. | Closure returning a boxed or inferred future. | Sanitized JSON or an optional block reason. |
+| Tool request intercept | Sync or async callback. | Async closure. | Complete rewritten JSON request. |
+| Tool execution intercept | Async callback with `ToolNext`. | Async closure with cloneable `ToolNext`. | `ToolExecutionInterceptOutcome`, which preserves the downstream `result` and optional `annotation` plus Relay-owned accounting. |
+| LLM sanitizers | Sync or async callback with an invocation-scoped codec context. | Async closure with typed request or response context. | Optional sanitized payload. |
+| LLM policy and request intercept | Sync or async callback. | Async closure. | Optional block reason or full request-intercept outcome with annotations. |
+| Unary LLM execution | Async callback with `LlmNext`. | Async closure with cloneable `LlmNext`. | Provider-response JSON. |
+| Stream LLM execution | Async generator or async callback returning an async iterator. | Async closure returning a `JsonStream`. | Chunks produced lazily until completion, error, or cancellation. |
+
+The Event metadata injector, subscriber, three event sanitizers, five tool registrations,
+and six LLM registrations make 16 surfaces. Registration names are component-local;
+[priority and `break_chain`](/build-plugins/fundamentals/plugin-context) are sent in
+registration metadata and enforced by the host after it merges visible
+[middleware](/about-nemo-relay/concepts/middleware).
+
+## Inject Event Metadata
+
+Choose a worker language to register a callback that proposes metadata additions:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+async def add_plugin_context(event):
+    del event
+    return {"app.source": "plugin"}
+
+ctx.register_event_metadata_injector(
+    "plugin-context",
+    add_plugin_context,
+    priority=0,
+)
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use std::collections::BTreeMap;
+
+use nemo_relay_worker::Json;
+
+context.register_event_metadata_injector(
+    "plugin-context",
+    0,
+    |_event| async move {
+        Ok(BTreeMap::from([(
+            "app.source".into(),
+            Json::String("plugin".into()),
+        )]))
+    },
+);
+```
+</Tab>
+</Tabs>
+
+Relay sends the immutable Event snapshot through the existing unary `Invoke` RPC. It
+validates and merges accepted additions before Event sanitizers run. A callback error
+omits that callback's additions without dropping the Event. Stopping the worker removes
+the registration.
+
+## Register Synchronous and Asynchronous Callbacks
+
+Python callbacks can be ordinary functions or coroutines on surfaces that the SDK
+normalizes. This excerpt uses a synchronous event sanitizer and an asynchronous LLM
+sanitizer because codec operations call back to the host. All three event sanitizers
+return the same complete field object.
+
+```python
+def sanitize_event(_event, fields):
+    metadata = _redact(fields.get("metadata") or {}, redact_keys)
+    if not isinstance(metadata, dict):
+        metadata = {"original": metadata}
+    return {
+        "data": _redact(fields.get("data"), redact_keys),
+        "category_profile": _redact(
+            fields.get("category_profile"), redact_keys
+        ),
+        "metadata": {**metadata, "plugin_tag": tag},
+    }
+
+async def sanitize_llm_request(request, codec_context):
+    request = deepcopy(request)
+    codec = codec_context.resolve_codec()
+    if codec is not None:
+        annotated = await codec.decode(request)
+        annotated = _redact(annotated, redact_keys)
+        request = await codec.encode(annotated, request)
+    request["content"] = _redact(request.get("content"), redact_keys)
+    return request
+
+ctx.register_mark_sanitize_guardrail(
+    "documentation_mark_sanitizer", sanitize_event, priority=10
+)
+ctx.register_scope_sanitize_start_guardrail(
+    "documentation_scope_start_sanitizer", sanitize_event, priority=10
+)
+ctx.register_scope_sanitize_end_guardrail(
+    "documentation_scope_end_sanitizer", sanitize_event, priority=10
+)
+ctx.register_llm_sanitize_request_guardrail(
+    "documentation_llm_request_sanitizer",
+    sanitize_llm_request,
+    priority=10,
+)
+```
+
+The equivalent Rust closure always returns a future. The codec proxy is asynchronous in
+a worker because decode and encode are authenticated host-runtime RPCs.
+
+```rust
+context.register_llm_sanitize_request_guardrail(
+    "documentation_llm_request_sanitizer",
+    10,
+    {
+        let keys = config.observe.redact_keys.clone();
+        move |mut request, codec_context| {
+            let keys = keys.clone();
+            async move {
+                if let Some(codec) = codec_context.resolve_codec() {
+                    let annotated = codec.decode(&request).await?;
+                    let annotated = serde_json::to_value(annotated)
+                        .map(|value| redact(value, &keys))
+                        .and_then(serde_json::from_value)
+                        .map_err(|error| {
+                            WorkerSdkError::InvalidInput(error.to_string())
+                        })?;
+                    request = codec.encode(&annotated, &request).await?;
+                }
+                request.content = redact(request.content, &keys);
+                Ok(Some(request))
+            }
+        }
+    },
+);
+```
+
+The codec object is scoped to this invocation. Its opaque capability expires when the
+callback finishes, even if the worker retained a language-level object that previously
+referenced it.
+
+## Return Complete Request Outcomes
+
+Request intercepts affect real execution. The LLM form returns more than a provider
+request because Relay must carry its normalized annotation and accounting separately.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+priority = requests["priority"]
+break_chain = requests["break_chain"]
+header_name = requests["header_name"]
+header_value = requests["header_value"]
+
+def llm_request(_name, request, annotated):
+    rewritten = deepcopy(request)
+    rewritten["headers"] = {
+        **(rewritten.get("headers") or {}),
+        header_name: header_value,
+    }
+    marks = (
+        [PendingMarkSpec(
+            name="example.python_worker.llm_request",
+            data={"tag": tag},
+        )]
+        if execution["emit_pending_marks"]
+        else []
+    )
+    return LlmRequestInterceptOutcome(
+        request=rewritten,
+        annotated_request=annotated,
+        pending_marks=marks,
+        optimization_contributions=[
+            LlmOptimizationContribution(
+                producer="examples.python_grpc_worker",
+                kind="request_rewrite",
+                applied=True,
+            )
+        ],
+    )
+
+ctx.register_llm_request_intercept(
+    "documentation_llm_request",
+    llm_request,
+    priority=priority,
+    break_chain=break_chain,
+)
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+context.register_llm_request_intercept(
+    "documentation_llm_request",
+    config.requests.priority,
+    config.requests.break_chain,
+    {
+        let header_name = config.requests.header_name.clone();
+        let header_value = config.requests.header_value.clone();
+        let tag = config.tag.clone();
+        let emit_marks = config.execution.emit_pending_marks;
+        move |_model, mut request, annotated| {
+            let header_name = header_name.clone();
+            let header_value = header_value.clone();
+            let tag = tag.clone();
+            async move {
+                request.headers.insert(
+                    header_name,
+                    Json::String(header_value),
+                );
+                let mut outcome = LlmRequestInterceptOutcome::new(request, annotated)
+                    .with_optimization_contribution(
+                        LlmOptimizationContribution::new(
+                            "examples.rust_grpc_worker",
+                            "request_rewrite",
+                        ),
+                    );
+                if emit_marks {
+                    outcome = outcome.with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("example.rust_worker.llm_request")
+                            .data(json!({ "tag": tag }))
+                            .build(),
+                    );
+                }
+                Ok(outcome)
+            }
+        }
+    },
+);
+```
+</Tab>
+</Tabs>
+
+Returning only `rewritten` would be the wrong callback result for this surface. The tool
+request intercept does return JSON directly because it has no annotated request or LLM
+optimization accounting.
+
+## Continuation Behavior
+
+When the example enables `repeat_downstream`, it starts two concurrent downstream calls
+and returns the first response after both calls settle. The first call alone determines
+whether the wrapper succeeds. The second call is intentional demonstration code: it can
+still consume provider capacity, incur cost, and cause provider-side effects even though
+Relay does not expose its result to the application. Its failure is deliberately ignored.
+
+`ToolNext`, `LlmNext`, and `LlmStreamNext` are host proxies identified by an opaque
+continuation ID. Calling one issues a host-runtime RPC under the scope snapshot captured
+for that worker invocation. A callback can call a unary proxy zero, one, or multiple
+times, including concurrently when the SDK type permits cloning. Each call can repeat
+side effects, provider charges, events, and downstream middleware.
+
+`ToolNext` returns `ToolExecutionResult`, not a raw JSON value. Forwarding middleware
+must preserve both `downstream.result` and `downstream.annotation` in its outcome. The
+Python example keeps the downstream annotation under `upstream` while adding its own
+worker metadata; the Rust example forwards it unchanged. A repeated tool continuation
+returns another independent structured result; it still does not expose downstream
+pending marks.
+
+The example uses one ordinary wrapper and one explicitly requested concurrent path. It
+does not retry implicitly. Tool pending marks remain in the tool execution outcome;
+LLM annotations, pending marks, and optimization contributions remain in the request
+intercept outcome. The unary execution callback returns only provider-response JSON.
+
+`LlmStreamNext` returns a remote stream. The worker transforms each chunk as it arrives
+and yields immediately. If the host cancels the invocation or the consumer abandons the
+stream, the Python task receives `asyncio.CancelledError` and the Rust callback future is
+aborted. Cleanup belongs in `finally` or a drop-safe guard. Acknowledged cancellation
+does not prove that external blocking work has stopped.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+priority = execution["priority"]
+emit_pending_marks = execution["emit_pending_marks"]
+tag = settings["tag"]
+
+async def tool_execution(name, args, next_call):
+    downstream = await next_call.call(args)
+    marks = (
+        [PendingMarkSpec(
+            name="example.python_worker.tool_execution",
+            data={"tool_name": name, "tag": tag},
+        )]
+        if emit_pending_marks
+        else []
+    )
+    return ToolExecutionInterceptOutcome(
+        result=downstream.result,
+        annotation={
+            "upstream": downstream.annotation,
+            "worker": {"tool_name": name, "tag": tag},
+        },
+        pending_marks=marks,
+    )
+
+async def llm_execution(_name, request, next_call):
+    content = request.get("content")
+    repeat = isinstance(content, dict) and content.get("repeat_downstream") is True
+    if repeat:
+        first, _second = await asyncio.gather(
+            next_call.call(request),
+            next_call.call(request),
+            return_exceptions=True,
+        )
+        if isinstance(first, BaseException):
+            raise first
+        return first
+    return await next_call.call(request)
+
+async def llm_stream_execution(_name, request, next_call):
+    async for chunk in next_call.call(request):
+        if isinstance(chunk, dict):
+            yield {**chunk, "plugin_stream": True}
+        else:
+            yield chunk
+
+ctx.register_tool_execution_intercept(
+    "documentation_tool_execution", tool_execution, priority=priority
+)
+ctx.register_llm_execution_intercept(
+    "documentation_llm_execution", llm_execution, priority=priority
+)
+ctx.register_llm_stream_execution_intercept(
+    "documentation_llm_stream_execution",
+    llm_stream_execution,
+    priority=priority,
+)
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+context.register_tool_execution_intercept(
+    "documentation_tool_execution",
+    config.execution.priority,
+    {
+        let emit_marks = config.execution.emit_pending_marks;
+        move |_name, request, next| async move {
+            let result = next.call(request).await?;
+            let mut outcome = ToolExecutionInterceptOutcome::from(result);
+            if emit_marks {
+                outcome = outcome.with_pending_mark(
+                    PendingMarkSpec::builder()
+                        .name("example.rust_worker.tool_execution")
+                        .build(),
+                );
+            }
+            Ok(outcome)
+        }
+    },
+);
+
+context.register_llm_execution_intercept(
+    "documentation_llm_execution",
+    config.execution.priority,
+    move |_model, request, next| async move {
+        if request.content
+            .get("repeat_downstream")
+            .and_then(Json::as_bool)
+            .unwrap_or(false)
+        {
+            let repeated = next.clone();
+            let (first, _second) = tokio::join!(
+                repeated.call(request.clone()),
+                next.call(request),
+            );
+            first
+        } else {
+            next.call(request).await
+        }
+    },
+);
+
+context.register_llm_stream_execution_intercept(
+    "documentation_llm_stream_execution",
+    config.execution.priority,
+    move |_model, request, next| async move {
+        let downstream = next.call(request).await?;
+        let mapped: JsonStream = Box::pin(downstream.map(|chunk| {
+            chunk.map(|mut value| {
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("plugin_stream".into(), Json::Bool(true));
+                }
+                value
+            })
+        }));
+        Ok(mapped)
+    },
+);
+```
+</Tab>
+</Tabs>
+
+The second unary result is awaited even though the first response is selected. That
+prevents an unobserved continuation from outliving the worker callback. In the stream
+case, each error remains an error item and no chunks are requested before the consumer
+polls the mapped stream.
+
+## Verify the Shared Contract
+
+Use the following procedure to verify equivalent behavior across the two worker SDKs:
+
+1. Assert that registration returns exactly 15 unique surface and local-name pairs.
+2. Exercise all three event sanitizers and both tool and LLM sanitizer directions; prove
+   that only observability values change.
+3. Block configured tool and model names, rewrite allowed requests, and preserve an
+   annotated LLM request through later request intercepts and the managed start event.
+4. Call each unary continuation once, then use the explicit repeated path to call it
+   twice concurrently and account for both downstream invocations.
+5. Consume a transformed stream incrementally, then cancel a second stream and confirm
+   worker cleanup.
+6. Inspect emitted outcomes to ensure pending marks and optimization contributions are
+   not present in application results.
+
+Success means Python and Rust exhibit the same Relay semantics despite their different
+callback syntax. The code examples show each callback contract, while the atomic Python
+example tests and worker SDK integration suites verify callback behavior, authenticated
+transport, and host invocation.

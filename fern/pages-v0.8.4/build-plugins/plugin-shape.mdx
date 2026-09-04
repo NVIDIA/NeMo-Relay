@@ -1,0 +1,178 @@
+---
+title: "Plugin Shape"
+description: "Understand plugin identity, lifecycle, ownership, rollback, and teardown."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+A plugin is a configuration-driven installer for Relay behavior. It is not the
+subscriber, guardrail, or intercept itself. The plugin gives a related set of runtime
+registrations a stable identity, validates one component's JSON configuration, and
+installs those registrations through a component-scoped context.
+
+## The Shared Contract
+
+| Part | Responsibility |
+|---|---|
+| Stable identity | A language-binding plugin is registered under a kind; native and worker implementations report their plugin identity during loading or handshake. Configuration uses that identity in `components[].kind`. |
+| `validate` | Examines component-local JSON and returns [structured diagnostics](/build-plugins/fundamentals/configuration-and-validation) without installing behavior or performing lasting side effects. |
+| `register` | Receives the validated component configuration and a [`PluginContext`](/build-plugins/fundamentals/plugin-context), then installs the component's subscribers and middleware. The Rust language-binding hook returns a future. Python, Node.js, native, and worker hooks register synchronously, although many callbacks they install are asynchronous. |
+| `allows_multiple_components` | Declares whether one plugin implementation can back more than one configured component. The default differs by SDK, so an implementation should set or test the intended behavior instead of relying on assumption. |
+| Component ownership | Every registration made through the context belongs to the component being activated. Relay qualifies registration names and tracks cleanup on that component's behalf. |
+
+The lifecycle hooks use the same logical shape in every binding. These implementations
+all validate `tag` and install one component-owned subscriber. The callback spelling is
+different, but the identity, validation, and ownership rules are the same.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+class AuditPlugin:
+    def validate(self, config):
+        tag = config.get("tag", "documentation")
+        if isinstance(tag, str):
+            return []
+        return [{
+            "level": "error",
+            "code": "audit.invalid_tag",
+            "component": "audit",
+            "field": "tag",
+            "message": "tag must be a string",
+        }]
+
+    def register(self, _config, context):
+        context.register_subscriber("events", lambda event: print(event.name))
+```
+</Tab>
+<Tab title="Node.js" language="node">
+```js
+const auditPlugin = {
+  validate(config) {
+    if (config.tag === undefined || typeof config.tag === 'string') return [];
+    return [{
+      level: 'error',
+      code: 'audit.invalid_tag',
+      component: 'audit',
+      field: 'tag',
+      message: 'tag must be a string',
+    }];
+  },
+
+  register(_config, context) {
+    context.registerSubscriber('events', (event) => console.log(event.name));
+  },
+};
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use std::{future::Future, pin::Pin, sync::Arc};
+
+use nemo_relay::plugin::{
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginRegistrationContext,
+    Result as PluginResult,
+};
+use serde_json::{Map, Value as Json};
+
+struct AuditPlugin;
+
+impl Plugin for AuditPlugin {
+    fn plugin_kind(&self) -> &str {
+        "audit"
+    }
+
+    fn validate(&self, config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        if config.get("tag").is_none_or(Json::is_string) {
+            return Vec::new();
+        }
+        vec![ConfigDiagnostic {
+            level: DiagnosticLevel::Error,
+            code: "audit.invalid_tag".into(),
+            component: Some("audit".into()),
+            field: Some("tag".into()),
+            message: "tag must be a string".into(),
+        }]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _config: &Map<String, Json>,
+        context: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
+        Box::pin(async move {
+            context.register_subscriber(
+                "events",
+                Arc::new(|event| println!("{}", event.name())),
+            )?;
+            Ok(())
+        })
+    }
+}
+```
+</Tab>
+</Tabs>
+
+Rust carries the kind on the `Plugin` implementation. Python and Node.js supply it when
+the application calls `plugin.register("audit", implementation)`. In all three cases,
+`events` is a local registration name. Relay qualifies that name with the component
+owner, records it during activation, and removes it during clear or rollback.
+
+One component can install several kinds of middleware when the configuration tells a
+coherent story. For example, a policy component can observe calls, block configured
+tools, and add an audit mark. A plugin that combines an unrelated exporter, routing
+policy, and provider client is harder to validate, roll out, and remove safely; those
+behaviors should normally become separate components.
+
+## Activation Is Transactional
+
+Activation begins with a complete plugin document, not an isolated callback. Relay
+validates the document and every component, including disabled components, so a staged
+configuration can be checked before it is enabled. An enabled component with error
+diagnostics cannot activate.
+
+For each valid, enabled component, Relay creates a registration context and calls the
+plugin's registration hook. A successful hook commits the registrations as active
+component state. If the hook fails after installing some behavior, Relay rolls back the
+partial registrations rather than leaving a half-active plugin. Dynamic loading adds a
+loader instance around the same component lifecycle; unloading does not begin until the
+component registrations have been cleared.
+
+The runtime report is the observable record of that process. It identifies loaded
+components and diagnostics, and it lets an application or deployment test distinguish
+"configuration parsed" from "runtime behavior is active."
+
+## Teardown Has an Owner
+
+Registrations should be created only through the supplied context. Direct process-global
+registration escapes component ownership and prevents reliable rollback. The same rule
+applies to external resources: create clients, tasks, and file handles during
+registration only when their lifetime is tied to the component and they can be stopped
+when activation fails or configuration is cleared.
+
+Language-binding applications remove active plugin configuration with the binding's
+[clear API](/build-plugins/language-binding/register-behavior) and can deregister a
+plugin kind when the implementation itself is no longer available. Dynamic hosts
+clear component registrations before unloading a native library or stopping a
+worker. Worker shutdown also ends in-flight callback service,
+closes the authenticated endpoint, and terminates the managed process.
+
+## Verify the Lifecycle
+
+Use the following sequence to verify validation, activation, ownership, and teardown:
+
+1. Register or load the plugin implementation under its stable identity.
+2. Validate one invalid component and confirm the report names the component, field,
+   stable diagnostic code, and error level.
+3. Validate a disabled invalid component and confirm the same error is still visible.
+4. Validate and initialize a valid enabled component, then inspect the runtime report
+   before sending application traffic.
+5. Execute a representative managed call and observe the registration's effect rather
+   than treating successful initialization as sufficient proof.
+6. Clear configuration and verify that the same call no longer observes the plugin.
+7. For a dynamic plugin, unload or stop the implementation only after registrations are
+   gone.
+
+Success means invalid configuration never changes runtime behavior, valid configuration
+produces an active report and an observable call-path effect, and teardown removes that
+effect without leaving a loaded dynamic instance or worker process behind.

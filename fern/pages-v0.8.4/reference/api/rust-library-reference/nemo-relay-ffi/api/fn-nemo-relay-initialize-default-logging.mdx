@@ -1,0 +1,16 @@
+---
+title: "Function nemo_relay_initialize_default_logging"
+sidebar-title: "nemo_relay_initialize_default_logging"
+description: "Initializes the Go binding runtime and installs default operational logging."
+position: 57
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub extern \"C\" fn nemo_relay_initialize_default_logging() -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Initializes the Go binding runtime and installs default operational logging.
+
+Logging configuration is resolved from `NEMO_RELAY_LOG`, `NEMO_RELAY_LOG_STDERR_FORMAT`, or `NEMO_RELAY_LOG_CONFIG_PATH`, with built-in defaults when none are set. Repeated initialization is a no-op.

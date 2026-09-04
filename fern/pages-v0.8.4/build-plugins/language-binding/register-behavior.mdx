@@ -1,0 +1,355 @@
+---
+title: "Register Behavior"
+description: "Install component-owned event, tool, LLM, and stream behavior in each binding."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Registration converts a valid component document into owned runtime behavior. The
+example installs only the feature groups whose `enabled` values are true and reads
+[priority and `break_chain`](/build-plugins/fundamentals/plugin-context) directly from
+configuration. It never calls a process-global middleware registrar from inside the
+plugin.
+
+An optional `registration_control` group in each complete example demonstrates an
+activation-owned conditional middleware guardrail. It is disabled by default. When
+enabled, the context qualifies the gate name and removes the gate automatically during
+rollback or teardown. Refer to
+[Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
+before selecting and storing the target name.
+
+## Register an Activation-Owned Gate
+
+The following examples register the same constant-result gate after configuration has
+supplied a discovered effective target name:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay.runtime_registrations import RuntimeRegistrationKind
+
+control = settings["registration_control"]
+if control["enabled"]:
+    context.register_conditional_middleware_guardrail(
+        "documentation-registration-control",
+        {RuntimeRegistrationKind(kind) for kind in control["kinds"]},
+        control["registration_name"],
+        lambda _kinds, _name: control["reason"],
+    )
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const control = settings.registration_control;
+if (control.enabled) {
+  context.registerConditionalMiddlewareGuardrail(
+    'documentation-registration-control',
+    control.kinds,
+    control.registration_name,
+    () => control.reason,
+  );
+}
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+if config.registration_control.enabled {
+    let reason = config.registration_control.reason.clone();
+    ctx.register_conditional_middleware_guardrail(
+        "documentation-registration-control",
+        config.registration_control.kinds.iter().copied().collect(),
+        &config.registration_control.registration_name,
+        Arc::new(move |_kinds, _name| Some(reason.clone())),
+    )?;
+}
+```
+</Tab>
+</Tabs>
+
+The component-local gate name does not need a plugin prefix. Relay qualifies the name
+and records its rollback operation. The target name is different: it must already be the
+effective name that discovery returned for the current runtime activation.
+
+## Register Event Metadata Injectors
+
+An event metadata injector receives an event snapshot and returns flat metadata
+additions. Relay validates and inserts accepted additions before event sanitizers run.
+Existing metadata values are preserved.
+
+The following examples register a component-owned callback through `PluginContext`:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+def register(self, plugin_config, context):
+    tag = plugin_config["tag"]
+    context.register_event_metadata_injector(
+        "component-metadata",
+        10,
+        lambda event: {"example.plugin.tag": tag},
+    )
+```
+
+Applications can instead use `nemo_relay.event_metadata.register_injector()` for a
+global callback or `nemo_relay.scope_local.register_event_metadata_injector()` for a
+callback owned by an active scope. The matching deregistration functions remove those
+registrations.
+</Tab>
+<Tab title="Node.js" language="node">
+```js
+register(pluginConfig, context) {
+  context.registerEventMetadataInjector('component-metadata', 10, () => ({
+    'example.plugin.tag': pluginConfig.tag,
+  }));
+}
+```
+
+Applications can instead use `registerEventMetadataInjector()` for a global callback
+or `scopeRegisterEventMetadataInjector()` for a callback owned by an active scope. The
+matching deregistration functions remove those registrations.
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+let tag = config.tag.clone();
+ctx.register_event_metadata_injector(
+    "component-metadata",
+    10,
+    Arc::new(move |_event| {
+        let tag = tag.clone();
+        Box::pin(async move {
+            Ok(BTreeMap::from([(
+                "example.plugin.tag".into(),
+                Json::String(tag),
+            )]))
+        })
+    }),
+)?;
+```
+
+Applications can instead use `register_event_metadata_injector()` for a global
+callback or `scope_register_event_metadata_injector()` for a callback owned by
+an active scope. The matching deregistration functions remove those registrations.
+</Tab>
+</Tabs>
+
+Python and Node.js callbacks can return additions directly or asynchronously. Rust
+callbacks return a future. In every binding, callback failures and invalid return values
+omit that callback's additions without dropping the event.
+
+## Register One Equivalent Request Intercept
+
+The following excerpts show the same model-header rewrite. The full checked examples add
+event observation, tool policy, execution wrappers, and streaming verification around
+this common center.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+settings = normalized_config(config)
+tag = settings["tag"]
+observe = settings["observe"]
+requests = settings["requests"]
+execution = settings["execution"]
+
+if observe["enabled"]:
+    context.register_subscriber(
+        "events", lambda event: self.events.append(event.name)
+    )
+
+def tool_policy(name, _args):
+    if requests["mode"] == "enforce" and name in requests["blocked_tools"]:
+        return f"tool '{name}' is blocked"
+    return None
+
+context.register_tool_conditional_execution_guardrail(
+    "tool-policy", 10, tool_policy
+)
+context.register_tool_request_intercept(
+    "tool-request",
+    requests["priority"],
+    requests["break_chain"],
+    lambda _name, args: {**args, "plugin_tag": tag},
+)
+
+def add_header(name, request, annotated):
+    headers = dict(request.headers)
+    headers[requests["header_name"]] = requests["header_value"]
+    return LLMRequestInterceptOutcome(
+        request=LLMRequest(headers=headers, content=request.content),
+        annotated_request=annotated,
+    )
+
+context.register_llm_request_intercept(
+    "documentation-header",
+    requests["priority"],
+    requests["break_chain"],
+    add_header,
+)
+
+async def stream_request(request, next_call):
+    async for chunk in await next_call(request):
+        yield {**chunk, "plugin_stream": True}
+
+context.register_llm_stream_execution_intercept(
+    "documentation-stream", execution["priority"], stream_request
+)
+```
+</Tab>
+<Tab title="Node.js" language="node">
+```js
+const settings = normalizedConfig(config);
+const { observe, requests, execution } = settings;
+
+if (observe.enabled) {
+  context.registerSubscriber(
+    'events', (event) => documentationPlugin.events.push(event.name),
+  );
+}
+
+context.registerToolConditionalExecutionGuardrail('tool-policy', 10, (name) => (
+  requests.mode === 'enforce' && requests.blocked_tools.includes(name)
+    ? `tool '${name}' is blocked`
+    : null
+));
+context.registerToolRequestIntercept(
+  'tool-request', requests.priority, requests.break_chain, (_name, args) => ({
+    ...args,
+    plugin_tag: settings.tag,
+  }),
+);
+
+context.registerLlmRequestIntercept(
+  'documentation-header',
+  requests.priority,
+  requests.break_chain,
+  ({ request, annotated }) => ({
+    request: {
+      ...request,
+      headers: {
+        ...request.headers,
+        [requests.header_name]: requests.header_value,
+      },
+    },
+    annotated,
+  }),
+);
+
+context.registerLlmStreamExecutionIntercept(
+  'documentation-stream',
+  execution.priority,
+  async function* (request, next) {
+    for await (const chunk of await next(request)) {
+      yield { ...chunk, plugin_stream: true };
+    }
+  },
+);
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+let tag = config.tag.clone();
+let mode = config.requests.mode.clone();
+let blocked_tools = config.requests.blocked_tools.clone();
+let header_name = config.requests.header_name.clone();
+let header_value = config.requests.header_value.clone();
+
+if config.observe.enabled {
+    ctx.register_subscriber(
+        "events",
+        Arc::new(|event| println!("event: {}", event.name())),
+    )?;
+}
+
+ctx.register_tool_conditional_execution_guardrail(
+    "tool-policy",
+    10,
+    Arc::new(move |name, _args| {
+        let mode = mode.clone();
+        let blocked = blocked_tools.clone();
+        Box::pin(async move {
+            Ok((mode == "enforce" && blocked.contains(&name))
+                .then(|| format!("tool '{name}' is blocked")))
+        })
+    }),
+)?;
+
+ctx.register_tool_request_intercept(
+    "tool-request",
+    config.requests.priority,
+    config.requests.break_chain,
+    Arc::new(move |_name, mut args| {
+        let tag = tag.clone();
+        Box::pin(async move {
+            if let Some(object) = args.as_object_mut() {
+                object.insert("plugin_tag".into(), Json::String(tag));
+            }
+            Ok(args)
+        })
+    }),
+)?;
+
+ctx.register_llm_request_intercept(
+    "documentation-header",
+    config.requests.priority,
+    config.requests.break_chain,
+    Arc::new(move |_name, mut request, annotated| {
+        let header_name = header_name.clone();
+        let header_value = header_value.clone();
+        Box::pin(async move {
+            request.headers.insert(header_name, header_value.into());
+            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+        })
+    }),
+)?;
+
+ctx.register_llm_stream_execution_intercept(
+    "documentation-stream",
+    config.execution.priority,
+    Arc::new(move |_name, request, next| {
+        Box::pin(async move {
+            let downstream = next(request).await?;
+            Ok(LlmJsonStream::new(downstream.map(|chunk| {
+                chunk.map(|mut value| {
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert("plugin_stream".into(), Json::Bool(true));
+                    }
+                    value
+                })
+            })))
+        })
+    }),
+)?;
+```
+</Tab>
+</Tabs>
+
+The LLM intercept returns the
+[complete outcome](/reference/llm-request-intercept-outcomes) rather than relying on
+mutation. In particular, it preserves `annotated`. The Rust request is mutable inside its
+owned callback value; Python creates a new typed request, and Node.js creates a new plain
+object. Those language differences do not change Relay semantics.
+
+## Initialize and Inspect
+
+Use the following procedure to verify successful activation and transactional rollback:
+
+1. Register the kind, validate the shared component, and stop if the report contains an
+   error. Duplicate kind registration is itself an error and should fail the test.
+2. Initialize the valid document. Rust awaits `initialize_plugins`, Python awaits
+   `plugin.initialize`, and Node.js awaits `plugin.initialize`. Inspect the returned
+   report instead of treating a resolved call as the only signal.
+3. Call the report accessor. Rust uses `active_plugin_report`, Python uses `report`, and
+   Node.js uses `report`. It should describe the last successful activation without
+   rerunning validation.
+4. Execute an LLM request and inspect the real callback headers. Then emit an event and
+   execute the representative tool and stream paths from the checked example.
+5. Force a later registration in the same component to fail. Initialization should
+   reject, the new partial registrations should disappear, and Relay should restore the
+   previous configuration when it can prove cleanup succeeded.
+
+Success means configuration controls the installed surfaces, names are component-owned,
+the activation report matches the runtime effect, and failed registration leaves no
+half-active middleware.

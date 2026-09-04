@@ -1,0 +1,258 @@
+---
+title: "Event Sanitizers"
+description: "Sanitize mark and scope event fields before subscribers and exporters receive them."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Event sanitizers let you remove or replace observability data on mark and
+scope events before the runtime sends the events to subscribers or exporters.
+Use them for event data that the tool and LLM request or response sanitizer
+APIs do not cover. They do not change the real request, response, or callback
+result.
+
+## Sanitizer Surfaces
+
+Choose a registry based on the event that you want to sanitize.
+
+| Registry | Events |
+| --- | --- |
+| Mark sanitizer | Every delivered mark, including explicit, pending, plugin-runtime, and streaming marks |
+| Scope-start sanitizer | Every delivered scope category with `scope_category = "start"` |
+| Scope-end sanitizer | Every delivered scope category with `scope_category = "end"` |
+
+Scope sanitizers apply to every delivered scope category, including `tool` and
+`llm`. For tool and LLM events, the specialized request or response sanitizers
+run first. Your scope sanitizer then receives the already-sanitized event
+fields, which lets a general event policy inspect them without changing the
+real request or response.
+
+On a successful tool end event, an optional opaque tool result annotation is
+available at `category_profile.tool_result_annotation`. Tool
+sanitize-response guardrails govern only the business result in `data`; use the
+scope-end sanitizer to replace or remove the annotation.
+
+## Callback Contract
+
+When the runtime calls a sanitizer, it provides the following values:
+
+- The complete event as immutable context.
+- An `EventSanitizeFields` value with `data`, `category_profile`, and
+  `metadata`.
+
+Return the replacement values for those three observability fields. The return
+value replaces the fields; it does not patch them. Start with the supplied
+fields, modify the fields that need to change, and return all three. In
+bindings that accept a partial object, omitting a field can clear it. To remove
+a field explicitly, use `None` in Rust or Python, `null` in Node.js, or a
+zero-value `json.RawMessage` in Go.
+
+Sanitizers can change only `data`, `category_profile`, and `metadata`. They
+cannot change event identity, parentage, timestamps, kind, scope category,
+semantic category, attributes, semantic input and output meaning, or schemas.
+
+Sanitizers are pure transformations. Do not use their callbacks for stateful
+side effects, such as metrics, logging, mutation, or I/O; Relay only guarantees
+the transformed observability payload.
+
+Registries run in priority order. Lower priorities run first, and each
+callback receives the fields returned by the callback before it. A callback
+error, panic, rejected Promise, or invalid binding result fails closed and
+short-circuits the remaining sanitizer chain. Event sanitizers clear `data`,
+`category_profile`, and `metadata`; tool and LLM sanitizers omit their governed
+payload, while LLM sanitizers also omit its annotation. Sanitizer failures do
+not change tool or provider execution. Node.js records the error for
+`getLastCallbackError()`.
+
+<Warning>
+Event sanitizer callbacks are not re-entrant. Do not call another NeMo Relay
+API that runs middleware, flushes subscribers, waits on an exporter, or clears
+plugins. Scope APIs remain supported: callbacks may create, push, or pop scopes
+at any nesting level and may replace the active scope stack with an arbitrary
+stack. Emitting a new event is the only supported operation that can
+enqueue additional callback work; Relay queues it for later publication.
+</Warning>
+
+## Async Delivery and Ordering
+
+Event sanitizer callbacks may be asynchronous: use an `async def` callback in
+Python, return a Promise in Node.js, or return a future in Rust. Scope and mark
+emission remains synchronous. Relay snapshots the event, sanitizers, and
+subscribers and queues them on one serial publication dispatcher; that
+dispatcher awaits sanitizers before delivering the event to subscribers and
+exporters.
+
+This preserves FIFO start/end/mark delivery without making `push_scope`,
+`pop_scope`, or `event` awaitable. A scope-local sanitizer removed after an
+event is emitted still applies to its queued snapshot. An asynchronous
+sanitizer rejection fails closed and clears the governed observability fields.
+
+When Python code emits events from an `asyncio` task, await
+`nemo_relay.subscribers.flush_async()` to drain queued publication without
+blocking the event loop that runs async sanitizers. The synchronous
+`subscribers.flush()` barrier raises when called from a running event loop.
+
+## Publication Semantics
+
+Scope and mark emission APIs remain synchronous. They snapshot the event,
+visible sanitizer chain, and subscribers, then enqueue that snapshot for
+sanitization and publication on a serial background dispatcher. Subscribers
+and exporters therefore receive the sanitized event after the emission call
+returns.
+
+Event sanitizers run only for events captured for delivery to a direct
+subscriber or an exporter-backed subscriber. With neither visible at emission,
+Relay does not invoke the sanitizer chain or start the dispatcher.
+
+The dispatcher processes snapshots in FIFO order, preserving scope start/end
+and mark ordering. Closing a scope or deregistering middleware after emission
+does not alter an already-snapshotted publication chain. Use the binding's
+subscriber flush API when a test or shutdown path must wait for queued delivery.
+
+## Registration Lifetimes
+
+Where you register a sanitizer determines how long it stays active.
+
+- Global registrations stay active until you explicitly deregister them.
+- Scope-local registrations are inherited by descendant scopes and are removed
+  when the owning scope closes.
+- Plugin-context registrations belong to the component instance. The runtime
+  rolls them back if activation fails or you clear the plugin configuration.
+
+## Register a Global Mark Sanitizer
+
+The following examples replace mark data and remove mark metadata while
+preserving the category profile.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import nemo_relay
+from nemo_relay import guardrails
+
+def sanitize_mark(event, fields: nemo_relay.EventSanitizeFields):
+    return {
+        "data": {"checkpoint": event.name},
+        "category_profile": fields["category_profile"],
+        "metadata": None,
+    }
+
+guardrails.register_mark_sanitize("safe-marks", 100, sanitize_mark)
+try:
+    nemo_relay.scope.event("planning", data={"secret": "value"})
+finally:
+    guardrails.deregister_mark_sanitize("safe-marks")
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const relay = require("nemo-relay-node");
+
+relay.registerMarkSanitizeGuardrail("safe-marks", 100, (event, fields) => ({
+  data: { checkpoint: event.name },
+  categoryProfile: fields.categoryProfile,
+  metadata: null,
+}));
+
+try {
+  relay.event("planning", null, { secret: "value" });
+} finally {
+  relay.deregisterMarkSanitizeGuardrail("safe-marks");
+}
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::api::registry::{
+    deregister_mark_sanitize_guardrail, register_mark_sanitize_guardrail,
+};
+use serde_json::json;
+use std::sync::Arc;
+
+register_mark_sanitize_guardrail(
+    "safe-marks",
+    100,
+    Arc::new(|event, mut fields| {
+        Box::pin(async move {
+            fields.data = Some(json!({"checkpoint": event.name()}));
+            fields.metadata = None;
+            Ok(fields)
+        })
+    }),
+)?;
+
+// Emit marks while the registration is active.
+
+deregister_mark_sanitize_guardrail("safe-marks")?;
+```
+</Tab>
+</Tabs>
+
+## API Names
+
+Use the matching start and end APIs when a policy applies to duration-bearing
+scope events. The following APIs register sanitizers at each level.
+
+| Level | Python | Node.js | Rust |
+| --- | --- | --- | --- |
+| Global Mark | `guardrails.register_mark_sanitize` | `registerMarkSanitizeGuardrail` | `register_mark_sanitize_guardrail` |
+| Global Start | `guardrails.register_scope_sanitize_start` | `registerScopeSanitizeStartGuardrail` | `register_scope_sanitize_start_guardrail` |
+| Global End | `guardrails.register_scope_sanitize_end` | `registerScopeSanitizeEndGuardrail` | `register_scope_sanitize_end_guardrail` |
+| Scope-Local Mark | `scope_local.register_mark_sanitize` | `scopeRegisterMarkSanitizeGuardrail` | `scope_register_mark_sanitize_guardrail` |
+| Scope-Local Start | `scope_local.register_scope_sanitize_start` | `scopeRegisterScopeSanitizeStartGuardrail` | `scope_register_scope_sanitize_start_guardrail` |
+| Scope-Local End | `scope_local.register_scope_sanitize_end` | `scopeRegisterScopeSanitizeEndGuardrail` | `scope_register_scope_sanitize_end_guardrail` |
+
+Each registration API has a matching deregistration API. Python scope-local
+helpers accept a scope handle. Node.js and Rust scope-local helpers accept the
+owning scope UUID.
+
+Plugin contexts expose the same three surfaces as
+`register_mark_sanitize_guardrail`,
+`register_scope_sanitize_start_guardrail`, and
+`register_scope_sanitize_end_guardrail`, using each binding's naming
+convention.
+
+## Dynamic Plugins
+
+Rust native plugins receive the three registration methods on their typed
+plugin context. Python `grpc-v1` workers receive the same methods on
+`PluginContext`, and their callbacks can be synchronous or asynchronous. The
+worker protocol is `grpc-v1` and defines the following stable registration
+surface values:
+
+- `MARK_SANITIZE_GUARDRAIL = 30`
+- `SCOPE_SANITIZE_START_GUARDRAIL = 31`
+- `SCOPE_SANITIZE_END_GUARDRAIL = 32`
+
+Declare only the surfaces that your dynamic plugin installs. Register them
+through the plugin context so the runtime rolls back every registration if
+activation fails.
+
+## Experimental C and Go Bindings
+
+The source-first C API uses `NemoRelayEventSanitizeCb`. It provides global,
+scope-local, and plugin-context registration functions for all three surfaces.
+Global names start with `nemo_relay_register_`, and scope-local names start
+with `nemo_relay_scope_register_`. These callbacks are synchronous: Relay
+waits on a native thread until the callback returns, and no completion-based
+registration variant is provided.
+
+The Go binding provides `EventSanitizeFields`, `EventSanitizeFunc`, global
+`Register*SanitizeGuardrail` helpers, scope-local
+`ScopeRegister*SanitizeGuardrail` helpers, and the same methods on
+`PluginContext`. The `guardrails` package provides shorter aliases. Because a
+returned `EventSanitizeFields` replaces all three fields, copy the supplied
+value and modify only the fields that should change. Go middleware callbacks
+are also synchronous; blocking work occupies the native callback thread.
+
+## Related Topics
+
+For related concepts and configuration, refer to the following topics:
+
+- [Middleware](/about-nemo-relay/concepts/middleware)
+- [Events](/about-nemo-relay/concepts/events)
+- [Register Plugin Behavior](/build-plugins/language-binding/register-behavior)
+- [PII Redaction Configuration](/configure-plugins/pii-redaction/configuration)

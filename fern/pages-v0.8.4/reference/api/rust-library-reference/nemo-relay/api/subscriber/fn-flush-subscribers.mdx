@@ -1,0 +1,18 @@
+---
+title: "Function flush_subscribers"
+sidebar-title: "flush_subscribers"
+description: "Wait for all subscriber callbacks and managed terminal publications registered before this call to finish, including publications emitted transitively by those callbacks."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn flush_subscribers() -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Wait for all subscriber callbacks and managed terminal publications registered before this call to finish, including publications emitted transitively by those callbacks.
+
+A direct re-entrant call from queued publication middleware returns without waiting. Publication middleware must not move such a flush into `tokio::spawn`, `tokio::task::spawn_blocking`, or another unmarked task or thread because the publication cannot complete while awaiting that flush.
+
+Native targets deliver subscriber callbacks on a background dispatcher so event-producing APIs do not wait for observer work. Call this helper from tests, shutdown paths, or exporter lifecycle code when callers need a deterministic observation barrier.

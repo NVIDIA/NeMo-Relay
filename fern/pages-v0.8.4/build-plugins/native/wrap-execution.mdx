@@ -1,0 +1,157 @@
+---
+title: "Wrap Execution"
+description: "Use native tool, unary LLM, and streaming continuations correctly."
+position: 24
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+[Execution intercepts](/about-nemo-relay/concepts/middleware) receive the real request
+and a continuation representing the rest
+of the call path. The example's `execution` group registers a tool wrapper, a unary LLM
+wrapper, and an LLM stream wrapper at the configured priority.
+
+## Tool and Unary Results
+
+The tool wrapper calls `next` once, awaits the downstream `ToolExecutionResult`, and
+converts it into a
+[`ToolExecutionInterceptOutcome`](/reference/tool-execution-intercept-outcomes) with the
+example's pending mark. The
+conversion preserves both the application `result` and any opaque `annotation`. Relay
+owns the pending mark: it is emitted in the managed lifecycle and does not appear in the
+application-visible result.
+The unary LLM wrapper has a deliberately smaller contract and returns provider-response
+JSON. LLM pending marks, annotations, and optimization contributions belong to the
+request-intercept outcome shown in [Control Requests](/build-plugins/native/control-requests),
+not the execution result.
+
+```rust
+context.register_tool_execution_intercept(
+    "documentation_tool_execution",
+    config.execution.priority,
+    {
+        let emit_pending_marks = config.execution.emit_pending_marks;
+        move |_name, request, next| async move {
+            let result = next.call(request).await?;
+            let mut outcome = ToolExecutionInterceptOutcome::from(result);
+            if emit_pending_marks {
+                outcome = outcome.with_pending_mark(
+                    PendingMarkSpec::builder()
+                        .name("example.native.tool_execution")
+                        .category(EventCategory::custom())
+                        .data(json!({ "source": "documentation" }))
+                        .build(),
+                );
+            }
+            Ok(outcome)
+        }
+    },
+)?;
+```
+
+If downstream returns `ToolExecutionResult::annotated(json!({"answer": 42}),
+json!({"source": "provider"}))`, the application receives that same result object and
+reads `tool_result.result["answer"]`. Relay separately emits
+`example.native.tool_execution` under the managed tool call. That separation is why the
+callback returns an outcome instead of returning a plain JSON value.
+
+The continuation is reusable. A deliberate configuration or request flag in the example
+can invoke unary `next` twice concurrently, await both responses, and select one. This
+demonstrates the API while preserving the cost of repetition. A repeated tool can perform
+its side effect twice, and a repeated model call can incur provider cost twice. Production
+plugins need an idempotency
+or charging policy before they use this pattern.
+
+```rust
+context.register_llm_execution_intercept(
+    "documentation_llm_execution",
+    config.execution.priority,
+    move |_name, request, next| async move {
+        let repeat = request.content
+            .get("repeat_downstream")
+            .and_then(Json::as_bool)
+            .unwrap_or(false);
+        if repeat {
+            let repeated = next.clone();
+            let (first, second) = tokio::join!(
+                repeated.call(request.clone()),
+                next.call(request),
+            );
+            let response = first?;
+            second?;
+            Ok(response)
+        } else {
+            next.call(request).await
+        }
+    },
+)?;
+```
+
+Cloning `next` creates another handle to the same downstream continuation. `tokio::join!`
+polls both calls concurrently; it does not make either provider operation free or
+idempotent. The wrapper propagates a failure from either call and returns the first
+response only after both calls succeed. The request flag makes repeated execution
+observable and opt-in for this example.
+
+Calling `next` zero times is also valid and replaces downstream execution. Conditional
+guardrails are clearer for ordinary allow-or-block policy; zero-call execution wrappers
+are useful when the plugin intentionally synthesizes a complete result.
+
+## Transform Streams Lazily
+
+The stream intercept asks the continuation for a downstream stream and maps chunks as
+the consumer polls them. It does not collect the stream into an array. Each transformed
+chunk preserves the downstream JSON fields, and terminal error or cancellation ends the
+output promptly.
+
+```rust
+context.register_llm_stream_execution_intercept(
+    "documentation_llm_stream_execution",
+    config.execution.priority,
+    move |_name, request, next| async move {
+        let stream = next.call(request).await?;
+        let mapped: LlmJsonAsyncStream = Box::pin(stream.map(|chunk| {
+            chunk.map(|chunk| match chunk {
+                Json::Object(mut object) => {
+                    object.insert("plugin_stream".into(), Json::Bool(true));
+                    Json::Object(object)
+                }
+                other => other,
+            })
+        }));
+        Ok(mapped)
+    },
+)?;
+```
+
+The outer `await` obtains the downstream stream. The `map` closure runs later, once per
+polled chunk, and preserves downstream errors through `chunk.map`. There is no collection
+step and therefore no requirement to hold the entire response in memory.
+
+The native raw queue is bounded, but typed SDK users see an asynchronous stream facade.
+The SDK handles the host push protocol; the plugin still must avoid producing unbounded
+work ahead of demand and must release per-invocation state after clean completion, error,
+or cancellation.
+
+## Verify Execution Behavior
+
+Use the following procedure to verify unary, repeated, and streaming continuation
+behavior:
+
+1. Activate the example with `execution.enabled = true`, priority 30, and
+   `emit_pending_marks = true`.
+2. Execute a tool and a unary model call. Confirm each downstream callback runs once,
+   the application receives only its expected result, and an additional pending mark is
+   emitted under the managed call scope.
+3. Enable the example's repeated-continuation input and confirm two downstream unary
+   invocations can overlap. Verify the selected result and accounting explicitly.
+4. Consume a three-chunk LLM stream one item at a time. Confirm the first transformed
+   chunk arrives before the downstream stream completes.
+5. Drop a second stream after its first chunk. Confirm that downstream production and
+   plugin work stop cooperatively.
+6. Clear the component and repeat the calls to prove that no wrapper or pending mark
+   remains registered.
+
+Success means unary and stream continuations preserve scope, errors, and cancellation,
+while Relay-owned tool marks and LLM request accounting remain separate from
+application results.

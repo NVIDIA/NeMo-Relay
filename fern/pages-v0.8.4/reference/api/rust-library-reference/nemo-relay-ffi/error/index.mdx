@@ -1,0 +1,28 @@
+---
+title: "Module error"
+sidebar-title: "error"
+description: "Error handling for the FFI layer."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Error handling for the FFI layer.
+
+This module defines the [`NemoRelayStatus`](/reference/api/rust-library-reference/nemo-relay-ffi/error/enum-nemorelaystatus) enum returned by every exported FFI function, along with thread-local storage for human-readable error messages. After any non-`Ok` return, the caller should invoke [`nemo_relay_last_error`](/reference/api/rust-library-reference/nemo-relay-ffi/error/fn-nemo-relay-last-error) on the same thread to obtain a diagnostic string. The error message remains valid until the next FFI call on that thread clears it via [`clear_last_error`](/reference/api/rust-library-reference/nemo-relay-ffi/error/fn-clear-last-error).
+
+## Enums
+
+- [NemoRelayStatus](/reference/api/rust-library-reference/nemo-relay-ffi/error/enum-nemorelaystatus): Status codes returned by all FFI functions.
+
+## Functions
+
+- [clear_last_error](/reference/api/rust-library-reference/nemo-relay-ffi/error/fn-clear-last-error): Clear the thread-local last-error message.
+- [last_error_message](/reference/api/rust-library-reference/nemo-relay-ffi/error/fn-last-error-message): Retrieve the last error message set on this thread, if any.
+- [nemo_relay_last_error](/reference/api/rust-library-reference/nemo-relay-ffi/error/fn-nemo-relay-last-error): Retrieve the last error message set on this thread, or null if no error has occurred since the last [`clear_last_error`](/reference/api/rust-library-reference/nemo-relay-ffi/error/fn-clear-last-error) call.
+- [nemo_relay_set_last_error_message](/reference/api/rust-library-reference/nemo-relay-ffi/error/fn-nemo-relay-set-last-error-message): Set the thread-local last-error message from foreign code.
+- [set_last_error](/reference/api/rust-library-reference/nemo-relay-ffi/error/fn-set-last-error): Store an error message in thread-local storage for later retrieval.
+- [status_from_error](/reference/api/rust-library-reference/nemo-relay-ffi/error/fn-status-from-error): Convert an `FlowError` to an `NemoRelayStatus`, storing the error message in thread-local storage.
+- [status_from_plugin_error](/reference/api/rust-library-reference/nemo-relay-ffi/error/fn-status-from-plugin-error): Convert a `PluginError` to an `NemoRelayStatus`, storing the error message in thread-local storage.

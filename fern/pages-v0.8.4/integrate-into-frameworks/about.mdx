@@ -1,0 +1,122 @@
+---
+title: "About"
+description: "Choose NeMo Relay APIs for tool and LLM calls controlled by a framework."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this section when an agent framework, orchestration layer, SDK, or provider
+adapter owns the tool and LLM call sites that need NeMo Relay instrumentation.
+
+Framework integrations differ from direct application instrumentation because the
+integration often does not own the full invocation. A framework may control
+scheduling, retries, streaming, callback signatures, provider payloads, and
+internal object lifetimes. The integration has to choose the best available
+boundary without changing framework behavior.
+
+Prefer a managed execution wrapper around a stable tool or LLM callback. When
+that is not possible, use explicit lifecycle calls, standalone guardrail or
+intercept helpers, or mark events.
+
+## Choose How Relay Connects
+
+Prefer these options in order when they represent the lifecycle boundary you
+need. Move down the table when the option above cannot capture that boundary or
+the framework does not support it.
+
+| Method | Use When | What Relay Handles |
+| --- | --- | --- |
+| Managed execution wrapper | Relay can wrap the real tool or LLM callback. | Lifecycle pairing, the complete middleware pipeline, timing, and event parentage. |
+| Explicit start and end calls | The framework exposes reliable lifecycle hooks but owns callback execution. | Event construction and parentage; the integration must pair the calls. |
+| Standalone conditional-execution helper | The framework needs an allow-or-block decision before its own call. | The policy decision only. |
+| Standalone request-intercept helper | The framework can accept a rewritten request before its own call. | Request transformation only. |
+| Mark event | The framework exposes only a milestone or state transition. | One point-in-time event without a duration. |
+
+### Prefer Managed Execution Wrappers
+
+A managed wrapper is the best fit when the framework exposes a stable callback.
+It preserves lifecycle ordering, middleware placement, timing, and
+parent-child relationships around the real invocation. The framework should
+still own its scheduler, retries, routing, and object lifetimes unless the
+wrapper explicitly encloses that behavior.
+
+### Use Explicit Lifecycle Calls as the Main Fallback
+
+When Relay cannot wrap the callback, use reliable framework hooks to emit the
+lifecycle explicitly:
+
+1. Emit the start event as soon as the framework can identify the work.
+2. Retain the returned handle.
+3. Emit the matching end event for success or failure.
+4. Use marks only for milestones that do not have a complete lifecycle.
+
+Manual lifecycle calls preserve observability and parentage. They do not run
+execution intercepts, request intercepts, or request and response guardrails
+unless the integration invokes those standalone APIs separately.
+
+### Use Standalone Policy or Transformation When Needed
+
+Conditional-execution helpers return an allow-or-block decision before the
+framework continues its own invocation. Request-intercept helpers return a
+rewritten JSON-compatible request before framework-owned execution. Neither
+helper creates a complete managed lifecycle span by itself.
+
+### Use Marks for Checkpoints
+
+Marks fit retries, queue transitions, scheduler milestones, state changes, and
+debugging checkpoints. They improve visibility but do not replace paired start
+and end events.
+
+### Keep Provider Semantics in Codecs
+
+When provider request or response payloads matter, use
+[Provider Codecs](/integrate-into-frameworks/provider-codecs) and annotated
+request or response data before adding raw-payload parsing to the integration.
+Provider-specific round-trip behavior should remain in the codec or adapter for
+that provider.
+
+## Start Here
+
+Use these signals to decide whether this documentation path matches your current task.
+
+- Maintain a framework integration for NeMo Relay
+- Need to instrument calls without rewriting framework internals
+- Need to handle provider-specific request or response payloads
+- Need to keep non-serializable framework objects outside NeMo Relay payloads
+- Are building or reviewing a public-API framework integration
+
+If you own the application call sites directly, use [Instrument Applications](/instrument-applications/about) first.
+If your application uses a maintained public integration such as LangChain,
+LangGraph, Deep Agents, or OpenClaw, start with
+[Supported Integrations](/supported-integrations/about).
+
+## Guides
+
+Use these guide links to move from the overview into task-specific instructions.
+
+- [Adding Scopes](/integrate-into-frameworks/adding-scopes) shows how framework request and run hooks become NeMo Relay ownership boundaries.
+- [Wrap Tool Calls](/integrate-into-frameworks/wrap-tool-calls) explains where to place managed tool wrappers and tool lifecycle fallbacks.
+- [Wrap LLM Calls](/integrate-into-frameworks/wrap-llm-calls) explains where to place managed provider wrappers, model names, streaming behavior, and LLM lifecycle fallbacks.
+- [Handle Non-Serializable Data](/integrate-into-frameworks/non-serializable-data) shows how to keep clients, streams, callbacks, and SDK objects outside JSON payloads.
+- [Using Codecs](/integrate-into-frameworks/using-codecs) explains typed value codecs for framework-facing wrappers.
+- [Provider Codecs](/integrate-into-frameworks/provider-codecs) explains request codecs for request intercepts and request-side middleware, plus response codecs for event annotations.
+- [Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs) focuses on response-only annotations for subscribers and exporters.
+- [Code Examples](/integrate-into-frameworks/code-examples) collects fallback APIs, mark events, and framework integration examples.
+
+For coding-agent hook and LLM gateway observability, use
+[NeMo Relay CLI](/nemo-relay-cli/about). That section covers Claude Code and
+Codex support. Hermes Agent includes Relay as a native in-process integration
+and does not require the Relay CLI or a separate observability plugin. Hermes
+Agent understands NeMo Relay plugin configurations.
+
+Start by identifying the framework's stable tool and LLM boundaries. Prefer
+managed execution wrappers wherever the framework exposes a callback that NeMo
+Relay can own. Use explicit API calls only when the framework owns invocation
+internally but exposes reliable start and finish hooks.
+
+Validate that application-visible framework behavior does not change. Then
+confirm that events share the expected root scope, middleware runs exactly once
+per managed call, and non-serializable framework objects remain in
+framework-owned storage.
