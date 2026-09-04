@@ -80,7 +80,13 @@ class TestPricingConfigHelpers:
             ],
         }
 
-    def test_component_configures_plugin_validation(self):
+    def test_component_configures_plugin_validation(self, tmp_path: Path, monkeypatch):
+        config_home = tmp_path / "config"
+        relay_config = config_home / "nemo-relay"
+        relay_config.mkdir(parents=True)
+        (relay_config / "plugins.toml").write_text("{", encoding="utf-8")
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
         report = validate_config(
             PricingConfig(
                 sources=[

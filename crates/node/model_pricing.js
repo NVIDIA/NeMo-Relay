@@ -165,7 +165,7 @@ function ComponentSpec(config, { enabled = true } = {}) {
  * @returns {object} A structured validation report with diagnostics.
  */
 function validateConfig(config) {
-  return plugin.validate({
+  return plugin.validateExact({
     version: 1,
     components: [ComponentSpec(config)],
   }).config;

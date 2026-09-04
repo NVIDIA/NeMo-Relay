@@ -411,8 +411,8 @@ func marshalPluginHostActivationConfig(config PluginConfig) ([]byte, error) {
 }
 
 // Initialize activates the core-owned static and dynamic plugin host.
-// Programmatic config is lowest precedence; the optional explicit file is
-// followed by discovered user and system files.
+// Programmatic config is lowest precedence. An optional explicit file replaces
+// user-file discovery, and the system file overlays either source.
 func Initialize(config PluginConfig, additionalPluginsTOML *string) (*PluginHostActivation, PluginHostReport, error) {
 	configPayload, err := marshalPluginHostActivationConfig(config)
 	if err != nil {
@@ -449,7 +449,9 @@ func Validate(config PluginConfig, additionalPluginsTOML *string) (PluginHostRep
 	return report, nil
 }
 
-func validateProgrammaticPluginConfig(config PluginConfig) (PluginHostReport, error) {
+// ValidateExact validates only the supplied static plugin configuration.
+// Unlike Validate, it does not discover or merge plugins.toml files.
+func ValidateExact(config PluginConfig) (PluginHostReport, error) {
 	payload, err := marshalPluginHostActivationConfig(config)
 	if err != nil {
 		return PluginHostReport{}, err

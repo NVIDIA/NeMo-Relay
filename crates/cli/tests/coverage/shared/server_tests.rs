@@ -46,6 +46,18 @@ const GENERIC_TEST_PLUGIN_KIND: &str = "cli-test-generic-plugin";
 static GENERIC_TEST_PLUGIN_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static GENERIC_TEST_PLUGIN_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 
+async fn assert_plugin_host_lease_available() {
+    let mut probe = nemo_relay::plugin::dynamic::PluginHostActivation::initialize_exact(
+        nemo_relay::plugin::PluginConfig::default(),
+    )
+    .await
+    .expect("server should leave the plugin-host lease available");
+    assert!(probe.is_active());
+    probe
+        .close()
+        .expect("plugin-host lease probe should close cleanly");
+}
+
 struct BuiltinObservabilityRestore;
 
 impl Drop for BuiltinObservabilityRestore {
@@ -1377,7 +1389,7 @@ async fn serve_listener_observability_plugin_records_supported_agent_hooks() {
 
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
-    assert!(nemo_relay::plugin::test_plugin_host_report().is_none());
+    assert_plugin_host_lease_available().await;
 
     let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
     let turn_starts = events
@@ -1791,7 +1803,7 @@ async fn serve_listener_records_codex_stop_atof_contract() {
 
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
-    assert!(nemo_relay::plugin::test_plugin_host_report().is_none());
+    assert_plugin_host_lease_available().await;
 
     let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
     let events = events
@@ -1892,7 +1904,7 @@ async fn serve_listener_activates_any_registered_plugin_kind() {
         GENERIC_TEST_PLUGIN_DEREGISTRATIONS.load(Ordering::SeqCst),
         1
     );
-    assert!(nemo_relay::plugin::test_plugin_host_report().is_none());
+    assert_plugin_host_lease_available().await;
     let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
 }
 
@@ -2197,7 +2209,7 @@ async fn serve_listener_rejects_invalid_plugin_config() {
         .unwrap_err();
 
     assert!(error.to_string().contains("ATOF sinks[0].mode"));
-    assert!(nemo_relay::plugin::test_plugin_host_report().is_none());
+    assert_plugin_host_lease_available().await;
 }
 
 #[tokio::test]
@@ -2249,7 +2261,7 @@ async fn serve_listener_preflights_dynamic_load_before_static_activation() {
         GENERIC_TEST_PLUGIN_DEREGISTRATIONS.load(Ordering::SeqCst),
         0
     );
-    assert!(nemo_relay::plugin::test_plugin_host_report().is_none());
+    assert_plugin_host_lease_available().await;
     assert!(deregister_plugin(GENERIC_TEST_PLUGIN_KIND));
 }
 
@@ -2283,7 +2295,7 @@ async fn serve_listener_rejects_invalid_pii_redaction_plugin_config() {
 
     assert!(error.to_string().contains("unsupported"));
     assert!(error.to_string().contains("version"));
-    assert!(nemo_relay::plugin::test_plugin_host_report().is_none());
+    assert_plugin_host_lease_available().await;
 }
 
 #[tokio::test]

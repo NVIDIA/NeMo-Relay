@@ -14,11 +14,11 @@ var testPluginHost struct {
 }
 
 func validateTestPluginConfig(config PluginConfig) (ConfigReport, error) {
-	report, err := validateProgrammaticPluginConfig(config)
+	report, err := ValidateExact(config)
 	return report.Config, err
 }
 
-func TestValidateProgrammaticPluginConfigUsesExactHostReport(t *testing.T) {
+func TestValidateExactUsesExactHostReport(t *testing.T) {
 	originalExact := validateExactPluginHostJSON
 	originalLayered := validatePluginHostJSON
 	t.Cleanup(func() {
@@ -50,9 +50,9 @@ func TestValidateProgrammaticPluginConfigUsesExactHostReport(t *testing.T) {
 		}`, nil
 	}
 
-	report, err := validateProgrammaticPluginConfig(PluginConfig{Version: 1})
+	report, err := ValidateExact(PluginConfig{Version: 1})
 	if err != nil {
-		t.Fatalf("validateProgrammaticPluginConfig failed: %v", err)
+		t.Fatalf("ValidateExact failed: %v", err)
 	}
 	if len(report.DynamicPlugins) != 1 || report.DynamicPlugins[0].PluginID != "fixture.dynamic" {
 		t.Fatalf("expected complete exact host report, got %#v", report)

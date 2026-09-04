@@ -239,19 +239,24 @@ export class NemoRelayRuntimeState {
     }
     this.backendValue = undefined;
 
+    let pluginHostCloseFailure: string | undefined;
     if (this.pluginHostActivation) {
       try {
         await this.pluginHostActivation.close();
       } catch (error) {
-        log.warn?.(`failed to close NeMo Relay plugin host: ${toMessage(error)}`);
+        pluginHostCloseFailure = `failed to close NeMo Relay plugin host: ${toMessage(error)}`;
+        log.warn?.(pluginHostCloseFailure);
       }
-      this.pluginHostActivation = undefined;
-      this.initializedPluginHost = false;
-      this.pluginHostOutputsHealthy = false;
+      if (pluginHostCloseFailure === undefined) {
+        this.pluginHostActivation = undefined;
+        this.initializedPluginHost = false;
+        this.pluginHostOutputsHealthy = false;
+      }
     }
 
     this.started = false;
-    this.statusValue = finalStatus;
+    this.statusValue =
+      pluginHostCloseFailure === undefined ? finalStatus : { state: 'degraded', reason: pluginHostCloseFailure };
   }
 
   /** Handle OpenClaw runtime lifecycle cleanup for either a session or the backend. */

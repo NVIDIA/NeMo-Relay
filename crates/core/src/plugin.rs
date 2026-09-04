@@ -2330,7 +2330,11 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
         .map(rollback_registrations_checked)
         .unwrap_or_default();
     let teardown_report = match ACTIVE_PLUGIN_CONFIGURATION.lock() {
-        Ok(mut guard) => guard.take().map(|state| state.report),
+        Ok(mut guard) if deregistration.callbacks_cleared => guard.take().map(|state| state.report),
+        Ok(mut guard) => guard.as_mut().map(|state| {
+            state.registrations = registrations.take().unwrap_or_default();
+            state.report.clone()
+        }),
         Err(err) => {
             return PluginHostClearOutcome {
                 result: Err(PluginError::Internal(format!(
@@ -2578,6 +2582,7 @@ pub(crate) fn active_runtime_diagnostics_snapshot() -> Vec<RuntimeDiagnosticsSna
 /// This is used internally during failed initialization and owned host close.
 pub fn rollback_registrations(registrations: &mut Vec<PluginRegistration>) {
     let _ = rollback_registrations_checked(registrations);
+    registrations.clear();
 }
 
 struct PluginRollbackOutcome {
@@ -2598,7 +2603,8 @@ fn rollback_registrations_checked(
     registrations: &mut Vec<PluginRegistration>,
 ) -> PluginRollbackOutcome {
     let mut outcome = PluginRollbackOutcome::default();
-    for registration in registrations.iter_mut().rev() {
+    let mut retained = Vec::new();
+    while let Some(mut registration) = registrations.pop() {
         match catch_unwind(AssertUnwindSafe(|| (registration.deregister)())) {
             Ok(PluginRegistrationCleanupOutcome::Removed) => {}
             Ok(PluginRegistrationCleanupOutcome::RemovedWithError(error)) => {
@@ -2613,6 +2619,7 @@ fn rollback_registrations_checked(
                     "{} registration '{}' could not be removed: {error}",
                     registration.kind, registration.name
                 ));
+                retained.push(registration);
             }
             Err(payload) => {
                 outcome.callbacks_cleared = false;
@@ -2622,10 +2629,12 @@ fn rollback_registrations_checked(
                     registration.name,
                     panic_payload_message(payload)
                 ));
+                retained.push(registration);
             }
         }
     }
-    registrations.clear();
+    retained.reverse();
+    *registrations = retained;
     outcome
 }
 

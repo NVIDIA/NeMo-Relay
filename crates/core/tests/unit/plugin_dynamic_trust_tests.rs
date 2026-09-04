@@ -249,10 +249,12 @@ fn authenticity_modes_cover_optional_required_and_malformed_evidence() {
     ));
 
     std::fs::write(temp.path().join("artifact.sig"), "not-base64!").unwrap();
-    assert!(matches!(
-        evaluate_dynamic_plugin_trust(&signed, manifest_ref, &with_key).failure,
-        Some(DynamicPluginTrustFailure::SignatureRead { .. })
-    ));
+    match evaluate_dynamic_plugin_trust(&signed, manifest_ref, &with_key).failure {
+        Some(DynamicPluginTrustFailure::SignatureRead { error, .. }) => {
+            assert!(error.contains("invalid base64 signature"), "{error}");
+        }
+        other => panic!("expected malformed base64 signature failure, got {other:?}"),
+    }
 }
 
 #[test]

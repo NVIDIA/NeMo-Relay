@@ -253,7 +253,7 @@ config = nemo_relay.plugin.PluginConfig(
     ]
 )
 
-report = nemo_relay.plugin.validate(config)["config"]
+report = nemo_relay.plugin.validate_exact(config)["config"]
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
@@ -277,19 +277,21 @@ config.components = [
   }),
 ];
 
-const report = plugin.validate(config).config;
+const report = plugin.validateExact(config).config;
 if (report.diagnostics.some((diagnostic) => diagnostic.level === 'error')) {
   throw new Error(JSON.stringify(report.diagnostics));
 }
 
 const activation = await plugin.initialize(config);
+// Run instrumented application work here.
+await activation.close();
 ```
 </Tab>
 
 <Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::plugin::PluginConfig;
-use nemo_relay::plugin::dynamic::{initialize, validate};
+use nemo_relay::plugin::dynamic::{initialize, validate_exact};
 use serde_json::json;
 
 let config: PluginConfig = serde_json::from_value(json!({
@@ -304,12 +306,14 @@ let config: PluginConfig = serde_json::from_value(json!({
     }]
 }))?;
 
-let report = validate(config.clone(), None)?;
+let report = validate_exact(config.clone());
 if report.config.has_errors() {
     return Err("invalid model pricing plugin config".into());
 }
 
-let activation = initialize(config, None).await?;
+let mut activation = initialize(config, None).await?;
+// Run instrumented application work here.
+activation.close()?;
 ```
 </Tab>
 </Tabs>

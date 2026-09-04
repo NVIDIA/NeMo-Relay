@@ -20,7 +20,7 @@ impl Drop for PoisonedRegistryCleanup {
 }
 
 #[test]
-fn unsafe_kind_deregistration_retains_runtime_and_owner() {
+fn unsafe_kind_deregistration_keeps_activation_retryable() {
     let _guard = crate::shared_runtime::runtime_owner_test_mutex()
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -51,7 +51,7 @@ fn unsafe_kind_deregistration_retains_runtime_and_owner() {
         .to_string();
     assert!(error.contains("plugin registry lock poisoned"), "{error}");
     assert!(error.contains("activation owner were retained"), "{error}");
-    assert!(!activation.is_active());
+    assert!(activation.is_active());
     assert_eq!(
         *PLUGIN_MUTATION_OWNER.lock().unwrap(),
         PluginMutationOwner::Host(owner_id)
@@ -60,6 +60,18 @@ fn unsafe_kind_deregistration_retains_runtime_and_owner() {
         acquire_plugin_host_lease(),
         Err(crate::plugin::PluginError::Conflict(_))
     ));
+
+    PLUGIN_HANDLERS.clear_poison();
+    let retry_error = activation
+        .clear_inner()
+        .expect_err("the missing fixture registration should still be reported")
+        .to_string();
+    assert!(retry_error.contains("was not registered"), "{retry_error}");
+    assert!(!activation.is_active());
+    assert_eq!(
+        *PLUGIN_MUTATION_OWNER.lock().unwrap(),
+        PluginMutationOwner::Idle
+    );
 }
 
 #[test]

@@ -156,8 +156,8 @@ fn lock_plugin_activation(
 /// Initialize the unified static and dynamic plugin host from core-owned
 /// `plugins.toml` discovery.
 ///
-/// `additional_plugins_toml` may be null. When supplied it is layered above
-/// programmatic configuration and below discovered user and system files.
+/// `additional_plugins_toml` may be null. When supplied it replaces user-file
+/// discovery, above programmatic configuration and below the system file.
 /// The returned handle owns all activated plugin registrations and runtimes.
 ///
 /// # Safety

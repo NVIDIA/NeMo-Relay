@@ -230,7 +230,11 @@ symbol = "nemo_relay_register_plugin"
     manifest
 }
 
-fn write_plugins_toml(directory: &Path, manifest: &Path, config: &Map<String, serde_json::Value>) -> PathBuf {
+fn write_plugins_toml(
+    directory: &Path,
+    manifest: &Path,
+    config: &Map<String, serde_json::Value>,
+) -> PathBuf {
     let path = directory.join("plugins.toml");
     let config = toml::Value::try_from(config.clone())
         .expect("plugin config should serialize as TOML");

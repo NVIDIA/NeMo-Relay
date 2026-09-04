@@ -184,7 +184,7 @@ func TestGoBindingErrorAndDefaultContracts(t *testing.T) {
 	assertExpiredCodecAndStreamErrors(t)
 	assertStreamExporterPath(t)
 	assertCallbackSerializationFailures(t)
-	assertPluginHostActivationIncompleteOutputs(t)
+	assertPluginHostActivationEmptyReportDecodeError(t)
 	assertAtofExporterSerializationFailures(t)
 	assertClosedHandleErrorPaths(t)
 	assertOptimizationContributionValidation(t)
@@ -500,14 +500,17 @@ func assertCallbackSerializationFailures(t *testing.T) {
 	}
 }
 
-func assertPluginHostActivationIncompleteOutputs(t *testing.T) {
+func assertPluginHostActivationEmptyReportDecodeError(t *testing.T) {
 	t.Helper()
 	withPluginHostStubs(t)
+	previousUnmarshal := jsonUnmarshal
+	jsonUnmarshal = json.Unmarshal
+	defer func() { jsonUnmarshal = previousUnmarshal }()
 	initializePluginHostJSON = func(string, *string) (unsafe.Pointer, string, error) {
 		return nil, "", nil
 	}
-	if _, _, err := Initialize(NewPluginConfig(), nil); err == nil {
-		t.Fatal("expected incomplete plugin host outputs to fail")
+	if _, _, err := Initialize(NewPluginConfig(), nil); err == nil || err.Error() != "unexpected end of JSON input" {
+		t.Fatalf("expected empty report decode error, got %v", err)
 	}
 	if err := newPluginHostActivation(nil).Close(); err != nil {
 		t.Fatalf("nil plugin host activation close failed: %v", err)

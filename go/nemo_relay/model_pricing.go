@@ -230,7 +230,7 @@ func PricingComponent(config PricingConfig) PluginComponentSpec {
 
 // ValidatePricingConfig validates a model pricing config document without activating it.
 func ValidatePricingConfig(config PricingConfig) (ConfigReport, error) {
-	report, err := validateProgrammaticPluginConfig(PluginConfig{
+	report, err := ValidateExact(PluginConfig{
 		Version:    1,
 		Components: []PluginComponentSpec{PricingComponent(config)},
 	})

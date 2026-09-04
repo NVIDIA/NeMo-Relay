@@ -2647,8 +2647,7 @@ class _PluginHostActivation:
     def is_active(self) -> bool:
         """Return whether this activation handle has not begun teardown.
 
-        ``False`` does not guarantee another process-wide activation can start;
-        failed teardown may intentionally retain the activation owner.
+        Failed teardown leaves the activation active so ``close()`` can retry.
         """
         ...
 
@@ -2662,6 +2661,10 @@ def initialize(config: object, additional_plugins_toml: str | None = None) -> Aw
 
 def validate(config: object, additional_plugins_toml: str | None = None) -> _JsonObject:
     """Validate static configuration and dynamic plugins without activating them."""
+    ...
+
+def validate_exact(config: object) -> _JsonObject:
+    """Validate only the supplied static plugin configuration."""
     ...
 
 def list_plugin_kinds() -> list[str]:

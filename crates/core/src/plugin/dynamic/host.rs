@@ -288,9 +288,7 @@ impl PluginHostActivation {
 
     /// Returns whether this activation handle has not begun teardown.
     ///
-    /// `false` means the handle is no longer reusable. It does not guarantee
-    /// that another process-wide activation can start: failed teardown may
-    /// intentionally retain the loaded runtimes and activation owner.
+    /// Failed teardown leaves the handle active so [`Self::close`] can retry.
     pub fn is_active(&self) -> bool {
         self.active
     }
@@ -317,7 +315,6 @@ impl PluginHostActivation {
         if !self.active {
             return Ok(());
         }
-        self.active = false;
         let outcome = self
             .claim
             .as_ref()
@@ -336,10 +333,6 @@ impl PluginHostActivation {
             .map(|error| vec![error.to_string()])
             .unwrap_or_default();
         if !outcome.callbacks_cleared {
-            // If core could not prove callbacks were removed, intentionally
-            // retain their code and owner for process lifetime rather than
-            // unload a library or worker that may still be referenced.
-            self.retain_loaded_runtimes();
             return Err(retained_runtime_error(errors));
         }
 
@@ -364,7 +357,6 @@ impl PluginHostActivation {
         errors.extend(runtime_outcome.errors);
 
         if !runtime_outcome.safe_to_unload {
-            self.retain_loaded_runtimes();
             return Err(retained_runtime_error(errors));
         }
 
@@ -375,6 +367,7 @@ impl PluginHostActivation {
         #[cfg(feature = "worker-grpc")]
         self.worker.take();
         self.claim.take();
+        self.active = false;
 
         if errors.is_empty() {
             log::info!(
@@ -466,6 +459,10 @@ fn plugin_error_context(
 impl Drop for PluginHostActivation {
     fn drop(&mut self) {
         if self.clear_inner().is_err() {
+            // No owner remains to retry. Keep any code and process-wide claim
+            // alive rather than unload a runtime with reachable callbacks.
+            self.retain_loaded_runtimes();
+            self.active = false;
             log::error!(
                 target: "nemo_relay.plugin",
                 event = "plugin_cleanup_failed",

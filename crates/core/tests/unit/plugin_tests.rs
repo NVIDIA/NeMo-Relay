@@ -469,10 +469,10 @@ fn reset_global() {
     let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
     crate::shared_runtime::reset_runtime_owner_for_tests();
+    test_close_plugin_host().unwrap();
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
     *state = NemoRelayContextState::new();
-    test_close_plugin_host().unwrap();
     recorded_names().lock().unwrap().clear();
     PARTIAL_FAIL_ROLLBACKS.store(0, Ordering::SeqCst);
     let _ = deregister_plugin("test.plugin");
@@ -1641,16 +1641,22 @@ fn test_pending_rollbacks_ignore_delivery_only_errors() {
 fn test_checked_teardown_reports_unremoved_registrations() {
     let _guard = lock_runtime_owner();
     reset_global();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let cleanup_attempts = Arc::clone(&attempts);
     store_active_plugin_configuration(
         PluginConfig::default(),
         ConfigReport::default(),
         vec![PluginRegistration::new(
             "fixture",
             "stale-callback",
-            Box::new(|| {
-                Err(PluginError::RegistrationFailed(
-                    "deregistration refused".into(),
-                ))
+            Box::new(move || {
+                if cleanup_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(PluginError::RegistrationFailed(
+                        "deregistration refused".into(),
+                    ))
+                } else {
+                    Ok(())
+                }
             }),
         )],
     )
@@ -1661,6 +1667,11 @@ fn test_checked_teardown_reports_unremoved_registrations() {
     let error = outcome.result.unwrap_err().to_string();
     assert!(error.contains("stale-callback"), "{error}");
     assert!(error.contains("deregistration refused"), "{error}");
+    assert!(plugin_configuration_is_active().unwrap());
+    let retry = clear_plugin_configuration_inner();
+    assert!(retry.callbacks_cleared);
+    retry.result.unwrap();
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
     assert!(!plugin_configuration_is_active().unwrap());
     reset_global();
 }
@@ -1669,17 +1680,23 @@ fn test_checked_teardown_reports_unremoved_registrations() {
 fn test_teardown_marker_text_does_not_imply_successful_removal() {
     let _guard = lock_runtime_owner();
     reset_global();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let cleanup_attempts = Arc::clone(&attempts);
     store_active_plugin_configuration(
         PluginConfig::default(),
         ConfigReport::default(),
         vec![PluginRegistration::new(
             "fixture",
             "stale-marker-callback",
-            Box::new(|| {
-                Err(PluginError::RegistrationFailed(format!(
-                    "unrelated failure mentioning {}",
-                    crate::plugin::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
-                )))
+            Box::new(move || {
+                if cleanup_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(PluginError::RegistrationFailed(format!(
+                        "unrelated failure mentioning {}",
+                        crate::plugin::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
+                    )))
+                } else {
+                    Ok(())
+                }
             }),
         )],
     )
@@ -1690,6 +1707,11 @@ fn test_teardown_marker_text_does_not_imply_successful_removal() {
     let error = outcome.result.unwrap_err().to_string();
     assert!(error.contains("stale-marker-callback"), "{error}");
     assert!(error.contains("could not be removed"), "{error}");
+    assert!(plugin_configuration_is_active().unwrap());
+    let retry = clear_plugin_configuration_inner();
+    assert!(retry.callbacks_cleared);
+    retry.result.unwrap();
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
     reset_global();
 }
 
@@ -1863,19 +1885,25 @@ fn test_opentelemetry_delivery_failure_allows_later_plugin_configuration() {
 fn test_mixed_opentelemetry_shutdown_failure_blocks_later_configuration() {
     let _guard = lock_runtime_owner();
     reset_global();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let cleanup_attempts = Arc::clone(&attempts);
     store_active_plugin_configuration(
         PluginConfig::default(),
         ConfigReport::default(),
         vec![PluginRegistration::new_with_outcome(
             "fixture",
             "opentelemetry-shutdown",
-            Box::new(|| {
-                PluginRegistrationCleanupOutcome::NotRemoved(PluginError::RegistrationFailed(
-                    format!(
-                        "OpenTelemetry shutdown failures: provider error: {}: otel.spans_dropped (2); endpoint shutdown timed out",
-                        crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER
-                    ),
-                ))
+            Box::new(move || {
+                if cleanup_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    PluginRegistrationCleanupOutcome::NotRemoved(
+                        PluginError::RegistrationFailed(format!(
+                            "OpenTelemetry shutdown failures: provider error: {}: otel.spans_dropped (2); endpoint shutdown timed out",
+                            crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER
+                        )),
+                    )
+                } else {
+                    PluginRegistrationCleanupOutcome::Removed
+                }
             }),
         )],
     )
@@ -1885,6 +1913,11 @@ fn test_mixed_opentelemetry_shutdown_failure_blocks_later_configuration() {
     assert!(!outcome.callbacks_cleared);
     let error = outcome.result.unwrap_err().to_string();
     assert!(error.contains("endpoint shutdown timed out"), "{error}");
+    assert!(plugin_configuration_is_active().unwrap());
+    let retry = clear_plugin_configuration_inner();
+    assert!(retry.callbacks_cleared);
+    retry.result.unwrap();
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
     reset_global();
 }
 

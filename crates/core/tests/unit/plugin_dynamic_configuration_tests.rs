@@ -202,7 +202,9 @@ fn lifecycle_state_selection_rejects_malformed_ambiguous_and_mismatched_state() 
 fn policy_and_utf8_file_loading_fail_closed_with_secure_defaults() {
     let temp = tempfile::tempdir().unwrap();
     let missing = temp.path().join("missing.toml");
-    let policy = effective_policy_from_paths(&[missing]).unwrap();
+    let policy = resolve_plugin_host_config_inner(PluginConfig::default(), Some(&missing), false)
+        .unwrap()
+        .policy;
     assert_eq!(
         policy.defaults.startup,
         Some(DynamicPluginStartupClass::Required)
@@ -223,7 +225,10 @@ attestation = "integrity_only"
 "#,
     )
     .unwrap();
-    let policy = effective_policy_from_paths(std::slice::from_ref(&plugins_toml)).unwrap();
+    let policy =
+        resolve_plugin_host_config_inner(PluginConfig::default(), Some(&plugins_toml), false)
+            .unwrap()
+            .policy;
     assert_eq!(policy.defaults.allowed, Some(true));
     assert_eq!(
         policy.defaults.startup,
@@ -235,7 +240,10 @@ attestation = "integrity_only"
     );
 
     fs::write(&plugins_toml, "{").unwrap();
-    assert!(effective_policy_from_paths(std::slice::from_ref(&plugins_toml)).is_err());
+    assert!(
+        resolve_plugin_host_config_inner(PluginConfig::default(), Some(&plugins_toml), false)
+            .is_err()
+    );
 
     fs::write(&plugins_toml, [0xff, 0xfe]).unwrap();
     let utf8 = read_utf8_plugin_file(&plugins_toml)

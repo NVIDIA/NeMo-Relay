@@ -89,10 +89,7 @@ export type DynamicPluginKind = 'rust_dynamic' | 'worker';
 export interface PluginHostActivation extends AsyncDisposable {
   /** Validation report produced by the successful activation. */
   readonly report: PluginHostReport;
-  /**
-   * Whether this activation handle has not begun teardown. `false` does not
-   * guarantee another process-wide activation can start after failed teardown.
-   */
+  /** Whether this activation remains open. Failed teardown can be retried. */
   readonly isActive: boolean;
   /** Clear callbacks before unloading libraries and workers. Idempotent. */
   close(): Promise<void>;
@@ -412,8 +409,8 @@ export declare function ComponentSpec(
 /**
  * Initialize the core-owned static and dynamic plugin host.
  *
- * Resolves programmatic, explicit, user, and system configuration layers and
- * activates the resulting host under one owned lifetime.
+ * Resolves programmatic config with either an explicit or discovered user
+ * file, then the system configuration, and activates one owned lifetime.
  *
  * @param config - Lowest-precedence programmatic configuration.
  * @param additionalPluginsToml - Optional explicit `plugins.toml` layer.
@@ -434,6 +431,17 @@ export declare function initialize(config: PluginConfig, additionalPluginsToml?:
  * @remarks Validation performs no activation and does not acquire the host lease.
  */
 export declare function validate(config: PluginConfig, additionalPluginsToml?: string): PluginHostReport;
+/**
+ * Validate only the supplied static plugin configuration.
+ *
+ * Unlike `validate`, this does not discover or merge `plugins.toml` files.
+ * Use it for component-specific validation when `config` is the complete
+ * document to check.
+ *
+ * @param config - Complete static plugin configuration.
+ * @returns Static validation results with no dynamic plugins.
+ */
+export declare function validateExact(config: PluginConfig): PluginHostReport;
 /**
  * List registered plugin kinds.
  *

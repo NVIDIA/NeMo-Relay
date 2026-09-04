@@ -96,8 +96,8 @@ test('validation warns about an unknown field', () => {
 
 test('disabled component configuration is still validated', () => {
   const restoreEnvironment = isolateExampleEnvironment();
-  plugin.register('documentation-plugin', documentationPlugin);
   try {
+    plugin.register('documentation-plugin', documentationPlugin);
     const report = plugin.validate(config('invalid', false));
 
     assert.equal(report.config.diagnostics[0].code, 'documentation-plugin.unsupported_mode');

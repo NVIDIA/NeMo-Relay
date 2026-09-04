@@ -37,7 +37,7 @@ use nemo_relay::api::registry::{
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay::error::Result as FlowResult;
-use nemo_relay::plugin::dynamic::{PluginHostReport, initialize, validate};
+use nemo_relay::plugin::dynamic::{PluginHostReport, initialize, validate, validate_exact};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginHostActivation,
     PluginRegistration, PluginRegistrationContext, deregister_plugin, list_plugin_kinds,
@@ -818,6 +818,10 @@ impl PluginTeardownCompletion {
         self.result.send_replace(Some(result));
     }
 
+    fn reset(&self) {
+        self.result.send_replace(None);
+    }
+
     async fn wait(&self, operation: &'static str) -> PluginTeardownResult {
         let mut result = self.result.subscribe();
         loop {
@@ -891,7 +895,7 @@ impl PluginHostCloseState {
         }
     }
 
-    fn begin_close(self: &Arc<Self>) {
+    fn begin_close(self: &Arc<Self>, finalizer: bool) {
         let activation = {
             let mut status = self
                 .status
@@ -915,6 +919,7 @@ impl PluginHostCloseState {
         let Some(activation) = activation else {
             return;
         };
+        self.completion.reset();
 
         // Keep the activation outside the spawned closure so a thread-spawn
         // failure cannot drop it and synchronously run teardown on the caller.
@@ -928,7 +933,7 @@ impl PluginHostCloseState {
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .take();
-                let result = match activation {
+                let (activation, result) = match activation {
                     Some(mut activation) => {
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             activation.close()
@@ -941,36 +946,52 @@ impl PluginHostCloseState {
                             .report
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner()) = activation.report();
-                        result
+                        (Some(activation), result)
                     }
-                    None => Err(PluginTeardownError::runtime(
-                        "dynamic plugin teardown task lost its activation",
-                    )),
+                    None => (
+                        None,
+                        Err(PluginTeardownError::runtime(
+                            "dynamic plugin teardown task lost its activation",
+                        )),
+                    ),
                 };
-                close_state.finish(result);
+                close_state.finish(activation, result);
             });
 
         if let Err(error) = spawn {
-            // Cleanup must never fall back to the Python thread. Retain the
-            // activation for process lifetime if no teardown thread can start.
-            if let Some(activation) = activation
+            let activation = activation
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .take()
-            {
-                std::mem::forget(activation);
-            }
-            self.finish(Err(PluginTeardownError::runtime(format!(
+                .take();
+            let error = PluginTeardownError::runtime(format!(
                 "failed to start dynamic plugin teardown task: {error}"
-            ))));
+            ));
+            if finalizer {
+                // There is no caller left to retry, and teardown must not run
+                // synchronously on the Python finalizer thread.
+                if let Some(activation) = activation {
+                    std::mem::forget(activation);
+                }
+                self.finish(None, Err(error));
+            } else {
+                self.finish(activation, Err(error));
+            }
         }
     }
 
-    fn finish(&self, result: PluginTeardownResult) {
+    fn finish(&self, activation: Option<PluginHostActivation>, result: PluginTeardownResult) {
+        let retryable = result.is_err()
+            && activation
+                .as_ref()
+                .is_some_and(PluginHostActivation::is_active);
         *self
             .status
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = PluginHostCloseStatus::Closed;
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = if retryable {
+            PluginHostCloseStatus::Active(activation)
+        } else {
+            PluginHostCloseStatus::Closed
+        };
         self.completion.finish(result);
     }
 
@@ -1002,7 +1023,7 @@ impl PyPluginHostActivation {
     #[pyo3(signature = () -> "None", text_signature = "($self) -> None")]
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let close_state = Arc::clone(&self.close_state);
-        close_state.begin_close();
+        close_state.begin_close(false);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             close_state
                 .wait_for_close()
@@ -1014,7 +1035,7 @@ impl PyPluginHostActivation {
 
 impl Drop for PyPluginHostActivation {
     fn drop(&mut self) {
-        self.close_state.begin_close();
+        self.close_state.begin_close(true);
     }
 }
 
@@ -1032,6 +1053,17 @@ fn validate_py(
         .detach(|| validate(config, additional_plugins_toml.map(Into::into)))
         .map_err(plugin_error_to_py_err)?;
     let report = serde_json::to_value(report)
+        .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+    json_to_py(py, &report)
+}
+
+/// Validate only the supplied static plugin configuration.
+#[pyfunction(name = "validate_exact")]
+#[pyo3(signature = (config: "object") -> "object", text_signature = "(config: object) -> object")]
+fn validate_exact_py(py: Python<'_>, config: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let config: PluginConfig = serde_json::from_value(py_to_json(config)?)
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+    let report = serde_json::to_value(validate_exact(config))
         .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
     json_to_py(py, &report)
 }
@@ -1090,6 +1122,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPluginHostActivation>()?;
     m.add_function(wrap_pyfunction!(initialize_py, m)?)?;
     m.add_function(wrap_pyfunction!(validate_py, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_exact_py, m)?)?;
     m.add_function(wrap_pyfunction!(list_plugin_kinds_py, m)?)?;
     m.add_function(wrap_pyfunction!(register_plugin_py, m)?)?;
     m.add_function(wrap_pyfunction!(deregister_plugin_py, m)?)?;

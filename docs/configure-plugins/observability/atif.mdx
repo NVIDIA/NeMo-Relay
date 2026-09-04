@@ -325,8 +325,9 @@ dispatcher lifecycle. The following examples configure and activate the ATIF
 exporter through each supported language binding.
 
 `validate()` resolves the same configuration layers as `initialize()` without
-loading plugin code or acquiring the activation lease. Use Rust `validate_exact()`
-when only the supplied static configuration should be checked. For complete
+loading plugin code or acquiring the activation lease. Use Python/Rust
+`validate_exact()`, Node.js `validateExact()`, or Go `ValidateExact()` when only
+the supplied static configuration should be checked. For complete
 layering rules, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
 
 <Tabs>

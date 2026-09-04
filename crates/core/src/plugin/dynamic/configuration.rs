@@ -130,6 +130,7 @@ impl<'de> serde::Deserialize<'de> for PluginHostValidationRequest {
 
 pub(crate) struct ResolvedPluginHostConfig {
     pub(crate) config: PluginConfig,
+    pub(crate) policy: DynamicPluginHostPolicy,
     pub(crate) dynamic_plugins: Vec<super::VerifiedDynamicPluginSpec>,
     pub(crate) dynamic_reports: Vec<DynamicPluginValidationReport>,
     pub(crate) diagnostics: Vec<crate::plugin::ConfigDiagnostic>,
@@ -241,8 +242,7 @@ pub(crate) fn validate_request(request: PluginHostValidationRequest) -> Result<P
         }
         PluginHostValidationTarget::ManifestPath(manifest_path) => {
             let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)?;
-            let policy = effective_policy(request.additional_plugins_toml.as_deref())?;
-            let evaluated_policy = evaluate_dynamic_plugin_host_policy(&policy, &manifest);
+            let evaluated_policy = evaluate_dynamic_plugin_host_policy(&resolved.policy, &manifest);
             vec![validate_declaration(
                 &manifest,
                 manifest_ref,
@@ -330,6 +330,7 @@ fn resolve_plugin_host_config_inner(
     }
     Ok(ResolvedPluginHostConfig {
         config: resolved.config,
+        policy,
         dynamic_plugins: active,
         dynamic_reports: reports,
         diagnostics: resolved.diagnostics,
@@ -385,24 +386,6 @@ fn validate_declaration(
         failure,
         selected: selected && is_valid,
     }
-}
-
-fn effective_policy(explicit_path: Option<&Path>) -> Result<DynamicPluginHostPolicy> {
-    effective_policy_from_paths(&plugin_config_paths(
-        explicit_path,
-        crate::plugin::user_config_dir(),
-    ))
-}
-
-fn effective_policy_from_paths(paths: &[PathBuf]) -> Result<DynamicPluginHostPolicy> {
-    let mut policy = DynamicPluginHostPolicy::default();
-    for (_, file) in read_plugin_files(paths)? {
-        if let Some(file_policy) = file.plugins.policy {
-            policy.merge_from(file_policy.into());
-        }
-    }
-    policy.apply_secure_defaults();
-    Ok(policy)
 }
 
 fn read_plugin_files(paths: &[PathBuf]) -> Result<Vec<(PathBuf, PluginFile)>> {

@@ -703,8 +703,8 @@ describe('nemo-relay OpenClaw plugin shell', () => {
     assert.equal(modules.pluginHost.calls.close, 1);
   });
 
-  it('completes shutdown and warns when plugin host close fails', async () => {
-    const modules = createModules({ closeThrows: new Error('close failed') });
+  it('preserves failed plugin host teardown state so shutdown can retry', async () => {
+    const modules = createModules({ closeFailures: [new Error('close failed')] });
     const api = createApi();
 
     registerPlugin(api, async () => modules);
@@ -716,11 +716,18 @@ describe('nemo-relay OpenClaw plugin shell', () => {
       await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
     });
     const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
-    assert.equal(status.status.state, 'stopped');
+    assert.equal(status.status.state, 'degraded');
+    assert.equal(status.initializedPluginHost, true);
     assert.equal(modules.pluginHost.calls.close, 1);
     assert.ok(
       api.messages.warn.some((message) => message.includes('failed to close NeMo Relay plugin host: close failed')),
     );
+
+    await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
+    const retriedStatus = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+    assert.equal(retriedStatus.status.state, 'stopped');
+    assert.equal(retriedStatus.initializedPluginHost, false);
+    assert.equal(modules.pluginHost.calls.close, 2);
   });
 
   it('does not statically import nemo-relay-node or OpenClaw private src paths', () => {
@@ -861,10 +868,12 @@ function createModules(
     validateThrows?: Error;
     initializeDiagnostics?: Array<{ level: 'warning' | 'error'; code: string; message: string }>;
     closeThrows?: Error;
+    closeFailures?: Error[];
   } = {},
 ): TestModules {
   const nf = createNemoRelayRuntime();
   const calls: TestPluginHost['calls'] = { validate: [], initialize: [], close: 0 };
+  const closeFailures = [...(params.closeFailures ?? (params.closeThrows ? [params.closeThrows] : []))];
   const adaptive: TestModules['adaptive'] = {
     ADAPTIVE_PLUGIN_KIND: 'adaptive',
     ComponentSpec: (
@@ -902,8 +911,9 @@ function createModules(
           isActive: true,
           close: async () => {
             calls.close += 1;
-            if (params.closeThrows) {
-              throw params.closeThrows;
+            const failure = closeFailures.shift();
+            if (failure) {
+              throw failure;
             }
           },
           [Symbol.asyncDispose]: async () => {

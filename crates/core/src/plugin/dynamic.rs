@@ -82,6 +82,7 @@ pub(super) fn deregister_tracked_registrations_checked(
     plugin_type: &str,
 ) -> DynamicPluginTeardownOutcome {
     let mut outcome = DynamicPluginTeardownOutcome::success();
+    let mut retained = Vec::new();
     for (plugin_kind, registration_id) in std::mem::take(registrations).into_iter().rev() {
         match deregister_plugin_registration_checked(&plugin_kind, registration_id) {
             Ok(PluginDeregistrationOutcome::Removed) => {}
@@ -97,14 +98,19 @@ pub(super) fn deregister_tracked_registrations_checked(
                 ),
                 true,
             ),
-            Err(error) => outcome.record_error(
-                format!(
-                    "failed to deregister {plugin_type} plugin kind '{plugin_kind}': {error}"
-                ),
-                false,
-            ),
+            Err(error) => {
+                outcome.record_error(
+                    format!(
+                        "failed to deregister {plugin_type} plugin kind '{plugin_kind}': {error}"
+                    ),
+                    false,
+                );
+                retained.push((plugin_kind, registration_id));
+            }
         }
     }
+    retained.reverse();
+    *registrations = retained;
     outcome
 }
 

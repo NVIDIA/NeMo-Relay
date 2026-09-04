@@ -262,7 +262,11 @@ entrypoint = {worker}
     manifest
 }
 
-fn write_plugins_toml(directory: &Path, manifest: &Path, config: &Map<String, serde_json::Value>) -> PathBuf {
+fn write_plugins_toml(
+    directory: &Path,
+    manifest: &Path,
+    config: &Map<String, serde_json::Value>,
+) -> PathBuf {
     let path = directory.join(format!("plugins-{}.toml", uuid::Uuid::now_v7()));
     let config = toml::Value::try_from(config.clone())
         .expect("plugin config should serialize as TOML");

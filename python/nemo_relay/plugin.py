@@ -49,6 +49,9 @@ from nemo_relay._native import (
 from nemo_relay._native import (
     validate as _validate,
 )
+from nemo_relay._native import (
+    validate_exact as _validate_exact,
+)
 from nemo_relay.runtime_registrations import ConditionalMiddlewareGuardrail, RuntimeRegistrationKind
 
 if TYPE_CHECKING:
@@ -415,8 +418,7 @@ class PluginHostActivation:
     def is_active(self) -> bool:
         """Return whether this activation handle has not begun teardown.
 
-        ``False`` does not guarantee another process-wide activation can start;
-        failed teardown may intentionally retain the activation owner.
+        Failed teardown leaves the handle active so :meth:`close` can retry.
         """
         return self._native.is_active
 
@@ -446,8 +448,9 @@ async def initialize(
     """Initialize the core-owned static and dynamic plugin host.
 
     Programmatic configuration is the lowest-precedence layer. An optional
-    explicit ``plugins.toml`` overlays it, then discovered user and system
-    files overlay both. The returned handle owns every activated plugin.
+    explicit ``plugins.toml`` replaces user-file discovery, and the system
+    file overlays either source. The returned handle owns every activated
+    plugin.
 
     Args:
         config: Lowest-precedence programmatic plugin configuration.
@@ -502,6 +505,22 @@ def validate(
     """
     path = os.fspath(additional_plugins_toml) if additional_plugins_toml is not None else None
     return cast(PluginHostReport, _validate(_normalize_object(config), path))
+
+
+def validate_exact(config: PluginConfig | JsonObject) -> PluginHostReport:
+    """Validate only the supplied static plugin configuration.
+
+    Unlike :func:`validate`, this does not discover or merge ``plugins.toml``
+    files. Use it for component-specific validation when ``config`` is the
+    complete document to check.
+
+    Args:
+        config: Complete static plugin configuration.
+
+    Returns:
+        The static validation report with no dynamic plugin results.
+    """
+    return cast(PluginHostReport, _validate_exact(_normalize_object(config)))
 
 
 def list_kinds() -> list[str]:
@@ -572,4 +591,5 @@ __all__ = [
     "list_kinds",
     "register",
     "validate",
+    "validate_exact",
 ]

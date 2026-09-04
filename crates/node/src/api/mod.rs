@@ -61,6 +61,7 @@ use nemo_relay::error::{FlowError, Result as FlowResult};
 use nemo_relay::plugin::dynamic::{
     PluginHostActivation as CorePluginHostActivation, PluginHostReport,
     initialize as initialize_impl, validate as validate_impl,
+    validate_exact as validate_exact_impl,
 };
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
@@ -5979,6 +5980,7 @@ impl DynamicPluginCloseState {
         let Some(activation) = activation else {
             return;
         };
+        self.completion.send_replace(None);
 
         // Keep the activation outside the spawned closure so a thread-spawn
         // failure cannot drop it and synchronously run teardown on the JS thread.
@@ -5992,7 +5994,7 @@ impl DynamicPluginCloseState {
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .take();
-                let result = match activation {
+                let (activation, result) = match activation {
                     Some(mut activation) => {
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             activation.close()
@@ -6003,39 +6005,56 @@ impl DynamicPluginCloseState {
                             .report
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner()) = activation.report();
-                        result
+                        (Some(activation), result)
                     }
-                    None => Err("plugin host teardown task lost its activation".to_string()),
+                    None => (
+                        None,
+                        Err("plugin host teardown task lost its activation".to_string()),
+                    ),
                 };
                 if log_finalizer_error && let Err(error) = &result {
                     eprintln!("nemo_relay: plugin host finalizer teardown failed: {error}");
                 }
-                close_state.finish(result);
+                close_state.finish(activation, result);
             });
 
         if let Err(error) = spawn {
-            // Cleanup must never fall back to the JS thread. Retain the
-            // activation for process lifetime if no teardown thread can start.
-            if let Some(activation) = activation
+            let activation = activation
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .take()
-            {
-                std::mem::forget(activation);
-            }
+                .take();
             let error = format!("failed to start dynamic plugin teardown task: {error}");
             if log_finalizer_error {
+                // There is no caller left to retry, and teardown must not run
+                // synchronously on the JS finalizer thread.
+                if let Some(activation) = activation {
+                    std::mem::forget(activation);
+                }
                 eprintln!("nemo_relay: dynamic plugin finalizer teardown failed: {error}");
+                self.finish(None, Err(error));
+            } else {
+                self.finish(activation, Err(error));
             }
-            self.finish(Err(error));
         }
     }
 
-    fn finish(&self, result: DynamicPluginTeardownResult) {
+    fn finish(
+        &self,
+        activation: Option<CorePluginHostActivation>,
+        result: DynamicPluginTeardownResult,
+    ) {
+        let retryable = result.is_err()
+            && activation
+                .as_ref()
+                .is_some_and(CorePluginHostActivation::is_active);
         *self
             .status
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = DynamicPluginCloseStatus::Closed;
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = if retryable {
+            DynamicPluginCloseStatus::Active(activation)
+        } else {
+            DynamicPluginCloseStatus::Closed
+        };
         self.completion.send_replace(Some(result));
     }
 
@@ -6065,8 +6084,7 @@ impl PluginHostActivation {
 
     /// Return whether this activation handle has not begun teardown.
     ///
-    /// `false` does not guarantee another process-wide activation can start;
-    /// failed teardown may intentionally retain the activation owner.
+    /// Failed teardown leaves the activation active so `close()` can retry.
     #[napi(getter)]
     pub fn is_active(&self) -> napi::Result<bool> {
         Ok(self.close_state.active())
@@ -6131,6 +6149,15 @@ pub fn validate(config: Json, additional_plugins_toml: Option<String>) -> napi::
     let report = validate_impl(config, additional_plugins_toml.map(Into::into))
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
     serde_json::to_value(report).map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+/// Validate only the supplied static plugin configuration.
+#[napi]
+pub fn validate_exact(config: Json) -> napi::Result<Json> {
+    let config: PluginConfig = serde_json::from_value(config)
+        .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
+    serde_json::to_value(validate_exact_impl(config))
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
 /// List registered plugin kinds.

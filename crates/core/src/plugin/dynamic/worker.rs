@@ -378,6 +378,9 @@ impl WorkerPluginInstance {
                 "Worker plugin stopped"
             );
         }
+        if !outcome.safe_to_unload {
+            self.teardown_started.store(false, Ordering::Release);
+        }
         outcome
     }
 

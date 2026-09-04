@@ -51,8 +51,8 @@ function ComponentSpec(kind, config = {}, { enabled = true } = {}) {
 /**
  * Initialize the core-owned static and dynamic plugin host.
  *
- * Resolves programmatic, explicit, user, and system configuration layers and
- * activates the resulting host under one owned lifetime.
+ * Resolves programmatic config with either an explicit or discovered user
+ * file, then the system configuration, and activates one owned lifetime.
  *
  * @param {object} config - Lowest-precedence programmatic configuration.
  * @param {string} [additionalPluginsToml] - Optional explicit `plugins.toml` layer.
@@ -77,6 +77,20 @@ function initialize(config, additionalPluginsToml) {
  */
 function validate(config, additionalPluginsToml) {
   return lib.validate(config, additionalPluginsToml);
+}
+
+/**
+ * Validate only the supplied static plugin configuration.
+ *
+ * Unlike `validate`, this does not discover or merge `plugins.toml` files.
+ * Use it for component-specific validation when `config` is the complete
+ * document to check.
+ *
+ * @param {object} config - Complete static plugin configuration.
+ * @returns {PluginHostReport} Static validation results with no dynamic plugins.
+ */
+function validateExact(config) {
+  return lib.validateExact(config);
 }
 
 /**
@@ -134,6 +148,7 @@ module.exports = {
   ComponentSpec,
   initialize,
   validate,
+  validateExact,
   listKinds,
   register,
   deregister,
