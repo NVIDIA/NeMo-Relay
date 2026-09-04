@@ -5,6 +5,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from plugin_host_test_helper import validate_plugin_config
+
 from nemo_relay import plugin
 from nemo_relay.pii_redaction import (
     PII_REDACTION_PLUGIN_KIND,
@@ -43,7 +47,13 @@ class TestPiiRedactionConfigHelpers:
         opted_out = PiiRedactionConfig(mark=False).to_dict()
         assert opted_out["mark"] is False
 
-    def test_validation_rejects_bad_values(self):
+    def test_validation_rejects_bad_values(self, tmp_path: Path, monkeypatch):
+        config_home = tmp_path / "config"
+        relay_config = config_home / "nemo-relay"
+        relay_config.mkdir(parents=True)
+        (relay_config / "plugins.toml").write_text("{", encoding="utf-8")
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
         report = validate_config(
             PiiRedactionConfig(
                 input=False,
@@ -57,7 +67,7 @@ class TestPiiRedactionConfigHelpers:
         assert any(diag.get("field") == "builtin.detector" for diag in report["diagnostics"])
 
     def test_component_configures_plugin_validation(self):
-        report = plugin.validate(
+        report = validate_plugin_config(
             plugin.PluginConfig(
                 components=[
                     ComponentSpec(

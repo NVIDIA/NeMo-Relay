@@ -116,7 +116,7 @@ fn test_ffi_llm_request_intercept_outcome_json_allocation_and_validation() {
 fn test_ffi_plugin_config_validate_initialize_and_clear() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_globals();
-    let _ = nemo_relay_clear_plugin_configuration();
+    let _ = close_test_plugin_host();
 
     let config = cstring(
         &json!({
@@ -147,7 +147,7 @@ fn test_ffi_plugin_config_validate_initialize_and_clear() {
 
     let mut report_json = ptr::null_mut();
     assert_status!(
-        unsafe { nemo_relay_validate_plugin_config(config.as_ptr(), &mut report_json) },
+        unsafe { validate_test_plugin_config(config.as_ptr(), &mut report_json) },
         NemoRelayStatus::Ok
     );
     let report = unsafe { returned_json(report_json) };
@@ -172,7 +172,7 @@ fn test_ffi_plugin_config_validate_initialize_and_clear() {
 
     let mut configured_json = ptr::null_mut();
     assert_status!(
-        unsafe { nemo_relay_initialize_plugins(config.as_ptr(), &mut configured_json) },
+        unsafe { activate_test_plugin_config(config.as_ptr(), &mut configured_json) },
         NemoRelayStatus::Ok
     );
     let configured_report = unsafe { returned_json(configured_json) };
@@ -180,17 +180,17 @@ fn test_ffi_plugin_config_validate_initialize_and_clear() {
 
     let mut active_json = ptr::null_mut();
     assert_status!(
-        unsafe { nemo_relay_active_plugin_report_json(&mut active_json) },
+        unsafe { test_plugin_host_report_json(&mut active_json) },
         NemoRelayStatus::Ok
     );
     let active_report = unsafe { returned_json(active_json) };
     assert_eq!(active_report["diagnostics"], json!([]));
 
-    assert_status!(nemo_relay_clear_plugin_configuration(), NemoRelayStatus::Ok);
+    assert_status!(close_test_plugin_host(), NemoRelayStatus::Ok);
 
     let mut cleared_json = ptr::null_mut();
     assert_status!(
-        unsafe { nemo_relay_active_plugin_report_json(&mut cleared_json) },
+        unsafe { test_plugin_host_report_json(&mut cleared_json) },
         NemoRelayStatus::Ok
     );
     assert_eq!(unsafe { returned_json(cleared_json) }, Json::Null);
@@ -200,7 +200,7 @@ fn test_ffi_plugin_config_validate_initialize_and_clear() {
 fn test_ffi_observability_plugin_file_sinks() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_globals();
-    let _ = nemo_relay_clear_plugin_configuration();
+    let _ = close_test_plugin_host();
     let dir = std::env::temp_dir().join(unique_name("ffi_observability_plugin"));
     std::fs::create_dir_all(&dir).unwrap();
     let dir_text = dir.to_string_lossy().into_owned();
@@ -262,14 +262,14 @@ fn test_ffi_observability_plugin_file_sinks() {
 
         let mut report_json = ptr::null_mut();
         assert_status!(
-            nemo_relay_validate_plugin_config(config.as_ptr(), &mut report_json),
+            validate_test_plugin_config(config.as_ptr(), &mut report_json),
             NemoRelayStatus::Ok
         );
         assert_eq!(returned_json(report_json)["diagnostics"], json!([]));
 
         let mut initialized_json = ptr::null_mut();
         assert_status!(
-            nemo_relay_initialize_plugins(config.as_ptr(), &mut initialized_json),
+            activate_test_plugin_config(config.as_ptr(), &mut initialized_json),
             NemoRelayStatus::Ok
         );
         assert_eq!(returned_json(initialized_json)["diagnostics"], json!([]));
@@ -305,7 +305,7 @@ fn test_ffi_observability_plugin_file_sinks() {
         );
         nemo_relay_scope_handle_free(scope);
         nemo_relay_scope_stack_free(stack);
-        assert_status!(nemo_relay_clear_plugin_configuration(), NemoRelayStatus::Ok);
+        assert_status!(close_test_plugin_host(), NemoRelayStatus::Ok);
 
         let jsonl = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
         assert_eq!(jsonl.trim().lines().count(), 3);
@@ -328,7 +328,7 @@ fn test_ffi_observability_plugin_file_sinks() {
 fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_globals();
-    let _ = nemo_relay_clear_plugin_configuration();
+    let _ = close_test_plugin_host();
     let dir = std::env::temp_dir().join(unique_name("ffi_observability_plugin_multi_agent"));
     std::fs::create_dir_all(&dir).unwrap();
     let dir_text = dir.to_string_lossy().into_owned();
@@ -357,7 +357,7 @@ fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
     unsafe {
         let mut initialized_json = ptr::null_mut();
         assert_status!(
-            nemo_relay_initialize_plugins(config.as_ptr(), &mut initialized_json),
+            activate_test_plugin_config(config.as_ptr(), &mut initialized_json),
             NemoRelayStatus::Ok
         );
         assert_eq!(returned_json(initialized_json)["diagnostics"], json!([]));
@@ -466,7 +466,7 @@ fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
         );
         nemo_relay_scope_handle_free(second);
         nemo_relay_scope_stack_free(stack);
-        assert_status!(nemo_relay_clear_plugin_configuration(), NemoRelayStatus::Ok);
+        assert_status!(close_test_plugin_host(), NemoRelayStatus::Ok);
 
         let files = std::fs::read_dir(&dir)
             .unwrap()
@@ -497,7 +497,7 @@ fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
 fn test_ffi_plugin_top_level_null_and_invalid_paths() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();
-    let _ = nemo_relay_clear_plugin_configuration();
+    let _ = close_test_plugin_host();
 
     let valid_config = cstring(
         &json!({
@@ -511,22 +511,26 @@ fn test_ffi_plugin_top_level_null_and_invalid_paths() {
 
     unsafe {
         assert_status!(
-            nemo_relay_validate_plugin_config(valid_config.as_ptr(), ptr::null_mut()),
+            validate_test_plugin_config(valid_config.as_ptr(), ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_plugin_validate_exact(valid_config.as_ptr(), ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
         assert!(
             read_last_error()
                 .unwrap_or_default()
-                .contains("out_json pointer is null")
+                .contains("out_report_json pointer is null")
         );
 
         let mut out_json = ptr::null_mut();
         assert_status!(
-            nemo_relay_validate_plugin_config(invalid_json.as_ptr(), &mut out_json),
+            validate_test_plugin_config(invalid_json.as_ptr(), &mut out_json),
             NemoRelayStatus::InvalidJson
         );
         assert_status!(
-            nemo_relay_validate_plugin_config(invalid_shape.as_ptr(), &mut out_json),
+            validate_test_plugin_config(invalid_shape.as_ptr(), &mut out_json),
             NemoRelayStatus::InvalidJson
         );
         assert!(
@@ -534,22 +538,32 @@ fn test_ffi_plugin_top_level_null_and_invalid_paths() {
                 .unwrap_or_default()
                 .contains("invalid type")
         );
+        assert_status!(
+            nemo_relay_plugin_validate_exact(invalid_json.as_ptr(), &mut out_json),
+            NemoRelayStatus::InvalidJson
+        );
+        assert_status!(
+            nemo_relay_plugin_validate_exact(valid_config.as_ptr(), &mut out_json),
+            NemoRelayStatus::Ok
+        );
+        let exact_report = returned_json(out_json);
+        assert_eq!(exact_report["dynamic_plugins"], json!([]));
 
         assert_status!(
-            nemo_relay_initialize_plugins(valid_config.as_ptr(), ptr::null_mut()),
+            activate_test_plugin_config(valid_config.as_ptr(), ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
         assert_status!(
-            nemo_relay_initialize_plugins(invalid_json.as_ptr(), &mut out_json),
+            activate_test_plugin_config(invalid_json.as_ptr(), &mut out_json),
             NemoRelayStatus::InvalidJson
         );
         assert_status!(
-            nemo_relay_initialize_plugins(invalid_shape.as_ptr(), &mut out_json),
+            activate_test_plugin_config(invalid_shape.as_ptr(), &mut out_json),
             NemoRelayStatus::InvalidJson
         );
 
         assert_status!(
-            nemo_relay_active_plugin_report_json(ptr::null_mut()),
+            test_plugin_host_report_json(ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
         assert_status!(

@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as pluginHost from './plugin_host_test_helper.mjs';
 
 const require = createRequire(import.meta.url);
 const plugin = require('../plugin.js');
@@ -135,14 +136,16 @@ describe('observability plugin helpers', () => {
       }),
     };
 
-    await plugin.initialize({
+    await pluginHost.initialize({
       version: 1,
       components: [observability.ComponentSpec(config)],
     });
     try {
-      assert.deepEqual(plugin.report()?.runtime_diagnostics ?? [], []);
+      const report = pluginHost.report();
+      assert.ok(report, 'initialized host must expose a report');
+      assert.deepEqual(report.runtime_diagnostics ?? [], []);
     } finally {
-      plugin.clear();
+      await pluginHost.close();
     }
   });
 
@@ -154,7 +157,7 @@ describe('observability plugin helpers', () => {
     );
     assert.throws(() => observability.openTelemetryEndpoint({ type: 'full', endpoint: ' ' }), /nonblank/);
     assert.equal(plugin.listKinds().includes(observability.OBSERVABILITY_PLUGIN_KIND), true);
-    const report = plugin.validate({
+    const report = pluginHost.validate({
       version: 1,
       components: [
         observability.ComponentSpec({
@@ -238,7 +241,7 @@ describe('observability plugin helpers', () => {
       }),
     };
 
-    await plugin.initialize({
+    await pluginHost.initialize({
       version: 1,
       components: [observability.ComponentSpec(config)],
     });
@@ -249,7 +252,7 @@ describe('observability plugin helpers', () => {
       popScope(scope, { done: true });
       scope = null;
     } finally {
-      plugin.clear();
+      await pluginHost.close();
       if (scope) {
         popScope(scope, { done: true });
       }
@@ -281,7 +284,7 @@ describe('observability plugin helpers', () => {
       }),
     };
 
-    await plugin.initialize({
+    await pluginHost.initialize({
       version: 1,
       components: [observability.ComponentSpec(config)],
     });
@@ -308,7 +311,7 @@ describe('observability plugin helpers', () => {
       popScope(second, { done: true });
       second = null;
     } finally {
-      plugin.clear();
+      await pluginHost.close();
       if (nested) {
         popScope(nested, { done: true });
       }

@@ -147,8 +147,8 @@ func TestMustConfigMapPanicBranches(t *testing.T) {
 	})
 }
 
-func TestValidatePluginConfigWarnsMissingStateForTelemetry(t *testing.T) {
-	report, err := ValidatePluginConfig(PluginConfig{
+func TestPluginHostValidationWarnsMissingStateForTelemetry(t *testing.T) {
+	report, err := validateTestPluginConfig(PluginConfig{
 		Version: 1,
 		Components: []PluginComponentSpec{
 			AdaptiveComponent(AdaptiveConfig{
@@ -158,7 +158,7 @@ func TestValidatePluginConfigWarnsMissingStateForTelemetry(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("ValidatePluginConfig failed: %v", err)
+		t.Fatalf("validateTestPluginConfig failed: %v", err)
 	}
 	if len(report.Diagnostics) == 0 {
 		t.Fatal("expected compatibility diagnostics")
@@ -192,37 +192,39 @@ func testConfigureAdaptiveComponentLifecycle(t *testing.T) {
 	acg := NewAcgConfig()
 	config.Acg = &acg
 
-	report, err := ValidatePluginConfig(PluginConfig{
+	report, err := validateTestPluginConfig(PluginConfig{
 		Version:    1,
 		Components: []PluginComponentSpec{AdaptiveComponent(config)},
 	})
 	if err != nil {
-		t.Fatalf("ValidatePluginConfig failed: %v", err)
+		t.Fatalf("validateTestPluginConfig failed: %v", err)
 	}
 	if len(report.Diagnostics) != 0 {
 		t.Fatalf("expected clean report, got %#v", report.Diagnostics)
 	}
 
-	configureReport, err := InitializePlugins(PluginConfig{
+	configureReport, err := initializeTestPluginHost(PluginConfig{
 		Version:    1,
 		Components: []PluginComponentSpec{AdaptiveComponent(config)},
 	})
 	if err != nil {
-		t.Fatalf("InitializePlugins failed: %v", err)
+		t.Fatalf("initializeTestPluginHost failed: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := closeTestPluginHost(); err != nil {
+			t.Errorf("closeTestPluginHost failed: %v", err)
+		}
+	})
 	if len(configureReport.Diagnostics) != 0 {
 		t.Fatalf("expected clean configure report, got %#v", configureReport.Diagnostics)
 	}
 
-	activeReport, err := ActivePluginReport()
+	activeReport, err := testPluginHostReport()
 	if err != nil {
-		t.Fatalf("ActivePluginReport failed: %v", err)
+		t.Fatalf("testPluginHostReport failed: %v", err)
 	}
 	if activeReport == nil || len(activeReport.Diagnostics) != 0 {
 		t.Fatalf("expected active report with no diagnostics, got %#v", activeReport)
 	}
 
-	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf("ClearPluginConfiguration failed: %v", err)
-	}
 }

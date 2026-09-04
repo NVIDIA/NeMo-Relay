@@ -64,16 +64,15 @@ async def main():
         )
     ])
     try:
-        report = await plugin.initialize(config)
-        print("activation:", report)
-        result = await tools.execute(
-            "lookup",
-            {"id": 7},
-            lambda request: nemo_relay.ToolExecutionResult(request),
-        )
-        assert result.result == {"id": 7, "plugin_tag": "documentation"}
+        async with plugin.activate(config) as activation:
+            print("activation:", activation.report)
+            result = await tools.execute(
+                "lookup",
+                {"id": 7},
+                lambda request: nemo_relay.ToolExecutionResult(request),
+            )
+            assert result.result == {"id": 7, "plugin_tag": "documentation"}
     finally:
-        await plugin.clear_async()
         plugin.deregister("example.add-tag")
 
 asyncio.run(main())
@@ -115,16 +114,17 @@ const config = {
   components: [plugin.ComponentSpec('example.add-tag', { tag: 'documentation' })],
 };
 
+let activation;
 try {
-  const report = await plugin.initialize(config);
-  console.log('activation:', report);
+  activation = await plugin.initialize(config);
+  console.log('activation:', activation.report);
   const result = await relay.toolCallExecute('lookup', { id: 7 }, (request) => ({ result: request }));
   if (result.result.plugin_tag !== 'documentation') {
     throw new Error('plugin did not rewrite the request');
   }
 } finally {
   await relay.flushSubscribers();
-  plugin.clear();
+  await activation?.close();
   plugin.deregister('example.add-tag');
 }
 ```
@@ -138,9 +138,9 @@ use std::sync::Arc;
 use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig,
-    PluginRegistrationContext, Result as PluginResult, clear_plugin_configuration,
-    deregister_plugin, initialize_plugins, register_plugin,
+    PluginRegistrationContext, Result as PluginResult, deregister_plugin, register_plugin,
 };
+use nemo_relay::plugin::dynamic::initialize;
 use serde_json::{Map, Value as Json, json};
 
 struct AddTagPlugin;
@@ -197,9 +197,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .clone();
     let config = PluginConfig { components: vec![component], ..PluginConfig::default() };
 
+    let mut activation = initialize(config, None).await?;
     let result = async {
-        let report = initialize_plugins(config).await?;
-        println!("activation: {report:?}");
+        println!("activation: {:?}", activation.report());
         let result = tool_call_execute(
             ToolCallExecuteParams::builder()
                 .name("lookup")
@@ -215,7 +215,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     .await;
 
-    clear_plugin_configuration()?;
+    activation.close()?;
     assert!(deregister_plugin("example.add-tag"));
     result
 }
@@ -235,7 +235,7 @@ can remove it without the plugin keeping a global deregistration handle.
 | Plugin identity | `plugin.register(kind, implementation)` supplies the kind. | `plugin.register(kind, implementation)` supplies the kind. | `Plugin::plugin_kind()` supplies the kind passed to `register_plugin`. |
 | Validation | `validate` is optional in the protocol, but a published component should implement it. | `validate` is optional in the interface, but a published component should implement it. | `validate` is required. Override `validate_with_policy` when component diagnostics should honor the host's non-default policy. |
 | Registration hook | Runs synchronously. Installed middleware callbacks can be synchronous or asynchronous according to their typed API. | Runs synchronously. Installed middleware callbacks can return values or promises according to their declarations. | Returns a `Send` future, so initialization can await resource setup and registration. |
-| Clearing | Use `await clear_async()` inside an event loop; synchronous `clear()` deliberately rejects that situation. | Await `relay.flushSubscribers()` when queued publication is still active, then use `clear()` to remove active registrations synchronously. | `clear_plugin_configuration()` removes active registrations and can report teardown failure. |
+| Closing | Await `activation.close()` after application work finishes. | Await `relay.flushSubscribers()` when queued publication is active, then await `activation.close()`. | `activation.close()` removes active registrations and can report teardown failure. |
 | Deregistration | `deregister(kind)` returns whether a kind was removed. | `deregister(kind)` returns whether a kind was removed. | `deregister_plugin(kind)` removes the implementation from future lookup. |
 
 Configuration keys remain `snake_case` in all three examples. Only Node.js API methods
@@ -252,7 +252,7 @@ each language binding:
 2. [Register Behavior](/build-plugins/language-binding/register-behavior) connects valid
    feature groups to component-owned registrations and verifies rollback.
 3. [Advanced Configuration](/build-plugins/language-binding/advanced-configuration)
-   covers multiple instances, host policy, reports, clearing, deregistration, and async
+   covers multiple instances, host policy, reports, activation close, deregistration, and async
    lifecycle differences.
 4. [Runnable Examples](/build-plugins/language-binding/code-examples) gives the clean
    commands and expected output for Rust, Python, and Node.js.

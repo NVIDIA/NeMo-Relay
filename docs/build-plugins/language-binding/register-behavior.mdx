@@ -338,12 +338,12 @@ Use the following procedure to verify successful activation and transactional ro
 
 1. Register the kind, validate the shared component, and stop if the report contains an
    error. Duplicate kind registration is itself an error and should fail the test.
-2. Initialize the valid document. Rust awaits `initialize_plugins`, Python awaits
-   `plugin.initialize`, and Node.js awaits `plugin.initialize`. Inspect the returned
-   report instead of treating a resolved call as the only signal.
-3. Call the report accessor. Rust uses `active_plugin_report`, Python uses `report`, and
-   Node.js uses `report`. It should describe the last successful activation without
-   rerunning validation.
+2. Initialize the valid document with Rust `initialize`, Python
+   `nemo_relay.plugin.initialize`, or Node.js `plugin.initialize`. Keep the
+   returned activation handle alive for the entire host lifetime.
+3. Inspect the report on that handle. Rust uses `activation.report()`, while Python and
+   Node.js use `activation.report`. It describes that activation without rerunning
+   validation.
 4. Execute an LLM request and inspect the real callback headers. Then emit an event and
    execute the representative tool and stream paths from the checked example.
 5. Force a later registration in the same component to fail. Initialization should

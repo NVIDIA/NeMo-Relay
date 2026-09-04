@@ -184,7 +184,7 @@ func TestGoBindingErrorAndDefaultContracts(t *testing.T) {
 	assertExpiredCodecAndStreamErrors(t)
 	assertStreamExporterPath(t)
 	assertCallbackSerializationFailures(t)
-	assertPluginActivationIncompleteOutputs(t)
+	assertPluginHostActivationEmptyReportDecodeError(t)
 	assertAtofExporterSerializationFailures(t)
 	assertClosedHandleErrorPaths(t)
 	assertOptimizationContributionValidation(t)
@@ -500,17 +500,22 @@ func assertCallbackSerializationFailures(t *testing.T) {
 	}
 }
 
-func assertPluginActivationIncompleteOutputs(t *testing.T) {
+func assertPluginHostActivationEmptyReportDecodeError(t *testing.T) {
 	t.Helper()
-	withPluginActivationStubs(t)
-	initializeWithDynamicPluginsJSON = func(string, string) (unsafe.Pointer, string, error) {
+	withPluginHostStubs(t)
+	previousUnmarshal := jsonUnmarshal
+	jsonUnmarshal = json.Unmarshal
+	defer func() { jsonUnmarshal = previousUnmarshal }()
+	initializePluginHostJSON = func(string, *string) (unsafe.Pointer, string, error) {
 		return nil, "", nil
 	}
-	if _, _, err := InitializeWithDynamicPlugins(NewPluginConfig(), fixtureDynamicPluginSpecs()); err == nil {
-		t.Fatal("expected incomplete dynamic plugin activation outputs to fail")
+	_, _, err := Initialize(NewPluginConfig(), nil)
+	var syntaxError *json.SyntaxError
+	if err == nil || !errors.As(err, &syntaxError) {
+		t.Fatalf("expected empty report decode error, got %v", err)
 	}
-	if err := newPluginActivation(nil).Close(); err != nil {
-		t.Fatalf("nil plugin activation close failed: %v", err)
+	if err := newPluginHostActivation(nil).Close(); err != nil {
+		t.Fatalf("nil plugin host activation close failed: %v", err)
 	}
 }
 

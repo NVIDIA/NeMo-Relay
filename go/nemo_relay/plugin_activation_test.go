@@ -4,6 +4,8 @@
 package nemo_relay
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,31 +14,14 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
 )
 
 const (
-	deferredCloseErrorFmt = "deferred Close() error = %v"
-	goNativeToolName      = "go-native-tool"
-	toolInterceptErrorFmt = "ToolRequestIntercepts() error = %v"
-	invalidToolArgsFmt    = "transformed tool args are invalid JSON: %v"
-	pluginsTOMLName       = "plugins.toml"
-	staticFixtureKind     = "go.fixture.static_base"
-)
-
-const (
-	pluginFixtureManifest      = "/tmp/relay-plugin.toml"
-	initializePluginsErrorFmt  = "InitializeWithDynamicPlugins() error = %v"
-	closeErrorFmt              = "Close() error = %v"
-	cleanupSequence            = "clear,free"
-	cleanupCallsFmt            = "cleanup calls = %v"
-	pluginTeardownErrorMessage = "teardown failed"
-	clearConfigurationErrorFmt = "ClearPluginConfiguration() error = %v"
-	cargoManifestName          = "Cargo.toml"
+	cargoManifestName = "Cargo.toml"
+	goNativeToolName  = "go-native-tool"
 )
 
 var (
@@ -44,939 +29,322 @@ var (
 	workspaceVersionPattern = regexp.MustCompile(`(?m)^[\t ]*version[\t ]*=[\t ]*(?:"([^"\r\n]+)"|'([^'\r\n]+)')[\t ]*(?:#[^\r\n]*)?\r?$`)
 )
 
-func withPluginActivationStubs(t *testing.T) {
+func withPluginHostStubs(t *testing.T) {
 	t.Helper()
-	originalInitialize := initializeWithDynamicPluginsJSON
-	originalClear := clearPluginActivation
-	originalFree := freePluginActivation
-	originalReporter := reportPluginActivationCleanupError
+	originalInitialize := initializePluginHostJSON
+	originalReport := pluginHostActivationReportJSON
+	originalIsActive := pluginHostActivationIsActive
+	originalClear := clearPluginHostActivation
+	originalFree := freePluginHostActivation
+	originalReporter := reportPluginHostActivationCleanupError
 	t.Cleanup(func() {
-		initializeWithDynamicPluginsJSON = originalInitialize
-		clearPluginActivation = originalClear
-		freePluginActivation = originalFree
-		reportPluginActivationCleanupError = originalReporter
+		initializePluginHostJSON = originalInitialize
+		pluginHostActivationReportJSON = originalReport
+		pluginHostActivationIsActive = originalIsActive
+		clearPluginHostActivation = originalClear
+		freePluginHostActivation = originalFree
+		reportPluginHostActivationCleanupError = originalReporter
 	})
 }
 
-func fixtureDynamicPluginSpecs() []DynamicPluginActivationSpec {
-	return []DynamicPluginActivationSpec{{
-		PluginID:    "fixture.native",
-		Kind:        DynamicPluginKindRustDynamic,
-		ManifestRef: pluginFixtureManifest,
-	}}
-}
+func TestInitializePluginHostSerializesConfigAndOwnsCleanup(t *testing.T) {
+	withPluginHostStubs(t)
+	token := new(byte)
+	ptr := unsafe.Pointer(token)
+	pluginsTOML := filepath.Join(t.TempDir(), "plugins.toml")
+	var gotConfig map[string]any
+	var gotPath *string
+	var cleanup []string
 
-func TestInitializeWithDynamicPluginsSerializesSpecsAndOwnsCleanup(t *testing.T) {
-	withPluginActivationStubs(t)
-	capture := installSerializationPluginStubs(t)
-	environment := "/tmp/fixture-environment"
-	activation, report, err := InitializeWithDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{
-		{
-			PluginID:       "fixture.worker",
-			Kind:           DynamicPluginKindWorker,
-			ManifestRef:    pluginFixtureManifest,
-			EnvironmentRef: &environment,
-			Config:         map[string]any{"tag": "go"},
-		},
-	})
-	if err != nil {
-		t.Fatalf(initializePluginsErrorFmt, err)
-	}
-	assertSerializedPluginActivation(t, capture, activation, report, environment)
-	runtime.KeepAlive(capture.token)
-}
-
-type serializationPluginCapture struct {
-	token     *byte
-	ptr       unsafe.Pointer
-	gotConfig PluginConfig
-	gotSpecs  []DynamicPluginActivationSpec
-	calls     []string
-}
-
-func installSerializationPluginStubs(t *testing.T) *serializationPluginCapture {
-	t.Helper()
-	capture := &serializationPluginCapture{token: new(byte)}
-	capture.ptr = unsafe.Pointer(capture.token)
-	initializeWithDynamicPluginsJSON = func(configJSON, specsJSON string) (unsafe.Pointer, string, error) {
-		if err := json.Unmarshal([]byte(configJSON), &capture.gotConfig); err != nil {
+	initializePluginHostJSON = func(configJSON string, additional *string) (unsafe.Pointer, string, error) {
+		if err := json.Unmarshal([]byte(configJSON), &gotConfig); err != nil {
 			t.Fatalf("invalid config JSON: %v", err)
 		}
-		if err := json.Unmarshal([]byte(specsJSON), &capture.gotSpecs); err != nil {
-			t.Fatalf("invalid specs JSON: %v", err)
-		}
-		return capture.ptr, `{"diagnostics":[{"level":"warning","code":"fixture.warning","message":"fixture"}]}`, nil
+		gotPath = additional
+		return ptr, `{"config":{"diagnostics":[]},"dynamic_plugins":[]}`, nil
 	}
-	clearPluginActivation = func(got unsafe.Pointer) error {
-		if got != capture.ptr {
-			t.Fatalf("clear pointer = %p, want %p", got, capture.ptr)
+	pluginHostActivationReportJSON = func(got unsafe.Pointer) (string, error) {
+		if got != ptr {
+			t.Fatalf("report pointer = %p, want %p", got, ptr)
 		}
-		capture.calls = append(capture.calls, "clear")
+		return `{"config":{"diagnostics":[]},"dynamic_plugins":[]}`, nil
+	}
+	pluginHostActivationIsActive = func(got unsafe.Pointer) (bool, error) {
+		if got != ptr {
+			t.Fatalf("is-active pointer = %p, want %p", got, ptr)
+		}
+		return true, nil
+	}
+	clearPluginHostActivation = func(got unsafe.Pointer) error {
+		if got != ptr {
+			t.Fatalf("clear pointer = %p, want %p", got, ptr)
+		}
+		cleanup = append(cleanup, "clear")
 		return nil
 	}
-	freePluginActivation = func(got unsafe.Pointer) {
-		if got != capture.ptr {
-			t.Fatalf("free pointer = %p, want %p", got, capture.ptr)
+	freePluginHostActivation = func(got unsafe.Pointer) {
+		if got != ptr {
+			t.Fatalf("free pointer = %p, want %p", got, ptr)
 		}
-		capture.calls = append(capture.calls, "free")
+		cleanup = append(cleanup, "free")
 	}
-	return capture
-}
 
-func assertSerializedPluginActivation(t *testing.T, capture *serializationPluginCapture, activation *PluginActivation, report ConfigReport, environment string) {
-	t.Helper()
-	if capture.gotConfig.Version != 1 {
-		t.Fatalf("config version = %d, want 1", capture.gotConfig.Version)
+	activation, report, err := Initialize(NewPluginConfig(), &pluginsTOML)
+	if err != nil {
+		t.Fatalf("Initialize() error = %v", err)
 	}
-	if len(capture.gotSpecs) != 1 || capture.gotSpecs[0].PluginID != "fixture.worker" {
-		t.Fatalf("specs = %#v", capture.gotSpecs)
+	if gotConfig["version"] != float64(1) || gotPath == nil || *gotPath != pluginsTOML {
+		t.Fatalf("serialized input = (%#v, %#v)", gotConfig, gotPath)
 	}
-	if capture.gotSpecs[0].EnvironmentRef == nil || *capture.gotSpecs[0].EnvironmentRef != environment {
-		t.Fatalf("environment ref = %#v", capture.gotSpecs[0].EnvironmentRef)
-	}
-	if len(report.Diagnostics) != 1 || report.Diagnostics[0].Code != "fixture.warning" {
+	if len(report.Config.Diagnostics) != 0 || len(report.DynamicPlugins) != 0 {
 		t.Fatalf("report = %#v", report)
 	}
-
+	if _, err := activation.Report(); err != nil {
+		t.Fatalf("Report() error = %v", err)
+	}
+	if !activation.IsActive() {
+		t.Fatal("IsActive() = false before Close()")
+	}
 	if err := activation.Close(); err != nil {
-		t.Fatalf(closeErrorFmt, err)
+		t.Fatalf("Close() error = %v", err)
+	}
+	if activation.IsActive() {
+		t.Fatal("IsActive() = true after Close()")
 	}
 	if err := activation.Close(); err != nil {
 		t.Fatalf("repeated Close() error = %v", err)
 	}
-	if strings.Join(capture.calls, ",") != cleanupSequence {
-		t.Fatalf(cleanupCallsFmt, capture.calls)
-	}
-}
-
-func TestPluginConfigPublicJSONShapeRemainsCompatible(t *testing.T) {
-	type envelope struct {
-		PluginConfig
-		Name string `json:"name"`
-	}
-
-	payload, err := json.Marshal(envelope{
-		PluginConfig: PluginConfig{Version: 1},
-		Name:         "fixture",
-	})
-	if err != nil {
-		t.Fatalf("marshal embedded plugin config: %v", err)
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &fields); err != nil {
-		t.Fatalf("unmarshal embedded plugin config: %v", err)
-	}
-	if string(fields["name"]) != `"fixture"` || string(fields["version"]) != "1" {
-		t.Fatalf("embedded plugin config lost envelope fields: %s", payload)
-	}
-
-	emptyPayload, err := json.Marshal(PluginConfig{})
-	if err != nil {
-		t.Fatalf("marshal empty plugin config: %v", err)
-	}
-	if string(emptyPayload) != "{}" {
-		t.Fatalf("empty plugin config JSON = %s, want {}", emptyPayload)
-	}
-}
-
-func TestInitializeWithDynamicPluginsUsesPrivateConfigWireShape(t *testing.T) {
-	withPluginActivationStubs(t)
-
-	config := PluginConfig{Components: []PluginComponentSpec{{Kind: "fixture.disabled"}}}
-	publicPayload, err := json.Marshal(config)
-	if err != nil {
-		t.Fatalf("marshal public plugin config: %v", err)
-	}
-	const wantPublic = `{"components":[{"kind":"fixture.disabled"}]}`
-	if string(publicPayload) != wantPublic {
-		t.Fatalf("public plugin config JSON = %s, want %s", publicPayload, wantPublic)
-	}
-
-	token := new(byte)
-	initializeWithDynamicPluginsJSON = func(configJSON, specsJSON string) (unsafe.Pointer, string, error) {
-		const wantConfig = `{"components":[{"kind":"fixture.disabled","enabled":false}]}`
-		if configJSON != wantConfig {
-			t.Fatalf("config JSON = %s, want %s", configJSON, wantConfig)
-		}
-		const wantSpecs = `[{"plugin_id":"fixture.native","kind":"rust_dynamic","manifest_ref":"/tmp/relay-plugin.toml"}]`
-		if specsJSON != wantSpecs {
-			t.Fatalf("dynamic plugin specs JSON = %s, want %s", specsJSON, wantSpecs)
-		}
-		return unsafe.Pointer(token), `{"diagnostics":[]}`, nil
-	}
-	clearPluginActivation = func(unsafe.Pointer) error { return nil }
-	freePluginActivation = func(unsafe.Pointer) {
-		// The test stub intentionally has no native allocation to release.
-	}
-
-	activation, _, err := InitializeWithDynamicPlugins(config, fixtureDynamicPluginSpecs())
-	if err != nil {
-		t.Fatalf(initializePluginsErrorFmt, err)
-	}
-	if err := activation.Close(); err != nil {
-		t.Fatalf(closeErrorFmt, err)
+	if strings.Join(cleanup, ",") != "clear,free" {
+		t.Fatalf("cleanup calls = %v", cleanup)
 	}
 	runtime.KeepAlive(token)
 }
 
-func TestComponentWrappersPreserveDisabledValuesDuringConversion(t *testing.T) {
-	disabled := []PluginComponentSpec{
-		(AdaptiveComponentSpec{Config: NewAdaptiveConfig()}).PluginComponent(),
-		(ObservabilityComponentSpec{Config: NewObservabilityConfig()}).PluginComponent(),
-		(PricingComponentSpec{Config: NewPricingConfig()}).PluginComponent(),
-		(PiiRedactionComponentSpec{Config: NewPiiRedactionConfig()}).PluginComponent(),
-	}
-	for _, component := range disabled {
-		payload, err := marshalPluginActivationConfig(PluginConfig{
-			Components: []PluginComponentSpec{component},
-		})
-		if err != nil {
-			t.Fatalf("marshal %s component: %v", component.Kind, err)
-		}
-		var wire struct {
-			Components []struct {
-				Enabled *bool `json:"enabled"`
-			} `json:"components"`
-		}
-		if err := json.Unmarshal(payload, &wire); err != nil {
-			t.Fatalf("unmarshal %s component wire payload: %v", component.Kind, err)
-		}
-		if len(wire.Components) != 1 || wire.Components[0].Enabled == nil || *wire.Components[0].Enabled {
-			t.Fatalf("%s component wire payload = %s, want enabled false", component.Kind, payload)
-		}
-	}
-}
-
-func TestInitializeWithDynamicPluginsRejectsEmptySpecsWithoutCallingCgo(t *testing.T) {
-	withPluginActivationStubs(t)
-
-	activationCalls := 0
-	initializeWithDynamicPluginsJSON = func(string, string) (unsafe.Pointer, string, error) {
-		activationCalls++
-		return nil, "", errors.New("unexpected CGo call")
-	}
-
-	for _, specs := range [][]DynamicPluginActivationSpec{nil, {}} {
-		activation, report, err := InitializeWithDynamicPlugins(NewPluginConfig(), specs)
-		if err == nil || !strings.Contains(err.Error(), "at least one dynamic plugin") {
-			t.Fatalf("InitializeWithDynamicPlugins(%#v) error = %v, want empty-spec diagnostic", specs, err)
-		}
-		if activation != nil || len(report.Diagnostics) != 0 {
-			t.Fatalf("InitializeWithDynamicPlugins(%#v) = (%#v, %#v), want empty outputs", specs, activation, report)
-		}
-	}
-	if activationCalls != 0 {
-		t.Fatalf("activation calls = %d, want 0", activationCalls)
-	}
-}
-
-func TestInitializeWithDynamicPluginsCleansUpInvalidReport(t *testing.T) {
-	withPluginActivationStubs(t)
-
+func TestInitializePluginHostRejectsInvalidReportAndCleansUp(t *testing.T) {
+	withPluginHostStubs(t)
 	token := new(byte)
 	ptr := unsafe.Pointer(token)
-	initializeWithDynamicPluginsJSON = func(string, string) (unsafe.Pointer, string, error) {
-		return ptr, "not-json", nil
+	var cleared, freed bool
+	initializePluginHostJSON = func(string, *string) (unsafe.Pointer, string, error) {
+		return ptr, "{", nil
 	}
-	var calls []string
-	clearPluginActivation = func(unsafe.Pointer) error {
-		calls = append(calls, "clear")
-		return nil
+	clearPluginHostActivation = func(unsafe.Pointer) error { cleared = true; return nil }
+	freePluginHostActivation = func(unsafe.Pointer) { freed = true }
+	if activation, _, err := Initialize(NewPluginConfig(), nil); err == nil || activation != nil {
+		t.Fatalf("Initialize() = (%#v, %v), want report error", activation, err)
 	}
-	freePluginActivation = func(unsafe.Pointer) { calls = append(calls, "free") }
-
-	activation, _, err := InitializeWithDynamicPlugins(NewPluginConfig(), fixtureDynamicPluginSpecs())
-	if err == nil {
-		t.Fatal("InitializeWithDynamicPlugins() error = nil, want invalid report error")
-	}
-	if activation != nil {
-		t.Fatalf("activation = %#v, want nil", activation)
-	}
-	if strings.Join(calls, ",") != cleanupSequence {
-		t.Fatalf(cleanupCallsFmt, calls)
+	if !cleared || !freed {
+		t.Fatalf("invalid report cleanup = clear:%t free:%t", cleared, freed)
 	}
 	runtime.KeepAlive(token)
 }
 
-func TestPluginActivationCloseFreesAfterClearFailure(t *testing.T) {
-	withPluginActivationStubs(t)
-
+func TestPluginHostActivationCloseRetriesWhileCoreRemainsActive(t *testing.T) {
+	withPluginHostStubs(t)
 	token := new(byte)
 	ptr := unsafe.Pointer(token)
-	wantErr := errors.New(pluginTeardownErrorMessage)
-	var calls []string
-	clearPluginActivation = func(unsafe.Pointer) error {
-		calls = append(calls, "clear")
-		return wantErr
-	}
-	freePluginActivation = func(unsafe.Pointer) { calls = append(calls, "free") }
-	activation := newPluginActivation(ptr)
-
-	if err := activation.Close(); !errors.Is(err, wantErr) {
-		t.Fatalf("Close() error = %v, want %v", err, wantErr)
-	}
-	if err := activation.Close(); !errors.Is(err, wantErr) {
-		t.Fatalf("repeated Close() error = %v, want %v", err, wantErr)
-	}
-	if strings.Join(calls, ",") != cleanupSequence {
-		t.Fatalf(cleanupCallsFmt, calls)
-	}
-	runtime.KeepAlive(token)
-}
-
-func TestPluginActivationFinalizerReportsClearFailure(t *testing.T) {
-	withPluginActivationStubs(t)
-
-	token := new(byte)
-	wantErr := errors.New(pluginTeardownErrorMessage)
-	clearPluginActivation = func(unsafe.Pointer) error { return wantErr }
-	freePluginActivation = func(unsafe.Pointer) {
-		// The test stub intentionally has no native allocation to release.
-	}
-	reported := make(chan error, 1)
-	reportPluginActivationCleanupError = func(err error) { reported <- err }
-
-	finalizePluginActivation(&pluginActivationState{ptr: unsafe.Pointer(token)})
-	select {
-	case err := <-reported:
-		if !errors.Is(err, wantErr) {
-			t.Fatalf("reported finalizer error = %v, want %v", err, wantErr)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("finalizer did not report the clear failure")
-	}
-	runtime.KeepAlive(token)
-}
-
-func TestPluginActivationFinalizerDoesNotBlockOnCleanup(t *testing.T) {
-	withPluginActivationStubs(t)
-
-	token := new(byte)
-	cleanupStarted := make(chan struct{})
-	releaseCleanup := make(chan struct{})
-	cleanupFinished := make(chan struct{})
-	clearPluginActivation = func(unsafe.Pointer) error {
-		close(cleanupStarted)
-		<-releaseCleanup
-		return nil
-	}
-	freePluginActivation = func(unsafe.Pointer) { close(cleanupFinished) }
-
-	finalizerReturned := make(chan struct{})
-	go func() {
-		finalizePluginActivation(&pluginActivationState{ptr: unsafe.Pointer(token)})
-		close(finalizerReturned)
-	}()
-
-	select {
-	case <-cleanupStarted:
-	case <-time.After(time.Second):
-		close(releaseCleanup)
-		t.Fatal("finalizer cleanup did not start")
-	}
-	select {
-	case <-finalizerReturned:
-	case <-time.After(time.Second):
-		close(releaseCleanup)
-		t.Fatal("finalizer blocked while native cleanup was in progress")
-	}
-
-	close(releaseCleanup)
-	select {
-	case <-cleanupFinished:
-	case <-time.After(time.Second):
-		t.Fatal("asynchronous finalizer cleanup did not finish")
-	}
-	runtime.KeepAlive(token)
-}
-
-func TestPluginActivationCopiesShareCloseStateAndError(t *testing.T) {
-	withPluginActivationStubs(t)
-
-	token := new(byte)
-	ptr := unsafe.Pointer(token)
-	wantErr := errors.New(pluginTeardownErrorMessage)
-	var callsMu sync.Mutex
-	var calls []string
-	clearPluginActivation = func(got unsafe.Pointer) error {
+	closeErr := errors.New("clear failed")
+	var cleanup []string
+	clearPluginHostActivation = func(got unsafe.Pointer) error {
 		if got != ptr {
-			return fmt.Errorf("clear pointer = %p, want %p", got, ptr)
+			t.Fatalf("clear pointer = %p, want %p", got, ptr)
 		}
-		callsMu.Lock()
-		calls = append(calls, "clear")
-		callsMu.Unlock()
-		return wantErr
-	}
-	freePluginActivation = func(got unsafe.Pointer) {
-		callsMu.Lock()
-		defer callsMu.Unlock()
-		if got != ptr {
-			calls = append(calls, "free-wrong-pointer")
-			return
+		cleanup = append(cleanup, "clear")
+		if len(cleanup) == 1 {
+			return closeErr
 		}
-		calls = append(calls, "free")
-	}
-
-	activation := newPluginActivation(ptr)
-	copyValue := *activation
-	closeErrors := make(chan error, 2)
-	var closeCalls sync.WaitGroup
-	for _, handle := range []*PluginActivation{activation, &copyValue} {
-		closeCalls.Add(1)
-		go func(handle *PluginActivation) {
-			defer closeCalls.Done()
-			closeErrors <- handle.Close()
-		}(handle)
-	}
-	closeCalls.Wait()
-	close(closeErrors)
-	for err := range closeErrors {
-		if !errors.Is(err, wantErr) {
-			t.Fatalf("Close() error = %v, want %v", err, wantErr)
-		}
-	}
-	if err := activation.Close(); !errors.Is(err, wantErr) {
-		t.Fatalf("repeated Close() error = %v, want %v", err, wantErr)
-	}
-
-	callsMu.Lock()
-	gotCalls := strings.Join(calls, ",")
-	callsMu.Unlock()
-	if gotCalls != cleanupSequence {
-		t.Fatalf("cleanup calls = %s, want clear,free", gotCalls)
-	}
-	runtime.KeepAlive(token)
-}
-
-func TestPluginActivationCopyPreventsEarlyFinalization(t *testing.T) {
-	withPluginActivationStubs(t)
-
-	token := new(byte)
-	ptr := unsafe.Pointer(token)
-	var callsMu sync.Mutex
-	var calls []string
-	clearPluginActivation = func(unsafe.Pointer) error {
-		callsMu.Lock()
-		calls = append(calls, "clear")
-		callsMu.Unlock()
 		return nil
 	}
-	freePluginActivation = func(unsafe.Pointer) {
-		callsMu.Lock()
-		calls = append(calls, "free")
-		callsMu.Unlock()
-	}
-
-	wrapperCollected := make(chan struct{})
-	copyValue := copiedPluginActivationWithGCSentinel(ptr, wrapperCollected)
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		runtime.GC()
-		runtime.Gosched()
-		select {
-		case <-wrapperCollected:
-			goto wrapperWasCollected
-		default:
-			if time.Now().After(deadline) {
-				t.Fatal("unreachable activation wrapper was not collected")
-			}
-			time.Sleep(10 * time.Millisecond)
+	pluginHostActivationIsActive = func(got unsafe.Pointer) (bool, error) {
+		if got != ptr {
+			t.Fatalf("is-active pointer = %p, want %p", got, ptr)
 		}
+		return true, nil
+	}
+	freePluginHostActivation = func(got unsafe.Pointer) {
+		if got != ptr {
+			t.Fatalf("free pointer = %p, want %p", got, ptr)
+		}
+		cleanup = append(cleanup, "free")
 	}
 
-wrapperWasCollected:
-	for i := 0; i < 3; i++ {
-		runtime.GC()
-		runtime.Gosched()
-		time.Sleep(10 * time.Millisecond)
+	activation := newPluginHostActivation(ptr)
+	firstErr := activation.Close()
+	if !errors.Is(firstErr, closeErr) {
+		t.Fatalf("Close() error = %v, want %v", firstErr, closeErr)
 	}
-	callsMu.Lock()
-	gotCalls := strings.Join(calls, ",")
-	callsMu.Unlock()
-	if gotCalls != "" {
-		t.Fatalf("cleanup ran while a copied activation was reachable: %s", gotCalls)
+	if strings.Join(cleanup, ",") != "clear" {
+		t.Fatalf("cleanup calls = %v", cleanup)
 	}
-
-	if err := copyValue.Close(); err != nil {
-		t.Fatalf("copied activation Close() error = %v", err)
+	if retryErr := activation.Close(); retryErr != nil {
+		t.Fatalf("retry Close() error = %v", retryErr)
 	}
-	callsMu.Lock()
-	gotCalls = strings.Join(calls, ",")
-	callsMu.Unlock()
-	if gotCalls != cleanupSequence {
-		t.Fatalf("cleanup calls = %s, want clear,free", gotCalls)
+	if strings.Join(cleanup, ",") != "clear,clear,free" {
+		t.Fatalf("retry cleanup calls = %v", cleanup)
 	}
-	runtime.KeepAlive(copyValue)
+	if repeatedErr := activation.Close(); repeatedErr != nil {
+		t.Fatalf("repeated Close() error = %v", repeatedErr)
+	}
+	if strings.Join(cleanup, ",") != "clear,clear,free" {
+		t.Fatalf("repeated cleanup calls = %v", cleanup)
+	}
 	runtime.KeepAlive(token)
 }
 
-type pluginActivationGCSentinel struct {
-	activation *PluginActivation
-	padding    [64]byte
+func TestPluginHostActivationCloseFreesAfterTerminalClearFailure(t *testing.T) {
+	withPluginHostStubs(t)
+	token := new(byte)
+	ptr := unsafe.Pointer(token)
+	closeErr := errors.New("clear failed after teardown")
+	var cleanup []string
+	clearPluginHostActivation = func(got unsafe.Pointer) error {
+		if got != ptr {
+			t.Fatalf("clear pointer = %p, want %p", got, ptr)
+		}
+		cleanup = append(cleanup, "clear")
+		return closeErr
+	}
+	pluginHostActivationIsActive = func(got unsafe.Pointer) (bool, error) {
+		if got != ptr {
+			t.Fatalf("is-active pointer = %p, want %p", got, ptr)
+		}
+		return false, nil
+	}
+	freePluginHostActivation = func(got unsafe.Pointer) {
+		if got != ptr {
+			t.Fatalf("free pointer = %p, want %p", got, ptr)
+		}
+		cleanup = append(cleanup, "free")
+	}
+
+	activation := newPluginHostActivation(ptr)
+	firstErr := activation.Close()
+	if !errors.Is(firstErr, closeErr) {
+		t.Fatalf("Close() error = %v, want %v", firstErr, closeErr)
+	}
+	if strings.Join(cleanup, ",") != "clear,free" {
+		t.Fatalf("cleanup calls = %v", cleanup)
+	}
+	if repeatedErr := activation.Close(); repeatedErr != firstErr {
+		t.Fatalf("repeated Close() error = %v, want cached %v", repeatedErr, firstErr)
+	}
+	if strings.Join(cleanup, ",") != "clear,free" {
+		t.Fatalf("repeated cleanup calls = %v", cleanup)
+	}
+	runtime.KeepAlive(token)
 }
 
-//go:noinline
-func copiedPluginActivationWithGCSentinel(
-	ptr unsafe.Pointer,
-	wrapperCollected chan<- struct{},
-) PluginActivation {
-	activation := newPluginActivation(ptr)
-	copyValue := *activation
-	sentinel := &pluginActivationGCSentinel{activation: activation}
-	runtime.SetFinalizer(sentinel, func(sentinel *pluginActivationGCSentinel) {
-		runtime.KeepAlive(sentinel.activation)
-		close(wrapperCollected)
-	})
-	runtime.KeepAlive(activation)
-	runtime.KeepAlive(sentinel)
-	return copyValue
-}
-
-func TestInitializeWithDynamicPluginsSurfacesSerializationAndActivationErrors(t *testing.T) {
-	withPluginActivationStubs(t)
-
-	activationCalls := 0
-	initializeWithDynamicPluginsJSON = func(string, string) (unsafe.Pointer, string, error) {
-		activationCalls++
-		return nil, "", errors.New("load failed")
-	}
-
-	invalidConfig := NewPluginConfig()
-	invalidConfig.Components = append(invalidConfig.Components, PluginComponentSpec{
-		Kind:    "fixture",
-		Enabled: true,
-		Config:  map[string]any{"invalid": make(chan int)},
-	})
-	if _, _, err := InitializeWithDynamicPlugins(invalidConfig, fixtureDynamicPluginSpecs()); err == nil {
-		t.Fatal("invalid config serialization error = nil")
-	}
-	if activationCalls != 0 {
-		t.Fatalf("activation calls after config serialization failure = %d", activationCalls)
-	}
-
-	invalidSpecs := []DynamicPluginActivationSpec{{
-		PluginID:    "fixture",
-		Kind:        DynamicPluginKindRustDynamic,
-		ManifestRef: pluginFixtureManifest,
-		Config:      map[string]any{"invalid": make(chan int)},
-	}}
-	if _, _, err := InitializeWithDynamicPlugins(NewPluginConfig(), invalidSpecs); err == nil {
-		t.Fatal("invalid specs serialization error = nil")
-	}
-	if activationCalls != 0 {
-		t.Fatalf("activation calls after specs serialization failure = %d", activationCalls)
-	}
-
-	if _, _, err := InitializeWithDynamicPlugins(NewPluginConfig(), fixtureDynamicPluginSpecs()); err == nil || err.Error() != "load failed" {
-		t.Fatalf("activation error = %v, want load failed", err)
-	}
-	if activationCalls != 1 {
-		t.Fatalf("activation calls = %d, want 1", activationCalls)
-	}
-}
-
-func TestNilPluginActivationCloseIsSafe(t *testing.T) {
-	var activation *PluginActivation
+func TestNilPluginHostActivationCloseIsSafe(t *testing.T) {
+	var activation *PluginHostActivation
 	if err := activation.Close(); err != nil {
 		t.Fatalf("nil Close() error = %v", err)
 	}
 }
 
-func TestInitializeWithDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
-	t.Setenv("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "")
-	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf(clearConfigurationErrorFmt, err)
-	}
-	library := goNativePluginFixture(t)
+func TestInitializePluginHostLoadsNativePluginThroughCgo(t *testing.T) {
+	t.Setenv("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+	library := preparedPluginFixture(t, "NEMO_RELAY_TEST_NATIVE_PLUGIN")
 	manifest := writeGoNativePluginManifest(t, library)
-	pluginsTOML := configureNativePluginUserConfig(t)
-	staticRegistrations, staticCallbacks := registerStaticFixturePlugin(t)
-
-	activation, report, err := InitializeWithDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
-		PluginID:    "fixture_native",
-		Kind:        DynamicPluginKindRustDynamic,
-		ManifestRef: manifest,
-		Config:      map[string]any{},
-	}})
+	pluginsTOML := writeGoPluginHostConfig(t, manifest)
+	activation, report, err := Initialize(NewPluginConfig(), &pluginsTOML)
 	if err != nil {
-		t.Fatalf(initializePluginsErrorFmt, err)
+		t.Fatalf("Initialize() error = %v", err)
 	}
-	defer func() {
-		if err := activation.Close(); err != nil {
-			t.Errorf(deferredCloseErrorFmt, err)
-		}
-	}()
-	if len(report.Diagnostics) != 1 {
-		t.Fatalf("activation diagnostics = %#v, want one inherited-configuration warning", report.Diagnostics)
-	}
-	diagnostic := report.Diagnostics[0]
-	if diagnostic.Level != DiagnosticLevelWarning ||
-		diagnostic.Code != "plugin.configuration_inherited" ||
-		diagnostic.Component != nil || diagnostic.Field != nil ||
-		!strings.Contains(diagnostic.Message, pluginsTOML) {
-		t.Fatalf("activation diagnostic = %#v, want source-only inherited-configuration warning", diagnostic)
-	}
-	if staticRegistrations.Load() != 1 {
-		t.Fatalf("static registrations = %d, want 1", staticRegistrations.Load())
-	}
-	assertNativePluginInterception(t, pluginsTOML, staticCallbacks)
-	assertNativePluginCleanup(t, activation, pluginsTOML, staticCallbacks)
-	assertMissingNativePluginFails(t)
-}
-
-func TestInitializeWithDynamicPluginsIgnoresProjectPluginConfig(t *testing.T) {
-	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf(clearConfigurationErrorFmt, err)
-	}
-	library := goNativePluginFixture(t)
-	manifest := writeGoNativePluginManifest(t, library)
-	configureNativePluginProjectConfig(t)
-	staticRegistrations, staticCallbacks := registerStaticFixturePlugin(t)
-
-	activation, report, err := InitializeWithDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
-		PluginID:    "fixture_native",
-		Kind:        DynamicPluginKindRustDynamic,
-		ManifestRef: manifest,
-		Config:      map[string]any{},
-	}})
-	if err != nil {
-		t.Fatalf(initializePluginsErrorFmt, err)
-	}
-	defer func() {
-		if err := activation.Close(); err != nil {
-			t.Errorf(deferredCloseErrorFmt, err)
-		}
-	}()
-	if len(report.Diagnostics) != 0 {
-		t.Fatalf("activation diagnostics = %#v, want none", report.Diagnostics)
-	}
-	if staticRegistrations.Load() != 0 {
-		t.Fatalf("static registrations = %d, want 0", staticRegistrations.Load())
+	defer func() { _ = activation.Close() }()
+	if len(report.DynamicPlugins) != 1 || report.DynamicPlugins[0].PluginID != "fixture_native" {
+		t.Fatalf("dynamic reports = %#v", report.DynamicPlugins)
 	}
 
 	transformed, err := ToolRequestIntercepts(goNativeToolName, json.RawMessage(`{"input":true}`))
 	if err != nil {
-		t.Fatalf(toolInterceptErrorFmt, err)
+		t.Fatalf("ToolRequestIntercepts() error = %v", err)
 	}
-	var transformedObject map[string]any
-	if err := json.Unmarshal(transformed, &transformedObject); err != nil {
-		t.Fatalf(invalidToolArgsFmt, err)
+	var payload map[string]any
+	if err := json.Unmarshal(transformed, &payload); err != nil || payload["native_plugin"] != true {
+		t.Fatalf("transformed tool args = %s, error = %v", transformed, err)
 	}
-	if transformedObject["native_plugin"] != true || transformedObject["go_static_base"] != nil {
-		t.Fatalf("transformed tool args = %s, want only native-plugin marker", transformed)
-	}
-	if staticCallbacks.Load() != 0 {
-		t.Fatalf("static callbacks = %d, want 0", staticCallbacks.Load())
-	}
-}
-
-func configureNativePluginUserConfig(t *testing.T) string {
-	t.Helper()
-	projectDir := t.TempDir()
-	legacyPluginsTOML := filepath.Join(projectDir, ".nemo-relay", pluginsTOMLName)
-	if err := os.MkdirAll(filepath.Dir(legacyPluginsTOML), 0o700); err != nil {
-		t.Fatalf("MkdirAll(legacy project config) error = %v", err)
-	}
-	if err := os.WriteFile(legacyPluginsTOML, []byte("components = ["), 0o600); err != nil {
-		t.Fatalf("WriteFile(legacy project plugins.toml) error = %v", err)
-	}
-	xdgConfigHome := filepath.Join(projectDir, "xdg")
-	userConfigDir := filepath.Join(xdgConfigHome, "nemo-relay")
-	if err := os.MkdirAll(userConfigDir, 0o700); err != nil {
-		t.Fatalf("MkdirAll(user config) error = %v", err)
-	}
-	pluginsTOML := filepath.Join(userConfigDir, pluginsTOMLName)
-	const staticKind = staticFixtureKind
-	fileConfig := fmt.Sprintf(`version = 1
-
-[[components]]
-kind = %q
-enabled = true
-
-[components.config]
-source = "user-file"
-`, staticKind)
-	if err := os.WriteFile(pluginsTOML, []byte(fileConfig), 0o600); err != nil {
-		t.Fatalf("WriteFile(plugins.toml) error = %v", err)
-	}
-	previousCWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(projectDir); err != nil {
-		t.Fatalf("Chdir(project) error = %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(previousCWD); err != nil {
-			t.Errorf("restore working directory error = %v", err)
-		}
-	})
-	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
-	return pluginsTOML
-}
-
-func configureNativePluginProjectConfig(t *testing.T) {
-	t.Helper()
-	projectDir := t.TempDir()
-	projectPluginsTOML := filepath.Join(projectDir, ".nemo-relay", pluginsTOMLName)
-	if err := os.MkdirAll(filepath.Dir(projectPluginsTOML), 0o700); err != nil {
-		t.Fatalf("MkdirAll(project config) error = %v", err)
-	}
-	const staticKind = staticFixtureKind
-	projectConfig := fmt.Sprintf(`version = 1
-
-[[components]]
-kind = %q
-enabled = true
-
-[components.config]
-source = "project-file"
-`, staticKind)
-	if err := os.WriteFile(projectPluginsTOML, []byte(projectConfig), 0o600); err != nil {
-		t.Fatalf("WriteFile(project plugins.toml) error = %v", err)
-	}
-	xdgConfigHome := filepath.Join(projectDir, "xdg")
-	if err := os.MkdirAll(xdgConfigHome, 0o700); err != nil {
-		t.Fatalf("MkdirAll(XDG config home) error = %v", err)
-	}
-	previousCWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(projectDir); err != nil {
-		t.Fatalf("Chdir(project) error = %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(previousCWD); err != nil {
-			t.Errorf("restore working directory error = %v", err)
-		}
-	})
-	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
-}
-
-func registerStaticFixturePlugin(t *testing.T) (*atomic.Int32, *atomic.Int32) {
-	t.Helper()
-	const staticKind = staticFixtureKind
-	staticRegistrations := &atomic.Int32{}
-	staticCallbacks := &atomic.Int32{}
-	if err := RegisterPlugin(staticKind, PluginFuncs{
-		RegisterFunc: func(config map[string]any, ctx *PluginContext) error {
-			if config["source"] != "user-file" {
-				return fmt.Errorf("static plugin config = %#v, want user-file source", config)
-			}
-			staticRegistrations.Add(1)
-			return ctx.RegisterToolRequestIntercept(
-				"go_static_base",
-				-1,
-				false,
-				func(_ string, args json.RawMessage) json.RawMessage {
-					staticCallbacks.Add(1)
-					var payload map[string]any
-					err := json.Unmarshal(args, &payload)
-					if err != nil {
-						return args
-					}
-					payload["static_saw_dynamic"] = payload["native_plugin"] == true
-					payload["go_static_base"] = true
-					out, _ := json.Marshal(payload)
-					return out
-				},
-			)
-		},
-	}); err != nil {
-		t.Fatalf("RegisterPlugin() error = %v", err)
-	}
-	t.Cleanup(func() {
-		if err := DeregisterPlugin(staticKind); err != nil {
-			t.Errorf("DeregisterPlugin() error = %v", err)
-		}
-	})
-	return staticRegistrations, staticCallbacks
-}
-
-func assertNativePluginInterception(t *testing.T, pluginsTOML string, staticCallbacks *atomic.Int32) {
-	t.Helper()
-	// The activation has already resolved its configuration; subsequent file
-	// mutations are neither watched nor reloaded.
-	if err := os.WriteFile(pluginsTOML, []byte("invalid = ["), 0o600); err != nil {
-		t.Fatalf("mutate plugins.toml error = %v", err)
-	}
-
-	transformed, err := ToolRequestIntercepts(goNativeToolName, json.RawMessage(`{"input":true}`))
-	if err != nil {
-		t.Fatalf(toolInterceptErrorFmt, err)
-	}
-	var transformedObject map[string]any
-	if err := json.Unmarshal(transformed, &transformedObject); err != nil {
-		t.Fatalf(invalidToolArgsFmt, err)
-	}
-	if transformedObject["native_plugin"] != true {
-		t.Fatalf("transformed tool args = %s, want native_plugin marker", transformed)
-	}
-	if transformedObject["go_static_base"] != true {
-		t.Fatalf("transformed tool args = %s, want static base marker", transformed)
-	}
-	if transformedObject["static_saw_dynamic"] != false {
-		t.Fatalf("transformed tool args = %s, want static callback before dynamic callback", transformed)
-	}
-	if staticCallbacks.Load() != 1 {
-		t.Fatalf("static callbacks = %d, want 1", staticCallbacks.Load())
-	}
-}
-
-func assertNativePluginCleanup(t *testing.T, activation *PluginActivation, pluginsTOML string, staticCallbacks *atomic.Int32) {
-	t.Helper()
 	if err := activation.Close(); err != nil {
-		t.Fatalf(closeErrorFmt, err)
+		t.Fatalf("Close() error = %v", err)
 	}
-	afterClose, err := ToolRequestIntercepts(goNativeToolName, json.RawMessage(`{"input":true}`))
-	if err != nil {
-		t.Fatalf("ToolRequestIntercepts() after Close error = %v", err)
-	}
-	if string(afterClose) != `{"input":true}` {
-		t.Fatalf("tool args after Close = %s, want unchanged args", afterClose)
-	}
-	if staticCallbacks.Load() != 1 {
-		t.Fatalf("static callbacks after Close = %d, want 1", staticCallbacks.Load())
-	}
-	kinds, err := ListPluginKinds()
-	if err != nil {
-		t.Fatalf("ListPluginKinds() error = %v", err)
-	}
-	for _, kind := range kinds {
-		if kind == "fixture_native" {
-			t.Fatal("fixture_native remains registered after Close")
-		}
-	}
-	if err := os.Remove(pluginsTOML); err != nil {
-		t.Fatalf("Remove(plugins.toml) error = %v", err)
+	after, err := ToolRequestIntercepts(goNativeToolName, json.RawMessage(`{"input":true}`))
+	if err != nil || string(after) != `{"input":true}` {
+		t.Fatalf("tool args after close = %s, error = %v", after, err)
 	}
 }
 
-func assertMissingNativePluginFails(t *testing.T) {
-	t.Helper()
-	_, _, err := InitializeWithDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
-		PluginID:    "fixture_missing",
-		Kind:        DynamicPluginKindRustDynamic,
-		ManifestRef: filepath.Join(t.TempDir(), "missing-relay-plugin.toml"),
-	}})
-	if err == nil || !strings.Contains(err.Error(), "native plugin load failed") {
-		t.Fatalf("missing-manifest error = %v, want native plugin load diagnostic", err)
-	}
-}
-
-func TestInitializeWithDynamicPluginsLoadsWorkerPluginThroughCgo(t *testing.T) {
-	executable := goWorkerPluginFixture(t)
+func TestInitializePluginHostLoadsWorkerPluginThroughCgo(t *testing.T) {
+	t.Setenv("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+	executable := preparedPluginFixture(t, "NEMO_RELAY_TEST_WORKER_PLUGIN")
 	manifest := writeGoWorkerPluginManifest(t, executable)
-	runTestInIsolatedWorkingDirectory(t, func(t *testing.T) {
-		testInitializeWithDynamicWorkerPlugin(t, manifest)
-	})
-}
-
-func testInitializeWithDynamicWorkerPlugin(t *testing.T, manifest string) {
-	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf(clearConfigurationErrorFmt, err)
-	}
-
-	activation, report, err := InitializeWithDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
-		PluginID:    "fixture_worker",
-		Kind:        DynamicPluginKindWorker,
-		ManifestRef: manifest,
-		Config:      map[string]any{},
-	}})
+	pluginsTOML := writeGoPluginHostConfig(t, manifest)
+	activation, report, err := Initialize(NewPluginConfig(), &pluginsTOML)
 	if err != nil {
-		t.Fatalf(initializePluginsErrorFmt, err)
+		t.Fatalf("Initialize() error = %v", err)
 	}
-	defer func() {
-		if err := activation.Close(); err != nil {
-			t.Errorf(deferredCloseErrorFmt, err)
-		}
-	}()
-	if len(report.Diagnostics) != 0 {
-		t.Fatalf("activation diagnostics = %#v, want none", report.Diagnostics)
+	defer func() { _ = activation.Close() }()
+	if len(report.DynamicPlugins) != 1 || report.DynamicPlugins[0].PluginID != "fixture_worker" {
+		t.Fatalf("dynamic reports = %#v", report.DynamicPlugins)
 	}
-
 	transformed, err := ToolRequestIntercepts("go-worker-tool", json.RawMessage(`{"input":true}`))
 	if err != nil {
-		t.Fatalf(toolInterceptErrorFmt, err)
+		t.Fatalf("ToolRequestIntercepts() error = %v", err)
 	}
-	var transformedObject map[string]any
-	if err := json.Unmarshal(transformed, &transformedObject); err != nil {
-		t.Fatalf(invalidToolArgsFmt, err)
-	}
-	if transformedObject["worker_plugin"] != true {
-		t.Fatalf("transformed tool args = %s, want worker_plugin marker", transformed)
-	}
-
-	if err := activation.Close(); err != nil {
-		t.Fatalf(closeErrorFmt, err)
-	}
-	afterClose, err := ToolRequestIntercepts("go-worker-tool", json.RawMessage(`{"input":true}`))
-	if err != nil {
-		t.Fatalf("ToolRequestIntercepts() after Close error = %v", err)
-	}
-	if string(afterClose) != `{"input":true}` {
-		t.Fatalf("tool args after Close = %s, want unchanged args", afterClose)
+	var payload map[string]any
+	if err := json.Unmarshal(transformed, &payload); err != nil || payload["worker_plugin"] != true {
+		t.Fatalf("transformed tool args = %s, error = %v", transformed, err)
 	}
 }
 
-func TestPluginActivationFinalizerReleasesHostOwnership(t *testing.T) {
-	library := goNativePluginFixture(t)
+func TestPluginHostActivationFinalizerReleasesOwnership(t *testing.T) {
+	t.Setenv("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+	library := preparedPluginFixture(t, "NEMO_RELAY_TEST_NATIVE_PLUGIN")
 	manifest := writeGoNativePluginManifest(t, library)
-	specs := []DynamicPluginActivationSpec{{
-		PluginID:    "fixture_native",
-		Kind:        DynamicPluginKindRustDynamic,
-		ManifestRef: manifest,
-		Config:      map[string]any{},
-	}}
-	runTestInIsolatedWorkingDirectory(t, func(t *testing.T) {
-		testPluginActivationFinalizerReleasesHostOwnership(t, specs)
-	})
-}
-
-func testPluginActivationFinalizerReleasesHostOwnership(t *testing.T, specs []DynamicPluginActivationSpec) {
-	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf(clearConfigurationErrorFmt, err)
-	}
-	createUnclosedPluginActivation(t, specs)
+	pluginsTOML := writeGoPluginHostConfig(t, manifest)
+	createUnclosedPluginHostActivation(t, pluginsTOML)
 
 	deadline := time.Now().Add(10 * time.Second)
+	var lastErr error
 	for time.Now().Before(deadline) {
 		runtime.GC()
 		runtime.Gosched()
-		activation, _, err := InitializeWithDynamicPlugins(NewPluginConfig(), specs)
+		activation, _, err := Initialize(NewPluginConfig(), &pluginsTOML)
 		if err == nil {
 			if closeErr := activation.Close(); closeErr != nil {
-				t.Fatalf("replacement activation Close() error = %v", closeErr)
+				t.Fatalf("replacement Close() error = %v", closeErr)
 			}
 			return
 		}
+		lastErr = err
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("plugin activation finalizer did not release host ownership")
+	t.Fatalf("plugin host finalizer did not release ownership; last error = %v", lastErr)
 }
 
-// Keep creation in a separate frame so the activation is unreachable when the
-// caller starts forcing collection.
-//
 //go:noinline
-func createUnclosedPluginActivation(t *testing.T, specs []DynamicPluginActivationSpec) {
+func createUnclosedPluginHostActivation(t *testing.T, pluginsTOML string) {
 	t.Helper()
-	activation, _, err := InitializeWithDynamicPlugins(NewPluginConfig(), specs)
+	activation, _, err := Initialize(NewPluginConfig(), &pluginsTOML)
 	if err != nil {
-		t.Fatalf(initializePluginsErrorFmt, err)
+		t.Fatalf("Initialize() error = %v", err)
 	}
 	runtime.KeepAlive(activation)
 }
 
-func goNativePluginFixture(t *testing.T) string {
+func writeGoPluginHostConfig(t *testing.T, manifests ...string) string {
 	t.Helper()
-	return preparedPluginFixture(t, "NEMO_RELAY_TEST_NATIVE_PLUGIN")
-}
-
-func goWorkerPluginFixture(t *testing.T) string {
-	t.Helper()
-	return preparedPluginFixture(t, "NEMO_RELAY_TEST_WORKER_PLUGIN")
+	path := filepath.Join(t.TempDir(), "plugins.toml")
+	var declarations strings.Builder
+	for _, manifest := range manifests {
+		fmt.Fprintf(&declarations, "[[plugins.dynamic]]\nmanifest = %q\n\n", manifest)
+	}
+	contents := fmt.Sprintf(
+		"version = 1\n\n[plugins.policy.defaults]\nstartup = \"required\"\nattestation = \"integrity_only\"\n\n%s",
+		declarations.String(),
+	)
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write plugins.toml: %v", err)
+	}
+	return path
 }
 
 func preparedPluginFixture(t *testing.T, environment string) string {
@@ -1008,6 +376,16 @@ func preparedPluginFixture(t *testing.T, environment string) string {
 	return path
 }
 
+func artifactDigest(t *testing.T, path string) string {
+	t.Helper()
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read plugin artifact: %v", err)
+	}
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:])
+}
+
 func writeGoNativePluginManifest(t *testing.T, library string) string {
 	t.Helper()
 	manifest := filepath.Join(t.TempDir(), "relay-plugin.toml")
@@ -1027,10 +405,16 @@ enabled = false
 [capabilities]
 items = ["plugin_native"]
 
+[source]
+artifact = %q
+
+[integrity]
+sha256 = "sha256:%s"
+
 [load]
 library = %q
 symbol = "nemo_relay_fixture_native_plugin"
-`, relayWorkspaceVersion(t), library)
+`, relayWorkspaceVersion(t), library, artifactDigest(t, library), library)
 	if err := os.WriteFile(manifest, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write native plugin manifest: %v", err)
 	}
@@ -1056,10 +440,16 @@ enabled = false
 [capabilities]
 items = ["plugin_worker"]
 
+[source]
+artifact = %q
+
+[integrity]
+sha256 = "sha256:%s"
+
 [load]
 runtime = "rust"
 entrypoint = %q
-`, relayWorkspaceVersion(t), executable)
+`, relayWorkspaceVersion(t), executable, artifactDigest(t, executable), executable)
 	if err := os.WriteFile(manifest, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write worker plugin manifest: %v", err)
 	}
@@ -1099,48 +489,24 @@ func workspaceVersionFromCargoTOML(payload []byte) (string, error) {
 }
 
 func TestWorkspaceVersionFromCargoTOML(t *testing.T) {
-	tests := []struct {
-		name    string
-		payload string
-		want    string
-		wantErr string
+	for _, test := range []struct {
+		name, payload, want, wantErr string
 	}{
-		{
-			name:    "standard workspace package",
-			payload: "[workspace.package]\nversion = \"0.6.0\"\nedition = \"2024\"\n\n[workspace.dependencies]\n",
-			want:    "0.6.0",
-		},
-		{
-			name:    "whitespace comments CRLF and literal string",
-			payload: "[package]\r\nversion = \"9.9.9\"\r\n\r\n  [workspace.package] # inherited metadata\r\n  version\t=\t'0.7.0' # next release\r\n\r\n[[workspace.metadata.fixture]]\r\n",
-			want:    "0.7.0",
-		},
-		{
-			name:    "missing workspace package",
-			payload: "[package]\nversion = \"0.6.0\"\n",
-			wantErr: "no [workspace.package] section",
-		},
-		{
-			name:    "missing workspace version",
-			payload: "[workspace.package]\nedition = \"2024\"\n",
-			wantErr: "workspace package version not found",
-		},
-	}
-
-	for _, test := range tests {
+		{"standard", "[workspace.package]\nversion = \"0.8.0\"\n", "0.8.0", ""},
+		{"literal", "[workspace.package]\nversion = '0.8.1'\n", "0.8.1", ""},
+		{"missing section", "[package]\nversion = \"0.8.0\"\n", "", "no [workspace.package] section"},
+		{"missing version", "[workspace.package]\nedition = \"2024\"\n", "", "version not found"},
+	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := workspaceVersionFromCargoTOML([]byte(test.payload))
 			if test.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-					t.Fatalf("workspaceVersionFromCargoTOML() error = %v, want %q", err, test.wantErr)
+					t.Fatalf("error = %v, want %q", err, test.wantErr)
 				}
 				return
 			}
-			if err != nil {
-				t.Fatalf("workspaceVersionFromCargoTOML() error = %v", err)
-			}
-			if got != test.want {
-				t.Fatalf("workspaceVersionFromCargoTOML() = %q, want %q", got, test.want)
+			if err != nil || got != test.want {
+				t.Fatalf("version = %q, error = %v", got, err)
 			}
 		})
 	}

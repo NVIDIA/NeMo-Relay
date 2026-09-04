@@ -6,6 +6,8 @@
 from pathlib import Path
 from typing import Literal, cast
 
+from plugin_host_test_helper import validate_plugin_config
+
 from nemo_relay import adaptive as adaptive_module
 from nemo_relay import plugin
 from nemo_relay.adaptive import (
@@ -43,7 +45,7 @@ class TestDynamicConfigContract:
         assert any(diag["code"] == "adaptive.section_disabled_missing_state" for diag in report["diagnostics"])
 
     def test_unknown_field_warns_by_default(self):
-        report = plugin.validate(
+        report = validate_plugin_config(
             plugin.PluginConfig(
                 components=[
                     plugin.ComponentSpec(
@@ -66,7 +68,7 @@ class TestDynamicConfigContract:
             Literal["observe_only", "inject_hints", "schedule"],
             "definitely_not_supported",
         )
-        report = plugin.validate(
+        report = validate_plugin_config(
             plugin.PluginConfig(
                 components=[
                     ComponentSpec(
@@ -81,7 +83,7 @@ class TestDynamicConfigContract:
         assert any(diag["code"] == "adaptive.unsupported_value" for diag in report["diagnostics"])
 
     def test_missing_state_warns_for_telemetry(self):
-        report = plugin.validate(
+        report = validate_plugin_config(
             plugin.PluginConfig(
                 components=[
                     plugin.ComponentSpec(
@@ -123,7 +125,7 @@ class TestDynamicConfigContract:
         assert evidence["missing_facts"] == ["acg_stability_unavailable"]
 
     def test_in_memory_state_produces_clean_report(self):
-        report = plugin.validate(
+        report = validate_plugin_config(
             plugin.PluginConfig(
                 components=[
                     ComponentSpec(
@@ -196,7 +198,7 @@ class TestDynamicConfigContract:
         assert response_cache["namespace"] == "dev"
 
     def test_response_cache_clean_report(self):
-        report = plugin.validate(
+        report = validate_plugin_config(
             plugin.PluginConfig(
                 components=[ComponentSpec(AdaptiveConfig(response_cache=ResponseCacheConfig(namespace="dev")))]
             )
@@ -204,14 +206,14 @@ class TestDynamicConfigContract:
         assert report["diagnostics"] == []
 
     def test_unscoped_response_cache_is_rejected(self):
-        report = plugin.validate(
+        report = validate_plugin_config(
             plugin.PluginConfig(components=[ComponentSpec(AdaptiveConfig(response_cache=ResponseCacheConfig()))])
         )
         codes = {diag["code"] for diag in report["diagnostics"]}
         assert "response_cache.missing_namespace" in codes
 
     def test_invalid_response_cache_section_is_rejected(self):
-        report = plugin.validate(
+        report = validate_plugin_config(
             plugin.PluginConfig(
                 components=[
                     ComponentSpec(

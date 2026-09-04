@@ -21,7 +21,7 @@ from nemo_relay.runtime_registrations import RuntimeRegistrationKind
 @dataclass
 class ActivatedExample:
     implementation: DocumentationPlugin
-    report: dict[str, Any]
+    report: plugin.PluginHostReport
 
 
 class RecordingContext:
@@ -48,11 +48,13 @@ async def active_plugin(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Async
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     plugin.register("documentation-plugin", implementation)
+    activation = None
     try:
-        report = await plugin.initialize(component("enforce"))
-        yield ActivatedExample(implementation, report)
+        activation = await plugin.initialize(component("enforce"))
+        yield ActivatedExample(implementation, activation.report)
     finally:
-        await plugin.clear_async()
+        if activation is not None:
+            await activation.close()
         plugin.deregister("documentation-plugin")
 
 
@@ -121,11 +123,13 @@ def test_validation_warns_about_unknown_field() -> None:
     assert diagnostics[0]["field"] == "unexpected"
 
 
-def test_disabled_invalid_component_is_still_validated() -> None:
+def test_disabled_component_configuration_is_still_validated(tmp_path: Any, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     plugin.register("documentation-plugin", DocumentationPlugin())
     try:
         report = plugin.validate(component("invalid", enabled=False))
-        assert report["diagnostics"][0]["code"] == "documentation-plugin.unsupported_mode"
+        assert report["config"]["diagnostics"][0]["code"] == "documentation-plugin.unsupported_mode"
     finally:
         plugin.deregister("documentation-plugin")
 
@@ -169,26 +173,29 @@ async def test_registration_control_is_owned_by_activation(tmp_path: Any, monkey
     configuration = component("enforce")
     configuration.components[0].config["registration_control"]["enabled"] = True
     plugin.register("documentation-plugin", DocumentationPlugin())
+    activation = None
     try:
         before = runtime_registrations.list_runtime_registrations({RuntimeRegistrationKind.SUBSCRIBER})
         assert any(item.effective_name == target for item in before)
-        await plugin.initialize(configuration)
+        activation = await plugin.initialize(configuration)
         baseline = len(observed)
         scope.event("registration-control-active")
         await subscribers.flush_async()
         assert len(observed) == baseline
-        await plugin.clear_async()
+        await activation.close()
+        activation = None
         scope.event("registration-control-cleared")
         await subscribers.flush_async()
         assert observed[-1] == "registration-control-cleared"
     finally:
-        await plugin.clear_async()
+        if activation is not None:
+            await activation.close()
         plugin.deregister("documentation-plugin")
         subscribers.deregister(target)
 
 
-async def test_activation_reports_no_diagnostics(active_plugin: ActivatedExample) -> None:
-    assert active_plugin.report["diagnostics"] == []
+async def test_activation_reports_no_diagnostics(active_plugin: ActivatedExample):
+    assert active_plugin.report["config"]["diagnostics"] == []
 
 
 async def test_tool_request_is_rewritten(active_plugin: ActivatedExample) -> None:
@@ -254,26 +261,31 @@ async def test_runtime_events_do_not_depend_on_request_rewriting(
     configuration = component("enforce")
     configuration.components[0].config["requests"]["enabled"] = False
     plugin.register("documentation-plugin", implementation)
+    activation = None
     try:
-        await plugin.initialize(configuration)
+        activation = await plugin.initialize(configuration)
         await tools.execute("safe_tool", {"value": 1}, nemo_relay.ToolExecutionResult)
         await subscribers.flush_async()
 
         assert "documentation-plugin.request" in implementation.events
     finally:
-        await plugin.clear_async()
+        if activation is not None:
+            await activation.close()
         plugin.deregister("documentation-plugin")
 
 
-async def test_teardown_removes_plugin_kind(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_teardown_removes_plugin_kind(tmp_path: Any, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     plugin.register("documentation-plugin", DocumentationPlugin())
+    activation = None
     try:
-        await plugin.initialize(component("enforce"))
-        await plugin.clear_async()
+        activation = await plugin.initialize(component("enforce"))
+        await activation.close()
+        activation = None
         assert plugin.deregister("documentation-plugin") is True
         assert "documentation-plugin" not in plugin.list_kinds()
     finally:
-        await plugin.clear_async()
+        if activation is not None:
+            await activation.close()
         plugin.deregister("documentation-plugin")

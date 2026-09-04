@@ -3,6 +3,8 @@
 
 //! Integration coverage for SDK-built native dynamic plugins.
 
+mod plugin_host_test_support;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -27,14 +29,14 @@ use nemo_relay::api::tool::{
 };
 use nemo_relay::codec::response::AnnotatedLlmResponse;
 use nemo_relay::plugin::dynamic::{
-    DynamicPluginActivationSpec, DynamicPluginKind, NativePluginLoadSpec, PluginHostActivation,
-    load_native_plugins,
+    DynamicPluginKind, NativePluginLoadSpec, PluginHostActivation, VerifiedDynamicPluginSpec,
+    initialize, load_native_plugins,
 };
 use nemo_relay::plugin::{
     ConfigDiagnostic, Plugin, PluginComponentSpec, PluginConfig, PluginRegistrationContext,
-    Result as PluginResult, clear_plugin_configuration, deregister_plugin,
-    initialize_plugins_exact, list_plugin_kinds, lookup_plugin, register_plugin,
+    Result as PluginResult, deregister_plugin, list_plugin_kinds, lookup_plugin, register_plugin,
 };
+use plugin_host_test_support::{test_close_plugin_host, test_initialize_plugin_host_exact};
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -199,7 +201,7 @@ impl Drop for NativePluginTestCleanup {
             let _ = deregister_subscriber(name);
         }
         if self.plugin_configuration_active {
-            let _ = clear_plugin_configuration();
+            let _ = test_close_plugin_host();
         }
     }
 }
@@ -223,7 +225,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
         enabled: true,
         config: Map::new(),
     });
-    initialize_plugins_exact(plugin_config)
+    test_initialize_plugin_host_exact(plugin_config)
         .await
         .expect("native plugin should initialize");
     cleanup.mark_plugin_configuration_active();
@@ -731,7 +733,7 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
         enabled: true,
         config: Map::new(),
     });
-    initialize_plugins_exact(config)
+    test_initialize_plugin_host_exact(config)
         .await
         .expect("v3 async native fixture should register");
     cleanup.mark_plugin_configuration_active();
@@ -826,7 +828,7 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
     })
     .await
     .expect("native async callback should enter before plugin clear");
-    clear_plugin_configuration().expect("v3 async native fixture should clear while pending");
+    test_close_plugin_host().expect("v3 async native fixture should clear while pending");
     cleanup.plugin_configuration_active = false;
     let pending = pending
         .await
@@ -840,7 +842,7 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
         enabled: true,
         config: Map::new(),
     });
-    initialize_plugins_exact(config)
+    test_initialize_plugin_host_exact(config)
         .await
         .expect("v3 async native fixture should reactivate");
     cleanup.mark_plugin_configuration_active();
@@ -863,7 +865,7 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
     })
     .await
     .expect("native async next should start before cancellation");
-    clear_plugin_configuration().expect("plugin configuration should clear with next pending");
+    test_close_plugin_host().expect("plugin configuration should clear with next pending");
     cleanup.plugin_configuration_active = false;
     pending_next.abort();
     assert!(
@@ -896,13 +898,13 @@ async fn native_validation_diagnostics_prevent_initialization() {
         enabled: true,
         config: Map::from_iter([("reject".into(), json!(true))]),
     });
-    let error = initialize_plugins_exact(plugin_config)
+    let error = test_initialize_plugin_host_exact(plugin_config)
         .await
         .expect_err("validation diagnostics should prevent initialization")
         .to_string();
     assert!(error.contains("fixture rejection requested"), "{error}");
 
-    clear_plugin_configuration().expect("native plugin config should clear");
+    test_close_plugin_host().expect("native plugin config should clear");
     activation.clear();
 }
 
@@ -922,7 +924,7 @@ async fn native_tool_execution_rejects_null_malformed_and_error_outcomes() {
         enabled: true,
         config: Map::new(),
     });
-    initialize_plugins_exact(plugin_config)
+    test_initialize_plugin_host_exact(plugin_config)
         .await
         .expect("native outcome fixture should initialize");
     cleanup.mark_plugin_configuration_active();
@@ -978,7 +980,7 @@ async fn native_api_one_preserves_results_after_abi_v2_negotiation() {
         enabled: true,
         config: Map::new(),
     });
-    initialize_plugins_exact(plugin_config)
+    test_initialize_plugin_host_exact(plugin_config)
         .await
         .expect("ABI v2 native API 1 fixture should initialize");
     cleanup.mark_plugin_configuration_active();
@@ -1022,7 +1024,7 @@ async fn native_event_sanitizer_callback_errors_clear_observability_fields() {
         enabled: true,
         config: Map::new(),
     });
-    initialize_plugins_exact(plugin_config)
+    test_initialize_plugin_host_exact(plugin_config)
         .await
         .expect("raw native event sanitizer fixture should initialize");
     cleanup.mark_plugin_configuration_active();
@@ -1478,17 +1480,17 @@ async fn native_validate_and_register_callback_errors_are_reported() {
             error.contains(expected),
             "expected {expected:?} in error: {error}"
         );
-        clear_plugin_configuration().expect("native plugin config should clear");
+        test_close_plugin_host().expect("native plugin config should clear");
         activation.clear();
     }
 }
 
 #[tokio::test]
-async fn plugin_host_activation_owns_configuration_until_clear() {
+async fn plugin_host_activation_owns_configuration_until_close() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest(&fixture);
-    let (activation, report) = PluginHostActivation::activate(
+    let (mut activation, report) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -1507,17 +1509,17 @@ async fn plugin_host_activation_owns_configuration_until_clear() {
         .expect("host-owned intercept should run");
     assert_eq!(rewritten["native_plugin"], true);
 
-    let initialize_error = initialize_plugins_exact(PluginConfig::default())
-        .await
-        .expect_err("legacy initialize must not replace a host activation")
-        .to_string();
+    let initialize_error =
+        match PluginHostActivation::initialize_exact(PluginConfig::default()).await {
+            Ok(mut unexpected) => {
+                unexpected.close().expect("unexpected host should close");
+                panic!("a second host replaced the active host");
+            }
+            Err(error) => error.to_string(),
+        };
     assert!(initialize_error.contains("active dynamic plugin host"));
-    let clear_error = clear_plugin_configuration()
-        .expect_err("legacy clear must not clear a host activation")
-        .to_string();
-    assert!(clear_error.contains("active dynamic plugin host"));
 
-    activation.clear().expect("plugin host should clear");
+    activation.close().expect("plugin host should close");
     assert!(
         !list_plugin_kinds()
             .iter()
@@ -1563,9 +1565,10 @@ async fn native_conditional_callbacks_block_allow_fail_open_and_clear() {
 
     let mut spec = host_spec("fixture_native", &manifest_ref);
     spec.config = Map::from_iter([("conditional_gate_test".into(), json!(true))]);
-    let (activation, report) = PluginHostActivation::activate(PluginConfig::default(), [spec])
-        .await
-        .expect("native plugin host should activate callback gates");
+    let (mut activation, report) =
+        PluginHostActivation::initialize_with_verified_specs(PluginConfig::default(), [spec])
+            .await
+            .expect("native plugin host should activate callback gates");
     assert!(!report.has_errors());
     flush_subscribers().expect("activation events should flush");
     let baselines = registrations
@@ -1584,7 +1587,7 @@ async fn native_conditional_callbacks_block_allow_fail_open_and_clear() {
     assert!(registrations[1].1.load(Ordering::SeqCst) > baselines[1]);
     assert!(registrations[2].1.load(Ordering::SeqCst) > baselines[2]);
 
-    activation.clear().expect("native plugin host should clear");
+    activation.close().expect("native plugin host should close");
     emit_scope_mark(
         EmitMarkEventParams::builder()
             .name("native-conditional-callback-cleared")
@@ -1602,9 +1605,10 @@ async fn native_event_metadata_injector_enriches_events_and_is_removed_on_clear(
     let manifest_ref = write_manifest(&fixture);
     let mut spec = host_spec("fixture_native", &manifest_ref);
     spec.config = Map::from_iter([("event_metadata_injector_only".into(), json!(true))]);
-    let (activation, report) = PluginHostActivation::activate(PluginConfig::default(), [spec])
-        .await
-        .expect("native plugin host should activate");
+    let (mut activation, report) =
+        PluginHostActivation::initialize_with_verified_specs(PluginConfig::default(), [spec])
+            .await
+            .expect("native plugin host should activate");
     assert!(!report.has_errors());
 
     let events = Arc::new(Mutex::new(Vec::<Event>::new()));
@@ -1636,7 +1640,7 @@ async fn native_event_metadata_injector_enriches_events_and_is_removed_on_clear(
         "native_dynamic_rust"
     );
 
-    activation.clear().expect("native plugin host should clear");
+    activation.close().expect("native plugin host should close");
     emit_scope_mark(
         EmitMarkEventParams::builder()
             .name("external-plugin-event-metadata-injection-native-after-clear")
@@ -1666,9 +1670,10 @@ async fn native_event_metadata_injector_error_preserves_event_delivery() {
         ("event_metadata_injector_only".into(), json!(true)),
         ("event_metadata_injector_error".into(), json!(true)),
     ]);
-    let (activation, _) = PluginHostActivation::activate(PluginConfig::default(), [spec])
-        .await
-        .expect("native plugin host should activate");
+    let (mut activation, _) =
+        PluginHostActivation::initialize_with_verified_specs(PluginConfig::default(), [spec])
+            .await
+            .expect("native plugin host should activate");
 
     let events = Arc::new(Mutex::new(Vec::<Event>::new()));
     let captured = events.clone();
@@ -1696,7 +1701,7 @@ async fn native_event_metadata_injector_error_preserves_event_delivery() {
     drop(events);
 
     deregister_subscriber(subscriber_name).expect("test subscriber should deregister");
-    activation.clear().expect("native plugin host should clear");
+    activation.close().expect("native plugin host should close");
 }
 
 #[tokio::test]
@@ -1715,17 +1720,19 @@ async fn plugin_host_activation_combines_static_base_and_dynamic_components() {
         enabled: true,
         config: Map::new(),
     });
-    let (activation, report) =
-        PluginHostActivation::activate(base_config, [host_spec("fixture_native", &manifest_ref)])
-            .await
-            .expect("static and dynamic components should activate together");
+    let (mut activation, report) = PluginHostActivation::initialize_with_verified_specs(
+        base_config,
+        [host_spec("fixture_native", &manifest_ref)],
+    )
+    .await
+    .expect("static and dynamic components should activate together");
 
     assert!(!report.has_errors());
     assert_eq!(STATIC_BASE_REGISTRATIONS.load(Ordering::SeqCst), 1);
     assert!(lookup_plugin(STATIC_BASE_PLUGIN_KIND).is_some());
     assert!(lookup_plugin("fixture_native").is_some());
 
-    activation.clear().expect("combined host should clear");
+    activation.close().expect("combined host should close");
     assert_eq!(STATIC_BASE_DEREGISTRATIONS.load(Ordering::SeqCst), 1);
     assert!(lookup_plugin(STATIC_BASE_PLUGIN_KIND).is_some());
     assert!(lookup_plugin("fixture_native").is_none());
@@ -1740,10 +1747,19 @@ async fn plugin_host_activation_layers_discovered_static_base_with_dynamic_compo
         let user_config_dir = xdg_config_home.join("nemo-relay");
         std::fs::create_dir_all(&user_config_dir)
             .expect("user plugin config directory should be created");
+        let fixture = build_fixture_plugin();
+        let manifest_ref = write_manifest_with_integrity(&fixture, &sha256(&fixture.library_path));
         std::fs::write(
             user_config_dir.join("plugins.toml"),
             format!(
-                "version = 1\n\n[[components]]\nkind = {STATIC_BASE_PLUGIN_KIND:?}\nenabled = true\n"
+                concat!(
+                    "version = 1\n\n",
+                    "[[components]]\nkind = {static_kind:?}\nenabled = true\n\n",
+                    "[plugins.policy.defaults]\nattestation = \"integrity_only\"\n\n",
+                    "[[plugins.dynamic]]\nmanifest = {manifest_ref:?}\n"
+                ),
+                static_kind = STATIC_BASE_PLUGIN_KIND,
+                manifest_ref = manifest_ref.to_string_lossy(),
             ),
         )
         .expect("user plugin config should be written");
@@ -1780,21 +1796,17 @@ async fn plugin_host_activation_layers_discovered_static_base_with_dynamic_compo
     STATIC_BASE_DEREGISTRATIONS.store(0, Ordering::SeqCst);
     register_plugin(Arc::new(StaticBasePlugin)).expect("static base plugin should register");
 
-    let fixture = build_fixture_plugin();
-    let manifest_ref = write_manifest(&fixture);
-    let (activation, report) = PluginHostActivation::activate_with_discovered_config(
-        PluginConfig::default(),
-        [host_spec("fixture_native", &manifest_ref)],
-    )
-    .await
-    .expect("discovered static and dynamic components should activate together");
+    let mut activation = initialize(PluginConfig::default(), None)
+        .await
+        .expect("discovered static and dynamic components should activate together");
+    let report = activation.report();
 
-    assert!(!report.has_errors());
+    assert!(!report.config.has_errors());
     assert_eq!(STATIC_BASE_REGISTRATIONS.load(Ordering::SeqCst), 1);
     assert!(lookup_plugin(STATIC_BASE_PLUGIN_KIND).is_some());
     assert!(lookup_plugin("fixture_native").is_some());
 
-    activation.clear().expect("discovered host should clear");
+    activation.close().expect("discovered host should close");
     assert_eq!(STATIC_BASE_DEREGISTRATIONS.load(Ordering::SeqCst), 1);
     assert!(lookup_plugin("fixture_native").is_none());
     assert!(deregister_plugin(STATIC_BASE_PLUGIN_KIND));
@@ -1805,7 +1817,7 @@ async fn plugin_host_clear_allows_an_in_flight_native_callback_to_finish() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest(&fixture);
-    let (activation, _) = PluginHostActivation::activate(
+    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -1853,8 +1865,8 @@ async fn plugin_host_clear_allows_an_in_flight_native_callback_to_finish() {
         .recv_timeout(std::time::Duration::from_secs(5))
         .expect("native callback should enter its continuation");
     activation
-        .clear()
-        .expect("host should clear while a callback snapshot remains in flight");
+        .close()
+        .expect("host should close while a callback snapshot remains in flight");
     let unchanged = tool_request_intercepts("after-clear", json!({ "input": true }))
         .await
         .expect("new calls should observe the cleared registries");
@@ -1886,7 +1898,7 @@ async fn plugin_host_activation_cleans_up_after_caller_cancellation() {
     }))
     .expect("blocking base plugin should register");
 
-    let caller = tokio::spawn(PluginHostActivation::activate(
+    let caller = tokio::spawn(PluginHostActivation::initialize_with_verified_specs(
         PluginConfig {
             components: vec![PluginComponentSpec::new("fixture_blocking_host_base")],
             ..PluginConfig::default()
@@ -1904,9 +1916,7 @@ async fn plugin_host_activation_cleans_up_after_caller_cancellation() {
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            if nemo_relay::plugin::active_plugin_report().is_none()
-                && lookup_plugin("fixture_native").is_none()
-            {
+            if lookup_plugin("fixture_native").is_none() {
                 break;
             }
             tokio::task::yield_now().await;
@@ -1915,29 +1925,29 @@ async fn plugin_host_activation_cleans_up_after_caller_cancellation() {
     .await
     .expect("canceled activation should clear its completed host result");
 
-    let (activation, _) = PluginHostActivation::activate(
+    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
     .await
     .expect("canceled activation must release process ownership");
-    activation.clear().expect("recovered host should clear");
+    activation.close().expect("recovered host should close");
     assert!(deregister_plugin("fixture_blocking_host_base"));
 }
 
 #[tokio::test]
 async fn plugin_host_rejects_empty_dynamic_specs_without_claiming_ownership() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
-    let error = match PluginHostActivation::activate(
+    let error = match PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
-        Vec::<DynamicPluginActivationSpec>::new(),
+        Vec::<VerifiedDynamicPluginSpec>::new(),
     )
     .await
     {
-        Ok((activation, _)) => {
+        Ok((mut activation, _)) => {
             activation
-                .clear()
-                .expect("unexpected empty activation should clear");
+                .close()
+                .expect("unexpected empty activation should close");
             panic!("an empty dynamic activation must fail");
         }
         Err(error) => error.to_string(),
@@ -1945,10 +1955,10 @@ async fn plugin_host_rejects_empty_dynamic_specs_without_claiming_ownership() {
     assert!(error.contains("at least one dynamic plugin"), "{error}");
     assert!(error.contains("static-only configuration"), "{error}");
 
-    initialize_plugins_exact(PluginConfig::default())
+    test_initialize_plugin_host_exact(PluginConfig::default())
         .await
         .expect("empty dynamic rejection must leave static initialization available");
-    clear_plugin_configuration().expect("static configuration should clear");
+    test_close_plugin_host().expect("static configuration should clear");
 }
 
 #[tokio::test]
@@ -1958,7 +1968,7 @@ async fn plugin_host_activation_drop_releases_owner_and_plugin_kind() {
     let manifest_ref = write_manifest(&fixture);
 
     {
-        let (activation, _) = PluginHostActivation::activate(
+        let (activation, _) = PluginHostActivation::initialize_with_verified_specs(
             PluginConfig::default(),
             [host_spec("fixture_native", &manifest_ref)],
         )
@@ -1972,13 +1982,13 @@ async fn plugin_host_activation_drop_releases_owner_and_plugin_kind() {
             .iter()
             .any(|kind| kind == "fixture_native")
     );
-    let (activation, _) = PluginHostActivation::activate(
+    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
     .await
     .expect("owner should be reusable after drop");
-    activation.clear().expect("second plugin host should clear");
+    activation.close().expect("second plugin host should close");
 }
 
 #[tokio::test]
@@ -1991,16 +2001,16 @@ async fn plugin_host_reserved_id_failure_does_not_poison_future_activation() {
         "nemo_relay_fixture_observability_collision",
     );
 
-    let error = match PluginHostActivation::activate(
+    let error = match PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("observability", &collision_manifest)],
     )
     .await
     {
-        Ok((activation, _)) => {
+        Ok((mut activation, _)) => {
             activation
-                .clear()
-                .expect("unexpected collision activation should clear");
+                .close()
+                .expect("unexpected collision activation should close");
             panic!("a dynamic plugin must not replace a builtin kind");
         }
         Err(error) => error.to_string(),
@@ -2009,15 +2019,15 @@ async fn plugin_host_reserved_id_failure_does_not_poison_future_activation() {
     assert!(error.contains("already registered"), "{error}");
 
     let manifest_ref = write_manifest(&fixture);
-    let (activation, _) = PluginHostActivation::activate(
+    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
     .await
     .expect("a reserved-id failure must not poison later activation");
     activation
-        .clear()
-        .expect("recovered plugin host should clear");
+        .close()
+        .expect("recovered plugin host should close");
 }
 
 #[tokio::test]
@@ -2027,16 +2037,20 @@ async fn plugin_host_rejects_duplicate_ids_before_loading() {
     let manifest_ref = write_manifest(&fixture);
     let spec = host_spec("fixture_native", &manifest_ref);
 
-    let error =
-        match PluginHostActivation::activate(PluginConfig::default(), [spec.clone(), spec]).await {
-            Ok((activation, _)) => {
-                activation
-                    .clear()
-                    .expect("unexpected duplicate activation should clear");
-                panic!("duplicate dynamic plugin ids should fail");
-            }
-            Err(error) => error.to_string(),
-        };
+    let error = match PluginHostActivation::initialize_with_verified_specs(
+        PluginConfig::default(),
+        [spec.clone(), spec],
+    )
+    .await
+    {
+        Ok((mut activation, _)) => {
+            activation
+                .close()
+                .expect("unexpected duplicate activation should close");
+            panic!("duplicate dynamic plugin ids should fail");
+        }
+        Err(error) => error.to_string(),
+    };
     assert!(error.contains("duplicate dynamic plugin id"), "{error}");
     assert!(error.contains("fixture_native"), "{error}");
     assert!(
@@ -2045,13 +2059,13 @@ async fn plugin_host_rejects_duplicate_ids_before_loading() {
             .any(|kind| kind == "fixture_native")
     );
 
-    let (activation, _) = PluginHostActivation::activate(
+    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
     .await
     .expect("duplicate-id rejection must release the owner");
-    activation.clear().expect("recovered host should clear");
+    activation.close().expect("recovered host should close");
 }
 
 #[tokio::test]
@@ -2059,7 +2073,7 @@ async fn plugin_host_clear_surfaces_missing_kind_and_releases_safe_owner() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest(&fixture);
-    let (activation, _) = PluginHostActivation::activate(
+    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -2068,19 +2082,19 @@ async fn plugin_host_clear_surfaces_missing_kind_and_releases_safe_owner() {
 
     assert!(deregister_plugin("fixture_native"));
     let error = activation
-        .clear()
+        .close()
         .expect_err("missing plugin-kind deregistration should be surfaced")
         .to_string();
     assert!(error.contains("fixture_native"), "{error}");
     assert!(error.contains("was not registered"), "{error}");
 
-    let (activation, _) = PluginHostActivation::activate(
+    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
     .await
     .expect("a safely absent plugin kind should release the owner");
-    activation.clear().expect("recovered host should clear");
+    activation.close().expect("recovered host should close");
 }
 
 #[tokio::test]
@@ -2088,7 +2102,7 @@ async fn plugin_host_clear_preserves_a_replacement_registration() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest(&fixture);
-    let (activation, _) = PluginHostActivation::activate(
+    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -2101,7 +2115,7 @@ async fn plugin_host_clear_preserves_a_replacement_registration() {
     let _cleanup = FixtureNativeRegistrationCleanup;
 
     let error = activation
-        .clear()
+        .close()
         .expect_err("replacement during teardown should be surfaced")
         .to_string();
     assert!(error.contains("fixture_native"), "{error}");
@@ -2112,13 +2126,13 @@ async fn plugin_host_clear_preserves_a_replacement_registration() {
     assert!(Arc::ptr_eq(&registered, &replacement));
     assert!(deregister_plugin("fixture_native"));
 
-    let (activation, _) = PluginHostActivation::activate(
+    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
     .await
     .expect("safe replacement detection should release the host owner");
-    activation.clear().expect("recovered host should clear");
+    activation.close().expect("recovered host should close");
 }
 
 #[tokio::test]
@@ -2128,7 +2142,7 @@ async fn plugin_host_partial_load_failure_rolls_back_and_releases_owner() {
     let manifest_ref = write_manifest(&fixture);
     let missing_manifest = manifest_ref.with_file_name("missing-relay-plugin.toml");
 
-    let error = match PluginHostActivation::activate(
+    let error = match PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [
             host_spec("fixture_native", &manifest_ref),
@@ -2137,10 +2151,10 @@ async fn plugin_host_partial_load_failure_rolls_back_and_releases_owner() {
     )
     .await
     {
-        Ok((activation, _)) => {
+        Ok((mut activation, _)) => {
             activation
-                .clear()
-                .expect("unexpected activation should clear");
+                .close()
+                .expect("unexpected activation should close");
             panic!("partial load should fail");
         }
         Err(error) => error.to_string(),
@@ -2152,55 +2166,54 @@ async fn plugin_host_partial_load_failure_rolls_back_and_releases_owner() {
             .any(|kind| kind == "fixture_native")
     );
 
-    let (activation, _) = PluginHostActivation::activate(
+    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
     .await
     .expect("failed activation must release the owner");
     activation
-        .clear()
-        .expect("recovered activation should clear");
+        .close()
+        .expect("recovered activation should close");
 }
 
 #[tokio::test]
-async fn plugin_host_rejects_an_existing_legacy_configuration() {
+async fn plugin_host_rejects_a_second_active_host() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest(&fixture);
-    initialize_plugins_exact(PluginConfig::default())
+    let mut existing = PluginHostActivation::initialize_exact(PluginConfig::default())
         .await
-        .expect("legacy configuration should initialize");
+        .expect("first host should initialize");
 
-    let error = match PluginHostActivation::activate(
+    let error = match PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
     .await
     {
-        Ok((activation, _)) => {
+        Ok((mut activation, _)) => {
             activation
-                .clear()
-                .expect("unexpected activation should clear");
+                .close()
+                .expect("unexpected activation should close");
             panic!("host activation should reject an existing configuration");
         }
         Err(error) => error.to_string(),
     };
     assert!(
-        error.contains("static plugin configuration is already active"),
+        error.contains("plugin configuration is owned by an active dynamic plugin host"),
         "{error}"
     );
-    assert!(error.contains("base configuration"), "{error}");
-    clear_plugin_configuration().expect("legacy configuration should clear");
+    existing.close().expect("first host should close");
 }
 
 #[cfg(not(feature = "worker-grpc"))]
 #[tokio::test]
 async fn plugin_host_rejects_workers_when_worker_support_is_disabled() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
-    let error = match PluginHostActivation::activate(
+    let error = match PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
-        [DynamicPluginActivationSpec {
+        [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
             kind: DynamicPluginKind::Worker,
             manifest_ref: "unused-worker-manifest.toml".into(),
@@ -2210,10 +2223,10 @@ async fn plugin_host_rejects_workers_when_worker_support_is_disabled() {
     )
     .await
     {
-        Ok((activation, _)) => {
+        Ok((mut activation, _)) => {
             activation
-                .clear()
-                .expect("unexpected activation should clear");
+                .close()
+                .expect("unexpected activation should close");
             panic!("worker activation should require worker support");
         }
         Err(error) => error.to_string(),
@@ -2222,13 +2235,13 @@ async fn plugin_host_rejects_workers_when_worker_support_is_disabled() {
 
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest(&fixture);
-    let (activation, _) = PluginHostActivation::activate(
+    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
     .await
     .expect("failed worker activation must release the owner");
-    activation.clear().expect("recovered host should clear");
+    activation.close().expect("recovered host should close");
 }
 
 async fn initialize_fixture_native(config: Map<String, Json>) -> nemo_relay::plugin::Result<()> {
@@ -2238,7 +2251,9 @@ async fn initialize_fixture_native(config: Map<String, Json>) -> nemo_relay::plu
         enabled: true,
         config,
     });
-    initialize_plugins_exact(plugin_config).await.map(|_| ())
+    test_initialize_plugin_host_exact(plugin_config)
+        .await
+        .map(|_| ())
 }
 
 fn expect_native_load_error(spec: NativePluginLoadSpec, message: &str) -> String {
@@ -2265,8 +2280,8 @@ fn load_spec(plugin_id: &str, manifest_ref: &Path) -> NativePluginLoadSpec {
     }
 }
 
-fn host_spec(plugin_id: &str, manifest_ref: &Path) -> DynamicPluginActivationSpec {
-    DynamicPluginActivationSpec {
+fn host_spec(plugin_id: &str, manifest_ref: &Path) -> VerifiedDynamicPluginSpec {
+    VerifiedDynamicPluginSpec {
         plugin_id: plugin_id.into(),
         kind: DynamicPluginKind::RustDynamic,
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
@@ -2441,6 +2456,9 @@ enabled = false
 
 [capabilities]
 items = ["plugin_native"]
+
+[source]
+artifact = {library}
 
 [load]
 library = {library}

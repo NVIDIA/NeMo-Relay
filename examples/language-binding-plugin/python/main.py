@@ -376,11 +376,12 @@ async def main() -> dict[str, Any]:
     implementation = DocumentationPlugin()
     plugin.register("documentation-plugin", implementation)
     print("registered:", plugin.list_kinds())
-    invalid = plugin.validate(component("invalid"))["diagnostics"]
+    invalid = plugin.validate(component("invalid"))["config"]["diagnostics"]
     assert invalid[0]["code"] == "documentation-plugin.unsupported_mode"
-    disabled_invalid = plugin.validate(component("invalid", enabled=False))["diagnostics"]
+    disabled_invalid = plugin.validate(component("invalid", enabled=False))["config"]["diagnostics"]
     assert disabled_invalid[0]["code"] == "documentation-plugin.unsupported_mode"
     print("invalid:", invalid)
+    activation = None
     try:
         with tempfile.TemporaryDirectory() as directory:
             previous_directory = os.getcwd()
@@ -388,7 +389,8 @@ async def main() -> dict[str, Any]:
             os.chdir(directory)
             os.environ["XDG_CONFIG_HOME"] = directory
             try:
-                report = await plugin.initialize(component("enforce"))
+                activation = await plugin.initialize(component("enforce"))
+                report = activation.report
             finally:
                 os.chdir(previous_directory)
                 if previous_config_home is None:
@@ -425,7 +427,8 @@ async def main() -> dict[str, Any]:
         assert implementation.events
         print("events:", implementation.events)
     finally:
-        await plugin.clear_async()
+        if activation is not None:
+            await activation.close()
         plugin.deregister("documentation-plugin")
     print("teardown: complete")
     assert "documentation-plugin" not in plugin.list_kinds()

@@ -23,17 +23,32 @@ pub type DynamicPluginId = String;
 /// Canonical filename for authored Relay plugin manifests.
 pub const DYNAMIC_PLUGIN_MANIFEST_FILENAME: &str = "relay-plugin.toml";
 
+mod bounded;
+mod configuration;
 mod host;
 mod manifest;
 mod native;
+mod policy;
 mod registry;
+mod schema;
+mod trust;
 #[cfg(feature = "worker-grpc")]
 mod worker;
 
+pub use bounded::*;
+pub(crate) use configuration::resolve_plugin_host_config;
+pub use configuration::{
+    DynamicPluginValidationReport, PluginHostReport, validate, validate_exact,
+};
+#[cfg(test)]
+pub(crate) use configuration::{PluginHostValidationRequest, PluginHostValidationTarget};
 pub use host::*;
 pub use manifest::*;
 pub use native::*;
+pub use policy::*;
 pub use registry::*;
+pub use schema::*;
+pub use trust::*;
 #[cfg(feature = "worker-grpc")]
 pub use worker::*;
 
@@ -67,6 +82,7 @@ pub(super) fn deregister_tracked_registrations_checked(
     plugin_type: &str,
 ) -> DynamicPluginTeardownOutcome {
     let mut outcome = DynamicPluginTeardownOutcome::success();
+    let mut retained = Vec::new();
     for (plugin_kind, registration_id) in std::mem::take(registrations).into_iter().rev() {
         match deregister_plugin_registration_checked(&plugin_kind, registration_id) {
             Ok(PluginDeregistrationOutcome::Removed) => {}
@@ -82,14 +98,19 @@ pub(super) fn deregister_tracked_registrations_checked(
                 ),
                 true,
             ),
-            Err(error) => outcome.record_error(
-                format!(
-                    "failed to deregister {plugin_type} plugin kind '{plugin_kind}': {error}"
-                ),
-                false,
-            ),
+            Err(error) => {
+                outcome.record_error(
+                    format!(
+                        "failed to deregister {plugin_type} plugin kind '{plugin_kind}': {error}"
+                    ),
+                    false,
+                );
+                retained.push((plugin_kind, registration_id));
+            }
         }
     }
+    retained.reverse();
+    *registrations = retained;
     outcome
 }
 

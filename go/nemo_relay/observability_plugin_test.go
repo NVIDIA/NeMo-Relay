@@ -15,8 +15,8 @@ import (
 const observabilityDevProject = "observability-dev"
 
 const (
-	ClearPluginConfigurationFailed = "ClearPluginConfiguration failed"
-	InitializePluginsFailed        = "InitializePlugins failed"
+	closeTestPluginHostFailed      = "closeTestPluginHost failed"
+	initializeTestPluginHostFailed = "initializeTestPluginHost failed"
 	TrajectoryFilenamePrefix       = "trajectory-"
 	FirstAgentName                 = "go-first-agent"
 	NestedAgentName                = "go-nested-agent"
@@ -330,28 +330,28 @@ func marshalStorageConfig(t *testing.T, config ObservabilityAtifStorageConfigure
 }
 
 func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
-	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
+	if err := closeTestPluginHost(); err != nil {
+		t.Fatalf(fatalErrorFormat, closeTestPluginHostFailed, err)
 	}
 	t.Cleanup(func() {
-		requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
+		requireNoError(t, closeTestPluginHost(), closeTestPluginHostFailed)
 	})
 	dir := t.TempDir()
 	config := NewAtofAndAtifTestConfig(dir)
 	pluginConfig := PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}}
 
-	if report, err := ValidatePluginConfig(pluginConfig); err != nil {
-		t.Fatalf("ValidatePluginConfig failed: %v", err)
+	if report, err := validateTestPluginConfig(pluginConfig); err != nil {
+		t.Fatalf("validateTestPluginConfig failed: %v", err)
 	} else if len(report.Diagnostics) != 0 {
 		t.Fatalf("unexpected diagnostics: %#v", report.Diagnostics)
 	}
-	if _, err := InitializePlugins(pluginConfig); err != nil {
-		t.Fatalf(fatalErrorFormat, InitializePluginsFailed, err)
+	if _, err := initializeTestPluginHost(pluginConfig); err != nil {
+		t.Fatalf(fatalErrorFormat, initializeTestPluginHostFailed, err)
 	}
 
 	handle := EmitObservabilityTestTrajectory(t)
-	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
+	if err := closeTestPluginHost(); err != nil {
+		t.Fatalf(fatalErrorFormat, closeTestPluginHostFailed, err)
 	}
 
 	AssertAtofRecordCount(t, filepath.Join(dir, eventsJSONLFilename), 3)
@@ -359,11 +359,11 @@ func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 }
 
 func TestObservabilityPluginActivatesDerivedLogsAndExplicitMetrics(t *testing.T) {
-	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
+	if err := closeTestPluginHost(); err != nil {
+		t.Fatalf(fatalErrorFormat, closeTestPluginHostFailed, err)
 	}
 	t.Cleanup(func() {
-		requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
+		requireNoError(t, closeTestPluginHost(), closeTestPluginHostFailed)
 	})
 
 	derivedRequests := make(chan otelRequest, 4)
@@ -390,11 +390,11 @@ func TestObservabilityPluginActivatesDerivedLogsAndExplicitMetrics(t *testing.T)
 	openTelemetry.Metrics = &metrics
 	config.OpenTelemetry = &openTelemetry
 
-	if _, err := InitializePlugins(PluginConfig{
+	if _, err := initializeTestPluginHost(PluginConfig{
 		Version:    1,
 		Components: []PluginComponentSpec{ObservabilityComponent(config)},
 	}); err != nil {
-		t.Fatalf(fatalErrorFormat, InitializePluginsFailed, err)
+		t.Fatalf(fatalErrorFormat, initializeTestPluginHostFailed, err)
 	}
 
 	runWithTestScopeStack(t, func() {
@@ -406,8 +406,8 @@ func TestObservabilityPluginActivatesDerivedLogsAndExplicitMetrics(t *testing.T)
 			Value:     uint64(1),
 		}}), "EmitMetric failed")
 	})
-	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
+	if err := closeTestPluginHost(); err != nil {
+		t.Fatalf(fatalErrorFormat, closeTestPluginHostFailed, err)
 	}
 
 	requireOtelRequest(t, derivedRequests, "/v1/logs", "go_plugin_exported_log")
@@ -501,7 +501,7 @@ func TestObservabilityPluginAtifSplitsMultipleTopLevelAgents(t *testing.T) {
 		EmitAgentEnd(t, "first", First)
 		Second = EmitAgentTrajectory(t, "second", SecondAgentName)
 	})
-	requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
+	requireNoError(t, closeTestPluginHost(), closeTestPluginHostFailed)
 
 	Files, err := filepath.Glob(filepath.Join(Dir, TrajectoryFilenamePrefix+"*.json"))
 	if err != nil {
@@ -536,9 +536,9 @@ func TestObservabilityPluginValidationRejectsBadValues(t *testing.T) {
 	atif.FilenameTemplate = "missing-placeholder.json"
 	config.Atif = &atif
 
-	report, err := ValidatePluginConfig(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}})
+	report, err := validateTestPluginConfig(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}})
 	if err != nil {
-		t.Fatalf("ValidatePluginConfig failed: %v", err)
+		t.Fatalf("validateTestPluginConfig failed: %v", err)
 	}
 	if len(report.Diagnostics) < 2 {
 		t.Fatalf("expected validation diagnostics, got %#v", report.Diagnostics)
@@ -559,11 +559,11 @@ func TestObservabilityPluginListKindIsAutomatic(t *testing.T) {
 }
 
 func TestObservabilityAtifOpenAgentFlushesOnClear(t *testing.T) {
-	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
+	if err := closeTestPluginHost(); err != nil {
+		t.Fatalf(fatalErrorFormat, closeTestPluginHostFailed, err)
 	}
 	t.Cleanup(func() {
-		requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
+		requireNoError(t, closeTestPluginHost(), closeTestPluginHostFailed)
 	})
 	dir := t.TempDir()
 	config := NewObservabilityConfig()
@@ -571,8 +571,8 @@ func TestObservabilityAtifOpenAgentFlushesOnClear(t *testing.T) {
 	atif.Enabled = true
 	atif.OutputDirectory = dir
 	config.Atif = &atif
-	if _, err := InitializePlugins(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}}); err != nil {
-		t.Fatalf(fatalErrorFormat, InitializePluginsFailed, err)
+	if _, err := initializeTestPluginHost(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}}); err != nil {
+		t.Fatalf(fatalErrorFormat, initializeTestPluginHostFailed, err)
 	}
 	var handle *ScopeHandle
 	runWithTestScopeStack(t, func() {
@@ -581,8 +581,8 @@ func TestObservabilityAtifOpenAgentFlushesOnClear(t *testing.T) {
 		if err != nil {
 			t.Fatalf("PushScope failed: %v", err)
 		}
-		if err := ClearPluginConfiguration(); err != nil {
-			t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
+		if err := closeTestPluginHost(); err != nil {
+			t.Fatalf(fatalErrorFormat, closeTestPluginHostFailed, err)
 		}
 		if err := PopScope(handle); err != nil {
 			t.Fatalf("PopScope failed: %v", err)
@@ -597,9 +597,9 @@ func TestObservabilityAtifOpenAgentFlushesOnClear(t *testing.T) {
 func InitializeAtifPlugin(t *testing.T, Dir string) {
 	t.Helper()
 	t.Cleanup(func() {
-		requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
+		requireNoError(t, closeTestPluginHost(), closeTestPluginHostFailed)
 	})
-	requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
+	requireNoError(t, closeTestPluginHost(), closeTestPluginHostFailed)
 
 	Config := NewObservabilityConfig()
 	Atif := NewObservabilityAtifConfig()
@@ -608,8 +608,8 @@ func InitializeAtifPlugin(t *testing.T, Dir string) {
 	Atif.FilenameTemplate = TrajectoryFilenamePrefix + "{session_id}.json"
 	Config.Atif = &Atif
 
-	_, Err := InitializePlugins(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(Config)}})
-	requireNoError(t, Err, InitializePluginsFailed)
+	_, Err := initializeTestPluginHost(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(Config)}})
+	requireNoError(t, Err, initializeTestPluginHostFailed)
 }
 
 func EmitAgentTrajectory(t *testing.T, Label string, Name string) *ScopeHandle {

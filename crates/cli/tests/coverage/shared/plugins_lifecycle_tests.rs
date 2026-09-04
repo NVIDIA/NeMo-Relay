@@ -691,14 +691,6 @@ fn trust_failure_messages_and_codes_cover_all_variants() {
             "signature /tmp/plugin.py.sig could not be read",
         ),
         (
-            trust::DynamicPluginTrustFailure::InvalidTrustedKey {
-                key: "ed25519:bad".into(),
-                error: "invalid".into(),
-            },
-            "attestation_failed",
-            "invalid trusted public key",
-        ),
-        (
             trust::DynamicPluginTrustFailure::SignatureVerification {
                 path: signature_path,
                 parse_errors: vec!["bad key".into()],

@@ -8,7 +8,7 @@ use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, regi
 use nemo_relay::observability::OpenTelemetryType;
 use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig, AtofExporterMode};
 use nemo_relay::observability::otel::OpenTelemetrySubscriber;
-use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins_exact};
+use nemo_relay::plugin::{PluginConfig, test_close_plugin_host, test_initialize_plugin_host_exact};
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
@@ -434,7 +434,7 @@ fn routing_identity_enrichment_replaces_untrusted_reserved_headers() {
 }
 
 async fn install_test_atif_plugin(output_directory: &Path) {
-    let _ = clear_plugin_configuration();
+    test_close_plugin_host().unwrap();
     std::fs::create_dir_all(output_directory).unwrap();
     let config: PluginConfig = serde_json::from_value(json!({
         "version": 1,
@@ -454,7 +454,7 @@ async fn install_test_atif_plugin(output_directory: &Path) {
         ]
     }))
     .unwrap();
-    initialize_plugins_exact(config).await.unwrap();
+    test_initialize_plugin_host_exact(config).await.unwrap();
 }
 
 #[tokio::test]
@@ -498,7 +498,7 @@ enabled = true
         .await
         .unwrap();
     let _trajectory = read_atif_for_session(&atif_dir, "hermetic-atif");
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
 
     let leaked = std::fs::read_dir(temp.path())
         .unwrap()
@@ -2210,7 +2210,7 @@ async fn writes_atif_on_session_end_from_plugin_config() {
         .await
         .unwrap();
 
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
     let atif = read_atif_for_session(&atif_dir, "atif-session");
     assert!(
         atif["extra"]["observed_events"]
@@ -2253,7 +2253,7 @@ async fn codex_stop_snapshots_atif_without_session_end() {
 
     stop_codex_turn(&manager, &headers, "codex-atif-stop").await;
 
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
     let atif = read_atif_for_session(&atif_dir, "codex-atif-stop");
     assert_eq!(atif["schema_version"], json!("ATIF-v1.7"));
     assert_ne!(atif["trajectory_id"], atif["session_id"]);
@@ -2499,7 +2499,7 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
         .await
         .unwrap();
 
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
     let second = read_atif_for_session(&atif_dir, "dup-end");
     let second_events = second["extra"]["observed_events"].as_array().unwrap().len();
     assert_eq!(
@@ -2547,7 +2547,7 @@ async fn empty_hook_marks_do_not_create_empty_atif_steps() {
         .await
         .unwrap();
 
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
     let atif = read_atif_for_session(&atif_dir, "empty-mark");
     assert!(atif["steps"].as_array().unwrap().is_empty());
     assert!(atif["subagent_trajectories"].is_null());
@@ -2557,7 +2557,7 @@ async fn empty_hook_marks_do_not_create_empty_atif_steps() {
 async fn inferred_skill_load_hook_marks_use_the_stable_event_contract() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
-    let _ = clear_plugin_configuration();
+    test_close_plugin_host().unwrap();
     let atof_exporter = make_atof_test_exporter(&temp.path().join("atof"), "events.jsonl");
     let subscriber_name = "cli-inferred-skill-load-atof-test";
     let _ = deregister_subscriber(subscriber_name);
@@ -3265,7 +3265,7 @@ async fn claude_orphan_subagent_stop_after_closed_turn_does_not_open_null_turn()
         .unwrap();
 
     flush_subscribers().unwrap();
-    clear_plugin_configuration().unwrap();
+    test_close_plugin_host().unwrap();
     let events = captured_events.lock().unwrap().clone();
     let turn_starts: Vec<_> = events
         .iter()

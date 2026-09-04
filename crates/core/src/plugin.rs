@@ -95,7 +95,6 @@ thread_local! {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PluginMutationOwner {
     Idle,
-    Legacy,
     Host(u64),
 }
 
@@ -1018,7 +1017,7 @@ pub trait Plugin: Send + Sync + 'static {
 
     /// Validates one plugin component config.
     ///
-    /// Returning error-level diagnostics prevents `initialize_plugins(...)`
+    /// Returning error-level diagnostics prevents plugin-host activation
     /// from activating the configuration.
     fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic>;
 
@@ -1304,7 +1303,8 @@ fn lookup_registered_plugin(plugin_kind: &str) -> Option<Arc<dyn Plugin>> {
 /// # Notes
 /// Validation checks host policy, plugin multiplicity rules, unknown component
 /// kinds, and plugin-provided validation hooks.
-pub fn validate_plugin_config(config: &PluginConfig) -> ConfigReport {
+#[doc(hidden)]
+pub fn validate_static_plugin_config(config: &PluginConfig) -> ConfigReport {
     let mut report = ConfigReport::default();
     if let Err(error) = ensure_builtin_plugins_registered() {
         report.diagnostics.push(ConfigDiagnostic {
@@ -1540,73 +1540,6 @@ pub fn plugin_config_schema() -> Json {
         .expect("plugin config schema should serialize")
 }
 
-/// Configures the active global plugin components.
-///
-/// Initialization validates the supplied config, replaces the active
-/// configuration, and rolls back partial registration on failure. If a
-/// previous configuration was active, the host attempts to restore it when the
-/// new activation fails.
-///
-/// # Parameters
-/// - `config`: Plugin configuration to validate and activate.
-///
-/// # Returns
-/// A plugin [`Result`] containing the successful [`ConfigReport`].
-///
-/// # Errors
-/// Returns an error when validation fails, when plugin registration fails, or
-/// when the previous configuration cannot be restored after a failed replace.
-///
-/// # Notes
-/// Initialization is replace-with-rollback: the previous active configuration
-/// is removed before the new configuration is activated.
-#[doc(hidden)]
-pub async fn initialize_plugins_exact(config: PluginConfig) -> Result<ConfigReport> {
-    initialize_plugins_with_diagnostics(config, Vec::new()).await
-}
-
-async fn initialize_plugins_with_diagnostics(
-    config: PluginConfig,
-    diagnostics: Vec<ConfigDiagnostic>,
-) -> Result<ConfigReport> {
-    run_owned_plugin_mutation("plugin initialization", move || async move {
-        let lease = LegacyPluginMutationLease::acquire()?;
-        let rollback_failures = Arc::new(Mutex::new(Vec::new()));
-        let initialization = tokio::spawn(initialize_plugins_exact_inner(
-            config,
-            Some(Arc::clone(&rollback_failures)),
-            diagnostics,
-        ))
-        .await
-        .map_err(|error| {
-            PluginError::Internal(format!("plugin initialization task failed: {error}"))
-        });
-        let result = initialization.and_then(|result| result);
-        let failures = rollback_failures
-            .lock()
-            .map(|failures| failures.clone())
-            .unwrap_or_else(|lock_error| {
-                vec![format!("rollback failure lock poisoned: {lock_error}")]
-            });
-        match result {
-            Err(error) if !failures.is_empty() => {
-                std::mem::forget(lease);
-                Err(PluginError::RegistrationFailed(format!(
-                    concat!(
-                        "{}; initialization rollback was incomplete: {}; plugin ",
-                        "configuration mutations are disabled for this process because callbacks ",
-                        "may remain registered"
-                    ),
-                    error,
-                    failures.join("; ")
-                )))
-            }
-            result => result,
-        }
-    })
-    .await
-}
-
 pub(crate) async fn run_owned_plugin_mutation<T, F, Fut>(
     operation_name: &'static str,
     operation: F,
@@ -1720,7 +1653,7 @@ async fn initialize_plugins_exact_inner(
     };
     report
         .diagnostics
-        .extend(validate_plugin_config(&config).diagnostics);
+        .extend(validate_static_plugin_config(&config).diagnostics);
     if report.has_errors() {
         return Err(PluginError::InvalidConfig(join_error_messages(&report)));
     }
@@ -1919,44 +1852,24 @@ async fn initialize_plugin_components_catching_panics(
         })?
 }
 
-/// Validates and activates `config` layered on top of the discovered
-/// `plugins.toml` configuration, so a direct integration sees the same file
-/// layering as the gateway. Each file's schema version is validated before
-/// layering. Declaring a component in `config` applies its `enabled` value,
-/// while default policy values inherit from discovered files and component
-/// `config` bodies merge field-by-field. The resolved configuration and
-/// diagnostics are passed to the shared `initialize_plugins_with_diagnostics`
-/// helper. Call [`initialize_plugins_exact`] directly when `config` is already
-/// fully resolved and every value must be applied exactly.
-pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
-    let resolved = resolve_plugin_config(config)?;
-    initialize_plugins_with_diagnostics(resolved.config, resolved.diagnostics).await
-}
-
-/// Layers `config` over the default discovered `plugins.toml` files.
-///
-/// This is crate-visible so owned dynamic-plugin activation can use the same
-/// one-time configuration resolution as regular harness-native initialization.
-pub(crate) fn resolve_plugin_config(config: PluginConfig) -> Result<ResolvedPluginConfig> {
-    let discovered = resolve_default_file_plugin_config()?;
-    resolve_programmatic_plugin_config(discovered, config)
-}
-
-fn resolve_programmatic_plugin_config(
-    discovered: DiscoveredPluginConfig,
+/// Resolves a plugin host configuration from already-read file documents, then
+/// applies programmatic values as the highest-precedence layer.
+pub(crate) fn resolve_plugin_config_documents(
     config: PluginConfig,
+    explicit_path: Option<&Path>,
+    documents: Vec<(PathBuf, Json)>,
 ) -> Result<ResolvedPluginConfig> {
-    let mut diagnostics = inherited_plugin_config_diagnostics(&discovered.sources);
-    diagnostics.extend(programmatic_enable_override_diagnostics(
-        &discovered.value,
-        &discovered.enabled_sources,
-        &config,
-    ));
-    let mut base = discovered.value;
-    layer_config(&mut base, plugin_config_overlay_value(&config)?);
+    let explicit_path = explicit_path.map(Path::to_path_buf);
+    let (file_value, mut sources) = merge_plugin_config_documents(documents)?
+        .unwrap_or_else(|| (Json::Object(Map::new()), Vec::new()));
+    let mut value = file_value;
+    layer_config(&mut value, plugin_config_overlay_value(&config)?);
+    if let Some(explicit_path) = explicit_path {
+        sources.retain(|source| source != &explicit_path);
+    }
     Ok(ResolvedPluginConfig {
-        config: serde_json::from_value(base)?,
-        diagnostics,
+        config: serde_json::from_value(value)?,
+        diagnostics: inherited_plugin_config_diagnostics(&sources),
     })
 }
 
@@ -1971,8 +1884,7 @@ pub(crate) struct ResolvedPluginConfig {
 /// explicitly or filled by serde. Treating those defaults as overlay values
 /// would mask discovered file settings on every library initialization. A
 /// declared component is an activation intent, so its `enabled` value remains
-/// in the overlay. Exact callers bypass discovery through
-/// [`initialize_plugins_exact`].
+/// in the overlay. Internal exact-host callers bypass discovery.
 fn plugin_config_overlay_value(config: &PluginConfig) -> Result<Json> {
     let mut overlay = serde_json::to_value(config)?;
     let Json::Object(root) = &mut overlay else {
@@ -2016,38 +1928,6 @@ fn remove_default_policy_overlay(root: &mut Map<String, Json>, config: &ConfigPo
     }
 }
 
-/// Resolves the default `plugins.toml` layering into one JSON document, or an
-/// empty object when no plugin file exists.
-fn resolve_default_file_plugin_config() -> Result<DiscoveredPluginConfig> {
-    let paths = default_plugin_config_paths(user_config_dir());
-    let documents = read_plugin_config_files(paths)?;
-    resolve_discovered_plugin_config(documents)
-}
-
-fn resolve_discovered_plugin_config(
-    documents: Vec<(PathBuf, Json)>,
-) -> Result<DiscoveredPluginConfig> {
-    let enabled_sources = component_enabled_sources(&documents);
-    let (value, sources) = merge_plugin_config_documents(documents)?
-        .unwrap_or_else(|| (Json::Object(Map::new()), Vec::new()));
-    Ok(DiscoveredPluginConfig {
-        value,
-        enabled_sources,
-        sources,
-    })
-}
-
-struct DiscoveredPluginConfig {
-    value: Json,
-    enabled_sources: HashMap<String, ComponentEnabledSource>,
-    sources: Vec<PathBuf>,
-}
-
-struct ComponentEnabledSource {
-    enabled: bool,
-    path: PathBuf,
-}
-
 use std::path::{Path, PathBuf};
 
 /// Reads, parses, and merges the `plugins.toml` files at `paths` (lowest
@@ -2081,32 +1961,6 @@ where
     Ok(documents)
 }
 
-fn component_enabled_sources(
-    documents: &[(PathBuf, Json)],
-) -> HashMap<String, ComponentEnabledSource> {
-    let mut sources = HashMap::new();
-    for (path, document) in documents {
-        let Some(components) = document.get("components").and_then(Json::as_array) else {
-            continue;
-        };
-        for component in components {
-            let Some(kind) = component_kind(component) else {
-                continue;
-            };
-            if let Some(enabled) = component.get("enabled").and_then(Json::as_bool) {
-                sources.insert(
-                    kind.to_string(),
-                    ComponentEnabledSource {
-                        enabled,
-                        path: path.clone(),
-                    },
-                );
-            }
-        }
-    }
-    sources
-}
-
 fn inherited_plugin_config_diagnostics(sources: &[PathBuf]) -> Vec<ConfigDiagnostic> {
     sources
         .iter()
@@ -2129,9 +1983,89 @@ fn inherited_plugin_config_diagnostics(sources: &[PathBuf]) -> Vec<ConfigDiagnos
         .collect()
 }
 
+// Legacy resolution helpers are retained only for focused unit coverage of
+// the former programmatic-over-file behavior. Production initialization uses
+// `resolve_plugin_config_with_explicit`, where file layers are authoritative.
+#[cfg(test)]
+fn resolve_discovered_plugin_config(
+    documents: Vec<(PathBuf, Json)>,
+) -> Result<TestDiscoveredPluginConfig> {
+    let enabled_sources = component_enabled_sources(&documents);
+    let (value, sources) = merge_plugin_config_documents(documents)?
+        .unwrap_or_else(|| (Json::Object(Map::new()), Vec::new()));
+    Ok(TestDiscoveredPluginConfig {
+        value,
+        enabled_sources,
+        sources,
+    })
+}
+
+#[cfg(test)]
+struct TestDiscoveredPluginConfig {
+    value: Json,
+    enabled_sources: HashMap<String, TestComponentEnabledSource>,
+    sources: Vec<PathBuf>,
+}
+
+#[cfg(test)]
+struct TestComponentEnabledSource {
+    enabled: bool,
+    path: PathBuf,
+}
+
+#[cfg(test)]
+use TestComponentEnabledSource as ComponentEnabledSource;
+
+#[cfg(test)]
+fn resolve_programmatic_plugin_config(
+    discovered: TestDiscoveredPluginConfig,
+    config: PluginConfig,
+) -> Result<ResolvedPluginConfig> {
+    let mut diagnostics = inherited_plugin_config_diagnostics(&discovered.sources);
+    diagnostics.extend(programmatic_enable_override_diagnostics(
+        &discovered.value,
+        &discovered.enabled_sources,
+        &config,
+    ));
+    let mut base = discovered.value;
+    layer_config(&mut base, plugin_config_overlay_value(&config)?);
+    Ok(ResolvedPluginConfig {
+        config: serde_json::from_value(base)?,
+        diagnostics,
+    })
+}
+
+#[cfg(test)]
+fn component_enabled_sources(
+    documents: &[(PathBuf, Json)],
+) -> HashMap<String, TestComponentEnabledSource> {
+    let mut sources = HashMap::new();
+    for (path, document) in documents {
+        let Some(components) = document.get("components").and_then(Json::as_array) else {
+            continue;
+        };
+        for component in components {
+            let Some(kind) = component_kind(component) else {
+                continue;
+            };
+            if let Some(enabled) = component.get("enabled").and_then(Json::as_bool) {
+                sources.insert(
+                    kind.to_string(),
+                    TestComponentEnabledSource {
+                        enabled,
+                        path: path.clone(),
+                    },
+                );
+            }
+        }
+    }
+    sources
+}
+
+#[cfg(test)]
 fn programmatic_enable_override_diagnostics(
     discovered: &Json,
-    enabled_sources: &HashMap<String, ComponentEnabledSource>,
+    enabled_sources: &HashMap<String, TestComponentEnabledSource>,
     programmatic: &PluginConfig,
 ) -> Vec<ConfigDiagnostic> {
     let Some(discovered_components) = discovered.get("components").and_then(Json::as_array) else {
@@ -2156,7 +2090,6 @@ fn programmatic_enable_override_diagnostics(
         if !component.enabled || !file_disabled {
             continue;
         }
-
         let source = enabled_sources
             .get(&component.kind)
             .map(|source| format!(" from {}", source.path.display()))
@@ -2288,6 +2221,27 @@ pub fn default_plugin_config_paths(user_dir: Option<PathBuf>) -> Vec<PathBuf> {
     paths
 }
 
+/// Effective `plugins.toml` paths (lowest precedence first).
+///
+/// An explicit path replaces the ambient user path but remains below the
+/// operator-managed system path.
+pub(crate) fn plugin_config_paths(
+    explicit_path: Option<&Path>,
+    user_dir: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut paths = explicit_path
+        .map(Path::to_path_buf)
+        .into_iter()
+        .collect::<Vec<_>>();
+    let selected_user_dir = if explicit_path.is_some() {
+        None
+    } else {
+        user_dir
+    };
+    paths.extend(default_plugin_config_paths(selected_user_dir));
+    deduplicate_plugin_config_paths(paths)
+}
+
 #[cfg(feature = "__skip-implicit-config")]
 fn skip_implicit_plugin_config() -> bool {
     std::env::var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG")
@@ -2329,61 +2283,12 @@ pub fn user_config_dir() -> Option<PathBuf> {
         .map(|home| PathBuf::from(home).join(".config/nemo-relay"))
 }
 
-/// Deregisters and clears all configured plugin components.
-///
-/// Registered plugin kinds remain available for future validation and
-/// initialization.
-///
-/// # Returns
-/// A plugin [`Result`] that is `Ok(())` when the active configuration
-/// has been cleared.
-///
-/// # Errors
-/// Returns an error when the active configuration lock is poisoned.
-///
-/// # Notes
-/// Clearing active configuration does not remove plugin kinds from the global
-/// registry.
-pub fn clear_plugin_configuration() -> Result<()> {
-    let lease = LegacyPluginMutationLease::acquire()?;
-    let outcome = clear_plugin_configuration_inner();
-    if !outcome.callbacks_cleared {
-        // Deregistration callbacks are single-use. If one failed, the process
-        // can no longer prove that replacing configuration is safe.
-        std::mem::forget(lease);
-        log::error!(
-            target: "nemo_relay.plugin",
-            event = "plugin_cleanup_failed",
-            callbacks_cleared = false;
-            "Plugin configuration cleanup was incomplete"
-        );
-        return Err(PluginError::RegistrationFailed(format!(
-            concat!(
-                "{}; plugin configuration mutations are disabled for this process because ",
-                "callbacks may remain registered"
-            ),
-            outcome
-                .result
-                .err()
-                .map(|error| error.to_string())
-                .unwrap_or_else(|| "plugin teardown was incomplete".into())
-        )));
-    }
-    if outcome.result.is_ok() {
-        log::info!(
-            target: "nemo_relay.plugin",
-            event = "plugin_configuration_cleared";
-            "Plugin configuration cleared"
-        );
-    }
-    outcome.result
-}
-
 pub(crate) fn clear_plugin_configuration_for_host(owner_id: u64) -> PluginHostClearOutcome {
     if let Err(error) = verify_plugin_host_owner(owner_id) {
         return PluginHostClearOutcome {
             result: Err(error),
             callbacks_cleared: false,
+            report: None,
         };
     }
     clear_plugin_configuration_inner()
@@ -2392,6 +2297,7 @@ pub(crate) fn clear_plugin_configuration_for_host(owner_id: u64) -> PluginHostCl
 pub(crate) struct PluginHostClearOutcome {
     pub(crate) result: Result<()>,
     pub(crate) callbacks_cleared: bool,
+    pub(crate) report: Option<ConfigReport>,
 }
 
 fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
@@ -2407,6 +2313,7 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
                         "active plugin configuration lock poisoned: {err}"
                     ))),
                     callbacks_cleared: false,
+                    report: None,
                 };
             }
         };
@@ -2421,13 +2328,18 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
         .map(rollback_registrations_checked)
         .unwrap_or_default();
     let teardown_report = match ACTIVE_PLUGIN_CONFIGURATION.lock() {
-        Ok(mut guard) => guard.take().map(|state| state.report),
+        Ok(mut guard) if deregistration.callbacks_cleared => guard.take().map(|state| state.report),
+        Ok(mut guard) => guard.as_mut().map(|state| {
+            state.registrations = registrations.take().unwrap_or_default();
+            state.report.clone()
+        }),
         Err(err) => {
             return PluginHostClearOutcome {
                 result: Err(PluginError::Internal(format!(
                     "active plugin configuration lock poisoned: {err}"
                 ))),
                 callbacks_cleared: false,
+                report: None,
             };
         }
     };
@@ -2449,8 +2361,10 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
         if let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock() {
             *guard = None;
         }
-    } else if let Some(report) =
-        teardown_report.filter(|report| !report.runtime_diagnostics.is_empty())
+    } else if let Some(report) = teardown_report
+        .as_ref()
+        .filter(|report| !report.runtime_diagnostics.is_empty())
+        .cloned()
         && let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock()
     {
         *guard = Some(report);
@@ -2458,6 +2372,7 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
     PluginHostClearOutcome {
         result,
         callbacks_cleared: deregistration.callbacks_cleared,
+        report: teardown_report,
     }
 }
 
@@ -2465,6 +2380,16 @@ pub(crate) fn plugin_configuration_is_active() -> Result<bool> {
     ACTIVE_PLUGIN_CONFIGURATION
         .lock()
         .map(|guard| guard.is_some())
+        .map_err(|err| {
+            PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
+        })
+}
+
+pub(crate) fn plugin_configuration_report_for_host(owner_id: u64) -> Result<Option<ConfigReport>> {
+    verify_plugin_host_owner(owner_id)?;
+    ACTIVE_PLUGIN_CONFIGURATION
+        .lock()
+        .map(|guard| guard.as_ref().map(|state| state.report.clone()))
         .map_err(|err| {
             PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
         })
@@ -2525,35 +2450,9 @@ fn verify_plugin_host_owner(owner_id: u64) -> Result<()> {
     }
 }
 
-struct LegacyPluginMutationLease;
-
-impl LegacyPluginMutationLease {
-    fn acquire() -> Result<Self> {
-        let mut owner = PLUGIN_MUTATION_OWNER.lock().map_err(|err| {
-            PluginError::Internal(format!("plugin mutation owner lock poisoned: {err}"))
-        })?;
-        if *owner != PluginMutationOwner::Idle {
-            return Err(plugin_mutation_conflict(*owner));
-        }
-        *owner = PluginMutationOwner::Legacy;
-        Ok(Self)
-    }
-}
-
-impl Drop for LegacyPluginMutationLease {
-    fn drop(&mut self) {
-        if let Ok(mut owner) = PLUGIN_MUTATION_OWNER.lock()
-            && *owner == PluginMutationOwner::Legacy
-        {
-            *owner = PluginMutationOwner::Idle;
-        }
-    }
-}
-
 fn plugin_mutation_conflict(owner: PluginMutationOwner) -> PluginError {
     let message = match owner {
         PluginMutationOwner::Idle => "plugin configuration is available",
-        PluginMutationOwner::Legacy => "another plugin configuration mutation is in progress",
         PluginMutationOwner::Host(_) => {
             "plugin configuration is owned by an active dynamic plugin host"
         }
@@ -2561,29 +2460,67 @@ fn plugin_mutation_conflict(owner: PluginMutationOwner) -> PluginError {
     PluginError::Conflict(message.into())
 }
 
-/// Returns the active plugin report or a report retained after a failed teardown.
-///
-/// `None` indicates that no plugin configuration is active and no failed
-/// teardown report is retained.
-///
-/// # Returns
-/// The active [`ConfigReport`], or the report containing runtime diagnostics
-/// from the last failed teardown.
-///
-/// # Notes
-/// This is a snapshot of the last successful activation and does not re-run
-/// validation.
-pub fn active_plugin_report() -> Option<ConfigReport> {
-    let active_report = ACTIVE_PLUGIN_CONFIGURATION
+#[cfg(any(test, feature = "__test-plugin-host"))]
+static TEST_PLUGIN_HOST: LazyLock<Mutex<Option<dynamic::PluginHostActivation>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+/// Test-only static validation entry point.
+#[doc(hidden)]
+#[cfg(any(test, feature = "__test-plugin-host"))]
+pub fn test_validate_static_plugin_config(config: &PluginConfig) -> ConfigReport {
+    validate_static_plugin_config(config)
+}
+
+/// Test-only owned-host initializer used while repository tests migrate away
+/// from the removed process-global lifecycle API.
+#[doc(hidden)]
+#[cfg(any(test, feature = "__test-plugin-host"))]
+pub async fn test_initialize_plugin_host_exact(config: PluginConfig) -> Result<ConfigReport> {
+    let previous = TEST_PLUGIN_HOST
+        .lock()
+        .map_err(|error| PluginError::Internal(format!("test plugin host lock poisoned: {error}")))?
+        .take();
+    if let Some(mut previous) = previous {
+        previous.close()?;
+    }
+    let activation = dynamic::PluginHostActivation::initialize_exact(config).await?;
+    let report = activation.report().config;
+    *TEST_PLUGIN_HOST.lock().map_err(|error| {
+        PluginError::Internal(format!("test plugin host lock poisoned: {error}"))
+    })? = Some(activation);
+    Ok(report)
+}
+
+/// Test-only deterministic cleanup for the owned host harness.
+#[doc(hidden)]
+#[cfg(any(test, feature = "__test-plugin-host"))]
+pub fn test_close_plugin_host() -> Result<()> {
+    let activation = TEST_PLUGIN_HOST
+        .lock()
+        .map_err(|error| PluginError::Internal(format!("test plugin host lock poisoned: {error}")))?
+        .take();
+    let Some(mut activation) = activation else {
+        return Ok(());
+    };
+    match activation.close() {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            *TEST_PLUGIN_HOST.lock().map_err(|lock_error| {
+                PluginError::Internal(format!("test plugin host lock poisoned: {lock_error}"))
+            })? = Some(activation);
+            Err(error)
+        }
+    }
+}
+
+/// Test-only snapshot of the owned host report.
+#[doc(hidden)]
+#[cfg(any(test, feature = "__test-plugin-host"))]
+pub fn test_plugin_host_report() -> Option<ConfigReport> {
+    TEST_PLUGIN_HOST
         .lock()
         .ok()
-        .and_then(|guard| guard.as_ref().map(|state| state.report.clone()));
-    active_report.or_else(|| {
-        LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT
-            .lock()
-            .ok()
-            .and_then(|guard| guard.clone())
-    })
+        .and_then(|host| host.as_ref().map(|host| host.report().config))
 }
 
 /// Record a bounded runtime diagnostic against the active plugin report.
@@ -2638,17 +2575,34 @@ pub(crate) fn active_runtime_diagnostics_snapshot() -> Vec<RuntimeDiagnosticsSna
         .unwrap_or_default()
 }
 
-/// Rolls back registrations in reverse order, ignoring rollback failures.
+/// Rolls back registrations in reverse order.
 ///
-/// This is used internally during failed initialization and by
-/// [`clear_plugin_configuration`].
-pub fn rollback_registrations(registrations: &mut Vec<PluginRegistration>) {
-    let _ = rollback_registrations_checked(registrations);
+/// Registrations that cannot be removed remain in `registrations` so callers
+/// can retry. The returned outcome reports whether every callback was cleared
+/// and preserves any cleanup errors.
+pub fn rollback_registrations(
+    registrations: &mut Vec<PluginRegistration>,
+) -> PluginRollbackOutcome {
+    rollback_registrations_checked(registrations)
 }
 
-struct PluginRollbackOutcome {
+/// Result of rolling back a set of plugin registrations.
+#[derive(Debug)]
+pub struct PluginRollbackOutcome {
     errors: Vec<String>,
     callbacks_cleared: bool,
+}
+
+impl PluginRollbackOutcome {
+    /// Return cleanup errors in rollback order.
+    pub fn errors(&self) -> &[String] {
+        &self.errors
+    }
+
+    /// Return whether every registered callback was removed.
+    pub fn callbacks_cleared(&self) -> bool {
+        self.callbacks_cleared
+    }
 }
 
 impl Default for PluginRollbackOutcome {
@@ -2664,7 +2618,8 @@ fn rollback_registrations_checked(
     registrations: &mut Vec<PluginRegistration>,
 ) -> PluginRollbackOutcome {
     let mut outcome = PluginRollbackOutcome::default();
-    for registration in registrations.iter_mut().rev() {
+    let mut retained = Vec::new();
+    while let Some(mut registration) = registrations.pop() {
         match catch_unwind(AssertUnwindSafe(|| (registration.deregister)())) {
             Ok(PluginRegistrationCleanupOutcome::Removed) => {}
             Ok(PluginRegistrationCleanupOutcome::RemovedWithError(error)) => {
@@ -2679,6 +2634,7 @@ fn rollback_registrations_checked(
                     "{} registration '{}' could not be removed: {error}",
                     registration.kind, registration.name
                 ));
+                retained.push(registration);
             }
             Err(payload) => {
                 outcome.callbacks_cleared = false;
@@ -2688,10 +2644,12 @@ fn rollback_registrations_checked(
                     registration.name,
                     panic_payload_message(payload)
                 ));
+                retained.push(registration);
             }
         }
     }
-    registrations.clear();
+    retained.reverse();
+    *registrations = retained;
     outcome
 }
 

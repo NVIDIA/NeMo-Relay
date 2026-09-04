@@ -195,7 +195,10 @@ pub(crate) fn validate(config: &Map<String, Json>, policy: &ConfigPolicy) -> Vec
             "registration_control.registration_name",
             &settings.registration_control.registration_name,
         ),
-        ("registration_control.reason", &settings.registration_control.reason),
+        (
+            "registration_control.reason",
+            &settings.registration_control.reason,
+        ),
     ] {
         if value.is_empty() {
             diagnostics.push(diagnostic(

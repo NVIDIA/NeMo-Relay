@@ -26,7 +26,7 @@ use nemo_relay::api::event::Event;
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::{LlmExecutionNextFn, NemoRelayContextState, global_context};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::plugin::clear_plugin_configuration;
+use nemo_relay::plugin::test_close_plugin_host;
 use nemo_relay_adaptive::ResponseCacheConfig;
 use serde_json::{Value as Json, json};
 use tokio::sync::Mutex;
@@ -42,7 +42,7 @@ static TEST_MUTEX: Mutex<()> = Mutex::const_new(());
 const PER_CALL_TOTAL_TOKENS: u64 = 1280;
 
 fn reset_global() {
-    let _ = clear_plugin_configuration();
+    test_close_plugin_host().expect("test plugin host must close");
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
     *state = NemoRelayContextState::new();
@@ -286,7 +286,7 @@ async fn reinitialized_cache_starts_empty() {
 
     // Runs one repeat workload against a fresh cache and returns the observed
     // hit count. Each invocation resets the global state and re-activates the
-    // cache, so `initialize_plugins_exact` builds a brand-new in-memory store.
+    // cache, so `test_initialize_plugin_host_exact` builds a brand-new in-memory store.
     async fn run_once(subscriber: &str) -> usize {
         reset_global();
         activate_cache(bench_config()).await;

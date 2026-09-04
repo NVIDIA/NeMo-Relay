@@ -3,6 +3,8 @@
 
 //! Integration coverage for gRPC worker dynamic plugins.
 
+mod plugin_host_test_support;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -28,14 +30,12 @@ use nemo_relay::observability::otel_metrics::{
     OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber,
 };
 use nemo_relay::plugin::dynamic::{
-    DynamicPluginActivationSpec, DynamicPluginKind, PluginHostActivation, WorkerPluginActivation,
+    DynamicPluginKind, PluginHostActivation, VerifiedDynamicPluginSpec, WorkerPluginActivation,
     WorkerPluginLoadSpec, load_worker_plugins,
 };
-use nemo_relay::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
-    list_plugin_kinds,
-};
+use nemo_relay::plugin::{PluginComponentSpec, PluginConfig, list_plugin_kinds};
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+use plugin_host_test_support::{test_close_plugin_host, test_initialize_plugin_host_exact};
 use prost::Message;
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
@@ -123,9 +123,9 @@ async fn plugin_host_activation_owns_worker_lifecycle() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (activation, report) = PluginHostActivation::activate(
+    let (mut activation, report) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
-        [DynamicPluginActivationSpec {
+        [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
             kind: DynamicPluginKind::Worker,
             manifest_ref: manifest_ref.to_string_lossy().into_owned(),
@@ -148,7 +148,7 @@ async fn plugin_host_activation_owns_worker_lifecycle() {
         .expect("worker host intercept should run");
     assert_eq!(rewritten["worker_plugin"], true);
 
-    activation.clear().expect("worker plugin host should clear");
+    activation.close().expect("worker plugin host should close");
     assert!(
         !list_plugin_kinds()
             .iter()
@@ -165,9 +165,9 @@ async fn rust_worker_event_metadata_injector_enriches_events_and_is_removed_on_c
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (activation, report) = PluginHostActivation::activate(
+    let (mut activation, report) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
-        [DynamicPluginActivationSpec {
+        [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
             kind: DynamicPluginKind::Worker,
             manifest_ref: manifest_ref.to_string_lossy().into_owned(),
@@ -207,7 +207,7 @@ async fn rust_worker_event_metadata_injector_enriches_events_and_is_removed_on_c
         "rust_grpc_worker"
     );
 
-    activation.clear().expect("worker plugin host should clear");
+    activation.close().expect("worker plugin host should close");
     event(
         EmitMarkEventParams::builder()
             .name("external-plugin-event-metadata-injection-worker-after-clear")
@@ -243,9 +243,9 @@ async fn rust_worker_conditional_middleware_callback_controls_target_and_cleans_
 
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (activation, report) = PluginHostActivation::activate(
+    let (mut activation, report) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
-        [DynamicPluginActivationSpec {
+        [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
             kind: DynamicPluginKind::Worker,
             manifest_ref: manifest_ref.to_string_lossy().into_owned(),
@@ -266,7 +266,7 @@ async fn rust_worker_conditional_middleware_callback_controls_target_and_cleans_
     flush_subscribers().expect("gated mark should flush");
     assert_eq!(deliveries.load(std::sync::atomic::Ordering::SeqCst), 0);
 
-    activation.clear().expect("worker plugin host should clear");
+    activation.close().expect("worker plugin host should close");
     event(
         EmitMarkEventParams::builder()
             .name("worker-gate-cleared")
@@ -283,9 +283,9 @@ async fn rust_worker_event_metadata_injector_error_preserves_event_delivery() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (activation, _) = PluginHostActivation::activate(
+    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
-        [DynamicPluginActivationSpec {
+        [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
             kind: DynamicPluginKind::Worker,
             manifest_ref: manifest_ref.to_string_lossy().into_owned(),
@@ -325,7 +325,7 @@ async fn rust_worker_event_metadata_injector_error_preserves_event_delivery() {
     drop(events);
 
     deregister_subscriber(subscriber_name).expect("test subscriber should deregister");
-    activation.clear().expect("worker plugin host should clear");
+    activation.close().expect("worker plugin host should close");
 }
 
 #[tokio::test]
@@ -333,9 +333,9 @@ async fn rust_worker_event_metadata_injector_process_exit_preserves_event_delive
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (activation, _) = PluginHostActivation::activate(
+    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
-        [DynamicPluginActivationSpec {
+        [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
             kind: DynamicPluginKind::Worker,
             manifest_ref: manifest_ref.to_string_lossy().into_owned(),
@@ -376,7 +376,7 @@ async fn rust_worker_event_metadata_injector_process_exit_preserves_event_delive
 
     deregister_subscriber(subscriber_name).expect("test subscriber should deregister");
     activation
-        .clear()
+        .close()
         .expect_err("terminated worker should report shutdown failure");
 }
 
@@ -385,9 +385,9 @@ async fn plugin_host_clear_surfaces_worker_shutdown_failure_and_releases_safe_ow
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (activation, _) = PluginHostActivation::activate(
+    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
-        [DynamicPluginActivationSpec {
+        [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
             kind: DynamicPluginKind::Worker,
             manifest_ref: manifest_ref.to_string_lossy().into_owned(),
@@ -402,15 +402,15 @@ async fn plugin_host_clear_surfaces_worker_shutdown_failure_and_releases_safe_ow
         .await
         .expect_err("fixture worker should terminate during callback");
     let error = activation
-        .clear()
+        .close()
         .expect_err("worker shutdown failure should be surfaced")
         .to_string();
     assert!(error.contains("fixture_worker"), "{error}");
     assert!(error.contains("shutdown"), "{error}");
 
-    let (activation, _) = PluginHostActivation::activate(
+    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
-        [DynamicPluginActivationSpec {
+        [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
             kind: DynamicPluginKind::Worker,
             manifest_ref: manifest_ref.to_string_lossy().into_owned(),
@@ -420,7 +420,7 @@ async fn plugin_host_clear_surfaces_worker_shutdown_failure_and_releases_safe_ow
     )
     .await
     .expect("a stopped worker process should permit owner release");
-    activation.clear().expect("recovered host should clear");
+    activation.close().expect("recovered host should close");
 }
 
 #[tokio::test]
@@ -1052,13 +1052,13 @@ async fn worker_validation_diagnostics_prevent_initialization() {
         enabled: true,
         config,
     });
-    let error = initialize_plugins_exact(plugin_config)
+    let error = test_initialize_plugin_host_exact(plugin_config)
         .await
         .expect_err("validation diagnostics should prevent initialization")
         .to_string();
     assert!(error.contains("fixture rejection requested"), "{error}");
 
-    clear_plugin_configuration().expect("worker plugin config should clear");
+    test_close_plugin_host().expect("worker plugin config should clear");
     activation.clear();
 }
 
@@ -1087,13 +1087,13 @@ async fn worker_duplicate_component_rejected_for_single_instance_plugin() {
         enabled: true,
         config: Map::new(),
     });
-    let error = initialize_plugins_exact(plugin_config)
+    let error = test_initialize_plugin_host_exact(plugin_config)
         .await
         .expect_err("single-instance worker plugin should reject duplicate components")
         .to_string();
     assert!(error.contains("may only appear once"), "{error}");
 
-    clear_plugin_configuration().expect("worker plugin config should clear");
+    test_close_plugin_host().expect("worker plugin config should clear");
     activation.clear();
 }
 
@@ -1117,13 +1117,13 @@ async fn worker_config_mismatch_prevents_initialization() {
         enabled: true,
         config: Map::from_iter([("changed".into(), json!(true))]),
     });
-    let error = initialize_plugins_exact(plugin_config)
+    let error = test_initialize_plugin_host_exact(plugin_config)
         .await
         .expect_err("config drift should prevent initialization")
         .to_string();
     assert!(error.contains("config changed"), "{error}");
 
-    clear_plugin_configuration().expect("worker plugin config should clear");
+    test_close_plugin_host().expect("worker plugin config should clear");
     activation.clear();
 }
 
@@ -1522,7 +1522,7 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
         enabled: true,
         config,
     });
-    initialize_plugins_exact(plugin_config)
+    test_initialize_plugin_host_exact(plugin_config)
         .await
         .expect("managed Python worker should initialize");
 
@@ -1681,7 +1681,7 @@ impl Drop for PythonWorkerCleanup {
         if let Some(subscriber_name) = self.subscriber_name.take() {
             let _ = deregister_subscriber(subscriber_name);
         }
-        let _ = clear_plugin_configuration();
+        let _ = test_close_plugin_host();
         if let Some(activation) = self.activation.take() {
             activation.clear();
         }
@@ -1690,7 +1690,7 @@ impl Drop for PythonWorkerCleanup {
 
 impl LoadedWorker {
     fn clear(mut self) {
-        clear_plugin_configuration().expect("worker plugin config should clear");
+        test_close_plugin_host().expect("worker plugin config should clear");
         if let Some(activation) = self.activation.take() {
             activation.clear();
         }
@@ -1699,7 +1699,7 @@ impl LoadedWorker {
 
 impl Drop for LoadedWorker {
     fn drop(&mut self) {
-        let _ = clear_plugin_configuration();
+        let _ = test_close_plugin_host();
         if let Some(activation) = self.activation.take() {
             activation.clear();
         }
@@ -1724,7 +1724,7 @@ async fn load_and_initialize_fixture(config: Map<String, Json>) -> LoadedWorker 
         enabled: true,
         config,
     });
-    initialize_plugins_exact(plugin_config)
+    test_initialize_plugin_host_exact(plugin_config)
         .await
         .expect("worker plugin should initialize");
 

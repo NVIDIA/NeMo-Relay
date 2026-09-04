@@ -2635,22 +2635,8 @@ def scope_deregister_subscriber(scope_uuid: str, name: str) -> bool:
     """
     ...
 
-def validate_plugin_config(config: object) -> _JsonObject:
-    """Validate a plugin configuration without changing active runtime state.
-
-    Args:
-        config: Plugin configuration object or equivalent mapping.
-
-    Returns:
-        Validation report as a JSON object.
-
-    Exceptional flow:
-        Raises native conversion or validation errors for malformed config.
-    """
-    ...
-
 class _PluginHostActivation:
-    """Native owner for one process-wide dynamic plugin host."""
+    """Native owner for one process-wide static and dynamic plugin host."""
 
     @property
     def report(self) -> _JsonObject:
@@ -2661,8 +2647,7 @@ class _PluginHostActivation:
     def is_active(self) -> bool:
         """Return whether this activation handle has not begun teardown.
 
-        ``False`` does not guarantee another process-wide activation can start;
-        failed teardown may intentionally retain the activation owner.
+        Failed teardown leaves the activation active so ``close()`` can retry.
         """
         ...
 
@@ -2670,66 +2655,16 @@ class _PluginHostActivation:
         """Clear and unload this activation; repeated calls are safe."""
         ...
 
-def initialize_with_dynamic_plugins(config: object, dynamic_plugins: object) -> Awaitable[_PluginHostActivation]:
-    """Initialize registered components with dynamic plugins as one owned host.
-
-    Args:
-        config: Base plugin configuration object.
-        dynamic_plugins: Sequence of dynamic plugin activation specifications.
-
-    Returns:
-        Awaitable resolving to the native activation owner.
-
-    Exceptional flow:
-        Invalid configuration, load, ownership, and registration errors are
-        raised through the awaitable.
-    """
+def initialize(config: object, additional_plugins_toml: str | None = None) -> Awaitable[_PluginHostActivation]:
+    """Initialize the core-owned static and dynamic plugin host."""
     ...
 
-def initialize_plugins(config: object) -> Awaitable[_JsonObject]:
-    """Validate and activate plugin configuration.
-
-    Args:
-        config: Plugin configuration object or equivalent mapping.
-
-    Returns:
-        Awaitable resolving to the activation report.
-
-    Exceptional flow:
-        Activation errors propagate through the awaitable. The native runtime
-        rolls back partial registration when possible.
-    """
+def validate(config: object, additional_plugins_toml: str | None = None) -> _JsonObject:
+    """Validate static configuration and dynamic plugins without activating them."""
     ...
 
-def clear_plugin_configuration() -> None:
-    """Clear active plugin configuration while preserving registered kinds.
-
-    Returns:
-        ``None``.
-
-    Exceptional flow:
-        Native cleanup errors propagate unchanged.
-    """
-    ...
-
-def clear_plugin_configuration_async() -> Awaitable[None]:
-    """Clear active plugin configuration without blocking the Python event loop.
-
-    Returns:
-        Awaitable resolving when native teardown completes.
-
-    Exceptional flow:
-        Native cleanup and teardown worker errors propagate through the awaitable.
-    """
-    ...
-
-def active_plugin_report() -> Optional[_JsonObject]:
-    """Return the active plugin report or a failed-teardown diagnostic report.
-
-    Returns:
-        Report JSON object for the active configuration or a failed teardown
-        with runtime diagnostics, or ``None`` if neither exists.
-    """
+def validate_exact(config: object) -> _JsonObject:
+    """Validate only the supplied static plugin configuration."""
     ...
 
 def list_plugin_kinds() -> list[str]:

@@ -13,6 +13,7 @@ import typing
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
+from plugin_host_test_helper import validate_plugin_config
 
 from nemo_relay import (
     PropagationContext,
@@ -226,7 +227,7 @@ class TestObservabilityConfigHelpers:
         assert typing.cast(dict[str, object], section["metrics"])["endpoints"] == [endpoint.to_dict()]
 
     def test_validation_rejects_bad_values(self):
-        report = plugin.validate(
+        report = validate_plugin_config(
             plugin.PluginConfig(
                 components=[
                     ComponentSpec(
@@ -318,7 +319,8 @@ class TestObservabilityConfigHelpers:
                     ],
                 )
             )
-            report = await plugin.initialize(plugin.PluginConfig(components=[ComponentSpec(config)]))
+            activation = await plugin.initialize(plugin.PluginConfig(components=[ComponentSpec(config)]))
+            report = activation.report["config"]
             assert report["diagnostics"] == []
             monkeypatch.delenv(variable)
 
@@ -326,7 +328,7 @@ class TestObservabilityConfigHelpers:
                 with scope.scope("python-header-env-agent", ScopeType.Agent) as handle:
                     scope.event("python-header-env-mark", handle=handle, data={"step": 1})
             finally:
-                await plugin.clear_async()
+                await activation.close()
             requests = capture.wait_for_requests(3)
 
         assert len(requests) == 3
@@ -391,14 +393,15 @@ class TestObservabilityConfigHelpers:
 
         plugin_config = plugin.PluginConfig(components=[ComponentSpec(config)])
         if use_context_manager:
-            async with plugin.plugin(plugin_config):
+            activation = await plugin.initialize(plugin_config)
+            async with activation:
                 handle = _inner()
         else:
-            await plugin.initialize(plugin_config)
+            activation = await plugin.initialize(plugin_config)
             try:
                 handle = _inner()
             finally:
-                await plugin.clear_async()
+                await activation.close()
 
         lines = (tmp_path / "events.jsonl").read_text().strip().splitlines()
         assert len(lines) == 3
@@ -458,8 +461,9 @@ class TestObservabilityConfigHelpers:
         server_thread = threading.Thread(target=server.serve_forever, daemon=True)
         server_thread.start()
         cleared = False
+        activation: plugin.PluginHostActivation | None = None
         try:
-            await plugin.initialize(
+            activation = await plugin.initialize(
                 plugin.PluginConfig(
                     components=[
                         ComponentSpec(
@@ -503,7 +507,7 @@ class TestObservabilityConfigHelpers:
             response_thread.start()
             teardown_started.set()
             started_at = time.monotonic()
-            await plugin.clear_async()
+            await activation.close()
             cleared = True
             assert time.monotonic() - started_at < 2
             response_thread.join(timeout=2)
@@ -521,14 +525,14 @@ class TestObservabilityConfigHelpers:
             assert stream_mark["data"] == expected_data
         finally:
             allow_response.set()
-            if not cleared:
-                await plugin.clear_async()
+            if not cleared and activation is not None:
+                await activation.close()
             server.shutdown()
             server_thread.join(timeout=5)
             server.server_close()
 
     async def test_atif_flushes_open_agent_on_clear(self, tmp_path):
-        await plugin.initialize(
+        activation = await plugin.initialize(
             plugin.PluginConfig(
                 components=[
                     ComponentSpec(ObservabilityConfig(atif=AtifConfig(enabled=True, output_directory=str(tmp_path))))
@@ -537,7 +541,7 @@ class TestObservabilityConfigHelpers:
         )
         handle = scope.push("python-open-agent", ScopeType.Agent)
         try:
-            await plugin.clear_async()
+            await activation.close()
             assert (tmp_path / f"nemo-relay-atif-{handle.uuid}.json").exists()
         finally:
             scope.pop(handle)
@@ -545,7 +549,7 @@ class TestObservabilityConfigHelpers:
     async def test_atif_can_use_propagation_root_as_run_session_id(self, tmp_path):
         request_id = "018f47a4-3af7-7d94-8e61-9f0f89b5d312"
         stack = create_scope_stack_from_propagation(PropagationContext(request_id, request_id))
-        await plugin.initialize(
+        activation = await plugin.initialize(
             plugin.PluginConfig(
                 components=[
                     ComponentSpec(
@@ -565,7 +569,7 @@ class TestObservabilityConfigHelpers:
                 with scope.scope("python-propagated-agent", ScopeType.Agent) as handle:
                     scope.event("python-mark", handle=handle, data={"step": 1})
         finally:
-            await plugin.clear_async()
+            await activation.close()
 
         trajectory_path = tmp_path / f"trajectory-{handle.uuid}.json"
         trajectory = json.loads(trajectory_path.read_text())
@@ -573,8 +577,8 @@ class TestObservabilityConfigHelpers:
         assert trajectory["trajectory_id"] == handle.uuid
         assert trajectory["extra"]["nemo_relay"]["session_instance_id"] == request_id
 
-    async def test_atif_non_string_metadata_is_reported_and_failed_clear_is_drainable(self, tmp_path):
-        await plugin.initialize(
+    async def test_atif_non_string_metadata_is_reported_on_failed_close(self, tmp_path):
+        activation = await plugin.initialize(
             plugin.PluginConfig(
                 components=[
                     ComponentSpec(
@@ -595,8 +599,7 @@ class TestObservabilityConfigHelpers:
                 pass
             await subscribers.flush_async()
 
-            report = plugin.report()
-            assert report is not None
+            report = activation.report["config"]
             assert any(
                 diagnostic["code"] == "atif.destination_render_failed" and "non-string" in diagnostic["message"]
                 for diagnostic in report["runtime_diagnostics"]
@@ -604,22 +607,19 @@ class TestObservabilityConfigHelpers:
             assert not (tmp_path / "unassigned").exists()
 
             with pytest.raises(RuntimeError, match=r"atif\.destination_render_failed") as teardown:
-                await plugin.clear_async()
+                await activation.close()
             assert "could not be removed" not in str(teardown.value)
-            retained = plugin.report()
-            assert retained is not None
+            retained = activation.report["config"]
             assert any(
                 diagnostic["code"] == "atif.destination_render_failed" for diagnostic in retained["runtime_diagnostics"]
             )
         finally:
-            try:
-                await plugin.clear_async()
-            except RuntimeError:
-                await plugin.clear_async()
-        assert plugin.report() is None
+            with pytest.raises(RuntimeError, match=r"atif\.destination_render_failed"):
+                await activation.close()
+        assert not activation.is_active
 
     async def test_atif_splits_multiple_top_level_agent_scopes(self, tmp_path):
-        await plugin.initialize(
+        activation = await plugin.initialize(
             plugin.PluginConfig(
                 components=[
                     ComponentSpec(
@@ -643,7 +643,7 @@ class TestObservabilityConfigHelpers:
             with scope.scope("python-second-agent", ScopeType.Agent) as second:
                 scope.event("python-second-mark", handle=second, data={"agent": "second"})
         finally:
-            await plugin.clear_async()
+            await activation.close()
 
         files = sorted(tmp_path.glob("trajectory-*.json"))
         assert len(files) == 2

@@ -26,6 +26,7 @@ import {
   type ConfigDiagnostic,
   type NemoRelayModules,
   type NemoRelayModuleLoader,
+  type PluginHostActivation,
 } from './modules.js';
 import type { RuntimeStateOptions, StartContext } from './types.js';
 
@@ -52,7 +53,7 @@ export class NemoRelayRuntimeState {
   private loadPromise: Promise<NemoRelayModules> | undefined;
   private startPromise: Promise<void> | undefined;
   private statusValue: HookReplayBackendStatus = { state: 'not_initialized' };
-  private modulesValue?: NemoRelayModules;
+  private pluginHostActivation: PluginHostActivation | undefined;
   private backendValue: HookReplayBackend | undefined;
   private initializedPluginHost = false;
   private pluginHostOutputsHealthy = false;
@@ -124,7 +125,6 @@ export class NemoRelayRuntimeState {
     try {
       this.loadPromise ??= this.moduleLoader();
       modules = await this.loadPromise;
-      this.modulesValue = modules;
     } catch (error) {
       this.loadPromise = undefined;
       this.statusValue = { state: 'degraded', reason: `failed to load nemo-relay-node: ${toMessage(error)}` };
@@ -143,21 +143,22 @@ export class NemoRelayRuntimeState {
     if (!validationReport.ok) {
       degradedReason = validationReport.reason;
       ctx.logger.warn?.(degradedReason);
-    } else if (validationReport.report.diagnostics.some((diagnostic) => diagnostic.level === 'error')) {
+    } else if (validationReport.report.config.diagnostics.some((diagnostic) => diagnostic.level === 'error')) {
       degradedReason = 'NeMo Relay plugin host config validation failed';
     } else {
       if (
-        validationReport.report.diagnostics.some((diagnostic) => diagnostic.level === 'warning') &&
+        validationReport.report.config.diagnostics.some((diagnostic) => diagnostic.level === 'warning') &&
         degradedReason === undefined
       ) {
         degradedReason = 'NeMo Relay plugin host config validation produced warnings';
       }
 
       try {
-        const activationReport = await modules.pluginHost.initialize(hostConfig);
-        logDiagnostics(ctx.logger, activationReport.diagnostics);
+        this.pluginHostActivation = await modules.pluginHost.initialize(hostConfig);
+        const activationDiagnostics = this.pluginHostActivation.report.config.diagnostics;
+        logDiagnostics(ctx.logger, activationDiagnostics);
         this.initializedPluginHost = true;
-        const hasInitializationErrors = activationReport.diagnostics.some((diagnostic) => diagnostic.level === 'error');
+        const hasInitializationErrors = activationDiagnostics.some((diagnostic) => diagnostic.level === 'error');
         this.pluginHostOutputsHealthy = !hasInitializationErrors;
         if (hasInitializationErrors) {
           degradedReason ??= 'NeMo Relay plugin host initialization reported errors';
@@ -238,18 +239,24 @@ export class NemoRelayRuntimeState {
     }
     this.backendValue = undefined;
 
-    if (this.initializedPluginHost && this.modulesValue) {
+    let pluginHostCloseFailure: string | undefined;
+    if (this.pluginHostActivation) {
       try {
-        this.modulesValue.pluginHost.clear();
+        await this.pluginHostActivation.close();
       } catch (error) {
-        log.warn?.(`failed to clear NeMo Relay plugin host: ${toMessage(error)}`);
+        pluginHostCloseFailure = `failed to close NeMo Relay plugin host: ${toMessage(error)}`;
+        log.warn?.(pluginHostCloseFailure);
       }
-      this.initializedPluginHost = false;
-      this.pluginHostOutputsHealthy = false;
+      if (pluginHostCloseFailure === undefined) {
+        this.pluginHostActivation = undefined;
+        this.initializedPluginHost = false;
+        this.pluginHostOutputsHealthy = false;
+      }
     }
 
     this.started = false;
-    this.statusValue = finalStatus;
+    this.statusValue =
+      pluginHostCloseFailure === undefined ? finalStatus : { state: 'degraded', reason: pluginHostCloseFailure };
   }
 
   /** Handle OpenClaw runtime lifecycle cleanup for either a session or the backend. */
@@ -513,7 +520,7 @@ function validatePluginHostConfig(
 ): { ok: true; report: ReturnType<NemoRelayModules['pluginHost']['validate']> } | { ok: false; reason: string } {
   try {
     const report = modules.pluginHost.validate(config);
-    logDiagnostics(logger, report.diagnostics);
+    logDiagnostics(logger, report.config.diagnostics);
     return { ok: true, report };
   } catch (error) {
     return {

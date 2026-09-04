@@ -130,7 +130,8 @@ fn test_native_pymodule_entrypoint_registers_bindings() {
         let module = PyModule::new(py, "_native_entrypoint").unwrap();
         crate::_native(&module).unwrap();
         assert!(module.getattr("ScopeStack").is_ok());
-        assert!(module.getattr("initialize_plugins").is_ok());
+        assert!(module.getattr("initialize").is_ok());
+        assert!(module.getattr("validate").is_ok());
         assert!(module.getattr("set_latency_sensitivity").is_ok());
     });
 }
@@ -388,10 +389,8 @@ fn test_plugin_bindings_validate_configure_and_clear() {
         crate::py_plugin::register(&plugin_module).unwrap();
 
         assert!(plugin_module.getattr("PluginContext").is_ok());
-        assert!(plugin_module.getattr("validate_plugin_config").is_ok());
-        assert!(plugin_module.getattr("initialize_plugins").is_ok());
-        assert!(plugin_module.getattr("clear_plugin_configuration").is_ok());
-        assert!(plugin_module.getattr("active_plugin_report").is_ok());
+        assert!(plugin_module.getattr("validate").is_ok());
+        assert!(plugin_module.getattr("initialize").is_ok());
         assert!(plugin_module.getattr("list_plugin_kinds").is_ok());
         assert!(plugin_module.getattr("register_plugin").is_ok());
         assert!(plugin_module.getattr("deregister_plugin").is_ok());
@@ -401,7 +400,7 @@ fn test_plugin_bindings_validate_configure_and_clear() {
         assert!(adaptive_module.getattr("AdaptiveRuntime").is_ok());
         assert!(adaptive_module.getattr("set_latency_sensitivity").is_ok());
 
-        let report_config = crate::convert::json_to_py(
+        let report_request = crate::convert::json_to_py(
             py,
             &json!({
                 "version": 1,
@@ -418,13 +417,13 @@ fn test_plugin_bindings_validate_configure_and_clear() {
         )
         .unwrap();
         let report = plugin_module
-            .getattr("validate_plugin_config")
+            .getattr("validate")
             .unwrap()
-            .call1((report_config.bind(py),))
+            .call1((report_request.bind(py),))
             .unwrap();
         let report_json = crate::convert::py_to_json(&report).unwrap();
         assert!(
-            report_json["diagnostics"]
+            report_json["config"]["diagnostics"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -503,7 +502,7 @@ class CoveragePlugin:
             ))
             .unwrap();
 
-        let plugin_report_config = crate::convert::json_to_py(
+        let plugin_report_request = crate::convert::json_to_py(
             py,
             &json!({
                 "version": 1,
@@ -516,13 +515,13 @@ class CoveragePlugin:
         )
         .unwrap();
         let plugin_report = plugin_module
-            .getattr("validate_plugin_config")
+            .getattr("validate")
             .unwrap()
-            .call1((plugin_report_config.bind(py),))
+            .call1((plugin_report_request.bind(py),))
             .unwrap();
         let plugin_report_json = crate::convert::py_to_json(&plugin_report).unwrap();
         assert!(
-            plugin_report_json["diagnostics"]
+            plugin_report_json["config"]["diagnostics"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -562,42 +561,42 @@ class CoveragePlugin:
         )
         .unwrap();
 
-        let helpers = load_module(
+        let lifecycle_helpers = load_module(
             py,
             r#"
-import asyncio
+async def initialize(module, config):
+    return await module.initialize(config)
 
-async def initialize_plugins(module, config):
-    return await module.initialize_plugins(config)
+async def close(activation):
+    await activation.close()
 "#,
         );
+        let mut activation = None;
         with_event_loop(py, |event_loop| {
-            let configured = event_loop
-                .call_method1(
-                    "run_until_complete",
-                    (helpers
-                        .getattr("initialize_plugins")
-                        .unwrap()
-                        .call1((plugin_module.clone(), configured_plugin_config.bind(py)))
-                        .unwrap(),),
-                )
+            let initialized = lifecycle_helpers
+                .getattr("initialize")
+                .unwrap()
+                .call1((plugin_module.clone(), configured_plugin_config.bind(py)))
                 .unwrap();
-            let configured_json = crate::convert::py_to_json(&configured).unwrap();
+            let configured = event_loop
+                .call_method1("run_until_complete", (initialized,))
+                .unwrap();
+            let configured_json = crate::convert::py_to_json(
+                &configured.getattr("report").expect("activation report"),
+            )
+            .unwrap();
             assert!(
-                configured_json["diagnostics"]
+                configured_json["config"]["diagnostics"]
                     .as_array()
                     .unwrap()
                     .iter()
                     .any(|diag| diag["code"] == "plugin.coverage_plugin_validate")
             );
+            activation = Some(configured.unbind());
         });
 
-        let active_report = plugin_module
-            .getattr("active_plugin_report")
-            .unwrap()
-            .call0()
-            .unwrap();
-        assert!(!active_report.is_none());
+        let activation = activation.expect("activation should be retained");
+        let active_report = activation.bind(py).getattr("report").unwrap();
         let active_report_json = crate::convert::py_to_json(&active_report).unwrap();
         assert!(active_report_json.is_object());
 
@@ -615,11 +614,16 @@ async def initialize_plugins(module, config):
                 .any(|kind| kind == "adaptive")
         );
 
-        plugin_module
-            .getattr("clear_plugin_configuration")
-            .unwrap()
-            .call0()
-            .unwrap();
+        with_event_loop(py, |event_loop| {
+            let close = lifecycle_helpers
+                .getattr("close")
+                .unwrap()
+                .call1((activation.bind(py),))
+                .unwrap();
+            event_loop
+                .call_method1("run_until_complete", (close,))
+                .unwrap();
+        });
 
         let removed = plugin_module
             .getattr("deregister_plugin")

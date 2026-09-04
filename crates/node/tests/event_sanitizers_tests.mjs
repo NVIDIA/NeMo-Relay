@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import * as pluginHost from './plugin_host_test_helper.mjs';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
@@ -42,7 +43,7 @@ async function initializeWithoutDiscoveredPluginConfig(config) {
   const directory = mkdtempSync(path.join(tmpdir(), 'nemo-relay-node-'));
   try {
     process.chdir(directory);
-    return await plugin.initialize(config);
+    return await pluginHost.initialize(config);
   } finally {
     process.chdir(previousDirectory);
     rmSync(directory, { recursive: true, force: true });
@@ -533,12 +534,12 @@ describe('event sanitizer registries', () => {
       lib.event('configured', null, { raw: true });
       await lib.flushSubscribers();
       await waitFor(events, 1);
-      plugin.clear();
+      await pluginHost.close();
       lib.event('cleared', null, { raw: true });
       await lib.flushSubscribers();
       await waitFor(events, 2);
     } finally {
-      plugin.clear();
+      await pluginHost.close();
       plugin.deregister(kind);
       lib.deregisterSubscriber('node-event-sanitize-plugin-sub');
     }
@@ -577,7 +578,7 @@ describe('event sanitizer registries', () => {
       assertSanitizerFieldsCleared(events.at(-1));
       assert.match(lib.getLastCallbackError() ?? '', /plugin sanitizer boom/i);
     } finally {
-      plugin.clear();
+      await pluginHost.close();
       plugin.deregister(kind);
       lib.deregisterSubscriber('node-event-sanitize-plugin-throw-sub');
       lib.clearLastCallbackError();

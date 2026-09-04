@@ -4,6 +4,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 const plugin = require('../plugin.js');
@@ -87,5 +90,27 @@ describe('model pricing plugin helpers', () => {
       invalid.diagnostics.map((diagnostic) => diagnostic.code),
       ['pricing.invalid_config'],
     );
+  });
+
+  it('validates only the supplied pricing config when ambient config is malformed', () => {
+    const configHome = mkdtempSync(path.join(tmpdir(), 'nemo-relay-node-pricing-'));
+    const relayConfig = path.join(configHome, 'nemo-relay');
+    mkdirSync(relayConfig);
+    writeFileSync(path.join(relayConfig, 'plugins.toml'), '{');
+    const previous = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = configHome;
+    try {
+      const report = pricing.validateConfig(
+        pricing.pricingConfig([pricing.inlineSource(pricing.inlineCatalog([pricedEntry()]))]),
+      );
+      assert.deepEqual(report.diagnostics, []);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = previous;
+      }
+      rmSync(configHome, { recursive: true, force: true });
+    }
   });
 });

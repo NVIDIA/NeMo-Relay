@@ -14,6 +14,8 @@
 
 #![cfg(feature = "object-store")]
 
+mod plugin_host_test_support;
+
 use std::time::Duration;
 
 use nemo_relay::api::runtime::{
@@ -22,11 +24,11 @@ use nemo_relay::api::runtime::{
 use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use nemo_relay::api::subscriber::flush_subscribers;
 use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
-use nemo_relay::plugin::{
-    PluginComponentSpec, PluginConfig, active_plugin_report, clear_plugin_configuration,
-    initialize_plugins,
-};
+use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
 use object_store::{ObjectStore, ObjectStoreExt as _};
+use plugin_host_test_support::{
+    test_close_plugin_host, test_initialize_plugin_host_exact, test_plugin_host_report,
+};
 use serde_json::{Value as Json, json};
 use uuid::Uuid;
 
@@ -96,7 +98,7 @@ fn build_test_key_prefix() -> String {
 }
 
 fn reset_runtime() {
-    let _ = clear_plugin_configuration();
+    let _ = test_close_plugin_host();
     let stack = create_scope_stack();
     set_thread_scope_stack(stack);
     let ctx = global_context();
@@ -379,7 +381,7 @@ fn atif_storage_uploads_trajectory_to_s3() {
     reset_runtime();
 
     let config = build_observability_config(&bucket, &key_prefix);
-    futures::executor::block_on(initialize_plugins(config))
+    futures::executor::block_on(test_initialize_plugin_host_exact(config))
         .expect("observability plugin should initialize with S3 storage");
 
     let handle = push_scope(
@@ -393,7 +395,7 @@ fn atif_storage_uploads_trajectory_to_s3() {
     pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())
         .expect("pop agent scope");
 
-    clear_plugin_configuration().expect("plugin teardown should flush the trajectory");
+    test_close_plugin_host().expect("plugin teardown should flush the trajectory");
 
     let key = format!("{key_prefix}trajectory-{session_id}.json");
     let (runtime, store) = build_verification_store(&bucket);
@@ -427,7 +429,7 @@ fn atif_storage_posts_trajectory_to_http_endpoints() {
         format!("{}/primary", server.base_url),
         format!("{}/secondary", server.base_url),
     ]);
-    futures::executor::block_on(initialize_plugins(config))
+    futures::executor::block_on(test_initialize_plugin_host_exact(config))
         .expect("observability plugin should initialize with HTTP storage");
 
     let handle = push_scope(
@@ -442,7 +444,7 @@ fn atif_storage_posts_trajectory_to_http_endpoints() {
         .expect("pop agent scope");
     flush_subscribers().expect("HTTP upload subscriber should flush");
 
-    clear_plugin_configuration().expect("plugin teardown should succeed after HTTP uploads");
+    test_close_plugin_host().expect("plugin teardown should succeed after HTTP uploads");
     server.stop();
     // SAFETY: cleanup of test-only env var.
     unsafe {
@@ -510,7 +512,7 @@ fn atif_storage_http_non_2xx_retries_on_the_next_trajectory() {
         .as_object_mut()
         .expect("ATIF config should be an object")
         .insert("output_directory".into(), json!(recovery_directory.path()));
-    futures::executor::block_on(initialize_plugins(config))
+    futures::executor::block_on(test_initialize_plugin_host_exact(config))
         .expect("observability plugin should initialize with HTTP storage");
 
     let handle = push_scope(
@@ -535,7 +537,7 @@ fn atif_storage_http_non_2xx_retries_on_the_next_trajectory() {
         .expect("pop second agent scope");
     flush_subscribers().expect("HTTP upload subscriber should flush after failure");
 
-    let report = active_plugin_report().expect("active plugin report should remain readable");
+    let report = test_plugin_host_report().expect("active plugin report should remain readable");
     let diagnostic = report
         .runtime_diagnostics
         .iter()
@@ -567,7 +569,7 @@ fn atif_storage_http_non_2xx_retries_on_the_next_trajectory() {
         assert!(request_session_ids.contains(&second.uuid.to_string()));
     }
     let teardown =
-        clear_plugin_configuration().expect_err("plugin teardown should report failed uploads");
+        test_close_plugin_host().expect_err("plugin teardown should report failed uploads");
     assert!(
         teardown.to_string().contains("atif.remote_delivery_failed"),
         "teardown should identify the failed remote destination: {teardown}"
@@ -576,15 +578,12 @@ fn atif_storage_http_non_2xx_retries_on_the_next_trajectory() {
         !teardown.to_string().contains("could not be removed"),
         "delivery failure should not imply a leaked registration: {teardown}"
     );
-    let retained_report =
-        active_plugin_report().expect("failed teardown should retain the plugin report");
-    let retained_diagnostic = retained_report
-        .runtime_diagnostics
-        .iter()
-        .find(|diagnostic| diagnostic.code == "atif.remote_delivery_failed")
-        .expect("failed upload diagnostic should remain readable after teardown");
-    assert_eq!(retained_diagnostic.field.as_deref(), Some("storage[0]"));
-    assert_eq!(retained_diagnostic.count, 2);
+    assert!(
+        test_plugin_host_report().is_some(),
+        "failed cleanup should retain the test-host report for diagnosis"
+    );
+    test_close_plugin_host().expect("inactive test-host activation should clear on retry");
+    assert!(test_plugin_host_report().is_none());
     // SAFETY: cleanup of test-only env var.
     unsafe {
         std::env::remove_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN");

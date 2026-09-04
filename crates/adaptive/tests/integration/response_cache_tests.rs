@@ -28,8 +28,8 @@ use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, regi
 use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
 use nemo_relay::error::FlowError;
 use nemo_relay::plugin::{
-    DiagnosticLevel, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
-    validate_plugin_config,
+    DiagnosticLevel, PluginConfig, test_close_plugin_host, test_initialize_plugin_host_exact,
+    test_validate_static_plugin_config,
 };
 use nemo_relay_adaptive::plugin_component::{ComponentSpec, register_adaptive_component};
 use nemo_relay_adaptive::{
@@ -48,7 +48,7 @@ static TEST_MUTEX: Mutex<()> = Mutex::const_new(());
 const ROUTING_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
 
 fn reset_global() {
-    let _ = clear_plugin_configuration();
+    test_close_plugin_host().expect("test plugin host must close");
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
     *state = NemoRelayContextState::new();
@@ -561,7 +561,7 @@ async fn invalid_config_is_rejected_by_validation() {
         }),
         ..AdaptiveConfig::default()
     };
-    let report = validate_plugin_config(&PluginConfig {
+    let report = test_validate_static_plugin_config(&PluginConfig {
         components: vec![ComponentSpec::new(adaptive).into()],
         ..PluginConfig::default()
     });
@@ -601,7 +601,7 @@ async fn unknown_and_unavailable_backends_are_rejected_by_validation() {
             ..ResponseCacheConfig::default()
         };
         config.backend.kind = kind.to_string();
-        validate_plugin_config(&PluginConfig {
+        test_validate_static_plugin_config(&PluginConfig {
             components: vec![
                 ComponentSpec::new(AdaptiveConfig {
                     response_cache: Some(config),
@@ -660,7 +660,7 @@ async fn response_cache_validation_diagnostics_identify_the_invalid_setting() {
     };
     cache.backend.kind = "redis".to_string();
 
-    let report = validate_plugin_config(&PluginConfig {
+    let report = test_validate_static_plugin_config(&PluginConfig {
         components: vec![
             ComponentSpec::new(AdaptiveConfig {
                 response_cache: Some(cache),
@@ -1601,7 +1601,7 @@ async fn unsafe_cache_scope_headers_and_backends_are_rejected_by_validation() {
             response_cache: Some(config),
             ..AdaptiveConfig::default()
         };
-        validate_plugin_config(&PluginConfig {
+        test_validate_static_plugin_config(&PluginConfig {
             components: vec![ComponentSpec::new(adaptive).into()],
             ..PluginConfig::default()
         })
@@ -1877,7 +1877,7 @@ async fn cache_coexists_with_acg_execution_intercept() {
         }),
         ..AdaptiveConfig::default()
     };
-    let report = initialize_plugins_exact(PluginConfig {
+    let report = test_initialize_plugin_host_exact(PluginConfig {
         components: vec![ComponentSpec::new(adaptive).into()],
         ..PluginConfig::default()
     })
@@ -2466,7 +2466,7 @@ async fn invalid_tool_config_is_rejected_by_validation() {
         })),
         ..AdaptiveConfig::default()
     };
-    let report = validate_plugin_config(&PluginConfig {
+    let report = test_validate_static_plugin_config(&PluginConfig {
         components: vec![ComponentSpec::new(adaptive).into()],
         ..PluginConfig::default()
     });
@@ -2528,7 +2528,7 @@ async fn wildcard_member_validation_rules() {
             })),
             ..AdaptiveConfig::default()
         };
-        validate_plugin_config(&PluginConfig {
+        test_validate_static_plugin_config(&PluginConfig {
             components: vec![ComponentSpec::new(adaptive).into()],
             ..PluginConfig::default()
         })
@@ -2642,7 +2642,7 @@ async fn wildcard_member_validation_rules() {
         })),
         ..AdaptiveConfig::default()
     };
-    let report = validate_plugin_config(&PluginConfig {
+    let report = test_validate_static_plugin_config(&PluginConfig {
         components: vec![ComponentSpec::new(adaptive).into()],
         ..PluginConfig::default()
     });
@@ -2671,7 +2671,7 @@ async fn wildcard_member_validation_rules() {
         })),
         ..AdaptiveConfig::default()
     };
-    let report = validate_plugin_config(&PluginConfig {
+    let report = test_validate_static_plugin_config(&PluginConfig {
         components: vec![ComponentSpec::new(adaptive).into()],
         ..PluginConfig::default()
     });
@@ -2707,7 +2707,7 @@ async fn wildcard_member_validation_rules() {
         })),
         ..AdaptiveConfig::default()
     };
-    let report = validate_plugin_config(&PluginConfig {
+    let report = test_validate_static_plugin_config(&PluginConfig {
         components: vec![ComponentSpec::new(adaptive).into()],
         ..PluginConfig::default()
     });
@@ -2747,7 +2747,7 @@ async fn wildcard_member_validation_rules() {
         })),
         ..AdaptiveConfig::default()
     };
-    let report = validate_plugin_config(&PluginConfig {
+    let report = test_validate_static_plugin_config(&PluginConfig {
         components: vec![ComponentSpec::new(adaptive).into()],
         ..PluginConfig::default()
     });
@@ -2788,7 +2788,7 @@ async fn unknown_tool_field_warns_but_valid_class_names_do_not() {
         enabled: true,
         config: adaptive_json.as_object().unwrap().clone(),
     };
-    let report = validate_plugin_config(&PluginConfig {
+    let report = test_validate_static_plugin_config(&PluginConfig {
         components: vec![component],
         ..PluginConfig::default()
     });

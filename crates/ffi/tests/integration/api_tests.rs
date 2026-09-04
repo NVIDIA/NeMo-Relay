@@ -22,7 +22,7 @@ use nemo_relay_ffi::convert::nemo_relay_string_free;
 use nemo_relay_ffi::error::{NemoRelayStatus, nemo_relay_last_error, set_last_error};
 use nemo_relay_ffi::types::{
     FfiAtifExporter, FfiAtofExporter, FfiEvent, FfiLLMHandle, FfiLLMRequest,
-    FfiOpenTelemetrySubscriber, FfiPluginActivation, FfiScopeStack, FfiToolHandle,
+    FfiOpenTelemetrySubscriber, FfiPluginHostActivation, FfiScopeStack, FfiToolHandle,
     nemo_relay_atif_exporter_free, nemo_relay_atof_exporter_free, nemo_relay_event_data,
     nemo_relay_event_input, nemo_relay_event_metadata, nemo_relay_event_model_name,
     nemo_relay_event_name, nemo_relay_event_output, nemo_relay_event_parent_uuid,
@@ -31,12 +31,12 @@ use nemo_relay_ffi::types::{
     nemo_relay_llm_handle_name, nemo_relay_llm_handle_parent_uuid, nemo_relay_llm_handle_uuid,
     nemo_relay_llm_request_content, nemo_relay_llm_request_free, nemo_relay_llm_request_headers,
     nemo_relay_llm_request_new, nemo_relay_otel_subscriber_free,
-    nemo_relay_scope_handle_attributes, nemo_relay_scope_handle_data, nemo_relay_scope_handle_free,
-    nemo_relay_scope_handle_metadata, nemo_relay_scope_handle_name,
-    nemo_relay_scope_handle_parent_uuid, nemo_relay_scope_handle_scope_type,
-    nemo_relay_scope_handle_uuid, nemo_relay_scope_stack_free, nemo_relay_tool_handle_attributes,
-    nemo_relay_tool_handle_free, nemo_relay_tool_handle_name, nemo_relay_tool_handle_parent_uuid,
-    nemo_relay_tool_handle_uuid,
+    nemo_relay_plugin_host_activation_free, nemo_relay_scope_handle_attributes,
+    nemo_relay_scope_handle_data, nemo_relay_scope_handle_free, nemo_relay_scope_handle_metadata,
+    nemo_relay_scope_handle_name, nemo_relay_scope_handle_parent_uuid,
+    nemo_relay_scope_handle_scope_type, nemo_relay_scope_handle_uuid, nemo_relay_scope_stack_free,
+    nemo_relay_tool_handle_attributes, nemo_relay_tool_handle_free, nemo_relay_tool_handle_name,
+    nemo_relay_tool_handle_parent_uuid, nemo_relay_tool_handle_uuid,
 };
 use nemo_relay_ffi::{api, callable, types};
 
@@ -44,6 +44,13 @@ static EVENT_LOG: OnceLock<Mutex<Vec<Json>>> = OnceLock::new();
 static COLLECTED_CHUNKS: OnceLock<Mutex<Vec<Json>>> = OnceLock::new();
 static FINALIZER_CALLS: OnceLock<Mutex<usize>> = OnceLock::new();
 static PLUGIN_FREES: OnceLock<Mutex<usize>> = OnceLock::new();
+
+#[path = "../support/plugin_host.rs"]
+mod plugin_host;
+use plugin_host::{
+    activate_test_plugin_config, close_test_plugin_host, test_plugin_host_report_json,
+    validate_test_plugin_config,
+};
 
 #[track_caller]
 fn assert_native_status(actual: NemoRelayStatus, expected: NemoRelayStatus) {

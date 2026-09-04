@@ -99,7 +99,7 @@ plugin_config = nemo_relay.plugin.PluginConfig(
     components=[nemo_relay.adaptive.ComponentSpec(adaptive_config)]
 )
 
-report = nemo_relay.plugin.validate(plugin_config)
+report = nemo_relay.plugin.validate(plugin_config)["config"]
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
@@ -113,8 +113,7 @@ def call_model(_request):
     }
 
 async def main():
-    await nemo_relay.plugin.initialize(plugin_config)
-    try:
+    async with nemo_relay.plugin.activate(plugin_config):
         # Managed calls need no changes. The first call runs the provider;
         # an identical repeat can be served from the cache.
         request = nemo_relay.LLMRequest(
@@ -127,8 +126,6 @@ async def main():
         )
         await nemo_relay.llm.execute("openai", request, call_model)
         await nemo_relay.llm.execute("openai", request, call_model)
-    finally:
-        await nemo_relay.plugin.clear_async()
 
 asyncio.run(main())
 ```
@@ -148,17 +145,17 @@ adaptiveConfig.responseCache = adaptive.responseCacheConfig({
 const pluginConfig = plugin.defaultConfig();
 pluginConfig.components = [adaptive.ComponentSpec(adaptiveConfig)];
 
-const report = plugin.validate(pluginConfig);
+const report = plugin.validate(pluginConfig).config;
 if (report.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
   throw new Error(JSON.stringify(report.diagnostics));
 }
 
 void (async () => {
-  await plugin.initialize(pluginConfig);
+  const activation = await plugin.initialize(pluginConfig);
   try {
     // Eligible deterministic repeats can be served from the cache.
   } finally {
-    plugin.clear();
+    await activation.close();
   }
 })().catch((error) => {
   console.error(error);
@@ -169,9 +166,8 @@ void (async () => {
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::plugin::{
-    clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
-};
+use nemo_relay::plugin::PluginConfig;
+use nemo_relay::plugin::dynamic::{initialize, validate};
 use nemo_relay_adaptive::plugin_component::{register_adaptive_component, ComponentSpec};
 use nemo_relay_adaptive::{AdaptiveConfig, ResponseCacheConfig};
 
@@ -188,13 +184,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     plugin_config.components.push(ComponentSpec::new(adaptive).into());
 
     register_adaptive_component()?;
-    let report = validate_plugin_config(&plugin_config);
-    assert!(!report.has_errors());
+    let report = validate(plugin_config.clone(), None)?;
+    assert!(!report.config.has_errors());
 
-    let _active = initialize_plugins(plugin_config).await?;
+    let mut activation = initialize(plugin_config, None).await?;
     // Eligible deterministic repeats can now be served from the cache.
 
-    clear_plugin_configuration()?;
+    activation.close()?;
     Ok(())
 }
 ```

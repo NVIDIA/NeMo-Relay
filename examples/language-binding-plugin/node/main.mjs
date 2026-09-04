@@ -340,15 +340,18 @@ export async function main() {
   documentationPlugin.events.length = 0;
   plugin.register('documentation-plugin', documentationPlugin);
   console.log('registered:', plugin.listKinds());
-  const invalid = plugin.validate(config('invalid')).diagnostics;
-  const disabledInvalid = plugin.validate(config('invalid', false)).diagnostics;
+  const invalid = plugin.validate(config('invalid')).config.diagnostics;
+  const disabledInvalid = plugin.validate(config('invalid', false)).config
+    .diagnostics;
   if (disabledInvalid[0]?.code !== 'documentation-plugin.unsupported_mode') {
     throw new Error('disabled invalid configuration must still be validated');
   }
   console.log('invalid:', invalid);
   let summary;
+  let activation;
   try {
-    const report = await plugin.initialize(config('enforce'));
+    activation = await plugin.initialize(config('enforce'));
+    const report = activation.report;
     console.log('active:', report);
     const toolResult = await relay.toolCallExecute('safe_tool', { value: 1 }, (args) => ({
       result: args,
@@ -391,7 +394,7 @@ export async function main() {
       events: [...documentationPlugin.events],
     };
   } finally {
-    plugin.clear();
+    await activation?.close();
     plugin.deregister('documentation-plugin');
     restoreEnvironment();
   }

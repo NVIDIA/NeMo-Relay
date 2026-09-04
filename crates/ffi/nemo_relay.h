@@ -198,14 +198,6 @@ typedef struct FfiOpenTelemetryMetricSubscriber FfiOpenTelemetryMetricSubscriber
 typedef struct FfiOpenTelemetrySubscriber FfiOpenTelemetrySubscriber;
 
 /**
- * Opaque owned dynamic plugin host activation.
- *
- * The inner option allows explicit activation cleanup to be idempotent while
- * retaining a stable allocation until the foreign caller frees the handle.
- */
-typedef struct FfiPluginActivation FfiPluginActivation;
-
-/**
  * Opaque plugin registration context.
  *
  * This wrapper contains a borrowed raw pointer to an
@@ -218,6 +210,14 @@ typedef struct FfiPluginActivation FfiPluginActivation;
  * wrapper does not own the underlying registration context.
  */
 typedef struct FfiPluginContext FfiPluginContext;
+
+/**
+ * Opaque owned static and dynamic plugin host activation.
+ *
+ * The inner option allows explicit activation cleanup to be idempotent while
+ * retaining a stable allocation until the foreign caller frees the handle.
+ */
+typedef struct FfiPluginHostActivation FfiPluginHostActivation;
 
 /**
  * Opaque handle representing an active execution scope.
@@ -2087,99 +2087,91 @@ NemoRelayStatus nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(const
 NemoRelayStatus nemo_relay_otel_metric_subscriber_shutdown(const struct FfiOpenTelemetryMetricSubscriber *subscriber);
 
 /**
- * Load and activate dynamic plugins as one owned transaction.
+ * Initialize the unified static and dynamic plugin host from core-owned
+ * `plugins.toml` discovery.
  *
- * **Experimental:** this API needs a production consumer before its lifecycle
- * contract is considered stable.
- *
- * Relay discovers `plugins.toml` once during this startup call and layers
- * `config_json` over the discovered configuration. Explicit values take
- * precedence where both sources configure the same setting. Static components
- * from the resolved configuration initialize before components appended by
- * the dynamic plugins. Configuration files are not watched or reloaded.
- * `dynamic_plugins_json` must contain at least one explicit dynamic-plugin
- * activation specification; use `nemo_relay_initialize_plugins` for a
- * static-only configuration.
- *
- * The explicit configuration uses this JSON shape:
- *
- * ```text
- * {"version":1,"components":[{"kind":"static.kind","enabled":true,"config":{}}]}
- * ```
- *
- * Dynamic plugin specifications use this JSON shape:
- *
- * ```text
- * [{"plugin_id":"example","kind":"rust_dynamic","manifest_ref":"/absolute/path/relay-plugin.toml","config":{}}]
- * ```
- *
- * `kind` must be `rust_dynamic` or `worker`. `environment_ref` is optional
- * and applies only to worker plugins. `manifest_ref` is resolved by the
- * embedding application; this API does not discover installed plugins.
- *
- * On success, the caller owns `out_activation` and
- * must clear and free it with `nemo_relay_plugin_activation_clear` and
- * `nemo_relay_plugin_activation_free`. `out_report_json` is a library-owned C
- * string and must be released with `nemo_relay_string_free`.
+ * `additional_plugins_toml` may be null. When supplied it replaces user-file
+ * discovery, above programmatic configuration and below the system file.
+ * The returned handle owns all activated plugin registrations and runtimes.
  *
  * # Safety
- * Both input pointers must reference valid, null-terminated C strings.
- * `out_activation` and `out_report_json` must be valid, non-null, non-overlapping
- * output pointers.
+ * Input strings and output pointers must be valid, non-overlapping C pointers.
  */
-NemoRelayStatus nemo_relay_initialize_with_dynamic_plugins(const char *config_json,
-                                                           const char *dynamic_plugins_json,
-                                                           struct FfiPluginActivation **out_activation,
-                                                           char **out_report_json);
+NemoRelayStatus nemo_relay_plugin_initialize(const char *config_json,
+                                             const char *additional_plugins_toml,
+                                             struct FfiPluginHostActivation **out_activation,
+                                             char **out_report_json);
 
 /**
- * Clear one owned dynamic plugin activation.
+ * Return the current report retained by an owned plugin-host activation.
  *
- * This operation is idempotent. A null handle is treated as already cleared.
- * If teardown fails, the error is reported only by the call that performs the
- * teardown. The activation is consumed regardless of the outcome, so a later
- * clear returns success and does not report the earlier error again.
- * Concurrent clear calls for the same handle are serialized, but they must not
- * overlap with `nemo_relay_plugin_activation_free`.
+ * The report remains available after either a successful or failed close and
+ * is released only when the activation handle is freed.
+ *
+ * # Safety
+ * `activation` must be a valid activation handle and `out_report_json`
+ * must be a valid non-null output pointer.
+ */
+NemoRelayStatus nemo_relay_plugin_host_activation_report_json(struct FfiPluginHostActivation *activation,
+                                                              char **out_report_json);
+
+/**
+ * Report whether an owned plugin-host activation is still active.
+ *
+ * # Safety
+ * `activation` must be a valid activation handle and `out_active` must be a
+ * valid non-null output pointer. The caller must ensure the handle is not
+ * freed concurrently with this call.
+ */
+NemoRelayStatus nemo_relay_plugin_host_activation_is_active(struct FfiPluginHostActivation *activation,
+                                                            bool *out_active);
+
+/**
+ * Validate dynamic plugins without loading plugin code or acquiring the host lease.
+ *
+ * `additional_plugins_toml` may be null. The inputs use the same configuration
+ * layering contract as [`nemo_relay_plugin_initialize`].
+ *
+ * # Safety
+ * `config_json` must be a valid C string, `additional_plugins_toml` must be a
+ * valid C string or null, and `out_report_json` must be a valid non-null
+ * output pointer.
+ */
+NemoRelayStatus nemo_relay_plugin_validate(const char *config_json,
+                                           const char *additional_plugins_toml,
+                                           char **out_report_json);
+
+/**
+ * Validate only the supplied static plugin configuration.
+ *
+ * This entry point does not discover or merge `plugins.toml` layers. The
+ * returned host report therefore has no dynamic-plugin reports.
+ *
+ * # Safety
+ * `config_json` must be a valid C string and `out_report_json` must be a valid
+ * non-null output pointer.
+ */
+NemoRelayStatus nemo_relay_plugin_validate_exact(const char *config_json, char **out_report_json);
+
+/**
+ * Close one owned plugin-host activation.
+ *
+ * This operation is idempotent. A null handle is treated as already closed.
+ * If teardown fails, the error is reported by each close attempt until
+ * teardown succeeds. The handle remains valid so callers can inspect its
+ * report and active state after closing.
+ * Concurrent close calls for the same handle are serialized, but they must not
+ * overlap with `nemo_relay_plugin_host_activation_free`.
  * The handle allocation remains owned by the caller and must still be passed
- * to `nemo_relay_plugin_activation_free`.
+ * to `nemo_relay_plugin_host_activation_free`.
  *
  * # Safety
  * `activation` must be a valid activation handle returned by
- * `nemo_relay_initialize_with_dynamic_plugins`, or null. The caller must ensure the
+ * `nemo_relay_plugin_initialize`, or null. The caller must ensure the
  * handle remains allocated for this call and that
- * `nemo_relay_plugin_activation_free` does not run concurrently with it.
+ * `nemo_relay_plugin_host_activation_free` does not run concurrently with it.
  */
-NemoRelayStatus nemo_relay_plugin_activation_clear(struct FfiPluginActivation *activation);
-
-/**
- * Validate a generic plugin config document and return the diagnostics report as JSON.
- *
- * # Safety
- * `config_json` must be a valid C string and `out_json` must be a valid, non-null pointer.
- */
-NemoRelayStatus nemo_relay_validate_plugin_config(const char *config_json, char **out_json);
-
-/**
- * Initialize the active global plugin components and return the resulting diagnostics report.
- *
- * # Safety
- * `config_json` must be a valid C string and `out_json` must be a valid, non-null pointer.
- */
-NemoRelayStatus nemo_relay_initialize_plugins(const char *config_json, char **out_json);
-
-/**
- * Clear the active global plugin configuration.
- */
-NemoRelayStatus nemo_relay_clear_plugin_configuration(void);
-
-/**
- * Return the last successfully configured plugin report as JSON.
- *
- * # Safety
- * `out_json` must be a valid, non-null pointer.
- */
-NemoRelayStatus nemo_relay_active_plugin_report_json(char **out_json);
+NemoRelayStatus nemo_relay_plugin_host_activation_close(struct FfiPluginHostActivation *activation);
 
 /**
  * Return the registered plugin kinds as JSON.
@@ -3434,7 +3426,7 @@ void nemo_relay_adaptive_runtime_free(struct FfiAdaptiveRuntime *ptr);
 
 /**
  * Free a dynamic plugin activation handle previously returned by
- * `nemo_relay_initialize_with_dynamic_plugins`.
+ * `nemo_relay_plugin_initialize`.
  *
  * Any activation that has not already been explicitly cleared is cleaned up
  * best-effort by its Rust destructor before the allocation is released. The
@@ -3443,13 +3435,13 @@ void nemo_relay_adaptive_runtime_free(struct FfiAdaptiveRuntime *ptr);
  *
  * # Safety
  * `ptr` must be null or point to a writable activation-handle variable whose
- * value is null or was returned by `nemo_relay_initialize_with_dynamic_plugins`. The
+ * value is null or was returned by `nemo_relay_plugin_initialize`. The
  * caller must ensure that no operation, including
- * `nemo_relay_plugin_activation_clear`, accesses the activation concurrently
+ * `nemo_relay_plugin_host_activation_close`, accesses the activation concurrently
  * with this call and that no operation can use the handle after this call
  * begins.
  */
-void nemo_relay_plugin_activation_free(struct FfiPluginActivation **ptr);
+void nemo_relay_plugin_host_activation_free(struct FfiPluginHostActivation **ptr);
 
 /**
  * Free a codec handle previously returned by one of the codec constructor

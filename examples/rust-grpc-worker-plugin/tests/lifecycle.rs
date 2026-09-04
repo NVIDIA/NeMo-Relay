@@ -11,9 +11,7 @@ use nemo_relay::api::event::Event;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
 use nemo_relay::plugin::PluginConfig;
-use nemo_relay::plugin::dynamic::{
-    DynamicPluginActivationSpec, DynamicPluginKind, PluginHostActivation,
-};
+use nemo_relay::plugin::dynamic::initialize;
 use serde_json::{Map, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -62,19 +60,15 @@ async fn built_worker_validates_registers_executes_and_shuts_down() {
     )
     .expect("allowed subscriber should register");
 
-    let (activation, report) = PluginHostActivation::activate(
-        PluginConfig::default(),
-        [DynamicPluginActivationSpec {
-            plugin_id: PLUGIN_ID.into(),
-            kind: DynamicPluginKind::Worker,
-            manifest_ref: manifest.to_string_lossy().into_owned(),
-            environment_ref: None,
-            config: documented_config(),
-        }],
-    )
-    .await
-    .expect("the materialized worker manifest should activate");
-    assert!(report.diagnostics.is_empty(), "{report:?}");
+    let plugins_toml = write_plugins_toml(manifest_dir.path(), &manifest, &documented_config());
+    let mut activation = initialize(PluginConfig::default(), Some(plugins_toml))
+        .await
+        .expect("the materialized worker manifest should activate");
+    assert!(
+        !activation.report().config.has_errors(),
+        "{:?}",
+        activation.report()
+    );
     flush_subscribers().expect("activation events should flush");
     let controlled_baseline = controlled_events.load(Ordering::SeqCst);
 
@@ -115,22 +109,20 @@ async fn built_worker_validates_registers_executes_and_shuts_down() {
     }));
 
     activation
-        .clear()
+        .close()
         .expect("worker shutdown should follow callback cleanup");
 
-    let (allowed_activation, report) = PluginHostActivation::activate(
-        PluginConfig::default(),
-        [DynamicPluginActivationSpec {
-            plugin_id: PLUGIN_ID.into(),
-            kind: DynamicPluginKind::Worker,
-            manifest_ref: manifest.to_string_lossy().into_owned(),
-            environment_ref: None,
-            config: allowed_config(),
-        }],
-    )
-    .await
-    .expect("the allow-path worker configuration should activate");
-    assert!(report.diagnostics.is_empty(), "{report:?}");
+    let allowed_plugins_toml =
+        write_plugins_toml(manifest_dir.path(), &manifest, &allowed_config());
+    let mut allowed_activation =
+        initialize(PluginConfig::default(), Some(allowed_plugins_toml))
+            .await
+            .expect("the allow-path worker configuration should activate");
+    assert!(
+        !allowed_activation.report().config.has_errors(),
+        "{:?}",
+        allowed_activation.report()
+    );
     flush_subscribers().expect("allow-path activation events should flush");
     let allowed_baseline = allowed_events.load(Ordering::SeqCst);
     tool_call_execute(
@@ -145,7 +137,7 @@ async fn built_worker_validates_registers_executes_and_shuts_down() {
     flush_subscribers().expect("allow-path subscriber events should flush");
     assert!(allowed_events.load(Ordering::SeqCst) > allowed_baseline);
     allowed_activation
-        .clear()
+        .close()
         .expect("allow-path worker should shut down cleanly");
 
     tool_call_execute(
@@ -254,6 +246,9 @@ enabled = false
 [capabilities]
 items = ["plugin_worker"]
 
+[source]
+artifact = {worker}
+
 [integrity]
 sha256 = "{digest}"
 
@@ -265,6 +260,47 @@ entrypoint = {worker}
     )
     .expect("materialized manifest should write");
     manifest
+}
+
+fn write_plugins_toml(
+    directory: &Path,
+    manifest: &Path,
+    config: &Map<String, serde_json::Value>,
+) -> PathBuf {
+    let path = directory.join(format!("plugins-{}.toml", uuid::Uuid::now_v7()));
+    let config = toml::Value::try_from(config.clone())
+        .expect("plugin config should serialize as TOML");
+    let document = toml::Value::Table(toml::map::Map::from_iter([
+        ("version".into(), toml::Value::Integer(1)),
+        (
+            "plugins".into(),
+            toml::Value::Table(toml::map::Map::from_iter([
+                (
+                    "policy".into(),
+                    toml::Value::Table(toml::map::Map::from_iter([(
+                        "defaults".into(),
+                        toml::Value::Table(toml::map::Map::from_iter([(
+                            "attestation".into(),
+                            toml::Value::String("integrity_only".into()),
+                        )])),
+                    )])),
+                ),
+                (
+                    "dynamic".into(),
+                    toml::Value::Array(vec![toml::Value::Table(toml::map::Map::from_iter([
+                        (
+                            "manifest".into(),
+                            toml::Value::String(manifest.to_string_lossy().into_owned()),
+                        ),
+                        ("config".into(), config),
+                    ]))]),
+                ),
+            ])),
+        ),
+    ]));
+    std::fs::write(&path, toml::to_string(&document).expect("plugins.toml should serialize"))
+        .expect("plugins.toml should write");
+    path
 }
 
 fn toml_basic_string(value: &str) -> String {

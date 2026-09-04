@@ -41,12 +41,12 @@ use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay::api::tool::tool_call_execute;
 use nemo_relay::error::FlowError;
 use nemo_relay::plugin::{ConfigPolicy, DiagnosticLevel, UnsupportedBehavior};
-use nemo_relay::plugin::{clear_plugin_configuration, rollback_registrations};
+use nemo_relay::plugin::{rollback_registrations, test_close_plugin_host};
 use serde_json::json;
 use tokio_stream::StreamExt;
 
 fn reset_global() {
-    let _ = clear_plugin_configuration();
+    test_close_plugin_host().expect("test plugin host must close");
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
     *state = NemoRelayContextState::new();

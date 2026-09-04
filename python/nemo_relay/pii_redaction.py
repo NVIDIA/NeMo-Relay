@@ -196,12 +196,12 @@ def validate_config(config: PiiRedactionConfig | JsonObject) -> ConfigReport:
         ConfigReport: Diagnostics describing whether the configuration is
         valid and can be activated.
     """
-    report = plugin_module.validate(
+    report = plugin_module.validate_exact(
         plugin_module.PluginConfig(
             components=[ComponentSpec(config)],
         )
     )
-    return cast(ConfigReport, report)
+    return cast(ConfigReport, report["config"])
 
 
 __all__ = [

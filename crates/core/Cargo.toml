@@ -28,6 +28,8 @@ atof-streaming = [
 schema = ["dep:schemars", "nemo-relay-types/schema"]
 # Private test hook for suppressing implicit user/system plugin discovery.
 __skip-implicit-config = []
+# Private compatibility-free test harness for migrating legacy lifecycle tests.
+__test-plugin-host = []
 # Deprecated with the built-in NeMo Guardrails integration; scheduled for removal in 0.9.
 guardrails-remote = []
 object-store = [
@@ -73,6 +75,10 @@ tracing = { version = "0.1", default-features = false, features = ["std", "log"]
 libloading = "0.8"
 semver = "1"
 sha2 = "0.11"
+base64 = "0.22"
+ring = ">=0.17.13, <0.18"
+jsonschema = { version = "0.46.6", default-features = false }
+percent-encoding = "2"
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "logs", "metrics", "http-proto", "reqwest-blocking-client", "reqwest-rustls", "grpc-tonic", "tls-ring", "tls-roots"] }
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "rustls-tls-native-roots", "stream"] }
 tonic = { version = "0.14.1", default-features = false }

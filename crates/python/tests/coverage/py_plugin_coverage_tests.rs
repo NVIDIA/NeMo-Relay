@@ -5,9 +5,11 @@
 
 use super::*;
 
+use std::collections::BTreeSet;
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
+use nemo_relay::api::registry::{RuntimeRegistrationKind, list_runtime_registrations};
 use nemo_relay::plugin::rollback_registrations;
 use pyo3::types::PyModule;
 use serde_json::json;
@@ -34,7 +36,11 @@ fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
 
 fn with_event_loop<T>(py: Python<'_>, f: impl FnOnce(Bound<'_, PyAny>) -> T) -> T {
     let asyncio = py.import("asyncio").unwrap();
-    let event_loop = asyncio.call_method0("new_event_loop").unwrap();
+    let event_loop = asyncio
+        .getattr("SelectorEventLoop")
+        .unwrap()
+        .call0()
+        .unwrap();
     asyncio
         .call_method1("set_event_loop", (&event_loop,))
         .unwrap();
@@ -44,6 +50,21 @@ fn with_event_loop<T>(py: Python<'_>, f: impl FnOnce(Bound<'_, PyAny>) -> T) -> 
         .unwrap();
     event_loop.call_method0("close").unwrap();
     result
+}
+
+struct ErrorFixturePluginRegistrations;
+
+impl Drop for ErrorFixturePluginRegistrations {
+    fn drop(&mut self) {
+        for kind in [
+            "demo.raising_validate",
+            "demo.invalid_diagnostics",
+            "demo.failing_register",
+            "demo.forced_failures",
+        ] {
+            let _ = deregister_plugin_py(kind);
+        }
+    }
 }
 
 #[test]
@@ -108,12 +129,8 @@ fn register_adds_plugin_management_bindings() {
         for name in [
             "PluginContext",
             "_PluginHostActivation",
-            "validate_plugin_config",
-            "initialize_plugins",
-            "initialize_with_dynamic_plugins",
-            "clear_plugin_configuration",
-            "clear_plugin_configuration_async",
-            "active_plugin_report",
+            "initialize",
+            "validate",
             "list_plugin_kinds",
             "register_plugin",
             "deregister_plugin",
@@ -125,9 +142,6 @@ fn register_adds_plugin_management_bindings() {
         let listed_json = crate::convert::py_to_json(listed.bind(py)).unwrap();
         assert!(listed_json.is_array());
 
-        let active = active_plugin_report_py(py).unwrap();
-        assert!(active.bind(py).is_none());
-
         let config = crate::convert::json_to_py(
             py,
             &json!({
@@ -137,9 +151,9 @@ fn register_adds_plugin_management_bindings() {
         )
         .unwrap()
         .into_bound(py);
-        let report = validate_plugin_config_py(py, &config).unwrap();
+        let report = validate_py(py, &config, None).unwrap();
         let report_json = crate::convert::py_to_json(report.bind(py)).unwrap();
-        assert!(report_json.get("diagnostics").unwrap().is_array());
+        assert!(report_json["config"]["diagnostics"].is_array());
 
         assert!(
             plugin_error_to_py_err(PluginError::InvalidConfig("bad".into()))
@@ -161,57 +175,168 @@ fn register_adds_plugin_management_bindings() {
 }
 
 #[test]
-fn async_clear_binding_completes_on_python_event_loop() {
+fn python_plugin_validation_and_initialization_cover_error_paths() {
     let _python = crate::test_support::init_python_test();
     let _plugin_test_state = lock_plugin_test_state_for_tests();
+    let _fixture_plugins = ErrorFixturePluginRegistrations;
     Python::attach(|py| {
-        let first_clear_state = plugin_configuration_clear_state();
-        let module = PyModule::new(py, "_plugin_async_clear").unwrap();
-        register(&module).unwrap();
         let helpers = load_module(
             py,
             r#"
-async def clear(module):
-    await module.clear_plugin_configuration_async()
+class RaisingValidatePlugin:
+    def validate(self, plugin_config):
+        raise RuntimeError("validate boom")
+
+class InvalidDiagnosticsPlugin:
+    def validate(self, plugin_config):
+        return [{"level": "warning", "code": 1, "message": "bad"}]
+
+class FailingRegisterPlugin:
+    def validate(self, plugin_config):
+        return []
+
+    def register(self, plugin_config, context):
+        context.register_subscriber("sub", lambda event: None)
+        raise RuntimeError("register boom")
+
+class GoodPlugin:
+    def validate(self, plugin_config):
+        return []
+
+    def register(self, plugin_config, context):
+        context.register_subscriber("sub", lambda event: None)
+
+async def initialize_plugin(module, config):
+    return await module.initialize(config)
+
+async def close_activation(activation):
+    await activation.close()
 "#,
         );
-        with_event_loop(py, |event_loop| {
-            let clear = helpers
-                .getattr("clear")
+        let module = PyModule::new(py, "_plugin_cov_errors").unwrap();
+        register(&module).unwrap();
+
+        for (kind, class_name) in [
+            ("demo.raising_validate", "RaisingValidatePlugin"),
+            ("demo.invalid_diagnostics", "InvalidDiagnosticsPlugin"),
+            ("demo.failing_register", "GoodPlugin"),
+            ("demo.forced_failures", "GoodPlugin"),
+        ] {
+            register_plugin_py(
+                kind,
+                helpers
+                    .getattr(class_name)
+                    .unwrap()
+                    .call0()
+                    .unwrap()
+                    .unbind(),
+            )
+            .unwrap();
+        }
+
+        let config_for = |kind: &str| {
+            crate::convert::json_to_py(
+                py,
+                &json!({
+                    "version": 1,
+                    "components": [{"kind": kind, "enabled": true, "config": {}}]
+                }),
+            )
+            .unwrap()
+        };
+        let has_validate_failure = |report: &Py<PyAny>| {
+            crate::convert::py_to_json(report.bind(py)).unwrap()["config"]["diagnostics"]
+                .as_array()
                 .unwrap()
-                .call1((module.clone(),))
-                .unwrap();
-            event_loop
-                .call_method1("run_until_complete", (clear,))
-                .unwrap();
-        });
-        let second_clear_state = plugin_configuration_clear_state();
-        assert!(!Arc::ptr_eq(&first_clear_state, &second_clear_state));
+                .iter()
+                .any(|diagnostic| diagnostic["code"] == "plugin.validate_failed")
+        };
+
+        for kind in ["demo.raising_validate", "demo.invalid_diagnostics"] {
+            let config = config_for(kind);
+            let report = validate_py(py, config.bind(py), None).unwrap();
+            assert!(has_validate_failure(&report));
+        }
+
+        let forced_config = config_for("demo.forced_failures");
+        let conversion_guard = force_validate_config_to_py_error_for_tests("demo.forced_failures");
+        let report = validate_py(py, forced_config.bind(py), None).unwrap();
+        assert!(has_validate_failure(&report));
+        drop(conversion_guard);
 
         with_event_loop(py, |event_loop| {
-            let clear = helpers.getattr("clear").unwrap().call1((module,)).unwrap();
-            event_loop
-                .call_method1("run_until_complete", (clear,))
+            let failing_config = config_for("demo.failing_register");
+            let successful = helpers
+                .getattr("initialize_plugin")
+                .unwrap()
+                .call1((module.clone(), failing_config.bind(py)))
                 .unwrap();
+            let activation = event_loop
+                .call_method1("run_until_complete", (successful,))
+                .unwrap();
+            let subscriber_kinds = BTreeSet::from([RuntimeRegistrationKind::Subscriber]);
+            let subscriber_name = list_runtime_registrations(Some(&subscriber_kinds))
+                .unwrap()
+                .into_iter()
+                .find(|registration| {
+                    registration.local_name == "sub"
+                        && registration.owner.plugin_kind.as_deref()
+                            == Some("demo.failing_register")
+                })
+                .expect("successful fixture registration should expose its effective name")
+                .effective_name;
+            let close = helpers
+                .getattr("close_activation")
+                .unwrap()
+                .call1((activation,))
+                .unwrap();
+            event_loop
+                .call_method1("run_until_complete", (close,))
+                .unwrap();
+            assert!(deregister_plugin_py("demo.failing_register"));
+            register_plugin_py(
+                "demo.failing_register",
+                helpers
+                    .getattr("FailingRegisterPlugin")
+                    .unwrap()
+                    .call0()
+                    .unwrap()
+                    .unbind(),
+            )
+            .unwrap();
+
+            let failing = helpers
+                .getattr("initialize_plugin")
+                .unwrap()
+                .call1((module.clone(), failing_config.bind(py)))
+                .unwrap();
+            let error = event_loop
+                .call_method1("run_until_complete", (failing,))
+                .unwrap_err();
+            assert!(error.to_string().contains("register boom"), "{error}");
+            assert!(
+                !deregister_subscriber(&subscriber_name).unwrap(),
+                "failed initialization should roll back partial registrations"
+            );
+
+            let context_guard = force_plugin_context_new_error_for_tests("demo.forced_failures");
+            let failing = helpers
+                .getattr("initialize_plugin")
+                .unwrap()
+                .call1((module.clone(), forced_config.bind(py)))
+                .unwrap();
+            let error = event_loop
+                .call_method1("run_until_complete", (failing,))
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("forced plugin context allocation failure"),
+                "{error}"
+            );
+            drop(context_guard);
         });
-        assert!(active_plugin_report_py(py).unwrap().bind(py).is_none());
     });
-}
-
-#[test]
-fn stale_async_clear_completion_keeps_the_newer_state() {
-    let _plugin_test_state = lock_plugin_test_state_for_tests();
-    let older = plugin_configuration_clear_state();
-    let newer = Arc::new(PluginConfigurationClearState::new());
-    *PLUGIN_CONFIGURATION_CLEAR_STATE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::clone(&newer);
-
-    reset_plugin_configuration_clear_state_if(&older);
-
-    let newer_state_remained_current = Arc::ptr_eq(&plugin_configuration_clear_state(), &newer);
-    reset_plugin_configuration_clear_state();
-    assert!(newer_state_remained_current);
 }
 
 #[test]
@@ -419,298 +544,6 @@ async def tool_execution_intercept(name, value, next):
 }
 
 #[test]
-fn python_plugin_validation_and_initialization_cover_error_paths() {
-    let _python = crate::test_support::init_python_test();
-    let _plugin_test_state = lock_plugin_test_state_for_tests();
-    Python::attach(|py| {
-        let helpers = load_module(
-            py,
-            r#"
-class MissingValidatePlugin:
-    pass
-
-class NonJsonValidatePlugin:
-    def validate(self, plugin_config):
-        return object()
-
-class InvalidDiagnosticsPlugin:
-    def validate(self, plugin_config):
-        return [{"level": "warning", "code": 1, "message": "bad"}]
-
-class RaisingValidatePlugin:
-    def validate(self, plugin_config):
-        raise RuntimeError("validate boom")
-
-class NoneValidatePlugin:
-    def validate(self, plugin_config):
-        return None
-
-class GoodPlugin:
-    def validate(self, plugin_config):
-        return [{
-            "level": "warning",
-            "code": "plugin.good_warning",
-            "component": "demo.good",
-            "message": "warn"
-        }]
-
-    def register(self, plugin_config, context):
-        context.register_subscriber("sub", lambda event: None)
-
-class FailingRegisterPlugin:
-    def validate(self, plugin_config):
-        return []
-
-    def register(self, plugin_config, context):
-        raise RuntimeError("register boom")
-
-async def initialize_plugins(module, config):
-    return await module.initialize_plugins(config)
-"#,
-        );
-
-        let module = PyModule::new(py, "_plugin_cov_errors").unwrap();
-        register(&module).unwrap();
-
-        register_plugin_py(
-            "demo.missing_validate",
-            helpers
-                .getattr("MissingValidatePlugin")
-                .unwrap()
-                .call0()
-                .unwrap()
-                .unbind(),
-        )
-        .unwrap();
-        register_plugin_py(
-            "demo.non_json_validate",
-            helpers
-                .getattr("NonJsonValidatePlugin")
-                .unwrap()
-                .call0()
-                .unwrap()
-                .unbind(),
-        )
-        .unwrap();
-        register_plugin_py(
-            "demo.invalid_diag_validate",
-            helpers
-                .getattr("InvalidDiagnosticsPlugin")
-                .unwrap()
-                .call0()
-                .unwrap()
-                .unbind(),
-        )
-        .unwrap();
-        register_plugin_py(
-            "demo.raising_validate",
-            helpers
-                .getattr("RaisingValidatePlugin")
-                .unwrap()
-                .call0()
-                .unwrap()
-                .unbind(),
-        )
-        .unwrap();
-        register_plugin_py(
-            "demo.none_validate",
-            helpers
-                .getattr("NoneValidatePlugin")
-                .unwrap()
-                .call0()
-                .unwrap()
-                .unbind(),
-        )
-        .unwrap();
-        register_plugin_py(
-            "demo.good",
-            helpers
-                .getattr("GoodPlugin")
-                .unwrap()
-                .call0()
-                .unwrap()
-                .unbind(),
-        )
-        .unwrap();
-        register_plugin_py(
-            "demo.failing_register",
-            helpers
-                .getattr("FailingRegisterPlugin")
-                .unwrap()
-                .call0()
-                .unwrap()
-                .unbind(),
-        )
-        .unwrap();
-
-        let missing_validate = validate_plugin_config_py(
-            py,
-            crate::convert::json_to_py(
-                py,
-                &json!({
-                    "version": 1,
-                    "components": [{"kind": "demo.missing_validate", "enabled": true, "config": {}}]
-                }),
-            )
-            .unwrap()
-            .bind(py),
-        )
-        .unwrap();
-        assert_eq!(
-            crate::convert::py_to_json(missing_validate.bind(py)).unwrap()["diagnostics"],
-            json!([])
-        );
-
-        let non_json_validate = validate_plugin_config_py(
-            py,
-            crate::convert::json_to_py(
-                py,
-                &json!({
-                    "version": 1,
-                    "components": [{"kind": "demo.non_json_validate", "enabled": true, "config": {}}]
-                }),
-            )
-            .unwrap()
-            .bind(py),
-        )
-        .unwrap();
-        assert!(
-            crate::convert::py_to_json(non_json_validate.bind(py)).unwrap()["diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|diag| diag["code"] == "plugin.validate_failed")
-        );
-
-        let invalid_diag_validate = validate_plugin_config_py(
-            py,
-            crate::convert::json_to_py(
-                py,
-                &json!({
-                    "version": 1,
-                    "components": [{"kind": "demo.invalid_diag_validate", "enabled": true, "config": {}}]
-                }),
-            )
-            .unwrap()
-            .bind(py),
-        )
-        .unwrap();
-        assert!(
-            crate::convert::py_to_json(invalid_diag_validate.bind(py)).unwrap()["diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|diag| diag["code"] == "plugin.validate_failed")
-        );
-
-        let raising_validate = validate_plugin_config_py(
-            py,
-            crate::convert::json_to_py(
-                py,
-                &json!({
-                    "version": 1,
-                    "components": [{"kind": "demo.raising_validate", "enabled": true, "config": {}}]
-                }),
-            )
-            .unwrap()
-            .bind(py),
-        )
-        .unwrap();
-        assert!(
-            crate::convert::py_to_json(raising_validate.bind(py)).unwrap()["diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|diag| diag["code"] == "plugin.validate_failed")
-        );
-
-        let none_validate = validate_plugin_config_py(
-            py,
-            crate::convert::json_to_py(
-                py,
-                &json!({
-                    "version": 1,
-                    "components": [{"kind": "demo.none_validate", "enabled": true, "config": {}}]
-                }),
-            )
-            .unwrap()
-            .bind(py),
-        )
-        .unwrap();
-        assert_eq!(
-            crate::convert::py_to_json(none_validate.bind(py)).unwrap()["diagnostics"],
-            json!([])
-        );
-
-        let active_before = active_plugin_report_py(py).unwrap();
-        assert!(active_before.bind(py).is_none());
-
-        with_event_loop(py, |event_loop| {
-            let good_config = crate::convert::json_to_py(
-                py,
-                &json!({
-                    "version": 1,
-                    "components": [{"kind": "demo.good", "enabled": true, "config": {}}]
-                }),
-            )
-            .unwrap();
-            let good_report = event_loop
-                .call_method1(
-                    "run_until_complete",
-                    (helpers
-                        .getattr("initialize_plugins")
-                        .unwrap()
-                        .call1((module.clone(), good_config.bind(py)))
-                        .unwrap(),),
-                )
-                .unwrap();
-            let good_json = crate::convert::py_to_json(&good_report).unwrap();
-            assert!(
-                good_json["diagnostics"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|diag| diag["code"] == "plugin.good_warning")
-            );
-
-            let active = active_plugin_report_py(py).unwrap();
-            assert!(!active.bind(py).is_none());
-            clear_plugin_configuration_py(py).unwrap();
-            assert!(active_plugin_report_py(py).unwrap().bind(py).is_none());
-
-            let failing_config = crate::convert::json_to_py(
-                py,
-                &json!({
-                    "version": 1,
-                    "components": [{"kind": "demo.failing_register", "enabled": true, "config": {}}]
-                }),
-            )
-            .unwrap();
-            let err = event_loop
-                .call_method1(
-                    "run_until_complete",
-                    (helpers
-                        .getattr("initialize_plugins")
-                        .unwrap()
-                        .call1((module.clone(), failing_config.bind(py)))
-                        .unwrap(),),
-                )
-                .unwrap_err();
-            assert!(err.to_string().contains("register boom"));
-        });
-
-        assert!(deregister_plugin_py("demo.missing_validate"));
-        assert!(deregister_plugin_py("demo.non_json_validate"));
-        assert!(deregister_plugin_py("demo.invalid_diag_validate"));
-        assert!(deregister_plugin_py("demo.raising_validate"));
-        assert!(deregister_plugin_py("demo.none_validate"));
-        assert!(deregister_plugin_py("demo.good"));
-        assert!(deregister_plugin_py("demo.failing_register"));
-        assert!(!deregister_plugin_py("demo.good"));
-    });
-}
-
-#[test]
 fn plugin_context_rollback_from_non_runtime_owner_covers_deregistration_error_mappers() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
@@ -867,86 +700,6 @@ async def tool_execution_intercept(name, value, next):
             Some(value) => unsafe { std::env::set_var("NEMO_RELAY_RUNTIME_OWNER", value) },
             None => unsafe { std::env::remove_var("NEMO_RELAY_RUNTIME_OWNER") },
         }
-    });
-}
-
-#[test]
-fn forced_plugin_conversion_and_context_allocation_failures_are_covered() {
-    let _python = crate::test_support::init_python_test();
-    let _plugin_test_state = lock_plugin_test_state_for_tests();
-    Python::attach(|py| {
-        let helpers = load_module(
-            py,
-            r#"
-class GoodPlugin:
-    def validate(self, plugin_config):
-        return []
-
-    def register(self, plugin_config, context):
-        context.register_subscriber("sub", lambda event: None)
-
-async def initialize_plugins(module, config):
-    return await module.initialize_plugins(config)
-"#,
-        );
-
-        let module = PyModule::new(py, "_plugin_cov_forced").unwrap();
-        register(&module).unwrap();
-
-        register_plugin_py(
-            "demo.forced",
-            helpers
-                .getattr("GoodPlugin")
-                .unwrap()
-                .call0()
-                .unwrap()
-                .unbind(),
-        )
-        .unwrap();
-
-        let config = crate::convert::json_to_py(
-            py,
-            &json!({
-                "version": 1,
-                "components": [{"kind": "demo.forced", "enabled": true, "config": {}}]
-            }),
-        )
-        .unwrap();
-
-        let _validate_error_guard = force_validate_config_to_py_error_for_tests("demo.forced");
-        let report = validate_plugin_config_py(py, config.bind(py)).unwrap();
-        assert!(
-            crate::convert::py_to_json(report.bind(py)).unwrap()["diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|diag| diag["message"]
-                    .as_str()
-                    .unwrap()
-                    .contains("forced plugin config conversion failure"))
-        );
-        drop(_validate_error_guard);
-
-        with_event_loop(py, |event_loop| {
-            let _context_new_error_guard = force_plugin_context_new_error_for_tests("demo.forced");
-            let err = event_loop
-                .call_method1(
-                    "run_until_complete",
-                    (helpers
-                        .getattr("initialize_plugins")
-                        .unwrap()
-                        .call1((module.clone(), config.bind(py)))
-                        .unwrap(),),
-                )
-                .unwrap_err();
-            assert!(
-                err.to_string()
-                    .contains("forced plugin context allocation failure"),
-                "{err}"
-            );
-        });
-
-        assert!(deregister_plugin_py("demo.forced"));
     });
 }
 

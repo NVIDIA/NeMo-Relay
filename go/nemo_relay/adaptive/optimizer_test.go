@@ -28,13 +28,14 @@ func TestConfigBuilders(t *testing.T) {
 	acg := NewAcgConfig()
 	config.Acg = &acg
 
-	report, err := nemo_relay.ValidatePluginConfig(nemo_relay.PluginConfig{
+	hostReport, err := nemo_relay.ValidateExact(nemo_relay.PluginConfig{
 		Version:    1,
 		Components: []nemo_relay.PluginComponentSpec{Component(config)},
 	})
 	if err != nil {
-		t.Fatalf("ValidatePluginConfig failed: %v", err)
+		t.Fatalf("ValidateExact failed: %v", err)
 	}
+	report := hostReport.Config
 	if len(report.Diagnostics) != 0 {
 		t.Fatalf("expected no diagnostics, got %+v", report.Diagnostics)
 	}

@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use futures::{StreamExt, stream};
 use nemo_relay::api::llm::{
@@ -11,9 +14,9 @@ use nemo_relay::api::llm::{
 use nemo_relay::api::runtime::callbacks::LlmJsonStream;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
+use nemo_relay::plugin::dynamic::{PluginHostActivation, initialize, validate};
 use nemo_relay::plugin::{
-    ConfigReport, DiagnosticLevel, Plugin, clear_plugin_configuration, deregister_plugin,
-    initialize_plugins_exact, list_plugin_kinds, register_plugin, validate_plugin_config,
+    ConfigReport, DiagnosticLevel, Plugin, deregister_plugin, list_plugin_kinds, register_plugin,
 };
 use nemo_relay_language_binding_plugin_example::{
     DocumentationPlugin, config, config_with_enabled, observed_event_count, observed_events,
@@ -30,12 +33,12 @@ struct RegisteredPlugin {
 
 impl Drop for RegisteredPlugin {
     fn drop(&mut self) {
-        let _ = clear_plugin_configuration();
         deregister_plugin("documentation-plugin");
     }
 }
 
 struct ActivePlugin {
+    _activation: PluginHostActivation,
     report: ConfigReport,
     _registration: RegisteredPlugin,
 }
@@ -64,10 +67,12 @@ async fn activate_registered(
     registration: RegisteredPlugin,
     plugin_config: nemo_relay::plugin::PluginConfig,
 ) -> ActivePlugin {
-    let report = initialize_plugins_exact(plugin_config)
+    let activation = initialize(plugin_config, None)
         .await
         .unwrap_or_else(|error| panic!("plugin activation should succeed: {error}"));
+    let report = activation.report().config.clone();
     ActivePlugin {
+        _activation: activation,
         report,
         _registration: registration,
     }
@@ -197,13 +202,14 @@ async fn registration_rejects_a_duplicate_kind_and_missing_deregistration_is_fal
 }
 
 #[tokio::test]
-async fn disabled_component_is_still_validated() {
+async fn disabled_component_configuration_is_still_validated() {
     let _registered = register_only().await;
-    let report = validate_plugin_config(&config_with_enabled("invalid", false));
+    let report = validate(config_with_enabled("invalid", false), None)
+        .expect("disabled host configuration should validate");
     assert!(deregister_plugin("documentation-plugin"));
 
     assert_eq!(
-        report.diagnostics[0].code,
+        report.config.diagnostics[0].code,
         "documentation-plugin.unsupported_mode"
     );
 }
@@ -239,7 +245,9 @@ async fn registration_control_is_owned_by_activation() {
         ToolCallExecuteParams::builder()
             .name("controlled-tool")
             .args(json!({}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
+            .func(Arc::new(|args| {
+                Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
+            }))
             .build(),
     )
     .await
@@ -252,7 +260,9 @@ async fn registration_control_is_owned_by_activation() {
         ToolCallExecuteParams::builder()
             .name("restored-tool")
             .args(json!({}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
+            .func(Arc::new(|args| {
+                Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
+            }))
             .build(),
     )
     .await
@@ -271,7 +281,10 @@ async fn tool_request_is_rewritten() {
             .args(json!({"value": 1}))
             .func(Arc::new(|args| {
                 Box::pin(async move {
-                    Ok(ToolExecutionResult::annotated(args, json!({"source": "application"})))
+                    Ok(ToolExecutionResult::annotated(
+                        args,
+                        json!({"source": "application"}),
+                    ))
                 })
             }))
             .build(),
@@ -279,7 +292,10 @@ async fn tool_request_is_rewritten() {
     .await
     .expect("tool call should succeed");
 
-    assert_eq!(result.result, json!({"value": 1, "plugin_tag": "documentation"}));
+    assert_eq!(
+        result.result,
+        json!({"value": 1, "plugin_tag": "documentation"})
+    );
     assert_eq!(result.annotation, Some(json!({"source": "application"})));
 }
 
@@ -396,7 +412,9 @@ async fn subscriber_observes_managed_call() {
         ToolCallExecuteParams::builder()
             .name("safe_tool")
             .args(json!({"value": 1}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
+            .func(Arc::new(|args| {
+                Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
+            }))
             .build(),
     )
     .await
@@ -414,7 +432,9 @@ async fn configuration_controls_redaction_pending_marks_and_isolated_scope_event
         ToolCallExecuteParams::builder()
             .name("safe_tool")
             .args(json!({"value": 1}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
+            .func(Arc::new(|args| {
+                Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
+            }))
             .build(),
     )
     .await
@@ -452,7 +472,9 @@ async fn runtime_events_do_not_depend_on_request_rewriting() {
         ToolCallExecuteParams::builder()
             .name("safe_tool")
             .args(json!({"value": 1}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
+            .func(Arc::new(|args| {
+                Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
+            }))
             .build(),
     )
     .await
@@ -476,7 +498,9 @@ async fn runtime_events_are_not_stopped_by_request_break_chain() {
         ToolCallExecuteParams::builder()
             .name("safe_tool")
             .args(json!({"value": 1}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
+            .func(Arc::new(|args| {
+                Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
+            }))
             .build(),
     )
     .await
@@ -493,11 +517,11 @@ async fn runtime_events_are_not_stopped_by_request_break_chain() {
 #[tokio::test]
 async fn teardown_removes_plugin_kind() {
     let _registered = register_only().await;
-    initialize_plugins_exact(config("enforce"))
+    let mut activation = initialize(config("enforce"), None)
         .await
         .expect("plugin activation should succeed");
 
-    clear_plugin_configuration().expect("plugin cleanup should succeed");
+    activation.close().expect("plugin cleanup should succeed");
     assert!(deregister_plugin("documentation-plugin"));
     assert!(
         !list_plugin_kinds()

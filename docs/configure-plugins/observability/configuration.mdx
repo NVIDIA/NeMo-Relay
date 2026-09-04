@@ -113,12 +113,12 @@ After activation, trace projections consume the event stream, while log and
 metric subscribers consume only their routed marks. A runtime delivery failure
 in one exporter does not stop application work or delivery to the other
 exporters. During teardown, NeMo Relay attempts to shut down every endpoint and
-returns the first teardown error after all attempts finish. Clear the plugin
-during graceful shutdown so queued subscriber work can drain and every
-exporter receives a teardown attempt.
+returns the first teardown error after all attempts finish. Close the activation
+with `activation.close()` during graceful shutdown so queued subscriber work can
+drain and every exporter receives a teardown attempt.
 
 NeMo Relay shuts down OpenTelemetry endpoint providers sequentially. A slow or
-unreachable collector can delay `plugin.clear()` or process shutdown by
+unreachable collector can delay `activation.close()` or process shutdown by
 approximately the OpenTelemetry SDK's five-second shutdown bound plus one
 endpoint export timeout. Use each endpoint's `timeout_millis` value to bound
 that export attempt. This timeout behavior does not make a full batch queue
@@ -218,8 +218,9 @@ const component = observability.ComponentSpec({
 </Tab>
 </Tabs>
 
-Validate programmatic configuration before initialization. Clear the plugin
-during graceful shutdown so every exporter gets a teardown attempt.
+Validate programmatic configuration before initialization. Close the activation
+with `activation.close()` during graceful shutdown so every exporter gets a
+teardown attempt.
 
 ## Migrating from Version 3 to Version 4
 

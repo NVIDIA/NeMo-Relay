@@ -186,12 +186,17 @@ func testPluginContextEventMetadataInjectorLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer DeregisterPlugin(kind)
-	if _, err := InitializePlugins(PluginConfig{Version: 1, Components: []PluginComponentSpec{{Kind: kind, Enabled: true}}}); err != nil {
+	if _, err := initializeTestPluginHost(PluginConfig{Version: 1, Components: []PluginComponentSpec{{Kind: kind, Enabled: true}}}); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := closeTestPluginHost(); err != nil {
+			t.Errorf("closeTestPluginHost() cleanup error = %v", err)
+		}
+	})
 	for _, name := range []string{"go-plugin-metadata-active", "go-plugin-metadata-cleanup"} {
 		if name == "go-plugin-metadata-cleanup" {
-			if err := ClearPluginConfiguration(); err != nil {
+			if err := closeTestPluginHost(); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -285,7 +290,7 @@ func assertNilPluginEventMetadataInjector(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = DeregisterPlugin(kind) })
 	baseline := registeredClosureCount()
-	if _, err := InitializePlugins(PluginConfig{Version: 1, Components: []PluginComponentSpec{{Kind: kind, Enabled: true}}}); err == nil {
+	if _, err := initializeTestPluginHost(PluginConfig{Version: 1, Components: []PluginComponentSpec{{Kind: kind, Enabled: true}}}); err == nil {
 		t.Fatal("expected nil plugin callback registration to fail")
 	}
 	current := registeredClosureCount()

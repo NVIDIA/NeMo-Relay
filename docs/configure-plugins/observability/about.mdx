@@ -19,7 +19,7 @@ manual subscribers. A common first path is:
 1. Instrument one scope, tool call, or LLM call in your application.
 2. Enable the Observability plugin with only one exporter, such as ATOF JSONL.
 3. Run one request through the instrumented path.
-4. Clear the plugin, or call the manual exporter's documented barrier.
+4. Close the activation, or call the manual exporter's documented barrier.
 5. Confirm the output before adding more exporters or sanitization rules.
 
 Observability in NeMo Relay starts with events. Scopes, marks, managed tool
@@ -87,9 +87,8 @@ Use the barrier that matches how you manage the exporter lifecycle:
   callback side effects.
 - For a manual exporter, call its documented `force_flush()`, `export()`, or
   `shutdown()` operation.
-- For plugin-managed export, call `plugin.clear()` or
-  `clear_plugin_configuration()` during graceful shutdown. From a Python
-  `asyncio` task, await `plugin.clear_async()` instead.
+- For plugin-managed export, retain the `PluginHostActivation` returned by
+  initialization and call its `close()` operation during graceful shutdown.
 
 If the process terminates before those operations complete, the output can omit
 queued telemetry even when the instrumented application work completed

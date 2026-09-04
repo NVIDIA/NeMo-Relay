@@ -8,12 +8,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use nemo_relay::plugin::dynamic::{
-    DynamicPluginActivationSpec, DynamicPluginKind, PluginHostActivation,
+    DynamicPluginKind, PluginHostActivation, VerifiedDynamicPluginSpec,
 };
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig,
     PluginRegistrationContext, Result, deregister_plugin, list_plugin_kinds, lookup_plugin,
-    register_plugin, validate_plugin_config,
+    register_plugin, validate_static_plugin_config,
 };
 use serde_json::{Map, Value as Json};
 
@@ -46,7 +46,7 @@ async fn host_rejects_a_builtin_kind_preclaimed_before_first_ensure() {
         components: vec![PluginComponentSpec::new("observability")],
         ..PluginConfig::default()
     };
-    let report = validate_plugin_config(&config);
+    let report = validate_static_plugin_config(&config);
     let diagnostic = report
         .diagnostics
         .iter()
@@ -63,23 +63,23 @@ async fn host_rejects_a_builtin_kind_preclaimed_before_first_ensure() {
     assert!(lookup_plugin("observability").is_none());
     assert!(list_plugin_kinds().is_empty());
 
-    let missing_dynamic_plugin = DynamicPluginActivationSpec {
+    let missing_dynamic_plugin = VerifiedDynamicPluginSpec {
         plugin_id: "fixture_missing".into(),
         kind: DynamicPluginKind::RustDynamic,
         manifest_ref: "missing-relay-plugin.toml".into(),
         environment_ref: None,
         config: Map::new(),
     };
-    let error = match PluginHostActivation::activate(
+    let error = match PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [missing_dynamic_plugin.clone()],
     )
     .await
     {
-        Ok((activation, _)) => {
+        Ok((mut activation, _)) => {
             activation
-                .clear()
-                .expect("unexpected host activation should clear");
+                .close()
+                .expect("unexpected host activation should close");
             panic!("a preclaimed builtin kind must prevent host activation");
         }
         Err(error) => error.to_string(),
@@ -92,7 +92,7 @@ async fn host_rejects_a_builtin_kind_preclaimed_before_first_ensure() {
     assert!(error.contains("already registered"), "{error}");
     assert!(deregister_plugin("observability"));
 
-    let report = validate_plugin_config(&config);
+    let report = validate_static_plugin_config(&config);
     assert!(!report.has_errors(), "{:#?}", report.diagnostics);
     assert!(lookup_plugin("observability").is_some());
     assert!(
@@ -101,11 +101,14 @@ async fn host_rejects_a_builtin_kind_preclaimed_before_first_ensure() {
             .any(|kind| kind == "observability")
     );
 
-    let error = PluginHostActivation::activate(PluginConfig::default(), [missing_dynamic_plugin])
-        .await
-        .err()
-        .expect("the missing fixture manifest should fail after builtin registration recovers")
-        .to_string();
+    let error = PluginHostActivation::initialize_with_verified_specs(
+        PluginConfig::default(),
+        [missing_dynamic_plugin],
+    )
+    .await
+    .err()
+    .expect("the missing fixture manifest should fail after builtin registration recovers")
+    .to_string();
     assert!(error.contains("missing-relay-plugin.toml"), "{error}");
     assert!(!error.contains("active dynamic plugin host"), "{error}");
 }

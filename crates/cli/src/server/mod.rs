@@ -20,14 +20,10 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use nemo_relay::plugin::dynamic::{
-    DynamicPluginKind, NativePluginActivation, NativePluginLoadSpec, WorkerPluginActivation,
-    WorkerPluginLoadSpec, load_native_plugins, load_worker_plugins,
-};
-use nemo_relay::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration,
-    ensure_builtin_plugins_registered, initialize_plugins_exact,
-};
+#[cfg(test)]
+use nemo_relay::plugin::PluginComponentSpec;
+use nemo_relay::plugin::PluginConfig;
+use nemo_relay::plugin::dynamic::{PluginHostActivation, VerifiedDynamicPluginSpec};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 use reqwest::Client;
@@ -288,7 +284,7 @@ async fn serve_listener_with_dynamic_inner(
     let require_provider_client_token =
         bootstrap_fingerprint.is_some() && transparent_proxy_credential.is_none();
     let plugin_activation =
-        initialize_plugin_host(config.plugin_config.clone(), dynamic_plugins).await?;
+        activate_server_plugins(config.plugin_config.clone(), dynamic_plugins).await?;
     let (bootstrap_shutdown, bootstrap_shutdown_rx) =
         bootstrap_shutdown_channel(bootstrap_shutdown_token.clone());
     let mut state = AppState::new_with_bootstrap(
@@ -930,20 +926,21 @@ where
     })
 }
 
-enum ServerPluginActivation {
-    Static,
-    Dynamic(PluginActivation),
+struct ServerPluginActivation {
+    host: PluginHostActivation,
+    // The CLI attests and snapshots managed Python environments. The core host
+    // owns plugin code and registration lifetimes; retaining snapshots here
+    // keeps the CLI-managed environment verifier boundary intact.
+    _snapshots: Vec<Arc<DynamicPluginActivationSnapshot>>,
 }
 
 const REMOVED_SWITCHYARD_MESSAGE: &str = "the built-in Switchyard service integration was removed in NeMo Relay >=0.8.0; remove this `[[components]]` entry and refer to the NeMo Relay migration guides for current Switchyard migration information: https://docs.nvidia.com/nemo/relay/reference/migration-guides";
 
 impl ServerPluginActivation {
-    fn clear(self) -> Result<(), CliError> {
-        match self {
-            Self::Static => clear_plugin_configuration()
-                .map_err(|error| CliError::Config(format!("plugin teardown failed: {error}"))),
-            Self::Dynamic(activation) => activation.clear(),
-        }
+    fn clear(mut self) -> Result<(), CliError> {
+        self.host
+            .close()
+            .map_err(|error| CliError::Config(format!("plugin teardown failed: {error}")))
     }
 }
 
@@ -1010,210 +1007,76 @@ pub(crate) fn register_and_validate_plugin_components(
     errors
 }
 
-async fn initialize_plugin_host(
+async fn activate_server_plugins(
     config: Option<Value>,
     dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
 ) -> Result<Option<ServerPluginActivation>, CliError> {
     if config.is_none() && dynamic_plugins.is_empty() {
         return Ok(None);
     }
+    let plugin_config: PluginConfig = config
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?
+        .unwrap_or_default();
+    if let Some(error) = register_and_validate_plugin_components(&plugin_config)
+        .into_iter()
+        .next()
+    {
+        return Err(CliError::Config(error.to_string()));
+    }
     if dynamic_plugins.is_empty() {
-        let plugin_config: PluginConfig = config
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?
-            .unwrap_or_default();
-        if let Some(error) = register_and_validate_plugin_components(&plugin_config)
-            .into_iter()
-            .next()
-        {
-            return Err(CliError::Config(error.to_string()));
-        }
-        initialize_plugins_exact(plugin_config)
+        let host = PluginHostActivation::initialize_exact(plugin_config)
             .await
             .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
-        return Ok(Some(ServerPluginActivation::Static));
+        return Ok(Some(ServerPluginActivation {
+            host,
+            _snapshots: Vec::new(),
+        }));
     }
-    PluginActivation::initialize(config, dynamic_plugins)
-        .await
-        .map(ServerPluginActivation::Dynamic)
-        .map(Some)
-}
-
-struct PluginActivation {
-    active: bool,
-    native: Option<NativePluginActivation>,
-    worker: Option<WorkerPluginActivation>,
-    _snapshots: Vec<Arc<DynamicPluginActivationSnapshot>>,
-}
-
-impl PluginActivation {
-    async fn initialize(
-        config: Option<Value>,
-        dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
-    ) -> Result<Self, CliError> {
-        if config.is_none() && dynamic_plugins.is_empty() {
-            return Ok(Self {
-                active: false,
-                native: None,
-                worker: None,
-                _snapshots: Vec::new(),
-            });
-        };
-        // Gateway already resolved its config; activate exactly (no re-discovery).
-        let mut plugin_config: PluginConfig = match config {
-            Some(config) => serde_json::from_value(config)
-                .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?,
-            None => PluginConfig::default(),
-        };
-        if let Some(error) = register_and_validate_plugin_components(&plugin_config)
-            .into_iter()
-            .next()
-        {
-            return Err(CliError::Config(error.to_string()));
-        }
-        // Reserve and register Relay's built-in plugin kinds before loading
-        // untrusted dynamic plugin code. This keeps the CLI activation path
-        // consistent with the runtime-owned dynamic plugin host.
-        ensure_builtin_plugins_registered().map_err(|error| {
-            CliError::Config(format!("built-in plugin initialization failed: {error}"))
-        })?;
-        let static_plugin_config = plugin_config.clone();
-        plugin_config
-            .components
-            .extend(dynamic_plugins.iter().map(|plugin| PluginComponentSpec {
-                kind: plugin.plugin_id.clone(),
-                enabled: true,
-                config: plugin.config.clone(),
-            }));
-        for plugin in &dynamic_plugins {
+    let mut snapshots = Vec::new();
+    let specs = dynamic_plugins
+        .into_iter()
+        .map(|plugin| {
             if let Some(snapshot) = plugin.activation_snapshot.as_ref() {
                 snapshot.verify_current()?;
             }
-        }
-        let native_specs = dynamic_plugins
-            .iter()
-            .filter(|plugin| plugin.kind == DynamicPluginKind::RustDynamic)
-            .map(|plugin| {
-                let manifest_ref = plugin
-                    .activation_snapshot
-                    .as_ref()
-                    .map(|snapshot| snapshot.activation_manifest_ref())
-                    .or_else(|| plugin.manifest_ref.clone())
-                    .ok_or_else(|| {
-                        CliError::Config(format!(
-                            "native dynamic plugin '{}' has no manifest_ref in lifecycle state",
-                            plugin.plugin_id
-                        ))
-                    })?;
-                Ok(NativePluginLoadSpec {
-                    plugin_id: plugin.plugin_id.clone(),
-                    manifest_ref,
-                })
-            })
-            .collect::<Result<Vec<_>, CliError>>()?;
-        let worker_specs = dynamic_plugins
-            .iter()
-            .filter(|plugin| plugin.kind == DynamicPluginKind::Worker)
-            .map(|plugin| {
-                let manifest_ref = plugin
-                    .activation_snapshot
-                    .as_ref()
-                    .map(|snapshot| snapshot.activation_manifest_ref())
-                    .or_else(|| plugin.manifest_ref.clone())
-                    .ok_or_else(|| {
-                        CliError::Config(format!(
-                            "worker dynamic plugin '{}' has no manifest_ref in lifecycle state",
-                            plugin.plugin_id
-                        ))
-                    })?;
-                Ok(WorkerPluginLoadSpec {
-                    plugin_id: plugin.plugin_id.clone(),
-                    manifest_ref,
-                    environment_ref: plugin
-                        .activation_snapshot
-                        .as_ref()
-                        .and_then(|snapshot| snapshot.activation_environment_ref())
-                        .map(ToOwned::to_owned)
-                        .or_else(|| plugin.environment_ref.clone()),
-                    config: plugin.config.clone(),
-                })
-            })
-            .collect::<Result<Vec<_>, CliError>>()?;
-        let snapshots = dynamic_plugins
-            .iter()
-            .filter_map(|plugin| plugin.activation_snapshot.clone())
-            .collect();
-        initialize_plugins_exact(static_plugin_config)
-            .await
-            .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
-        let activation: Result<Self, CliError> = async {
-            let native = if native_specs.is_empty() {
-                None
-            } else {
-                Some(load_native_plugins(native_specs).map_err(|error| {
-                    CliError::Config(format!("native plugin load failed: {error}"))
-                })?)
-            };
-            for plugin in &dynamic_plugins {
-                if let Some(snapshot) = plugin.activation_snapshot.as_ref() {
-                    snapshot.verify_current()?;
-                }
+            let manifest_ref = plugin
+                .activation_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.activation_manifest_ref())
+                .or(plugin.manifest_ref)
+                .ok_or_else(|| {
+                    CliError::Config(format!(
+                        "dynamic plugin '{}' has no manifest_ref in lifecycle state",
+                        plugin.plugin_id
+                    ))
+                })?;
+            let environment_ref = plugin
+                .activation_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.activation_environment_ref())
+                .map(ToOwned::to_owned)
+                .or(plugin.environment_ref);
+            if let Some(snapshot) = plugin.activation_snapshot {
+                snapshots.push(snapshot);
             }
-            let worker = if worker_specs.is_empty() {
-                None
-            } else {
-                Some(load_worker_plugins(worker_specs).map_err(|error| {
-                    CliError::Config(format!("worker plugin load failed: {error}"))
-                })?)
-            };
-            clear_plugin_configuration().map_err(|error| {
-                CliError::Config(format!("static plugin teardown failed: {error}"))
-            })?;
-            initialize_plugins_exact(plugin_config)
-                .await
-                .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
-            Ok(Self {
-                active: true,
-                native,
-                worker,
-                _snapshots: snapshots,
+            Ok(VerifiedDynamicPluginSpec {
+                plugin_id: plugin.plugin_id,
+                kind: plugin.kind,
+                manifest_ref,
+                environment_ref,
+                config: plugin.config,
             })
-        }
-        .await;
-        if let Err(error) = activation {
-            return match clear_plugin_configuration() {
-                Ok(()) => Err(error),
-                Err(cleanup_error) => Err(CliError::Config(format!(
-                    "{error}; plugin activation cleanup failed: {cleanup_error}"
-                ))),
-            };
-        }
-        activation
-    }
-
-    fn clear(mut self) -> Result<(), CliError> {
-        let result = if self.active {
-            self.active = false;
-            clear_plugin_configuration()
-                .map_err(|error| CliError::Config(format!("plugin teardown failed: {error}")))?;
-            Ok(())
-        } else {
-            Ok(())
-        };
-        self.native.take();
-        self.worker.take();
-        result
-    }
-}
-
-impl Drop for PluginActivation {
-    fn drop(&mut self) {
-        if self.active {
-            let _ = clear_plugin_configuration();
-            self.active = false;
-        }
-    }
+        })
+        .collect::<Result<Vec<_>, CliError>>()?;
+    let (host, _) = PluginHostActivation::initialize_with_verified_specs(plugin_config, specs)
+        .await
+        .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
+    Ok(Some(ServerPluginActivation {
+        host,
+        _snapshots: snapshots,
+    }))
 }
 
 // Normalizes a Codex hook payload, applies all resulting events before responding, and returns the

@@ -24,7 +24,7 @@ This surface is experimental and source-first. The repository-maintained Go
 binding consumes it through CGo.
 
 > **DO NOT TREAT AS PRODUCTION-READY:** the experimental
-> `nemo_relay_initialize_with_dynamic_plugins` lifecycle needs a real consumer
+> `nemo_relay_plugin_initialize` lifecycle needs a real consumer
 > to validate shutdown, ownership, and error handling before it can be promoted
 > to a stable contract.
 
@@ -133,11 +133,18 @@ const char *config_json =
     "\"type\":\"gen_ai\",\"endpoint\":\"http://localhost:4318/v1/traces\"}],"
     "\"logs\":{\"enabled\":true},\"metrics\":{\"enabled\":true}}}}]}";
 char *report_json = NULL;
-if (nemo_relay_initialize_plugins(config_json, &report_json) != NEMO_RELAY_STATUS_OK) {
+FfiPluginHostActivation *activation = NULL;
+if (nemo_relay_plugin_initialize(config_json, NULL, &activation, &report_json) != NEMO_RELAY_STATUS_OK) {
     /* inspect nemo_relay_last_error() */
+} else {
+    nemo_relay_string_free(report_json);
+    /* Close, then free, the activation during process teardown. */
+    if (nemo_relay_plugin_host_activation_close(activation) != NEMO_RELAY_STATUS_OK) {
+        /* inspect nemo_relay_last_error(); do not free an activation that did not close */
+    } else {
+        nemo_relay_plugin_host_activation_free(&activation);
+    }
 }
-nemo_relay_string_free(report_json);
-/* Call nemo_relay_clear_plugin_configuration() during process teardown. */
 ```
 
 Use `nemo_relay_event_v2` for a schema-tagged log mark and

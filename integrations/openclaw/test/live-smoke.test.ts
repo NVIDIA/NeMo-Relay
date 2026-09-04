@@ -43,7 +43,7 @@ it(
               kind: 'observability',
               enabled: true,
               config: {
-          version: 3,
+                version: 3,
                 atif: {
                   enabled: true,
                   agent_name: 'openclaw',
@@ -73,6 +73,8 @@ it(
         },
       },
     });
+    const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = outputDir;
     let serviceStarted = false;
 
     try {
@@ -160,6 +162,11 @@ it(
           config: {} as never,
           logger: api.logger,
         });
+      }
+      if (previousXdgConfigHome === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
       }
       await fs.rm(outputDir, { recursive: true, force: true });
     }

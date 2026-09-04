@@ -10,9 +10,7 @@ use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
 use nemo_relay::api::event::Event;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
-use nemo_relay::plugin::dynamic::{
-    DynamicPluginActivationSpec, DynamicPluginKind, PluginHostActivation,
-};
+use nemo_relay::plugin::dynamic::initialize;
 use nemo_relay::plugin::{PluginConfig, list_plugin_kinds};
 use serde_json::{Map, json};
 use sha2::{Digest, Sha256};
@@ -63,19 +61,15 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
     .expect("allowed subscriber should register");
 
     let config = documented_config();
-    let (activation, report) = PluginHostActivation::activate(
-        PluginConfig::default(),
-        [DynamicPluginActivationSpec {
-            plugin_id: PLUGIN_ID.into(),
-            kind: DynamicPluginKind::RustDynamic,
-            manifest_ref: manifest.to_string_lossy().into_owned(),
-            environment_ref: None,
-            config,
-        }],
-    )
-    .await
-    .expect("the materialized native manifest should activate");
-    assert!(report.diagnostics.is_empty(), "{report:?}");
+    let plugins_toml = write_plugins_toml(manifest_dir.path(), &manifest, &config);
+    let mut activation = initialize(PluginConfig::default(), Some(plugins_toml))
+        .await
+        .expect("the materialized native manifest should activate");
+    assert!(
+        !activation.report().config.has_errors(),
+        "{:?}",
+        activation.report()
+    );
     flush_subscribers().expect("activation events should flush");
     let controlled_baseline = controlled_events.load(Ordering::SeqCst);
     let allowed_baseline = allowed_events.load(Ordering::SeqCst);
@@ -125,7 +119,7 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
     }));
 
     activation
-        .clear()
+        .close()
         .expect("callbacks should clear before the library unloads");
     tool_call_execute(
         ToolCallExecuteParams::builder()
@@ -220,6 +214,9 @@ enabled = false
 [capabilities]
 items = ["plugin_native"]
 
+[source]
+artifact = {library}
+
 [integrity]
 sha256 = "{digest}"
 
@@ -231,6 +228,47 @@ symbol = "nemo_relay_register_plugin"
     )
     .expect("materialized manifest should write");
     manifest
+}
+
+fn write_plugins_toml(
+    directory: &Path,
+    manifest: &Path,
+    config: &Map<String, serde_json::Value>,
+) -> PathBuf {
+    let path = directory.join("plugins.toml");
+    let config = toml::Value::try_from(config.clone())
+        .expect("plugin config should serialize as TOML");
+    let document = toml::Value::Table(toml::map::Map::from_iter([
+        ("version".into(), toml::Value::Integer(1)),
+        (
+            "plugins".into(),
+            toml::Value::Table(toml::map::Map::from_iter([
+                (
+                    "policy".into(),
+                    toml::Value::Table(toml::map::Map::from_iter([(
+                        "defaults".into(),
+                        toml::Value::Table(toml::map::Map::from_iter([(
+                            "attestation".into(),
+                            toml::Value::String("integrity_only".into()),
+                        )])),
+                    )])),
+                ),
+                (
+                    "dynamic".into(),
+                    toml::Value::Array(vec![toml::Value::Table(toml::map::Map::from_iter([
+                        (
+                            "manifest".into(),
+                            toml::Value::String(manifest.to_string_lossy().into_owned()),
+                        ),
+                        ("config".into(), config),
+                    ]))]),
+                ),
+            ])),
+        ),
+    ]));
+    std::fs::write(&path, toml::to_string(&document).expect("plugins.toml should serialize"))
+        .expect("plugins.toml should write");
+    path
 }
 
 fn toml_basic_string(value: &str) -> String {

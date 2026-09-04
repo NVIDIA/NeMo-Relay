@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
+import * as pluginHost from './plugin_host_test_helper.mjs';
 
 const configHome = mkdtempSync(path.join(tmpdir(), 'nemo-relay-node-config-'));
 process.env.XDG_CONFIG_HOME = configHome;
@@ -34,7 +35,7 @@ async function initializeWithoutDiscoveredPluginConfig(config) {
   const directory = mkdtempSync(path.join(tmpdir(), 'nemo-relay-node-'));
   try {
     process.chdir(directory);
-    return await plugin.initialize(config);
+    return await pluginHost.initialize(config);
   } finally {
     process.chdir(previousDirectory);
     rmSync(directory, { recursive: true, force: true });
@@ -165,12 +166,12 @@ describe('event metadata injector bindings', () => {
       await lib.flushSubscribers();
       await waitFor(events, 1);
 
-      plugin.clear();
+      await pluginHost.close();
       lib.event('node-event-metadata-plugin-cleared');
       await lib.flushSubscribers();
       await waitFor(events, 2);
     } finally {
-      plugin.clear();
+      await pluginHost.close();
       plugin.deregister(kind);
       lib.deregisterSubscriber('node-event-metadata-plugin-sub');
     }

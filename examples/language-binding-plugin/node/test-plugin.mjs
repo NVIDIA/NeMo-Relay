@@ -23,17 +23,18 @@ function registeredCallbacks() {
 async function withActivePlugin(run, pluginConfig = config('enforce')) {
   const restoreEnvironment = isolateExampleEnvironment();
   documentationPlugin.events.length = 0;
+  let activation;
   try {
     plugin.register('documentation-plugin', documentationPlugin);
     const preflight = plugin.validate(pluginConfig);
-    assert.deepEqual(preflight.diagnostics, []);
-    const report = await plugin.initialize(pluginConfig);
-    return await run(report);
+    assert.deepEqual(preflight.config.diagnostics, []);
+    activation = await plugin.initialize(pluginConfig);
+    return await run(activation.report);
   } finally {
     // Scope-end sanitizers run in Relay's queued publication path. Drain that
     // work before removing the callbacks that the active component owns.
     await relay.flushSubscribers();
-    plugin.clear();
+    await activation?.close();
     plugin.deregister('documentation-plugin');
     restoreEnvironment();
   }
@@ -93,13 +94,13 @@ test('validation warns about an unknown field', () => {
   assert.equal(diagnostics[0].field, 'unexpected');
 });
 
-test('disabled invalid configuration is still validated', () => {
+test('disabled component configuration is still validated', () => {
   const restoreEnvironment = isolateExampleEnvironment();
-  plugin.register('documentation-plugin', documentationPlugin);
   try {
+    plugin.register('documentation-plugin', documentationPlugin);
     const report = plugin.validate(config('invalid', false));
 
-    assert.equal(report.diagnostics[0].code, 'documentation-plugin.unsupported_mode');
+    assert.equal(report.config.diagnostics[0].code, 'documentation-plugin.unsupported_mode');
   } finally {
     plugin.deregister('documentation-plugin');
     restoreEnvironment();
@@ -159,7 +160,7 @@ test('registration control is owned by activation', async () => {
 
 test('activation reports no diagnostics', async () => {
   await withActivePlugin((report) => {
-    assert.deepEqual(report.diagnostics, []);
+    assert.deepEqual(report.config.diagnostics, []);
   });
 });
 
@@ -262,13 +263,15 @@ test('runtime controls do not depend on request rewriting', async () => {
 test('teardown removes the plugin kind', async () => {
   const restoreEnvironment = isolateExampleEnvironment();
   plugin.register('documentation-plugin', documentationPlugin);
+  let activation;
   try {
-    await plugin.initialize(config('enforce'));
-    plugin.clear();
+    activation = await plugin.initialize(config('enforce'));
+    await activation.close();
+    activation = undefined;
     assert.equal(plugin.deregister('documentation-plugin'), true);
     assert.equal(plugin.listKinds().includes('documentation-plugin'), false);
   } finally {
-    plugin.clear();
+    await activation?.close();
     plugin.deregister('documentation-plugin');
     restoreEnvironment();
   }
@@ -281,7 +284,6 @@ test('registration rejects a duplicate kind and missing deregistration is false'
     assert.throws(() => plugin.register('documentation-plugin', documentationPlugin));
     assert.equal(plugin.deregister('missing-documentation-plugin'), false);
   } finally {
-    plugin.clear();
     plugin.deregister('documentation-plugin');
     restoreEnvironment();
   }

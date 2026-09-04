@@ -48,7 +48,7 @@ describe('pii_redaction plugin helpers', () => {
           builtin: piiRedaction.builtinConfig({ action: 'mask', detector: 'not_a_detector' }),
         }),
       ],
-    });
+    }).config;
     assert.deepEqual(
       report.diagnostics.map((diagnostic) => diagnostic.field),
       ['builtin.detector'],

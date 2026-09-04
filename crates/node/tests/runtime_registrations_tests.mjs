@@ -57,14 +57,9 @@ describe('conditional middleware guardrails', () => {
       intercepted: true,
     }));
     try {
-      lib.registerConditionalMiddlewareGuardrail(
-        gateName,
-        ['tool_request_intercept'],
-        targetName,
-        () => {
-          throw new Error('expected gate failure');
-        },
-      );
+      lib.registerConditionalMiddlewareGuardrail(gateName, ['tool_request_intercept'], targetName, () => {
+        throw new Error('expected gate failure');
+      });
       try {
         assert.deepEqual(await lib.toolRequestIntercepts('tool', {}), { intercepted: true });
       } finally {
@@ -85,12 +80,7 @@ describe('conditional middleware guardrails', () => {
       intercepted: true,
     }));
     try {
-      lib.registerConditionalMiddlewareGuardrail(
-        gateName,
-        ['tool_request_intercept'],
-        targetName,
-        () => {},
-      );
+      lib.registerConditionalMiddlewareGuardrail(gateName, ['tool_request_intercept'], targetName, () => {});
       try {
         assert.deepEqual(await lib.toolRequestIntercepts('tool', {}), { intercepted: true });
       } finally {

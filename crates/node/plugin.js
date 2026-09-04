@@ -49,85 +49,50 @@ function ComponentSpec(kind, config = {}, { enabled = true } = {}) {
 }
 
 /**
- * Validate a plugin configuration without activating it.
+ * Initialize the core-owned static and dynamic plugin host.
  *
- * Runs the same config validation pipeline used by initialization while
- * leaving the active plugin registry and runtime configuration unchanged.
+ * Resolves programmatic config with either an explicit or discovered user
+ * file, then the system configuration, and activates one owned lifetime.
  *
- * @param {object} config - Candidate plugin configuration document.
- * @returns {object} A structured validation report with diagnostics.
- * @remarks Use this to surface warnings or incompatibilities before replacing
- * the active plugin configuration.
+ * @param {object} config - Lowest-precedence programmatic configuration.
+ * @param {string} [additionalPluginsToml] - Optional explicit `plugins.toml` layer.
+ * @returns {Promise<object>} An owned activation with the unified host report.
+ * @remarks Keep the returned activation alive while callbacks may run and call
+ * `close()` or use `await using` for deterministic teardown.
  */
-function validate(config) {
-  return lib.validatePluginConfig(config);
+function initialize(config, additionalPluginsToml) {
+  return lib.initialize(config, additionalPluginsToml);
 }
 
 /**
- * Validate and activate a plugin configuration.
+ * Validate the plugin host without loading plugin code.
  *
- * Replaces the current active config, invokes each enabled component's
- * registration hooks, and resolves with the final activation report.
+ * Resolves the same layered configuration and trust policy used by activation
+ * while leaving the process-wide host lease untouched.
  *
- * @param {object} config - Plugin configuration document to activate.
- * @returns {Promise<object>} A promise resolving to the activation report.
- * @remarks Partial plugin registration is rolled back if activation fails, and
- * the returned promise rejects with the underlying validation or setup error.
+ * @param {object} config - Lowest-precedence programmatic configuration.
+ * @param {string} [additionalPluginsToml] - Optional explicit `plugins.toml` layer.
+ * @returns {PluginHostReport} Structured static and dynamic validation report.
+ * @remarks Validation performs no activation and does not acquire the host lease.
  */
-function initialize(config) {
-  return lib.initializePlugins(config);
+function validate(config, additionalPluginsToml) {
+  return lib.validate(config, additionalPluginsToml);
 }
 
 /**
- * @typedef {object} DynamicPluginActivationSpec
- * @property {string} pluginId - Manifest plugin identifier.
- * @property {'rust_dynamic'|'worker'} kind - Dynamic plugin execution kind.
- * @property {string} manifestRef - Path to the plugin manifest.
- * @property {string|null} [environmentRef] - Optional worker environment path.
- * @property {Object<string, unknown>} [config] - Plugin component configuration.
+ * Validate only the supplied static plugin configuration.
+ *
+ * Unlike `validate`, this does not discover or merge `plugins.toml` files.
+ * Use it for component-specific validation when `config` is the complete
+ * document to check.
+ *
+ * @param {object} config - Complete static plugin configuration.
+ * @returns {PluginHostReport} Static validation results with no dynamic plugins.
+ * @remarks This validates only the supplied document and intentionally skips
+ * plugin discovery from the filesystem.
  */
-
-/**
- * Initialize with explicitly resolved dynamic plugins.
- *
- * @param {object} config - Base configuration layered over discovered `plugins.toml` files.
- * @param {DynamicPluginActivationSpec[]} specs - Non-empty native-library or worker plugin specifications.
- * @returns {Promise<object>} An owned activation with `report`, `active`, `close()`, and async disposal.
- * @remarks File-configured static components initialize before dynamic
- * components. Keep the returned activation alive while its callbacks may run
- * and call `close()` or use `await using` for deterministic teardown. Use
- * `initialize()` for a static-only configuration.
- */
-function initializeWithDynamicPlugins(config, specs) {
-  return lib.initializeWithDynamicPlugins(config, specs);
-}
-
-/**
- * Clear the active plugin configuration.
- *
- * Removes the currently active component registrations while leaving plugin
- * kinds in the registry so they can be reused by a later initialization call.
- *
- * @returns {void} Nothing.
- * @remarks Registered plugin kinds remain available after the active config is
- * cleared.
- */
-function clear() {
-  return lib.clearPluginConfiguration();
-}
-
-/**
- * Return the last successfully activated plugin report.
- *
- * Exposes the most recent activation report emitted by the native plugin system
- * without triggering validation or registration work.
- *
- * @returns {object|null|undefined} The last activation report, if one exists.
- * @remarks This returns an empty value until `initialize` succeeds at least
- * once in the current process.
- */
-function report() {
-  return lib.activePluginReport();
+function validateExact(config) {
+  return lib.validateExact(config);
 }
 
 /**
@@ -173,8 +138,8 @@ function register(pluginKind, plugin) {
  *
  * @param {string} pluginKind - Registered plugin kind identifier to remove.
  * @returns {boolean} `true` when a plugin kind was removed, otherwise `false`.
- * @remarks Active runtime registrations remain in place until `clear` or a
- * later successful `initialize` replaces them.
+ * @remarks Active runtime registrations remain in place until the owning
+ * plugin-host activation closes.
  */
 function deregister(pluginKind) {
   return lib.deregisterPlugin(pluginKind);
@@ -183,11 +148,9 @@ function deregister(pluginKind) {
 module.exports = {
   defaultConfig,
   ComponentSpec,
-  validate,
   initialize,
-  initializeWithDynamicPlugins,
-  clear,
-  report,
+  validate,
+  validateExact,
   listKinds,
   register,
   deregister,

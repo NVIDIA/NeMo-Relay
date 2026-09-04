@@ -54,11 +54,11 @@ impl Drop for ResetPricingResolverGuard {
     }
 }
 
-struct ClearPluginConfigurationGuard;
+struct ClosePluginHostGuard;
 
-impl Drop for ClearPluginConfigurationGuard {
+impl Drop for ClosePluginHostGuard {
     fn drop(&mut self) {
-        let _ = crate::plugin::clear_plugin_configuration();
+        let _ = crate::plugin::test_close_plugin_host();
     }
 }
 
@@ -5053,9 +5053,9 @@ fn provider_builders_cover_success_paths() {
 #[test]
 fn dropped_spans_are_recorded_in_the_active_plugin_report() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
-    let _ = crate::plugin::clear_plugin_configuration();
-    let _clear_guard = ClearPluginConfigurationGuard;
-    futures::executor::block_on(crate::plugin::initialize_plugins_exact(
+    let _ = crate::plugin::test_close_plugin_host();
+    let _clear_guard = ClosePluginHostGuard;
+    futures::executor::block_on(crate::plugin::test_initialize_plugin_host_exact(
         crate::plugin::PluginConfig::default(),
     ))
     .unwrap();
@@ -5091,7 +5091,7 @@ fn dropped_spans_are_recorded_in_the_active_plugin_report() {
             .contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER)
     );
 
-    let report = crate::plugin::active_plugin_report().unwrap();
+    let report = crate::plugin::test_plugin_host_report().unwrap();
     let diagnostic = report
         .runtime_diagnostics
         .iter()
@@ -5148,9 +5148,9 @@ fn direct_trace_processor_records_cumulative_queue_drops_on_flush_and_shutdown()
 #[test]
 fn plugin_trace_subscriber_runtime_diagnostics_use_trace_field() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
-    let _ = crate::plugin::clear_plugin_configuration();
-    let _clear_guard = ClearPluginConfigurationGuard;
-    futures::executor::block_on(crate::plugin::initialize_plugins_exact(
+    let _ = crate::plugin::test_close_plugin_host();
+    let _clear_guard = ClosePluginHostGuard;
+    futures::executor::block_on(crate::plugin::test_initialize_plugin_host_exact(
         crate::plugin::PluginConfig::default(),
     ))
     .unwrap();
@@ -5177,7 +5177,7 @@ fn plugin_trace_subscriber_runtime_diagnostics_use_trace_field() {
 
     (subscriber.subscriber())(&event);
 
-    let report = crate::plugin::active_plugin_report().unwrap();
+    let report = crate::plugin::test_plugin_host_report().unwrap();
     let diagnostic = report
         .runtime_diagnostics
         .iter()
@@ -5296,9 +5296,9 @@ fn trace_export_failures_use_a_safe_endpoint_identity() {
 #[test]
 fn unrecovered_trace_export_failure_is_retained_in_the_active_plugin_report() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
-    let _ = crate::plugin::clear_plugin_configuration();
-    let _clear_guard = ClearPluginConfigurationGuard;
-    futures::executor::block_on(crate::plugin::initialize_plugins_exact(
+    let _ = crate::plugin::test_close_plugin_host();
+    let _clear_guard = ClosePluginHostGuard;
+    futures::executor::block_on(crate::plugin::test_initialize_plugin_host_exact(
         crate::plugin::PluginConfig::default(),
     ))
     .unwrap();
@@ -5333,7 +5333,7 @@ fn unrecovered_trace_export_failure_is_retained_in_the_active_plugin_report() {
             .contains("otel.traces_export_failed (1)")
     );
 
-    let report = crate::plugin::active_plugin_report().unwrap();
+    let report = crate::plugin::test_plugin_host_report().unwrap();
     let diagnostic = report
         .runtime_diagnostics
         .iter()

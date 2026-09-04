@@ -148,11 +148,10 @@ each stream worker to drain and close within the configured timeout. It ignores
 events delivered after the exporter closes. A timeout is logged and does not by
 itself cause `shutdown()` to return an error.
 
-During graceful shutdown, `plugin.clear()` or `clear_plugin_configuration()`
-uses that same terminal stream-sink operation. From a Python `asyncio` task,
-await `plugin.clear_async()` so queued sanitizers can finish on the running
-event loop. Teardown does not guarantee that a worker which timed out drained
-or closed.
+During graceful shutdown, `activation.close()` uses that same terminal
+stream-sink operation. Await it from Python and Node.js so queued sanitizers
+can finish on the running event loop. Teardown does not guarantee that a worker
+which timed out drained or closed.
 
 ## Migrate From Version 1
 
@@ -218,10 +217,11 @@ Use plugin configuration when you want NeMo Relay to manage the ATOF exporter
 lifecycle. The following examples configure and activate the exporter through
 each supported language binding.
 
-`validate()` checks only the supplied in-memory object. `initialize()` also
-layers discovered `plugins.toml` configuration. For effective file-backed
-validation, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
-and run the gateway with the same configuration path that production uses.
+`validate()` resolves the same configuration layers as `initialize()` without
+loading plugin code or acquiring the activation lease. Use Python/Rust
+`validate_exact()`, Node.js `validateExact()`, or Go `ValidateExact()` when only
+the supplied static configuration should be checked. For complete
+layering rules, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -260,17 +260,14 @@ config = plugin.PluginConfig(
     ]
 )
 
-report = plugin.validate(config)
+report = plugin.validate(config)["config"]
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
 async def main():
-    await plugin.initialize(config)
-    try:
+    async with plugin.activate(config):
         # Run instrumented application work here.
         pass
-    finally:
-        await plugin.clear_async()
 
 asyncio.run(main())
 ```
@@ -283,7 +280,7 @@ const plugin = require("nemo-relay-node/plugin");
 const observability = require("nemo-relay-node/observability");
 
 void (async () => {
-  await plugin.initialize({
+  const activation = await plugin.initialize({
     version: 1,
     components: [
       observability.ComponentSpec({
@@ -311,7 +308,7 @@ void (async () => {
   try {
     // Run instrumented application work here.
   } finally {
-    plugin.clear();
+    await activation.close();
   }
 })().catch((error) => {
   console.error(error);
@@ -327,9 +324,8 @@ use nemo_relay::observability::plugin_component::{
     AtofFileSinkSectionConfig, AtofSectionConfig, AtofSinkSectionConfig,
     AtofStreamSinkSectionConfig, ComponentSpec, ObservabilityConfig,
 };
-use nemo_relay::plugin::{
-    clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
-};
+use nemo_relay::plugin::PluginConfig;
+use nemo_relay::plugin::dynamic::{initialize, validate};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -362,14 +358,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         policy: Default::default(),
     };
 
-    let report = validate_plugin_config(&config);
-    assert!(!report.has_errors());
+    let report = validate(config.clone(), None)?;
+    assert!(!report.config.has_errors());
 
-    let _active = initialize_plugins(config).await?;
+    let mut activation = initialize(config, None).await?;
 
     // Run instrumented application work here.
 
-    clear_plugin_configuration()?;
+    activation.close()?;
     Ok(())
 }
 ```

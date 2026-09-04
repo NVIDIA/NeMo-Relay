@@ -26,12 +26,12 @@ func TestPluginConfigSerializationErrorsSurfaceBeforeFFI(t *testing.T) {
 		t.Fatalf("expected pluginConfigCString serialization error, got %v", cConfig)
 	}
 
-	if _, err := ValidatePluginConfig(config); err == nil {
-		t.Fatal("expected ValidatePluginConfig serialization error")
+	if _, err := validateTestPluginConfig(config); err == nil {
+		t.Fatal("expected validateTestPluginConfig serialization error")
 	}
 
-	if _, err := InitializePlugins(config); err == nil {
-		t.Fatal("expected InitializePlugins serialization error")
+	if _, err := initializeTestPluginHost(config); err == nil {
+		t.Fatal("expected initializeTestPluginHost serialization error")
 	}
 }
 

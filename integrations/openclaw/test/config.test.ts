@@ -700,6 +700,34 @@ describe('nemo-relay OpenClaw plugin shell', () => {
 
     await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
     assert.equal(process.listenerCount('beforeExit'), before);
+    assert.equal(modules.pluginHost.calls.close, 1);
+  });
+
+  it('preserves failed plugin host teardown state so shutdown can retry', async () => {
+    const modules = createModules({ closeFailures: [new Error('close failed')] });
+    const api = createApi();
+
+    registerPlugin(api, async () => modules);
+    const service = api.calls.services[0];
+    assert.ok(service);
+    await service.start({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
+
+    await assert.doesNotReject(async () => {
+      await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
+    });
+    const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+    assert.equal(status.status.state, 'degraded');
+    assert.equal(status.initializedPluginHost, true);
+    assert.equal(modules.pluginHost.calls.close, 1);
+    assert.ok(
+      api.messages.warn.some((message) => message.includes('failed to close NeMo Relay plugin host: close failed')),
+    );
+
+    await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
+    const retriedStatus = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+    assert.equal(retriedStatus.status.state, 'stopped');
+    assert.equal(retriedStatus.initializedPluginHost, false);
+    assert.equal(modules.pluginHost.calls.close, 2);
   });
 
   it('does not statically import nemo-relay-node or OpenClaw private src paths', () => {
@@ -818,7 +846,7 @@ type TestPluginHost = NemoRelayModules['pluginHost'] & {
   calls: {
     validate: unknown[];
     initialize: unknown[];
-    clear: number;
+    close: number;
   };
 };
 
@@ -839,10 +867,13 @@ function createModules(
     validateDiagnostics?: Array<{ level: 'warning' | 'error'; code: string; message: string }>;
     validateThrows?: Error;
     initializeDiagnostics?: Array<{ level: 'warning' | 'error'; code: string; message: string }>;
+    closeThrows?: Error;
+    closeFailures?: Error[];
   } = {},
 ): TestModules {
   const nf = createNemoRelayRuntime();
-  const calls: TestPluginHost['calls'] = { validate: [], initialize: [], clear: 0 };
+  const calls: TestPluginHost['calls'] = { validate: [], initialize: [], close: 0 };
+  const closeFailures = [...(params.closeFailures ?? (params.closeThrows ? [params.closeThrows] : []))];
   const adaptive: TestModules['adaptive'] = {
     ADAPTIVE_PLUGIN_KIND: 'adaptive',
     ComponentSpec: (
@@ -865,14 +896,31 @@ function createModules(
         if (params.validateThrows) {
           throw params.validateThrows;
         }
-        return { diagnostics: params.validateDiagnostics ?? [] };
+        return {
+          config: { diagnostics: params.validateDiagnostics ?? [] },
+          dynamic_plugins: [],
+        };
       },
       initialize: async (config) => {
         calls.initialize.push(config);
-        return { diagnostics: params.initializeDiagnostics ?? [] };
-      },
-      clear: () => {
-        calls.clear += 1;
+        const activation = {
+          report: {
+            config: { diagnostics: params.initializeDiagnostics ?? [] },
+            dynamic_plugins: [],
+          },
+          isActive: true,
+          close: async () => {
+            calls.close += 1;
+            const failure = closeFailures.shift();
+            if (failure) {
+              throw failure;
+            }
+          },
+          [Symbol.asyncDispose]: async () => {
+            await activation.close();
+          },
+        };
+        return activation;
       },
     },
   };

@@ -4,6 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import * as pluginHost from './plugin_host_test_helper.mjs';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
@@ -19,10 +20,10 @@ describe('core plugins', () => {
     });
 
     try {
-      assert.equal(plugin.report(), null);
+      assert.equal(pluginHost.report(), null);
       assert.equal(plugin.listKinds().includes(pluginKind), true);
 
-      const report = await plugin.initialize({
+      const report = await pluginHost.initialize({
         version: 1,
         components: [
           adaptive.ComponentSpec({
@@ -35,9 +36,9 @@ describe('core plugins', () => {
         ],
       });
 
-      assert.deepEqual(plugin.report(), report);
+      assert.deepEqual(pluginHost.report(), report);
     } finally {
-      plugin.clear();
+      await pluginHost.close();
       plugin.deregister(pluginKind);
     }
   });
@@ -61,8 +62,8 @@ describe('core plugins', () => {
     });
 
     try {
-      const report = plugin.validate(plugin.defaultConfig());
-      const wrappedReport = plugin.validate({
+      const report = pluginHost.validate(plugin.defaultConfig());
+      const wrappedReport = pluginHost.validate({
         version: 1,
         components: [
           plugin.ComponentSpec(pluginKind, {
@@ -105,21 +106,21 @@ describe('core plugins', () => {
     });
 
     try {
-      assert.deepEqual(plugin.validate(config).diagnostics, []);
-      assert.deepEqual((await plugin.initialize(config)).diagnostics, []);
+      assert.deepEqual(pluginHost.validate(config).diagnostics, []);
+      assert.deepEqual((await pluginHost.initialize(config)).diagnostics, []);
       assert.equal(validateCalls, 2);
       assert.equal(registerCalls, 1);
       assert.deepEqual(await lib.toolCallExecute('validated_plugin_tool', {}, (args) => ({ result: args })), {
         result: { marker: 'validated' },
       });
 
-      plugin.clear();
+      await pluginHost.close();
       assert.equal(plugin.deregister(pluginKind), true);
       assert.deepEqual(await lib.toolCallExecute('cleared_plugin_tool', {}, (args) => ({ result: args })), {
         result: {},
       });
     } finally {
-      plugin.clear();
+      await pluginHost.close();
       plugin.deregister(pluginKind);
     }
   });
@@ -133,7 +134,7 @@ describe('core plugins', () => {
     });
 
     try {
-      const report = plugin.validate({
+      const report = pluginHost.validate({
         version: 1,
         components: [plugin.ComponentSpec(pluginKind, {})],
       });
@@ -159,8 +160,8 @@ describe('core plugins', () => {
         version: 1,
         components: [plugin.ComponentSpec(pluginKind, {})],
       };
-      await assert.rejects(() => plugin.initialize(config), /plugin validation boom/);
-      const report = plugin.validate(config);
+      await assert.rejects(() => pluginHost.initialize(config), /plugin validation boom/);
+      const report = pluginHost.validate(config);
       assert.equal(report.diagnostics.length, 1);
       assert.equal(report.diagnostics[0].code, 'plugin.validate_failed');
       assert.match(report.diagnostics[0].message, /plugin validation boom/);
@@ -168,7 +169,7 @@ describe('core plugins', () => {
         result: {},
       });
     } finally {
-      plugin.clear();
+      await pluginHost.close();
       plugin.deregister(pluginKind);
     }
   });
@@ -209,7 +210,7 @@ describe('core plugins', () => {
     });
 
     try {
-      const report = await plugin.initialize({
+      const report = await pluginHost.initialize({
         version: 1,
         components: [
           adaptive.ComponentSpec({
@@ -237,7 +238,7 @@ describe('core plugins', () => {
         hasScopeEndSanitize: true,
       });
     } finally {
-      plugin.clear();
+      await pluginHost.close();
       plugin.deregister(pluginKind);
     }
   });
@@ -253,7 +254,7 @@ describe('core plugins', () => {
     });
 
     try {
-      const report = await plugin.initialize({
+      const report = await pluginHost.initialize({
         version: 1,
         components: [
           adaptive.ComponentSpec({
@@ -270,7 +271,7 @@ describe('core plugins', () => {
         /plugin request intercept boom/i,
       );
     } finally {
-      plugin.clear();
+      await pluginHost.close();
       plugin.deregister(pluginKind);
     }
   });
@@ -307,7 +308,7 @@ describe('core plugins', () => {
     });
 
     try {
-      await plugin.initialize({
+      await pluginHost.initialize({
         version: 1,
         components: [
           plugin.ComponentSpec('observability', {
@@ -326,7 +327,7 @@ describe('core plugins', () => {
         result: { downstream: true },
       }));
       await entered;
-      plugin.clear();
+      await pluginHost.close();
       releaseBlocker();
       assert.deepEqual(await execution, {
         result: {
@@ -336,7 +337,7 @@ describe('core plugins', () => {
       });
     } finally {
       releaseBlocker();
-      plugin.clear();
+      await pluginHost.close();
       plugin.deregister(pluginKind);
     }
   });
@@ -359,19 +360,19 @@ describe('plugin context conditional middleware guardrails', () => {
       },
     });
     try {
-      await plugin.initialize({ version: 1, components: [plugin.ComponentSpec(pluginKind)] });
+      await pluginHost.initialize({ version: 1, components: [plugin.ComponentSpec(pluginKind)] });
       lib.event('node-context-gate-fail-open', null, null);
       await lib.flushSubscribers();
       assert.equal(observed.at(-1), 'node-context-gate-fail-open');
       assert.ok(guardrailCalls > 0);
-      plugin.clear();
+      await pluginHost.close();
       const callsBeforeClear = guardrailCalls;
       lib.event('node-context-gate-cleared', null, null);
       await lib.flushSubscribers();
       assert.equal(observed.at(-1), 'node-context-gate-cleared');
       assert.equal(guardrailCalls, callsBeforeClear);
     } finally {
-      plugin.clear();
+      await pluginHost.close();
       plugin.deregister(pluginKind);
       lib.deregisterSubscriber(target);
     }
@@ -395,7 +396,7 @@ describe('plugin context conditional middleware guardrails', () => {
     });
     try {
       await assert.rejects(
-        () => plugin.initialize({ version: 1, components: [plugin.ComponentSpec(pluginKind)] }),
+        () => pluginHost.initialize({ version: 1, components: [plugin.ComponentSpec(pluginKind)] }),
         /expected activation failure/,
       );
       const callsAfterFailure = guardrailCalls;
@@ -404,7 +405,7 @@ describe('plugin context conditional middleware guardrails', () => {
       assert.equal(observed.at(-1), 'node-context-gate-rolled-back');
       assert.equal(guardrailCalls, callsAfterFailure);
     } finally {
-      plugin.clear();
+      await pluginHost.close();
       plugin.deregister(pluginKind);
       lib.deregisterSubscriber(target);
     }
