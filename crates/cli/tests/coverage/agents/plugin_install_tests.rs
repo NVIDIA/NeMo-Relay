@@ -4597,6 +4597,7 @@ fn unknown_plugin_registration_preserves_the_install_tree() {
     assert!(layout.state_path.exists());
     assert!(layout.generation_lock.exists());
     InstallGeneration::capture(layout.generation_fence).unwrap();
+    assert_no_install_stage(dir.path());
     assert!(
         runner
             .commands()
