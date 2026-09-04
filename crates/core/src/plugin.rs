@@ -2577,17 +2577,34 @@ pub(crate) fn active_runtime_diagnostics_snapshot() -> Vec<RuntimeDiagnosticsSna
         .unwrap_or_default()
 }
 
-/// Rolls back registrations in reverse order, ignoring rollback failures.
+/// Rolls back registrations in reverse order.
 ///
-/// This is used internally during failed initialization and owned host close.
-pub fn rollback_registrations(registrations: &mut Vec<PluginRegistration>) {
-    let _ = rollback_registrations_checked(registrations);
-    registrations.clear();
+/// Registrations that cannot be removed remain in `registrations` so callers
+/// can retry. The returned outcome reports whether every callback was cleared
+/// and preserves any cleanup errors.
+pub fn rollback_registrations(
+    registrations: &mut Vec<PluginRegistration>,
+) -> PluginRollbackOutcome {
+    rollback_registrations_checked(registrations)
 }
 
-struct PluginRollbackOutcome {
+/// Result of rolling back a set of plugin registrations.
+#[derive(Debug)]
+pub struct PluginRollbackOutcome {
     errors: Vec<String>,
     callbacks_cleared: bool,
+}
+
+impl PluginRollbackOutcome {
+    /// Return cleanup errors in rollback order.
+    pub fn errors(&self) -> &[String] {
+        &self.errors
+    }
+
+    /// Return whether every registered callback was removed.
+    pub fn callbacks_cleared(&self) -> bool {
+        self.callbacks_cleared
+    }
 }
 
 impl Default for PluginRollbackOutcome {

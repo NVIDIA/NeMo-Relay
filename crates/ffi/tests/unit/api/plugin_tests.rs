@@ -7,6 +7,50 @@ use super::*;
 use nemo_relay::plugin::rollback_registrations;
 
 #[test]
+fn test_plugin_initialize_rejects_aliased_outputs_without_activating() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    reset_globals();
+    assert_status!(close_test_plugin_host(), NemoRelayStatus::Ok);
+
+    let config = cstring(r#"{"version":1,"components":[]}"#);
+    let mut output = ptr::null_mut::<FfiPluginHostActivation>();
+    unsafe {
+        assert_status!(
+            api::nemo_relay_plugin_initialize(
+                config.as_ptr(),
+                ptr::null(),
+                &mut output,
+                (&mut output as *mut *mut FfiPluginHostActivation).cast(),
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+    }
+    assert!(output.is_null());
+    assert!(last_error_message().unwrap().contains("must not alias"));
+
+    let mut activation = ptr::null_mut();
+    let mut report = ptr::null_mut();
+    unsafe {
+        assert_status!(
+            api::nemo_relay_plugin_initialize(
+                config.as_ptr(),
+                ptr::null(),
+                &mut activation,
+                &mut report,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let _ = returned_json(report);
+        assert_status!(
+            api::nemo_relay_plugin_host_activation_close(activation),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_plugin_host_activation_free(&mut activation);
+    }
+    assert!(activation.is_null());
+}
+
+#[test]
 fn test_plugin_initialize_rejects_empty_and_malformed_config_without_activating() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_globals();

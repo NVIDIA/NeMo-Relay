@@ -1417,7 +1417,7 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
 }
 
 #[test]
-fn test_rollback_registrations_runs_in_reverse_and_ignores_failures() {
+fn test_rollback_registrations_runs_in_reverse_and_retains_failures_for_retry() {
     let mut registrations = vec![];
     let call_order = Arc::new(Mutex::new(Vec::new()));
 
@@ -1432,33 +1432,61 @@ fn test_rollback_registrations_runs_in_reverse_and_ignores_failures() {
     ));
 
     let panic_order = Arc::clone(&call_order);
+    let panic_attempts = Arc::new(AtomicUsize::new(0));
+    let cleanup_panic_attempts = Arc::clone(&panic_attempts);
     registrations.push(PluginRegistration::new(
         "plugin",
         "panicking",
         Box::new(move || {
             panic_order.lock().unwrap().push("panicking");
-            panic!("expected rollback panic")
+            if cleanup_panic_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                panic!("expected rollback panic");
+            }
+            Ok(())
         }),
     ));
 
     let second_order = Arc::clone(&call_order);
+    let second_attempts = Arc::new(AtomicUsize::new(0));
+    let cleanup_second_attempts = Arc::clone(&second_attempts);
     registrations.push(PluginRegistration::new(
         "plugin",
         "second",
         Box::new(move || {
             second_order.lock().unwrap().push("second");
-            Err(PluginError::RegistrationFailed(
-                "expected rollback failure".into(),
-            ))
+            if cleanup_second_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(PluginError::RegistrationFailed(
+                    "expected rollback failure".into(),
+                ))
+            } else {
+                Ok(())
+            }
         }),
     ));
 
-    rollback_registrations(&mut registrations);
+    let first = rollback_registrations(&mut registrations);
 
-    assert!(registrations.is_empty());
+    assert!(!first.callbacks_cleared());
+    assert_eq!(first.errors().len(), 2);
+    assert_eq!(
+        registrations
+            .iter()
+            .map(|registration| registration.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["panicking", "second"]
+    );
     assert_eq!(
         *call_order.lock().unwrap(),
         vec!["second", "panicking", "first"]
+    );
+
+    let retry = rollback_registrations(&mut registrations);
+    assert!(retry.callbacks_cleared());
+    assert!(retry.errors().is_empty());
+    assert!(registrations.is_empty());
+    assert_eq!(
+        *call_order.lock().unwrap(),
+        vec!["second", "panicking", "first", "second", "panicking"]
     );
 }
 

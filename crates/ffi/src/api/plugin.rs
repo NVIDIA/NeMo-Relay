@@ -180,6 +180,11 @@ pub unsafe extern "C" fn nemo_relay_plugin_initialize(
         set_last_error("out_activation and out_report_json must be non-null");
         return NemoRelayStatus::NullPointer;
     }
+    if out_activation.cast::<*mut c_char>() == out_report_json {
+        unsafe { *out_activation = std::ptr::null_mut() };
+        set_last_error("out_activation and out_report_json must not alias");
+        return NemoRelayStatus::InvalidArg;
+    }
     unsafe {
         *out_activation = std::ptr::null_mut();
         *out_report_json = std::ptr::null_mut();
