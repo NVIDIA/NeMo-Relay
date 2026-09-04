@@ -234,6 +234,7 @@ The `builtin` section contains:
 
 | Field | Purpose |
 | --- | --- |
+| `preset` | Optional semantic policy. `trajectory_context` keeps normalized analytics while emptying opaque trajectory payloads. |
 | `action` | Sanitization action. Current values are `remove`, `redact`, `regex_replace`, `hash`, and `mask`. |
 | `target_paths` | Exact RFC 6901 JSON-pointer paths to sanitize. Empty together with `target_path_globs` means every matching string leaf, except when `action = "remove"`. |
 | `target_path_globs` | Restricted JSON-pointer glob paths. A whole `*` segment matches exactly one object key or array index. |
@@ -243,7 +244,32 @@ The `builtin` section contains:
 | `mask_char` | Masking token used when `action = "mask"`. Defaults to `*`. |
 | `unmasked_prefix` | Leading character count to keep when `action = "mask"`. Defaults to `0`, unless a detector-specific masking preset is active. |
 | `unmasked_suffix` | Trailing character count to keep when `action = "mask"`. Defaults to `0`, unless a detector-specific masking preset is active. |
+| `custom_mark_payload_policy` | Controls unknown custom marks under `trajectory_context`. Defaults to `redact_all_leaves`; set `preserve` only for trusted producers. |
 | `metric_string_attribute_allowlist` | Exact typed metric attribute names and bounded string values that `trajectory_context` may preserve. Empty by default. |
+
+## Trajectory Context Preset
+
+`trajectory_context` is a fail-closed policy for metrics-oriented trajectory
+export. It replaces present opaque JSON payloads with `{}`, including raw LLM
+and tool input/output, headers, generic event data and metadata,
+provider-native values, category-profile extras, and unknown custom-mark
+payloads. A valid `nemo_relay.log.severity` value is restored for marks.
+
+Typed LLM annotations retain message roles and content-part kinds; provider,
+model, and tool names; request tuning settings; finish reasons; token and cache
+usage; and normalized cost amounts, currency, and source classification.
+Conversational content and application identifiers use the configured
+replacement, which defaults to `[REDACTED]`. Opaque typed fields become `{}`,
+unapproved numbers become `0`, and unapproved booleans become `false`. Routing
+metadata, pricing provenance, optimization contribution evidence, and unknown
+fields are discarded. Relay lifecycle identifiers remain unchanged.
+
+Provider, model, tool, and metric names are intentional free-form exceptions.
+Do not place user content, secrets, or personal identifiers in these fields.
+All redacted application identifiers collapse to the same marker and are not
+suitable correlation keys. To retain an unknown custom mark unchanged, set
+`custom_mark_payload_policy = "preserve"` explicitly and only for a trusted
+producer.
 
 ## Typed Metric Marks
 
@@ -263,13 +289,15 @@ The plugin sanitizes optional text without invalidating the envelope:
   that attribute. Targeting an individual element removes that element and
   compacts the remaining array; Relay cannot use a `null` placeholder because
   typed OpenTelemetry metric attributes must remain valid homogeneous arrays.
-- Numeric and boolean metric attributes remain analytical telemetry.
+- Outside `trajectory_context`, numeric and boolean metric attributes remain
+  analytical telemetry.
 
-The `trajectory_context` preset replaces descriptions and string-valued
-attributes with its configured replacement while retaining the required metric
-fields. That preset does not accept target selectors. Its
-`custom_mark_payload_policy` applies only to opaque marks in the `custom`
-category; it does not control Relay typed metric envelopes.
+The `trajectory_context` preset replaces descriptions with its configured
+replacement while retaining required measurement fields. It drops every
+metric attribute except an exact string value admitted by
+`metric_string_attribute_allowlist`. That preset does not accept target
+selectors. Its `custom_mark_payload_policy` applies only to opaque marks in the
+`custom` category; it does not control Relay typed metric envelopes.
 
 To retain bounded string dimensions, configure exact attribute/value pairs on
 the trajectory preset:
@@ -291,17 +319,18 @@ preset = "trajectory_context"
 "gen_ai.operation.name" = ["chat", "text_completion"]
 ```
 
-Matching is case-sensitive and requires both the attribute name and value. Each
-element of a string-array attribute is evaluated independently. Values under an
-unlisted key and unexpected values under a listed key remain redacted. This
-allowlist does not apply to descriptions, mark metadata, category profiles, or
-non-metric marks. Configure fixed constants or bounded enums only; do not list
-free-form identifiers or user-provided text.
+Matching is case-sensitive and requires both the attribute name and value. A
+string-array attribute is retained only when every element is allowed; one
+unexpected value drops the whole attribute. Values under an unlisted key,
+unexpected values under a listed key, and numeric or boolean attributes are
+dropped. This allowlist does not apply to descriptions, mark metadata, category
+profiles, or non-metric marks. Configure fixed constants or bounded enums only;
+do not list free-form identifiers or user-provided text.
 
 On every mark, the preset preserves the reserved `nemo_relay.log.severity`
 metadata field in canonical form when it contains a supported severity. For
 opaque custom marks using `redact_all_leaves`, unsupported severity values and
-all other string leaves remain redacted.
+all other opaque fields are discarded.
 
 ## Action Semantics
 

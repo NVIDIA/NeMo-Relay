@@ -110,12 +110,11 @@ required. Profile-array mode covers marks, LLM and tool observability, and
 scope metadata automatically. The original single-policy surface flags remain
 available for backward compatibility but cannot be combined with `profiles`.
 
-### Structure-Preserving Trajectory Export
+### Fail-Closed Trajectory Export
 
 Use the `trajectory_context` preset when exported trajectories must retain
-their analytical structure without retaining chat, reasoning, tool, or
-multimodal content. Pair it with a later email profile so email addresses are
-also removed from otherwise-preserved metadata and custom marks:
+normalized analytical structure without retaining chat, reasoning, tool, or
+multimodal payloads:
 
 ```toml
 [[components]]
@@ -131,24 +130,29 @@ priority = 80
 
 [components.config.profiles.builtin]
 preset = "trajectory_context"
-custom_mark_payload_policy = "redact_all_leaves"
-
-[[components.config.profiles]]
-mode = "builtin"
-priority = 90
-
-[components.config.profiles.builtin]
-action = "redact"
-detector = "email"
 ```
 
-`custom_mark_payload_policy = "preserve"` is the default and leaves unknown
-plugin mark payloads intact for analysis. Use `redact_all_leaves` when opaque
-plugins may emit content: scalar leaves in data, metadata, and opaque category
-profile fields are replaced while typed category identity remains valid. Relay
-metric-schema marks use schema-aware sanitization instead: required measurement
-fields and numeric analytics remain valid for metric export, while descriptions
-and string attribute values are redacted.
+The preset empties raw LLM and tool payloads, headers, generic event data and
+metadata, provider-native values, category-profile extras, and unknown custom
+mark payloads. Present opaque JSON values become `{}`. The reserved
+`nemo_relay.log.severity` mark metadata field is restored in canonical form when
+valid. Set `custom_mark_payload_policy = "preserve"` only when an unknown custom
+mark producer is trusted and its original payload must remain available.
+
+Normalized LLM annotations retain message roles and content-part kinds; model,
+tool, provider, and metric names; request tuning parameters; finish reasons;
+token and cache usage; and normalized cost amounts, currency, and source
+classification. Content strings and application identifiers use the configured
+replacement, which defaults to `[REDACTED]`. Opaque typed fields become `{}`,
+unapproved numbers become `0`, and unapproved booleans become `false`.
+Pricing provenance, routing metadata, optimization contribution evidence, and
+unknown fields are discarded. Relay event, parent, trace, and span identifiers
+are not sanitizer fields, so trajectory hierarchy remains available.
+
+Provider, model, tool, and metric names are intentional free-form exceptions.
+Producers must not place user content, secrets, or personal identifiers in those
+name fields. Redacted application identifiers all use the same marker and must
+not be used as correlation keys.
 
 The preset can preserve explicitly approved, bounded string metric dimensions
 without exposing arbitrary text:
@@ -159,32 +163,12 @@ without exposing arbitrary text:
 ```
 
 Relay compares both the attribute name and value exactly and case-sensitively.
-For string arrays, each element is checked separately. Unlisted attributes and
-unexpected values remain redacted. The allowlist is empty by default and does
+For string arrays, every element must be allowed or Relay drops the whole
+attribute. Unlisted attributes, unexpected string values, and all numeric or
+boolean attributes are dropped. The allowlist is empty by default and does
 not apply to descriptions, mark metadata, category profiles, or non-metric
 marks. Configure only fixed constants or bounded enum values; do not add
 free-form identifiers or user-provided text.
-
-Strings become `[REDACTED]`, numbers become `0`, booleans become `false`, and
-nulls, keys, arrays, and object shape are retained. On every mark, the preset
-preserves the reserved `nemo_relay.log.severity` metadata field in canonical
-form when it contains a supported severity. For opaque custom marks that use
-`redact_all_leaves`, unsupported severity values remain redacted with the
-other string leaves.
-Known Relay marks are sanitized semantically so their structural and analytical
-fields remain usable. This choice affects canonical event fields before
-subscriber fan-out; exporter-owned resource attributes are outside this
-boundary.
-
-For Scope events, the preset retains direct string values for the trusted
-low-cardinality classification fields `nemo_relay_scope_role`, `agent_kind`,
-`hook_event_name`, `gateway_config_profile`, `gateway_mode`, `turn_source`,
-`harness`, `source`, `identity_quality`, `gateway_path`,
-`llm_correlation_status`, `llm_correlation_source`, `tool_correlation_status`,
-`tool_correlation_source`, `otel.status_code`, and `fidelity_source`. It also
-retains the direct boolean `provider_payload_exact`. Do not place PII or
-conversational content in these fields. Arbitrary metadata and unexpected value
-types continue through the preset's normal semantic redaction.
 
 The preset defines its own action and therefore cannot be combined with
 `action`, `detector`, `pattern`, `target_paths`, or mask-specific fields. Its

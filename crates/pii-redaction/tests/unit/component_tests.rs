@@ -277,12 +277,23 @@ fn builtin_backend_config_default_matches_documented_action_default() {
 
     assert!(config.preset.is_none());
     assert_eq!(config.action, "remove");
-    assert_eq!(config.custom_mark_payload_policy, "preserve");
+    assert_eq!(config.custom_mark_payload_policy, "redact_all_leaves");
     assert!(config.metric_string_attribute_allowlist.is_empty());
     assert!(config.target_paths.is_empty());
     assert!(config.target_path_globs.is_empty());
     assert!(config.pattern.is_none());
     assert!(config.detector.is_none());
+}
+
+#[cfg(feature = "schema")]
+#[test]
+fn builtin_backend_schema_exposes_the_hardened_custom_mark_default() {
+    let schema = pii_redaction_config_schema();
+
+    assert_eq!(
+        schema["definitions"]["BuiltinBackendConfig"]["properties"]["custom_mark_payload_policy"]["default"],
+        "redact_all_leaves"
+    );
 }
 
 #[test]
@@ -510,6 +521,242 @@ fn trajectory_backend_with_metric_allowlist(
         None,
     )
     .unwrap()
+}
+
+fn trajectory_sanitizer() -> crate::trajectory::TrajectorySanitizer {
+    crate::trajectory::TrajectorySanitizer::new(
+        "[REDACTED]".into(),
+        crate::trajectory::CustomMarkPayloadPolicy::RedactAllLeaves,
+        BTreeMap::new(),
+    )
+}
+
+#[test]
+#[allow(clippy::cognitive_complexity)] // One sentinel-rich matrix covers every typed request shape.
+fn trajectory_typed_request_matrix_preserves_only_approved_structure() {
+    let request: AnnotatedLlmRequest = serde_json::from_value(json!({
+        "messages": [
+            {"role": "system", "content": "SECRET", "name": "SECRET"},
+            {"role": "user", "content": [
+                {"type": "text", "text": "SECRET", "future": "SECRET"},
+                {"type": "image_url", "image_url": {"url": "SECRET", "detail": "high"}},
+                {"type": "image", "image": {"data": "SECRET"}},
+                {"type": "audio", "audio": {"data": "SECRET"}},
+                {"type": "file", "file": {"data": "SECRET"}},
+                {"type": "refusal", "refusal": "SECRET"},
+                {"type": "tool_use", "id": "SECRET", "name": "search", "input": {"q": "SECRET"}},
+                {"type": "tool_result", "tool_use_id": "SECRET", "content": {"text": "SECRET"}, "is_error": true},
+                {"type": "provider_native", "provider": "openai", "kind": "output_text", "value": {"text": "SECRET"}}
+            ]},
+            {"role": "developer", "content": "SECRET"},
+            {"role": "assistant", "content": "SECRET", "tool_calls": [{
+                "id": "SECRET", "type": "function",
+                "function": {"name": "terminal", "arguments": "SECRET"}
+            }]},
+            {"role": "tool", "tool_call_id": "SECRET", "content": "SECRET"},
+            {"role": "function", "name": "legacy_tool", "content": "SECRET"},
+            {"role": "tool_call", "id": "SECRET", "call_id": "SECRET", "name": "browser", "arguments": {"q": "SECRET"}, "future": "SECRET"},
+            {"role": "tool_result", "id": "SECRET", "call_id": "SECRET", "output": {"text": "SECRET"}, "future": "SECRET"},
+            {"role": "provider_native", "provider": "anthropic", "kind": "tool_result", "value": {"text": "SECRET"}}
+        ],
+        "instructions": "SECRET",
+        "model": "gpt-5.6-sol",
+        "params": {"temperature": 0.2, "max_tokens": 512, "top_p": 0.9, "stop": ["SECRET"]},
+        "tools": [
+            {"type": "function", "function": {"name": "search", "description": "SECRET", "parameters": {"type": "object"}, "strict": true}, "future": "SECRET"},
+            {"type": "provider_native", "provider": "anthropic", "kind": "tool_use", "value": {"description": "SECRET"}}
+        ],
+        "tool_choice": {"type": "function", "function": {"name": "search"}},
+        "store": true,
+        "previous_response_id": "SECRET",
+        "truncation": {"type": "SECRET"},
+        "reasoning": {"summary": "SECRET"},
+        "include": ["SECRET"],
+        "user": "SECRET",
+        "metadata": {"owner": "SECRET"},
+        "service_tier": "SECRET",
+        "parallel_tool_calls": true,
+        "max_output_tokens": 256,
+        "max_tool_calls": 4,
+        "top_logprobs": 3,
+        "stream": true,
+        "api_specific": {
+            "api": "openai_chat",
+            "audio": {"voice": "SECRET"},
+            "frequency_penalty": 0.4,
+            "logprobs": true,
+            "modalities": ["text", "SECRET"],
+            "n": 2,
+            "presence_penalty": 0.5,
+            "prompt_cache_key": "SECRET",
+            "seed": 7
+        },
+        "future": {"secret": "SECRET"}
+    }))
+    .unwrap();
+
+    let sanitized = trajectory_sanitizer()
+        .sanitize_annotated_request(request)
+        .unwrap();
+    let value = serde_json::to_value(&sanitized).unwrap();
+    let serialized = serde_json::to_string(&value).unwrap();
+
+    assert!(!serialized.contains("SECRET"), "{serialized}");
+    assert_eq!(value["model"], "gpt-5.6-sol");
+    assert_eq!(value["params"]["temperature"], 0.2);
+    assert_eq!(value["params"]["max_tokens"], 512);
+    assert_eq!(value["params"]["top_p"], 0.9);
+    assert_eq!(value["params"]["stop"], json!(["[REDACTED]"]));
+    assert_eq!(value["messages"][0]["role"], "system");
+    assert_eq!(value["messages"][0]["content"], "[REDACTED]");
+    assert_eq!(value["messages"][1]["content"][1]["type"], "image_url");
+    assert_eq!(
+        value["messages"][1]["content"][1]["image_url"]["url"],
+        "[REDACTED]"
+    );
+    assert_eq!(value["messages"][1]["content"][6]["name"], "search");
+    assert_eq!(value["messages"][1]["content"][6]["input"], json!({}));
+    assert_eq!(value["messages"][4]["tool_call_id"], "[REDACTED]");
+    assert_eq!(value["messages"][6]["name"], "browser");
+    assert_eq!(value["messages"][6]["arguments"], json!({}));
+    assert_eq!(value["messages"][8]["value"], json!({}));
+    assert_eq!(value["tools"][0]["function"]["name"], "search");
+    assert_eq!(value["tools"][0]["function"]["parameters"], json!({}));
+    assert_eq!(value["previous_response_id"], "[REDACTED]");
+    assert_eq!(value["truncation"], json!({}));
+    assert_eq!(value["reasoning"], json!({}));
+    assert_eq!(value["include"], json!({}));
+    assert_eq!(value["metadata"], json!({}));
+    assert!(value.get("service_tier").is_none());
+    assert_eq!(value["parallel_tool_calls"], true);
+    assert_eq!(value["max_output_tokens"], 256);
+    assert_eq!(value["max_tool_calls"], 4);
+    assert_eq!(value["top_logprobs"], 3);
+    assert_eq!(value["stream"], true);
+    assert_eq!(value["api_specific"]["frequency_penalty"], 0.4);
+    assert_eq!(value["api_specific"]["n"], 2);
+    assert_eq!(value["api_specific"]["seed"], 7);
+    assert_eq!(value["api_specific"]["audio"], json!({}));
+    assert!(value.get("future").is_none());
+}
+
+#[test]
+fn trajectory_typed_api_specific_variants_fail_closed() {
+    let request_cases = [
+        json!({
+            "api": "anthropic_messages", "cache_control": {"secret": "SECRET"},
+            "container": "SECRET", "top_k": 17, "user_profile_id": "SECRET"
+        }),
+        json!({
+            "api": "openai_responses", "background": true,
+            "conversation": {"id": "SECRET"}, "prompt_cache_key": "SECRET", "text": {"secret": "SECRET"}
+        }),
+        json!({
+            "api": "oci_genai", "compartment_id": "SECRET",
+            "serving_mode": {"endpointId": "SECRET"}, "api_format": "GENERIC"
+        }),
+        json!({"api": "custom", "api_name": "SECRET", "data": {"secret": "SECRET"}}),
+    ];
+    for api_specific in request_cases {
+        let request: AnnotatedLlmRequest = serde_json::from_value(json!({
+            "api_specific": api_specific
+        }))
+        .unwrap();
+        let sanitized = trajectory_sanitizer()
+            .sanitize_annotated_request(request)
+            .unwrap();
+        let serialized = serde_json::to_string(&sanitized).unwrap();
+        assert!(!serialized.contains("SECRET"), "{serialized}");
+    }
+
+    let response_cases = [
+        json!({"api": "openai_chat", "logprobs": {"token": "SECRET"}, "system_fingerprint": "SECRET", "service_tier": "SECRET"}),
+        json!({"api": "openai_responses", "output_items": [{"text": "SECRET"}], "status": "completed", "previous_response_id": "SECRET", "store": true}),
+        json!({"api": "anthropic_messages", "object_type": "message", "role": "assistant", "stop_reason": "end_turn", "stop_sequence": "SECRET", "content_blocks": [{"text": "SECRET"}]}),
+        json!({"api": "oci_genai", "api_format": "GENERIC", "model_version": "oci-model-v1"}),
+        json!({"api": "gemini_generate_content", "thoughts_tokens": 9, "safety_ratings": {"secret": "SECRET"}, "future": "SECRET"}),
+        json!({"api": "custom", "api_name": "SECRET", "data": {"secret": "SECRET"}}),
+    ];
+    for api_specific in response_cases {
+        let response: crate::codec::response::AnnotatedLlmResponse =
+            serde_json::from_value(json!({
+                "finish_reason": {"unknown": "SECRET"},
+                "api_specific": api_specific
+            }))
+            .unwrap();
+        let sanitized = trajectory_sanitizer()
+            .sanitize_annotated_response(response)
+            .unwrap();
+        let serialized = serde_json::to_string(&sanitized).unwrap();
+        assert!(!serialized.contains("SECRET"), "{serialized}");
+        assert_eq!(
+            serde_json::to_value(&sanitized).unwrap()["finish_reason"],
+            json!({"unknown": "[REDACTED]"})
+        );
+    }
+}
+
+#[tokio::test]
+async fn trajectory_event_profile_preserves_provider_and_marks_identifiers() {
+    let request: AnnotatedLlmRequest = serde_json::from_value(json!({
+        "model": "gpt-5.6-sol",
+        "messages": [{"role": "user", "content": "SECRET"}],
+        "api_specific": {"api": "openai_responses", "conversation": {"id": "SECRET"}}
+    }))
+    .unwrap();
+    let event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .name("openai.responses")
+            .metadata(json!({"provider": "metadata-provider", "secret": "SECRET"}))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(
+            CategoryProfile::builder()
+                .model_name("gpt-5.6-sol")
+                .tool_call_id("SECRET")
+                .subtype("SECRET")
+                .tool_result_annotation(json!({"secret": "SECRET"}))
+                .extra(BTreeMap::from([
+                    ("gen_ai.provider.name".into(), json!("free-form-provider")),
+                    ("secret".into(), json!("SECRET")),
+                ]))
+                .annotated_request(Arc::new(request))
+                .build(),
+        ),
+    ));
+    let sanitized =
+        crate::builtin::event_sanitize_callback(trajectory_backend(None, "redact_all_leaves"))(
+            Arc::new(event.clone()),
+            EventSanitizeFields {
+                data: Some(json!({"secret": "SECRET"})),
+                category_profile: event.category_profile().cloned(),
+                metadata: event.metadata().cloned(),
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(sanitized.data, Some(json!({})));
+    assert_eq!(sanitized.metadata, Some(json!({})));
+    let profile = sanitized.category_profile.unwrap();
+    assert_eq!(profile.model_name.as_deref(), Some("gpt-5.6-sol"));
+    assert_eq!(profile.tool_call_id.as_deref(), Some("[REDACTED]"));
+    assert_eq!(profile.subtype.as_deref(), Some("[REDACTED]"));
+    assert_eq!(profile.tool_result_annotation, Some(json!({})));
+    assert_eq!(
+        profile.extra,
+        BTreeMap::from([("gen_ai.provider.name".into(), json!("free-form-provider"))])
+    );
+    assert_eq!(
+        profile
+            .annotated_request
+            .as_deref()
+            .unwrap()
+            .last_user_message(),
+        Some("[REDACTED]")
+    );
 }
 
 fn no_codec_context() -> LlmSanitizeResponseContext {
@@ -900,7 +1147,7 @@ async fn normalized_llm_paths_use_configured_anthropic_codec_without_a_system_me
 }
 
 #[tokio::test]
-async fn trajectory_preset_redacts_chat_content_without_erasing_request_structure() {
+async fn trajectory_preset_builds_codec_valid_redacted_chat_requests() {
     let callback = crate::builtin::llm_sanitize_request_callback(trajectory_backend(
         Some("openai_chat"),
         "preserve",
@@ -940,52 +1187,22 @@ async fn trajectory_preset_redacts_chat_content_without_erasing_request_structur
     .unwrap();
 
     assert_eq!(request.content["model"], "claude-sonnet-4-6");
-    assert_eq!(request.content["temperature"], 0.2);
-    assert_eq!(request.content["stop"][0], "[REDACTED]");
-    assert_eq!(request.content["participant"]["name"], "[REDACTED]");
-    assert_eq!(request.content["participant"]["username"], "[REDACTED]");
-    assert_eq!(request.content["person_name"], "[REDACTED]");
-    assert_eq!(request.content["messages"][0]["role"], "system");
     assert_eq!(request.content["messages"][0]["content"], "[REDACTED]");
-    assert_eq!(request.content["messages"][1]["content"][0]["type"], "text");
-    assert_eq!(
-        request.content["messages"][1]["content"][0]["text"],
-        "[REDACTED]"
-    );
-    assert_eq!(
-        request.content["messages"][1]["content"][1]["image_url"]["url"],
-        "[REDACTED]"
-    );
     assert_eq!(
         request.content["messages"][2]["tool_calls"][0]["id"],
-        "call_1"
-    );
-    assert_eq!(
-        request.content["messages"][2]["tool_calls"][0]["function"]["name"],
-        "search"
-    );
-    let arguments: Json = serde_json::from_str(
-        request.content["messages"][2]["tool_calls"][0]["function"]["arguments"]
-            .as_str()
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(arguments, json!({"query": "[REDACTED]", "limit": 0}));
-    assert_eq!(request.content["messages"][3]["tool_call_id"], "call_1");
-    assert_eq!(request.content["messages"][3]["content"], "[REDACTED]");
-    assert_eq!(request.content["tools"][0]["function"]["name"], "search");
-    assert_eq!(
-        request.content["tools"][0]["function"]["description"],
         "[REDACTED]"
     );
     assert_eq!(
-        request.content["tools"][0]["function"]["parameters"]["required"][0],
-        "query"
+        request.content["messages"][2]["tool_calls"][0]["function"]["arguments"],
+        "{}"
     );
+    assert_eq!(request.content["tools"][0]["function"]["name"], "search");
+    assert!(request.content.get("participant").is_none());
+    assert!(request.content.get("person_name").is_none());
 }
 
 #[tokio::test]
-async fn trajectory_preset_preserves_response_analytics_and_redacts_response_content() {
+async fn trajectory_preset_builds_codec_valid_redacted_chat_responses() {
     let callback = crate::builtin::llm_sanitize_response_callback(trajectory_backend(
         Some("openai_chat"),
         "preserve",
@@ -1010,32 +1227,22 @@ async fn trajectory_preset_preserves_response_analytics_and_redacts_response_con
     .unwrap()
     .unwrap();
 
-    assert_eq!(sanitized["id"], "chatcmpl_1");
+    assert_eq!(sanitized["id"], "[REDACTED]");
     assert_eq!(sanitized["model"], "claude-opus-4-6");
-    assert_eq!(sanitized["choices"][0]["finish_reason"], "tool_calls");
-    assert_eq!(sanitized["choices"][0]["message"]["role"], "assistant");
     assert_eq!(sanitized["choices"][0]["message"]["content"], "[REDACTED]");
     assert_eq!(
         sanitized["choices"][0]["message"]["tool_calls"][0]["id"],
-        "call_1"
+        "[REDACTED]"
     );
     assert_eq!(
-        sanitized["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
-        "terminal"
+        sanitized["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"],
+        "{}"
     );
-    let arguments: Json = serde_json::from_str(
-        sanitized["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
-            .as_str()
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(arguments, json!({"command": "[REDACTED]"}));
     assert_eq!(sanitized["usage"]["total_tokens"], 25);
-    assert_eq!(sanitized["cost"]["total"], 1.25);
 }
 
 #[tokio::test]
-async fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
+async fn trajectory_preset_builds_codec_valid_provider_shapes() {
     let responses_request = crate::builtin::llm_sanitize_request_callback(trajectory_backend(
         Some("openai_responses"),
         "preserve",
@@ -1052,11 +1259,11 @@ async fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
     .unwrap()
     .unwrap();
     assert_eq!(responses_request.content["model"], "gpt-5");
-    assert_eq!(responses_request.content["input"][0]["role"], "user");
     assert_eq!(
         responses_request.content["input"][0]["content"][0]["text"],
         "[REDACTED]"
     );
+    assert_eq!(responses_request.content["reasoning"], json!({}));
     assert_eq!(responses_request.content["max_output_tokens"], 100);
 
     let responses_response = crate::builtin::llm_sanitize_response_callback(trajectory_backend(
@@ -1077,9 +1284,8 @@ async fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(responses_response["id"], "resp_1");
+    assert_eq!(responses_response["id"], "[REDACTED]");
     assert_eq!(responses_response["status"], "completed");
-    assert_eq!(responses_response["output"][0]["id"], "msg_1");
     assert_eq!(
         responses_response["output"][0]["content"][0]["text"],
         "[REDACTED]"
@@ -1107,12 +1313,7 @@ async fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
     assert_eq!(anthropic_request.content["model"], "claude-sonnet-4-6");
     assert_eq!(anthropic_request.content["system"], "[REDACTED]");
     assert_eq!(
-        anthropic_request.content["messages"][0]["content"][0]["text"], "[REDACTED]",
-        "{}",
-        anthropic_request.content
-    );
-    assert_eq!(
-        anthropic_request.content["messages"][0]["content"][1]["source"]["data"],
+        anthropic_request.content["messages"][0]["content"][0]["text"],
         "[REDACTED]"
     );
     assert_eq!(anthropic_request.content["max_tokens"], 128);
@@ -1135,13 +1336,10 @@ async fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(anthropic_response["id"], "msg_1");
+    assert_eq!(anthropic_response["id"], "[REDACTED]");
     assert_eq!(anthropic_response["role"], "assistant");
-    assert_eq!(anthropic_response["content"][0]["type"], "thinking");
-    assert_eq!(anthropic_response["content"][0]["thinking"], "[REDACTED]");
     assert_eq!(anthropic_response["content"][1]["text"], "[REDACTED]");
     assert_eq!(anthropic_response["usage"]["input_tokens"], 12);
-    assert_eq!(anthropic_response["usage"]["cache_read_input_tokens"], 8);
 }
 
 #[tokio::test]
@@ -1166,14 +1364,10 @@ async fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
     )
     .await
     .unwrap();
-    assert_eq!(sanitized.data.as_ref().unwrap()["chunk_index"], 2);
+    assert_eq!(sanitized.data, Some(json!({})));
     assert_eq!(
-        sanitized.data.as_ref().unwrap()["event_type"],
-        "content_block_delta"
-    );
-    assert_eq!(
-        sanitized.data.as_ref().unwrap()["delta"]["text"],
-        "[REDACTED]"
+        sanitized.category_profile.unwrap().subtype.as_deref(),
+        Some("llm.chunk")
     );
 
     let optimization = Event::Mark(MarkEvent::new(
@@ -1207,21 +1401,10 @@ async fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
     )
     .await
     .unwrap();
+    assert_eq!(sanitized.data, Some(json!({})));
     assert_eq!(
-        sanitized.data.as_ref().unwrap()["producer"],
-        "neutral.router"
-    );
-    assert_eq!(
-        sanitized.data.as_ref().unwrap()["model_transition"]["baseline"]["model"],
-        "claude-opus-4-6"
-    );
-    assert_eq!(
-        sanitized.data.as_ref().unwrap()["token_impact"]["saved"]["total_tokens"],
-        40
-    );
-    assert_eq!(
-        sanitized.data.as_ref().unwrap()["payload"]["private_excerpt"],
-        "[REDACTED]"
+        sanitized.category_profile.unwrap().subtype.as_deref(),
+        Some("nemo_relay.llm.optimization")
     );
 
     let nested_agent = Event::Scope(ScopeEvent::new(
@@ -1245,28 +1428,12 @@ async fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
     )
     .await
     .unwrap();
-    assert_eq!(sanitized.data.as_ref().unwrap()["request_id"], "request-1");
-    assert_eq!(
-        sanitized.data.as_ref().unwrap()["instruction"],
-        "[REDACTED]"
-    );
-    assert_eq!(
-        sanitized.data.as_ref().unwrap()["history"][0]["role"],
-        "user"
-    );
-    assert_eq!(
-        sanitized.data.as_ref().unwrap()["history"][0]["content"],
-        "[REDACTED]"
-    );
-    assert_eq!(
-        sanitized.metadata.as_ref().unwrap()["parent_scope_id"],
-        "scope-1"
-    );
-    assert_eq!(sanitized.metadata.as_ref().unwrap()["note"], "[REDACTED]");
+    assert_eq!(sanitized.data, Some(json!({})));
+    assert_eq!(sanitized.metadata, Some(json!({})));
 }
 
 #[tokio::test]
-async fn trajectory_preset_preserves_trusted_scope_metadata_only() {
+async fn trajectory_preset_empties_untyped_scope_metadata() {
     let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
     let metadata = json!({
         "nemo_relay_scope_role": "turn",
@@ -1289,28 +1456,6 @@ async fn trajectory_preset_preserves_trusted_scope_metadata_only() {
         "private_note": "private context",
         "nested": {"harness": "private nested context"}
     });
-    let expected_metadata = json!({
-        "nemo_relay_scope_role": "turn",
-        "agent_kind": "codex",
-        "hook_event_name": "UserPromptSubmit",
-        "gateway_config_profile": "development",
-        "gateway_mode": "passthrough",
-        "turn_source": "user_prompt",
-        "harness": "codex",
-        "source": "hook",
-        "identity_quality": "native",
-        "gateway_path": "responses",
-        "llm_correlation_status": "matched",
-        "llm_correlation_source": "provider",
-        "tool_correlation_status": "matched",
-        "tool_correlation_source": "provider",
-        "otel.status_code": "OK",
-        "fidelity_source": "provider",
-        "provider_payload_exact": true,
-        "private_note": "[REDACTED]",
-        "nested": {"harness": "[REDACTED]"}
-    });
-
     for (scope_category, category) in [
         (ScopeCategory::Start, EventCategory::agent()),
         (ScopeCategory::End, EventCategory::agent()),
@@ -1336,7 +1481,7 @@ async fn trajectory_preset_preserves_trusted_scope_metadata_only() {
         )
         .await
         .unwrap();
-        assert_eq!(sanitized.metadata, Some(expected_metadata.clone()));
+        assert_eq!(sanitized.metadata, Some(json!({})));
     }
 
     let malformed = Event::Scope(ScopeEvent::new(
@@ -1361,15 +1506,7 @@ async fn trajectory_preset_preserves_trusted_scope_metadata_only() {
     )
     .await
     .unwrap();
-    assert_eq!(
-        sanitized.metadata,
-        Some(json!({
-            "harness": {"private": "[REDACTED]"},
-            "source": 0,
-            "identity_quality": ["[REDACTED]"],
-            "provider_payload_exact": "[REDACTED]"
-        }))
-    );
+    assert_eq!(sanitized.metadata, Some(json!({})));
 
     let mark = Event::Mark(MarkEvent::new(
         BaseEvent::builder().name("llm.chunk").build(),
@@ -1386,14 +1523,11 @@ async fn trajectory_preset_preserves_trusted_scope_metadata_only() {
     )
     .await
     .unwrap();
-    assert_eq!(
-        sanitized.metadata,
-        Some(json!({"harness": "[REDACTED]", "source": "[REDACTED]"}))
-    );
+    assert_eq!(sanitized.metadata, Some(json!({})));
 }
 
 #[tokio::test]
-async fn trajectory_custom_mark_policy_is_explicit_and_shape_preserving() {
+async fn trajectory_custom_mark_policy_is_explicit_and_fail_closed() {
     let event = Event::Mark(MarkEvent::new(
         BaseEvent::builder().name("neutral.plugin.evidence").build(),
         Some(EventCategory::custom()),
@@ -1420,16 +1554,11 @@ async fn trajectory_custom_mark_policy_is_explicit_and_shape_preserving() {
     let redact =
         crate::builtin::event_sanitize_callback(trajectory_backend(None, "redact_all_leaves"));
     let sanitized = redact(Arc::new(event), fields).await.unwrap();
-    assert_eq!(
-        sanitized.data.unwrap(),
-        json!({
-            "text": "[REDACTED]", "score": 0, "nested": [false, null]
-        })
-    );
-    assert_eq!(sanitized.metadata.unwrap(), json!({"owner": "[REDACTED]"}));
+    assert_eq!(sanitized.data.unwrap(), json!({}));
+    assert_eq!(sanitized.metadata.unwrap(), json!({}));
     let profile = sanitized.category_profile.unwrap();
-    assert_eq!(profile.subtype.as_deref(), Some("neutral.plugin"));
-    assert_eq!(profile.extra["opaque"]["label"], "[REDACTED]");
+    assert_eq!(profile.subtype.as_deref(), Some("[REDACTED]"));
+    assert!(profile.extra.is_empty());
 }
 
 #[tokio::test]
@@ -1455,13 +1584,10 @@ async fn trajectory_custom_mark_preserves_only_valid_log_severity() {
     )
     .await
     .unwrap();
-    assert_eq!(sanitized.data, Some(json!({"message": "[REDACTED]"})));
+    assert_eq!(sanitized.data, Some(json!({})));
     assert_eq!(
         sanitized.metadata,
-        Some(json!({
-            LOG_SEVERITY_METADATA_KEY: "warn",
-            "owner": "[REDACTED]"
-        }))
+        Some(json!({LOG_SEVERITY_METADATA_KEY: "warn"}))
     );
 
     let sanitized = callback(
@@ -1474,10 +1600,7 @@ async fn trajectory_custom_mark_preserves_only_valid_log_severity() {
     )
     .await
     .unwrap();
-    assert_eq!(
-        sanitized.metadata,
-        Some(json!({LOG_SEVERITY_METADATA_KEY: "[REDACTED]"}))
-    );
+    assert_eq!(sanitized.metadata, Some(json!({})));
 }
 
 #[tokio::test]
@@ -1487,6 +1610,7 @@ async fn trajectory_metric_marks_preserve_typed_measurements_and_redact_text() {
             {
                 "name": "example.request_count",
                 "kind": "counter",
+                "unit": "request",
                 "value_type": "u64",
                 "value": 1,
                 "description": "private request count",
@@ -1544,6 +1668,9 @@ async fn trajectory_metric_marks_preserve_typed_measurements_and_redact_text() {
     let data = sanitized.data.unwrap();
     let envelope = serde_json::from_value::<MetricEnvelope>(data.clone()).unwrap();
     envelope.validate().unwrap();
+    assert_eq!(data["measurements"][0]["name"], "example.request_count");
+    assert_eq!(data["measurements"][0]["kind"], "counter");
+    assert_eq!(data["measurements"][0]["unit"], "request");
     assert_eq!(data["measurements"][0]["value_type"], "u64");
     assert_eq!(data["measurements"][0]["value"], 1);
     assert_eq!(data["measurements"][1]["value_type"], "i64");
@@ -1552,18 +1679,9 @@ async fn trajectory_metric_marks_preserve_typed_measurements_and_redact_text() {
     assert_eq!(data["measurements"][2]["value"], 3.5);
     assert_eq!(data["measurements"][2]["boundaries"], json!([1.0, 5.0]));
     assert_eq!(data["measurements"][0]["description"], "[REDACTED]");
-    assert_eq!(data["measurements"][0]["attributes"]["owner"], "[REDACTED]");
-    assert_eq!(
-        data["measurements"][0]["attributes"]["regions"],
-        json!(["[REDACTED]", "[REDACTED]"])
-    );
-    assert_eq!(data["measurements"][0]["attributes"]["attempt"], 2);
-    assert_eq!(data["measurements"][0]["attributes"]["sampled"], true);
-    assert_eq!(sanitized.metadata.unwrap()["owner"], "[REDACTED]");
-    assert_eq!(
-        sanitized.category_profile.unwrap().extra["owner"],
-        "[REDACTED]"
-    );
+    assert_eq!(data["measurements"][0]["attributes"], json!({}));
+    assert_eq!(sanitized.metadata, Some(json!({})));
+    assert!(sanitized.category_profile.unwrap().extra.is_empty());
 }
 
 #[tokio::test]
@@ -1577,6 +1695,7 @@ async fn trajectory_metric_string_allowlist_requires_exact_key_and_value() {
             "description": "private request count",
             "attributes": {
                 "query.source": "main",
+                "allowed.modes": ["main", "subagent"],
                 "operation": "private operation",
                 "unapproved.key": "main",
                 "execution.modes": ["main", "private mode"],
@@ -1602,6 +1721,10 @@ async fn trajectory_metric_string_allowlist_requires_exact_key_and_value() {
     let callback = crate::builtin::event_sanitize_callback(
         trajectory_backend_with_metric_allowlist(BTreeMap::from([
             ("query.source".into(), vec!["main".into()]),
+            (
+                "allowed.modes".into(),
+                vec!["main".into(), "subagent".into()],
+            ),
             ("operation".into(), vec!["chat".into()]),
             ("execution.modes".into(), vec!["main".into()]),
         ])),
@@ -1625,17 +1748,15 @@ async fn trajectory_metric_string_allowlist_requires_exact_key_and_value() {
     envelope.validate().unwrap();
     let attributes = &data["measurements"][0]["attributes"];
     assert_eq!(attributes["query.source"], "main");
-    assert_eq!(attributes["operation"], "[REDACTED]");
-    assert_eq!(attributes["unapproved.key"], "[REDACTED]");
-    assert_eq!(attributes["execution.modes"], json!(["main", "[REDACTED]"]));
-    assert_eq!(attributes["attempt"], 2);
-    assert_eq!(attributes["sampled"], true);
+    assert_eq!(attributes["allowed.modes"], json!(["main", "subagent"]));
+    assert!(attributes.get("operation").is_none());
+    assert!(attributes.get("unapproved.key").is_none());
+    assert!(attributes.get("execution.modes").is_none());
+    assert!(attributes.get("attempt").is_none());
+    assert!(attributes.get("sampled").is_none());
     assert_eq!(data["measurements"][0]["description"], "[REDACTED]");
-    assert_eq!(sanitized.metadata.unwrap()["query.source"], "[REDACTED]");
-    assert_eq!(
-        sanitized.category_profile.unwrap().extra["query.source"],
-        "[REDACTED]"
-    );
+    assert_eq!(sanitized.metadata, Some(json!({})));
+    assert!(sanitized.category_profile.unwrap().extra.is_empty());
 }
 
 #[tokio::test]
@@ -2311,8 +2432,14 @@ async fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annot
                 "total_tokens": 120,
                 "cost": {
                     "total": 0.42,
-                    "currency": "USD",
-                    "source": "provider_reported"
+                    "currency": "usd",
+                    "input": 0.3,
+                    "output": 0.12,
+                    "source": "provider_reported",
+                    "pricing_provider": "SECRET",
+                    "pricing_model": "SECRET",
+                    "pricing_as_of": "SECRET",
+                    "pricing_source": "SECRET"
                 }
             },
             "optimization_summary": {
@@ -2324,6 +2451,12 @@ async fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annot
                 "effective_usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
                 "baseline_usage": {"prompt_tokens": 140, "completion_tokens": 20, "total_tokens": 160},
                 "tokens_saved": {"prompt_tokens": 40, "total_tokens": 40},
+                "actual_cost": {
+                    "total": 0.42,
+                    "currency": "USD",
+                    "source": "provider_reported",
+                    "pricing_source": "SECRET"
+                },
                 "estimated_cost_saved": 0.8,
                 "currency": "USD",
                 "contributions": [{
@@ -2368,6 +2501,10 @@ async fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annot
     assert_eq!(profile.model_name.as_deref(), Some("claude-sonnet-4-6"));
     let response = profile.annotated_response.unwrap();
     assert_eq!(response.response_text(), Some("[REDACTED]"));
+    assert!(matches!(
+        response.finish_reason,
+        Some(crate::codec::response::FinishReason::Complete)
+    ));
     assert_eq!(response.usage.as_ref().unwrap().total_tokens, Some(120));
     assert_eq!(
         response
@@ -2380,23 +2517,33 @@ async fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annot
             .total,
         Some(0.42)
     );
+    let cost = response.usage.as_ref().unwrap().cost.as_ref().unwrap();
+    assert_eq!(cost.currency, "USD");
+    assert_eq!(cost.input, Some(0.3));
+    assert_eq!(cost.output, Some(0.12));
+    assert_eq!(
+        cost.source,
+        crate::codec::response::CostSource::ProviderReported
+    );
+    assert!(cost.pricing_provider.is_none());
+    assert!(cost.pricing_model.is_none());
+    assert!(cost.pricing_as_of.is_none());
+    assert!(cost.pricing_source.is_none());
     let summary = response.optimization_summary.as_ref().unwrap();
     assert_eq!(summary.tokens_saved.prompt_tokens, Some(40));
     assert_eq!(summary.estimated_cost_saved, Some(0.8));
-    assert_eq!(summary.contributions[0].producer, "neutral.optimizer");
-    assert_eq!(
-        summary.contributions[0].payload.as_ref().unwrap()["private_excerpt"],
-        "[REDACTED]"
+    assert!(summary.contributions.is_empty());
+    assert!(summary.baseline_model.is_none());
+    assert!(summary.effective_model.is_none());
+    assert!(
+        summary
+            .actual_cost
+            .as_ref()
+            .unwrap()
+            .pricing_source
+            .is_none()
     );
-    assert_eq!(
-        summary.contributions[0].payload.as_ref().unwrap()["strategy"],
-        "[REDACTED]"
-    );
-    assert_eq!(
-        sanitized.data.unwrap()["already"],
-        "sanitized by the response callback",
-        "specialized LLM data must not be processed twice"
-    );
+    assert_eq!(sanitized.data, Some(json!({})));
 }
 
 #[tokio::test]
@@ -3502,8 +3649,7 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
                 "mode": "builtin",
                 "priority": 80,
                 "builtin": {
-                    "preset": "trajectory_context",
-                    "custom_mark_payload_policy": "redact_all_leaves"
+                    "preset": "trajectory_context"
                 }
             },
             {
@@ -3543,6 +3689,17 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
     let otel = OpenTelemetrySubscriber::from_tracer_provider(otel_provider, "pii-regression");
     otel.register("pii-regression-otel").unwrap();
 
+    let genai_exporter = InMemorySpanExporterBuilder::new().build();
+    let genai_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(genai_exporter.clone())
+        .build();
+    let genai = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+        genai_provider,
+        "pii-regression",
+        OpenTelemetryType::GenAi,
+    );
+    genai.register("pii-regression-genai").unwrap();
+
     let openinference_exporter = InMemorySpanExporterBuilder::new().build();
     let openinference_provider = SdkTracerProvider::builder()
         .with_simple_exporter(openinference_exporter.clone())
@@ -3558,7 +3715,7 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
 
     let raw_pii = "person@example.com";
     let raw_context = "private trajectory context canary";
-    let trusted_scope_metadata = json!({
+    let scope_metadata = json!({
         "nemo_relay_scope_role": "session",
         "agent_kind": "hermes",
         "hook_event_name": "SessionStart",
@@ -3583,10 +3740,66 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
             .name("hermes-agent")
             .scope_type(ScopeType::Agent)
             .input(json!({"prompt": raw_context, "request_id": "request-1"}))
-            .metadata(trusted_scope_metadata.clone())
+            .metadata(scope_metadata.clone())
             .build(),
     )
     .unwrap();
+    futures::executor::block_on(async {
+        llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("openai")
+                .request(LlmRequest {
+                    headers: [("authorization".into(), json!(raw_pii))]
+                        .into_iter()
+                        .collect(),
+                    content: json!({
+                        "model": "gpt-4o-mini",
+                        "messages": [{"role": "user", "content": raw_context}],
+                        "temperature": 0.25
+                    }),
+                })
+                .func(noop_openai_chat_exec_fn(json!({
+                    "id": "chatcmpl-private",
+                    "model": "gpt-4o-mini",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": raw_context},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 7,
+                        "completion_tokens": 3,
+                        "total_tokens": 10,
+                        "cost": {
+                            "total": 0.01,
+                            "currency": "USD",
+                            "source": "provider_reported"
+                        }
+                    }
+                })))
+                .codec(Arc::new(OpenAIChatCodec))
+                .response_codec(Arc::new(OpenAIChatCodec))
+                .build(),
+        )
+        .await
+        .unwrap();
+        tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("lookup")
+                .args(json!({"query": raw_context, "owner": raw_pii}))
+                .func(Arc::new(move |_args| {
+                    Box::pin(async move {
+                        Ok(ToolExecutionResult::new(json!({
+                            "result": raw_context,
+                            "owner": raw_pii
+                        })))
+                    })
+                }))
+                .build(),
+        )
+        .await
+        .unwrap();
+    });
     event(
         EmitMarkEventParams::builder()
             .name("hermes.checkpoint")
@@ -3609,19 +3822,22 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
     atof.force_flush().unwrap();
     let trajectory = atif.export().unwrap();
     otel.force_flush().unwrap();
+    genai.force_flush().unwrap();
     openinference.force_flush().unwrap();
 
     let subscriber_json = serde_json::to_string(&captured_events_snapshot(&captured)).unwrap();
     let atof_json = std::fs::read_to_string(atof.path().expect("file sink path")).unwrap();
     let atif_json = serde_json::to_string(&trajectory).unwrap();
     let otel_debug = format!("{:?}", otel_exporter.get_finished_spans().unwrap());
+    let genai_debug = format!("{:?}", genai_exporter.get_finished_spans().unwrap());
     let openinference_debug = format!("{:?}", openinference_exporter.get_finished_spans().unwrap());
-    for (surface, output, retains_scope_metadata) in [
-        ("subscriber", subscriber_json, true),
-        ("ATOF", atof_json, true),
-        ("ATIF", atif_json, false),
-        ("OpenTelemetry", otel_debug, true),
-        ("OpenInference", openinference_debug, true),
+    for (surface, output) in [
+        ("subscriber", subscriber_json),
+        ("ATOF", atof_json),
+        ("ATIF", atif_json),
+        ("OpenTelemetry", otel_debug),
+        ("GenAI OpenTelemetry", genai_debug.clone()),
+        ("OpenInference", openinference_debug),
     ] {
         assert!(
             !output.contains(raw_pii),
@@ -3631,20 +3847,16 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
             !output.contains(raw_context),
             "trajectory context leaked through {surface}: {output}"
         );
-        if retains_scope_metadata {
-            for (key, value) in trusted_scope_metadata
-                .as_object()
-                .unwrap()
-                .iter()
-                .filter(|(key, _)| *key != "session_owner")
-            {
-                assert!(
-                    output.contains(key) && output.contains(value.to_string().trim_matches('"')),
-                    "trusted scope metadata {key} was not retained in {surface}: {output}"
-                );
-            }
-        }
     }
+    assert!(
+        genai_debug.contains("gen_ai.operation.name"),
+        "{genai_debug}"
+    );
+    assert!(genai_debug.contains("gpt-4o-mini"), "{genai_debug}");
+    assert!(
+        genai_debug.contains("gen_ai.usage.input_tokens"),
+        "{genai_debug}"
+    );
 
     let captured = captured_events_snapshot(&captured);
     let agent_start = captured
@@ -3653,36 +3865,31 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
             event.name() == "hermes-agent" && event.scope_category() == Some(ScopeCategory::Start)
         })
         .unwrap();
-    assert_eq!(agent_start.data().unwrap()["request_id"], "request-1");
-    assert_eq!(agent_start.data().unwrap()["prompt"], "[REDACTED]");
-    let agent_metadata = agent_start.metadata().unwrap();
-    for (key, value) in trusted_scope_metadata
-        .as_object()
-        .unwrap()
+    let agent_end = captured
         .iter()
-        .filter(|(key, _)| *key != "session_owner")
-    {
-        assert_eq!(agent_metadata[key], *value, "{key}");
-    }
-    assert_eq!(agent_metadata["session_owner"], "[REDACTED]");
+        .find(|event| {
+            event.name() == "hermes-agent" && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert_eq!(agent_start.uuid(), agent_end.uuid());
+    assert_eq!(agent_start.data(), Some(&json!({})));
+    assert_eq!(agent_start.metadata(), Some(&json!({})));
     let custom_mark = captured
         .iter()
         .find(|event| event.name() == "hermes.checkpoint")
         .unwrap();
-    assert_eq!(custom_mark.data().unwrap()["content"], "[REDACTED]");
-    assert_eq!(custom_mark.data().unwrap()["score"], 0);
+    assert_eq!(custom_mark.parent_uuid(), Some(agent_start.uuid()));
+    assert_eq!(custom_mark.data(), Some(&json!({})));
     assert_eq!(
         custom_mark.metadata().unwrap(),
-        &json!({
-            LOG_SEVERITY_METADATA_KEY: "warn",
-            "reviewer": "[REDACTED]"
-        })
+        &json!({LOG_SEVERITY_METADATA_KEY: "warn"})
     );
 
     deregister_subscriber("pii-regression-subscriber").unwrap();
     atof.deregister("pii-regression-atof").unwrap();
     deregister_subscriber("pii-regression-atif").unwrap();
     otel.deregister("pii-regression-otel").unwrap();
+    genai.deregister("pii-regression-genai").unwrap();
     openinference
         .deregister("pii-regression-openinference")
         .unwrap();
@@ -3759,25 +3966,32 @@ async fn trajectory_preset_sanitizes_stream_finalization_without_changing_client
         .iter()
         .find(|event| event.scope_category() == Some(ScopeCategory::Start))
         .unwrap();
-    assert_eq!(
-        start.input().unwrap()["content"]["messages"][0]["content"],
-        "[REDACTED]"
-    );
+    assert_eq!(start.input(), Some(&json!({})));
+    let annotated_request = start
+        .category_profile()
+        .and_then(|profile| profile.annotated_request.as_deref())
+        .unwrap();
+    assert_eq!(annotated_request.last_user_message(), Some("[REDACTED]"));
     let chunk_mark = captured
         .iter()
         .find(|event| event.name() == "llm.chunk")
         .unwrap();
-    assert_eq!(chunk_mark.data().unwrap()["chunk_index"], 0);
+    assert_eq!(chunk_mark.data(), Some(&json!({})));
     assert!(!chunk_mark.to_json_string().unwrap().contains(raw_delta));
     let end = captured
         .iter()
         .find(|event| event.scope_category() == Some(ScopeCategory::End))
         .unwrap();
+    assert_eq!(end.output(), Some(&json!({})));
+    let annotated_response = end
+        .category_profile()
+        .and_then(|profile| profile.annotated_response.as_deref())
+        .unwrap();
+    assert_eq!(annotated_response.response_text(), Some("[REDACTED]"));
     assert_eq!(
-        end.output().unwrap()["choices"][0]["message"]["content"],
-        "[REDACTED]"
+        annotated_response.usage.as_ref().unwrap().total_tokens,
+        Some(11)
     );
-    assert_eq!(end.output().unwrap()["usage"]["total_tokens"], 11);
 
     deregister_subscriber("pii-trajectory-stream").unwrap();
     clear_plugin_configuration().unwrap();
@@ -6303,10 +6517,7 @@ async fn trajectory_preset_redacts_opaque_llm_request_header_values() {
 
     let captured_events = captured_events_snapshot(&events);
     assert_eq!(captured_events.len(), 1);
-    assert_eq!(
-        captured_events[0].input().unwrap()["headers"]["model"],
-        json!("[REDACTED]")
-    );
+    assert!(captured_events[0].input().unwrap().get("headers").is_none());
     assert!(
         !serde_json::to_string(&captured_events[0])
             .unwrap()
