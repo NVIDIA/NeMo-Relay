@@ -1433,6 +1433,47 @@ fn anthropic_streaming_codec_assembles_text_response() {
 }
 
 #[test]
+fn anthropic_streaming_codec_preserves_usage_across_partial_updates() {
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_usage",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5-20251001",
+            "content": [],
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 0,
+                "cache_read_input_tokens": 25,
+                "cache_creation_input_tokens": 10
+            }
+        }
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+        "usage": {"output_tokens": 5}
+    }))
+    .unwrap();
+
+    let annotated = AnthropicMessagesCodec
+        .decode_response(&finalizer())
+        .expect("assembled response should decode");
+    let usage = annotated.usage.expect("usage should be retained");
+    assert_eq!(usage.prompt_tokens, Some(100));
+    assert_eq!(usage.completion_tokens, Some(5));
+    assert_eq!(usage.total_tokens, Some(105));
+    assert_eq!(usage.cache_read_tokens, Some(25));
+    assert_eq!(usage.cache_write_tokens, Some(10));
+}
+
+#[test]
 fn anthropic_streaming_codec_assembles_tool_use_input_from_partial_json() {
     let codec = AnthropicMessagesStreamingCodec::new();
     let mut collector = codec.collector();
