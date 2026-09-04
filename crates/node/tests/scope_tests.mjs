@@ -42,6 +42,7 @@ function runSubscriberFailureChild({ callback, registration = 'global' }) {
     ].join('\n'),
     plugin: [
       "process.chdir(require('node:os').tmpdir());",
+      "process.env.XDG_CONFIG_HOME = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'nemo-relay-node-test-'));",
       'globalThis.plugin = require(' + JSON.stringify(path.join(nodeDir, 'plugin.js')) + ');',
       "globalThis.pluginKind = 'node.test.subscriber-failure';",
       'plugin.register(pluginKind, {',

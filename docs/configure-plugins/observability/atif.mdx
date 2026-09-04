@@ -269,11 +269,10 @@ fails for one trajectory, Relay writes a local recovery copy under
 The diagnostic is logged after subscriber delivery is flushed. Teardown also reports
 the degraded delivery, even when the local recovery write succeeds. This error
 reports delivery degradation, not a registration leak; callbacks have already
-been removed. If the failure is still pending when initialization replaces the
-configuration, that replacement returns the delivery error and leaves no
-configuration active; a subsequent clear or initialization is safe. Fatal
-dispatcher failures, such as trajectory serialization failures, are also
-reported during teardown.
+been removed. If the failure is still pending when `activation.close()` runs,
+the close returns the delivery error after removing callbacks. Fatal dispatcher
+failures, such as trajectory serialization failures, are also reported during
+teardown.
 
 ## Expected Output
 

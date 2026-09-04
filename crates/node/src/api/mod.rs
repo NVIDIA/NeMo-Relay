@@ -5971,6 +5971,9 @@ impl DynamicPluginCloseState {
                             .unwrap_or_else(|poisoned| poisoned.into_inner()) = current.report();
                     }
                     let activation = activation.take();
+                    if activation.is_some() {
+                        self.completion.send_replace(None);
+                    }
                     *status = DynamicPluginCloseStatus::Closing;
                     activation
                 }
@@ -5980,7 +5983,6 @@ impl DynamicPluginCloseState {
         let Some(activation) = activation else {
             return;
         };
-        self.completion.send_replace(None);
 
         // Keep the activation outside the spawned closure so a thread-spawn
         // failure cannot drop it and synchronously run teardown on the JS thread.

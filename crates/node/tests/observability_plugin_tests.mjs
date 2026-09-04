@@ -141,7 +141,9 @@ describe('observability plugin helpers', () => {
       components: [observability.ComponentSpec(config)],
     });
     try {
-      assert.deepEqual(pluginHost.report()?.runtime_diagnostics ?? [], []);
+      const report = pluginHost.report();
+      assert.ok(report, 'initialized host must expose a report');
+      assert.deepEqual(report.runtime_diagnostics ?? [], []);
     } finally {
       await pluginHost.close();
     }

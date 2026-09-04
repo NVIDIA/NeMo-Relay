@@ -245,6 +245,7 @@ func TestPluginHostActivationFinalizerReleasesOwnership(t *testing.T) {
 	createUnclosedPluginHostActivation(t, pluginsTOML)
 
 	deadline := time.Now().Add(10 * time.Second)
+	var lastErr error
 	for time.Now().Before(deadline) {
 		runtime.GC()
 		runtime.Gosched()
@@ -255,9 +256,10 @@ func TestPluginHostActivationFinalizerReleasesOwnership(t *testing.T) {
 			}
 			return
 		}
+		lastErr = err
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("plugin host finalizer did not release ownership")
+	t.Fatalf("plugin host finalizer did not release ownership; last error = %v", lastErr)
 }
 
 //go:noinline

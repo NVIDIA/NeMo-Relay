@@ -343,8 +343,8 @@ export async function main() {
   const invalid = plugin.validate(config('invalid')).config.diagnostics;
   const disabledInvalid = plugin.validate(config('invalid', false)).config
     .diagnostics;
-  if (disabledInvalid.length !== 0) {
-    throw new Error('disabled configuration must not enter the effective host');
+  if (disabledInvalid[0]?.code !== 'documentation-plugin.unsupported_mode') {
+    throw new Error('disabled invalid configuration must still be validated');
   }
   console.log('invalid:', invalid);
   let summary;

@@ -509,7 +509,9 @@ func assertPluginHostActivationEmptyReportDecodeError(t *testing.T) {
 	initializePluginHostJSON = func(string, *string) (unsafe.Pointer, string, error) {
 		return nil, "", nil
 	}
-	if _, _, err := Initialize(NewPluginConfig(), nil); err == nil || err.Error() != "unexpected end of JSON input" {
+	_, _, err := Initialize(NewPluginConfig(), nil)
+	var syntaxError *json.SyntaxError
+	if err == nil || !errors.As(err, &syntaxError) {
 		t.Fatalf("expected empty report decode error, got %v", err)
 	}
 	if err := newPluginHostActivation(nil).Close(); err != nil {

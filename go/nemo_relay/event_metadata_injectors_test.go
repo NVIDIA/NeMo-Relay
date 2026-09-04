@@ -189,6 +189,11 @@ func testPluginContextEventMetadataInjectorLifecycle(t *testing.T) {
 	if _, err := initializeTestPluginHost(PluginConfig{Version: 1, Components: []PluginComponentSpec{{Kind: kind, Enabled: true}}}); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := closeTestPluginHost(); err != nil {
+			t.Errorf("closeTestPluginHost() cleanup error = %v", err)
+		}
+	})
 	for _, name := range []string{"go-plugin-metadata-active", "go-plugin-metadata-cleanup"} {
 		if name == "go-plugin-metadata-cleanup" {
 			if err := closeTestPluginHost(); err != nil {

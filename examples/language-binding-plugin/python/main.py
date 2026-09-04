@@ -379,7 +379,7 @@ async def main() -> dict[str, Any]:
     invalid = plugin.validate(component("invalid"))["config"]["diagnostics"]
     assert invalid[0]["code"] == "documentation-plugin.unsupported_mode"
     disabled_invalid = plugin.validate(component("invalid", enabled=False))["config"]["diagnostics"]
-    assert disabled_invalid == []
+    assert disabled_invalid[0]["code"] == "documentation-plugin.unsupported_mode"
     print("invalid:", invalid)
     activation = None
     try:

@@ -14,6 +14,7 @@ const nodeEntries = [
       { name: 'ComponentSpec', params: ['kind', 'config', 'options'] },
       { name: 'initialize', params: ['config', 'additionalPluginsToml'] },
       { name: 'validate', params: ['config', 'additionalPluginsToml'] },
+      { name: 'validateExact', params: ['config'] },
       { name: 'listKinds', params: [] },
       { name: 'register', params: ['pluginKind', 'plugin'] },
       { name: 'deregister', params: ['pluginKind'] },

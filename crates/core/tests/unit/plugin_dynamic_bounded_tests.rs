@@ -18,11 +18,14 @@ fn bounded_reader_streams_regular_files_across_multiple_chunks() {
     );
 
     let mut streamed = Vec::new();
+    let mut chunks = 0usize;
     stream_bounded_regular_file(&path, "fixture artifact", |chunk| {
+        chunks += 1;
         streamed.extend_from_slice(chunk)
     })
     .unwrap();
     assert_eq!(streamed, expected);
+    assert!(chunks > 1, "expected more than one chunk, got {chunks}");
 }
 
 #[test]

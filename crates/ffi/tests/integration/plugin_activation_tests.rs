@@ -122,12 +122,8 @@ source = "user-file"
 
     let manifest_dir = TempDir::new().expect("native manifest tempdir");
     let manifest = write_native_manifest(manifest_dir.path(), build_native_fixture());
-    let (mut activation, report) = initialize_test_plugin_host_from_declarations(json!([{
-        "plugin_id": "fixture_native",
-        "kind": "rust_dynamic",
-        "manifest_ref": manifest,
-        "config": {}
-    }]));
+    let (mut activation, report) =
+        initialize_test_plugin_host_from_manifests(&[manifest.as_path()]);
 
     let mut active = false;
     assert_eq!(
@@ -218,12 +214,8 @@ fn ffi_activation_loads_native_callbacks_and_removes_them_before_free() {
 
     let manifest_dir = TempDir::new().expect("native manifest tempdir");
     let manifest = write_native_manifest(manifest_dir.path(), build_native_fixture());
-    let (mut activation, report) = initialize_test_plugin_host_from_declarations(json!([{
-        "plugin_id": "fixture_native",
-        "kind": "rust_dynamic",
-        "manifest_ref": manifest,
-        "config": {}
-    }]));
+    let (mut activation, report) =
+        initialize_test_plugin_host_from_manifests(&[manifest.as_path()]);
     assert_eq!(report["config"]["diagnostics"], json!([]));
     assert_eq!(report["dynamic_plugins"][0]["plugin_id"], "fixture_native");
     assert!(plugin_kinds().iter().any(|kind| kind == "fixture_native"));
@@ -256,12 +248,8 @@ fn ffi_activation_loads_native_callbacks_and_removes_them_before_free() {
         json!({"input": true})
     );
 
-    let (mut drop_activation, _) = initialize_test_plugin_host_from_declarations(json!([{
-        "plugin_id": "fixture_native",
-        "kind": "rust_dynamic",
-        "manifest_ref": manifest,
-        "config": {}
-    }]));
+    let (mut drop_activation, _) =
+        initialize_test_plugin_host_from_manifests(&[manifest.as_path()]);
     assert_eq!(
         tool_request_intercepts("ffi-native-tool", json!({"input": true}))["native_plugin"],
         true
@@ -279,12 +267,8 @@ fn ffi_activation_loads_worker_callbacks_and_stops_worker_on_clear() {
 
     let manifest_dir = TempDir::new().expect("worker manifest tempdir");
     let manifest = write_worker_manifest(manifest_dir.path(), build_worker_fixture());
-    let (mut activation, report) = initialize_test_plugin_host_from_declarations(json!([{
-        "plugin_id": "fixture_worker",
-        "kind": "worker",
-        "manifest_ref": manifest,
-        "config": {}
-    }]));
+    let (mut activation, report) =
+        initialize_test_plugin_host_from_manifests(&[manifest.as_path()]);
     assert_eq!(report["config"]["diagnostics"], json!([]));
     assert_eq!(report["dynamic_plugins"][0]["plugin_id"], "fixture_worker");
     assert!(plugin_kinds().iter().any(|kind| kind == "fixture_worker"));
@@ -314,21 +298,8 @@ fn ffi_activation_rolls_back_an_earlier_native_load_when_a_later_load_fails() {
     let manifest_dir = TempDir::new().expect("native manifest tempdir");
     let manifest = write_native_manifest(manifest_dir.path(), build_native_fixture());
     let missing_manifest = manifest_dir.path().join("missing-relay-plugin.toml");
-    let declarations = json!([
-        {
-            "plugin_id": "fixture_native",
-            "kind": "rust_dynamic",
-            "manifest_ref": manifest,
-            "config": {}
-        },
-        {
-            "plugin_id": "fixture_missing",
-            "kind": "rust_dynamic",
-            "manifest_ref": missing_manifest,
-            "config": {}
-        }
-    ]);
-    let (_config_dir, plugins_toml) = write_test_plugin_host_config(&declarations);
+    let (_config_dir, plugins_toml) =
+        write_test_plugin_host_config(&[manifest.as_path(), missing_manifest.as_path()]);
     let config = cstring(r#"{"version":1,"components":[]}"#);
     let plugins_toml = cstring(&plugins_toml.to_string_lossy());
     let mut activation = ptr::null_mut();
@@ -350,12 +321,7 @@ fn ffi_activation_rolls_back_an_earlier_native_load_when_a_later_load_fails() {
         json!({"input": true})
     );
 
-    let (mut activation, _) = initialize_test_plugin_host_from_declarations(json!([{
-        "plugin_id": "fixture_native",
-        "kind": "rust_dynamic",
-        "manifest_ref": manifest,
-        "config": {}
-    }]));
+    let (mut activation, _) = initialize_test_plugin_host_from_manifests(&[manifest.as_path()]);
     unsafe {
         assert_eq!(
             api::nemo_relay_plugin_host_activation_close(activation),
@@ -365,10 +331,10 @@ fn ffi_activation_rolls_back_an_earlier_native_load_when_a_later_load_fails() {
     }
 }
 
-fn initialize_test_plugin_host_from_declarations(
-    specs: Json,
+fn initialize_test_plugin_host_from_manifests(
+    manifests: &[&Path],
 ) -> (*mut FfiPluginHostActivation, Json) {
-    let (_config_dir, plugins_toml) = write_test_plugin_host_config(&specs);
+    let (_config_dir, plugins_toml) = write_test_plugin_host_config(manifests);
     let config = cstring(r#"{"version":1,"components":[]}"#);
     let plugins_toml = cstring(&plugins_toml.to_string_lossy());
     let mut activation = ptr::null_mut();
@@ -391,18 +357,16 @@ fn initialize_test_plugin_host_from_declarations(
     (activation, unsafe { returned_json(report) })
 }
 
-fn write_test_plugin_host_config(specs: &Json) -> (TempDir, PathBuf) {
+fn write_test_plugin_host_config(manifests: &[&Path]) -> (TempDir, PathBuf) {
     let directory = TempDir::new().expect("plugin host config tempdir");
     let path = directory.path().join("plugins.toml");
-    let declarations = specs
-        .as_array()
-        .expect("dynamic plugin declarations")
+    let declarations = manifests
         .iter()
-        .map(|spec| {
-            let manifest = spec["manifest_ref"].as_str().expect("manifest_ref string");
+        .map(|manifest| {
             format!(
                 "[[plugins.dynamic]]\nmanifest = {}\n",
-                serde_json::to_string(manifest).expect("manifest path JSON string")
+                serde_json::to_string(&manifest.to_string_lossy())
+                    .expect("manifest path JSON string")
             )
         })
         .collect::<Vec<_>>()

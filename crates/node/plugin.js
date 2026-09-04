@@ -88,6 +88,8 @@ function validate(config, additionalPluginsToml) {
  *
  * @param {object} config - Complete static plugin configuration.
  * @returns {PluginHostReport} Static validation results with no dynamic plugins.
+ * @remarks This validates only the supplied document and intentionally skips
+ * plugin discovery from the filesystem.
  */
 function validateExact(config) {
   return lib.validateExact(config);

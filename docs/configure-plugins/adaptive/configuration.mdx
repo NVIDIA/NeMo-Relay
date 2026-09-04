@@ -178,10 +178,12 @@ if (report.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
   throw new Error(JSON.stringify(report.diagnostics));
 }
 
-plugin.initialize(pluginConfig).catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+const activation = await plugin.initialize(pluginConfig);
+try {
+  // Run instrumented application work here.
+} finally {
+  await activation.close();
+}
 ```
 </Tab>
 
@@ -339,9 +341,8 @@ Common validation failures include:
 - Unsupported schema versions.
 - Backend-specific fields that do not match the selected backend.
 
-Clear plugin configuration during shutdown or test cleanup. Clearing the plugin
-configuration deregisters adaptive subscribers and intercepts owned by the
-plugin runtime.
+Close the activation during shutdown or test cleanup. Closing the activation
+deregisters the adaptive subscribers and intercepts owned by the plugin runtime.
 
 ## Rollout Guidance
 

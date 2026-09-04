@@ -111,10 +111,6 @@ fn trust_failures_have_stable_codes_messages_and_structured_errors() {
             path: signature.clone(),
             error: "unreadable".into(),
         },
-        DynamicPluginTrustFailure::InvalidTrustedKey {
-            key: "bad-key".into(),
-            error: "invalid".into(),
-        },
         DynamicPluginTrustFailure::SignatureVerification {
             path: signature,
             parse_errors: vec!["bad key".into()],

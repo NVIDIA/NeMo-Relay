@@ -49,13 +49,6 @@ pub enum DynamicPluginTrustFailure {
         /// Read or decode failure detail.
         error: String,
     },
-    /// A configured trusted key is malformed.
-    InvalidTrustedKey {
-        /// Configured key value.
-        key: String,
-        /// Parse failure detail.
-        error: String,
-    },
     /// No trusted key verified the signature.
     SignatureVerification {
         /// Signature path.
@@ -76,7 +69,6 @@ impl DynamicPluginTrustFailure {
             Self::MissingSignature
             | Self::MissingTrustedKeys
             | Self::SignatureRead { .. }
-            | Self::InvalidTrustedKey { .. }
             | Self::SignatureVerification { .. } => "attestation_failed",
         }
     }
@@ -111,9 +103,6 @@ impl DynamicPluginTrustFailure {
             Self::SignatureRead { path, error } => format!(
                 "dynamic plugin '{plugin_id}' signature {} could not be read: {error}",
                 path.display()
-            ),
-            Self::InvalidTrustedKey { key, error } => format!(
-                "dynamic plugin '{plugin_id}' has invalid trusted public key '{key}': {error}"
             ),
             Self::SignatureVerification { path, parse_errors } => {
                 let suffix = if parse_errors.is_empty() {
