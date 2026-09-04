@@ -12,13 +12,13 @@ description = "Complete Rust grpc-v1 worker example for NeMo Relay"
 
 [dependencies]
 futures-util = "0.3"
-nemo-relay-worker = { version = "0.8.0", path = "../../crates/worker" }
+nemo-relay-worker = { version = "0.9.0", path = "../../crates/worker" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [dev-dependencies]
-nemo-relay = { version = "0.8.0", path = "../../crates/core", features = ["worker-grpc"] }
+nemo-relay = { version = "0.9.0", path = "../../crates/core", features = ["worker-grpc"] }
 sha2 = "0.11"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }

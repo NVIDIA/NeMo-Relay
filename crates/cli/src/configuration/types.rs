@@ -97,6 +97,7 @@ impl ResolvedDynamicPluginConfig {
 pub(crate) struct AgentConfigs {
     pub(crate) claude: AgentCommandConfig,
     pub(crate) codex: AgentCommandConfig,
+    pub(crate) pi: AgentCommandConfig,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -42,6 +42,7 @@ use nemo_relay::api::runtime::{
 use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
     capture_propagation_context_with_root as capture_propagation_context_with_root_handle,
+    capture_rootless_propagation_context as capture_rootless_propagation_context_handle,
     capture_traceparent as capture_traceparent_handle,
     create_scope_stack as create_scope_stack_handle,
     create_scope_stack_from_propagation as create_scope_stack_from_propagation_handle,
@@ -317,6 +318,9 @@ fn build_otel_config(
     for (key, value) in parse_string_map(options.headers, "headers")? {
         config = config.with_header(key, value);
     }
+    for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
+        config = config.with_header_env(key, variable);
+    }
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
     }
@@ -404,6 +408,9 @@ fn build_otel_log_config(
     for (key, value) in parse_string_map(options.headers, "headers")? {
         config = config.with_header(key, value);
     }
+    for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
+        config = config.with_header_env(key, variable);
+    }
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
     }
@@ -451,6 +458,9 @@ fn build_otel_metric_config(
     }
     for (key, value) in parse_string_map(options.headers, "headers")? {
         config = config.with_header(key, value);
+    }
+    for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
+        config = config.with_header_env(key, variable);
     }
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
@@ -2175,12 +2185,31 @@ pub fn capture_propagation_context(env: Env) -> napi::Result<PropagationContext>
         return Ok(propagation_context_to_napi(
             nemo_relay::api::runtime::PropagationContext {
                 version: nemo_relay::api::runtime::PropagationContext::VERSION,
-                root_uuid: None,
+                root_uuid: Some(parent_uuid),
                 parent_uuid,
             },
         ));
     }
     with_effective_scope_stack(&env, capture_propagation_context_handle)?
+        .map(propagation_context_to_napi)
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+/// Capture the current Relay causal parent without a propagation root.
+#[napi]
+pub fn capture_rootless_propagation_context(env: Env) -> napi::Result<PropagationContext> {
+    if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
+        let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
+            .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
+        return Ok(propagation_context_to_napi(
+            nemo_relay::api::runtime::PropagationContext {
+                version: nemo_relay::api::runtime::PropagationContext::VERSION,
+                root_uuid: None,
+                parent_uuid,
+            },
+        ));
+    }
+    with_effective_scope_stack(&env, capture_rootless_propagation_context_handle)?
         .map(propagation_context_to_napi)
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
@@ -5152,6 +5181,9 @@ pub struct OpenTelemetryConfig {
     pub endpoint: String,
     /// Extra exporter headers/metadata as string key/value pairs.
     pub headers: Option<Json>,
+    /// Header names mapped to environment variables resolved during subscriber activation.
+    #[napi(ts_type = "Record<string, string>")]
+    pub header_env: Option<Json>,
     /// Extra OpenTelemetry resource attributes as string key/value pairs.
     pub resource_attributes: Option<Json>,
     /// `service.name` resource attribute. Defaults to `"unknown_service"`.
@@ -5250,6 +5282,9 @@ pub struct OpenTelemetryLogConfig {
     /// Extra exporter headers/metadata as string key/value pairs.
     #[napi(ts_type = "Record<string, string>")]
     pub headers: Option<Json>,
+    /// Header names mapped to environment variables resolved during subscriber activation.
+    #[napi(ts_type = "Record<string, string>")]
+    pub header_env: Option<Json>,
     /// Extra OpenTelemetry resource attributes as string key/value pairs.
     #[napi(ts_type = "Record<string, string>")]
     pub resource_attributes: Option<Json>,
@@ -5346,6 +5381,9 @@ pub struct OpenTelemetryMetricConfig {
     /// Extra exporter headers/metadata as string key/value pairs.
     #[napi(ts_type = "Record<string, string>")]
     pub headers: Option<Json>,
+    /// Header names mapped to environment variables resolved during subscriber activation.
+    #[napi(ts_type = "Record<string, string>")]
+    pub header_env: Option<Json>,
     /// Extra OpenTelemetry resource attributes as string key/value pairs.
     #[napi(ts_type = "Record<string, string>")]
     pub resource_attributes: Option<Json>,

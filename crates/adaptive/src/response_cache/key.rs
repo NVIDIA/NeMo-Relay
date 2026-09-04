@@ -25,6 +25,7 @@ use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
 
 use crate::config::ResponseCacheConfig;
+use crate::response_cache::config::ResponseCacheKeyStrategy;
 use crate::response_cache::mark::CacheReason;
 use crate::response_cache::store::CACHE_SCHEMA_VERSION;
 
@@ -75,6 +76,13 @@ pub fn build_cache_key(
             object.remove(*key);
         }
         normalize_tool_call_ids(object);
+    }
+
+    if config.key_strategy == ResponseCacheKeyStrategy::Logical
+        && let Some(object) = body.as_object_mut()
+        && let Some(tools) = object.get("tools").cloned()
+    {
+        object.insert("tools".to_string(), structural_tool_schema(&tools));
     }
 
     let header_allowlist = normalized_header_allowlist(&config.header_allowlist);
@@ -691,6 +699,48 @@ fn rewrite_id(id_value: &mut Json, mapping: &mut Map<String, Json>) {
         }
     };
     *id_value = Json::String(stable);
+}
+
+/// Fingerprint of the tool set for the `logical` strategy: each tool keeps its
+/// full definition minus string-valued `description` keys (stripped
+/// recursively), and the array is sorted so tool order does not key.
+fn structural_tool_schema(tools: &Json) -> Json {
+    let Some(array) = tools.as_array() else {
+        return tools.clone();
+    };
+    let mut entries: Vec<Json> = array
+        .iter()
+        .map(|tool| {
+            let mut entry = tool.clone();
+            strip_descriptions(&mut entry);
+            entry
+        })
+        .collect();
+    entries
+        .sort_by_cached_key(|entry| serde_json_canonicalizer::to_string(entry).unwrap_or_default());
+    Json::Array(entries)
+}
+
+/// Removes every string-valued `description` key, at any depth. A non-string
+/// value under that key (e.g. a schema property named `description`) is
+/// interface, not prose, and stays.
+fn strip_descriptions(value: &mut Json) {
+    match value {
+        Json::Object(object) => {
+            if object.get("description").is_some_and(Json::is_string) {
+                object.remove("description");
+            }
+            for nested in object.values_mut() {
+                strip_descriptions(nested);
+            }
+        }
+        Json::Array(items) => {
+            for item in items {
+                strip_descriptions(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]

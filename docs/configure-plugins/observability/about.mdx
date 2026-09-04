@@ -144,8 +144,9 @@ before adding more exporters or extra config layers.
 
 When ATIF and trace exporters observe the same NeMo Relay events, they share
 NeMo Relay UUIDs for cross-format joins. Plugin-managed ATIF uses the top-level
-trajectory root scope UUID as the trajectory `session_id`. ATIF step lineage stores the
-event UUID as `step.extra.ancestry.function_id` and the parent UUID as
+trajectory scope UUID as `trajectory_id` and uses the propagation root UUID as
+the run-scoped `session_id` when one is present. ATIF step lineage stores the event UUID as
+`step.extra.ancestry.function_id` and the parent UUID as
 `step.extra.ancestry.parent_id`.
 
 The `full` and `openinference` OpenTelemetry projections carry the same values
@@ -161,9 +162,9 @@ UUID and is shared across trace roots created by the same runtime session.
 The `gen_ai` projection uses the standard `gen_ai.conversation.id` when the
 event supplies a conversation, session, or thread identifier. Typed endpoints
 derive the same native trace and span IDs from the same Relay lifecycle UUIDs,
-so the backend IDs also correlate across exporters. ATIF keeps its existing
-artifact IDs and exposes the logical coding-session values under
-`extra.nemo_relay`.
+so the backend IDs also correlate across exporters. ATIF artifact filenames and
+storage keys remain based on the trajectory scope UUID. Logical coding-session
+values also remain available under `extra.nemo_relay`.
 
 ## Pages
 

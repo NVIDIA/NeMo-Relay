@@ -251,6 +251,7 @@ extern void nemo_relay_string_free(char* ptr);
 // Scope stack isolation
 extern int32_t nemo_relay_scope_stack_create(FfiScopeStack** out);
 extern int32_t nemo_relay_capture_propagation_context_json(char** out);
+extern int32_t nemo_relay_capture_rootless_propagation_context_json(char** out);
 extern int32_t nemo_relay_capture_propagation_context_with_root_json(const char* root_uuid, char** out);
 extern int32_t nemo_relay_capture_traceparent(char** out);
 extern int32_t nemo_relay_propagation_context_to_traceparent(const char* context_json, char** out);
@@ -284,6 +285,7 @@ extern int32_t nemo_relay_otel_subscriber_create(const char*, const char*, const
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, void**);
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v2(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, void**);
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v3(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, uint64_t, void**);
+extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v4(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, uint64_t, void**);
 extern int32_t nemo_relay_otel_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_subscriber_force_flush(const void*);
@@ -291,6 +293,7 @@ extern int32_t nemo_relay_otel_subscriber_runtime_diagnostics_json(const void*, 
 extern int32_t nemo_relay_otel_subscriber_shutdown(const void*);
 extern void nemo_relay_otel_subscriber_free(void*);
 extern int32_t nemo_relay_otel_log_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, uint64_t, uint64_t, uint64_t, uint64_t, void**);
+extern int32_t nemo_relay_otel_log_subscriber_create_v2(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, uint64_t, uint64_t, uint64_t, uint64_t, void**);
 extern int32_t nemo_relay_otel_log_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_log_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_log_subscriber_force_flush(const void*);
@@ -298,6 +301,7 @@ extern int32_t nemo_relay_otel_log_subscriber_runtime_diagnostics_json(const voi
 extern int32_t nemo_relay_otel_log_subscriber_shutdown(const void*);
 extern void nemo_relay_otel_log_subscriber_free(void*);
 extern int32_t nemo_relay_otel_metric_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, uint64_t, const char*, uint64_t, uint64_t, void**);
+extern int32_t nemo_relay_otel_metric_subscriber_create_v2(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, uint64_t, const char*, uint64_t, uint64_t, void**);
 extern int32_t nemo_relay_otel_metric_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_metric_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_metric_subscriber_force_flush(const void*);
@@ -2006,10 +2010,21 @@ func validatePropagationContext(context PropagationContext) error {
 	return nil
 }
 
-// CapturePropagationContext captures the current Relay causal parent.
+// CapturePropagationContext captures the current Relay causal parent and root.
 func CapturePropagationContext() (PropagationContext, error) {
 	var out *C.char
 	if err := checkStatus(C.nemo_relay_capture_propagation_context_json(&out)); err != nil {
+		return PropagationContext{}, err
+	}
+	defer C.nemo_relay_string_free(out)
+	return PropagationContextFromJSON(C.GoString(out))
+}
+
+// CaptureRootlessPropagationContext captures the current causal parent without
+// a propagation root, so a receiver starts a new observability trace.
+func CaptureRootlessPropagationContext() (PropagationContext, error) {
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_capture_rootless_propagation_context_json(&out)); err != nil {
 		return PropagationContext{}, err
 	}
 	defer C.nemo_relay_string_free(out)
@@ -2388,10 +2403,12 @@ const (
 // Create it with [NewOpenTelemetryConfig], then mutate fields as needed before
 // passing it to [NewOpenTelemetrySubscriber].
 type OpenTelemetryConfig struct {
-	Type                    OpenTelemetryType
-	Transport               OpenTelemetryTransport
-	Endpoint                string
-	Headers                 map[string]string
+	Type      OpenTelemetryType
+	Transport OpenTelemetryTransport
+	Endpoint  string
+	Headers   map[string]string
+	// HeaderEnv maps outbound header names to environment variables resolved at activation.
+	HeaderEnv               map[string]string
 	ResourceAttributes      map[string]string
 	ServiceName             string
 	ServiceNamespace        string
@@ -2413,6 +2430,7 @@ func NewOpenTelemetryConfig(otelType OpenTelemetryType, endpoint string) OpenTel
 		Transport:               OpenTelemetryTransportHTTPBinary,
 		Endpoint:                endpoint,
 		Headers:                 map[string]string{},
+		HeaderEnv:               map[string]string{},
 		ResourceAttributes:      map[string]string{},
 		ServiceName:             "unknown_service",
 		InstrumentationScope:    "opentelemetry",
@@ -2481,6 +2499,9 @@ func normalizeOpenTelemetryConfig(config OpenTelemetryConfig) (OpenTelemetryConf
 	if config.Headers == nil {
 		config.Headers = map[string]string{}
 	}
+	if config.HeaderEnv == nil {
+		config.HeaderEnv = map[string]string{}
+	}
 	if config.ResourceAttributes == nil {
 		config.ResourceAttributes = map[string]string{}
 	}
@@ -2527,6 +2548,12 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	}
 	cHeadersJSON := C.CString(string(headersJSON))
 	defer C.free(unsafe.Pointer(cHeadersJSON))
+	headerEnvJSON, err := jsonMarshal(config.HeaderEnv)
+	if err != nil {
+		return nil, err
+	}
+	cHeaderEnvJSON := C.CString(string(headerEnvJSON))
+	defer C.free(unsafe.Pointer(cHeaderEnvJSON))
 
 	resourceAttrsJSON, err := jsonMarshal(config.ResourceAttributes)
 	if err != nil {
@@ -2568,11 +2595,12 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	defer C.free(unsafe.Pointer(cPromoteMetadataPrefixesJSON))
 
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_subscriber_create_with_projection_options_v3(
+	status := C.nemo_relay_otel_subscriber_create_with_projection_options_v4(
 		cType,
 		cTransport,
 		cEndpoint,
 		cHeadersJSON,
+		cHeaderEnvJSON,
 		cResourceAttrsJSON,
 		cServiceName,
 		cServiceNamespace,
@@ -2640,9 +2668,11 @@ func (s *OpenTelemetrySubscriber) Close() {
 
 // OpenTelemetryLogConfig configures an independent OTLP log subscriber.
 type OpenTelemetryLogConfig struct {
-	Transport               OpenTelemetryTransport
-	Endpoint                string
-	Headers                 map[string]string
+	Transport OpenTelemetryTransport
+	Endpoint  string
+	Headers   map[string]string
+	// HeaderEnv maps outbound header names to environment variables resolved at activation.
+	HeaderEnv               map[string]string
 	ResourceAttributes      map[string]string
 	ServiceName             string
 	ServiceNamespace        string
@@ -2662,6 +2692,7 @@ func NewOpenTelemetryLogConfig(endpoint string) OpenTelemetryLogConfig {
 		Transport:               OpenTelemetryTransportHTTPBinary,
 		Endpoint:                endpoint,
 		Headers:                 map[string]string{},
+		HeaderEnv:               map[string]string{},
 		ResourceAttributes:      map[string]string{},
 		ServiceName:             "unknown_service",
 		InstrumentationScope:    "opentelemetry",
@@ -2690,9 +2721,11 @@ const (
 
 // OpenTelemetryMetricConfig configures an independent OTLP metric subscriber.
 type OpenTelemetryMetricConfig struct {
-	Transport            OpenTelemetryTransport
-	Endpoint             string
-	Headers              map[string]string
+	Transport OpenTelemetryTransport
+	Endpoint  string
+	Headers   map[string]string
+	// HeaderEnv maps outbound header names to environment variables resolved at activation.
+	HeaderEnv            map[string]string
 	ResourceAttributes   map[string]string
 	ServiceName          string
 	ServiceNamespace     string
@@ -2711,6 +2744,7 @@ func NewOpenTelemetryMetricConfig(endpoint string) OpenTelemetryMetricConfig {
 		Transport:            OpenTelemetryTransportHTTPBinary,
 		Endpoint:             endpoint,
 		Headers:              map[string]string{},
+		HeaderEnv:            map[string]string{},
 		ResourceAttributes:   map[string]string{},
 		ServiceName:          "unknown_service",
 		InstrumentationScope: "opentelemetry",
@@ -2731,6 +2765,7 @@ type openTelemetrySignalCStrings struct {
 	transport            *C.char
 	endpoint             *C.char
 	headers              *C.char
+	headerEnv            *C.char
 	resourceAttributes   *C.char
 	serviceName          *C.char
 	serviceNamespace     *C.char
@@ -2742,6 +2777,7 @@ type openTelemetrySignalConfig struct {
 	transport            OpenTelemetryTransport
 	endpoint             string
 	headers              map[string]string
+	headerEnv            map[string]string
 	resourceAttributes   map[string]string
 	serviceName          string
 	serviceNamespace     string
@@ -2754,6 +2790,10 @@ func newOpenTelemetrySignalCStrings(config openTelemetrySignalConfig) (openTelem
 	if err != nil {
 		return openTelemetrySignalCStrings{}, err
 	}
+	encodedHeaderEnv, err := jsonMarshal(config.headerEnv)
+	if err != nil {
+		return openTelemetrySignalCStrings{}, err
+	}
 	encodedResources, err := jsonMarshal(config.resourceAttributes)
 	if err != nil {
 		return openTelemetrySignalCStrings{}, err
@@ -2762,6 +2802,7 @@ func newOpenTelemetrySignalCStrings(config openTelemetrySignalConfig) (openTelem
 		transport:            C.CString(string(config.transport)),
 		endpoint:             C.CString(config.endpoint),
 		headers:              C.CString(string(encodedHeaders)),
+		headerEnv:            C.CString(string(encodedHeaderEnv)),
 		resourceAttributes:   C.CString(string(encodedResources)),
 		serviceName:          C.CString(config.serviceName),
 		serviceNamespace:     optionalCString(config.serviceNamespace),
@@ -2774,6 +2815,7 @@ func (values *openTelemetrySignalCStrings) free() {
 	C.free(unsafe.Pointer(values.transport))
 	C.free(unsafe.Pointer(values.endpoint))
 	C.free(unsafe.Pointer(values.headers))
+	C.free(unsafe.Pointer(values.headerEnv))
 	C.free(unsafe.Pointer(values.resourceAttributes))
 	C.free(unsafe.Pointer(values.serviceName))
 	C.free(unsafe.Pointer(values.serviceNamespace))
@@ -2834,6 +2876,9 @@ func normalizeOpenTelemetryLogConfig(config OpenTelemetryLogConfig) (OpenTelemet
 	if config.Headers == nil {
 		config.Headers = map[string]string{}
 	}
+	if config.HeaderEnv == nil {
+		config.HeaderEnv = map[string]string{}
+	}
 	if config.ResourceAttributes == nil {
 		config.ResourceAttributes = map[string]string{}
 	}
@@ -2847,7 +2892,7 @@ func NewOpenTelemetryLogSubscriber(config OpenTelemetryLogConfig) (*OpenTelemetr
 		return nil, err
 	}
 	common, err := newOpenTelemetrySignalCStrings(openTelemetrySignalConfig{
-		config.Transport, config.Endpoint, config.Headers, config.ResourceAttributes,
+		config.Transport, config.Endpoint, config.Headers, config.HeaderEnv, config.ResourceAttributes,
 		config.ServiceName, config.ServiceNamespace, config.ServiceVersion, config.InstrumentationScope,
 	})
 	if err != nil {
@@ -2857,10 +2902,11 @@ func NewOpenTelemetryLogSubscriber(config OpenTelemetryLogConfig) (*OpenTelemetr
 	cSeverity := C.CString(string(config.MinimumSeverity))
 	defer C.free(unsafe.Pointer(cSeverity))
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_log_subscriber_create(
+	status := C.nemo_relay_otel_log_subscriber_create_v2(
 		common.transport,
 		common.endpoint,
 		common.headers,
+		common.headerEnv,
 		common.resourceAttributes,
 		common.serviceName,
 		common.serviceNamespace,
@@ -2962,6 +3008,9 @@ func normalizeOpenTelemetryMetricConfig(config OpenTelemetryMetricConfig) (OpenT
 	if config.Headers == nil {
 		config.Headers = map[string]string{}
 	}
+	if config.HeaderEnv == nil {
+		config.HeaderEnv = map[string]string{}
+	}
 	if config.ResourceAttributes == nil {
 		config.ResourceAttributes = map[string]string{}
 	}
@@ -2975,7 +3024,7 @@ func NewOpenTelemetryMetricSubscriber(config OpenTelemetryMetricConfig) (*OpenTe
 		return nil, err
 	}
 	common, err := newOpenTelemetrySignalCStrings(openTelemetrySignalConfig{
-		config.Transport, config.Endpoint, config.Headers, config.ResourceAttributes,
+		config.Transport, config.Endpoint, config.Headers, config.HeaderEnv, config.ResourceAttributes,
 		config.ServiceName, config.ServiceNamespace, config.ServiceVersion, config.InstrumentationScope,
 	})
 	if err != nil {
@@ -2985,10 +3034,11 @@ func NewOpenTelemetryMetricSubscriber(config OpenTelemetryMetricConfig) (*OpenTe
 	cTemporality := C.CString(string(config.Temporality))
 	defer C.free(unsafe.Pointer(cTemporality))
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_metric_subscriber_create(
+	status := C.nemo_relay_otel_metric_subscriber_create_v2(
 		common.transport,
 		common.endpoint,
 		common.headers,
+		common.headerEnv,
 		common.resourceAttributes,
 		common.serviceName,
 		common.serviceNamespace,

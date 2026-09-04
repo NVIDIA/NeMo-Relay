@@ -33,8 +33,8 @@ use nemo_relay::plugin::{
 };
 use nemo_relay_adaptive::plugin_component::{ComponentSpec, register_adaptive_component};
 use nemo_relay_adaptive::{
-    AcgComponentConfig, AdaptiveConfig, BackendSpec, ResponseCacheConfig, StateConfig,
-    ToolCacheConfig, ToolClass, ToolOverride,
+    AcgComponentConfig, AdaptiveConfig, BackendSpec, ResponseCacheConfig, ResponseCacheKeyStrategy,
+    StateConfig, ToolCacheConfig, ToolClass, ToolOverride,
 };
 use serde_json::{Value as Json, json};
 use tokio::sync::Mutex;
@@ -555,7 +555,7 @@ async fn invalid_config_is_rejected_by_validation() {
         response_cache: Some(ResponseCacheConfig {
             ttl_seconds: 0,
             bypass_rate: 2.0,
-            key_strategy: "semantic".to_string(),
+            key_strategy: ResponseCacheKeyStrategy::Unknown("semantic".to_string()),
             namespace: "invalid-config-test".to_string(),
             ..ResponseCacheConfig::default()
         }),
@@ -647,7 +647,7 @@ async fn response_cache_validation_diagnostics_identify_the_invalid_setting() {
 
     let mut cache = ResponseCacheConfig {
         namespace: "diagnostic-contract-test".to_string(),
-        key_strategy: "semantic".to_string(),
+        key_strategy: ResponseCacheKeyStrategy::Unknown("semantic".to_string()),
         tools: Some(ToolCacheConfig {
             enabled: true,
             default: ToolClass {
@@ -790,6 +790,50 @@ async fn hit_preserves_usage_on_the_end_event_and_reports_savings_on_the_mark() 
 
     drop(events);
     deregister_subscriber("response_cache_event_capture").unwrap();
+}
+
+#[tokio::test]
+async fn logical_strategy_reuses_across_reworded_tool_descriptions() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    // `logical` must be accepted by validation (activate_cache asserts no
+    // diagnostics) and must reuse across a reworded tool description end-to-end.
+    activate_cache(ResponseCacheConfig {
+        namespace: "logical-key-integration-test".to_string(),
+        key_strategy: ResponseCacheKeyStrategy::Logical,
+        ..ResponseCacheConfig::default()
+    })
+    .await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = counting_provider(Arc::clone(&calls), sample_body());
+
+    let request_with_tool = |description: &str| LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+            "messages": [{"role": "user", "content": "what is the weather?"}],
+            "temperature": 0.0,
+            "tools": [{"type": "function", "function": {
+                "name": "get_weather",
+                "description": description,
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}
+            }}]
+        }),
+    };
+
+    call(&provider, request_with_tool("Get the weather for a city.")).await;
+    call(
+        &provider,
+        request_with_tool("Look up the current weather (reworded)."),
+    )
+    .await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "logical keying must serve the reworded-tool repeat from cache"
+    );
 }
 
 #[tokio::test]

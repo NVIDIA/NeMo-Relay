@@ -154,4 +154,13 @@ pub(crate) struct AgentInfo {
     pub path: Option<PathBuf>,
     pub version: Option<String>,
     pub annotation: String,
+    /// Agent-specific preflight checks, folded into `status` above.
+    ///
+    /// Empty for every agent whose setup NeMo Relay writes itself, because
+    /// `annotation` already says everything there is to say about it. pi is the
+    /// exception: its hooks live in an extension the *user* installs, so where
+    /// that extension sits decides whether pi loads it at all, and that is a
+    /// finding with its own status rather than a sentence in a summary.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<Check>,
 }

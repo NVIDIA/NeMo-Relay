@@ -185,6 +185,7 @@ func TestResponseCacheConfigReachesTypedSurface(t *testing.T) {
 	assertResponseCacheConstructorDefaults(t, rc)
 	rc.Namespace = responseCacheTestNamespace
 	rc.CacheNondeterministic = true
+	rc.KeyStrategy = ResponseCacheKeyStrategyLogical
 	rc.Backend = &backend
 	assertResponseCacheJSONSurface(t, rc)
 	assertResponseCacheValidation(t, rc)
@@ -197,6 +198,9 @@ func assertResponseCacheConstructorDefaults(t *testing.T, config ResponseCacheCo
 	}
 	if config.Priority == nil || *config.Priority != 50 {
 		t.Fatalf("constructor priority default mismatch: %#v", config.Priority)
+	}
+	if config.KeyStrategy != ResponseCacheKeyStrategyExactRequest {
+		t.Fatalf("constructor key strategy default mismatch: %#v", config.KeyStrategy)
 	}
 }
 
@@ -224,6 +228,9 @@ func assertResponseCacheJSONSurface(t *testing.T, responseCache ResponseCacheCon
 	}
 	if v, ok := section["cache_nondeterministic"].(bool); !ok || !v {
 		t.Fatalf("explicit cache_nondeterministic=true was not preserved: %#v", section["cache_nondeterministic"])
+	}
+	if section["key_strategy"] != string(ResponseCacheKeyStrategyLogical) {
+		t.Fatalf("logical key strategy was not preserved: %#v", section["key_strategy"])
 	}
 	if b, ok := section["backend"].(map[string]any); !ok || b["kind"] != "in_memory" {
 		t.Fatalf("backend not preserved: %#v", section["backend"])

@@ -315,6 +315,80 @@ pub(super) fn validate_signal_headers(headers: &HashMap<String, String>) -> Resu
     Ok(())
 }
 
+pub(super) fn resolve_header_env(
+    headers: &HashMap<String, String>,
+    header_env: &HashMap<String, String>,
+) -> Result<HashMap<String, String>> {
+    let mut normalized = HashSet::new();
+    for key in headers.keys() {
+        normalized.insert(key.to_ascii_lowercase());
+    }
+
+    for (key, variable) in header_env {
+        if !normalized.insert(key.to_ascii_lowercase()) {
+            return Err(OpenTelemetryError::InvalidHeader {
+                key: key.clone(),
+                message:
+                    "header names must be unique across headers and header_env ignoring ASCII case"
+                        .to_string(),
+            });
+        }
+        reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|error| {
+            OpenTelemetryError::InvalidHeader {
+                key: key.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        if variable.trim().is_empty()
+            || variable.trim() != variable
+            || variable.contains(['\0', '='])
+        {
+            return Err(OpenTelemetryError::InvalidHeader {
+                key: key.clone(),
+                message: "header_env must name a nonblank environment variable without surrounding whitespace, '=' or NUL"
+                    .to_string(),
+            });
+        }
+    }
+
+    let mut resolved = headers.clone();
+    for (key, variable) in header_env {
+        let value = match std::env::var(variable) {
+            Ok(value) => value,
+            Err(std::env::VarError::NotPresent) => {
+                return Err(OpenTelemetryError::InvalidHeader {
+                    key: key.clone(),
+                    message: format!("environment variable {variable:?} is not set"),
+                });
+            }
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(OpenTelemetryError::InvalidHeader {
+                    key: key.clone(),
+                    message: format!("environment variable {variable:?} is not valid Unicode"),
+                });
+            }
+        };
+        if value.trim().is_empty() || value.trim() != value {
+            return Err(OpenTelemetryError::InvalidHeader {
+                key: key.clone(),
+                message: format!(
+                    "environment variable {variable:?} must contain a nonblank value without surrounding whitespace"
+                ),
+            });
+        }
+        reqwest::header::HeaderValue::from_str(&value).map_err(|_| {
+            OpenTelemetryError::InvalidHeader {
+                key: key.clone(),
+                message: format!(
+                    "environment variable {variable:?} does not contain a valid header value"
+                ),
+            }
+        })?;
+        resolved.insert(key.clone(), value);
+    }
+    Ok(resolved)
+}
+
 pub(super) fn reject_signal_header_environment(signal_variable: &'static str) -> Result<()> {
     for variable in ["OTEL_EXPORTER_OTLP_HEADERS", signal_variable] {
         if std::env::var_os(variable).is_some_and(|value| !value.is_empty()) {

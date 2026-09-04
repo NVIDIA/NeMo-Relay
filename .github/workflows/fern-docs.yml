@@ -36,14 +36,15 @@ jobs:
       docs: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.docs == 'true' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Detect changed paths
         id: filter
         if: ${{ github.event_name != 'workflow_dispatch' }}
-        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.01
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: .github/ci-path-filters.yml
 
@@ -67,10 +68,11 @@ jobs:
       UV_PYTHON_PREFERENCE: only-system
     steps:
       - name: Checkout source branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: source-checkout
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Load CI tool versions
         id: ci-config
@@ -84,12 +86,12 @@ jobs:
           cache-dependency-glob: ${{ github.workspace }}/source-checkout/uv.lock
 
       - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
       - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: false
           toolchain: ${{ steps.ci-config.outputs.rust_version }}
@@ -129,7 +131,7 @@ jobs:
         run: just docs
 
       - name: Checkout docs website branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: docs-website
           path: docs-checkout
@@ -171,7 +173,7 @@ jobs:
 
       - name: Comment preview URL on PR
         if: ${{ steps.preview.outputs.url != '' }}
-        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: nemo-relay-fern-preview
           number: ${{ steps.preview.outputs.pr_number }}
@@ -195,7 +197,7 @@ jobs:
       UV_PYTHON_PREFERENCE: only-system
     steps:
       - name: Checkout source branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.ref }}
           path: source-checkout
@@ -207,7 +209,7 @@ jobs:
         uses: ./source-checkout/.github/actions/load-ci-tool-versions
 
       - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
           package-manager-cache: false
@@ -252,10 +254,11 @@ jobs:
       UV_PYTHON_PREFERENCE: only-system
     steps:
       - name: Checkout source branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: source-checkout
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Load CI tool versions
         id: ci-config
@@ -269,12 +272,12 @@ jobs:
           cache-dependency-glob: ${{ github.workspace }}/source-checkout/uv.lock
 
       - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
       - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: false
           toolchain: ${{ steps.ci-config.outputs.rust_version }}
@@ -314,7 +317,7 @@ jobs:
         run: just docs
 
       - name: Checkout docs website branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: docs-website
           path: docs-checkout
@@ -418,18 +421,19 @@ jobs:
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
 
       - name: Checkout workflow tools
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: workflow-checkout
           fetch-depth: 1
           persist-credentials: false
 
       - name: Checkout source branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.version.outputs.tag }}
           path: source-checkout
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Load CI tool versions
         id: ci-config
@@ -443,12 +447,12 @@ jobs:
           cache-dependency-glob: ${{ github.workspace }}/source-checkout/uv.lock
 
       - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
       - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: false
           toolchain: ${{ steps.ci-config.outputs.rust_version }}
@@ -487,7 +491,7 @@ jobs:
         run: just docs-api-reference
 
       - name: Checkout docs website branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: docs-website
           path: docs-checkout

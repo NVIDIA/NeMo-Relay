@@ -457,8 +457,9 @@ pub struct AtofStreamSinkSectionConfig {
 ///
 /// When enabled, this section creates a dispatcher that opens a separate
 /// [`crate::observability::atif::AtifExporter`] for each top-level agent or turn scope. The
-/// `{session_id}` placeholder in [`AtifSectionConfig::filename_template`] is required so
-/// concurrent sibling trajectories cannot overwrite each other's files.
+/// historical `{session_id}` placeholder in [`AtifSectionConfig::filename_template`] expands to
+/// the trajectory scope UUID so concurrent sibling trajectories cannot overwrite each other's
+/// files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct AtifSectionConfig {
@@ -485,11 +486,11 @@ pub struct AtifSectionConfig {
     /// [`storage`]: Self::storage
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_directory: Option<PathBuf>,
-    /// Filename template. `{session_id}` is replaced with the top-level trajectory scope UUID, and
-    /// `{metadata.<path>:-fallback}` placeholders sanitize strings from the top-level scope
-    /// metadata into path-safe filename fragments or use the optional literal fallback. When
-    /// [`storage`] is non-empty, the rendered filename is appended to each backend's key prefix.
-    ///
+    /// Filename template. The historical `{session_id}` placeholder is always replaced with the
+    /// top-level trajectory scope UUID. `{metadata.<path>:-fallback}` placeholders sanitize strings from the
+    /// top-level scope metadata into path-safe filename fragments or use the optional literal
+    /// fallback. When [`storage`] is non-empty, the rendered filename is appended to each
+    /// backend's key prefix.
     /// [`storage`]: Self::storage
     #[serde(default = "default_atif_filename_template")]
     pub filename_template: String,
@@ -2289,9 +2290,9 @@ fn resolve_signal_headers(
                 "OpenTelemetry {signal}.endpoints[{index}] header {key:?} cannot appear in both headers and header_env"
             )));
         }
-        let value = std::env::var(variable).map_err(|error| {
+        let value = std::env::var(variable).map_err(|_| {
             PluginError::InvalidConfig(format!(
-                "OpenTelemetry {signal}.endpoints[{index}].header_env.{key} could not read environment variable {variable:?}: {error}"
+                "OpenTelemetry {signal}.endpoints[{index}].header_env.{key} could not read environment variable {variable:?}"
             ))
         })?;
         if value.trim().is_empty() || value.trim() != value {
@@ -2488,10 +2489,7 @@ impl AtifCorrelation {
                 .and_then(|value| value.get("session_id"))
                 .and_then(Json::as_str)
                 .map(ToString::to_string),
-            session_instance_id: current_scope_stack()
-                .read()
-                .ok()
-                .map(|stack| stack.root_uuid().to_string()),
+            session_instance_id: event.propagation_root_uuid().map(|uuid| uuid.to_string()),
             user_id: metadata
                 .and_then(|value| value.get("user_id"))
                 .and_then(Json::as_str)
@@ -2558,33 +2556,38 @@ impl AtifDispatcher {
             return None;
         }
 
-        // The top-level trajectory scope UUID is the ATIF session ID. The global
+        // The top-level trajectory scope UUID remains the artifact identity. The global
         // dispatcher records the start event itself because the scope-local
         // subscriber is attached after that start event has already been
         // emitted.
-        let session_id = event.uuid().to_string();
+        let trajectory_id = event.uuid().to_string();
+        let session_id = event
+            .propagation_root_uuid()
+            .unwrap_or(event.uuid())
+            .to_string();
         let (filename, local_root, local_path) =
-            match self.prepare_destination(&session_id, event.metadata()) {
+            match self.prepare_destination(&trajectory_id, event.metadata()) {
                 Ok(destination) => destination,
                 Err(error) => {
                     self.record_runtime_failure(
                         "atif.destination_render_failed",
                         Some("filename_template".into()),
                         error.clone(),
-                        Some(session_id.clone()),
+                        Some(trajectory_id.clone()),
                     );
                     log::warn!(
                         target: "nemo_relay.observability",
                         event = "atif_destination_render_failed",
                         plugin_kind = OBSERVABILITY_PLUGIN_KIND,
                         exporter = "atif",
-                        session_id = session_id.as_str();
+                        trajectory_id = trajectory_id.as_str();
                         "ATIF destination rendering failed: {error}"
                     );
                     return None;
                 }
             };
-        let exporter = AtifExporter::new(session_id.clone(), self.agent_info());
+        let exporter =
+            AtifExporter::new_for_trajectory(session_id, trajectory_id, self.agent_info());
         (exporter.subscriber())(event);
         let correlation = AtifCorrelation::from_event(event);
         self.scope_owners.insert(event.uuid(), event.uuid());
@@ -3165,6 +3168,7 @@ fn prepare_atif_payload(
     observed_events: Vec<Event>,
     correlation: AtifCorrelation,
 ) -> std::io::Result<PendingAtifWrite> {
+    let session_id = trajectory.session_id.clone();
     let mut value = serde_json::to_value(trajectory)?;
     if let Some(object) = value.as_object_mut() {
         let existing_extra = object.remove("extra");
@@ -3191,7 +3195,7 @@ fn prepare_atif_payload(
     let payload = serde_json::to_vec_pretty(&value)?;
     Ok(PendingAtifWrite {
         agent_uuid,
-        session_id: agent_uuid.to_string(),
+        session_id,
         filename,
         local_root,
         local_path,
@@ -3291,7 +3295,7 @@ fn is_top_level_trajectory_start(event: &Event) -> bool {
     };
     current_scope_stack()
         .read()
-        .map(|stack| stack.root_uuid() == parent_uuid)
+        .map(|stack| stack.root_uuid() == parent_uuid || stack.is_propagated_parent(parent_uuid))
         .unwrap_or(false)
 }
 
@@ -3419,9 +3423,9 @@ fn apply_otel_environment_headers(
     header_env: HashMap<String, String>,
 ) -> PluginResult<CoreOpenTelemetryConfig> {
     for (key, variable) in header_env {
-        let value = std::env::var(&variable).map_err(|error| {
+        let value = std::env::var(&variable).map_err(|_| {
             PluginError::InvalidConfig(format!(
-                "OpenTelemetry endpoints[{index}].header_env.{key} could not read environment variable {variable:?}: {error}"
+                "OpenTelemetry endpoints[{index}].header_env.{key} could not read environment variable {variable:?}"
             ))
         })?;
         if value.trim().is_empty() || value.trim() != value {

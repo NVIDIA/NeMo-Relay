@@ -25,6 +25,12 @@ the payload in a shared gateway envelope.
 - `POST /hooks/claude-code` accepts Claude Code hook JSON and returns
   Claude-compatible fields such as `continue` and permission decisions when the
   hook event supports them.
+- `POST /hooks/pi` accepts the hook JSON posted by the NeMo Relay pi extension.
+  It returns an empty object for an allowed call, or
+  `{"tool_call": {"tool_call_id": "…", "input": {…}}}` when a request intercept
+  rewrote the arguments and the extension must execute those instead. It returns
+  HTTP 403 with `error.type = "nemo_relay_guardrail_rejected"` when a guardrail
+  blocks one.
 
 When a hook closes a turn, subagent, or session scope, Relay returns the hook
 response after subscribers finish processing that scope-end event. This makes
@@ -55,9 +61,9 @@ under the active session scope.
 
 ## Transparent Run
 
-Use the agent shortcuts for no-install local observability. The wrapper starts
-a gateway on a dynamic `127.0.0.1` port, injects the resolved hook and gateway
-configuration into the launched coding agent, and stops the gateway when the
+Use the agent shortcuts for local observability. The wrapper starts a gateway on
+a dynamic `127.0.0.1` port, injects the resolved hook and gateway configuration
+into the launched coding agent, and stops the gateway when the
 agent exits. Relay owns the launched wrapper and its descendants as one process
 tree, so a gateway failure cannot leave an agent running without its private
 gateway and hook configuration. Interactive Unix launches transfer foreground
@@ -68,7 +74,16 @@ before Relay removes the injected configuration.
 ```bash
 nemo-relay codex
 nemo-relay claude
+nemo-relay pi
 ```
+
+`nemo-relay codex` and `nemo-relay claude` need no install: the wrapper injects
+their hooks per run. `nemo-relay pi` is the exception. pi has no native
+hook-configuration file, so its hooks can only originate inside a NeMo Relay
+extension that is already installed. On a clean machine the first-time setup
+wizard offers to install it; once a Relay configuration exists the wizard no
+longer runs, so install it with `nemo-relay install pi`. See
+[pi](/nemo-relay-cli/pi).
 
 Use `nemo-relay run -- <command>` when you want to launch an explicit command
 instead of the built-in shortcut:
@@ -125,14 +140,19 @@ environment, gateway URL, and final command without launching the agent.
 
 ## Persistent Host Integrations
 
-Use persistent integration installation to let Claude Code or Codex load Relay
-without a wrapper command:
+Use persistent integration installation to let a coding agent load Relay without
+a wrapper command:
 
 ```bash
 nemo-relay install claude-code
 nemo-relay install codex
+nemo-relay install pi
 nemo-relay install all
 ```
+
+`nemo-relay install pi` is not a marketplace install: pi has no marketplace, so
+Relay writes the extension into pi's own auto-discovery directory instead. See
+[pi](/nemo-relay-cli/pi).
 
 Claude Code and Codex use marketplace plugins. Their MCP clients can share the native gateway on
 `127.0.0.1:47632`. Every `nemo-relay mcp` process acquires that gateway when it
@@ -474,6 +494,11 @@ calling NeMo Relay APIs.
   agent-thought hook. These hints are not emitted as NeMo Relay events.
 - Compaction, notification, and unknown hook events become mark events under
   the active session scope.
+- Harnesses that report the *start* of a turn as well as its end open the turn
+  scope at that signal instead of lazily. pi does; Claude Code and Codex report
+  only `Stop`, so their turns stay lazily opened by the first event of the turn.
+  For a harness with an explicit turn start, a mark that arrives between turns
+  is recorded on the session scope rather than opening a turn to hold it.
 - Gateway requests emit NeMo Relay LLM start and end events under the active
   session scope. Before each LLM start, the gateway uses explicit subagent
   headers, pending hints, shared conversation/generation/request identifiers,
@@ -509,12 +534,23 @@ hints can also add `llm_correlation_source`, `llm_correlation_subagent_id`,
 `llm_correlation_conversation_id`, `llm_correlation_generation_id`,
 `llm_correlation_request_id`, and `llm_correlation_agent_type`.
 
-Generated hook bundles subscribe to the events needed for that mapping:
+Generated hook bundles subscribe to the events needed for that mapping. pi has
+no generated bundle — its extension posts these names directly:
 
 | Agent | LLM Lifecycle and Correlation Hooks | Scope, Tool, and Mark Hooks |
 | --- | --- | --- |
 | Claude Code | `UserPromptSubmit`, `Stop` | `SessionStart`, `SessionEnd`, `UserPromptExpansion`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Notification`, `PreCompact`, `PostCompact` |
 | Codex | `UserPromptSubmit`, `Stop` | `SessionStart`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `PreCompact`, `PostCompact` |
+| pi | none — pi's LLM spans come from real gateway traffic, not from hooks | `session_start`, `session_shutdown`, `agent_start`, `agent_end`, `agent_settled`, `turn_start`, `turn_end`, `session_before_compact`, `session_compact`, `model_redirect`, `tool_call`, `tool_arguments_transformed`, `tool_execution_end`, `user_bash`, `user_bash_end` |
+
+Three of pi's names are not pi hooks. The extension posts `model_redirect` after
+deciding whether to point the active model's provider at the gateway, from
+`session_start` and from every `model_select`; `tool_arguments_transformed` after
+applying a request intercept's rewrite; and `user_bash_end` to close the
+inline-shell span, because pi reports no completion for it. pi's own
+`tool_execution_start` is deliberately never forwarded — it fires before argument
+validation and for calls that never execute, so the extension uses it only to
+remember a tool name for the matching end.
 
 ## Hook Forwarding
 
@@ -564,6 +600,7 @@ application-mode caveats.
 
 - [Claude Code](/nemo-relay-cli/claude-code)
 - [Codex](/nemo-relay-cli/codex)
+- [pi](/nemo-relay-cli/pi)
 - [Coding Agent Installation](/nemo-relay-cli/plugin-installation)
 
 Each guide covers transparent run setup, gateway routing, hook smoke tests,

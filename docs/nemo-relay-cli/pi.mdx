@@ -1,0 +1,633 @@
+---
+title: "pi"
+description: ""
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this guide to observe local [pi](https://github.com/earendil-works/pi)
+sessions and to gate pi tool calls and model calls on a NeMo Relay policy. The pi
+integration is a proof of concept. Tool and turn activity reach Relay when two
+things hold: the gateway is reachable, and no other pi extension preempts the
+hook first. The extension defaults to failing **open**, so an unavailable gateway
+lets pi carry on with that activity unrecorded; and pi runs every extension's
+handler for a hook, so an extension registered ahead of this one can decide a
+tool call before Relay's gate ever sees it.
+
+Model traffic reaches Relay when the gateway forwards to the endpoint the
+selected model would otherwise call, which is what [Model
+Redirection](#model-redirection) explains.
+
+pi has no native hook-configuration file, and its external event stream is
+observation-only, so hook calls cannot be injected from outside the process. They
+originate inside a pi *extension*, which Relay ships in this repository. The
+extension is a thin HTTP client: it forwards pi's lifecycle to `POST /hooks/pi`
+and gates tool calls on the gateway's verdict. All policy and all span
+construction stay in the gateway.
+
+<Warning>
+pi ships breaking changes through *minor* releases and has no major-release
+channel. The integration is verified against pi `v0.84.0`. Re-verify hook
+signatures after a pi upgrade; a silent shape change appears as missing spans,
+not as an error.
+</Warning>
+
+## Requirements
+
+Install pi 0.84.x, and confirm the NeMo Relay extension is reachable. Anything
+below 0.84.0 is rejected; anything above 0.84.x is accepted but reported as
+**unverified**, because pi can change a hook shape in a minor release and the
+symptom is missing spans rather than an error. `doctor` reports it in its output;
+the launcher records it as a warning-level log line, so `nemo-relay pi` shows it
+only at `--log-level warn` or lower:
+
+```bash
+nemo-relay doctor pi
+```
+
+That command reports two things nothing else can: which path the extension will
+load from and whether pi will trust it, and whether the gateway is answering at
+the URL the extension posts to. Run it first whenever Relay does not seem to be
+doing anything.
+
+## Install The Extension
+
+Install it once. The install is **persistent**: pi loads the extension on every
+later run, and both `nemo-relay pi` and `nemo-relay run --agent pi` find it
+without any variable being set.
+
+```bash
+nemo-relay install pi
+```
+
+This writes the extension into `~/.pi/agent/extensions/nemo-relay`, which pi
+auto-discovers. The `nemo-relay` binary carries the extension, so no repository
+checkout is needed. pi does not have to be on `PATH` either — the install writes
+a directory rather than driving pi.
+
+You may not need to run it explicitly. When `nemo-relay pi` or `nemo-relay
+config` runs the first-time setup wizard and pi is among the selected agents,
+setup offers this install if pi has no copy of the extension. The wizard only
+runs when no Relay configuration exists yet, so on a machine already configured
+for another agent, run the command above.
+
+pi has no plugin marketplace — no marketplace manifest, no `pi plugin` verb, and
+no MCP client for a plugin-owned server to serve — so this is not a marketplace
+install like the Claude Code and Codex ones. `--install-dir` therefore does not
+apply: pi decides where its extensions live. Set `PI_CODING_AGENT_DIR` to move
+pi's whole configuration.
+
+Remove it with:
+
+```bash
+nemo-relay uninstall pi
+```
+
+Uninstall removes only the files the install recorded, and only while they still
+match what was written. A file you edited is kept, and so is the directory
+holding it.
+
+### Install It Yourself Instead
+
+Two manual routes, both untrusted-project-proof, if you would rather manage the
+extension yourself:
+
+```bash
+# 1 · file drop
+cp -r crates/cli/assets/pi-extension ~/.pi/agent/extensions/nemo-relay
+
+# 2 · pi install, from a LOCAL PATH -- never with --local
+pi install /path/to/NeMo-Relay/crates/cli/assets/pi-extension
+```
+
+Both copy from `crates/cli/assets/pi-extension`, which is where the extension's
+source lives and the only self-contained copy of it. `integrations/pi` holds the
+extension's README, TypeScript configuration and test suite, and reaches the
+source through symlinks that a copy may or may not follow.
+
+Relay resolves either route too — or `NEMO_RELAY_PI_EXTENSION`, if you set it —
+and passes what it finds to `-e`, which loads first and is never trust-gated. It
+needs one of them: it never promotes a project-scoped install to `-e`.
+
+<Warning>
+**Do not install a second copy.** pi de-duplicates its extension set by path
+rather than by package, so a copy in one place and a copy in another are two
+packages: both register hooks, every turn, tool and inline-shell event is
+reported twice, each turn closes as superseded by its own duplicate, and the
+inline-shell gate decides one command twice. `nemo-relay install pi` refuses
+when another copy would load beside it, and the launcher refuses to start. Keep
+one copy.
+
+**Project scope is the exception, and the two commands treat it differently.**
+`nemo-relay install pi` refuses when the current directory holds a project-scoped
+copy, because installing would be the act that creates the second one. The
+launcher does *not* refuse over it — it launches and prints a note — because a
+project copy loads only in a trusted project, and refusing would block every
+launch in an untrusted one over a copy that will not run.
+
+Both checks read only the current directory, `nemo-relay doctor pi` included. Run
+from outside the project, none of the three sees the copy.
+</Warning>
+
+Because the manual routes look exactly like the managed one, `nemo-relay install
+pi` never overwrites a directory it did not write, `--force` included, and
+`nemo-relay uninstall pi` never removes one. Every managed install records what
+it wrote, and anything without that record is left alone — whether it is a
+package with its own `package.json`, a bare `index.ts` (which pi loads too), or
+leftovers pi would not load at all. The recovery in every case is to remove the
+directory yourself.
+
+<Warning>
+**Do not install from a git URL.** pi has no subdirectory syntax for a git
+source: it clones the repository root and looks there for a `pi` manifest key or
+a top-level `extensions/` directory. This extension lives further down the tree,
+so the install reports success and loads nothing — while the clone's root
+`skills/` directory *is* picked up, giving you NeMo Relay's skills in pi and none
+of the gating.
+</Warning>
+
+The extension is **not published to npm**, deliberately: `nemo-relay install pi`
+and the two manual routes already cover user scope, and publishing would add a
+namespace, a build step and release wiring for one more route to the same files.
+
+<Warning>
+**Do not install into `.pi/extensions/` or with `pi install --local`.** pi adds
+project-scoped extensions to its candidate set only when the project is trusted,
+and `-p`, `--mode json` and `--mode rpc` never prompt for trust. Under the
+default policy the extension is dropped by a bare conditional — not an error
+path — so pi does not treat it as a failure and never reports it, and the
+extension cannot report it either, because it is not running. The only symptom
+is that Relay appears to do nothing. `nemo-relay doctor pi` warns about it.
+</Warning>
+
+## Transparent Run
+
+Use the wrapper for local observability that leaves your pi configuration
+untouched. It is **not install-free**: the extension has to be present already,
+because a hook can only originate inside it, so run the install above first. On a
+clean machine the first-time setup wizard offers that install; once a Relay
+configuration exists the wizard no longer runs, and this command fails instead
+and names the routes that fix it.
+
+```bash
+nemo-relay pi
+```
+
+Pass pi arguments after `--`:
+
+```bash
+nemo-relay pi -- -p "Summarize this repository."
+```
+
+This shortcut is equivalent to `nemo-relay run --agent pi`. The wrapper starts a
+gateway on a dynamic `127.0.0.1` port, loads the NeMo Relay extension with
+`pi -e <path>`, and passes the gateway URL to it through
+`NEMO_RELAY_PI_GATEWAY_URL`. `pi -e` is the reliable loader here: it is
+trust-ungated, loads before extension discovery, and survives `--no-extensions`,
+so a launched session is instrumented regardless of the user's own pi
+configuration.
+
+The launcher resolves the extension from the same places `nemo-relay doctor pi`
+looks — `NEMO_RELAY_PI_EXTENSION` first, then a user-scope install — so any
+install route above is enough and no variable is required. That includes the one
+`nemo-relay install pi` writes: pi extensions live in the user's own
+configuration directories, so Relay writes into one instead of managing a plugin
+root of its own as it does for Claude Code and Codex.
+
+A **project-scoped** install is deliberately never used. `-e` is not trust-gated,
+so passing one would load repository code pi itself declined to trust. Launch
+fails instead, and names the install routes that are not gated.
+
+The launcher also passes this invocation's proxy credential through
+`NEMO_RELAY_PROXY_CREDENTIAL`, and the extension sends it as
+`x-nemo-relay-proxy-token` on a redirected provider. A gateway started by `run`
+authenticates its own client before any intercept can rewrite the route, so
+without it a redirect would succeed and every model call would come back `401`. A
+standalone `nemo-relay --bind` daemon sets no credential and requires none.
+
+Inspect what would be launched without starting pi:
+
+```bash
+nemo-relay run --dry-run --print --agent pi
+```
+
+## Standalone Gateway
+
+Run a long-lived gateway and point pi at it by hand:
+
+```bash
+nemo-relay --bind 127.0.0.1:4040 &
+NEMO_RELAY_PI_GATEWAY_URL=http://127.0.0.1:4040 \
+  pi -e integrations/pi/index.ts
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `NEMO_RELAY_PI_GATEWAY_URL` | `http://127.0.0.1:4040` | Gateway base URL |
+| `NEMO_RELAY_PI_TIMEOUT_MS` | `5000` | Per-request timeout |
+| `NEMO_RELAY_PI_FAIL` | `open` | Set to `closed` to block tool calls when the gateway is unreachable |
+| `NEMO_RELAY_PI_REDIRECT` | `match` | `force` redirects without verifying the upstream; `off` disables redirection |
+| `NEMO_RELAY_PI_OPENAI_UPSTREAM` | unset | What the gateway forwards OpenAI-compatible traffic to. Set by `nemo-relay run` |
+| `NEMO_RELAY_PI_ANTHROPIC_UPSTREAM` | unset | What the gateway forwards Anthropic traffic to. Set by `nemo-relay run` |
+
+<Warning>
+Run headless pi with `< /dev/null`. pi drains piped standard input before the
+session starts and returns early only for a TTY, so under an automated harness
+it can block indefinitely before any hook fires.
+</Warning>
+
+## Captured Events
+
+The extension posts 15 event types, covering session, turn, tool and
+inline-shell activity. Twelve carry a pi hook's own name. The other three —
+`model_redirect`, `tool_arguments_transformed` and `user_bash_end` — are
+synthesized by the extension. The table below names where each one comes from.
+
+pi reports both ends of a turn, so Relay opens the turn scope at pi's own
+`turn_start` instead of inferring one, and a mark that arrives between turns is
+recorded on the session scope rather than opening an empty turn to hold it.
+
+| pi hook | Relay lifecycle |
+| --- | --- |
+| `session_start` / `session_shutdown` | Session scope. `session_shutdown` is ignored for `reason: "reload"`, which continues the same session |
+| `agent_start` / `agent_end` / `agent_settled` | Marks on the session scope |
+| `turn_start` / `turn_end` | Turn scope open and close |
+| `session_before_compact` | Mark. The compaction is announced, not yet done, and a later extension can still cancel it |
+| `session_compact` | Canonical `compaction` mark |
+| `session_start`, then every `model_select` | `model_redirect` mark, for each decision that explains something. Synthesized: the decision is re-evaluated per model, so a switch away from a provider the gateway fronts stops redirecting |
+| *(after a rewrite)* | `tool_arguments_transformed` mark. Synthesized, so the trace records that the arguments the tool ran were not the ones proposed |
+| `tool_call` | Tool span start, and the gate |
+| `tool_execution_end` | Tool span end, for every outcome including blocked |
+| `user_bash` | Tool span start named `user_bash`, and the inline shell gate |
+| *(after the `user_bash` verdict)* | `user_bash_end`, a tool span end. Synthesized by the extension the moment the gate decides, **before the command runs** — pi reports no completion for inline shell, so this span measures the policy decision and not the shell command's duration |
+
+For pi's structured tool results, the extension joins text parts in order and
+omits image and other non-text parts. **Tool-result text is truncated at 2000
+characters** before the extension forwards it. The overflow is replaced by a
+`... [truncated N chars]` suffix. A guardrail or subscriber that reads a tool
+result sees this bounded text projection, so do not write policy that depends on
+the tail of a long result or on non-text content.
+
+pi's `tool_execution_start` is deliberately not forwarded: it fires before
+argument validation and also for calls that never execute. `tool_result` is not
+forwarded either, because it does not fire at all for blocked calls and in the
+parallel path it fires before `tool_execution_end`.
+
+A blocked call still produces a well-formed tool span. The guardrail rejects
+before the span opens, but pi fires `tool_execution_end` for blocked calls too,
+and the gateway synthesizes the missing pair, tagged
+`tool_correlation_status: "agent_fallback"`.
+
+## Tool Gating
+
+For model-invoked tools, `tool_call` is the only pre-execution decision point
+that sees arguments: pi applies `--tools`, `--exclude-tools`, `--no-tools`, and
+the runtime `setActiveTools` at tool-registry construction, never per call. The
+user's own inline shell takes a different path and is gated separately. See
+[Inline Shell Gating](#inline-shell-gating).
+
+A guardrail rejection surfaces as HTTP 403 with
+`error.type = "nemo_relay_guardrail_rejected"` and the guardrail's own words in
+`error.reason`. The extension turns that into pi's `{block, reason}`.
+
+| Gateway response | Extension behavior |
+| --- | --- |
+| 2xx | Allow |
+| 403 with the guardrail marker | Block, using `error.reason` |
+| 403 without that marker | Fault — an authorization failure is not a policy decision |
+| Other status, timeout, unreachable | Fault, resolved by `NEMO_RELAY_PI_FAIL` |
+
+pi passes the block reason to the model verbatim, with no framing. Write
+guardrail reasons as guidance rather than as error codes: a reason that names a
+safe alternative produces a model that adapts, and a bare denial produces one
+that gives up.
+
+The default is fail-open, so an unreachable gateway does not brick the agent.
+`NEMO_RELAY_PI_FAIL=closed` opts in to blocking, and the block reason then says
+explicitly that it is an infrastructure fault rather than a judgment about the
+request — and *which* fault, because the four are debugged in four different
+places: nothing answered, nothing answered in time (the gateway may be up and
+slow), the gateway answered without a decision (a rejected payload, an unreadable
+body, a 403 with no guardrail marker), or the gate itself failed before the
+gateway was asked.
+
+## Argument Transforms
+
+A Relay request intercept can rewrite a tool call's arguments. The gateway never
+executes the tool, so the rewrite travels back in the allow response and the
+extension applies it to pi's `event.input` in place.
+
+| Response body | Meaning |
+| --- | --- |
+| `{}` | Allow, arguments unchanged |
+| `{"tool_call": {"tool_call_id": "…", "input": {…}}}` | Allow, but execute these arguments |
+
+`tool_call_id` is echoed so the extension can prove the rewrite belongs to the
+call it just posted. It applies the transform only on an exact string match. A
+body that carries `input` but names a different call, or no call at all, is
+refused — and a refused transform blocks, exactly as a shape violation does,
+because the alternative is running arguments the policy never approved.
+
+<Warning>
+The rewrite is **constrained, not validated**. pi validates tool arguments
+before the hook and never re-validates. The extension could read the tool's
+schema — `pi.getAllTools()` exposes it for built-ins too — but deliberately does
+not: pi's tool set is per-session mutable, so a schema read once can go stale
+mid-session. It enforces a shape invariant instead: a transform
+may rewrite the values of existing keys, preserving each value's JSON type. It
+may not add or remove keys, change a type, or change an array's length.
+
+That keeps the required keys and types intact, but it is not schema validation —
+`pattern`, `enum` and range constraints are not checked. A transform that
+rewrites a value to one the schema would reject will still execute.
+
+Conditional-execution guardrails decide on the arguments pi proposed, before the
+rewrite, and are not re-run on the result — the same order a managed tool call
+uses. A request intercept can therefore rewrite a value a guardrail would have
+refused. Put the decision in the guardrail, not in a transform that outruns it.
+</Warning>
+
+A transform that violates the invariant **blocks the call**, with a reason
+stating that a policy could not be applied rather than that the request was
+refused. Running the original arguments would silently discard the policy.
+
+The shipped `examples/rust-native-plugin` demonstrates the mechanism rather than
+a policy: its tool request intercept inserts `plugin_tag` and `plugin_tool` into
+the arguments, which adds keys and so blocks every pi tool call. Those two names
+are what you will see in the refusal reason. Enable it to see the refusal, not as
+a template to copy.
+
+## Inline Shell Gating
+
+pi's bang prefix runs a command outside the tool registry: `!git status` runs it
+and shows the model the output, and `!!git status` runs it and keeps the output
+out of the model's context. Neither fires `tool_call`, so tool gating does not
+cover them. Both reach pi's `user_bash` hook, which the extension gates through
+the same guardrail chain by posting the command as a tool span start.
+
+<Warning>
+The tool name is `user_bash`, not `bash`. A guardrail receives only the tool name
+and the arguments, so a policy can distinguish a command the user typed from one
+the model proposed only if the two arrive under different names. **A policy that
+must cover both has to name both** — a rule written for `bash` alone does not
+gate the bang prefix.
+</Warning>
+
+The posted arguments are `command`, `cwd`, and `exclude_from_context`, the last
+of which is `true` for the `!!` form.
+
+pi's `user_bash` hook has no block-and-reason contract, so a refusal is a
+synthetic failed command result that pi records as though the command had run:
+
+| Field | Value |
+| --- | --- |
+| `exitCode` | `126`, the shell convention for a command that was found but could not be executed |
+| `output` | An attribution line, a blank line, then the guardrail's reason verbatim |
+| `cancelled` | `false` — nothing was started |
+| `truncated` | `false` — the message is whole |
+
+`NEMO_RELAY_PI_FAIL` governs this path as well. A rewritten command is refused
+rather than run: pi's `user_bash` result can replace the result or the execution
+backend, but never the command itself.
+
+Two limits are worth planning around. The gate records the decision, not the
+command — pi reports no completion for inline shell, so the span closes as soon
+as the verdict arrives and measures the policy round trip. And the hook fires
+only in the interactive TUI and in RPC mode; headless `-p` has no input loop to
+type a bang prefix into.
+
+## Model Redirection
+
+pi has no base-URL flag and no generic environment override — it resolves a base
+URL per model from a generated catalog — so the extension points the active
+model's provider at the gateway directly, with
+`registerProvider(provider, { baseUrl })`. pi rewrites the URL of every existing
+model for that provider and keeps their API, headers, costs and context windows.
+
+The gateway forwards to one statically configured upstream per API family, set by
+`--openai-base-url` and `--anthropic-base-url`. Redirecting a model whose
+endpoint is not that upstream would send the request to the wrong provider —
+which does not produce a trace without spans, it breaks the session.
+
+**Under `nemo-relay pi` or `nemo-relay run --agent pi`, the extension names the
+endpoint instead**, in an `x-nemo-relay-upstream-base-url` header on each
+request, so the gateway forwards to a provider it was never configured for. The
+gateway honors that header only from a request carrying this invocation's proxy
+credential, which the launcher mints per run and gives only to the process it
+starts, and strips it before forwarding.
+
+**A named endpoint receives only the credential the request already carried.**
+Naming a destination does not obtain one: the gateway never attaches its own
+configured `Authorization` value, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` to an
+endpoint the client chose — those belong to the upstream it was configured for.
+pi sends the provider's own key for the provider it named, and that key travels;
+nothing else does.
+
+**A named endpoint must use `https`, unless it is loopback.** Because that
+credential travels to it, plain `http` to anything reachable from off the machine
+is refused. A local model server — `http://127.0.0.1:11434/v1` and the like — is
+allowed, since its traffic never reaches a network.
+
+**A named endpoint that cannot be used fails the request**, with `400` and a
+reason, rather than falling back to the gateway's configured upstream. The
+request was addressed to the endpoint it named, and quietly sending it somewhere
+else would deliver the prompt and the provider key to a different provider.
+
+**Redirects from a named endpoint are not followed.** The checks above apply to
+the URL that was named; a redirect names a different one. A `3xx` is returned to
+pi as it is, so a provider that redirects to a canonical host has to be named at
+that host instead.
+
+A **standalone `nemo-relay --bind` daemon issues no credential**, so it ignores
+the header and keeps the static behavior below. Point it at a provider with
+`--openai-base-url` / `--anthropic-base-url`, or launch through the wrapper.
+
+| Situation | Launched by `nemo-relay pi` | Standalone daemon |
+| --- | --- | --- |
+| Gateway upstream equals the model's endpoint | Redirected | Redirected |
+| Gateway forwards elsewhere | Redirected, naming the endpoint | Skipped (`upstream-mismatch`) |
+| Upstream unknown | Redirected, naming the endpoint | Skipped (`unknown-upstream`) |
+| Model's API has no gateway route | Skipped (`unserviceable-api`) | Skipped (`unserviceable-api`) |
+| The provider's models do not share one endpoint | Redirected only if both upstreams already point at it | Redirected only if both upstreams already point at it |
+
+`registerProvider` rewrites every model of the provider, not only the selected
+one, so the check is applied to the whole provider either way. A provider that
+mixes endpoints — Fireworks serves `anthropic-messages` at `/inference` and
+`openai-completions` at `/inference/v1` — is left alone even when the selected
+model matches, because redirecting it would move its siblings to an endpoint that
+has never heard of them.
+
+**The way through is configuration, not naming.** Point `--openai-base-url` and
+`--anthropic-base-url` at that provider's respective endpoints, and every model
+then already targets the gateway's upstream for its own family, so the whole
+provider redirects. That works on a launched session and a standalone daemon
+alike. Naming cannot substitute for it: one endpoint is named per provider, so a
+provider spanning two has no single value to send. It still fails if a sibling
+speaks an API the gateway has no route for at all.
+
+Each of these outcomes is recorded as a `model_redirect` mark on the session
+scope, so a trace with no LLM spans states its own reason. The decision is
+re-made on each model switch; the two skips that explain nothing — no model
+resolved yet, and a provider already redirected — are evaluated but not marked,
+because one per `session_start` is noise in every trace.
+
+To capture a specific provider, point the gateway at it:
+
+```bash
+nemo-relay --bind 127.0.0.1:4040 \
+  --openai-base-url https://integrate.api.nvidia.com/v1
+```
+
+32 of pi's 39 built-in providers speak an API the gateway serves. The seven that
+do not are Amazon Bedrock, Azure OpenAI Responses, Google, Google Vertex,
+Mistral, OpenAI Codex, and Radius.
+
+<Note>
+The denominator is `builtinProviders()`, not the 38 catalog files in
+`providers/data/`. Radius is a purely dynamic provider with no static catalog
+entry, so counting files loses it.
+</Note>
+
+<Warning>
+Point pi at the gateway **root**, not the root plus `/v1`. The Anthropic SDK
+appends `/v1/messages` itself, while the OpenAI SDK appends `/chat/completions`;
+the gateway serves both shapes from the root.
+</Warning>
+
+## Agent-Run Attribution
+
+One pi prompt can re-enter the agent run several times — provider retry,
+post-compaction recovery, or a queued follow-up — and pi's own `turnIndex`
+resets to 0 on each re-entry, so turn indices collide within one prompt.
+
+Relay's session model is flat (session → turn → tool) and is shared with Codex
+and Claude Code, so it gains no attempt level for pi. **Re-entry is therefore
+not nested**: two attempts of one prompt appear as more turns under one session.
+To keep them distinguishable, the extension sends two counters on every
+attributable hook, and the gateway promotes both into event metadata:
+
+- `attempt_index` — which agent-run attempt this event belongs to.
+- `turn_seq` — a session-monotonic turn counter, where pi's `turn_index` resets.
+
+Read them from `metadata` on turn scopes and tool spans, and from either
+`metadata` or the mark's `data` on marks. The turn scope's own `turn_index` is
+assigned by Relay and is monotonic; pi's colliding value stays in the payload.
+
+<Warning>
+`turn_seq` can repeat within one session. The counters live in the extension
+runtime, and pi rebuilds that runtime on `/reload` while the session id stays
+the same, so the counter restarts at 0. It orders turns within a runtime, not
+strictly within a session.
+</Warning>
+
+Subagents are not represented. pi has no nested-agent hook of its own, and a
+child pi process running this extension posts under its own session id, so it
+appears as an unrelated session rather than as a subagent.
+
+## Smoke Test
+
+Check hook forwarding directly. A 200 is an allow; a 403 with the guardrail
+marker is a block:
+
+```bash
+curl -f http://127.0.0.1:4040/healthz
+curl -s -w '\nHTTP:%{http_code}\n' -X POST http://127.0.0.1:4040/hooks/pi \
+  -H 'content-type: application/json' \
+  -d '{"hook_event_name":"tool_call","session_id":"smoke-pi","tool_call_id":"c1","tool_name":"read","input":{"path":"README.md"}}'
+```
+
+## Verify Export
+
+Complete a pi turn, then confirm the exporter output. With an ATOF file sink
+configured in `plugins.toml`, a single-tool turn produces a `pi` session scope,
+one `pi-turn` scope with `turn_source: turn_start`, and the tool span nested
+under it.
+
+If turn scopes are missing entirely, the extension is not loading. pi 0.84 prints
+the load failure on standard error and exits before the session starts, so read
+stderr first — the failure is reported, not silent. Running pi with `-e` pointing
+at the entry point directly isolates it.
+
+## Troubleshoot LLM Lifecycle
+
+Look for the `model_redirect` mark on the session scope: it names the outcome and
+the reason.
+
+`upstream-mismatch` and `unknown-upstream` appear only on a standalone daemon,
+which cannot be told where to forward. Launch through `nemo-relay pi` and the
+endpoint is named for you; otherwise point the gateway at the provider with
+`--openai-base-url` or `--anthropic-base-url`, or set
+`NEMO_RELAY_PI_REDIRECT=force` if you know the gateway is already correct.
+
+`unserviceable-api` means the model's provider speaks an API the gateway has no
+route for, so pick another model. `provider-mixed-endpoints` names the sibling
+model that blocked it — its provider's models do not share one endpoint, and a
+provider is redirected as a whole; select a model elsewhere.
+
+Tool and turn activity are unaffected by any of these.
+
+## Limitations
+
+### What The Gate Is Authoritative Over
+
+pi runs every `tool_call` handler unless one returns `block`, and all of them
+share the same mutable `input` object with no re-validation before execution.
+Loading with `-e` puts this gate first, which prevents an *earlier* extension
+pre-empting it — but an extension loaded after it can rewrite arguments Relay has
+already authorized, and those execute unreviewed.
+
+<Warning>
+pi exposes no ordering API and no post-chain hook, so this cannot be prevented
+from inside an extension. In a mixed extension stack, the tool gate is
+authoritative over **the model**, not over **the other extensions**.
+</Warning>
+
+### Tool-Result Policy Is Not Available
+
+Relay's only tool middleware that can change what a tool *returned* is the
+execution intercept, which wraps the callback and so owns execution. pi runs its
+tools in its own process and reports the outcome, and the gateway builds spans
+from hook posts rather than executing anything, so neither side ever holds that
+callback.
+
+<Warning>
+This is broader than pi. **A tool execution intercept registered by any plugin
+does not run under the CLI gateway at all** — the registry's only consumer is
+`tool_call_execute`, which the gateway never calls, because it applies policy
+through the hook path instead. Conditional-execution guardrails and request
+intercepts do run there, since both have standalone runners the gateway invokes
+directly; there is no response-phase equivalent to invoke.
+</Warning>
+
+### Interrupted Sessions
+
+pi registers **no SIGINT handler in any mode**. All three modes install handlers
+for `SIGTERM`, plus `SIGHUP` off Windows, and raw mode is set only by the
+interactive TUI — so under `-p`, `--mode json` and `--mode rpc`, Ctrl+C is a real
+SIGINT that terminates the process with teardown never running. pi's
+`session_shutdown` never fires, and the extension never drains its queue.
+
+The loss is bounded. Every hook the extension *awaits* has already reached the
+gateway: both gates and both turn boundaries block on their round trip. An
+interrupt can therefore drop only observability marks queued since the last
+awaited hook, and the gateway keeps everything already delivered — the session
+scope is left open rather than the trace being lost.
+
+| Exit | Teardown runs? |
+| --- | --- |
+| `/quit`, normal completion | Yes |
+| `SIGTERM`, `SIGHUP` | Yes |
+| `SIGINT` (Ctrl+C in a headless mode) | **No** |
+| `SIGKILL`, uncaught exception | **No** |
+
+### Gateway Round Trips
+
+pi awaits extension handlers on its critical path, so a blocking hook is
+synchronous by construction. Observability-only hooks are queued rather than
+awaited and drained at shutdown, so they do not charge that path — while the
+gateway answers. Posts go out one at a time in hook order, so a gating hook also
+waits for whatever is queued ahead of it: against a gateway that holds requests,
+the first gate of a session pays `NEMO_RELAY_PI_TIMEOUT_MS` once per queued post,
+not once.

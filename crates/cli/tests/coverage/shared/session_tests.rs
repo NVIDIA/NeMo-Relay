@@ -2256,7 +2256,7 @@ async fn codex_stop_snapshots_atif_without_session_end() {
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "codex-atif-stop");
     assert_eq!(atif["schema_version"], json!("ATIF-v1.7"));
-    assert_eq!(atif["trajectory_id"], atif["session_id"]);
+    assert_ne!(atif["trajectory_id"], atif["session_id"]);
     assert!(atif["subagent_trajectories"].is_null());
     assert_eq!(atif["final_metrics"]["total_steps"], json!(2));
 
@@ -2281,8 +2281,8 @@ async fn codex_stop_snapshots_atif_without_session_end() {
                 && event["scope_category"] == "end"
         })
         .expect("Codex Stop should close the turn scope");
-    assert_eq!(turn_start["uuid"], atif["session_id"]);
-    assert_eq!(turn_end["uuid"], atif["session_id"]);
+    assert_eq!(turn_start["uuid"], atif["trajectory_id"]);
+    assert_eq!(turn_end["uuid"], atif["trajectory_id"]);
     assert_eq!(
         turn_end["data"]["output"][0]["call_id"],
         json!("tool-call-1")
@@ -5784,4 +5784,494 @@ fn llm_start_with_content(
         streaming: false,
         metadata: json!({}),
     }
+}
+
+// --------------------------------------------------------------------------
+// pi turn boundaries and attempt attribution, end to end through the adapter
+// --------------------------------------------------------------------------
+
+/// Drive one pi hook payload through the real adapter and the session manager.
+///
+/// Going through `pi::adapt` rather than hand-building `NormalizedEvent`s is the point: the
+/// defects this covers -- turn scopes opening at the wrong event, and attribution accepted on the
+/// wire and then discarded -- both live in the classification and metadata layers, not in the
+/// session manager alone.
+async fn apply_pi_hook(manager: &SessionManager, payload: Value) {
+    let outcome = crate::agents::shared::adapters::pi::adapt(payload, &HeaderMap::new());
+    manager
+        .apply_events(&HeaderMap::new(), outcome.events)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn pi_turn_scopes_open_at_pis_own_boundary_and_carry_attempt_attribution() {
+    let subscriber_name = "cli-pi-turn-boundary-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured = Arc::new(StdMutex::new(
+        Vec::<(String, Option<ScopeCategory>, Value)>::new(),
+    ));
+    let events = captured.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            let Some(metadata) = event.metadata() else {
+                return;
+            };
+            if metadata.get("session_id").and_then(Value::as_str) != Some("pi-boundary-session") {
+                return;
+            }
+            events.lock().unwrap().push((
+                event.name().to_string(),
+                event.scope_category(),
+                metadata.clone(),
+            ));
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let session = json!({ "session_id": "pi-boundary-session" });
+    // One prompt, one attempt, one turn, one tool -- the shape every trace starts from.
+    for payload in [
+        json!({ "hook_event_name": "session_start", "reason": "startup" }),
+        json!({ "hook_event_name": "agent_start", "attempt_index": 0 }),
+        json!({
+            "hook_event_name": "turn_start", "turn_index": 0, "turn_seq": 0, "attempt_index": 0
+        }),
+        json!({
+            "hook_event_name": "tool_call", "tool_call_id": "call-1", "tool_name": "read",
+            "input": { "path": "README.md" }, "attempt_index": 0, "turn_seq": 0
+        }),
+        json!({
+            "hook_event_name": "tool_execution_end", "tool_call_id": "call-1",
+            "tool_name": "read", "status": "ok", "attempt_index": 0, "turn_seq": 0
+        }),
+        json!({
+            "hook_event_name": "turn_end", "turn_index": 0, "turn_seq": 0, "attempt_index": 0
+        }),
+        // The run-level tail. These trail the last turn_end and used to open an empty turn.
+        json!({ "hook_event_name": "agent_end", "attempt_index": 0 }),
+        json!({ "hook_event_name": "agent_settled", "attempts": 1, "attempt_index": 0 }),
+        json!({ "hook_event_name": "session_shutdown", "reason": "quit" }),
+    ] {
+        let mut merged = session.clone();
+        merged
+            .as_object_mut()
+            .unwrap()
+            .extend(payload.as_object().unwrap().clone());
+        apply_pi_hook(&manager, merged).await;
+    }
+
+    flush_subscribers().unwrap();
+    let captured = captured.lock().unwrap();
+
+    let turn_starts = captured
+        .iter()
+        .filter(|(name, category, _)| name == "pi-turn" && *category == Some(ScopeCategory::Start))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        turn_starts.len(),
+        1,
+        "pi reports one turn, so exactly one turn scope should exist; the run-level marks after \
+         turn_end must not open another. captured: {:?}",
+        captured
+            .iter()
+            .map(|(name, category, _)| (name.as_str(), *category))
+            .collect::<Vec<_>>()
+    );
+    let (_, _, turn_metadata) = turn_starts[0];
+    assert_eq!(turn_metadata["turn_source"], json!("turn_start"));
+    // Attribution on the scope itself, not only on a mark inside it: this is what makes "which
+    // attempt did this turn belong to" answerable by walking the scope tree.
+    assert_eq!(turn_metadata["attempt_index"], json!(0));
+    assert_eq!(turn_metadata["turn_seq"], json!(0));
+    // The gateway still assigns its own turn index and never trusts pi's, which resets on re-entry.
+    assert_eq!(turn_metadata["turn_index"], json!(1));
+
+    let tool_start = captured
+        .iter()
+        .find(|(name, category, _)| name == "read" && *category == Some(ScopeCategory::Start))
+        .expect("the tool span should exist");
+    assert_eq!(tool_start.2["attempt_index"], json!(0));
+    assert_eq!(tool_start.2["turn_seq"], json!(0));
+
+    assert_eq!(
+        captured
+            .iter()
+            .filter(|(name, category, _)| name == "pi-turn"
+                && *category == Some(ScopeCategory::End))
+            .count(),
+        1,
+        "the one turn should close exactly once"
+    );
+
+    // Every scope end names its own closer, not the hook that opened the scope. The session end
+    // reported `session_start` while `close_agent_scope` had no metadata channel, so bucketing
+    // ATOF by `hook_event_name` never yielded a session end at all.
+    let scope_end = |name: &str| {
+        captured
+            .iter()
+            .find(|(candidate, category, _)| {
+                candidate == name && *category == Some(ScopeCategory::End)
+            })
+            .unwrap_or_else(|| panic!("{name} should have closed"))
+            .2
+            .clone()
+    };
+    assert_eq!(
+        scope_end("pi")["hook_event_name"],
+        json!("session_shutdown")
+    );
+    assert_eq!(scope_end("pi-turn")["hook_event_name"], json!("turn_end"));
+    assert_eq!(
+        scope_end("read")["hook_event_name"],
+        json!("tool_execution_end")
+    );
+    // The opening identity is untouched, so a start and its end remain distinguishable.
+    let session_start = captured
+        .iter()
+        .find(|(name, category, _)| name == "pi" && *category == Some(ScopeCategory::Start))
+        .expect("the session scope should exist");
+    assert_eq!(session_start.2["hook_event_name"], json!("session_start"));
+
+    drop(captured);
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
+// A pi hook that resolves to nothing -- an empty object, an unknown name -- still opens a
+// session, under a synthetic id no later `session_shutdown` can ever match. pi's marks land on
+// the session scope rather than a turn, which is what `has_explicit_turn_start` is for, and the
+// idle sweeper's precondition was an open turn -- so those sessions were resident until process
+// shutdown while Codex's and Claude Code's were swept.
+#[tokio::test]
+async fn pi_sessions_that_only_ever_held_a_mark_are_swept() {
+    let manager = SessionManager::new(session_test_config());
+    for index in 0..3 {
+        apply_pi_hook(
+            &manager,
+            json!({ "session_id": format!("pi-sparse-{index}") }),
+        )
+        .await;
+    }
+    assert_eq!(manager.inner.lock().await.len(), 3);
+
+    let closed = manager
+        .close_idle_sessions_at(Instant::now(), Duration::from_secs(0), "idle_timeout")
+        .await
+        .unwrap();
+
+    assert_eq!(closed, 3, "every unannounced session should be swept");
+    assert_eq!(manager.inner.lock().await.len(), 0);
+}
+
+// The guard that keeps the sweep narrow. A session pi announced is a user sitting at an idle
+// prompt between turns, and closing it there would split one run into two traces.
+#[tokio::test]
+async fn an_announced_pi_session_idling_between_turns_is_not_swept() {
+    let manager = SessionManager::new(session_test_config());
+    let session = json!({ "session_id": "pi-announced-session" });
+    for payload in [
+        json!({ "hook_event_name": "session_start", "reason": "startup" }),
+        json!({ "hook_event_name": "turn_start", "turn_index": 0, "turn_seq": 0 }),
+        json!({ "hook_event_name": "turn_end", "turn_index": 0, "turn_seq": 0 }),
+    ] {
+        let mut merged = session.clone();
+        merged
+            .as_object_mut()
+            .unwrap()
+            .extend(payload.as_object().unwrap().clone());
+        apply_pi_hook(&manager, merged).await;
+    }
+
+    let closed = manager
+        .close_idle_sessions_at(Instant::now(), Duration::from_secs(0), "idle_timeout")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        closed, 0,
+        "an announced session between turns is not idle debris"
+    );
+    assert_eq!(manager.inner.lock().await.len(), 1);
+}
+
+// The re-entry case, which is why `turn_seq` exists: pi's `turn_index` restarts at 0 on every
+// attempt, so two turns in one session both call themselves turn 0.
+#[tokio::test]
+async fn pi_re_entry_produces_two_turns_attributed_to_two_attempts() {
+    let subscriber_name = "cli-pi-reentry-attribution-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured = Arc::new(StdMutex::new(Vec::<Value>::new()));
+    let events = captured.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.name() != "pi-turn" || event.scope_category() != Some(ScopeCategory::Start) {
+                return;
+            }
+            let Some(metadata) = event.metadata() else {
+                return;
+            };
+            if metadata.get("session_id").and_then(Value::as_str) != Some("pi-reentry-session") {
+                return;
+            }
+            events.lock().unwrap().push(metadata.clone());
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let session = json!({ "session_id": "pi-reentry-session" });
+    for payload in [
+        json!({ "hook_event_name": "session_start", "reason": "startup" }),
+        json!({ "hook_event_name": "agent_start", "attempt_index": 0 }),
+        json!({
+            "hook_event_name": "turn_start", "turn_index": 0, "turn_seq": 0, "attempt_index": 0
+        }),
+        json!({
+            "hook_event_name": "turn_end", "turn_index": 0, "turn_seq": 0, "attempt_index": 0
+        }),
+        json!({ "hook_event_name": "agent_end", "attempt_index": 0 }),
+        // Re-entry: pi's turn_index collides at 0 while turn_seq keeps counting.
+        json!({ "hook_event_name": "agent_start", "attempt_index": 1 }),
+        json!({
+            "hook_event_name": "turn_start", "turn_index": 0, "turn_seq": 1, "attempt_index": 1
+        }),
+        json!({
+            "hook_event_name": "turn_end", "turn_index": 0, "turn_seq": 1, "attempt_index": 1
+        }),
+        json!({ "hook_event_name": "agent_end", "attempt_index": 1 }),
+        json!({ "hook_event_name": "agent_settled", "attempts": 2, "attempt_index": 1 }),
+        json!({ "hook_event_name": "session_shutdown", "reason": "quit" }),
+    ] {
+        let mut merged = session.clone();
+        merged
+            .as_object_mut()
+            .unwrap()
+            .extend(payload.as_object().unwrap().clone());
+        apply_pi_hook(&manager, merged).await;
+    }
+
+    flush_subscribers().unwrap();
+    let captured = captured.lock().unwrap();
+    assert_eq!(
+        captured.len(),
+        2,
+        "one turn scope per pi turn: {captured:?}"
+    );
+    assert_eq!(
+        captured
+            .iter()
+            .map(|metadata| (
+                metadata["attempt_index"].clone(),
+                metadata["turn_seq"].clone()
+            ))
+            .collect::<Vec<_>>(),
+        vec![(json!(0), json!(0)), (json!(1), json!(1))],
+        "each turn scope must name the attempt it belonged to"
+    );
+    drop(captured);
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
+// pi's inline shell is the one tool event that can arrive with no turn open: `!git status` typed
+// at an idle prompt happens between turns, not inside one. Opening a turn to hold it would invent
+// a boundary pi never reported -- the same defect `has_explicit_turn_start` already fixed for
+// marks, reached from the tool side instead.
+#[tokio::test]
+async fn pi_inline_shell_between_turns_does_not_invent_a_turn() {
+    let subscriber_name = "cli-pi-inline-shell-scope-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured = Arc::new(StdMutex::new(Vec::<(String, Option<ScopeCategory>)>::new()));
+    let events = captured.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            let Some(metadata) = event.metadata() else {
+                return;
+            };
+            if metadata.get("session_id").and_then(Value::as_str) != Some("pi-inline-shell-session")
+            {
+                return;
+            }
+            events
+                .lock()
+                .unwrap()
+                .push((event.name().to_string(), event.scope_category()));
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let session = json!({ "session_id": "pi-inline-shell-session" });
+    for payload in [
+        json!({ "hook_event_name": "session_start", "reason": "startup" }),
+        json!({ "hook_event_name": "agent_start", "attempt_index": 0 }),
+        json!({
+            "hook_event_name": "turn_start", "turn_index": 0, "turn_seq": 0, "attempt_index": 0
+        }),
+        json!({
+            "hook_event_name": "turn_end", "turn_index": 0, "turn_seq": 0, "attempt_index": 0
+        }),
+        // The user types `!git status` at the prompt, after the turn closed.
+        json!({
+            "hook_event_name": "user_bash", "tool_call_id": "user-bash-0",
+            "tool_name": "user_bash",
+            "input": { "command": "git status", "cwd": "/work", "exclude_from_context": false },
+            "attempt_index": 0, "turn_seq": 0
+        }),
+        json!({
+            "hook_event_name": "user_bash_end", "tool_call_id": "user-bash-0",
+            "tool_name": "user_bash", "status": "ok", "attempt_index": 0, "turn_seq": 0
+        }),
+        json!({ "hook_event_name": "agent_end", "attempt_index": 0 }),
+        json!({ "hook_event_name": "agent_settled", "attempts": 1, "attempt_index": 0 }),
+        json!({ "hook_event_name": "session_shutdown", "reason": "quit" }),
+    ] {
+        let mut merged = session.clone();
+        merged
+            .as_object_mut()
+            .unwrap()
+            .extend(payload.as_object().unwrap().clone());
+        apply_pi_hook(&manager, merged).await;
+    }
+
+    flush_subscribers().unwrap();
+    let captured = captured.lock().unwrap();
+    let sequence = captured
+        .iter()
+        .map(|(name, category)| (name.as_str(), *category))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        sequence
+            .iter()
+            .filter(|(name, category)| *name == "pi-turn" && *category == Some(ScopeCategory::Start))
+            .count(),
+        1,
+        "pi reported one turn; the inline shell command must not open a second. sequence: \
+         {sequence:?}"
+    );
+    // The span still exists -- it is not being dropped, only re-parented onto the session scope,
+    // which is where a command typed between turns belongs.
+    assert!(
+        sequence.contains(&("user_bash", Some(ScopeCategory::Start)))
+            && sequence.contains(&("user_bash", Some(ScopeCategory::End))),
+        "the inline shell command must still produce a balanced span. sequence: {sequence:?}"
+    );
+    let turn_end = sequence
+        .iter()
+        .position(|(name, category)| *name == "pi-turn" && *category == Some(ScopeCategory::End))
+        .expect("the one turn should close");
+    let shell_start = sequence
+        .iter()
+        .position(|(name, category)| {
+            *name == "user_bash" && *category == Some(ScopeCategory::Start)
+        })
+        .expect("the inline shell span should open");
+    assert!(
+        turn_end < shell_start,
+        "the command was typed after the turn closed, so its span belongs outside it. sequence: \
+         {sequence:?}"
+    );
+    drop(captured);
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
+// A tool span parented to the *session* scope has to close with it.
+//
+// `close_turn` used to return early when no turn was open, before closing active tools -- so a
+// span `ensure_tool_scope_started` had parented to the session scope was simply abandoned, and the
+// session scope closed over a span that never ended. Reachable without any signal: the extension
+// posts `user_bash_end` through a fire-and-forget path that swallows every failure, so one dropped
+// post plus `/quit` produced a malformed trace rather than merely an incomplete one.
+#[tokio::test]
+async fn an_inline_shell_span_closes_even_when_its_end_never_arrives() {
+    let subscriber_name = "cli-pi-orphan-shell-span-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured = Arc::new(StdMutex::new(Vec::<(String, Option<ScopeCategory>)>::new()));
+    let events = captured.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            let Some(metadata) = event.metadata() else {
+                return;
+            };
+            if metadata.get("session_id").and_then(Value::as_str) != Some("pi-orphan-shell-session")
+            {
+                return;
+            }
+            events
+                .lock()
+                .unwrap()
+                .push((event.name().to_string(), event.scope_category()));
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let session = json!({ "session_id": "pi-orphan-shell-session" });
+    for payload in [
+        json!({ "hook_event_name": "session_start", "reason": "startup" }),
+        // No turn is ever opened, and no `user_bash_end` ever arrives.
+        json!({
+            "hook_event_name": "user_bash", "tool_call_id": "user-bash-0",
+            "tool_name": "user_bash",
+            "input": { "command": "git status", "cwd": "/work", "exclude_from_context": false },
+            "attempt_index": 0, "turn_seq": 0
+        }),
+        json!({ "hook_event_name": "session_shutdown", "reason": "quit" }),
+    ] {
+        let mut merged = session.clone();
+        merged
+            .as_object_mut()
+            .unwrap()
+            .extend(payload.as_object().unwrap().clone());
+        apply_pi_hook(&manager, merged).await;
+    }
+
+    flush_subscribers().unwrap();
+    let captured = captured.lock().unwrap();
+    let sequence = captured
+        .iter()
+        .map(|(name, category)| (name.as_str(), *category))
+        .collect::<Vec<_>>();
+
+    let opened = sequence
+        .iter()
+        .filter(|(name, category)| *name == "user_bash" && *category == Some(ScopeCategory::Start))
+        .count();
+    let closed = sequence
+        .iter()
+        .filter(|(name, category)| *name == "user_bash" && *category == Some(ScopeCategory::End))
+        .count();
+    assert_eq!(
+        (opened, closed),
+        (1, 1),
+        "the inline shell span must be closed by the shutdown that closes its parent, not left \
+         open. sequence: {sequence:?}"
+    );
+
+    // And it must close *strictly before* the scope that contains it.
+    //
+    // Named scopes on both sides, and `<`. The first version of this took the last `End` of
+    // any kind as the parent, which the shell's own `End` can satisfy -- so it compared a
+    // value against a maximum that included itself, could never fail, and still carried a
+    // comment claiming it enforced containment.
+    let shell_end = sequence
+        .iter()
+        .position(|(name, category)| *name == "user_bash" && *category == Some(ScopeCategory::End))
+        .expect("the inline shell span should close");
+    let session_end = sequence
+        .iter()
+        .position(|(name, category)| *name == "pi" && *category == Some(ScopeCategory::End))
+        .expect("the pi session scope should close");
+    assert!(
+        shell_end < session_end,
+        "no span may outlive the scope that opened it; the shell span closed at index \
+         {shell_end} against a session scope closing at {session_end}. sequence: {sequence:?}"
+    );
+    drop(captured);
+    deregister_subscriber(subscriber_name).unwrap();
 }

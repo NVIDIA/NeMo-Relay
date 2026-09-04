@@ -163,6 +163,9 @@ rust:
   - 'Cargo.toml'
   - 'crates/**/Cargo.toml'
   - 'crates/**/*.rs'
+  # The embedded pi extension is `.ts`/`.json` under the CLI crate. Changes must run
+  # the Rust tests that verify the embedded asset inventory and package contents.
+  - 'crates/cli/assets/**'
   - 'crates/worker-proto/proto/**'
   - 'crates/ffi/cbindgen.toml'
   - 'integrations/coding-agents/**'
@@ -189,6 +192,26 @@ node:
 
 openclaw:
   - 'integrations/openclaw/**'
+
+# The pi extension is a hook client for the CLI gateway, so a change to the
+# adapter it posts against should re-run the extension's own suite.
+#
+# Only the adapter paths are listed, deliberately. `test-pi` is a TypeScript
+# typecheck plus Node tests against a *stub* gateway, so it cannot observe the
+# `/hooks/pi` route, the event classifier, or the session manager no matter what
+# changes there -- and `crates/cli/src/sessions/**` alone would put a full Node
+# matrix on nearly every CLI change. Those files are covered by the `rust`
+# filter, which matches every `crates/**/*.rs` file and runs the workspace tests
+# that exercise the route for real.
+pi:
+  - 'crates/cli/src/agents/pi/**'
+  - 'crates/cli/src/agents/shared/adapters.rs'
+  # The extension's source lives under the CLI crate, because the published crate can only
+  # embed files below its own root. `integrations/pi` holds its README, tsconfig and test
+  # suite and symlinks the rest, so an edit to the extension itself lands here and would
+  # otherwise never reach the suite that tests it.
+  - 'crates/cli/assets/pi-extension/**'
+  - 'integrations/pi/**'
 
 python:
   - 'crates/python/Cargo.toml'

@@ -140,6 +140,15 @@ impl SourceCredentialDisposition {
         }
     }
 
+    /// Whether this request proved it belongs to the invocation that started this gateway.
+    ///
+    /// The launcher mints the credential per run and hands it only to the process it starts, so
+    /// this is the question to ask before honoring anything a client asks the gateway to *do*
+    /// rather than merely send -- naming an upstream, for one.
+    pub(crate) const fn is_relay_proxy_credential(self) -> bool {
+        matches!(self, Self::RelayProxyCredential { .. })
+    }
+
     pub(crate) const fn provider_credential_present(self) -> bool {
         match self {
             Self::RelayProxyCredential {

@@ -67,6 +67,16 @@ type AcgConfig struct {
 	StabilityThresholds *AcgStabilityThresholds `json:"stability_thresholds,omitempty"`
 }
 
+// ResponseCacheKeyStrategy selects how LLM response-cache keys are derived.
+type ResponseCacheKeyStrategy string
+
+const (
+	// ResponseCacheKeyStrategyExactRequest keys on the normalized request exactly.
+	ResponseCacheKeyStrategyExactRequest ResponseCacheKeyStrategy = "exact_request"
+	// ResponseCacheKeyStrategyLogical ignores tool-description wording while preserving interfaces.
+	ResponseCacheKeyStrategyLogical ResponseCacheKeyStrategy = "logical"
+)
+
 // ResponseCacheConfig configures the opt-in LLM response and tool-result cache: a section
 // of the adaptive config (a sibling to acg/adaptive_hints/tool_parallelism), not a
 // standalone plugin kind. The Rust core validates and installs it from the adaptive
@@ -87,8 +97,8 @@ type ResponseCacheConfig struct {
 	// CacheNondeterministic lets requests that are not explicitly deterministic
 	// use the cache (default false).
 	CacheNondeterministic bool `json:"cache_nondeterministic"`
-	// KeyStrategy is the key strategy. Only "exact_request" is supported.
-	KeyStrategy string `json:"key_strategy,omitempty"`
+	// KeyStrategy is the typed LLM response-cache key derivation strategy.
+	KeyStrategy ResponseCacheKeyStrategy `json:"key_strategy,omitempty"`
 	// HeaderAllowlist lists request headers folded into the key; never auth headers.
 	HeaderAllowlist []string `json:"header_allowlist,omitempty"`
 	// Backend selects the cache's own storage backend (distinct from the adaptive
@@ -225,7 +235,7 @@ func NewResponseCacheConfig() ResponseCacheConfig {
 		TTLSeconds:            &ttlSeconds,
 		Priority:              &priority,
 		CacheNondeterministic: false,
-		KeyStrategy:           "exact_request",
+		KeyStrategy:           ResponseCacheKeyStrategyExactRequest,
 	}
 }
 

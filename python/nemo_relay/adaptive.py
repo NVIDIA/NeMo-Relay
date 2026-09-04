@@ -10,6 +10,7 @@ plugins remain separate top-level components managed through ``nemo_relay.plugin
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, is_dataclass
+from enum import Enum
 from typing import Literal, Protocol, TypedDict, cast
 
 from nemo_relay import Json, JsonObject, UnsupportedBehavior
@@ -36,6 +37,13 @@ class ConfigReport(TypedDict):
     """Validation report for adaptive configuration."""
 
     diagnostics: list[ConfigDiagnostic]
+
+
+class ResponseCacheKeyStrategy(str, Enum):
+    """Supported LLM response-cache key derivation strategies."""
+
+    EXACT_REQUEST = "exact_request"
+    LOGICAL = "logical"
 
 
 class _SupportsToDict(Protocol):
@@ -370,7 +378,7 @@ class ToolCacheConfig:
 
 @dataclass(slots=True)
 class ResponseCacheConfig:
-    """Opt-in exact-match LLM response and tool-result cache settings.
+    """Opt-in LLM response and tool-result cache settings.
 
     This is a section of the adaptive component, not a standalone plugin kind.
     When present, the adaptive plugin installs the response-cache execution
@@ -386,7 +394,7 @@ class ResponseCacheConfig:
         bypass_rate: Probability in ``[0.0, 1.0]`` of skipping the cache and running live.
         cache_nondeterministic: Cache nondeterministic requests too; ``False``
             caches only requests explicitly pinned deterministic (``temperature`` = 0).
-        key_strategy: Key strategy. Only ``"exact_request"`` is supported.
+        key_strategy: Typed key derivation strategy.
         header_allowlist: Request headers folded into the key; never auth headers.
         backend: Cache storage backend (``in_memory`` or ``redis``).
         tools: Opt-in tool-result cache; ``None`` leaves it off.
@@ -397,7 +405,7 @@ class ResponseCacheConfig:
     priority: int = 50
     bypass_rate: float = 0.0
     cache_nondeterministic: bool = False
-    key_strategy: str = "exact_request"
+    key_strategy: ResponseCacheKeyStrategy = ResponseCacheKeyStrategy.EXACT_REQUEST
     header_allowlist: list[str] = field(default_factory=list)
     backend: BackendSpec = field(default_factory=BackendSpec.in_memory)
     tools: ToolCacheConfig | None = None
@@ -411,7 +419,11 @@ class ResponseCacheConfig:
                 "priority": self.priority,
                 "bypass_rate": self.bypass_rate,
                 "cache_nondeterministic": self.cache_nondeterministic,
-                "key_strategy": self.key_strategy,
+                "key_strategy": (
+                    self.key_strategy.value
+                    if isinstance(self.key_strategy, ResponseCacheKeyStrategy)
+                    else self.key_strategy
+                ),
                 "header_allowlist": self.header_allowlist,
                 "backend": _normalize(self.backend),
                 "tools": _normalize(self.tools),
@@ -557,6 +569,7 @@ __all__ = [
     "ConfigReport",
     "ComponentSpec",
     "ResponseCacheConfig",
+    "ResponseCacheKeyStrategy",
     "StateConfig",
     "TelemetryConfig",
     "ToolCacheConfig",

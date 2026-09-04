@@ -337,8 +337,12 @@ func assertCapturedPropagationContexts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CapturePropagationContext failed: %v", err)
 	}
-	if context.Version != 1 || context.RootUUID != nil || context.ParentUUID == "" {
-		t.Fatalf("unexpected rootless context: %+v", context)
+	if context.Version != 1 || context.RootUUID == nil || context.ParentUUID == "" {
+		t.Fatalf("unexpected rooted context: %+v", context)
+	}
+	rootless, err := CaptureRootlessPropagationContext()
+	if err != nil || rootless.RootUUID != nil || rootless.ParentUUID != context.ParentUUID {
+		t.Fatalf("unexpected explicit rootless context: %+v, %v", rootless, err)
 	}
 
 	rootUUID := propagationRootUUID

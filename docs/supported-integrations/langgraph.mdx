@@ -64,6 +64,53 @@ with nemo_relay.scope.scope("langgraph-request", nemo_relay.ScopeType.Agent):
 print(result)
 ```
 
+## Managed ToolNode Calls
+
+For a standalone LangGraph `ToolNode`, construct the node with
+`create_tool_node`. It routes each model-requested tool call through Relay's
+managed execution pipeline while preserving LangGraph state, store, and runtime
+argument injection.
+
+```python
+from langchain_core.messages import AIMessage
+from langchain_core.tools import tool
+from langgraph.graph import END, START, MessagesState, StateGraph
+from nemo_relay.integrations.langgraph import (
+    NemoRelayCallbackHandler,
+    create_tool_node,
+)
+
+@tool
+def get_weather(location: str) -> str:
+    """Return the weather for a location."""
+    return f"Sunny in {location}"
+
+builder = StateGraph(MessagesState)
+builder.add_node("tools", create_tool_node([get_weather]))
+builder.add_edge(START, "tools")
+builder.add_edge("tools", END)
+graph = builder.compile()
+
+with nemo_relay.scope.scope("langgraph-request", nemo_relay.ScopeType.Agent):
+    result = graph.invoke(
+        {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "get_weather", "args": {"location": "Boston"}, "id": "call-1"}],
+                )
+            ]
+        },
+        config={"callbacks": [NemoRelayCallbackHandler()]},
+    )
+```
+
+`NemoRelayCallbackHandler` records the graph lifecycle and provides its scopes.
+`create_tool_node` provides managed tool execution; use both for complete
+standalone LangGraph instrumentation. For custom ToolNode wrapper composition,
+construct `ToolNode` directly and pass `wrap_tool_call` and `awrap_tool_call`
+from this integration.
+
 For LangChain agents inside a LangGraph workflow, use `NemoRelayMiddleware` from
 this package the same way as the LangChain integration and pass the LangGraph
 `config` into the nested agent call:

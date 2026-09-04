@@ -1943,8 +1943,23 @@ fn dynamic_plugin_relay_compatibility_requires_the_zero_eight_baseline() {
     ] {
         validate_dynamic_plugin_relay_baseline(Some(requirement), "worker")
             .unwrap_or_else(|error| panic!("{requirement} should satisfy the baseline: {error}"));
+    }
+
+    for requirement in [
+        ">=0.8.0",
+        ">=0.8.0,<1.0",
+        ">=0.8.0-alpha,>=0.8.0",
+        ">0.7",
+        ">0.8,<1.0",
+    ] {
         validate_dynamic_plugin_relay_compatibility(Some(requirement), "worker")
             .unwrap_or_else(|error| panic!("{requirement} should be accepted: {error}"));
+    }
+
+    for requirement in ["=0.8", "^0.8", "=0.8.0"] {
+        let error = validate_dynamic_plugin_relay_compatibility(Some(requirement), "worker")
+            .expect_err("a range that excludes the current host should fail");
+        assert!(error.to_string().contains("but host version is"));
     }
 
     for requirement in [

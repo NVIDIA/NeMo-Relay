@@ -42,6 +42,7 @@ pub(crate) enum InstallTarget {
     Codex,
     #[value(name = "claude-code", alias = "claude")]
     ClaudeCode,
+    Pi,
     All,
 }
 
@@ -50,7 +51,8 @@ impl InstallTarget {
         match self {
             Self::Codex => vec![CodingAgent::Codex],
             Self::ClaudeCode => vec![CodingAgent::ClaudeCode],
-            Self::All => vec![CodingAgent::Codex, CodingAgent::ClaudeCode],
+            Self::Pi => vec![CodingAgent::Pi],
+            Self::All => vec![CodingAgent::Codex, CodingAgent::ClaudeCode, CodingAgent::Pi],
         }
     }
 
@@ -80,6 +82,29 @@ impl UninstallCommand {
     }
 }
 
+/// `--install-dir` names a marketplace root, and pi has none -- so under `all`, drop it.
+///
+/// Not by removing pi from the run. Filtering it out was the first attempt and it was
+/// worse than the problem: `install all --install-dir` then excluded pi silently, the
+/// "no supported host was detected" error named pi as undetected when it had been detected
+/// and filtered, and `uninstall all --install-dir` exited 0 leaving a managed extension in
+/// place where it had previously exited 1 and said why.
+///
+/// Clearing the flag for pi alone keeps every host in the run and gives each the only
+/// meaning the flag has for it. An explicit `install pi --install-dir` still errors,
+/// because there the flag is the user's stated intent rather than a default carried along
+/// by `all`.
+pub(super) fn scoped_for(
+    agent: CodingAgent,
+    target: InstallTarget,
+    install_dir: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if target.is_all() && matches!(agent, CodingAgent::Pi) {
+        return None;
+    }
+    install_dir
+}
+
 pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
     let target = command.host;
     let request = command.into_runtime();
@@ -91,14 +116,20 @@ pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
     };
     if agents.is_empty() {
         return Err(CliError::Install(
-            "no supported Claude Code or Codex host CLI was detected".into(),
+            "no supported Claude Code, Codex, or pi host CLI was detected".into(),
         ));
     }
     if !request.dry_run {
         crate::configuration::BootstrapChallengeKey::load()?;
     }
     run_agent_operations(agents, "install", |agent| {
-        crate::agents::install_integration(agent, request.clone())
+        crate::agents::install_integration(
+            agent,
+            crate::installation::InstallRequest {
+                install_dir: scoped_for(agent, target, request.install_dir.clone()),
+                ..request.clone()
+            },
+        )
     })
 }
 
@@ -107,7 +138,7 @@ pub(super) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError>
     let request = command.into_runtime();
     let candidates = target.agents();
     let agents = if target.is_all() {
-        crate::agents::installed_integrations(
+        crate::agents::uninstallable_integrations(
             &candidates,
             request.install_dir.as_deref(),
             request.force,
@@ -117,11 +148,17 @@ pub(super) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError>
     };
     if agents.is_empty() {
         return Err(CliError::Install(
-            "no installed Claude Code or Codex integration state was found".into(),
+            "no installed Claude Code, Codex, or pi integration state was found".into(),
         ));
     }
     run_agent_operations(agents, "uninstall", |agent| {
-        crate::agents::uninstall_integration(agent, request.clone())
+        crate::agents::uninstall_integration(
+            agent,
+            crate::installation::UninstallRequest {
+                install_dir: scoped_for(agent, target, request.install_dir.clone()),
+                ..request.clone()
+            },
+        )
     })
 }
 

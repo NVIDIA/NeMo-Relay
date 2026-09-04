@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -53,6 +55,9 @@ func TestNewOpenTelemetryConfigDefaults(t *testing.T) {
 	}
 	if config.Headers == nil || len(config.Headers) != 0 {
 		t.Fatalf("expected empty headers map, got %#v", config.Headers)
+	}
+	if config.HeaderEnv == nil || len(config.HeaderEnv) != 0 {
+		t.Fatalf("expected empty header environment map, got %#v", config.HeaderEnv)
 	}
 	if config.ResourceAttributes == nil || len(config.ResourceAttributes) != 0 {
 		t.Fatalf("expected empty resource attributes map, got %#v", config.ResourceAttributes)
@@ -185,9 +190,10 @@ func TestOpenTelemetrySubscriberRejectsInvalidRequiredFields(t *testing.T) {
 
 func TestOpenTelemetrySubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 	type otelRequest struct {
-		Path        string
-		ContentType string
-		Body        []byte
+		Path          string
+		ContentType   string
+		Authorization string
+		Body          []byte
 	}
 
 	requests := make(chan otelRequest, 4)
@@ -197,9 +203,10 @@ func TestOpenTelemetrySubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 			t.Errorf("read request body: %v", err)
 		}
 		requests <- otelRequest{
-			Path:        r.URL.Path,
-			ContentType: r.Header.Get("Content-Type"),
-			Body:        body,
+			Path:          r.URL.Path,
+			ContentType:   r.Header.Get("Content-Type"),
+			Authorization: r.Header.Get("Authorization"),
+			Body:          body,
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -208,11 +215,18 @@ func TestOpenTelemetrySubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, server.URL+otelTestPath)
 	config.ServiceName = "go-agent"
 	config.PromoteMetadataPrefixes = []string{"nv."}
+	variable := "NEMO_RELAY_GO_HEADER_" + time.Now().Format(otelTimeFormat)
+	secret := "Bearer go-activation-secret"
+	t.Setenv(variable, secret)
+	config.HeaderEnv["authorization"] = variable
 	subscriber, err := NewOpenTelemetrySubscriber(config)
 	if err != nil {
 		t.Fatalf(newOpenTelemetrySubscriberFailed, err)
 	}
 	defer subscriber.Close()
+	if err := os.Setenv(variable, "Bearer go-changed-secret"); err != nil {
+		t.Fatalf("change header environment: %v", err)
+	}
 
 	name := "go_otel_e2e_" + time.Now().Format(otelTimeFormat)
 	if err := subscriber.Register(name); err != nil {
@@ -256,13 +270,61 @@ func TestOpenTelemetrySubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 		if request.ContentType != "application/x-protobuf" {
 			t.Fatalf("expected protobuf content type, got %q", request.ContentType)
 		}
+		if request.Authorization != secret {
+			t.Fatalf("expected activation-time authorization header, got %q", request.Authorization)
+		}
 		if len(request.Body) == 0 {
 			t.Fatal("expected non-empty OTLP request body")
 		}
+		if bytes.Contains(request.Body, []byte(secret)) {
+			t.Fatal("authorization value must not appear in the OTLP payload")
+		}
 		assertOtlpStringAttribute(t, request.Body, "nemo_relay.scope_type", "agent")
 		assertOtlpStringAttribute(t, request.Body, "nv.binding", "go")
+		diagnostics, err := subscriber.RuntimeDiagnostics()
+		if err != nil {
+			t.Fatalf("RuntimeDiagnostics failed: %v", err)
+		}
+		for _, diagnostic := range diagnostics {
+			if strings.Contains(diagnostic.Message, secret) {
+				t.Fatal("authorization value must not appear in runtime diagnostics")
+			}
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for OTLP request")
+	}
+}
+
+func TestOpenTelemetrySubscriberRejectsInvalidHeaderEnvWithoutSecretValues(t *testing.T) {
+	variable := "NEMO_RELAY_GO_INVALID_HEADER_" + time.Now().Format(otelTimeFormat)
+	secret := "relay-go-secret"
+
+	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, otelTestEndpoint)
+	config.HeaderEnv["authorization"] = variable
+	if _, err := NewOpenTelemetrySubscriber(config); err == nil {
+		t.Fatal("expected unset header environment variable to fail")
+	}
+
+	t.Setenv(variable, "  ")
+	if _, err := NewOpenTelemetrySubscriber(config); err == nil {
+		t.Fatal("expected blank header environment variable to fail")
+	}
+
+	if err := os.Setenv(variable, secret+"\ninvalid"); err != nil {
+		t.Fatalf("set invalid header value: %v", err)
+	}
+	if _, err := NewOpenTelemetrySubscriber(config); err == nil {
+		t.Fatal("expected invalid header value to fail")
+	} else if strings.Contains(err.Error(), secret) {
+		t.Fatal("invalid header error exposed the environment-derived value")
+	}
+
+	if err := os.Setenv(variable, "valid"); err != nil {
+		t.Fatalf("set valid header value: %v", err)
+	}
+	config.Headers["Authorization"] = "static"
+	if _, err := NewOpenTelemetrySubscriber(config); err == nil {
+		t.Fatal("expected case-insensitive header collision to fail")
 	}
 }
 

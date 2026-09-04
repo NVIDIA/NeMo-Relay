@@ -59,17 +59,22 @@ lifecycle, and trust requirements.
 ## Coding Agents Supported by the CLI
 
 The CLI supports local coding-agent sessions where agent hooks and provider
-traffic can reach the local Relay gateway. It rejects prerelease, malformed,
-and older CLI versions during installation, diagnostics, and transparent runs.
+traffic can reach the local Relay gateway. For Claude Code and Codex it rejects
+prerelease, malformed, and older CLI versions during installation, diagnostics,
+and transparent runs. `nemo-relay install pi` is the exception: it writes a
+directory and never runs pi, so it checks no version — diagnostics and transparent
+runs still do.
 
 | Agent | Minimum version | Supported CLI capabilities | Current limitations |
 | --- | --- | --- | --- |
 | Claude Code | 2.1.121 | Persistent install, transparent run, lifecycle hooks, local gateway routing, and pre-tool security | Claude desktop, web, and application sessions are unsupported unless they expose the same local hook and gateway controls. Optimization requires gateway-routed LLM traffic and available hooks. |
 | Codex CLI | 0.143.0 | Persistent install, transparent run, 10 supported plugin hooks, local gateway routing, and pre-tool security | Cloud or remote tasks that bypass the local machine have partial or no LLM capture. The plugin hook schema has no `SessionEnd`; Relay finalizes the cumulative session snapshot at `Stop`. Encrypted Codex multi-agent v2 payloads cannot be decrypted or reliably linked. |
+| pi | 0.84.x | Transparent run through a Relay-authored pi extension, 15 forwarded event types covering session, turn, tool and inline-shell activity, tool-call security, inline-shell security, and model-call security when redirection applies | Proof of concept. `nemo-relay install pi` writes the extension into pi's own auto-discovery directory rather than generating a marketplace plugin, because pi has no plugin marketplace; installing it yourself with `pi install` or a file drop works too, and every route persists. Model traffic is redirected only when the gateway forwards to the endpoint every model of the selected provider would otherwise call, because pi's provider registration is provider-wide; otherwise there are no LLM spans for that model. Seven of pi's 39 built-in providers speak an API the gateway has no route for. Subagents and nested pi processes appear as unrelated sessions. pi ships breaking changes through minor releases, so hook signatures need re-verification after an upgrade; a minor above 0.84.x is accepted but reported as unverified rather than supported. |
 
 For installation, diagnostics, and host-specific behavior, refer to [Coding Agent
 Installation](/nemo-relay-cli/plugin-installation), [Claude
-Code](/nemo-relay-cli/claude-code), and [Codex](/nemo-relay-cli/codex).
+Code](/nemo-relay-cli/claude-code), [Codex](/nemo-relay-cli/codex), and
+[pi](/nemo-relay-cli/pi).
 
 Hermes Agent includes NeMo Relay as a native in-process integration. It does
 not require a separate observability plugin or Relay CLI setup. Hermes Agent

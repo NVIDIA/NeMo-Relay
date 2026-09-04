@@ -18,15 +18,18 @@ const dataSchema: DataSchema = { name: 'example.fixture', version: '1' };
 
 const logSubscriber = new OpenTelemetryLogSubscriber({
   endpoint: 'http://localhost:4318/v1/logs',
+  headerEnv: { authorization: 'OTEL_LOG_AUTHORIZATION' },
   minimumSeverity: LogSeverity.Warn,
 });
 const metricSubscriber = new OpenTelemetryMetricSubscriber({
   endpoint: 'http://localhost:4318/v1/metrics',
+  headerEnv: { authorization: 'OTEL_METRIC_AUTHORIZATION' },
   temporality: MetricTemporality.Delta,
 });
 const traceSubscriber = new OpenTelemetrySubscriber({
   type: 'full',
   endpoint: 'http://localhost:4318/v1/traces',
+  headerEnv: { authorization: 'OTEL_TRACE_AUTHORIZATION' },
   completedSpanContextTtlMillis: 4_294_967_296n,
 });
 

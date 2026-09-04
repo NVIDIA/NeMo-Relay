@@ -9,7 +9,7 @@ use crate::agents::CodingAgent;
 use crate::configuration::{RELAY_PLUGIN_ID, RELAY_SOURCE_PLUGIN_ID};
 use crate::error::CliError;
 use crate::hooks::{generated_policy_hooks, transparent_hook_forward_commands};
-use crate::process::{PreparedAgentLaunch, insert_after_host};
+use crate::process::PreparedAgentLaunch;
 
 pub(crate) fn prepare(launch: &mut PreparedAgentLaunch, gateway_url: &str) -> Result<(), CliError> {
     let has_openai_key = std::env::var("OPENAI_API_KEY")
@@ -49,8 +49,99 @@ pub(crate) fn prepare(launch: &mut PreparedAgentLaunch, gateway_url: &str) -> Re
     }
     args.push("--config".to_string());
     args.push(session_hook_state_override(&hook_groups)?);
-    insert_after_host(&mut launch.argv, launch.host_index, args);
+    insert_config_in_command_scope(&mut launch.argv, launch.host_index, args);
     Ok(())
+}
+
+fn insert_config_in_command_scope(
+    argv: &mut Vec<String>,
+    host_index: usize,
+    values: impl IntoIterator<Item = String>,
+) {
+    debug_assert!(host_index < argv.len());
+    // Codex accepts configuration at each clap command level, but a nested command's
+    // overrides replace the parent scope. Keep Relay's provider and hook overrides in the
+    // deepest model-running `exec` scope. Parse positions rather than searching values so a
+    // command such as `codex mcp remove exec` keeps the root placement.
+    let Some(exec_index) = command_position(argv, host_index + 1)
+        .filter(|&index| matches!(argv[index].as_str(), "exec" | "e"))
+    else {
+        argv.splice(host_index + 1..host_index + 1, values);
+        return;
+    };
+    let insert_at = command_position(argv, exec_index + 1)
+        .filter(|&index| matches!(argv[index].as_str(), "fork" | "resume" | "review"))
+        .map_or(exec_index + 1, |index| index + 1);
+    argv.splice(insert_at..insert_at, values);
+}
+
+fn command_position(argv: &[String], mut index: usize) -> Option<usize> {
+    while let Some(argument) = argv.get(index).map(String::as_str) {
+        if argument == "--" {
+            return None;
+        }
+        if option_takes_separate_value(argument) {
+            index += 2;
+        } else if option_is_self_contained(argument) {
+            index += 1;
+        } else {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn option_is_self_contained(argument: &str) -> bool {
+    (argument.starts_with("--") && argument.contains('='))
+        || (argument.starts_with('-') && !argument.starts_with("--") && argument.len() > 2)
+        || matches!(
+            argument,
+            "--strict-config"
+                | "--full-auto"
+                | "--oss"
+                | "--dangerously-bypass-approvals-and-sandbox"
+                | "--dangerously-bypass-hook-trust"
+                | "--search"
+                | "--no-alt-screen"
+                | "--skip-git-repo-check"
+                | "--ephemeral"
+                | "--ignore-user-config"
+                | "--ignore-rules"
+                | "--json"
+                | "-h"
+                | "--help"
+                | "-V"
+                | "--version"
+        )
+}
+
+fn option_takes_separate_value(argument: &str) -> bool {
+    matches!(
+        argument,
+        "-c" | "--config"
+            | "--enable"
+            | "--disable"
+            | "--remote"
+            | "--remote-auth-token-env"
+            | "-i"
+            | "--image"
+            | "-m"
+            | "--model"
+            | "--local-provider"
+            | "-p"
+            | "--profile"
+            | "-s"
+            | "--sandbox"
+            | "-C"
+            | "--cd"
+            | "--add-dir"
+            | "-a"
+            | "--ask-for-approval"
+            | "--output-schema"
+            | "--color"
+            | "-o"
+            | "--output-last-message"
+    )
 }
 
 pub(crate) fn session_hook_state_override(generated: &Value) -> Result<String, CliError> {

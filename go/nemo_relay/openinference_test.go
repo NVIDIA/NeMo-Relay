@@ -15,6 +15,7 @@ import (
 type otelRequest struct {
 	Path        string
 	ContentType string
+	RelayRoute  string
 	Body        []byte
 }
 
@@ -73,6 +74,7 @@ func NewOtelTestServer(t *testing.T, requests chan<- otelRequest) *httptest.Serv
 		requests <- otelRequest{
 			Path:        r.URL.Path,
 			ContentType: r.Header.Get("Content-Type"),
+			RelayRoute:  r.Header.Get("x-relay-route"),
 			Body:        body,
 		}
 		w.WriteHeader(http.StatusOK)

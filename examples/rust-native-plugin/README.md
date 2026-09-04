@@ -9,7 +9,7 @@ This project is the complete native plugin used by the authoring guide. Its
 configuration, observation, request policy, execution wrappers, and runtime
 helpers live in separate source modules. Together they register the subscriber,
 all three event sanitizers, five tool surfaces, and six LLM surfaces exposed by
-the current typed 0.8.0 SDK.
+the current typed 0.9.0 SDK.
 
 Run the focused tests and build the shared library from this directory. The
 configuration tests isolate validation and schema contracts. The lifecycle test
@@ -51,3 +51,9 @@ reason must be nonempty. When registration control is enabled, `registration_nam
 and `allowed_registration_name` must differ. Refer to
 [Conditional Middleware Guardrails](../../docs/about-nemo-relay/concepts/conditional-middleware-guardrails.mdx)
 before enabling it against a discovered runtime target.
+
+The `documentation_tool_request` intercept **adds** keys to a tool's arguments.
+That is fine in process, but the pi extension accepts only a rewrite that
+preserves the argument shape, so running pi against a gateway with this example
+enabled blocks every tool call. See the argument-transform notes in
+`docs/nemo-relay-cli/pi.mdx`.

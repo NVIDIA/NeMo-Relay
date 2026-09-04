@@ -3139,8 +3139,9 @@ fn test_ffi_scope_stack_propagation_and_thread_binding_entry_points() {
         );
         assert_status!(
             nemo_relay_capture_traceparent(&mut traceparent),
-            NemoRelayStatus::InvalidArg
+            NemoRelayStatus::Ok
         );
+        nemo_relay_string_free(traceparent);
 
         let scope_name = cstring("ffi_traceparent_scope");
         let mut scope = ptr::null_mut();

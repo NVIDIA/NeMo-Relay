@@ -6,7 +6,7 @@ position: 21
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-The repository example builds a `cdylib` against the current 0.8.0 SDK and packages it
+The repository example builds a `cdylib` against the current 0.9.0 SDK and packages it
 with a strict schema. Run every command in this procedure from
 `examples/rust-native-plugin` unless a step says otherwise.
 
@@ -14,10 +14,10 @@ with a strict schema. Run every command in this procedure from
 
 The example crate exposes both `cdylib` and `rlib`. Relay loads the `cdylib`; the `rlib`
 lets the example integration tests call validation helpers without loading an unsafe
-dynamic boundary. The dependencies use the current 0.8.0 public SDK rather than a Git
+dynamic boundary. The dependencies use the current 0.9.0 public SDK rather than a Git
 revision or an older package line. The `path = "../../crates/plugin"` override exists
 only because this checked example builds inside the NeMo Relay repository. A standalone
-plugin depends on the published `nemo-relay-plugin = "0.8.0"` package without `path`.
+plugin depends on the published `nemo-relay-plugin = "0.9.0"` package without `path`.
 
 The checked example uses the following package and dependency configuration:
 
@@ -33,7 +33,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 futures = "0.3"
-nemo-relay-plugin = { version = "0.8.0", path = "../../crates/plugin" }
+nemo-relay-plugin = { version = "0.9.0", path = "../../crates/plugin" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["io-util", "macros", "time"] }
@@ -77,7 +77,7 @@ id = "examples.rust_native_policy"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=0.9.0,<1.0"
 native_api = "1"
 
 [defaults]

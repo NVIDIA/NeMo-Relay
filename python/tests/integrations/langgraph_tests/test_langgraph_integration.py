@@ -25,6 +25,11 @@ class State(TypedDict):
     value: int
 
 
+class ToolNodeState(TypedDict):
+    messages: Annotated[list[Any], operator.add]
+    offset: int
+
+
 def increment(state: State) -> State:
     return {"value": state["value"] + 1}
 
@@ -84,6 +89,331 @@ def test_handler_type(callback_handler: NemoRelayCallbackHandler):
 
     assert isinstance(callback_handler, LangChainCallbackHandler)
     assert isinstance(callback_handler, GraphCallbackHandler)
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_create_tool_node_routes_standalone_tool_calls_through_relay(
+    use_async: bool,
+    subscribed_events: list[nemo_relay.Event],
+):
+    from langchain_core.messages import AIMessage
+    from langchain_core.tools import tool
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.prebuilt import InjectedState
+
+    from nemo_relay.integrations.langgraph import create_tool_node
+
+    def add_offset(value: int, state: Any) -> str:
+        """Add the graph state's offset to a model-provided value."""
+        return str(value + state["offset"])
+
+    add_offset.__annotations__["state"] = Annotated[dict[str, Any], InjectedState]
+    add_offset_tool = tool(add_offset)
+
+    async def rewrite_tool_args(_name: str, args: nemo_relay.Json, next_call: Any) -> Any:
+        downstream = await next_call({**cast(dict[str, Any], args), "value": 4})
+        return nemo_relay.ToolExecutionInterceptOutcome(
+            downstream.result,
+            annotation=downstream.annotation,
+        )
+
+    node = create_tool_node([add_offset_tool], name="managed-tools")
+    builder = StateGraph(ToolNodeState)
+    builder.add_node("tools", node)
+    builder.add_edge(START, "tools")
+    builder.add_edge("tools", END)
+    graph = builder.compile()
+    nemo_relay.intercepts.register_tool_execution("langgraph-rewrite-tool-args", 1, rewrite_tool_args)
+    try:
+        with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent) as request:
+            input_state = {
+                "offset": 3,
+                "messages": [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {"name": "add_offset", "args": {"value": 1}, "id": "call-1"},
+                            {"name": "add_offset", "args": {"value": 2}, "id": "call-3"},
+                        ],
+                    )
+                ],
+            }
+            if use_async:
+                result = asyncio.run(graph.ainvoke(input_state))
+            else:
+                result = graph.invoke(input_state)
+    finally:
+        nemo_relay.intercepts.deregister_tool_execution("langgraph-rewrite-tool-args")
+
+    nemo_relay.subscribers.flush()
+    assert [message.content for message in result["messages"][-2:]] == ["7", "7"]
+    tool_events = [
+        event for event in subscribed_events if isinstance(event, nemo_relay.ScopeEvent) and event.name == "add_offset"
+    ]
+    assert len(tool_events) == 4
+    assert {event.scope_category for event in tool_events} == {"start", "end"}
+    assert all(event.parent_uuid == request.uuid for event in tool_events)
+    assert {event.category_profile["tool_call_id"] for event in tool_events if event.category_profile} == {
+        "call-1",
+        "call-3",
+    }
+
+
+def test_exported_tool_node_wrappers_support_direct_tool_node_construction(
+    subscribed_events: list[nemo_relay.Event],
+):
+    from langchain_core.messages import AIMessage
+    from langchain_core.tools import tool
+    from langgraph.graph import END, START, MessagesState, StateGraph
+    from langgraph.prebuilt import ToolNode
+
+    from nemo_relay.integrations.langgraph import awrap_tool_call, wrap_tool_call
+
+    @tool
+    def echo(value: str) -> str:
+        """Echo a value."""
+        return value
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("tools", ToolNode([echo], wrap_tool_call=wrap_tool_call, awrap_tool_call=awrap_tool_call))
+    builder.add_edge(START, "tools")
+    builder.add_edge("tools", END)
+    graph = builder.compile()
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        result = graph.invoke(
+            {
+                "messages": [
+                    AIMessage(
+                        content="",
+                        tool_calls=[{"name": "echo", "args": {"value": "managed"}, "id": "call-2"}],
+                    )
+                ]
+            }
+        )
+
+    nemo_relay.subscribers.flush()
+    assert result["messages"][-1].content == "managed"
+    assert any(
+        isinstance(event, nemo_relay.ScopeEvent)
+        and event.name == "echo"
+        and event.category_profile == {"tool_call_id": "call-2"}
+        for event in subscribed_events
+    )
+
+
+def test_create_tool_node_preserves_command_and_error_handling(
+    subscribed_events: list[nemo_relay.Event],
+):
+    from langchain_core.messages import AIMessage, ToolMessage
+    from langchain_core.tools import tool
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.types import Command
+
+    from nemo_relay.integrations.langgraph import create_tool_node
+
+    @tool
+    def update_offset():
+        """Update graph state through a LangGraph command."""
+        return Command(
+            update={
+                "offset": 9,
+                "messages": [ToolMessage(content="updated", tool_call_id="call-command")],
+            }
+        )
+
+    @tool
+    def fail() -> str:
+        """Raise a tool failure handled by ToolNode."""
+        raise ValueError("expected failure")
+
+    command_builder = StateGraph(ToolNodeState)
+    command_builder.add_node("command", create_tool_node([update_offset]))
+    command_builder.add_edge(START, "command")
+    command_builder.add_edge("command", END)
+    command_graph = command_builder.compile()
+
+    failure_builder = StateGraph(ToolNodeState)
+    failure_builder.add_node("failure", create_tool_node([fail], handle_tool_errors=True))
+    failure_builder.add_edge(START, "failure")
+    failure_builder.add_edge("failure", END)
+    failure_graph = failure_builder.compile()
+
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        command_result = command_graph.invoke(
+            {
+                "offset": 0,
+                "messages": [
+                    AIMessage(
+                        content="",
+                        tool_calls=[{"name": "update_offset", "args": {}, "id": "call-command"}],
+                    )
+                ],
+            }
+        )
+        failure_result = failure_graph.invoke(
+            {
+                "offset": 0,
+                "messages": [AIMessage(content="", tool_calls=[{"name": "fail", "args": {}, "id": "call-failure"}])],
+            }
+        )
+
+    nemo_relay.subscribers.flush()
+    assert command_result["offset"] == 9
+    assert command_result["messages"][-1].content == "updated"
+    assert failure_result["messages"][-1].status == "error"
+    assert {event.name for event in subscribed_events if isinstance(event, nemo_relay.ScopeEvent)} == {
+        "request",
+        "update_offset",
+        "fail",
+    }
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("policy", [ValueError, (ValueError,)])
+def test_create_tool_node_preserves_selective_error_handling(
+    use_async: bool,
+    policy: type[ValueError] | tuple[type[ValueError], ...],
+):
+    from langchain_core.messages import AIMessage
+    from langchain_core.tools import tool
+    from langgraph.graph import END, START, StateGraph
+
+    from nemo_relay.integrations.langgraph import create_tool_node
+
+    @tool
+    def value_error() -> str:
+        """Raise an error selected by the ToolNode policy."""
+        raise ValueError("handled")
+
+    @tool
+    def runtime_error() -> str:
+        """Raise an error outside the ToolNode policy."""
+        raise RuntimeError("unhandled")
+
+    def build_graph(tool: Any):
+        builder = StateGraph(ToolNodeState)
+        builder.add_node("tools", create_tool_node([tool], handle_tool_errors=policy))
+        builder.add_edge(START, "tools")
+        builder.add_edge("tools", END)
+        return builder.compile()
+
+    handled_graph = build_graph(value_error)
+    unhandled_graph = build_graph(runtime_error)
+    handled_input = {
+        "offset": 0,
+        "messages": [AIMessage(content="", tool_calls=[{"name": "value_error", "args": {}, "id": "call-value"}])],
+    }
+    unhandled_input = {
+        "offset": 0,
+        "messages": [AIMessage(content="", tool_calls=[{"name": "runtime_error", "args": {}, "id": "call-runtime"}])],
+    }
+
+    if use_async:
+
+        async def invoke_handled() -> ToolNodeState:
+            return await handled_graph.ainvoke(handled_input)
+
+        async def invoke_unhandled() -> ToolNodeState:
+            return await unhandled_graph.ainvoke(unhandled_input)
+
+        handled_result = asyncio.run(invoke_handled())
+        with pytest.raises(RuntimeError, match="internal error"):
+            asyncio.run(invoke_unhandled())
+    else:
+        handled_result = handled_graph.invoke(handled_input)
+        with pytest.raises(RuntimeError, match="internal error"):
+            unhandled_graph.invoke(unhandled_input)
+
+    assert handled_result["messages"][-1].status == "error"
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_create_tool_node_preserves_list_command_results(use_async: bool):
+    from langchain_core.messages import AIMessage, ToolMessage
+    from langchain_core.tools import tool
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.types import Command
+
+    from nemo_relay.integrations.langgraph import create_tool_node
+
+    @tool
+    def update_offset():
+        """Return a list containing a graph state update command."""
+        return [
+            Command(
+                update={
+                    "offset": 9,
+                    "messages": [ToolMessage(content="updated", tool_call_id="call-list")],
+                }
+            )
+        ]
+
+    builder = StateGraph(ToolNodeState)
+    builder.add_node("tools", create_tool_node([update_offset]))
+    builder.add_edge(START, "tools")
+    builder.add_edge("tools", END)
+    graph = builder.compile()
+    input_state = {
+        "offset": 0,
+        "messages": [AIMessage(content="", tool_calls=[{"name": "update_offset", "args": {}, "id": "call-list"}])],
+    }
+
+    if use_async:
+        result = asyncio.run(graph.ainvoke(input_state))
+    else:
+        result = graph.invoke(input_state)
+
+    assert result["offset"] == 9
+    assert result["messages"][-1].content == "updated"
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_create_tool_node_propagates_graph_interrupts(use_async: bool):
+    from langchain_core.messages import AIMessage
+    from langchain_core.tools import tool
+    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.types import interrupt
+
+    from nemo_relay.integrations.langgraph import create_tool_node
+
+    @tool
+    def await_approval() -> str:
+        """Pause the graph until approval is supplied."""
+        interrupt("approval required")
+        return "approved"
+
+    builder = StateGraph(ToolNodeState)
+    builder.add_node("tools", create_tool_node([await_approval]))
+    builder.add_edge(START, "tools")
+    builder.add_edge("tools", END)
+    graph = builder.compile(checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": str(uuid4())}}
+    input_state = {
+        "offset": 0,
+        "messages": [
+            AIMessage(content="", tool_calls=[{"name": "await_approval", "args": {}, "id": "call-interrupt"}])
+        ],
+    }
+
+    if use_async:
+
+        async def collect_updates() -> list[dict[str, Any]]:
+            return [update async for update in graph.astream(input_state, config, stream_mode="updates")]
+
+        updates = asyncio.run(collect_updates())
+    else:
+        updates = list(graph.stream(input_state, config, stream_mode="updates"))
+
+    assert any("__interrupt__" in update for update in updates)
+
+
+@pytest.mark.parametrize("wrapper_name", ["wrap_tool_call", "awrap_tool_call"])
+def test_create_tool_node_rejects_custom_tool_wrappers(wrapper_name: str):
+    from nemo_relay.integrations.langgraph import create_tool_node
+
+    with pytest.raises(ValueError, match="construct ToolNode directly"):
+        create_tool_node([], **{wrapper_name: lambda *_args: None})
 
 
 class TestGraphCallbacks:

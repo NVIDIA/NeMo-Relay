@@ -19,6 +19,7 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     hook_path: "/hooks/claude-code",
     version_product: "Claude Code",
     minimum_version: (2, 1, 121),
+    verified_through: None,
     hook_events: &[
         "SessionStart",
         "UserPromptSubmit",

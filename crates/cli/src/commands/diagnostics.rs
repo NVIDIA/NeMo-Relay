@@ -64,6 +64,19 @@ fn execute_plugin_doctor(
     } else {
         candidates
     };
+    // `--plugin` asks about marketplace plugin state, and pi has none -- the whole surface
+    // below is `unreachable!()` for it. `--plugin all` cannot land here because
+    // `installed_integrations` excludes pi; only an explicit `--plugin pi` can, and it did,
+    // panicking whether or not anything was installed.
+    if agents.contains(&crate::agents::CodingAgent::Pi) {
+        return Err(CliError::Install(
+            "pi has no marketplace plugin to diagnose: `nemo-relay install pi` writes an \
+             extension into pi's own auto-discovery directory rather than a Relay-managed \
+             plugin. Run `nemo-relay doctor pi` instead, which reports the extension's load \
+             path, whether pi will trust it, and whether it is up to date"
+                .into(),
+        ));
+    }
     if agents.is_empty() {
         return Err(CliError::Install(
             "no installed Claude Code or Codex integration state was found".into(),

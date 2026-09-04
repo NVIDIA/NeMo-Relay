@@ -25,7 +25,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::otel_signal::{
-    MetricMarkClassification, SignalRuntimeDiagnostics, classify_metric_mark,
+    MetricMarkClassification, SignalRuntimeDiagnostics, classify_metric_mark, resolve_header_env,
     should_relog_runtime_diagnostic,
 };
 use super::{
@@ -39,7 +39,7 @@ use super::{
     validate_metadata_promotion_prefixes,
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
-use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
+use crate::api::runtime::EventSubscriberFn;
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use crate::codec::response::CostEstimate;
@@ -237,6 +237,7 @@ pub struct OpenTelemetryConfig {
     otel_type: OpenTelemetryType,
     endpoint: String,
     headers: HashMap<String, String>,
+    header_env: HashMap<String, String>,
     resource_attributes: HashMap<String, String>,
     service_name: String,
     service_namespace: Option<String>,
@@ -261,6 +262,7 @@ impl OpenTelemetryConfig {
             otel_type: OpenTelemetryType::Full,
             endpoint: String::new(),
             headers: HashMap::new(),
+            header_env: HashMap::new(),
             resource_attributes: HashMap::new(),
             service_name: "unknown_service".to_string(),
             service_namespace: None,
@@ -330,6 +332,12 @@ impl OpenTelemetryConfig {
     /// Adds a header/metadata entry for the exporter.
     pub fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.insert(key.into(), value.into());
+        self
+    }
+
+    /// Maps an exporter header name to the environment variable supplying its value.
+    pub fn with_header_env(mut self, key: impl Into<String>, variable: impl Into<String>) -> Self {
+        self.header_env.insert(key.into(), variable.into());
         self
     }
 
@@ -558,7 +566,7 @@ impl OpenTelemetrySubscriber {
     }
 
     fn new_with_runtime_diagnostics(
-        config: OpenTelemetryConfig,
+        mut config: OpenTelemetryConfig,
         diagnostic_field: Option<String>,
     ) -> Result<Self> {
         if config.endpoint.trim().is_empty() {
@@ -578,6 +586,8 @@ impl OpenTelemetrySubscriber {
         validate_metadata_promotion_prefixes(&config.promote_resource_metadata_prefixes)
             .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
         reject_global_header_environment()?;
+        validate_headers(&config.headers)?;
+        config.headers = resolve_header_env(&config.headers, &config.header_env)?;
         validate_headers(&config.headers)?;
         let runtime_diagnostics = SignalRuntimeDiagnostics::new(diagnostic_field);
         let (provider, runtime) =
@@ -2119,12 +2129,9 @@ impl OtelEventProcessor {
         let Some(parent_uuid) = event.parent_uuid() else {
             return Context::new();
         };
-        let stack = current_scope_stack();
-        let stack = stack.read().expect("scope stack lock poisoned");
-        if !stack.is_propagated_parent(parent_uuid) {
+        let Some(root_uuid) = event.propagation_root_uuid() else {
             return Context::new();
-        }
-        let root_uuid = stack.root_uuid();
+        };
         Context::new().with_remote_span_context(SpanContext::new(
             relay_trace_id(root_uuid),
             relay_span_id(parent_uuid),

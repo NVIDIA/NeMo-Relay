@@ -18,7 +18,7 @@ use nemo_relay::api::scope::{
 };
 use nemo_relay::api::tool::{
     ToolCallEndParams, ToolCallParams, ToolHandle, tool_call, tool_call_end,
-    tool_conditional_execution,
+    tool_conditional_execution, tool_request_intercepts,
 };
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
@@ -59,6 +59,27 @@ const ROUTING_IDENTITY_HEADERS: &[&str] = &[
     "x-nemo-relay-identity-quality",
     "x-nemo-relay-source",
 ];
+
+/// Arguments a request intercept rewrote, on their way back to the agent that will execute them.
+///
+/// The gateway cannot apply a transform itself -- it never runs the tool -- so the rewrite has to
+/// travel back in the hook response and be applied by the extension. One pi hook post carries at
+/// most one `tool_call`, so a single value is enough; `tool_call_id` lets the receiver assert the
+/// response belongs to the call it just sent.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ToolArgumentTransform {
+    pub(crate) tool_call_id: String,
+    pub(crate) arguments: Value,
+}
+
+/// What one batch of hook events produced that the HTTP response still has to carry.
+///
+/// Empty for every agent except pi, and empty for pi unless a request intercept actually changed
+/// the arguments.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct HookEffects {
+    pub(crate) tool_argument_transform: Option<ToolArgumentTransform>,
+}
 
 #[derive(Clone)]
 pub(crate) struct SessionManager {
@@ -154,6 +175,9 @@ fn insert_routing_identity_header(headers: &mut Map<String, Value>, name: &str, 
 pub(super) struct Session {
     agent_kind: AgentKind,
     session_id: String,
+    /// Set by `start_tool` when a request intercept rewrote the arguments; taken by the routing
+    /// layer once the event batch has been applied, so the hook response can carry it back.
+    tool_argument_transform: Option<ToolArgumentTransform>,
     scope_stack: ScopeStackHandle,
     session_started: bool,
     session_metadata: Value,
@@ -311,7 +335,7 @@ impl SessionManager {
                 .entry(event.session_id().to_string())
                 .or_insert_with(|| owner.to_string());
         }
-        let released_owner_ids = self
+        let (released_owner_ids, _effects) = self
             .apply_events_inner(headers, events, Some(&prospective_owners), Some(owner))
             .await?;
         *owners = prospective_owners;
@@ -426,24 +450,33 @@ impl SessionManager {
     /// metadata reflects the actual agent. Note: agent-scope and observer identities are baked at
     /// scope-open time, so this upgrade applies to session metadata only — the
     /// provider-inferred kind set in `start_llm` is the primary defense.
-    #[cfg(test)]
+    ///
+    /// Unlike [`Self::apply_authenticated_events`] this binds no session owner, so it is only for
+    /// callers that cannot present an internal client credential. That is pi: its extension posts
+    /// to `/hooks/pi` from inside pi's own process with `fetch`, and on the standalone-daemon route
+    /// (`nemo-relay serve` plus a user-run `pi`) there is no launcher to hand it a bootstrap or
+    /// transparent-proxy token. Codex and Claude Code deliver hooks through a Relay subprocess that
+    /// loads the challenge key, so they take the authenticated path.
     pub(crate) async fn apply_events(
         &self,
         headers: &HeaderMap,
         events: Vec<NormalizedEvent>,
-    ) -> Result<(), CliError> {
+    ) -> Result<HookEffects, CliError> {
         self.apply_events_inner(headers, events, None, None)
             .await
-            .map(|_| ())
+            .map(|(_, effects)| effects)
     }
 
+    /// Returns the owner IDs whose sessions closed in this batch, plus what the batch produced for
+    /// the HTTP response.
     async fn apply_events_inner(
         &self,
         headers: &HeaderMap,
         events: Vec<NormalizedEvent>,
         authenticated_owners: Option<&HashMap<String, String>>,
         authenticated_owner: Option<&str>,
-    ) -> Result<HashSet<String>, CliError> {
+    ) -> Result<(HashSet<String>, HookEffects), CliError> {
+        let mut effects = HookEffects::default();
         let mut subscriber_deliveries = Vec::new();
         let mut released_owner_ids = HashSet::new();
         let mut alignment_state = self.alignment.lock().await;
@@ -491,17 +524,21 @@ impl SessionManager {
                 released_owner_ids.insert(original_session_id);
             }
             let event_kind = event_agent_kind(&event);
-            let (should_remove_session, subscriber_delivery) = apply_event_to_session(
-                &mut sessions,
-                &session_id,
-                event,
-                event_kind,
-                config.clone(),
-                is_agent_started,
-            )
-            .await?;
+            let (should_remove_session, subscriber_delivery, tool_argument_transform) =
+                apply_event_to_session(
+                    &mut sessions,
+                    &session_id,
+                    event,
+                    event_kind,
+                    config.clone(),
+                    is_agent_started,
+                )
+                .await?;
             if let Some(subscriber_delivery) = subscriber_delivery {
                 subscriber_deliveries.push(subscriber_delivery);
+            }
+            if tool_argument_transform.is_some() {
+                effects.tool_argument_transform = tool_argument_transform;
             }
             if is_agent_started {
                 // A just-opened parent may unlock one or more child SessionStart hooks that arrived
@@ -525,7 +562,7 @@ impl SessionManager {
         for subscriber_delivery in subscriber_deliveries {
             subscriber_delivery.wait().await?;
         }
-        Ok(released_owner_ids)
+        Ok((released_owner_ids, effects))
     }
 
     /// Legacy manual-lifecycle entry point retained for tests that drive correlation behavior
@@ -876,6 +913,7 @@ impl Session {
         Self {
             agent_kind,
             session_id,
+            tool_argument_transform: None,
             scope_stack: create_scope_stack(),
             session_started: false,
             session_metadata: Value::Null,
@@ -966,7 +1004,7 @@ impl Session {
     }
 
     fn is_idle_for(&self, now: Instant, timeout: Duration) -> bool {
-        self.turn_scope.is_some()
+        (self.turn_scope.is_some() || self.holds_only_an_unannounced_agent_scope())
             && self.active_gateway_calls == 0
             && self.llms.is_empty()
             && self.tools.is_empty()
@@ -993,6 +1031,7 @@ impl Session {
                 match event {
                     NormalizedEvent::AgentStarted(event) => self.start_agent(event).map(|()| None),
                     NormalizedEvent::AgentEnded(event) => self.end_agent(event).await,
+                    NormalizedEvent::TurnStarted(event) => self.start_turn_boundary(event).await,
                     NormalizedEvent::TurnEnded(event) => self.end_turn(event).await,
                     NormalizedEvent::SubagentStarted(event) => {
                         self.start_subagent(event).await.map(|()| None)
@@ -1231,6 +1270,27 @@ impl Session {
         Ok(subscriber_delivery)
     }
 
+    // Opens a turn at the harness's own `turn_start`, for harnesses that report one.
+    //
+    // Distinct from `start_turn`, which handles a *prompt* and has to tolerate a prompt arriving
+    // while a turn is open. A turn-start hook is unambiguous: whatever is still open belongs to
+    // the previous turn and is closed first, so a dropped or missing `turn_end` degrades into one
+    // superseded turn rather than merging two turns into one.
+    async fn start_turn_boundary(
+        &mut self,
+        event: SessionEvent,
+    ) -> Result<Option<SubscriberDelivery>, CliError> {
+        let mut subscriber_delivery = None;
+        if self.turn_scope.is_some() {
+            let (_, delivery) = self
+                .close_turn_for_reason("superseded_by_next_turn")
+                .await?;
+            subscriber_delivery = delivery;
+        }
+        self.open_turn(event.metadata, event.payload, "turn_start")?;
+        Ok(subscriber_delivery)
+    }
+
     // Lazily creates an implicit turn when gateway/tool/LLM activity arrives before a prompt hook.
     // This keeps direct gateway traffic and sparse hook streams bounded by the same lifecycle as
     // prompt-driven turns.
@@ -1239,6 +1299,21 @@ impl Session {
             return Ok(());
         }
         self.open_turn(event_metadata, Value::Null, "implicit")
+    }
+
+    // Chooses the enclosing scope for a tool event that arrives with no turn open.
+    //
+    // Same reasoning as `mark`: a harness that reports its own turn start is telling the gateway
+    // where turns begin, so a tool event between turns is genuinely between turns, and opening one
+    // to hold it invents a turn the harness never reported. pi's inline-shell gate is what makes
+    // this reachable -- a user typing `!cmd` at an idle prompt is outside every turn, while pi's
+    // model-invoked tool calls always arrive inside one. Codex and Claude Code report no turn
+    // start, so they keep opening turns lazily and are unaffected.
+    fn ensure_tool_scope_started(&mut self, event_metadata: Value) -> Result<(), CliError> {
+        if self.agent_kind.has_explicit_turn_start() && self.turn_scope.is_none() {
+            return self.ensure_agent_started(event_metadata);
+        }
+        self.ensure_turn_started(event_metadata)
     }
 
     fn ensure_turn_started_for_gateway(&mut self, start: &LlmGatewayStart) -> Result<(), CliError> {
@@ -1372,12 +1447,25 @@ impl Session {
         boundary_metadata: Option<Value>,
         reason: &str,
     ) -> Result<(Vec<String>, Option<SubscriberDelivery>), CliError> {
-        if self.turn_scope.is_none() {
-            return Ok((Vec::new(), None));
-        }
+        // Active spans are closed before the turn check, not after it.
+        //
+        // A tool span does not always live under a turn. `ensure_tool_scope_started` parents
+        // one to the *session* scope for a host with explicit turn boundaries when no turn is
+        // open, which is exactly what pi's inline shell does between turns -- so returning
+        // early here closed the session over a span that never ended, and the trace was
+        // malformed rather than merely incomplete. Reachable without a signal: the extension
+        // posts `user_bash_end` through a fire-and-forget path that swallows failures, so one
+        // dropped post plus `/quit` was enough.
+        //
+        // All three closers drain empty collections, so running them with no turn open costs
+        // nothing when there is nothing to close.
         self.close_active_llms(reason).await?;
         self.close_active_tools(reason).await?;
         let closed_subagents = self.close_active_subagents(reason).await?;
+        if self.turn_scope.is_none() {
+            self.clear_correlation_state();
+            return Ok((closed_subagents, None));
+        }
         let output = self.last_turn_llm_output.take().unwrap_or(output);
         self.clear_correlation_state();
         let subscriber_delivery = self.close_turn_scope(output, boundary_metadata)?;
@@ -1395,11 +1483,48 @@ impl Session {
         }
         let (_, turn_delivery) = self.close_turn_for_reason("closed_by_agent_end").await?;
         self.clear_correlation_state();
-        let agent_delivery = self.close_agent_scope(event.payload)?;
+        let agent_delivery = self.close_agent_scope(event.payload, Some(event.metadata))?;
         self.session_started = false;
         // Agent end is queued after turn end on the serial dispatcher. Waiting for the later
         // receipt therefore covers both terminal events without a process-wide flush.
         Ok(agent_delivery.or(turn_delivery))
+    }
+
+    // Closes what the idle sweeper found, which is normally the open turn.
+    //
+    // A session no harness lifecycle event ever announced has no turn to close: for a harness
+    // with an explicit turn start, a mark opens only the agent scope, so closing the turn alone
+    // would leave that scope -- and the session holding it -- resident until process shutdown.
+    // Sessions the harness *did* announce are left alone, because sitting at an idle prompt
+    // between turns is normal and closing the session there would split one run into two traces.
+    async fn close_idle_scopes_for_reason(
+        &mut self,
+        reason: &str,
+    ) -> Result<(Vec<String>, Option<SubscriberDelivery>), CliError> {
+        let (closed_subagents, turn_delivery) = self.close_turn_for_reason(reason).await?;
+        if !self.holds_only_an_unannounced_agent_scope() {
+            return Ok((closed_subagents, turn_delivery));
+        }
+        let agent_delivery = self.close_agent_scope(json!({ "status": reason }), None)?;
+        Ok((closed_subagents, agent_delivery.or(turn_delivery)))
+    }
+
+    // Whether this session's only content is an agent scope no harness lifecycle event asked for.
+    //
+    // `turn_index` stays at zero until the first turn opens, so a session that did real work
+    // keeps its agent scope even when its session-start hook was lost -- without that guard, a
+    // later `turn_start` would open a second agent scope on the same stack and split the trace.
+    fn holds_only_an_unannounced_agent_scope(&self) -> bool {
+        !self.session_started
+            && self.turn_index == 0
+            && self.agent_scope.is_some()
+            && self.turn_scope.is_none()
+            && self.subagents.is_empty()
+            && self.subagent_stacks.is_empty()
+            && self.subagent_stack.is_empty()
+            && self.llms.is_empty()
+            && self.tools.is_empty()
+            && self.active_gateway_calls == 0
     }
 
     async fn close_for_shutdown(&mut self, reason: &str) -> Result<(), CliError> {
@@ -1412,7 +1537,7 @@ impl Session {
                 }
                 let _ = self.close_turn_for_reason(reason).await?;
                 self.clear_correlation_state();
-                let _ = self.close_agent_scope(payload)?;
+                let _ = self.close_agent_scope(payload, None)?;
                 self.session_started = false;
                 Ok(())
             })
@@ -1482,9 +1607,15 @@ impl Session {
 
     // Ends the root agent scope when present. Duplicate agent-end hooks can reach this path after the
     // scope is already gone, so absence is treated as a no-op.
+    // Takes the closing hook's metadata for the same reason `close_turn_scope` does: a scope end
+    // otherwise repeats the metadata its scope was *opened* with, so pi's session end named
+    // `session_start` as the hook that produced it and bucketing ATOF by `hook_event_name` never
+    // yielded a session end. Synthetic closes pass `None` and keep the opening identity, because
+    // no hook stands behind them.
     fn close_agent_scope(
         &mut self,
         payload: Value,
+        boundary_metadata: Option<Value>,
     ) -> Result<Option<SubscriberDelivery>, CliError> {
         let Some(scope) = self.agent_scope.take() else {
             return Ok(None);
@@ -1493,6 +1624,7 @@ impl Session {
             PopScopeParams::builder()
                 .handle_uuid(&scope.uuid)
                 .output(payload)
+                .metadata_opt(boundary_metadata)
                 .build(),
         )?;
         Ok(Some(subscriber_delivery))
@@ -1675,7 +1807,7 @@ impl Session {
     // scope. Duplicate tool IDs are ignored so repeated pre-tool hooks do not create parallel
     // handles for one agent tool invocation.
     async fn start_tool(&mut self, event: ToolEvent) -> Result<(), CliError> {
-        self.ensure_turn_started(event.metadata.clone())?;
+        self.ensure_tool_scope_started(event.metadata.clone())?;
         if self.tools.contains_key(&event.tool_call_id) {
             return Ok(());
         }
@@ -1689,10 +1821,39 @@ impl Session {
         } else {
             event.arguments
         };
+        tool_conditional_execution(event.tool_name.as_str(), &arguments).await?;
+
+        // Guardrails decide whether the call runs; request intercepts decide what it runs with.
+        // Only worth running for a harness that can actually execute the rewrite -- see
+        // `AgentKind::applies_tool_argument_transforms`. The transformed arguments become the
+        // span's arguments too, so the trace records what will execute rather than what was
+        // proposed.
+        //
+        // The verdict above is on the arguments the harness proposed, and the chain is
+        // deliberately not re-run on the rewrite. That is the order a managed `tool_call_execute`
+        // uses, so a hook-driven tool call is gated exactly as an in-process one is. An intercept
+        // is policy, not something policy has to defend against -- re-deciding here would fork
+        // the middleware contract for one harness, and would evaluate every conditional guardrail
+        // twice, emitting two guardrail scope pairs and billing an LLM-judge guardrail twice for
+        // one call.
+        let mut rewrite = None;
+        let arguments = if self.agent_kind.applies_tool_argument_transforms() {
+            let transformed =
+                tool_request_intercepts(event.tool_name.as_str(), arguments.clone()).await?;
+            if transformed != arguments {
+                rewrite = Some(ToolArgumentTransform {
+                    tool_call_id: event.tool_call_id.clone(),
+                    arguments: transformed.clone(),
+                });
+            }
+            transformed
+        } else {
+            arguments
+        };
+
         let active_tool_arguments = arguments.clone();
         let active_tool_name = event.tool_name.clone();
         let active_tool_owner_subagent_id = owner.subagent_id.clone();
-        tool_conditional_execution(event.tool_name.as_str(), &arguments).await?;
         let metadata = tool_correlation_metadata(
             self.event_identity_metadata(event.metadata),
             owner.status,
@@ -1719,13 +1880,23 @@ impl Session {
                 owner_subagent_id: active_tool_owner_subagent_id,
             },
         );
+        // Published only once the start cannot fail. The field lives on the session until a hook
+        // response drains it, so a rewrite recorded before a failing start would ride out on the
+        // *next* response instead -- where the extension's `tool_call_id` echo reads it as
+        // another call's rewrite and refuses that call.
+        //
+        // The failing branch has no test of its own, deliberately: `tool_call` is fallible only
+        // through process-global state, so inducing it would corrupt every other test in this
+        // binary. What is pinned instead is the invariant on the success side -- a rewrite reaches
+        // exactly one hook response, never the next one.
+        self.tool_argument_transform = rewrite;
         Ok(())
     }
 
     // Ends a tool call, synthesizing a start if no matching handle exists. This keeps post-only
     // hooks observable and preserves the final result/status instead of dropping orphaned endings.
     async fn end_tool(&mut self, event: ToolEvent) -> Result<Option<SubscriberDelivery>, CliError> {
-        self.ensure_turn_started(event.metadata.clone())?;
+        self.ensure_tool_scope_started(event.metadata.clone())?;
         let event_metadata = self.event_identity_metadata(event.metadata.clone());
         let completed_agent_subagent_id = alignment::completed_subagent_from_tool(&event);
         let explicit_subagent_id = event
@@ -1827,10 +1998,28 @@ impl Session {
             .filter(|subagent_id| self.subagents.contains_key(subagent_id))
     }
 
-    // Emits a mark event after ensuring the turn scope exists. Generic and unknown hooks use this
-    // path so unsupported agent events remain visible without changing scope structure.
+    /// Hand over any rewrite produced while applying this batch, clearing it.
+    ///
+    /// Taken rather than read so a later hook on the same session cannot re-apply a stale
+    /// transform to a different tool call.
+    fn take_tool_argument_transform(&mut self) -> Option<ToolArgumentTransform> {
+        self.tool_argument_transform.take()
+    }
+
+    // Emits a mark event after ensuring an enclosing scope exists. Generic and unknown hooks use
+    // this path so unsupported agent events remain visible without changing scope structure.
+    //
+    // Which scope encloses it depends on the harness. Codex and Claude Code report no turn start,
+    // so a mark has to open the turn it belongs to or it would have nowhere to land. pi does
+    // report one, and for it a mark arriving between turns is genuinely between turns -- run-level
+    // events such as `agent_end` and `agent_settled` trail the last `turn_end`, and opening a turn
+    // for them produced an empty turn scope at the end of every run.
     fn mark(&mut self, name: &str, event_payload: SessionEvent) -> Result<(), CliError> {
-        self.ensure_turn_started(event_payload.metadata.clone())?;
+        if self.agent_kind.has_explicit_turn_start() {
+            self.ensure_agent_started(event_payload.metadata.clone())?;
+        } else {
+            self.ensure_turn_started(event_payload.metadata.clone())?;
+        }
         emit_mark_event(
             EmitMarkEventParams::builder()
                 .name(name)

@@ -708,6 +708,12 @@ pub(crate) fn route_event_through_alias(
             }),
             Some(child_session_id),
         ),
+        // Unlike `TurnEnded`, a turn start is never reused as a subagent-completion signal, so it
+        // reports no child session id -- there is nothing for the parent to close on it.
+        NormalizedEvent::TurnStarted(mut event) => {
+            route_session_event(&mut event, &alias, metadata);
+            (NormalizedEvent::TurnStarted(event), None)
+        }
         NormalizedEvent::TurnEnded(mut event) => {
             route_session_event(&mut event, &alias, metadata);
             (NormalizedEvent::TurnEnded(event), Some(child_session_id))

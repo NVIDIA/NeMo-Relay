@@ -1,15 +1,23 @@
 ---
 title: "Coding Agent Installation"
-description: "Install and manage persistent NeMo Relay integrations for Claude Code and Codex."
+description: "Install and manage persistent NeMo Relay integrations for Claude Code, Codex, and pi."
 position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-Install a persistent integration when you want Claude Code or Codex to load
-NeMo Relay without a `nemo-relay` wrapper command. Both use their normal plugin
-systems.
+Install a persistent integration when you want a coding agent to load NeMo
+Relay without a `nemo-relay` wrapper command.
+
+**Two different mechanisms live under this one command.** Claude Code and Codex
+take a generated marketplace plugin whose MCP server carries the gateway; the
+sections below describe that path, and everything they say about marketplaces,
+MCP stdio, `--install-dir`, and version gating applies only to those two hosts.
+pi has an extension and package system of its own but no marketplace and no MCP
+client, so `nemo-relay install pi` writes an extension into pi's auto-discovery
+directory and that extension talks to the gateway over plain HTTP. See
+[pi](/nemo-relay-cli/pi) for the whole of the pi path.
 
 Each persistent integration forwards the lifecycle signals that its host
 exposes, including agent, subagent, tool, prompt, compaction, and stop events
@@ -41,10 +49,16 @@ The selected coding-agent CLI must also be available at a supported version:
 
 - Claude Code 2.1.121 or newer through `claude`.
 - `codex-cli` 0.143.0 or newer through `codex`.
+- pi 0.84.x through `pi`.
 
-Relay checks the selected CLI version before modifying agent configuration.
-Prerelease, malformed, and older versions are rejected consistently by install,
-doctor, and transparent launch paths.
+For Claude Code and Codex, Relay checks the selected CLI version before
+modifying agent configuration. Prerelease, malformed, and older versions are
+rejected consistently by install, doctor, and transparent launch paths.
+
+`nemo-relay install pi` does not check pi's version, because it never runs pi:
+it writes a directory into pi's auto-discovery location, which succeeds whether
+or not pi is present. It reports when `pi` is absent from `PATH`. Version
+checking for pi happens in `nemo-relay doctor pi` and at transparent launch.
 
 ## Install a Persistent Integration
 
@@ -53,6 +67,7 @@ Run the command for the coding-agent integration that you want to install:
 ```bash
 nemo-relay install claude-code
 nemo-relay install codex
+nemo-relay install pi
 ```
 
 Install every supported host detected on the machine:
@@ -62,7 +77,13 @@ nemo-relay install all
 ```
 
 `install all` selects only supported agents whose CLI is present. It fails if
-Claude Code and Codex are both absent.
+Claude Code, Codex and pi are all absent.
+
+`nemo-relay install pi` differs from the other two: pi has no plugin
+marketplace, so Relay writes the extension into pi's own auto-discovery
+directory rather than generating a marketplace plugin. `--install-dir` does not
+apply to it, and it does not require `pi` on `PATH` when installed by name. See
+[pi](/nemo-relay-cli/pi).
 
 Use `--dry-run` to preview the operation without changing host configuration.
 For Claude Code and Codex, the preview includes marketplace paths and host
@@ -286,6 +307,15 @@ nemo-relay doctor --plugin codex
 nemo-relay doctor --plugin all
 ```
 
+`--plugin` asks about marketplace plugin state, so it does not accept `pi` —
+there is no pi plugin to diagnose, and `--plugin all` covers the marketplace
+hosts only. Diagnose a pi install with its own command, which reports the
+extension's load path, whether pi will trust it, and whether it is up to date:
+
+```bash
+nemo-relay doctor pi
+```
+
 `nemo-relay doctor` includes every persistent integration it finds. It checks
 generated marketplace and plugin files where applicable, the Relay binary and
 hook support, agent version, registration, provider routing, hooks, and sidecar
@@ -297,6 +327,12 @@ missing, or duplicated required hooks. A stopped Codex sidecar is informational;
 the required plugin MCP starts it before the captured turn. Doctor also reports
 newly required forwarded environment names and recommends
 `nemo-relay install codex --force`.
+
+In `nemo-relay doctor --json` output, a configured but unloadable Codex
+marketplace is reported with `host_marketplace_unloadable: true` under the
+integration's `host_registration` object. In that state,
+`host_plugin_registered` is `null` because Codex could not determine whether
+the plugin is registered.
 
 For Claude Code, doctor also validates version 2.1.121 or newer, the generated
 `alwaysLoad` MCP server, and its generation marker. A stopped sidecar remains
@@ -322,8 +358,15 @@ Run the command for the installed integration that you want to remove:
 ```bash
 nemo-relay uninstall claude-code
 nemo-relay uninstall codex
+nemo-relay uninstall pi
 nemo-relay uninstall all
 ```
+
+`nemo-relay uninstall pi` removes only the files its install recorded, and only
+while they still match what was written; anything you edited is kept, and a
+directory Relay did not write is never touched. `uninstall all` includes it.
+`--install-dir` addresses the marketplace root, so it is ignored for pi under
+`all` and rejected when you name pi explicitly.
 
 Uninstall removes Codex provider configuration and trust for the exact plugin
 hooks before unregistering the plugin, while Codex can still report its hook

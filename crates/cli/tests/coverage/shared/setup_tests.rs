@@ -284,6 +284,62 @@ command = "custom"
     assert_eq!(agents, vec![CodingAgent::ClaudeCode, CodingAgent::Codex]);
 }
 
+// The parser used to hand-match "claude" and "codex", so `[agents.pi]` read as
+// unknown. That is not merely unreported: an unscoped wizard run rewrites the whole
+// `[agents]` table from what this returns, so an unparsed agent is *deleted*.
+#[test]
+fn read_agents_from_doc_recognizes_every_supported_agent() {
+    let doc: DocumentMut = r#"
+[agents.claude]
+command = "claude"
+
+[agents.codex]
+command = "codex"
+
+[agents.pi]
+command = "pi"
+"#
+    .parse()
+    .unwrap();
+    assert_eq!(
+        read_agents_from_doc(&doc),
+        vec![CodingAgent::ClaudeCode, CodingAgent::Codex, CodingAgent::Pi]
+    );
+}
+
+// The failure this guards: `nemo-relay config`, answered without deselecting anything,
+// silently dropping an agent the wizard never offered.
+#[test]
+fn an_unscoped_save_preserves_every_configured_agent() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join(".config/nemo-relay/config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        "[agents.claude]\ncommand = \"claude\"\n\n[agents.pi]\ncommand = \"pi\"\n",
+    )
+    .unwrap();
+
+    // What the wizard reads back as its pre-checked defaults...
+    let existing: DocumentMut = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+    let configured = read_agents_from_doc(&existing);
+    assert!(
+        configured.contains(&CodingAgent::Pi),
+        "pi must be seen as configured, or the wizard cannot re-offer it: {configured:?}"
+    );
+
+    // ...and what it writes back when the user changes nothing.
+    let doc = build_config(&SetupAnswers { agents: configured });
+    save_config(&doc, home.path(), None).unwrap();
+
+    let saved: DocumentMut = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+    assert_eq!(
+        read_agents_from_doc(&saved),
+        vec![CodingAgent::ClaudeCode, CodingAgent::Pi],
+        "an unscoped save replaces the whole [agents] table, so it must carry every agent forward"
+    );
+}
+
 #[test]
 fn read_existing_defaults_reads_user_config_and_ignores_project_config() {
     let cwd = tempfile::tempdir().unwrap();

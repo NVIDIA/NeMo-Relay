@@ -1,0 +1,25 @@
+{
+  "name": "nemo-relay-pi",
+  "version": "0.9.0",
+  "private": true,
+  "description": "NeMo Relay proof-of-concept extension for the pi coding agent.",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NVIDIA/NeMo-Relay",
+    "directory": "integrations/pi"
+  },
+  "main": "./index.ts",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
+}

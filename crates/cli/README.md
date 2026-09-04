@@ -28,7 +28,7 @@ with the installed `nemo-relay` command rather than link against the crate.
 
 The CLI is designed for these tasks:
 
-- **Observe existing coding agents**: Run Claude Code or Codex through a local
+- **Observe existing coding agents**: Run Claude Code, Codex, or pi through a local
   NeMo Relay gateway without changing the agent
   itself.
 - **Configure transparent runs interactively**: Use the setup wizard to write

@@ -93,6 +93,8 @@ pub(crate) struct HostPluginReadiness {
     #[serde(skip_serializing)]
     pub(crate) host_marketplace_registered: Option<bool>,
     #[serde(skip_serializing)]
+    pub(crate) host_marketplace_unloadable: bool,
+    #[serde(skip_serializing)]
     pub(crate) plugin_setup: Option<Value>,
 }
 
@@ -511,7 +513,7 @@ fn force_cleanup_target_exists_with_runner(
         skip_doctor: true,
     };
     host_registration_report(host, &options, runner).is_ok_and(|registration| {
-        registration.host_plugin_registered || registration.host_marketplace_registered
+        registration.host_plugin_may_be_registered() || registration.host_marketplace_registered
     })
 }
 
@@ -997,7 +999,12 @@ fn recover_failed_install_registration<H: MarketplaceHost>(
                 "{error}; refusing destructive rollback because the host registration state could not be verified after a registration command failed: {report_error}"
             )
         })?;
-        registration.host_plugin_added |= observed.host_plugin_registered;
+        let observed_plugin_registered = observed.host_plugin_registered.ok_or_else(|| {
+            format!(
+                "{error}; refusing destructive rollback because the host plugin registration state could not be determined after a registration command failed"
+            )
+        })?;
+        registration.host_plugin_added |= observed_plugin_registered;
         registration.host_marketplace_added |= observed.host_marketplace_registered;
     }
     retire_live_replacement_before_rollback(host, layout, options, setup_runner, transaction, &registration)
@@ -1251,8 +1258,8 @@ fn retire_installed_generation(
     let mut existing_install = local_install_exists;
     if !generation_fence.exists() {
         let registration = host_registration_report(host, options, runner)?;
-        existing_install |=
-            registration.host_plugin_registered || registration.host_marketplace_registered;
+        existing_install |= registration.host_plugin_may_be_registered()
+            || registration.host_marketplace_registered;
         if existing_install && !legacy_plugin_without_mcp(host, plugin_root)? {
             return Err(missing_generation_fence_error(host, &generation_fence));
         }
@@ -1262,8 +1269,8 @@ fn retire_installed_generation(
             .map_err(|cause| invalid_generation_fence_error(host, &generation_fence, &cause))?;
     if retirement.is_none() && !existing_install {
         let registration = host_registration_report(host, options, runner)?;
-        existing_install =
-            registration.host_plugin_registered || registration.host_marketplace_registered;
+        existing_install = registration.host_plugin_may_be_registered()
+            || registration.host_marketplace_registered;
     }
     if retirement.is_none() && existing_install && !legacy_plugin_without_mcp(host, plugin_root)? {
         return Err(missing_generation_fence_error(host, &generation_fence));
@@ -1464,7 +1471,16 @@ fn doctor_host_json_value(
 ) -> Result<Value, String> {
     let readiness = collect_host_plugin_readiness(host, options, runner, setup_runner);
     let host_registration_ok = readiness.host_plugin_registered == Some(true)
-        && readiness.host_marketplace_registered == Some(true);
+        && readiness.host_marketplace_registered == Some(true)
+        && !readiness.host_marketplace_unloadable;
+    let mut host_registration = json!({
+        "ok": host_registration_ok,
+        "host_plugin_registered": readiness.host_plugin_registered,
+        "host_marketplace_registered": readiness.host_marketplace_registered
+    });
+    if readiness.host_marketplace_unloadable {
+        host_registration["host_marketplace_unloadable"] = json!(true);
+    }
     Ok(json!({
         "ok": readiness.ok(),
         "host": readiness.host,
@@ -1472,11 +1488,7 @@ fn doctor_host_json_value(
         "nemo_relay": readiness.relay,
         "marketplace": readiness.marketplace,
         "plugin": readiness.plugin,
-        "host_registration": {
-            "ok": host_registration_ok,
-            "host_plugin_registered": readiness.host_plugin_registered,
-            "host_marketplace_registered": readiness.host_marketplace_registered
-        },
+        "host_registration": host_registration,
         "checks": readiness.plugin_setup,
         "state_path": readiness.state_path,
         "readiness_checks": readiness.checks
@@ -1514,6 +1526,7 @@ fn collect_host_plugin_readiness(
         relay: None,
         host_plugin_registered: None,
         host_marketplace_registered: None,
+        host_marketplace_unloadable: false,
         plugin_setup: None,
     };
 
@@ -1618,8 +1631,9 @@ fn collect_host_plugin_readiness(
         );
         match host_registration_report(host, options, runner) {
             Ok(report) => {
-                readiness.host_plugin_registered = Some(report.host_plugin_registered);
+                readiness.host_plugin_registered = report.host_plugin_registered;
                 readiness.host_marketplace_registered = Some(report.host_marketplace_registered);
+                readiness.host_marketplace_unloadable = report.host_marketplace_unloadable;
                 readiness.push(
                     "Host registration",
                     report
@@ -1629,10 +1643,13 @@ fn collect_host_plugin_readiness(
                 );
                 readiness.push(
                     "Host plugin registration",
-                    report
-                        .host_plugin_registered
-                        .then_some("registered".into())
-                        .ok_or_else(|| "nemo-relay host plugin is not registered".into()),
+                    match report.host_plugin_registered {
+                        Some(true) => Ok("registered".into()),
+                        Some(false) => Err("nemo-relay host plugin is not registered".into()),
+                        None => Err(
+                            "nemo-relay host plugin registration could not be determined".into(),
+                        ),
+                    },
                 );
                 readiness.push(
                     "Host marketplace registration",
@@ -1980,7 +1997,8 @@ fn prepare_plugin_install(
         layout.validate_persisted_state(state)?;
     }
     let registration = host_registration_report(host, options, runner)?;
-    let plugin_registered = registration.host_plugin_registered;
+    let plugin_registration = registration.host_plugin_registered;
+    let plugin_may_be_registered = registration.host_plugin_may_be_registered();
     let marketplace_registered = registration.host_marketplace_registered;
     let state_bytes = match fs::read(&layout.state_path) {
         Ok(bytes) => Some(bytes),
@@ -1992,10 +2010,9 @@ fn prepare_plugin_install(
             ));
         }
     };
-    let previous_setup_installed = persisted
+    let persisted_setup_installed = persisted
         .as_ref()
-        .is_some_and(|state| state.plugin_setup_installed)
-        || plugin_registered;
+        .is_some_and(|state| state.plugin_setup_installed);
     let previous_marketplace_root = persisted
         .as_ref()
         .map(|state| state.marketplace_root.clone())
@@ -2019,29 +2036,34 @@ fn prepare_plugin_install(
     // failure. `validate_persisted_state` above already guarantees the state names this layout's
     // roots, so `local_install_exists` covers everything the state file could point at.
     let previous_install_exists =
-        local_install_exists || plugin_registered || marketplace_registered;
-    let generation_retirement = if previous_install_exists {
-        if !previous_generation_fence.exists() {
-            if legacy_plugin_without_mcp(host, &previous_plugin_root)? {
-                None
-            } else {
-                return Err(missing_generation_fence_error(
-                    host,
-                    &previous_generation_fence,
-                ));
-            }
-        } else {
-            Some(
-                GenerationRetirement::acquire_for_plugin(
-                    &previous_generation_fence,
-                    &layout.generation_lock,
-                )
-                .map_err(|cause| {
-                    invalid_generation_fence_error(host, &previous_generation_fence, &cause)
-                })?
-                .ok_or_else(|| missing_generation_fence_error(host, &previous_generation_fence))?,
+        local_install_exists || plugin_may_be_registered || marketplace_registered;
+    if previous_install_exists
+        && !previous_generation_fence.exists()
+        && !legacy_plugin_without_mcp(host, &previous_plugin_root)?
+    {
+        return Err(missing_generation_fence_error(
+            host,
+            &previous_generation_fence,
+        ));
+    }
+    let plugin_registered = plugin_registration.ok_or_else(|| {
+        format!(
+            "refusing to modify the {} plugin because its host plugin registration state could not be determined",
+            host.label()
+        )
+    })?;
+    let previous_setup_installed = persisted_setup_installed || plugin_registered;
+    let generation_retirement = if previous_install_exists && previous_generation_fence.exists() {
+        Some(
+            GenerationRetirement::acquire_for_plugin(
+                &previous_generation_fence,
+                &layout.generation_lock,
             )
-        }
+            .map_err(|cause| {
+                invalid_generation_fence_error(host, &previous_generation_fence, &cause)
+            })?
+            .ok_or_else(|| missing_generation_fence_error(host, &previous_generation_fence))?,
+        )
     } else {
         None
     };
@@ -2400,7 +2422,7 @@ fn remove_promoted_replacement(
     }
     match host_registration_report(host, options, runner) {
         Ok(report) => {
-            if report.host_plugin_registered
+            if report.host_plugin_may_be_registered()
                 && let Err(error) = run_host_plugin_removal(host, options, runner)
             {
                 errors.push(error);
@@ -2460,7 +2482,29 @@ fn reconcile_restored_registration(
             return;
         }
     };
-    if report.host_plugin_registered
+    let Some(host_plugin_registered) = report.host_plugin_registered else {
+        if snapshot.marketplace_registered
+            && let Err(error) = run_host_marketplace_registration(
+                host,
+                &snapshot.original_marketplace_root,
+                options,
+                runner,
+            )
+        {
+            errors.push(error);
+        }
+        if snapshot.plugin_registered
+            && let Err(error) = run_host_plugin_registration(host, options, runner)
+        {
+            errors.push(error);
+        }
+        errors.push(
+            "host plugin registration state could not be determined while restoring the previous install"
+                .into(),
+        );
+        return;
+    };
+    if host_plugin_registered
         && !snapshot.plugin_registered
         && let Err(error) = run_host_plugin_removal(host, options, runner)
     {
@@ -2484,7 +2528,7 @@ fn reconcile_restored_registration(
         errors.push(error);
     }
     if snapshot.plugin_registered
-        && !report.host_plugin_registered
+        && !host_plugin_registered
         && let Err(error) = run_host_plugin_registration(host, options, runner)
     {
         errors.push(error);

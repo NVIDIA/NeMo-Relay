@@ -85,6 +85,7 @@ struct FileAgentsConfig {
     // `CodingAgent` enum kebab spelling. Same convention as the bare-agent shortcut in Phase 2.
     claude: Option<FileAgentCommandConfig>,
     codex: Option<FileAgentCommandConfig>,
+    pi: Option<FileAgentCommandConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1619,6 +1620,9 @@ fn apply_file_agents_config(agents: &mut AgentConfigs, file_agents: Option<FileA
     }
     if let Some(value) = file_agents.codex {
         agents.codex.command = value.command;
+    }
+    if let Some(value) = file_agents.pi {
+        agents.pi.command = value.command;
     }
 }
 

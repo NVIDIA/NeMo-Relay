@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.12.6,<2.0"]
 build-backend = "maturin"
 
 [project]
@@ -67,7 +67,7 @@ test = [
 
 [project.optional-dependencies]
 cli = [
-    "nemo-relay-cli-bin==0.8.0",
+    "nemo-relay-cli-bin==0.9.0",
 ]
 
 langchain = [

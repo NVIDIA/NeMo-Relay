@@ -119,7 +119,9 @@ async fn close_idle_turns(idle_sessions: Vec<(String, Session)>, reason: &str) -
     for (session_id, mut session) in idle_sessions {
         let stack = session.scope_stack.clone();
         match TASK_SCOPE_STACK
-            .scope(stack, async { session.close_turn_for_reason(reason).await })
+            .scope(stack, async {
+                session.close_idle_scopes_for_reason(reason).await
+            })
             .await
         {
             Ok((subagent_ids, subscriber_delivery)) => {

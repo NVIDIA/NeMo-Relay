@@ -19,6 +19,8 @@ const {
   ScopeType,
   ScopeStack,
   createScopeStackFromPropagation,
+  capturePropagationContext,
+  captureRootlessPropagationContext,
   propagationContextFromJson,
   propagationContextToJson,
   withScopeStack,
@@ -66,6 +68,23 @@ describe('Context isolation', () => {
       () => propagationContextFromJson(`{"version":2,"parent_uuid":"${context.parentUuid}"}`),
       /unsupported propagation context version 2; expected 1/,
     );
+  });
+
+  it('captures a rooted context by default and supports explicit rootless capture', () => {
+    const stack = createScopeStack();
+    withScopeStack(stack, () => {
+      const handle = pushScope('propagation-root', ScopeType.Agent, null, null);
+      try {
+        const rooted = capturePropagationContext();
+        const rootless = captureRootlessPropagationContext();
+        assert.equal(rooted.rootUuid, handle.uuid);
+        assert.equal(rooted.parentUuid, handle.uuid);
+        assert.equal(rootless.rootUuid, undefined);
+        assert.equal(rootless.parentUuid, handle.uuid);
+      } finally {
+        popScope(handle);
+      }
+    });
   });
 
   it('restores the surrounding stack after withScopeStack', () => {

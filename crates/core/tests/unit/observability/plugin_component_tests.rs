@@ -8,8 +8,11 @@ use crate::api::event::{
     BaseEvent, DataSchema, EventCategory, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION,
     MarkEvent, ScopeEvent,
 };
-use crate::api::runtime::NemoRelayContextState;
-use crate::api::runtime::global_context;
+use crate::api::runtime::{
+    NemoRelayContextState, PropagationContext, ThreadScopeStackBinding, capture_thread_scope_stack,
+    create_scope_stack_from_propagation, global_context, restore_thread_scope_stack,
+    set_thread_scope_stack,
+};
 use crate::api::scope::{PopScopeParams, PushScopeParams};
 use crate::api::subscriber::scope_deregister_subscriber;
 use crate::config_editor::{EditorConfig, EditorFieldKind, EditorSchema};
@@ -29,6 +32,14 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+struct RestoreThreadScopeStackGuard(ThreadScopeStackBinding);
+
+impl Drop for RestoreThreadScopeStackGuard {
+    fn drop(&mut self) {
+        restore_thread_scope_stack(self.0.clone());
+    }
+}
 
 #[derive(Debug)]
 struct ShutdownFailureSpanProcessor {
@@ -1532,6 +1543,44 @@ fn opentelemetry_endpoint_header_env_rejects_missing_and_duplicate_headers() {
     clear_plugin_configuration().unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn opentelemetry_header_env_non_unicode_errors_do_not_expose_values() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let variable = "NEMO_RELAY_TEST_NON_UNICODE_OTEL_HEADER_ENV";
+    let secret = "relay-plugin-secret";
+    let mut value = vec![0xff];
+    value.extend_from_slice(secret.as_bytes());
+    unsafe { std::env::set_var(variable, std::ffi::OsString::from_vec(value)) };
+
+    let trace: OpenTelemetryEndpointConfig = serde_json::from_value(json!({
+        "type": "full",
+        "endpoint": "http://localhost:4318/v1/traces",
+        "header_env": {"authorization": variable}
+    }))
+    .unwrap();
+    let trace_error = build_otel_config(0, trace).unwrap_err().to_string();
+    assert!(trace_error.contains(variable));
+    assert!(!trace_error.contains(secret));
+
+    let logs: OpenTelemetrySignalEndpointConfig = serde_json::from_value(json!({
+        "endpoint": "http://localhost:4318/v1/logs",
+        "header_env": {"authorization": variable}
+    }))
+    .unwrap();
+    let log_error = resolve_signal_headers("logs", 0, &logs)
+        .unwrap_err()
+        .to_string();
+    assert!(log_error.contains(variable));
+    assert!(!log_error.contains(secret));
+
+    unsafe { std::env::remove_var(variable) };
+}
+
 #[test]
 fn invalid_log_endpoint_keeps_valid_signal_subscriber() {
     let _guard = crate::observability::test_mutex()
@@ -2825,6 +2874,50 @@ fn atif_defaults_create_one_file_per_top_level_agent() {
 }
 
 #[test]
+fn atif_propagation_root_session_id_flows_through_plugin_e2e() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    let dir = temp_dir("observability-atif-propagation-root");
+    let request_id = Uuid::parse_str("018f47a4-3af7-7d94-8e61-9f0f89b5d312").unwrap();
+    let parent_id = Uuid::now_v7();
+    let stack = create_scope_stack_from_propagation(&PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: Some(request_id),
+        parent_uuid: parent_id,
+    })
+    .unwrap();
+    set_thread_scope_stack(stack);
+
+    let config = plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "output_directory": dir,
+            "filename_template": "trajectory-{session_id}.json"
+        }
+    }));
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+
+    let first = push_agent("first-propagated-agent");
+    pop(&first);
+    let second = push_agent("second-propagated-agent");
+    pop(&second);
+    clear_plugin_configuration().unwrap();
+
+    for agent in [&first, &second] {
+        let path = dir.join(format!("trajectory-{}.json", agent.uuid));
+        let trajectory: Json = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(trajectory["session_id"], request_id.to_string());
+        assert_eq!(trajectory["trajectory_id"], agent.uuid.to_string());
+        assert_eq!(
+            trajectory["extra"]["nemo_relay"]["session_instance_id"],
+            request_id.to_string()
+        );
+    }
+    assert_ne!(first.uuid, second.uuid);
+}
+
+#[test]
 fn atif_filename_template_sanitizes_metadata_paths() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
@@ -2905,7 +2998,7 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
     })));
     let empty_storage: Arc<Vec<Arc<AtifRemoteStorage>>> = Arc::new(Vec::new());
 
-    let start_event = Event::Scope(ScopeEvent::new(
+    let mut start_event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
             .uuid(agent_uuid)
             .parent_uuid(root_uuid)
@@ -2920,6 +3013,7 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
         EventCategory::agent(),
         None,
     ));
+    start_event.set_propagation_root_uuid(Some(root_uuid));
     assert!(
         manager
             .lock()
@@ -3008,7 +3102,7 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
             .is_none()
     );
 
-    let end_event = Event::Scope(ScopeEvent::new(
+    let mut end_event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
             .uuid(agent_uuid)
             .parent_uuid(root_uuid)
@@ -3019,6 +3113,7 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
         EventCategory::agent(),
         None,
     ));
+    end_event.set_propagation_root_uuid(Some(root_uuid));
     let (pending_write, targets) = manager
         .lock()
         .unwrap()
@@ -3044,7 +3139,7 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
 
     let value: Json = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
     assert_eq!(value["trajectory_id"], agent_uuid.to_string());
-    assert_eq!(value["session_id"], agent_uuid.to_string());
+    assert_eq!(value["session_id"], root_uuid.to_string());
     assert_eq!(value["extra"]["nemo_relay"]["session_id"], "root-session");
     assert_eq!(
         value["extra"]["nemo_relay"]["session_instance_id"],
