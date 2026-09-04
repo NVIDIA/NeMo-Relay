@@ -16,6 +16,7 @@ use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -660,13 +661,33 @@ fn router_with_state(state: AppState) -> Router {
         .route("/chat/completions", post(gateway::passthrough))
         .route("/models", get(gateway::models))
         .route("/v1/responses", post(gateway::passthrough))
+        .route("/backend-api/codex/responses", post(gateway::passthrough))
         .route("/v1/chat/completions", post(gateway::passthrough))
         .route("/v1/images/generations", post(gateway::images_generations))
         .route("/v1/messages", post(gateway::passthrough))
         .route("/v1/messages/count_tokens", post(gateway::passthrough))
         .route("/v1/models", get(gateway::models))
+        .layer(middleware::from_fn(responses_websocket_fallback))
         .layer(DefaultBodyLimit::max(max_hook_payload_bytes))
         .with_state(state)
+}
+
+// Codex treats 426 from its Responses WebSocket probe as a signal to use HTTP/SSE. Keep ordinary
+// GETs at 405 so this compatibility response does not broaden the public Responses API surface.
+async fn responses_websocket_fallback(request: Request<Body>, next: Next) -> Response {
+    let is_responses_path = matches!(
+        request.uri().path(),
+        "/responses" | "/v1/responses" | "/backend-api/codex/responses"
+    );
+    let is_websocket_upgrade = request
+        .headers()
+        .get(header::UPGRADE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
+    if request.method() == http::Method::GET && is_responses_path && is_websocket_upgrade {
+        return StatusCode::UPGRADE_REQUIRED.into_response();
+    }
+    next.run(request).await
 }
 
 async fn bootstrap_tls_tunnel(

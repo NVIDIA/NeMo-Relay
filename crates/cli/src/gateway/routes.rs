@@ -53,6 +53,7 @@ impl ProviderRoute {
         match path {
             "/responses" => Some(Self::OpenAiResponses),
             "/v1/responses" => Some(Self::OpenAiResponses),
+            "/backend-api/codex/responses" => Some(Self::OpenAiResponses),
             "/chat/completions" => Some(Self::OpenAiChatCompletions),
             "/v1/chat/completions" => Some(Self::OpenAiChatCompletions),
             "/v1/images/generations" => Some(Self::OpenAiImagesGenerations),
@@ -140,14 +141,24 @@ impl ProviderRoute {
     // one place for configured public, enterprise, or local proxy bases.
     pub(super) fn upstream_url_with_base(self, base: &str, path_and_query: &str) -> String {
         let base = base.trim_end_matches('/');
+        let path_and_query = self.canonical_path_and_query(path_and_query);
         let path_and_query = match self {
             Self::OpenAiResponses
             | Self::OpenAiChatCompletions
             | Self::OpenAiImagesGenerations
-            | Self::OpenAiModels => normalize_openai_path_for_base(base, path_and_query),
-            _ => path_and_query.to_string(),
+            | Self::OpenAiModels => normalize_openai_path_for_base(base, &path_and_query),
+            _ => path_and_query,
         };
         format!("{base}{path_and_query}")
+    }
+
+    fn canonical_path_and_query(self, path_and_query: &str) -> String {
+        if self == Self::OpenAiResponses
+            && let Some(suffix) = path_and_query.strip_prefix("/backend-api/codex/responses")
+        {
+            return format!("/responses{suffix}");
+        }
+        path_and_query.to_string()
     }
 
     // Narrows gateway routing to the smaller taxonomy used by trace alignment. Keeping this
@@ -258,10 +269,11 @@ pub(super) fn gateway_upstream_url_override_with_openai_key_state(
     path_and_query: &str,
     has_openai_replacement_key: bool,
 ) -> Option<String> {
+    let path_and_query = route.canonical_path_and_query(path_and_query);
     alignment::gateway_upstream_url_override(
         headers,
         route.alignment_route(),
-        path_and_query,
+        &path_and_query,
         has_openai_replacement_key,
     )
 }
