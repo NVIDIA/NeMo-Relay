@@ -55,7 +55,7 @@ const BUILTIN_DETECTOR_SPECS: &[BuiltinDetectorSpec] = &[
         detector: BuiltinDetector::ApiKey,
         name: "api_key",
         category: BuiltinDetectorCategory::StructuredSecret,
-        regex_pattern: r"(?:sk|rk|pk|ak)-[A-Za-z0-9_-]{8,}",
+        regex_pattern: r"\b(?:sk|rk|pk|ak)-[A-Za-z0-9_-]{8,}",
     },
     BuiltinDetectorSpec {
         detector: BuiltinDetector::IpAddress,

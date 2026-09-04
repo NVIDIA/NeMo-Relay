@@ -9,7 +9,10 @@ use nemo_relay::api::event::{
 };
 use nemo_relay::api::scope::ScopeType;
 use nemo_relay::codec::response::{AnnotatedLlmResponse, FinishReason};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 #[derive(Clone, Copy)]
 enum EventType {
@@ -76,6 +79,22 @@ fn test_subscriber_survives_dropped_receiver() {
 
     let event = make_test_event(EventType::Start, Some(ScopeType::Tool), Some("search"));
     subscriber(&event); // Must not panic
+}
+
+#[test]
+fn test_subscriber_restores_pending_count_when_receiver_is_dropped() {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let pending_events = Arc::new(AtomicUsize::new(0));
+    let subscriber = create_subscriber_with_counter(tx, pending_events.clone());
+    drop(rx);
+
+    subscriber(&make_test_event(
+        EventType::Start,
+        Some(ScopeType::Tool),
+        Some("search"),
+    ));
+
+    assert_eq!(pending_events.load(Ordering::SeqCst), 0);
 }
 
 // -----------------------------------------------------------------------
