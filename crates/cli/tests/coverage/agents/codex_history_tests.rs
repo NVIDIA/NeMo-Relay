@@ -435,6 +435,42 @@ fn restore_prefers_the_database_the_migration_recorded() {
 }
 
 #[test]
+fn a_failed_restore_keeps_the_journal_for_a_later_attempt() {
+    require_sqlite3_or_skip!();
+    let scope = CodexHistoryScope::enter(&[("thread-a", OPENAI_PROVIDER)]);
+    migrate_to_relay(/*dry_run*/ false, /*database*/ None).expect("migration succeeds");
+    let missing = scope.database().with_file_name("typo.sqlite");
+
+    let error = restore_from_relay(/*dry_run*/ false, Some(&missing))
+        .expect_err("an override that does not resolve fails");
+
+    assert!(
+        error.contains("kept the migration journal"),
+        "the error says the journal survived: {error}"
+    );
+    assert_eq!(
+        scope.providers(),
+        vec![("thread-a".to_string(), RELAY_PROVIDER.to_string())],
+        "the threads are still migrated"
+    );
+    assert!(
+        migration_recorded(),
+        "the journal still records the migration this attempt failed to reverse"
+    );
+
+    // The point of keeping it: the correct path still reverses the migration.
+    let outcome = restore_from_relay(/*dry_run*/ false, /*database*/ None)
+        .expect("restore succeeds")
+        .expect("restore reports an outcome");
+
+    assert_eq!(outcome.thread_ids, vec!["thread-a"]);
+    assert_eq!(
+        scope.providers(),
+        vec![("thread-a".to_string(), OPENAI_PROVIDER.to_string())]
+    );
+}
+
+#[test]
 fn migrate_rejects_a_database_without_a_threads_table() {
     require_sqlite3_or_skip!();
     let scope = CodexHistoryScope::enter(&[("thread-a", OPENAI_PROVIDER)]);

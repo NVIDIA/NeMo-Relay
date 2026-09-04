@@ -146,6 +146,7 @@ pub(crate) fn restore_from_relay(
     // An explicit override wins, then the database the migration pinned, then
     // the default. The journal matters most here: it names the database that
     // was actually rewritten, even if the default has since moved on.
+    let overridden = database.is_some();
     let database = match database {
         Some(database) => resolve_database(Some(database))?,
         None => match journal_database(&journal) {
@@ -154,6 +155,16 @@ pub(crate) fn restore_from_relay(
         },
     };
     if !database.exists() {
+        // Only a missing *recorded* database says the migration went stale. An
+        // override that does not resolve is a caller mistake, so keep the
+        // journal: discarding it would strand the threads on the Relay
+        // provider with no record of how to move them back.
+        if overridden {
+            return Err(format!(
+                "Codex thread database {} does not exist; kept the migration journal",
+                database.display()
+            ));
+        }
         clear_journal(dry_run)?;
         return Err(format!(
             "recorded Codex thread database {} no longer exists; discarded the migration journal",
