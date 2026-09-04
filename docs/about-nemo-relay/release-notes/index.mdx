@@ -25,6 +25,41 @@ This is the Release Notes template. Document one release version per page and us
 This page contains the release notes for [NVIDIA NeMo
 Relay](/about-nemo-relay/overview).
 
+Complete, pull-request-by-pull-request release history is available in
+[GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/releases).
+
+## Release 0.8.4
+
+### PII Redaction Safety
+
+- Built-in PII-redaction policies using `action = "remove"` must now include
+  at least one `target_paths` or `target_path_globs` selector. Relay rejects
+  unscoped removal policies during validation, preventing accidental removal of
+  every matching string value.
+- API-key detection no longer redacts matching prefixes embedded in ordinary
+  words, while retaining valid AWS secret detection. If Relay cannot safely
+  round-trip an annotated LLM payload, metric envelope, or category profile
+  during redaction, it omits that optional observability value and records a
+  structured warning rather than emitting an unsanitized value.
+
+### Managed Gateway and Coding-Agent Reliability
+
+- Managed MCP clients can reuse a healthy authenticated Relay gateway after a
+  persistent configuration change. Bootstrap authentication remains required.
+- Codex Responses WebSocket probes now receive HTTP 426 from the Relay gateway,
+  allowing Codex configured with `openai_base_url` to fall back to the supported
+  HTTP/SSE transport. Regular `GET` requests retain their normal method
+  handling.
+- On Windows, marketplace paths passed to host coding-agent CLIs are normalized
+  from extended-length local and UNC forms, allowing host registration to
+  succeed with the marketplace created by `nemo-relay install all --force`.
+
+### Adaptive Telemetry Shutdown
+
+- Adaptive telemetry now drains queued events during runtime shutdown and
+  deregistration. Relay waits up to five seconds before aborting only remaining
+  work and logs dropped events or a drain timeout for diagnosis.
+
 ## Release 0.8.3
 
 Python release wheels now synchronize the selected release version between the
