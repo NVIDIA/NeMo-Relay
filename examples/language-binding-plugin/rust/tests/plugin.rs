@@ -205,7 +205,7 @@ async fn registration_rejects_a_duplicate_kind_and_missing_deregistration_is_fal
 async fn disabled_component_configuration_is_still_validated() {
     let _registered = register_only().await;
     let report = validate(config_with_enabled("invalid", false), None)
-    .expect("disabled host configuration should validate");
+        .expect("disabled host configuration should validate");
     assert!(deregister_plugin("documentation-plugin"));
 
     assert_eq!(
