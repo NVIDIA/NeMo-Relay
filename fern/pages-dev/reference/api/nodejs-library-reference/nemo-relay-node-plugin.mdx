@@ -118,37 +118,65 @@ export interface PluginConfig {
 }
 ```
 
-### `DynamicPluginActivationSpec`
-
-Explicitly resolved dynamic plugin load and component configuration.
+### `PluginHostActivation`
 
 ```ts
-export interface DynamicPluginActivationSpec {
-  pluginId: string;
-  kind: DynamicPluginKind;
-  manifestRef: string;
-  environmentRef?: string | null;
-  config?: Record<string, Json>;
-}
-```
-
-### `DynamicPluginActivation`
-
-Owns one process-wide dynamic plugin host activation.
-
-```ts
-export interface DynamicPluginActivation extends AsyncDisposable {
+export interface PluginHostActivation extends AsyncDisposable {
   /** Validation report produced by the successful activation. */
-  readonly report: ConfigReport;
-  /**
-   * Whether this activation handle has not begun teardown. `false` does not
-   * guarantee another process-wide activation can start after failed teardown.
-   */
-  readonly active: boolean;
+  readonly report: PluginHostReport;
+  /** Whether this activation remains open. Failed teardown can be retried. */
+  readonly isActive: boolean;
   /** Clear callbacks before unloading libraries and workers. Idempotent. */
   close(): Promise<void>;
   /** Delegate structured `await using` cleanup to `close()`. */
   [Symbol.asyncDispose](): Promise<void>;
+}
+```
+
+### `PluginHostReport`
+
+```ts
+export interface PluginHostReport {
+  config: ConfigReport;
+  dynamic_plugins: DynamicPluginValidationReport[];
+}
+```
+
+### `DynamicPluginValidationStatus`
+
+```ts
+export interface DynamicPluginValidationStatus {
+  manifest: DynamicPluginCheckState;
+  compatibility: DynamicPluginCheckState;
+  integrity: DynamicPluginCheckState;
+  environment: DynamicPluginCheckState;
+  authenticity: DynamicPluginCheckState;
+  policy_satisfied: DynamicPluginCheckState;
+  checked_at?: string | null;
+  message?: string | null;
+}
+```
+
+### `DynamicPluginFailure`
+
+```ts
+export interface DynamicPluginFailure {
+  phase: string;
+  code: string;
+  message: string;
+}
+```
+
+### `DynamicPluginValidationReport`
+
+```ts
+export interface DynamicPluginValidationReport {
+  plugin_id: string;
+  manifest_ref: string;
+  kind: DynamicPluginKind;
+  status: DynamicPluginValidationStatus;
+  failure?: DynamicPluginFailure | null;
+  selected: boolean;
 }
 ```
 
@@ -479,110 +507,68 @@ export declare function ComponentSpec(
     enabled?: boolean;
 ```
 
-### `validate`
-
-Validate a plugin configuration without activating it.
-
-Runs the same config validation pipeline used by initialization while leaving the active plugin registry and runtime configuration unchanged.
-
-**Parameters**
-
-- `config`: Candidate plugin configuration document.
-
-**Returns**
-
-A structured validation report with diagnostics.
-
-**Remarks**
-
-Use this to surface warnings or incompatibilities before replacing the active plugin configuration.
-
-```ts
-export declare function validate(config: PluginConfig): ConfigReport;
-```
-
 ### `initialize`
 
-Validate and activate a plugin configuration.
+Initialize the core-owned static and dynamic plugin host.
 
-Replaces the current active config, invokes each enabled component's registration hooks, and resolves with the final activation report.
-
-**Parameters**
-
-- `config`: Plugin configuration document to activate.
-
-**Returns**
-
-A promise resolving to the activation report.
-
-**Remarks**
-
-Partial plugin registration is rolled back if activation fails, and the promise rejects with the underlying validation or setup error.
-
-```ts
-export declare function initialize(config: PluginConfig): Promise<ConfigReport>;
-```
-
-### `initializeWithDynamicPlugins`
-
-Initialize with explicitly resolved dynamic plugins.
-
-The returned object owns loaded libraries and worker processes. Keep it alive while plugin callbacks may run and call `close()` for deterministic teardown. Garbage collection is a defensive fallback only.
+Resolves programmatic config with either an explicit or discovered user file, then the system configuration, and activates one owned lifetime.
 
 **Parameters**
 
-- `config`: Base configuration layered over discovered `plugins.toml` files.
-- `specs`: Non-empty explicit manifest and component configuration for each plugin.
+- `config`: Lowest-precedence programmatic configuration.
+- `additionalPluginsToml`: Optional explicit `plugins.toml` layer.
 
 **Returns**
 
-The owned activation and its validation report.
+An owned activation with the unified host report.
 
 **Remarks**
 
-File-configured static components initialize before dynamic components. Use `initialize()` for a static-only configuration.
+Keep the returned activation alive while callbacks may run and call `close()` or use `await using` for deterministic teardown.
 
 ```ts
-export declare function initializeWithDynamicPlugins(
-  config: PluginConfig,
-  specs: DynamicPluginActivationSpec[],
-): Promise<DynamicPluginActivation>;
+export declare function initialize(config: PluginConfig, additionalPluginsToml?: string): Promise<PluginHostActivation>;
 ```
 
-### `clear`
+### `validate`
 
-Clear the active plugin configuration.
+Validate the plugin host without loading plugin code.
 
-Removes the currently active component registrations while leaving plugin kinds in the registry so they can be reused by a later initialization call.
+Resolves the same layered configuration and trust policy used by activation while leaving the process-wide host lease untouched.
+
+**Parameters**
+
+- `config`: Lowest-precedence programmatic configuration.
+- `additionalPluginsToml`: Optional explicit `plugins.toml` layer.
 
 **Returns**
 
-Nothing.
+Structured static and dynamic validation report.
 
 **Remarks**
 
-Registered plugin kinds remain available after the active config is cleared.
+Validation performs no activation and does not acquire the host lease.
 
 ```ts
-export declare function clear(): void;
+export declare function validate(config: PluginConfig, additionalPluginsToml?: string): PluginHostReport;
 ```
 
-### `report`
+### `validateExact`
 
-Return the last successfully activated plugin report.
+Validate only the supplied static plugin configuration.
 
-Exposes the most recent activation report emitted by the native plugin system without triggering validation or registration work.
+Unlike `validate`, this does not discover or merge `plugins.toml` files. Use it for component-specific validation when `config` is the complete document to check.
+
+**Parameters**
+
+- `config`: Complete static plugin configuration.
 
 **Returns**
 
-The last activation report, if one exists.
-
-**Remarks**
-
-This returns `null` until `initialize` succeeds at least once in the current process.
+Static validation results with no dynamic plugins.
 
 ```ts
-export declare function report(): ConfigReport | null;
+export declare function validateExact(config: PluginConfig): PluginHostReport;
 ```
 
 ### `listKinds`
@@ -642,7 +628,7 @@ Deletes the plugin kind from the registry so future config validation and initia
 
 **Remarks**
 
-Active runtime registrations remain until `clear()` or the next successful `initialize(...)`.
+Active runtime registrations remain until the owning plugin-host activation closes.
 
 ```ts
 export declare function deregister(pluginKind: string): boolean;
@@ -675,6 +661,12 @@ Execution lane for a dynamically loaded Relay plugin.
 
 ```ts
 export type DynamicPluginKind = 'rust_dynamic' | 'worker';
+```
+
+### `DynamicPluginCheckState`
+
+```ts
+export type DynamicPluginCheckState = 'unknown' | 'valid' | 'invalid';
 ```
 
 ### `EventMetadataScalar`

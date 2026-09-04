@@ -25,7 +25,6 @@ Each function clears the thread-local error before executing and returns an [`Ne
 
 ## Functions
 
-- [nemo_relay_active_plugin_report_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-active-plugin-report-json): Return the last successfully configured plugin report as JSON.
 - [nemo_relay_adaptive_build_cache_telemetry_event](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-build-cache-telemetry-event): Build one cache telemetry event as JSON.
 - [nemo_relay_adaptive_runtime_bind_scope](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-runtime-bind-scope): Bind ACG request rewrites to a scope.
 - [nemo_relay_adaptive_runtime_build_cache_request_facts](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-runtime-build-cache-request-facts): Build cache request facts as JSON.
@@ -54,7 +53,6 @@ Each function clears the thread-local error before executing and returns an [`Ne
 - [nemo_relay_capture_propagation_context_with_root_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-capture-propagation-context-with-root-json): Serialize the current causal parent with an application-supplied root UUID.
 - [nemo_relay_capture_rootless_propagation_context_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-capture-rootless-propagation-context-json): Serialize the current causal parent without a propagation root.
 - [nemo_relay_capture_traceparent](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-capture-traceparent): Capture the current Relay context as a W3C `traceparent` header value.
-- [nemo_relay_clear_plugin_configuration](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-clear-plugin-configuration): Clear the active global plugin configuration.
 - [nemo_relay_deregister_conditional_middleware_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-conditional-middleware-guardrail): Deregister a global conditional middleware guardrail.
 - [nemo_relay_deregister_event_metadata_injector](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-event-metadata-injector): Deregister a global event metadata injector.
 - [nemo_relay_deregister_llm_conditional_execution_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-llm-conditional-execution-guardrail): Deregister an LLM conditional execution guardrail by name.
@@ -79,8 +77,6 @@ Each function clears the thread-local error before executing and returns an [`Ne
 - [nemo_relay_gemini_generate_content_codec_new](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-gemini-generate-content-codec-new): Create a new Gemini generateContent API codec handle.
 - [nemo_relay_get_handle](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-get-handle): Retrieve the current scope handle from the thread-local scope stack.
 - [nemo_relay_initialize_default_logging](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-initialize-default-logging): Initializes the Go binding runtime and installs default operational logging.
-- [nemo_relay_initialize_plugins](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-initialize-plugins): Initialize the active global plugin components and return the resulting diagnostics report.
-- [nemo_relay_initialize_with_dynamic_plugins](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-initialize-with-dynamic-plugins): Load and activate dynamic plugins as one owned transaction.
 - [nemo_relay_list_plugin_kinds_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-list-plugin-kinds-json): Return the registered plugin kinds as JSON.
 - [nemo_relay_list_runtime_registrations](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-list-runtime-registrations): List global gateable runtime registrations as JSON.
 - [nemo_relay_llm_call](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-llm-call): Begin a manual LLM call lifecycle span.
@@ -125,7 +121,6 @@ Each function clears the thread-local error before executing and returns an [`Ne
 - [nemo_relay_otel_subscriber_register](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-register): Registers the OpenTelemetry subscriber as an event subscriber.
 - [nemo_relay_otel_subscriber_runtime_diagnostics_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-runtime-diagnostics-json): Return a bounded JSON snapshot of runtime diagnostics for this subscriber.
 - [nemo_relay_otel_subscriber_shutdown](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-shutdown): Shuts down the underlying tracer provider.
-- [nemo_relay_plugin_activation_clear](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-activation-clear): Clear one owned dynamic plugin activation.
 - [nemo_relay_plugin_context_register_event_metadata_injector](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-event-metadata-injector): Register an event metadata injector into a plugin context.
 - [nemo_relay_plugin_context_register_llm_conditional_execution_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-llm-conditional-execution-guardrail): Register an LLM conditional-execution guardrail into the plugin registration context.
 - [nemo_relay_plugin_context_register_llm_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-llm-execution-intercept): Register an LLM execution intercept into the plugin registration context.
@@ -142,6 +137,12 @@ Each function clears the thread-local error before executing and returns an [`Ne
 - [nemo_relay_plugin_context_register_tool_request_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-tool-request-intercept): Register a tool request intercept into the plugin registration context.
 - [nemo_relay_plugin_context_register_tool_sanitize_request_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-tool-sanitize-request-guardrail): Register a tool sanitize-request guardrail into the plugin registration context.
 - [nemo_relay_plugin_context_register_tool_sanitize_response_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-tool-sanitize-response-guardrail): Register a tool sanitize-response guardrail into the plugin registration context.
+- [nemo_relay_plugin_host_activation_close](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-host-activation-close): Close one owned plugin-host activation.
+- [nemo_relay_plugin_host_activation_is_active](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-host-activation-is-active): Report whether an owned plugin-host activation is still active.
+- [nemo_relay_plugin_host_activation_report_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-host-activation-report-json): Return the current report retained by an owned plugin-host activation.
+- [nemo_relay_plugin_initialize](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-initialize): Initialize the unified static and dynamic plugin host from core-owned `plugins.toml` discovery.
+- [nemo_relay_plugin_validate](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-validate): Validate dynamic plugins without loading plugin code or acquiring the host lease.
+- [nemo_relay_plugin_validate_exact](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-validate-exact): Validate only the supplied static plugin configuration.
 - [nemo_relay_pop_scope](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-pop-scope): Pop a scope from the scope stack by its handle.
 - [nemo_relay_propagation_context_to_traceparent](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-propagation-context-to-traceparent): Convert a rooted propagation-context JSON value to a W3C `traceparent`.
 - [nemo_relay_push_scope](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-push-scope): Push a new scope onto the scope stack.
@@ -211,4 +212,3 @@ Each function clears the thread-local error before executing and returns an [`Ne
 - [nemo_relay_tool_call_execute_v2](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-tool-call-execute-v2): Execute a tool call end-to-end with an optional external tool call ID.
 - [nemo_relay_tool_conditional_execution](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-tool-conditional-execution): Run the registered tool conditional execution guardrail chain.
 - [nemo_relay_tool_request_intercepts](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-tool-request-intercepts): Run the registered tool request intercept chain on the given arguments.
-- [nemo_relay_validate_plugin_config](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-validate-plugin-config): Validate a generic plugin config document and return the diagnostics report as JSON.

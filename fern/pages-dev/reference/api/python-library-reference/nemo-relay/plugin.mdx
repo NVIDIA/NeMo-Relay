@@ -27,6 +27,18 @@ One aggregated runtime failure from an active plugin.
 
 Validation or activation report for a plugin config.
 
+### `DynamicPluginValidationStatus(_DynamicPluginValidationStatusRequired)`
+
+### `DynamicPluginFailure(TypedDict)`
+
+Actionable reason a dynamic plugin could not be trusted or loaded.
+
+### `DynamicPluginValidationReport(_DynamicPluginValidationReportRequired)`
+
+### `PluginHostReport(TypedDict)`
+
+Static and dynamic validation results owned by one plugin host.
+
 ### `PluginContext(Protocol)`
 
 Component-scoped registration context passed to custom plugin handlers.
@@ -257,38 +269,16 @@ def to_dict() -> JsonObject
 
 Serialize this config to the canonical JSON document shape.
 
-### `DynamicPluginActivationSpec`
-
-One dynamic plugin component to load and activate.
-
-#### Methods
-
-##### `DynamicPluginActivationSpec`
-
-```python
-def DynamicPluginActivationSpec(plugin_id: str, kind: DynamicPluginKind, manifest_ref: str, environment_ref: str | None = None, config: JsonObject = ...) -> None
-```
-
-Create an instance.
-
-##### `to_dict`
-
-```python
-def to_dict() -> JsonObject
-```
-
-Serialize this activation specification to its canonical JSON shape.
-
 ### `PluginHostActivation`
 
-Owned lifetime for one process-wide dynamic plugin host.
+Owned lifetime for one process-wide static and dynamic plugin host.
 
 #### Methods
 
 ##### `report`
 
 ```python
-def report() -> ConfigReport
+def report() -> PluginHostReport
 ```
 
 Return the validation report captured during activation.
@@ -311,69 +301,37 @@ Clear callbacks and unload plugins; repeated calls are safe.
 
 ## Functions
 
-### `load_dynamic_plugin_activation_specs`
+### `initialize`
 
 ```python
-def load_dynamic_plugin_activation_specs(plugin_config_path: str | os.PathLike[str]) -> list[DynamicPluginActivationSpec]
+async def initialize(config: PluginConfig | JsonObject, additional_plugins_toml: str | os.PathLike[str] | None = None) -> PluginHostActivation
 ```
 
-Load dynamic activation specs from one standard `plugins.toml`.
+Initialize the core-owned static and dynamic plugin host.
+
+### `activate`
+
+```python
+def activate(config: PluginConfig | JsonObject, additional_plugins_toml: str | os.PathLike[str] | None = None) -> AbstractAsyncContextManager[PluginHostActivation]
+```
+
+Initialize and close the plugin host around an async context.
 
 ### `validate`
 
 ```python
-def validate(config: PluginConfig | JsonObject) -> ConfigReport
+def validate(config: PluginConfig | JsonObject, additional_plugins_toml: str | os.PathLike[str] | None = None) -> PluginHostReport
 ```
 
-Validate a plugin configuration without changing runtime state.
+Validate the core-owned static and dynamic plugin host.
 
-### `initialize`
+### `validate_exact`
 
 ```python
-async def initialize(config: PluginConfig | JsonObject) -> ConfigReport
+def validate_exact(config: PluginConfig | JsonObject) -> PluginHostReport
 ```
 
-Validate and activate a plugin configuration.
-
-### `initialize_with_dynamic_plugins`
-
-```python
-async def initialize_with_dynamic_plugins(config: PluginConfig | JsonObject, dynamic_plugins: Sequence[DynamicPluginActivationSpec | JsonObject]) -> PluginHostActivation
-```
-
-Initialize registered components with dynamic plugins as one owned host.
-
-### `clear`
-
-```python
-def clear() -> None
-```
-
-Clear the active plugin configuration.
-
-### `clear_async`
-
-```python
-async def clear_async() -> None
-```
-
-Clear the active plugin configuration without blocking `asyncio`.
-
-### `plugin`
-
-```python
-def plugin(config: PluginConfig | JsonObject) -> AsyncContextManager[ConfigReport]
-```
-
-Context manager for plugin initialization and cleanup.
-
-### `report`
-
-```python
-def report() -> ConfigReport | None
-```
-
-Return the active plugin report or a failed-teardown diagnostic report.
+Validate only the supplied static plugin configuration.
 
 ### `list_kinds`
 
@@ -401,6 +359,7 @@ Deregister a custom plugin kind.
 
 ## Type Aliases And Constants
 
+- `DynamicPluginCheckState`
 - `DynamicPluginKind`
 - `UnsupportedBehavior`
 

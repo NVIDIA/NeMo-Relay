@@ -1,0 +1,20 @@
+---
+title: "Function nemo_relay_plugin_host_activation_report_json"
+sidebar-title: "nemo_relay_plugin_host_activation_report_json"
+description: "Return the current report retained by an owned plugin-host activation."
+position: 119
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_plugin_host_activation_report_json(\n    activation: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"../types/struct-ffipluginhostactivation\">FfiPluginHostActivation</a>,\n    out_report_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Return the current report retained by an owned plugin-host activation.
+
+The report remains available after either a successful or failed close and is released only when the activation handle is freed.
+
+## Safety
+
+`activation` must be a valid activation handle and `out_report_json` must be a valid non-null output pointer.

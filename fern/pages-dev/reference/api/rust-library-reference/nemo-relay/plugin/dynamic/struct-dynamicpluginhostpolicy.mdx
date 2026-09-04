@@ -1,0 +1,104 @@
+---
+title: "Struct Dynamic Plugin Host Policy"
+sidebar-title: "DynamicPluginHostPolicy"
+description: "Effective host policy for dynamic plugins."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DynamicPluginHostPolicy &#123;\n    pub defaults: <a href=\"struct-dynamicpluginhostpolicyeffect\">DynamicPluginHostPolicyEffect</a>,\n    pub rules: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-dynamicpluginhostpolicyrule\">DynamicPluginHostPolicyRule</a>&gt;,\n    pub overrides: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/collections/btree/map/struct.BTreeMap.html\">BTreeMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"struct-dynamicpluginhostpolicyeffect\">DynamicPluginHostPolicyEffect</a>&gt;,\n&#125;"}} /></pre>
+
+Effective host policy for dynamic plugins.
+
+## Fields
+
+### `defaults: DynamicPluginHostPolicyEffect`
+
+Rules applied to every plugin before matching rules and ID overrides.
+
+### `rules: Vec<DynamicPluginHostPolicyRule>`
+
+Ordered matching rules.
+
+### `overrides: BTreeMap<String, DynamicPluginHostPolicyEffect>`
+
+Per-plugin overrides.
+
+## Implementations
+
+### `impl DynamicPluginHostPolicy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-dynamicpluginhostpolicy\">DynamicPluginHostPolicy</a>"}} /></pre>
+
+#### `merge_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn merge_from(&amp;mut self, other: Self)"}} /></pre>
+
+Overlays a higher-precedence policy onto this policy.
+
+#### `apply_secure_defaults`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn apply_secure_defaults(&amp;mut self)"}} /></pre>
+
+Applies Relay's fail-closed production defaults when fields were omitted.
+
+## Trait Implementations
+
+### `impl Clone for DynamicPluginHostPolicy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-dynamicpluginhostpolicy\">DynamicPluginHostPolicy</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-dynamicpluginhostpolicy\">DynamicPluginHostPolicy</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for DynamicPluginHostPolicy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-dynamicpluginhostpolicy\">DynamicPluginHostPolicy</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for DynamicPluginHostPolicy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-dynamicpluginhostpolicy\">DynamicPluginHostPolicy</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"struct-dynamicpluginhostpolicy\">DynamicPluginHostPolicy</a>"}} /></pre>
+
+### `impl From<FileDynamicPluginHostPolicy> for DynamicPluginHostPolicy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"struct-filedynamicpluginhostpolicy\">FileDynamicPluginHostPolicy</a>&gt; for <a href=\"struct-dynamicpluginhostpolicy\">DynamicPluginHostPolicy</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(value: <a href=\"struct-filedynamicpluginhostpolicy\">FileDynamicPluginHostPolicy</a>) -&gt; Self"}} /></pre>
+
+### `impl PartialEq for DynamicPluginHostPolicy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-dynamicpluginhostpolicy\">DynamicPluginHostPolicy</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-dynamicpluginhostpolicy\">DynamicPluginHostPolicy</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Eq for DynamicPluginHostPolicy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"struct-dynamicpluginhostpolicy\">DynamicPluginHostPolicy</a>"}} /></pre>
+
+### `impl StructuralPartialEq for DynamicPluginHostPolicy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"struct-dynamicpluginhostpolicy\">DynamicPluginHostPolicy</a>"}} /></pre>

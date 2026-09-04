@@ -118,7 +118,7 @@ digits, `-`, `_`, `.`, and `~`. Relay rejects empty segments, `.` and `..`
 segments, absolute paths, backslashes, spaces, and other characters. If a
 placeholder is missing without a fallback, is present but non-string, or
 resolves to an unsafe value, Relay skips that trajectory. It records a runtime
-diagnostic in `plugin.report()` and causes plugin teardown to fail. Literal
+diagnostic and causes `activation.close()` to fail. Literal
 template text must also be a relative, traversal-free path. The rendered
 filename applies to local, S3, and HTTP storage in the same way as a static
 filename.
@@ -266,15 +266,13 @@ delivery diagnostic and retries that destination for each later trajectory.
 Other destinations continue to receive writes. When every remote destination
 fails for one trajectory, Relay writes a local recovery copy under
 `output_directory`; a successful remote destination does not create that copy.
-The diagnostic becomes visible in `plugin.report()` after subscriber delivery
-is flushed and is retained there after a failed teardown. Teardown also reports
+The diagnostic is logged after subscriber delivery is flushed. Teardown also reports
 the degraded delivery, even when the local recovery write succeeds. This error
 reports delivery degradation, not a registration leak; callbacks have already
-been removed. If the failure is still pending when initialization replaces the
-configuration, that replacement returns the delivery error and leaves no
-configuration active; a subsequent clear or initialization is safe. Fatal
-dispatcher failures, such as trajectory serialization failures, are also
-reported during teardown.
+been removed. If the failure is still pending when `activation.close()` runs,
+the close returns the delivery error after removing callbacks. Fatal dispatcher
+failures, such as trajectory serialization failures, are also reported during
+teardown.
 
 ## Expected Output
 
@@ -325,10 +323,11 @@ Use plugin configuration when the application should let NeMo Relay own the ATIF
 dispatcher lifecycle. The following examples configure and activate the ATIF
 exporter through each supported language binding.
 
-`validate()` checks only the supplied in-memory object. `initialize()` also
-layers discovered `plugins.toml` configuration. For effective file-backed
-validation, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
-and run the gateway with the same configuration path that production uses.
+`validate()` resolves the same configuration layers as `initialize()` without
+loading plugin code or acquiring the activation lease. Use Python/Rust
+`validate_exact()`, Node.js `validateExact()`, or Go `ValidateExact()` when only
+the supplied static configuration should be checked. For complete
+layering rules, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -355,17 +354,14 @@ config = plugin.PluginConfig(
     ]
 )
 
-report = plugin.validate(config)
+report = plugin.validate(config)["config"]
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
 async def main():
-    await plugin.initialize(config)
-    try:
+    async with plugin.activate(config):
         # Run instrumented application work here.
         pass
-    finally:
-        await plugin.clear_async()
 
 asyncio.run(main())
 ```
@@ -378,7 +374,7 @@ const plugin = require("nemo-relay-node/plugin");
 const observability = require("nemo-relay-node/observability");
 
 void (async () => {
-  await plugin.initialize({
+  const activation = await plugin.initialize({
     version: 1,
     components: [
       observability.ComponentSpec({
@@ -398,7 +394,7 @@ void (async () => {
   try {
     // Run instrumented application work here.
   } finally {
-    plugin.clear();
+    await activation.close();
   }
 })().catch((error) => {
   console.error(error);
@@ -415,9 +411,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use nemo_relay::observability::plugin_component::{
     AtifSectionConfig, ComponentSpec, ObservabilityConfig,
 };
-use nemo_relay::plugin::{
-    clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
-};
+use nemo_relay::plugin::PluginConfig;
+use nemo_relay::plugin::dynamic::{initialize, validate};
 
 let component = ComponentSpec::new(ObservabilityConfig {
     atif: Some(AtifSectionConfig {
@@ -438,14 +433,14 @@ let config = PluginConfig {
     policy: Default::default(),
 };
 
-let report = validate_plugin_config(&config);
-assert!(!report.has_errors());
+let report = validate(config.clone(), None)?;
+assert!(!report.config.has_errors());
 
-let _active = initialize_plugins(config).await?;
+let mut activation = initialize(config, None).await?;
 
 // Run instrumented application work here.
 
-clear_plugin_configuration()?;
+activation.close()?;
 Ok(())
 }
 ```

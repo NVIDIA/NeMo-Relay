@@ -236,6 +236,8 @@ component for model pricing directly:
 <Tabs>
 <Tab title="Python" language="python">
 ```python
+import asyncio
+
 import nemo_relay
 
 config = nemo_relay.plugin.PluginConfig(
@@ -251,11 +253,16 @@ config = nemo_relay.plugin.PluginConfig(
     ]
 )
 
-report = nemo_relay.plugin.validate(config)
+report = nemo_relay.plugin.validate_exact(config)["config"]
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
-await nemo_relay.plugin.initialize(config)
+async def main():
+    async with nemo_relay.plugin.activate(config):
+        # Run instrumented application work here.
+        pass
+
+asyncio.run(main())
 ```
 </Tab>
 
@@ -270,18 +277,21 @@ config.components = [
   }),
 ];
 
-const report = plugin.validate(config);
+const report = plugin.validateExact(config).config;
 if (report.diagnostics.some((diagnostic) => diagnostic.level === 'error')) {
   throw new Error(JSON.stringify(report.diagnostics));
 }
 
-await plugin.initialize(config);
+const activation = await plugin.initialize(config);
+// Run instrumented application work here.
+await activation.close();
 ```
 </Tab>
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use nemo_relay::plugin::PluginConfig;
+use nemo_relay::plugin::dynamic::{initialize, validate_exact};
 use serde_json::json;
 
 let config: PluginConfig = serde_json::from_value(json!({
@@ -296,20 +306,22 @@ let config: PluginConfig = serde_json::from_value(json!({
     }]
 }))?;
 
-let report = validate_plugin_config(&config);
-if report.has_errors() {
+let report = validate_exact(config.clone());
+if report.config.has_errors() {
     return Err("invalid model pricing plugin config".into());
 }
 
-initialize_plugins(config).await?;
+let mut activation = initialize(config, None).await?;
+// Run instrumented application work here.
+activation.close()?;
 ```
 </Tab>
 </Tabs>
 
 Initialize model pricing once during process or harness startup, before the
 managed LLM calls or manual lifecycle end events whose responses should be
-cost-annotated. In tests or reusable harnesses, clear plugin configuration
-during teardown if later cases need a different resolver.
+cost-annotated. Retain the activation handle and close it during teardown if
+later cases need a different resolver.
 
 Built-in response codecs attach estimated cost directly to
 `AnnotatedLlmResponse.usage.cost` when model pricing is known. Managed LLM

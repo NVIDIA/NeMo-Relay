@@ -42,14 +42,14 @@ and installs the replacement gate with the new component.
 The report accessor is a snapshot, not a live inspection of every registry. The kind-listing
 accessor answers a different question: which implementations can future component
 documents reference? An inactive or disabled kind can appear in that list, and an active
-component can keep running after its kind is deregistered until configuration is cleared.
+component can keep running after its kind is deregistered until its activation is closed.
 
 ## Own the Complete Host Lifecycle
 
 The host, rather than the plugin implementation, owns kind registration and active
 configuration. These complete lifecycle skeletons show where validation, report
-inspection, clearing, and deregistration belong. Put the clear operation in a guaranteed
-cleanup path so an application exception does not leave middleware installed.
+inspection, activation close, and deregistration belong. Put `activation.close()` in a
+guaranteed cleanup path so an application exception does not leave middleware installed.
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -59,21 +59,17 @@ plugin.register("documentation-plugin", implementation)
 assert "documentation-plugin" in plugin.list_kinds()
 
 preflight = plugin.validate(plugin_config)
-if any(item["level"] == "error" for item in preflight["diagnostics"]):
-    raise ValueError(preflight["diagnostics"])
+if any(item["level"] == "error" for item in preflight["config"]["diagnostics"]):
+    raise ValueError(preflight["config"]["diagnostics"])
 
 try:
-    report = await plugin.initialize(plugin_config)
-    print("active report:", report)
-    assert plugin.report() is not None
-    await run_application_work()
+    async with plugin.activate(plugin_config) as activation:
+        print("active report:", activation.report)
+        assert activation.is_active
+        await run_application_work()
 finally:
-    await plugin.clear_async()
     assert plugin.deregister("documentation-plugin")
 ```
-
-`clear_async` is the correct operation inside this running event loop. Calling the
-synchronous `clear()` here raises instead of blocking the loop.
 </Tab>
 <Tab title="Node.js" language="node">
 ```js
@@ -83,18 +79,19 @@ if (!plugin.listKinds().includes('documentation-plugin')) {
 }
 
 const preflight = plugin.validate(pluginConfig);
-if (preflight.diagnostics.some((item) => item.level === 'error')) {
-  throw new Error(JSON.stringify(preflight.diagnostics));
+if (preflight.config.diagnostics.some((item) => item.level === 'error')) {
+  throw new Error(JSON.stringify(preflight.config.diagnostics));
 }
 
+let activation;
 try {
-  const report = await plugin.initialize(pluginConfig);
-  console.log('active report:', report);
-  if (plugin.report() === null) throw new Error('active report is missing');
+  activation = await plugin.initialize(pluginConfig);
+  console.log('active report:', activation.report);
+  if (!activation.isActive) throw new Error('plugin host is inactive');
   await runApplicationWork();
 } finally {
   await relay.flushSubscribers();
-  plugin.clear();
+  await activation?.close();
   if (!plugin.deregister('documentation-plugin')) {
     throw new Error('plugin kind was not deregistered');
   }
@@ -106,20 +103,19 @@ try {
 register_plugin(Arc::new(DocumentationPlugin))?;
 assert!(list_plugin_kinds().iter().any(|kind| kind == "documentation-plugin"));
 
-let preflight = validate_plugin_config(&plugin_config);
-if preflight.diagnostics.iter().any(|item| {
+let preflight = validate(plugin_config.clone(), None)?;
+if preflight.config.diagnostics.iter().any(|item| {
     matches!(item.level, DiagnosticLevel::Error)
 }) {
     return Err("plugin configuration failed validation".into());
 }
 
-let report = initialize_plugins(plugin_config).await?;
-println!("active report: {report:?}");
-assert!(active_plugin_report().is_some());
+let mut activation = initialize(plugin_config, None).await?;
+println!("active report: {:?}", activation.report());
+assert!(activation.is_active());
 
 let work_result = run_application_work().await;
-let clear_result = clear_plugin_configuration();
-clear_result?;
+activation.close()?;
 assert!(deregister_plugin("documentation-plugin"));
 work_result?;
 ```
@@ -132,10 +128,8 @@ fn allows_multiple_components(&self) -> bool {
 }
 ```
 
-`initialize_plugins` resolves the supplied document with discovered `plugins.toml`
-configuration before it activates the result. `initialize_plugins_exact` is an internal
-escape hatch for hosts that have already resolved a `PluginConfig` and need Relay to
-apply those values without discovery or layering.
+`initialize` resolves the supplied document with discovered `plugins.toml`
+configuration before it activates the result and returns its sole lifecycle owner.
 </Tab>
 </Tabs>
 
@@ -144,13 +138,12 @@ apply those values without discovery or layering.
 Use the following order so active callbacks cannot outlive their implementation:
 
 1. Stop sending new managed calls and let in-flight plugin callbacks settle. In Node.js,
-   await `relay.flushSubscribers()` before clearing so queued event and scope-end
+   await `relay.flushSubscribers()` before closing so queued event and scope-end
    sanitizers finish while their component still owns their callbacks.
-2. Clear active configuration. In Python, use `await plugin.clear_async()` whenever an
-   event loop is running; the synchronous `clear()` raises instead of blocking that loop.
-   Rust checks the returned `Result`, and Node.js calls `plugin.clear()` after the flush.
-3. Inspect the report after clear. A clean clear removes the active report; a failed
-   teardown can retain bounded runtime diagnostics for investigation.
+2. Inspect `activation.report` (or Rust `activation.report()`) when retaining
+   activation-time diagnostics for investigation.
+3. Close the activation handle. Python and Node.js await `activation.close()`; Rust
+   checks the `Result` returned by `activation.close()`.
 4. Deregister the plugin kind only after active behavior is gone. Deregistration affects
    future validation and initialization, not registrations already committed to the
    runtime.

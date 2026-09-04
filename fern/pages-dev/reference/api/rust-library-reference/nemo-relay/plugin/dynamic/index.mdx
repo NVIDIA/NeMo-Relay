@@ -15,8 +15,10 @@ This module owns the durable control-plane record shape for dynamic plugins. Aut
 
 ## Structs
 
-- [DynamicPluginActivationSpec](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginactivationspec): One dynamic plugin component to load and activate in an embedding host.
 - [DynamicPluginFailure](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginfailure): One structured recent failure summary.
+- [DynamicPluginHostPolicy](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginhostpolicy): Effective host policy for dynamic plugins.
+- [DynamicPluginHostPolicyEffect](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginhostpolicyeffect): A partial policy effect that may overlay another effect.
+- [DynamicPluginHostPolicyRule](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginhostpolicyrule): One ordered policy rule.
 - [DynamicPluginManifest](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginmanifest): Authored `relay-plugin.toml` manifest.
 - [DynamicPluginManifestCapabilities](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginmanifestcapabilities): Capability declarations for authored manifests.
 - [DynamicPluginManifestCompat](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginmanifestcompat): Compatibility block for `relay-plugin.toml`.
@@ -36,12 +38,20 @@ This module owns the durable control-plane record shape for dynamic plugins. Aut
 - [DynamicPluginSource](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginsource): Source and resolved artifact facts for a plugin.
 - [DynamicPluginSpec](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginspec): Desired-state fields owned by user-facing operations.
 - [DynamicPluginStatus](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginstatus): Durable observed state for a plugin record.
+- [DynamicPluginValidationReport](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginvalidationreport): One validation result produced by core before dynamic code is loaded.
 - [DynamicPluginValidationStatus](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginvalidationstatus): Decomposed validation results for one plugin record.
 - [DynamicPluginWorkerCompatibility](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginworkercompatibility): Compatibility contract for worker plugins.
 - [DynamicPluginWorkerLoadContract](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginworkerloadcontract): Lane-specific load contract for worker plugins.
+- [EvaluatedDynamicPluginHostPolicy](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-evaluateddynamicpluginhostpolicy): The result of applying the effective host policy to one manifest.
+- [EvaluatedDynamicPluginTrust](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-evaluateddynamicplugintrust): Result of integrity and authenticity verification.
+- [FileDynamicPluginHostPolicy](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-filedynamicpluginhostpolicy): The TOML representation accepted below `[plugins.policy]`.
+- [FileDynamicPluginHostPolicyEffect](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-filedynamicpluginhostpolicyeffect): File-level partial policy effect.
+- [FileDynamicPluginHostPolicyRule](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-filedynamicpluginhostpolicyrule): File-level ordered policy rule.
 - [NativePluginActivation](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-nativepluginactivation): Owns native dynamic libraries registered into the plugin registry.
 - [NativePluginLoadSpec](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-nativepluginloadspec): Native plugin load request derived from host dynamic-plugin state.
 - [PluginHostActivation](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-pluginhostactivation): Owns one process-wide dynamic plugin configuration and its loaded runtimes.
+- [PluginHostReport](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-pluginhostreport): Combined static and dynamic host report.
+- [VerifiedDynamicPluginSpec](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-verifieddynamicpluginspec): One dynamic plugin component to load and activate in an embedding host.
 - [WorkerPluginActivation](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-workerpluginactivation): Owns gRPC worker processes registered into the plugin registry.
 - [WorkerPluginLoadSpec](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-workerpluginloadspec): Worker plugin load request derived from host dynamic-plugin state.
 
@@ -52,21 +62,35 @@ This module owns the durable control-plane record shape for dynamic plugins. Aut
 - [DynamicPluginCheckState](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicplugincheckstate): High-level verification state for one validation axis.
 - [DynamicPluginCompatibility](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicplugincompatibility): Lane-specific compatibility declarations and resolved compatibility facts.
 - [DynamicPluginFailurePhase](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginfailurephase): Recent failure phase for diagnostics and operator UX.
+- [DynamicPluginHostPolicyFailure](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginhostpolicyfailure): A policy refusal.
 - [DynamicPluginKind](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginkind): Plugin execution lane.
 - [DynamicPluginLoadContract](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginloadcontract): Runtime entry contract for the resolved plugin.
 - [DynamicPluginManifestLoad](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginmanifestload): Load block for authored manifests.
 - [DynamicPluginRuntimeState](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginruntimestate): Observed runtime state for a dynamic plugin.
 - [DynamicPluginStartupClass](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginstartupclass): Host policy startup classification for a plugin.
+- [DynamicPluginTrustFailure](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicplugintrustfailure): A failed artifact trust check.
 - [WorkerRuntime](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-workerruntime): Managed runtime identity for worker-based plugins.
 
 ## Constants
 
 - [DYNAMIC_PLUGIN_MANIFEST_FILENAME](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/constant-dynamic-plugin-manifest-filename): Canonical filename for authored Relay plugin manifests.
+- [MAX_DYNAMIC_PLUGIN_FILE_BYTES](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/constant-max-dynamic-plugin-file-bytes): Maximum accepted size for one plugin manifest, artifact, schema, or signature.
 
 ## Functions
 
+- [evaluate_dynamic_plugin_host_policy](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-evaluate-dynamic-plugin-host-policy): Evaluates a dynamic plugin manifest against a resolved host policy.
+- [evaluate_dynamic_plugin_trust](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-evaluate-dynamic-plugin-trust): Validates the manifest artifact under the already-evaluated host policy.
+- [initialize](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-initialize): Initializes the process-wide static and dynamic plugin host.
 - [load_native_plugins](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-load-native-plugins): Loads native dynamic plugins and registers their plugin kinds.
 - [load_worker_plugins](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-load-worker-plugins): Loads gRPC worker plugins and registers their plugin kinds.
+- [read_bounded_regular_file](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-read-bounded-regular-file): Reads a regular file without following a Unix symlink and with a fixed byte budget.
+- [read_regular_file_with_limit](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-read-regular-file-with-limit): Reads a regular file without following a Unix symlink and with a caller-provided byte budget.
+- [resolve_dynamic_plugin_artifact_path](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-resolve-dynamic-plugin-artifact-path): Resolves an artifact or signature reference relative to its manifest.
+- [stream_bounded_regular_file](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-stream-bounded-regular-file): Streams a regular file through `consume` with a fixed byte budget.
+- [stream_regular_file_with_limit](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-stream-regular-file-with-limit): Streams a regular file through `consume` with a caller-provided byte budget.
+- [validate](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-validate): Validates the process-wide static and dynamic plugin host.
+- [validate_dynamic_plugin_config_schema](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-validate-dynamic-plugin-config-schema): Validates dynamic component configuration against its manifest-declared local schema.
+- [validate_exact](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-validate-exact): Validates only the supplied static plugin configuration.
 
 ## Type Aliases
 

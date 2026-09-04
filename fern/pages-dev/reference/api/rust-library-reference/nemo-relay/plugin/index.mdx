@@ -35,6 +35,7 @@ This module owns:
 - [PluginConfig](/reference/api/rust-library-reference/nemo-relay/plugin/struct-pluginconfig): Canonical plugin configuration document.
 - [PluginRegistration](/reference/api/rust-library-reference/nemo-relay/plugin/struct-pluginregistration): Bookkeeping for one middleware/subscriber registration.
 - [PluginRegistrationContext](/reference/api/rust-library-reference/nemo-relay/plugin/struct-pluginregistrationcontext): Context provided to plugin handlers during runtime registration.
+- [PluginRollbackOutcome](/reference/api/rust-library-reference/nemo-relay/plugin/struct-pluginrollbackoutcome): Result of rolling back a set of plugin registrations.
 - [RuntimeDiagnostic](/reference/api/rust-library-reference/nemo-relay/plugin/struct-runtimediagnostic): Bounded aggregate for a runtime failure observed by an active plugin.
 
 ## Enums
@@ -49,18 +50,14 @@ This module owns:
 
 ## Functions
 
-- [active_plugin_report](/reference/api/rust-library-reference/nemo-relay/plugin/fn-active-plugin-report): Returns the active plugin report or a report retained after a failed teardown.
 - [apply_global_config_policy](/reference/api/rust-library-reference/nemo-relay/plugin/fn-apply-global-config-policy): Applies non-default global policy fields to a component policy.
-- [clear_plugin_configuration](/reference/api/rust-library-reference/nemo-relay/plugin/fn-clear-plugin-configuration): Deregisters and clears all configured plugin components.
 - [deregister_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-deregister-plugin): Removes a previously registered plugin.
 - [ensure_builtin_plugins_registered](/reference/api/rust-library-reference/nemo-relay/plugin/fn-ensure-builtin-plugins-registered): Registers core-provided plugin kinds.
-- [initialize_plugins](/reference/api/rust-library-reference/nemo-relay/plugin/fn-initialize-plugins): Validates and activates `config` layered on top of the discovered `plugins.toml` configuration, so a direct integration sees the same file layering as the gateway. Each file's schema version is validated before layering. Declaring a component in `config` applies its `enabled` value, while default policy values inherit from discovered files and component `config` bodies merge field-by-field. The resolved configuration and diagnostics are passed to the shared `initialize_plugins_with_diagnostics` helper. Call [`initialize_plugins_exact`] directly when `config` is already fully resolved and every value must be applied exactly.
 - [list_plugin_kinds](/reference/api/rust-library-reference/nemo-relay/plugin/fn-list-plugin-kinds): Lists registered plugin kinds in sorted order.
 - [lookup_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-lookup-plugin): Looks up a registered plugin by kind.
 - [record_active_plugin_runtime_diagnostic](/reference/api/rust-library-reference/nemo-relay/plugin/fn-record-active-plugin-runtime-diagnostic): Record a bounded runtime diagnostic against the active plugin report.
 - [register_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-register-plugin): Registers a plugin by kind.
-- [rollback_registrations](/reference/api/rust-library-reference/nemo-relay/plugin/fn-rollback-registrations): Rolls back registrations in reverse order, ignoring rollback failures.
-- [validate_plugin_config](/reference/api/rust-library-reference/nemo-relay/plugin/fn-validate-plugin-config): Validates a plugin configuration document.
+- [rollback_registrations](/reference/api/rust-library-reference/nemo-relay/plugin/fn-rollback-registrations): Rolls back registrations in reverse order.
 
 ## Type Aliases
 

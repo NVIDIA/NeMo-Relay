@@ -443,23 +443,22 @@ export declare class AdaptiveRuntime {
 }
 ```
 
-### `DynamicPluginActivation`
+### `PluginHostActivation`
 
 Owned dynamic plugin activation.
 
 Keep this object alive while code may invoke callbacks registered by the dynamic plugins. Call `close()` for deterministic cleanup; garbage collection performs the same cleanup as a defensive fallback.
 
 ```ts
-export declare class DynamicPluginActivation {
+export declare class PluginHostActivation {
   /** Return the validation report produced by activation. */
   get report(): Json
   /**
    * Return whether this activation handle has not begun teardown.
    *
-   * `false` does not guarantee another process-wide activation can start;
-   * failed teardown may intentionally retain the activation owner.
+   * Failed teardown leaves the activation active so `close()` can retry.
    */
-  get active(): boolean
+  get isActive(): boolean
   /**
    * Clear plugin callbacks before unloading libraries and workers.
    *
@@ -1807,14 +1806,6 @@ Set manual latency sensitivity on the current scope.
 export declare function setLatencySensitivity(value: number): void
 ```
 
-### `validatePluginConfig`
-
-Validate a plugin config document and return a structured diagnostics report.
-
-```ts
-export declare function validatePluginConfig(config: Json): Json
-```
-
 ### `registerPlugin`
 
 Register a plugin backed by JavaScript callbacks.
@@ -1833,38 +1824,28 @@ Deregister a plugin by kind.
 export declare function deregisterPlugin(pluginKind: string): boolean
 ```
 
-### `initializePlugins`
+### `initialize`
 
-Initialize the active global plugin components.
+Initialize the core-owned static and dynamic plugin host from layered files.
 
 ```ts
-export declare function initializePlugins(config: Json): Promise<Json>
+export declare function initialize(config: Json, additionalPluginsToml?: string | undefined | null): Promise<PluginHostActivation>
 ```
 
-### `initializeWithDynamicPlugins`
+### `validate`
 
-Initialize with explicitly resolved dynamic plugins.
-
-`config` is layered over discovered `plugins.toml` files and may contain statically registered components; dynamic components are activated after that effective base configuration. At least one dynamic plugin is required. Static-only callers should use `initializePlugins`. The returned object owns all loaded libraries and worker processes. Its validation report is available through the `report` property.
+Validate dynamic plugins without loading any plugin code.
 
 ```ts
-export declare function initializeWithDynamicPlugins(config: Json, specs: Json): Promise<DynamicPluginActivation>
+export declare function validate(config: Json, additionalPluginsToml?: string | undefined | null): Json
 ```
 
-### `clearPluginConfiguration`
+### `validateExact`
 
-Clear the active global plugin configuration.
-
-```ts
-export declare function clearPluginConfiguration(): void
-```
-
-### `activePluginReport`
-
-Return the active plugin report or one retained after a teardown failure with runtime diagnostics.
+Validate only the supplied static plugin configuration.
 
 ```ts
-export declare function activePluginReport(): Json | null
+export declare function validateExact(config: Json): Json
 ```
 
 ### `listPluginKinds`

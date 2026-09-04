@@ -1,0 +1,16 @@
+---
+title: "Function initialize"
+sidebar-title: "initialize"
+description: "Initializes the process-wide static and dynamic plugin host."
+position: 57
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn initialize(\n    config: <a href=\"../struct-pluginconfig\">PluginConfig</a>,\n    additional_plugins_toml: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.PathBuf.html\">PathBuf</a>&gt;,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"struct-pluginhostactivation\">PluginHostActivation</a>&gt;"}} /></pre>
+
+Initializes the process-wide static and dynamic plugin host.
+
+The returned handle must remain alive while any plugin-provided callback can run. Closing or dropping it unregisters components before unloading dynamic runtimes.
