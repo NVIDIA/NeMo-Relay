@@ -1453,7 +1453,18 @@ async fn builtin_metric_marks_preserve_typed_measurements() {
         None,
     ));
     let callback = crate::builtin::event_sanitize_callback(
-        crate::builtin::CompiledBuiltinBackend::new(BuiltinBackendConfig::default(), None).unwrap(),
+        crate::builtin::CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                target_paths: vec!["/owner".to_string()],
+                target_path_globs: vec![
+                    "/measurements/*/description".to_string(),
+                    "/measurements/*/attributes/*".to_string(),
+                ],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
     );
     let sanitized = callback(
         Arc::new(event),
@@ -2051,7 +2062,14 @@ async fn builtin_metric_marks_drop_invalid_envelopes() {
         None,
     ));
     let callback = crate::builtin::event_sanitize_callback(
-        crate::builtin::CompiledBuiltinBackend::new(BuiltinBackendConfig::default(), None).unwrap(),
+        crate::builtin::CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                target_paths: vec!["/unused".to_string()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
     );
     let sanitized = callback(
         Arc::new(event),
@@ -2785,7 +2803,8 @@ fn validate_allows_llm_surfaces_without_codec() {
     let report = validate_plugin_config(&plugin_config(json!({
         "mode": "builtin",
         "builtin": {
-            "action": "remove"
+            "action": "remove",
+            "target_paths": ["/message"]
         },
         "input": true,
         "output": false,
@@ -3798,12 +3817,12 @@ fn builtin_remove_deletes_object_fields_and_nulls_array_or_root_targets() {
 }
 
 #[test]
-fn builtin_remove_with_empty_target_paths_only_removes_string_leaves() {
+fn builtin_remove_without_target_paths_is_rejected() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
     setup_isolated_thread();
 
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+    let config = plugin_config(json!({
         "mode": "builtin",
         "input": false,
         "output": false,
@@ -3812,41 +3831,16 @@ fn builtin_remove_with_empty_target_paths_only_removes_string_leaves() {
         "builtin": {
             "action": "remove"
         }
-    }))))
-    .unwrap();
+    }));
+    let report = validate_plugin_config(&config);
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("builtin.target_paths")
+            && diagnostic.message.contains("requires at least one")
+    }));
 
-    let events = capture_events("pii-redaction-remove-empty-targets-events");
-    let _handle = tool_call(
-        ToolCallParams::builder()
-            .name("search")
-            .args(json!({
-                "secret": "abc",
-                "nested": {
-                    "keep": "yes",
-                    "count": 3
-                },
-                "items": ["a", "b", 9],
-                "public": true
-            }))
-            .build(),
-    )
-    .unwrap();
-
-    let captured_events = captured_events_snapshot(&events);
-    assert_eq!(captured_events.len(), 1);
-    assert_eq!(
-        captured_events[0].input(),
-        Some(&json!({
-            "nested": {
-                "count": 3
-            },
-            "items": [null, null, 9],
-            "public": true
-        }))
-    );
-
-    deregister_subscriber("pii-redaction-remove-empty-targets-events").unwrap();
-    clear_plugin_configuration().unwrap();
+    let activation = futures::executor::block_on(initialize_plugins(config));
+    let error = activation.expect_err("unscoped remove must fail plugin activation");
+    assert!(error.to_string().contains("requires at least one"));
 }
 
 #[test]

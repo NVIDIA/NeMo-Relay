@@ -188,7 +188,8 @@ pub struct BuiltinBackendConfig {
     #[cfg_attr(feature = "schema", schemars(schema_with = "builtin_action_schema"))]
     pub action: String,
     /// Exact RFC 6901 JSON-pointer paths to sanitize. Empty together with
-    /// [`Self::target_path_globs`] means every string leaf.
+    /// [`Self::target_path_globs`] means every string leaf, except that
+    /// `action = "remove"` requires an explicit selector.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_paths: Vec<String>,
     /// JSON-pointer glob paths to sanitize. A whole `*` segment matches one
@@ -962,6 +963,21 @@ fn validate_builtin_action_requirements(
     if builtin.preset.is_some() {
         validate_builtin_preset_requirements(diagnostics, policy, plugin_config, builtin);
         return;
+    }
+
+    if builtin.action == "remove"
+        && builtin.target_paths.is_empty()
+        && builtin.target_path_globs.is_empty()
+    {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "pii_redaction.unsupported_value",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some("builtin.target_paths".to_string()),
+            "builtin.action = 'remove' requires at least one builtin.target_paths or builtin.target_path_globs selector"
+                .to_string(),
+        );
     }
 
     let custom_policy_configured = plugin_config

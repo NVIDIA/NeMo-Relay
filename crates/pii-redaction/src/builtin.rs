@@ -169,20 +169,55 @@ impl TargetPathMatcher {
 enum BuiltinAction {
     Remove,
     Hash {
-        matcher: Option<Arc<Regex>>,
+        matcher: Option<Arc<BuiltinMatcher>>,
     },
     Mask {
-        matcher: Option<Arc<Regex>>,
+        matcher: Option<Arc<BuiltinMatcher>>,
         strategy: BuiltinMaskStrategy,
     },
     Redact {
-        matcher: Arc<Regex>,
+        matcher: Arc<BuiltinMatcher>,
         replacement: Arc<String>,
     },
     RegexReplace {
-        pattern: Arc<Regex>,
+        pattern: Arc<BuiltinMatcher>,
         replacement: Arc<String>,
     },
+}
+
+#[derive(Clone)]
+struct BuiltinMatcher {
+    regex: Arc<Regex>,
+}
+
+impl BuiltinMatcher {
+    fn replace_all(&self, text: &str, mut replacement: impl FnMut(&str) -> String) -> String {
+        let mut output = String::with_capacity(text.len());
+        let mut cursor = 0;
+        for matched in self.regex.find_iter(text) {
+            let matched_text = matched.as_str();
+            output.push_str(&text[cursor..matched.start()]);
+            output.push_str(&replacement(matched_text));
+            cursor = matched.end();
+        }
+        output.push_str(&text[cursor..]);
+        output
+    }
+
+    fn replace_all_expanded(&self, text: &str, replacement: &str) -> String {
+        let mut output = String::with_capacity(text.len());
+        let mut cursor = 0;
+        for captures in self.regex.captures_iter(text) {
+            let matched = captures
+                .get(0)
+                .expect("regular-expression captures always include the full match");
+            output.push_str(&text[cursor..matched.start()]);
+            captures.expand(replacement, &mut output);
+            cursor = matched.end();
+        }
+        output.push_str(&text[cursor..]);
+        output
+    }
 }
 
 #[derive(Clone)]
@@ -315,6 +350,15 @@ impl CompiledBuiltinBackend {
                     "builtin target paths must be valid RFC 6901 JSON pointers".to_string(),
                 )
             })?;
+        if trajectory.is_none()
+            && matches!(action, BuiltinAction::Remove)
+            && target_paths.is_empty()
+        {
+            return Err(PluginError::InvalidConfig(
+                "builtin.action = 'remove' requires at least one builtin.target_paths or builtin.target_path_globs selector"
+                    .to_string(),
+            ));
+        }
 
         Ok(Self {
             action,
@@ -331,8 +375,17 @@ impl CompiledBuiltinBackend {
 
     /// Sanitize optional metric text without modifying required export fields.
     fn sanitize_metric_envelope(&self, data: Json) -> Option<Json> {
-        let mut envelope = serde_json::from_value::<MetricEnvelope>(data).ok()?;
-        envelope.validate().ok()?;
+        let mut envelope = match serde_json::from_value::<MetricEnvelope>(data) {
+            Ok(envelope) => envelope,
+            Err(_) => {
+                return log_metric_envelope_omitted("metric envelope deserialization failure");
+            }
+        };
+        if envelope.validate().is_err() {
+            return log_metric_envelope_omitted(
+                "metric envelope validation failure before redaction",
+            );
+        }
         for (index, measurement) in envelope.measurements.iter_mut().enumerate() {
             measurement.description = measurement.description.take().and_then(|description| {
                 self.sanitize_metric_string_at_path(
@@ -349,8 +402,15 @@ impl CompiledBuiltinBackend {
                 .take()
                 .map(|attributes| self.sanitize_metric_attributes(attributes, index));
         }
-        envelope.validate().ok()?;
-        serde_json::to_value(envelope).ok()
+        if envelope.validate().is_err() {
+            return log_metric_envelope_omitted(
+                "metric envelope validation failure after redaction",
+            );
+        }
+        match serde_json::to_value(envelope) {
+            Ok(data) => Some(data),
+            Err(_) => log_metric_envelope_omitted("metric envelope serialization failure"),
+        }
     }
 
     /// Sanitize metric text using its payload-relative JSON Pointer.
@@ -499,47 +559,26 @@ impl CompiledBuiltinBackend {
         match &self.action {
             BuiltinAction::Remove => None,
             BuiltinAction::Hash { matcher } => Some(Json::String(match matcher {
-                Some(matcher) => matcher
-                    .replace_all(&text, |captures: &regex::Captures<'_>| {
-                        hex_sha256(
-                            captures
-                                .get(0)
-                                .map(|capture| capture.as_str())
-                                .unwrap_or(""),
-                        )
-                    })
-                    .into_owned(),
+                Some(matcher) => matcher.replace_all(&text, hex_sha256),
                 None => hex_sha256(&text),
             })),
             BuiltinAction::Mask { matcher, strategy } => Some(Json::String(match matcher {
-                Some(matcher) => matcher
-                    .replace_all(&text, |captures: &regex::Captures<'_>| {
-                        mask_with_strategy(
-                            captures
-                                .get(0)
-                                .map(|capture| capture.as_str())
-                                .unwrap_or(""),
-                            strategy,
-                        )
-                    })
-                    .into_owned(),
+                Some(matcher) => {
+                    matcher.replace_all(&text, |matched| mask_with_strategy(matched, strategy))
+                }
                 None => mask_with_strategy(&text, strategy),
             })),
             BuiltinAction::Redact {
                 matcher,
                 replacement,
             } => Some(Json::String(
-                matcher
-                    .replace_all(&text, replacement.as_str())
-                    .into_owned(),
+                matcher.replace_all(&text, |_| replacement.as_str().to_string()),
             )),
             BuiltinAction::RegexReplace {
                 pattern,
                 replacement,
             } => Some(Json::String(
-                pattern
-                    .replace_all(&text, replacement.as_str())
-                    .into_owned(),
+                pattern.replace_all_expanded(&text, replacement),
             )),
         }
     }
@@ -786,9 +825,9 @@ fn event_sanitize_callback_with_scope_categories(
                 fields.metadata = fields
                     .metadata
                     .map(|metadata| backend.sanitize_json_preorder_dfs(metadata));
-                fields.category_profile = fields.category_profile.and_then(|profile| {
-                    sanitize_serializable_with_backend::<CategoryProfile>(&backend, profile).ok()
-                });
+                fields.category_profile = fields
+                    .category_profile
+                    .and_then(|profile| sanitize_category_profile_with_backend(&backend, profile));
                 return Ok(fields);
             }
             let specialized_scope = matches!(event.as_ref(), Event::Scope(_))
@@ -813,9 +852,9 @@ fn event_sanitize_callback_with_scope_categories(
                 fields.data = fields
                     .data
                     .map(|data| backend.sanitize_json_preorder_dfs(data));
-                fields.category_profile = fields.category_profile.and_then(|profile| {
-                    sanitize_serializable_with_backend::<CategoryProfile>(&backend, profile).ok()
-                });
+                fields.category_profile = fields
+                    .category_profile
+                    .and_then(|profile| sanitize_category_profile_with_backend(&backend, profile));
             }
 
             fields.metadata = fields
@@ -957,6 +996,34 @@ fn log_llm_payload_omitted(direction: &str, codec: &LlmCodecIdentity, reason: &s
         reason;
         "PII redaction omitted an LLM {direction} payload"
     );
+}
+
+fn log_metric_envelope_omitted(reason: &str) -> Option<Json> {
+    log::warn!(
+        target: "nemo_relay.plugin",
+        event = "pii_metric_envelope_omitted",
+        reason;
+        "PII redaction omitted a metric envelope"
+    );
+    None
+}
+
+fn sanitize_category_profile_with_backend(
+    backend: &CompiledBuiltinBackend,
+    profile: CategoryProfile,
+) -> Option<CategoryProfile> {
+    match sanitize_serializable_with_backend(backend, profile) {
+        Ok(profile) => Some(profile),
+        Err(_) => {
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "pii_category_profile_omitted",
+                reason = "category profile redaction round-trip failure";
+                "PII redaction omitted a category profile"
+            );
+            None
+        }
+    }
 }
 
 fn json_pointer_segments(pointer: &str) -> Option<Vec<String>> {
@@ -1106,7 +1173,7 @@ fn mask_with_strategy(text: &str, strategy: &BuiltinMaskStrategy) -> String {
 fn compile_builtin_matcher(
     pattern: Option<String>,
     detector: Option<BuiltinDetector>,
-) -> PluginResult<Option<Arc<Regex>>> {
+) -> PluginResult<Option<Arc<BuiltinMatcher>>> {
     let pattern_text = match (pattern, detector) {
         (Some(pattern), None) => Some(pattern),
         (None, Some(detector)) => Some(detector.regex_pattern().to_string()),
@@ -1127,7 +1194,9 @@ fn compile_builtin_matcher(
             "invalid builtin matcher regex '{pattern_text}': {err}"
         ))
     })?;
-    Ok(Some(Arc::new(pattern)))
+    Ok(Some(Arc::new(BuiltinMatcher {
+        regex: Arc::new(pattern),
+    })))
 }
 
 fn sanitize_serializable_with_backend<T>(
@@ -1172,5 +1241,80 @@ mod tests {
             "0".to_string(),
             "content".to_string(),
         ]));
+    }
+
+    #[test]
+    fn detectors_ignore_embedded_api_key_prefixes_and_redact_hex_aws_secrets() {
+        let api_key_backend = CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "redact".to_string(),
+                detector: Some("api_key".to_string()),
+                target_paths: vec!["/value".to_string()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap();
+        let api_key_result = api_key_backend.sanitize_json_preorder_dfs(serde_json::json!({
+            "value": "task-management risk-assessment network-topology sk-abcdef123456"
+        }));
+        assert_eq!(
+            api_key_result["value"],
+            "task-management risk-assessment network-topology [REDACTED]"
+        );
+
+        let aws_backend = CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "redact".to_string(),
+                detector: Some("aws_secret_access_key".to_string()),
+                target_paths: vec!["/value".to_string()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap();
+        let aws_result = aws_backend.sanitize_json_preorder_dfs(serde_json::json!({
+            "value": "sha 0123456789abcdef0123456789abcdef01234567 key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        }));
+        assert_eq!(aws_result["value"], "sha [REDACTED] key [REDACTED]");
+    }
+
+    #[test]
+    fn regex_replace_expands_numbered_and_named_captures() {
+        let numbered_backend = CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "regex_replace".to_string(),
+                pattern: Some("(token)-(\\d+)".to_string()),
+                replacement: Some("$1-[REDACTED]".to_string()),
+                target_paths: vec!["/value".to_string()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            numbered_backend.sanitize_json_preorder_dfs(serde_json::json!({
+                "value": "token-123"
+            }))["value"],
+            "token-[REDACTED]"
+        );
+
+        let named_backend = CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "regex_replace".to_string(),
+                pattern: Some("(?<kind>token)-(?<value>\\d+)".to_string()),
+                replacement: Some("${kind}-[REDACTED]".to_string()),
+                target_paths: vec!["/value".to_string()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            named_backend.sanitize_json_preorder_dfs(serde_json::json!({
+                "value": "token-123"
+            }))["value"],
+            "token-[REDACTED]"
+        );
     }
 }
