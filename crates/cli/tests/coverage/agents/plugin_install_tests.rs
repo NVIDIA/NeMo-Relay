@@ -4002,6 +4002,60 @@ fn force_replacement_restoration_reports_failed_host_reregistration() {
 }
 
 #[test]
+fn force_replacement_restoration_reregisters_snapshot_when_plugin_state_is_unknown() {
+    let dir = tempdir().unwrap();
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
+    let original_marketplace_root = dir.path().join("original-marketplace");
+    let mut snapshot = ForceInstallSnapshot {
+        state_bytes: None,
+        setup_snapshot: None,
+        original_marketplace_root: original_marketplace_root.clone(),
+        original_plugin_root: original_marketplace_root.join("plugins/nemo-relay-plugin"),
+        original_generation_fence: original_marketplace_root.join(GENERATION_FILE_NAME),
+        plugin_registered: true,
+        marketplace_registered: true,
+        backup_marketplace_root: dir.path().join("unused-marketplace-backup"),
+        backup_plugin_root: None,
+        marketplace_moved: false,
+        plugin_moved: false,
+        replacement_promoted: false,
+        generation_retirement: None,
+    };
+    let runner = MockRunner::default()
+        .with_executable("codex", "/bin/codex")
+        .with_capture_status(
+            "/bin/codex plugin list",
+            1,
+            "",
+            DANGLING_CODEX_MARKETPLACE_ERROR,
+        );
+
+    let error = restore_force_replacement(
+        CodingAgent::Codex,
+        &layout,
+        &mut snapshot,
+        &options(dir.path()),
+        &runner,
+        &MockSetupRunner::default(),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("could not be determined"), "{error}");
+    assert!(runner.commands().iter().any(|command| {
+        command.ends_with(&format!(
+            "plugin marketplace add {}",
+            original_marketplace_root.display()
+        ))
+    }));
+    assert!(
+        runner
+            .commands()
+            .iter()
+            .any(|command| { command.ends_with("plugin add nemo-relay-plugin@nemo-relay-local") })
+    );
+}
+
+#[test]
 fn force_replacement_moves_and_restores_a_separate_plugin_tree() {
     let dir = tempdir().unwrap();
     let previous_marketplace_root = dir.path().join("previous-marketplace");

@@ -2483,6 +2483,21 @@ fn reconcile_restored_registration(
         }
     };
     let Some(host_plugin_registered) = report.host_plugin_registered else {
+        if snapshot.marketplace_registered
+            && let Err(error) = run_host_marketplace_registration(
+                host,
+                &snapshot.original_marketplace_root,
+                options,
+                runner,
+            )
+        {
+            errors.push(error);
+        }
+        if snapshot.plugin_registered
+            && let Err(error) = run_host_plugin_registration(host, options, runner)
+        {
+            errors.push(error);
+        }
         errors.push(
             "host plugin registration state could not be determined while restoring the previous install"
                 .into(),
