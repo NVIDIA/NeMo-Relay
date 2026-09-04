@@ -328,6 +328,12 @@ the required plugin MCP starts it before the captured turn. Doctor also reports
 newly required forwarded environment names and recommends
 `nemo-relay install codex --force`.
 
+In `nemo-relay doctor --json` output, a configured but unloadable Codex
+marketplace is reported with `host_marketplace_unloadable: true` under the
+integration's `host_registration` object. In that state,
+`host_plugin_registered` is `null` because Codex could not determine whether
+the plugin is registered.
+
 For Claude Code, doctor also validates version 2.1.121 or newer, the generated
 `alwaysLoad` MCP server, and its generation marker. A stopped sidecar remains
 informational because the next MCP process starts it. Persistent hooks wait for
