@@ -220,6 +220,7 @@ fn exit_code_fails_when_an_installed_host_plugin_is_unready() {
             relay: None,
             host_plugin_registered: None,
             host_marketplace_registered: None,
+            host_marketplace_unloadable: false,
             plugin_setup: None,
         });
 
