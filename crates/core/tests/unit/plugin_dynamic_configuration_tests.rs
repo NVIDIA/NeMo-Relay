@@ -259,14 +259,20 @@ attestation = "integrity_only"
 fn plugin_file_loading_skips_only_missing_paths() {
     let temp = tempfile::tempdir().unwrap();
     let missing = temp.path().join("missing.toml");
-    assert!(read_plugin_files(&[missing]).unwrap().is_empty());
+    assert!(
+        read_plugin_files(std::slice::from_ref(&missing))
+            .unwrap()
+            .is_empty()
+    );
 
-    let blocker = temp.path().join("not-a-directory");
-    fs::write(&blocker, "blocker").unwrap();
-    let inaccessible = blocker.join("plugins.toml");
-    let error = read_plugin_files(&[inaccessible])
-        .err()
-        .expect("non-missing inspection errors must fail closed");
+    let error = plugin_file_is_present(
+        &missing,
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "access denied",
+        )),
+    )
+    .expect_err("non-missing inspection errors must fail closed");
     assert!(
         matches!(error, PluginError::InvalidConfig(_)),
         "unexpected error: {error}"

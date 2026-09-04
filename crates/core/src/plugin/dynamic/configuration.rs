@@ -404,15 +404,8 @@ fn validate_declaration(
 fn read_plugin_files(paths: &[PathBuf]) -> Result<Vec<PluginFileDocument>> {
     let mut files = Vec::new();
     for source in paths {
-        match std::fs::symlink_metadata(source) {
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(PluginError::InvalidConfig(format!(
-                    "failed to inspect plugin configuration {}: {error}",
-                    source.display()
-                )));
-            }
+        if !plugin_file_is_present(source, std::fs::symlink_metadata(source))? {
+            continue;
         }
         let raw = read_utf8_plugin_file(source)?;
         let table = raw.parse::<toml::Table>().map_err(|error| {
@@ -434,6 +427,20 @@ fn read_plugin_files(paths: &[PathBuf]) -> Result<Vec<PluginFileDocument>> {
         });
     }
     Ok(files)
+}
+
+fn plugin_file_is_present(
+    source: &Path,
+    inspection: std::io::Result<std::fs::Metadata>,
+) -> Result<bool> {
+    match inspection {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(PluginError::InvalidConfig(format!(
+            "failed to inspect plugin configuration {}: {error}",
+            source.display()
+        ))),
+    }
 }
 
 fn read_utf8_plugin_file(path: &Path) -> Result<String> {
