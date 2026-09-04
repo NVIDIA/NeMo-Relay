@@ -52,6 +52,8 @@ use crate::subscriber::create_subscriber_with_counter;
 use crate::tool_parallelism_learner::ToolParallelismLearner;
 use crate::types::cache::HotCache;
 
+const TELEMETRY_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Hosted adaptive runtime that registers NeMo Relay plugin components.
 ///
 /// This type validates configuration, builds the configured storage backend,
@@ -65,13 +67,18 @@ pub struct AdaptiveRuntime {
     hot_cache: Arc<RwLock<HotCache>>,
     cache_diagnostics_tracker: Arc<RwLock<CacheDiagnosticsTracker>>,
     pending_events: Arc<AtomicUsize>,
-    event_tx: tokio::sync::mpsc::UnboundedSender<Event>,
+    event_tx: Option<tokio::sync::mpsc::UnboundedSender<Event>>,
     event_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Event>>,
-    drain_handle: Option<tokio::task::JoinHandle<()>>,
+    drain_task: Option<TelemetryDrainTask>,
     registered: bool,
     runtime_id: Uuid,
     bound_scopes: Arc<RwLock<HashSet<Uuid>>>,
     registrations: Vec<ComponentRegistration>,
+}
+
+struct TelemetryDrainTask {
+    handle: tokio::task::JoinHandle<()>,
+    runtime: tokio::runtime::Handle,
 }
 
 impl fmt::Debug for AdaptiveRuntime {
@@ -154,8 +161,12 @@ impl<'a> RegistrationContext<'a> {
             .ok_or_else(|| AdaptiveError::Internal("telemetry already registered".into()))
     }
 
-    fn set_drain_task(&mut self, handle: tokio::task::JoinHandle<()>) {
-        self.runtime.drain_handle = Some(handle);
+    fn set_drain_task(
+        &mut self,
+        handle: tokio::task::JoinHandle<()>,
+        runtime: tokio::runtime::Handle,
+    ) {
+        self.runtime.drain_task = Some(TelemetryDrainTask { handle, runtime });
     }
 
     fn finish(self) -> Vec<ComponentRegistration> {
@@ -218,9 +229,9 @@ impl AdaptiveRuntime {
             })),
             cache_diagnostics_tracker: Arc::new(RwLock::new(CacheDiagnosticsTracker::default())),
             pending_events: Arc::new(AtomicUsize::new(0)),
-            event_tx,
+            event_tx: Some(event_tx),
             event_rx: Some(event_rx),
-            drain_handle: None,
+            drain_task: None,
             registered: false,
             runtime_id: Uuid::now_v7(),
             bound_scopes: Arc::new(RwLock::new(HashSet::new())),
@@ -499,8 +510,8 @@ impl AdaptiveRuntime {
             let mut just_registered = ctx.finish();
             rollback_registrations(&mut just_registered);
             rollback_registrations(&mut self.registrations);
-            if let Some(handle) = self.drain_handle.take() {
-                handle.abort();
+            if let Some(task) = self.drain_task.take() {
+                task.handle.abort();
             }
             self.registered = false;
             return Err(error);
@@ -518,13 +529,39 @@ impl AdaptiveRuntime {
     ///
     /// # Errors
     /// Returns any rollback error surfaced by the hosted plugin system.
+    ///
+    /// # Runtime lifecycle
+    /// This method returns before the telemetry drain finishes. Callers using a
+    /// Tokio `current_thread` runtime must keep that runtime alive and driven
+    /// until the drain completes. Call [`Self::shutdown`] when completion must
+    /// be observed before the runtime is dropped.
     pub fn deregister(&mut self) -> Result<()> {
         rollback_registrations(&mut self.registrations);
         if let Ok(mut guard) = self.bound_scopes.write() {
             guard.clear();
         }
-        if let Some(handle) = self.drain_handle.take() {
-            handle.abort();
+        // Remove every sender so the drain can process the queued events and
+        // finish naturally. The synchronous API cannot await it, so supervise
+        // the detached drain with the same bounded timeout as shutdown.
+        self.event_tx.take();
+        if let Some(task) = self.drain_task.take() {
+            let TelemetryDrainTask {
+                mut handle,
+                runtime,
+            } = task;
+            runtime.spawn(async move {
+                if tokio::time::timeout(TELEMETRY_DRAIN_TIMEOUT, &mut handle)
+                    .await
+                    .is_err()
+                {
+                    log::warn!(
+                        target: "nemo_relay.runtime",
+                        event = "adaptive_telemetry_drain_timeout";
+                        "Adaptive runtime deregistration timed out while draining telemetry; aborting remaining work"
+                    );
+                    handle.abort();
+                }
+            });
         }
         self.registered = false;
         Ok(())
@@ -536,9 +573,30 @@ impl AdaptiveRuntime {
     /// A [`Result`] that is `Ok(())` when shutdown completes.
     ///
     /// # Errors
-    /// Propagates any error returned by [`Self::deregister`].
+    /// This method currently always returns `Ok(())` after deregistering
+    /// features and either draining or aborting telemetry work.
     pub async fn shutdown(mut self) -> Result<()> {
-        self.deregister()
+        rollback_registrations(&mut self.registrations);
+        if let Ok(mut guard) = self.bound_scopes.write() {
+            guard.clear();
+        }
+        self.event_tx.take();
+        self.registered = false;
+
+        if let Some(TelemetryDrainTask { mut handle, .. }) = self.drain_task.take()
+            && tokio::time::timeout(TELEMETRY_DRAIN_TIMEOUT, &mut handle)
+                .await
+                .is_err()
+        {
+            log::warn!(
+                target: "nemo_relay.runtime",
+                event = "adaptive_telemetry_drain_timeout";
+                "Adaptive runtime shutdown timed out while draining telemetry; aborting remaining work"
+            );
+            handle.abort();
+        }
+
+        Ok(())
     }
 }
 
@@ -586,21 +644,31 @@ impl AdaptiveFeature for TelemetryFeature {
             let agent_id = self.agent_id.clone();
             let learners = std::mem::take(&mut self.learners);
             let pending_events = ctx.runtime.pending_events.clone();
-            ctx.set_drain_task(tokio::spawn(async move {
-                crate::drain::drain_task_with_counter(
-                    rx,
-                    backend,
-                    cache,
-                    pending_events,
-                    agent_id,
-                    learners,
-                )
-                .await;
-            }));
+            let runtime = tokio::runtime::Handle::current();
+            ctx.set_drain_task(
+                runtime.spawn(async move {
+                    crate::drain::drain_task_with_counter(
+                        rx,
+                        backend,
+                        cache,
+                        pending_events,
+                        agent_id,
+                        learners,
+                    )
+                    .await;
+                }),
+                runtime,
+            );
             ctx.register_subscriber(
                 &self.subscriber_name,
                 create_subscriber_with_counter(
-                    ctx.runtime.event_tx.clone(),
+                    ctx.runtime
+                        .event_tx
+                        .as_ref()
+                        .ok_or_else(|| {
+                            AdaptiveError::Internal("telemetry sender is unavailable".into())
+                        })?
+                        .clone(),
                     ctx.runtime.pending_events.clone(),
                 ),
             )
