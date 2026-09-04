@@ -2,3 +2,5 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Optional integrations for NeMo Relay."""
+
+# Available integrations: langchain, langgraph, deepagents, hermes
