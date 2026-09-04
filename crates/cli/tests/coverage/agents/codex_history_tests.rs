@@ -53,17 +53,7 @@ impl CodexHistoryScope {
     }
 
     fn providers(&self) -> Vec<(String, String)> {
-        let raw = sqlite(
-            &self.database(),
-            "SELECT id, model_provider FROM threads ORDER BY id;",
-        );
-        raw.lines()
-            .filter(|line| !line.is_empty())
-            .map(|line| {
-                let (id, provider) = line.split_once('|').expect("delimited row");
-                (id.to_string(), provider.to_string())
-            })
-            .collect()
+        providers_in(&self.database())
     }
 
     fn journal(&self) -> Option<Value> {
@@ -86,6 +76,21 @@ impl CodexHistoryScope {
         dirs.sort();
         dirs
     }
+}
+
+/// Reads every thread and its provider, for a database the scope does not own.
+fn providers_in(database: &Path) -> Vec<(String, String)> {
+    let raw = sqlite(
+        database,
+        "SELECT id, model_provider FROM threads ORDER BY id;",
+    );
+    raw.lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let (id, provider) = line.split_once('|').expect("delimited row");
+            (id.to_string(), provider.to_string())
+        })
+        .collect()
 }
 
 /// Creates a minimal `threads` table carrying only the columns under test.
@@ -411,6 +416,73 @@ fn a_full_path_database_is_used_as_given() {
         scope.providers(),
         vec![("ignored".to_string(), OPENAI_PROVIDER.to_string())],
         "the default database is left alone"
+    );
+}
+
+#[test]
+fn migrate_rejects_a_second_database_while_one_migration_is_outstanding() {
+    require_sqlite3_or_skip!();
+    // One journal records one migration, so migrating a second database would
+    // overwrite the record naming the first and strand it on the Relay
+    // provider: reversal reads the journal, so it would never visit that file.
+    let scope = CodexHistoryScope::enter(&[("thread-a", OPENAI_PROVIDER)]);
+    let elsewhere = scope.home.path().join("elsewhere.sqlite");
+    seed_database(&elsewhere, &[("thread-b", OPENAI_PROVIDER)]);
+    migrate_to_relay(/*dry_run*/ false, /*database*/ None).expect("the first migration succeeds");
+
+    let error = migrate_to_relay(/*dry_run*/ false, Some(&elsewhere))
+        .expect_err("a second outstanding migration is refused");
+
+    assert!(
+        error.contains("already records an outstanding migration"),
+        "the error names the conflict: {error}"
+    );
+    assert_eq!(
+        providers_in(&elsewhere),
+        vec![("thread-b".to_string(), OPENAI_PROVIDER.to_string())],
+        "the second database is untouched"
+    );
+    assert_eq!(
+        scope.journal().expect("journal exists")["database"],
+        json!(scope.database()),
+        "the journal still pins the first database"
+    );
+
+    // The first migration stays reversible, which is what the refusal protects.
+    restore_from_relay(/*dry_run*/ false, /*database*/ None)
+        .expect("restore succeeds")
+        .expect("restore reports an outcome");
+    assert_eq!(
+        scope.providers(),
+        vec![("thread-a".to_string(), OPENAI_PROVIDER.to_string())]
+    );
+}
+
+#[test]
+fn migrate_accepts_the_database_the_journal_already_records() {
+    require_sqlite3_or_skip!();
+    // Threads created after a migration land on the built-in provider, so the
+    // same database is migrated again. The override spells it as a bare name
+    // while the journal recorded an absolute path: that is one database, not a
+    // conflict.
+    let scope = CodexHistoryScope::enter(&[("thread-a", OPENAI_PROVIDER)]);
+    migrate_to_relay(/*dry_run*/ false, /*database*/ None).expect("the first migration succeeds");
+    sqlite(
+        &scope.database(),
+        &format!("INSERT INTO threads VALUES ('thread-b', '{OPENAI_PROVIDER}');"),
+    );
+
+    let outcome = migrate_to_relay(/*dry_run*/ false, Some(Path::new(STATE_DB_FILE)))
+        .expect("migrating the recorded database again succeeds")
+        .expect("migration reports an outcome");
+
+    assert_eq!(outcome.thread_ids, vec!["thread-b"]);
+    assert_eq!(
+        scope.providers(),
+        vec![
+            ("thread-a".to_string(), RELAY_PROVIDER.to_string()),
+            ("thread-b".to_string(), RELAY_PROVIDER.to_string()),
+        ]
     );
 }
 

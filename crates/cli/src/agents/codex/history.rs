@@ -80,6 +80,21 @@ pub(crate) fn migrate_to_relay(
             database.display()
         ));
     }
+    // One journal describes one outstanding migration. Overwriting it would
+    // strand the database it named on the Relay provider: nothing records that
+    // migration any more, so reversal never visits it and the threads stay
+    // hidden from the picker.
+    if let Some(journal) = read_journal()?
+        && let Some(recorded) = journal_database(&journal)
+        && !is_same_database(&recorded, &database)
+    {
+        return Err(format!(
+            "the Codex history migration journal already records an outstanding migration of {}; \
+             reverse that one with `nemo-relay uninstall codex` before migrating {}",
+            recorded.display(),
+            database.display()
+        ));
+    }
     require_sqlite3()?;
     ensure_thread_schema(&database)?;
     let thread_ids = thread_ids_for_provider(&database, OPENAI_PROVIDER)?;
@@ -421,11 +436,33 @@ fn read_journal() -> Result<Option<Value>, String> {
                     path.display()
                 )
             }),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        // A path whose prefix is not a directory holds no journal, same as one
+        // that is simply absent. Reporting it here would mask the clearer error
+        // from the write that follows, which names the directory it cannot make.
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(None)
+        }
         Err(error) => Err(format!(
             "failed to read the Codex history migration journal {}: {error}",
             path.display()
         )),
+    }
+}
+
+/// Reports whether two paths name the same thread database.
+///
+/// Both sides are canonicalized when they resolve, so a bare `--history-database`
+/// name and the absolute path the journal recorded are recognized as one file
+/// rather than read as a second, conflicting migration.
+fn is_same_database(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
     }
 }
 
