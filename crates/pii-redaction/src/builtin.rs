@@ -16,7 +16,7 @@ use nemo_relay::api::runtime::{
     BuiltinLlmCodec, EventSanitizeFn, LlmCodecIdentity, LlmSanitizeRequestFn,
     LlmSanitizeResponseFn, ToolSanitizeFn,
 };
-use nemo_relay::codec::request::AnnotatedLlmRequest;
+use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use nemo_relay::codec::resolve::{
     ProviderSurface, detect_response_surface, request_codec as build_request_codec,
     response_codec as build_response_codec,
@@ -24,7 +24,10 @@ use nemo_relay::codec::resolve::{
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::plugin::{PluginError, Result as PluginResult};
 
-use super::component::{BuiltinBackendConfig, validate_metric_string_attribute_allowlist};
+use super::component::{
+    BuiltinBackendConfig, DEFAULT_CUSTOM_MARK_PAYLOAD_POLICY,
+    validate_metric_string_attribute_allowlist,
+};
 use super::detectors::BuiltinDetector;
 use super::overlay::BuiltinCodecName;
 use super::trajectory::{CustomMarkPayloadPolicy, TrajectorySanitizer, is_relay_metric_mark};
@@ -300,7 +303,9 @@ impl CompiledBuiltinBackend {
             }
             None => None,
         };
-        if trajectory.is_none() && config.custom_mark_payload_policy != "preserve" {
+        if trajectory.is_none()
+            && config.custom_mark_payload_policy != DEFAULT_CUSTOM_MARK_PAYLOAD_POLICY
+        {
             return Err(PluginError::InvalidConfig(
                 "builtin.custom_mark_payload_policy requires builtin.preset = 'trajectory_context'"
                     .to_string(),
@@ -638,6 +643,73 @@ impl CompiledBuiltinBackend {
             })
     }
 
+    fn sanitize_trajectory_request_with_codec(
+        &self,
+        trajectory: &TrajectorySanitizer,
+        codec: &dyn LlmCodec,
+        request: &LlmRequest,
+    ) -> Option<LlmRequest> {
+        let annotated = codec.decode(request).ok()?;
+        let sanitized = trajectory.sanitize_annotated_request(annotated)?;
+        if let Ok(request) = codec.encode(&sanitized, request) {
+            return Some(request);
+        }
+        self.encode_trajectory_request_items_incrementally(codec, request, &sanitized)
+    }
+
+    fn encode_trajectory_request_items_incrementally(
+        &self,
+        codec: &dyn LlmCodec,
+        request: &LlmRequest,
+        sanitized: &AnnotatedLlmRequest,
+    ) -> Option<LlmRequest> {
+        let mut output = request.clone();
+        for (index, message) in sanitized.messages.iter().enumerate() {
+            if let Some(MessageContent::Parts(parts)) = message_content(message) {
+                for (part_index, part) in parts.iter().enumerate() {
+                    let mut current = codec.decode(&output).ok()?;
+                    let current_message = current.messages.get_mut(index)?;
+                    let MessageContent::Parts(current_parts) =
+                        message_content_mut(current_message)?
+                    else {
+                        return None;
+                    };
+                    current_parts.get_mut(part_index)?.clone_from(part);
+                    output = codec.encode(&current, &output).ok()?;
+                }
+            }
+            if let Message::Assistant {
+                tool_calls: Some(tool_calls),
+                ..
+            } = message
+            {
+                for (call_index, call) in tool_calls.iter().enumerate() {
+                    let mut current = codec.decode(&output).ok()?;
+                    let Message::Assistant {
+                        tool_calls: Some(current_calls),
+                        ..
+                    } = current.messages.get_mut(index)?
+                    else {
+                        return None;
+                    };
+                    current_calls.get_mut(call_index)?.clone_from(call);
+                    output = codec.encode(&current, &output).ok()?;
+                }
+            }
+            let mut current = codec.decode(&output).ok()?;
+            current.messages[index] = message.clone();
+            output = codec.encode(&current, &output).ok()?;
+        }
+        if let Some(tools) = sanitized.tools.as_ref() {
+            for (index, tool) in tools.iter().enumerate() {
+                let mut current = codec.decode(&output).ok()?;
+                current.tools.as_mut()?.get_mut(index)?.clone_from(tool);
+                output = codec.encode(&current, &output).ok()?;
+            }
+        }
+        codec.encode(sanitized, &output).ok()
+    }
+
     fn sanitize_request_target_paths_incrementally(
         &self,
         codec: &dyn LlmCodec,
@@ -758,6 +830,21 @@ impl CompiledBuiltinBackend {
         .then_some(payload)
     }
 
+    fn sanitize_trajectory_response_with_codec(
+        &self,
+        trajectory: &TrajectorySanitizer,
+        codec: &dyn LlmResponseCodec,
+        surface: ProviderSurface,
+        payload: Json,
+    ) -> Option<Json> {
+        let annotated = codec.decode_response(&payload).ok()?;
+        let sanitized = trajectory.sanitize_annotated_response(annotated)?;
+        Some(
+            BuiltinCodecName::from_provider_surface(surface)
+                .overlay_response_payload(payload, &sanitized),
+        )
+    }
+
     fn normalized_response_targets_match(
         target_paths: &[Vec<String>],
         annotated: &Json,
@@ -777,6 +864,34 @@ impl CompiledBuiltinBackend {
     fn targets_normalized_single_projected_response(&self) -> bool {
         self.target_path_matcher
             .may_select_single_projected_response()
+    }
+}
+
+fn message_content(message: &Message) -> Option<&MessageContent> {
+    match message {
+        Message::System { content, .. }
+        | Message::User { content, .. }
+        | Message::Developer { content, .. }
+        | Message::Tool { content, .. } => Some(content),
+        Message::Assistant { content, .. } => content.as_ref(),
+        Message::Function { .. }
+        | Message::ToolCallItem { .. }
+        | Message::ToolResultItem { .. }
+        | Message::ProviderNative { .. } => None,
+    }
+}
+
+fn message_content_mut(message: &mut Message) -> Option<&mut MessageContent> {
+    match message {
+        Message::System { content, .. }
+        | Message::User { content, .. }
+        | Message::Developer { content, .. }
+        | Message::Tool { content, .. } => Some(content),
+        Message::Assistant { content, .. } => content.as_mut(),
+        Message::Function { .. }
+        | Message::ToolCallItem { .. }
+        | Message::ToolResultItem { .. }
+        | Message::ProviderNative { .. } => None,
     }
 }
 
@@ -889,8 +1004,28 @@ pub(super) fn llm_sanitize_request_callback(
                     .as_object()
                     .cloned()
                     .unwrap_or_default();
-                request.content = trajectory.sanitize_provider_payload(request.content);
-                return Ok(Some(request));
+                let resolved = context.resolve_codec();
+                let fallback = if resolved.is_none() {
+                    backend
+                        .selected_surface(context.codec())
+                        .map(build_request_codec)
+                } else {
+                    None
+                };
+                let Some(codec) = resolved.as_deref().or(fallback.as_deref()) else {
+                    request.content = trajectory.sanitize_provider_payload(request.content);
+                    return Ok(Some(request));
+                };
+                let sanitized =
+                    backend.sanitize_trajectory_request_with_codec(trajectory, codec, &request);
+                if sanitized.is_none() {
+                    log_llm_payload_omitted(
+                        "request",
+                        context.codec(),
+                        "codec decode, typed sanitize, or encode failure",
+                    );
+                }
+                return Ok(sanitized);
             }
             request.headers = backend.sanitize_request_headers(request.headers);
             if backend.target_path_matcher.is_empty() {
@@ -930,7 +1065,28 @@ pub(super) fn llm_sanitize_response_callback(
         let backend = Arc::clone(&backend);
         Box::pin(async move {
             if let Some(trajectory) = backend.trajectory.as_ref() {
-                return Ok(Some(trajectory.sanitize_provider_payload(payload)));
+                let Some(surface) = backend.selected_surface(context.codec()) else {
+                    return Ok(Some(trajectory.sanitize_provider_payload(payload)));
+                };
+                let resolved = context.resolve_codec();
+                let fallback = if resolved.is_none() {
+                    Some(build_response_codec(surface))
+                } else {
+                    None
+                };
+                let Some(codec) = resolved.as_deref().or(fallback.as_deref()) else {
+                    return Ok(Some(trajectory.sanitize_provider_payload(payload)));
+                };
+                let sanitized = backend
+                    .sanitize_trajectory_response_with_codec(trajectory, codec, surface, payload);
+                if sanitized.is_none() {
+                    log_llm_payload_omitted(
+                        "response",
+                        context.codec(),
+                        "codec decode, typed sanitize, or encode failure",
+                    );
+                }
+                return Ok(sanitized);
             }
             if backend.target_path_matcher.is_empty() {
                 return Ok(Some(backend.sanitize_json_preorder_dfs(payload)));

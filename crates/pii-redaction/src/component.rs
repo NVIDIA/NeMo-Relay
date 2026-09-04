@@ -30,6 +30,7 @@ pub use super::local::{clear_local_backend_provider, register_local_backend_prov
 
 /// The plugin kind reserved for the built-in privacy component.
 pub const PII_REDACTION_PLUGIN_KIND: &str = "pii_redaction";
+pub(super) const DEFAULT_CUSTOM_MARK_PAYLOAD_POLICY: &str = "redact_all_leaves";
 
 /// Top-level PII redaction component wrapper.
 #[derive(Debug, Clone)]
@@ -509,7 +510,7 @@ fn custom_mark_payload_policy_schema(
     string_enum_schema(
         generator,
         &["preserve", "redact_all_leaves"],
-        Some("preserve"),
+        Some(DEFAULT_CUSTOM_MARK_PAYLOAD_POLICY),
     )
 }
 
@@ -1484,7 +1485,7 @@ fn default_builtin_action() -> String {
 }
 
 fn default_custom_mark_payload_policy() -> String {
-    "preserve".to_string()
+    DEFAULT_CUSTOM_MARK_PAYLOAD_POLICY.to_string()
 }
 
 fn default_true() -> bool {
@@ -1504,7 +1505,7 @@ fn is_default_builtin_action(action: &str) -> bool {
 }
 
 fn is_default_custom_mark_payload_policy(policy: &str) -> bool {
-    policy == "preserve"
+    policy == DEFAULT_CUSTOM_MARK_PAYLOAD_POLICY
 }
 
 fn is_true(value: &bool) -> bool {
