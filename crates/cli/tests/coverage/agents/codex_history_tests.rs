@@ -517,3 +517,72 @@ fn migrate_fails_cleanly_while_another_writer_holds_the_lock() {
         "a locked migration records no journal to reverse"
     );
 }
+
+#[test]
+fn a_failed_journal_write_leaves_the_database_unchanged() {
+    require_sqlite3_or_skip!();
+    let scope =
+        CodexHistoryScope::enter(&[("thread-a", OPENAI_PROVIDER), ("thread-b", OPENAI_PROVIDER)]);
+    // Make the journal unwritable by turning its parent directory into a file.
+    let journal = journal_path().expect("journal path resolves");
+    let parent = journal
+        .parent()
+        .expect("journal has a parent")
+        .to_path_buf();
+    if parent.exists() {
+        std::fs::remove_dir_all(&parent).expect("clear the journal directory");
+    }
+    if let Some(grandparent) = parent.parent() {
+        std::fs::create_dir_all(grandparent).expect("journal grandparent");
+    }
+    std::fs::write(&parent, b"not a directory").expect("block the journal directory");
+
+    let error =
+        migrate_to_relay(/*dry_run*/ false, /*database*/ None).expect_err("journal write fails");
+
+    assert!(
+        error.contains("failed to create") || error.contains("failed to write"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(
+        scope.providers(),
+        vec![
+            ("thread-a".to_string(), OPENAI_PROVIDER.to_string()),
+            ("thread-b".to_string(), OPENAI_PROVIDER.to_string()),
+        ],
+        "a journal that cannot be written must abort before the provider update"
+    );
+}
+
+#[test]
+fn restore_clears_a_journal_for_a_migration_that_never_completed() {
+    require_sqlite3_or_skip!();
+    // The reordered write can leave a journal behind if the process dies
+    // between recording it and updating the database.
+    let scope = CodexHistoryScope::enter(&[("thread-a", OPENAI_PROVIDER)]);
+    let outcome = MigrationOutcome {
+        from: OPENAI_PROVIDER.to_string(),
+        to: RELAY_PROVIDER.to_string(),
+        thread_ids: vec!["thread-a".to_string()],
+    };
+    write_journal(
+        &scope.database(),
+        Path::new("/nonexistent-backup"),
+        &outcome,
+    )
+    .expect("journal writes");
+
+    let restored =
+        restore_from_relay(/*dry_run*/ false, /*database*/ None).expect("restore succeeds");
+
+    assert_eq!(restored, None, "there is nothing to reverse");
+    assert_eq!(
+        scope.providers(),
+        vec![("thread-a".to_string(), OPENAI_PROVIDER.to_string())],
+        "the database is untouched"
+    );
+    assert!(
+        !migration_recorded(),
+        "a journal with nothing to reverse is cleared"
+    );
+}

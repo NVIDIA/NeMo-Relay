@@ -103,8 +103,18 @@ pub(crate) fn migrate_to_relay(
         return Ok(Some(outcome));
     }
     let backup = back_up_database(&database)?;
-    update_provider(&database, OPENAI_PROVIDER, RELAY_PROVIDER)?;
+    // Record the journal before the database changes. Writing it afterwards
+    // leaves no way back when the write fails: the threads have already moved,
+    // and uninstall infers reversal from the journal, so it would silently
+    // decline to reverse anything.
     write_journal(&database, &backup, &outcome)?;
+    if let Err(error) = update_provider(&database, OPENAI_PROVIDER, RELAY_PROVIDER) {
+        // The update is a single transaction, so a failure changed nothing and
+        // the journal describes a migration that never happened. Drop it, but
+        // do not let cleanup mask the original failure.
+        let _ = clear_journal(/*dry_run*/ false);
+        return Err(error);
+    }
     println!("moved {} in {}", outcome.describe(), database.display());
     println!(
         "backed up the previous thread database to {}",
