@@ -249,6 +249,50 @@ fn test_config() -> GatewayConfig {
     }
 }
 
+#[tokio::test]
+async fn responses_websocket_upgrades_request_http_fallback() {
+    let app = router_with_state(AppState::new(test_config()));
+
+    for path in [
+        "/responses",
+        "/v1/responses",
+        "/backend-api/codex/responses",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(path)
+                    .header(header::CONNECTION, "upgrade")
+                    .header(header::UPGRADE, "websocket")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn responses_plain_get_remains_method_not_allowed() {
+    let app = router_with_state(AppState::new(test_config()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/responses")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
 #[test]
 fn startup_status_reports_bound_gateway_and_exporters() {
     let config = GatewayConfig {
