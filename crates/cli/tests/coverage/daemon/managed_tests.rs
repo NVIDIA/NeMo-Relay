@@ -104,19 +104,31 @@ fn assert_pi_bundle_artifacts(bundle: &RenderedBundle) {
     for (path, expected) in [
         (
             "pi/extension-v1/README.md",
-            include_bytes!("../../../src/daemon/managed/pi_extension/README.md").as_slice(),
+            canonical_embedded_text(include_str!(
+                "../../../src/daemon/managed/pi_extension/README.md"
+            ))
+            .into_bytes(),
         ),
         (
             "pi/extension-v1/index.ts",
-            include_bytes!("../../../src/daemon/managed/pi_extension/index.ts").as_slice(),
+            canonical_embedded_text(include_str!(
+                "../../../src/daemon/managed/pi_extension/index.ts"
+            ))
+            .into_bytes(),
         ),
         (
             "pi/extension-v1/package.json",
-            include_bytes!("../../../src/daemon/managed/pi_extension/package.json").as_slice(),
+            canonical_embedded_text(include_str!(
+                "../../../src/daemon/managed/pi_extension/package.json"
+            ))
+            .into_bytes(),
         ),
         (
             "pi/extension-v1/tsconfig.json",
-            include_bytes!("../../../src/daemon/managed/pi_extension/tsconfig.json").as_slice(),
+            canonical_embedded_text(include_str!(
+                "../../../src/daemon/managed/pi_extension/tsconfig.json"
+            ))
+            .into_bytes(),
         ),
     ] {
         let rendered = bundle
