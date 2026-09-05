@@ -507,12 +507,12 @@ fn render_pi(spec: &ManagedBundleSpec) -> Result<Vec<RenderedArtifact>, CliError
         artifact(
             ManagedAgent::Pi,
             "pi/extension-v1/README.md",
-            include_bytes!("pi_extension/README.md").to_vec(),
+            canonical_embedded_text(include_str!("pi_extension/README.md")).into_bytes(),
         ),
         artifact(
             ManagedAgent::Pi,
             "pi/extension-v1/index.ts",
-            include_bytes!("pi_extension/index.ts").to_vec(),
+            canonical_embedded_text(include_str!("pi_extension/index.ts")).into_bytes(),
         ),
         artifact(
             ManagedAgent::Pi,
@@ -522,20 +522,20 @@ fn render_pi(spec: &ManagedBundleSpec) -> Result<Vec<RenderedArtifact>, CliError
         artifact(
             ManagedAgent::Pi,
             "pi/extension-v1/package.json",
-            include_bytes!("pi_extension/package.json").to_vec(),
+            canonical_embedded_text(include_str!("pi_extension/package.json")).into_bytes(),
         ),
         artifact(
             ManagedAgent::Pi,
             "pi/extension-v1/tsconfig.json",
-            include_bytes!("pi_extension/tsconfig.json").to_vec(),
+            canonical_embedded_text(include_str!("pi_extension/tsconfig.json")).into_bytes(),
         ),
     ])
 }
 
 fn render_pi_config(spec: &ManagedBundleSpec) -> Result<Vec<u8>, CliError> {
-    let template = include_str!("pi_extension/managed-config.json");
+    let template = canonical_embedded_text(include_str!("pi_extension/managed-config.json"));
     let rendered = replace_json_string_value(
-        template,
+        &template,
         PI_DAEMON_ADDRESS_PLACEHOLDER,
         &spec.daemon_address,
     )?;
@@ -555,6 +555,10 @@ fn render_pi_config(spec: &ManagedBundleSpec) -> Result<Vec<u8>, CliError> {
         ))
     })?;
     Ok(rendered.into_bytes())
+}
+
+fn canonical_embedded_text(template: &str) -> String {
+    template.replace("\r\n", "\n")
 }
 
 fn replace_json_string_value(

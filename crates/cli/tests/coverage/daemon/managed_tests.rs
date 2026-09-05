@@ -272,6 +272,18 @@ fn canonical_v1_bundle_matches_the_release_frozen_golden_digest() {
 }
 
 #[test]
+fn embedded_managed_text_has_platform_independent_line_endings() {
+    assert_eq!(
+        canonical_embedded_text("first\r\nsecond\r\n"),
+        "first\nsecond\n"
+    );
+    assert_eq!(
+        canonical_embedded_text("first\nsecond\n"),
+        "first\nsecond\n"
+    );
+}
+
+#[test]
 fn write_is_create_only_and_existing_exact_bundle_is_not_rewritten() {
     let directory = tempdir().unwrap();
     let root = directory.path().join("bundle");
