@@ -520,10 +520,10 @@ fn validate_private_file(file: &std::fs::File, path: &Path) -> Result<(), CliErr
     Ok(())
 }
 
-fn sync_parent_directory(path: &Path) -> Result<(), CliError> {
+fn sync_parent_directory(_path: &Path) -> Result<(), CliError> {
     #[cfg(unix)]
     {
-        let parent = path
+        let parent = _path
             .parent()
             .ok_or_else(|| CliError::Config("worker generation state path has no parent".into()))?;
         std::fs::File::open(parent)?.sync_all()?;

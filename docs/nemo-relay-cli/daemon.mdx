@@ -4,8 +4,8 @@ description: 'Deploy the brokered NeMo Relay daemon, MCP lifecycle client, manag
 position: 7
 ---
 
-{/_ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-SPDX-License-Identifier: Apache-2.0 _/}
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
 
 Use the managed daemon when an administrator must give multiple users the same
 coding-agent configuration while preserving per-user NeMo Relay runtime state.
@@ -447,9 +447,9 @@ explicit `-e` extension, but does not also load user, project, or discovered
 extensions that could alter provider registration, tool arguments, or shell
 policy after Relay has authorized an operation.
 
-The extension starts the fixed dispatcher as `daemon mcp --daemon-address
-
-<URL>`, waits for MCP initialization before registering managed providers, and
+The extension starts the fixed dispatcher as
+`daemon mcp --daemon-address <URL>`, waits for MCP initialization before
+registering managed providers, and
 keeps one process-wide broker reference across Pi reload, new, resume, and fork
 transitions. It sends Pi's session, agent, turn, compaction, tool, and custom
 shell events to `/hooks/pi`; policy responses are converted back into Pi's
