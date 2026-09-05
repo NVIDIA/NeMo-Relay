@@ -963,9 +963,11 @@ fn prepares_claude_temp_plugin() {
         &[
             "hook-forward",
             "claude",
-            "--gateway-url",
-            "http://127.0.0.1:1234",
-            "--transparent-run",
+            "--hook-config",
+            plugin_dir
+                .join(".nemo-relay-hook-config.json")
+                .to_str()
+                .unwrap(),
         ],
     ));
     assert!(

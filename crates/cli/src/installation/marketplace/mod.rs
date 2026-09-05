@@ -1557,9 +1557,11 @@ fn collect_host_plugin_readiness(
         if let Some(plugin) = readiness.plugin.as_ref() {
             let generation_fence =
                 plugin.join(crate::installation::generation::GENERATION_FILE_NAME);
+            let hook_config = plugin.join(".nemo-relay-hook-config.json");
             readiness.push(
                 "Generated hooks",
                 InstallGeneration::capture(generation_fence.clone()).and_then(|generation| {
+                    crate::hooks::HookCommandConfig::load(&hook_config)?;
                     let expected =
                         plugin_hooks(host, &relay, &generation_fence, generation.token())?;
                     generated_manifest_check(

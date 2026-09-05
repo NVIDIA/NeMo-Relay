@@ -48,6 +48,7 @@ pub(super) struct PluginLayout {
     pub(super) mcp_config: PathBuf,
     pub(super) generation_fence: PathBuf,
     pub(super) generation_lock: PathBuf,
+    pub(super) hook_config: PathBuf,
     pub(super) hooks_path: PathBuf,
     pub(super) state_path: PathBuf,
 }
@@ -73,6 +74,7 @@ impl PluginLayout {
             host.install_arg()
         ));
         let hooks_path = plugin_root.join("hooks").join("hooks.json");
+        let hook_config = plugin_root.join(".nemo-relay-hook-config.json");
         let state_path = state_path(host, install_dir);
         Self {
             host_arg: host.install_arg(),
@@ -84,6 +86,7 @@ impl PluginLayout {
             mcp_config,
             generation_fence,
             generation_lock,
+            hook_config,
             hooks_path,
             state_path,
         }

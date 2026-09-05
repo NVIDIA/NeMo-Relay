@@ -3,6 +3,7 @@
 
 //! Hook delivery, command encoding, generated definitions, and configuration merging.
 
+mod config;
 mod delivery;
 mod destination;
 mod encoding;
@@ -11,6 +12,7 @@ mod merging;
 mod response;
 mod types;
 
+pub(crate) use config::HookCommandConfig;
 pub(crate) use delivery::hook_forward;
 #[cfg(test)]
 pub(crate) use delivery::send_verified_hook_forward_request;
@@ -21,16 +23,14 @@ pub(crate) use destination::{
     HookGatewayLifecycle, resolve_hook_destination, transparent_gateway_spec,
 };
 #[cfg(test)]
-pub(crate) use encoding::decode_windows_hook_command;
-#[cfg(all(test, windows))]
-pub(crate) use encoding::windows_powershell_path;
+pub(crate) use encoding::transparent_hook_forward_commands;
 pub(crate) use encoding::{
     GeneratedHookCommands, generated_policy_hooks, persistent_hook_forward_commands,
-    transparent_hook_forward_commands,
+    transparent_hook_forward_commands_with_config,
 };
 #[cfg(test)]
 pub(crate) use encoding::{
-    encoded_windows_hook_command, event_matches_tools, event_requires_fail_closed, generated_hooks,
+    event_matches_tools, event_requires_fail_closed, generated_hooks,
     persistent_hook_forward_commands_for_platform, transparent_hook_forward_commands_for_platform,
 };
 #[cfg(test)]

@@ -3,9 +3,22 @@
 
 use serde_json::Value;
 
+pub(crate) fn decode_windows_hook_command(command: &str) -> Option<Vec<String>> {
+    let command = command
+        .strip_prefix('"')
+        .and_then(|command| command.strip_suffix('"'))
+        .unwrap_or(command);
+    shell_words::split(command).ok().map(|arguments| {
+        arguments
+            .into_iter()
+            .map(|argument| argument.replace("^%", "%"))
+            .collect()
+    })
+}
+
 pub(crate) fn command_has_arguments(command: &str, expected: &[&str]) -> bool {
-    let arguments = crate::hooks::decode_windows_hook_command(command)
-        .or_else(|| shell_words::split(command).ok());
+    let arguments =
+        decode_windows_hook_command(command).or_else(|| shell_words::split(command).ok());
     arguments.is_some_and(|arguments| {
         arguments.windows(expected.len()).any(|window| {
             window

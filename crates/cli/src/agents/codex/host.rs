@@ -1800,13 +1800,13 @@ pub(crate) fn codex_hook_command(gateway_url: &str) -> String {
 pub(crate) fn codex_plugin_hook_command(
     relay: &Path,
     generation: &Path,
-    generation_token: &str,
+    _generation_token: &str,
 ) -> Result<crate::hooks::GeneratedHookCommands, String> {
     crate::hooks::persistent_hook_forward_commands(
         relay,
         CodingAgent::Codex,
         generation,
-        generation_token,
+        _generation_token,
     )
 }
 
@@ -1814,14 +1814,14 @@ pub(crate) fn codex_plugin_hook_command(
 pub(crate) fn codex_plugin_hook_command_for_platform(
     relay: &Path,
     generation: &Path,
-    generation_token: &str,
+    _generation_token: &str,
     windows: bool,
 ) -> crate::hooks::GeneratedHookCommands {
     crate::hooks::persistent_hook_forward_commands_for_platform(
         relay,
         CodingAgent::Codex,
         generation,
-        generation_token,
+        _generation_token,
         windows,
     )
 }

@@ -5,17 +5,13 @@ use std::ffi::OsString;
 use std::io::Read;
 
 fn main() {
-    let generation = std::env::var_os("NEMO_RELAY_HOOK_GENERATION")
-        .expect("NEMO_RELAY_HOOK_GENERATION is required");
+    let hook_config = std::env::var_os("NEMO_RELAY_HOOK_CONFIG")
+        .expect("NEMO_RELAY_HOOK_CONFIG is required");
     let expected = vec![
         OsString::from("hook-forward"),
         OsString::from("codex"),
-        OsString::from("--gateway-url"),
-        OsString::from("http://127.0.0.1:47632"),
-        OsString::from("--generation-file"),
-        generation,
-        OsString::from("--generation-token"),
-        OsString::from("test-generation"),
+        OsString::from("--hook-config"),
+        hook_config,
         OsString::from("--fail-closed"),
     ];
     let actual = std::env::args_os().skip(1).collect::<Vec<_>>();

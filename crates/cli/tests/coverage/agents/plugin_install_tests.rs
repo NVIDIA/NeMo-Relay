@@ -2588,10 +2588,8 @@ fn force_install_retires_previous_mcp_generation() {
     let cached_mcp =
         serde_json::from_str::<Value>(&std::fs::read_to_string(&layout.mcp_config).unwrap())
             .unwrap();
-    let cached_hooks = serde_json::from_str::<serde_json::Value>(
-        &std::fs::read_to_string(&layout.hooks_path).unwrap(),
-    )
-    .unwrap();
+    let cached_hook_config: Value =
+        serde_json::from_str(&std::fs::read_to_string(&layout.hook_config).unwrap()).unwrap();
 
     install_host(CodingAgent::Codex, &options, &runner, &setup_runner).unwrap();
 
@@ -2613,18 +2611,24 @@ fn force_install_retires_previous_mcp_generation() {
         cached_mcp["nemo-relay"]["env"]["NEMO_RELAY_MCP_GENERATION"],
         json!(previous_token)
     );
-    assert!(crate::hook_assertions::value_has_command_arguments(
-        &cached_hooks,
-        &["--generation-token", &previous_token]
-    ));
+    assert_eq!(
+        cached_hook_config["generation_token"],
+        json!(previous_token)
+    );
     let current_hooks = serde_json::from_str::<serde_json::Value>(
         &std::fs::read_to_string(&layout.hooks_path).unwrap(),
     )
     .unwrap();
     assert!(crate::hook_assertions::value_has_command_arguments(
         &current_hooks,
-        &["--generation-token", current.token()]
+        &["--hook-config", layout.hook_config.to_str().unwrap()]
     ));
+    let current_hook_config: Value =
+        serde_json::from_str(&std::fs::read_to_string(&layout.hook_config).unwrap()).unwrap();
+    assert_eq!(
+        current_hook_config["generation_token"],
+        json!(current.token())
+    );
     assert!(layout.generation_lock.exists());
 }
 

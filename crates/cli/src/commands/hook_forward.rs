@@ -13,6 +13,22 @@ pub(crate) struct HookForwardCommand {
     /// Coding agent whose canonical lifecycle payload is read from standard input.
     #[arg(value_enum)]
     pub(crate) agent: AgentArg,
+    /// Private Relay-owned configuration used by generated coding-agent hooks.
+    #[arg(
+        long,
+        hide = true,
+        conflicts_with_all = [
+            "gateway_url",
+            "generation_file",
+            "generation_token",
+            "forward_only",
+            "transparent_run",
+            "profile",
+            "session_metadata",
+            "gateway_mode"
+        ]
+    )]
+    pub(crate) hook_config: Option<PathBuf>,
     /// Base URL of the Relay gateway that receives the lifecycle payload.
     #[arg(long)]
     pub(crate) gateway_url: Option<String>,
@@ -56,6 +72,7 @@ impl HookForwardCommand {
     fn into_runtime(self) -> crate::hooks::HookForwardRequest {
         crate::hooks::HookForwardRequest {
             agent: self.agent.into(),
+            hook_config: self.hook_config,
             gateway_url: self.gateway_url,
             generation_file: self.generation_file,
             generation_token: self.generation_token,

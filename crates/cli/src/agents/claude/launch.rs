@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::agents::CodingAgent;
 use crate::error::CliError;
-use crate::hooks::{generated_policy_hooks, transparent_hook_forward_commands};
+use crate::hooks::{generated_policy_hooks, transparent_hook_forward_commands_with_config};
 use crate::process::{PreparedAgentLaunch, insert_after_host};
 
 pub(crate) fn prepare(
@@ -64,10 +64,14 @@ pub(crate) fn prepare(
         }))
         .map_err(|error| CliError::Launch(error.to_string()))?,
     )?;
-    let hook_commands = transparent_hook_forward_commands(
+    let hook_config = root.join(".nemo-relay-hook-config.json");
+    crate::hooks::HookCommandConfig::transparent(CodingAgent::ClaudeCode, gateway_url)
+        .write(&hook_config)
+        .map_err(CliError::Launch)?;
+    let hook_commands = transparent_hook_forward_commands_with_config(
         &transparent_hook_executable(),
         CodingAgent::ClaudeCode,
-        gateway_url,
+        &hook_config,
     )
     .map_err(CliError::Launch)?;
     write_hooks(

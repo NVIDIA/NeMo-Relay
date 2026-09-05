@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use base64::Engine;
 use std::path::Path;
 use std::time::Duration;
 
@@ -10,6 +9,36 @@ use reqwest::header::HeaderMap;
 use serde_json::Value;
 
 use crate::agents::CodingAgent;
+
+#[test]
+fn private_hook_config_round_trips_and_rejects_agent_mismatch() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("hook.json");
+    HookCommandConfig::transparent(CodingAgent::Codex, "http://127.0.0.1:1234")
+        .write(&path)
+        .unwrap();
+
+    let config = HookCommandConfig::load(&path).unwrap();
+    let mut request = HookForwardRequest {
+        agent: CodingAgent::ClaudeCode,
+        hook_config: Some(path),
+        gateway_url: None,
+        generation_file: None,
+        generation_token: None,
+        forward_only: false,
+        transparent_run: false,
+        profile: None,
+        session_metadata: None,
+        gateway_mode: None,
+        failure_policy: HookFailurePolicy::Default,
+    };
+    assert!(
+        config
+            .apply(&mut request)
+            .unwrap_err()
+            .contains("requested claude")
+    );
+}
 
 struct BootstrapConfigHome {
     _guard: std::sync::MutexGuard<'static, ()>,
@@ -115,6 +144,7 @@ async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
     .expect("wrapper gateway did not become healthy");
     let command = HookForwardRequest {
         agent: CodingAgent::Codex,
+        hook_config: None,
         gateway_url: Some(gateway_url.clone()),
         generation_file: None,
         generation_token: None,
@@ -278,27 +308,6 @@ fn hook_response_statuses_preserve_guardrail_rejections_and_fail_closed_errors()
 }
 
 #[test]
-fn windows_hook_decoder_rejects_unsafe_odd_and_trailing_argument_envelopes() {
-    const SEPARATOR: &str = " -NoLogo -NoProfile -NonInteractive -EncodedCommand ";
-    #[cfg(windows)]
-    let launcher = windows_powershell_path().unwrap();
-    #[cfg(not(windows))]
-    let launcher = "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe".to_string();
-
-    assert!(decode_windows_hook_command(&format!("powershell.exe{SEPARATOR}QQ==")).is_none());
-    assert!(decode_windows_hook_command(&format!("{launcher}{SEPARATOR}QQ==")).is_none());
-
-    let script = "$ErrorActionPreference='Stop'; & 'relay' ; if ($null -eq $LASTEXITCODE) { exit 1 }; exit $LASTEXITCODE";
-    let encoded = base64::engine::general_purpose::STANDARD.encode(
-        script
-            .encode_utf16()
-            .flat_map(u16::to_le_bytes)
-            .collect::<Vec<_>>(),
-    );
-    assert!(decode_windows_hook_command(&format!("{launcher}{SEPARATOR}{encoded}")).is_none());
-}
-
-#[test]
 fn merge_hooks_is_idempotent_and_preserves_existing_entries() {
     let existing = json!({
         "hooks": {
@@ -361,53 +370,33 @@ fn helper_formatting_and_headers_cover_optional_paths() {
 #[test]
 fn generated_hook_dispatch_covers_all_agents() {
     assert_generated_hook_policies();
+    let config = "/private/nemo-relay-hook.json";
     assert_eq!(
         transparent_hook_forward_commands_for_platform(
             Path::new("/abs/path/to/nemo-relay"),
             CodingAgent::Codex,
-            "http://127.0.0.1:1234",
+            config,
             false,
         )
         .for_event("PreToolUse"),
-        "/abs/path/to/nemo-relay hook-forward codex --gateway-url http://127.0.0.1:1234 --transparent-run --fail-closed"
+        "/abs/path/to/nemo-relay hook-forward codex --hook-config /private/nemo-relay-hook.json --fail-closed"
     );
     let relay = Path::new("/opt/NeMo Relay's & tools/nemo-relay");
     assert_eq!(
-        transparent_hook_forward_commands_for_platform(
-            relay,
-            CodingAgent::Codex,
-            "http://127.0.0.1:1234",
-            false
-        )
-        .for_event("SessionStart"),
-        r#"'/opt/NeMo Relay'\''s & tools/nemo-relay' hook-forward codex --gateway-url http://127.0.0.1:1234 --transparent-run --fail-open"#
+        transparent_hook_forward_commands_for_platform(relay, CodingAgent::Codex, config, false)
+            .for_event("SessionStart"),
+        r#"'/opt/NeMo Relay'\''s & tools/nemo-relay' hook-forward codex --hook-config /private/nemo-relay-hook.json --fail-open"#
     );
-    let native = transparent_hook_forward_commands(
-        Path::new("nemo-relay"),
-        CodingAgent::Codex,
-        "http://127.0.0.1:1234",
-    )
-    .unwrap();
-    if cfg!(windows) {
-        assert_eq!(
-            decode_windows_hook_command(native.for_event("on_session_start")).unwrap(),
-            vec![
-                String::from("nemo-relay"),
-                String::from("hook-forward"),
-                String::from("codex"),
-                String::from("--gateway-url"),
-                String::from("http://127.0.0.1:1234"),
-                String::from("--transparent-run"),
-                String::from("--fail-open"),
-            ]
-        );
-    } else {
+    let native =
+        transparent_hook_forward_commands(Path::new("nemo-relay"), CodingAgent::Codex, config)
+            .unwrap();
+    if !cfg!(windows) {
         assert_eq!(
             native,
             transparent_hook_forward_commands_for_platform(
                 Path::new("nemo-relay"),
                 CodingAgent::Codex,
-                "http://127.0.0.1:1234",
+                config,
                 false,
             )
         );
@@ -415,56 +404,13 @@ fn generated_hook_dispatch_covers_all_agents() {
     let windows = transparent_hook_forward_commands_for_platform(
         relay,
         CodingAgent::ClaudeCode,
-        "http://127.0.0.1:1234",
+        config,
         true,
     );
     let windows = windows.for_event("PreToolUse");
-    let (launcher, encoded) = windows.rsplit_once(' ').unwrap();
-    assert_eq!(
-        launcher,
-        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand"
-    );
-    assert!(
-        !encoded.is_empty()
-            && encoded
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric()
-                    || matches!(character, '+' | '/' | '='))
-    );
-    assert_eq!(
-        decode_windows_hook_command(windows).unwrap(),
-        vec![
-            relay.display().to_string(),
-            "hook-forward".into(),
-            "claude".into(),
-            "--gateway-url".into(),
-            "http://127.0.0.1:1234".into(),
-            "--transparent-run".into(),
-            "--fail-closed".into(),
-        ]
-    );
-    assert!(decode_windows_hook_command("powershell.exe -EncodedCommand invalid").is_none());
-    assert!(
-        decode_windows_hook_command(
-            "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand invalid payload"
-        )
-        .is_none()
-    );
-    let oversized = format!(
-        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {}",
-        "A".repeat(8_000)
-    );
-    assert!(decode_windows_hook_command(&oversized).is_none());
-
-    let oversized_path = format!("C:/{}nemo-relay.exe", "long/".repeat(2_000));
-    let error = encoded_windows_hook_command(
-        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
-        Path::new(&oversized_path),
-        &["hook-forward".into(), "codex".into()],
-    )
-    .unwrap_err();
-    assert!(error.contains("exceeds the 8000-character safety limit"));
-    assert!(error.contains("shorten the Relay or plugin installation path"));
+    assert!(windows.contains("--hook-config"));
+    assert!(!windows.contains("PowerShell"));
+    assert!(!windows.contains("EncodedCommand"));
 }
 
 fn assert_generated_hook_policies() {

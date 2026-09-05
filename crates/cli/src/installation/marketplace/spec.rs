@@ -41,11 +41,17 @@ pub(crate) trait MarketplaceHost: Copy {
     fn marketplace_manifest(self, marketplace: &str, plugin: &str) -> Value;
     fn plugin_manifest(self, plugin: &str) -> Value;
     fn plugin_mcp_config(self, server: Value) -> Result<Value, String>;
+    fn persistent_hook_config(
+        self,
+        generation_fence: &Path,
+        generation_token: &str,
+    ) -> crate::hooks::HookCommandConfig;
     fn plugin_hooks(
         self,
         relay: &Path,
         generation_fence: &Path,
         generation_token: &str,
+        hook_config: &Path,
     ) -> Result<Value, String>;
     fn plugin_registration_args(self, plugin_id: &str) -> Vec<String>;
     fn plugin_removal_args(self, plugin_name: &str, plugin_id: &str) -> Vec<String>;
