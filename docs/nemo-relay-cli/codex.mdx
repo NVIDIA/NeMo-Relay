@@ -277,6 +277,97 @@ Refer to [Coding Agent Installation](/nemo-relay-cli/plugin-installation) for
 install directories, shared-sidecar behavior, rollback behavior, and source
 marketplace notes.
 
+## Migrate Codex Thread History
+
+<Warning title="Experimental">
+`--migrate-history` edits Codex's own thread database directly. Codex owns that
+schema, provides no supported API for changing a thread's provider, and can
+change the storage layout in any release. Treat this as a stopgap until
+[openai/codex#27381](https://github.com/openai/codex/issues/27381) is resolved
+upstream.
+</Warning>
+
+Codex records the provider that produced each thread and filters its resume
+picker by the provider that is currently active. Installing the Relay
+integration switches Codex to the `nemo-relay-openai` provider, so threads
+recorded under the built-in `openai` provider stop appearing in the picker.
+They remain on disk and stay resumable by thread id; only discovery is
+affected.
+
+To move existing history onto the Relay provider so it stays visible, add
+`--migrate-history` at install time:
+
+```bash
+nemo-relay install codex --migrate-history
+```
+
+Close every Codex session first. The migration takes the database write lock
+and fails cleanly with `database is locked` rather than writing partial state
+if Codex is still running.
+
+<Warning title="Requires sqlite3">
+This is the only Relay feature that needs the `sqlite3` command on `PATH`. It
+is present by default on macOS and most Linux distributions, but not on Windows
+or in minimal container images. Without it, `--migrate-history` stops and
+reports the missing command; the rest of the Codex integration is unaffected.
+Uninstall needs `sqlite3` only when a migration was recorded, and the journal
+survives a failed reversal, so a later uninstall can still complete it.
+</Warning>
+
+Before rewriting anything, Relay copies the thread database and its
+write-ahead-log sidecars into a timestamped `nemo-relay-history-backup-*`
+directory inside the Codex home. It then records a migration journal in the
+user configuration directory. To recover from an unexpected result, quit Codex
+and copy the files from the most recent backup directory back over the thread
+database. Relay never removes these backups, and each one is a full copy of the
+thread database; delete old directories when you no longer need them.
+
+The migration is reversible and the reversal is inferred, so uninstall needs no
+flag:
+
+```bash
+nemo-relay uninstall codex
+```
+
+Uninstall reads the journal, moves every thread still recorded under
+`nemo-relay-openai` back to `openai`, and clears the journal. Reversal covers
+threads created while Relay was installed as well as the migrated ones: once
+uninstall removes the `nemo-relay-openai` provider from `config.toml`, any
+thread still pointing at it would be hidden from the picker in the same way the
+migration exists to prevent.
+
+Pass `--skip-history-migration` to leave thread history on the Relay provider
+instead. Use it only when Relay is about to be reinstalled. Codex resolves a
+thread's recorded provider against `config.toml` when it resumes, so a thread
+left on `nemo-relay-openai` after the provider is removed does not merely
+disappear from the picker: resuming it fails with
+``Model provider `nemo-relay-openai` not found``. Reverse it by reinstalling with
+`--migrate-history`, or restore the backup described below.
+
+Add `--dry-run` to either command to report the thread counts that would move
+without touching the database or the journal.
+
+Relay targets Codex's current thread database, `state_5.sqlite`. The numeric
+suffix is a Codex schema generation, so a future Codex release can move to
+`state_6.sqlite` or later. Relay does not search for another generation when
+that file is missing; it stops and reports the path it expected. Name the
+current database explicitly to proceed:
+
+```bash
+nemo-relay install codex --migrate-history --history-database state_6.sqlite
+```
+
+A bare file name resolves inside the Codex home; a value with a directory
+component is used as given. Relay rejects a database that has no `threads`
+table or no `model_provider` column before it copies or rewrites anything.
+
+`--history-database` requires `--migrate-history` at install time. At uninstall
+time it overrides the database the migration recorded, which is otherwise
+preferred over the default; supply it only when that recorded path has moved.
+
+`nemo-relay integrations refresh` does not re-run the migration. A recorded
+migration stays recorded across reinstalls and upgrades.
+
 ## Configure Transparent Runs
 
 Create `$XDG_CONFIG_HOME/nemo-relay/config.toml` (or

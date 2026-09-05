@@ -25,7 +25,8 @@ associated with another provider can disappear from the sidebar after restart.
 The thread data has not been deleted.
 
 Do not inspect, copy, delete, or edit Codex session storage or SQLite state to
-repair sidebar visibility.
+repair sidebar visibility. The supported way to keep threads visible is the
+experimental `nemo-relay install codex --migrate-history` flag described below.
 
 ## Restore Normal Codex Desktop Visibility
 
@@ -48,6 +49,21 @@ session data:
 ```bash
 nemo-relay doctor --plugin codex
 ```
+
+## Keep Existing Threads Visible Instead
+
+This experimental option avoids the disappearance rather than recovering from
+it. Fully quit Codex Desktop, then reinstall with the migration flag:
+
+```bash
+nemo-relay install codex --migrate-history
+```
+
+Relay records existing threads under the Relay provider so they stay listed,
+backs up the thread database first, and reverses the change automatically during
+`nemo-relay uninstall codex`. It requires the `sqlite3` command on `PATH`, which
+Windows does not provide by default. Treat it as experimental: it changes
+Codex's own thread database, and its behavior can change with any Codex release.
 
 ## Continue A Thread Through Temporary Relay Wiring
 

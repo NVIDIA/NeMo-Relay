@@ -21,6 +21,17 @@ pub(crate) struct InstallCommand {
     pub(crate) dry_run: bool,
     #[arg(long)]
     pub(crate) skip_doctor: bool,
+    /// Experimental: move existing Codex thread history onto the Relay provider so it stays
+    /// visible in the Codex resume picker. `nemo-relay uninstall codex` reverses this
+    /// automatically. Requires the `sqlite3` command on PATH, which Windows does not provide by
+    /// default.
+    #[arg(long)]
+    pub(crate) migrate_history: bool,
+    /// Codex thread database to migrate, when Codex has moved past the default schema
+    /// generation. Accepts a bare file name such as `state_6.sqlite`, resolved inside the Codex
+    /// home, or a full path. Requires `--migrate-history`.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) history_database: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -34,6 +45,13 @@ pub(crate) struct UninstallCommand {
     pub(crate) force: bool,
     #[arg(long)]
     pub(crate) dry_run: bool,
+    /// Leave migrated Codex thread history on the Relay provider instead of restoring it.
+    #[arg(long)]
+    pub(crate) skip_history_migration: bool,
+    /// Codex thread database to restore, overriding the one the migration recorded. Accepts a bare
+    /// file name such as `state_6.sqlite`, resolved inside the Codex home, or a full path.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) history_database: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
@@ -66,6 +84,8 @@ impl InstallCommand {
             force: self.force,
             dry_run: self.dry_run,
             skip_doctor: self.skip_doctor,
+            migrate_history: self.migrate_history,
+            history_database: self.history_database,
         }
     }
 }
@@ -76,12 +96,24 @@ impl UninstallCommand {
             install_dir: self.install_dir,
             force: self.force,
             dry_run: self.dry_run,
+            skip_history_migration: self.skip_history_migration,
+            history_database: self.history_database,
         }
     }
 }
 
 pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
     let target = command.host;
+    if command.migrate_history && matches!(target, InstallTarget::ClaudeCode) {
+        return Err(CliError::Install(
+            "--migrate-history applies to the Codex integration only".into(),
+        ));
+    }
+    if command.history_database.is_some() && !command.migrate_history {
+        return Err(CliError::Install(
+            "--history-database requires --migrate-history".into(),
+        ));
+    }
     let request = command.into_runtime();
     let candidates = target.agents();
     let agents = if target.is_all() {
@@ -104,6 +136,21 @@ pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
 
 pub(super) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError> {
     let target = command.host;
+    if command.skip_history_migration && matches!(target, InstallTarget::ClaudeCode) {
+        return Err(CliError::Install(
+            "--skip-history-migration applies to the Codex integration only".into(),
+        ));
+    }
+    if command.history_database.is_some() && matches!(target, InstallTarget::ClaudeCode) {
+        return Err(CliError::Install(
+            "--history-database applies to the Codex integration only".into(),
+        ));
+    }
+    if command.history_database.is_some() && command.skip_history_migration {
+        return Err(CliError::Install(
+            "--history-database cannot be combined with --skip-history-migration".into(),
+        ));
+    }
     let request = command.into_runtime();
     let candidates = target.agents();
     let agents = if target.is_all() {

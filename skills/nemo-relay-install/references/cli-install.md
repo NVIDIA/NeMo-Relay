@@ -137,10 +137,20 @@ The recovery file must include both supported exits:
   quitting Desktop and running `nemo-relay codex -- resume --all` or
   `nemo-relay codex -- resume <thread-id>`.
 
+An experimental third option keeps existing threads visible instead of
+recovering from their disappearance. `nemo-relay install codex
+--migrate-history` records the existing threads under the Relay provider, and
+`nemo-relay uninstall codex` reverses that automatically. It requires the
+`sqlite3` command on `PATH`, which Windows does not provide by default. Offer it
+only when the user asks to keep history visible, describe it as experimental,
+and still create the recovery file: the flag changes Codex's own thread database
+and its behavior can change with any Codex release.
+
 Avoid `resume --last` when crossing providers. Never directly inspect, copy,
 delete, edit, or rewrite Codex session storage, private application
-configuration, or SQLite state as a migration workaround. Supported
-`nemo-relay` commands may manage Relay-generated provider and hook
+configuration, or SQLite state as a migration workaround. Use
+`--migrate-history` when that outcome is wanted; do not reproduce it by hand.
+Supported `nemo-relay` commands may manage Relay-generated provider and hook
 configuration.
 
 Use these references for the supported installation and host-integration paths:
