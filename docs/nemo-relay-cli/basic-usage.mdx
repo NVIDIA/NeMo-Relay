@@ -59,6 +59,12 @@ payload schemas. It removes only hop-by-hop transport headers, forwards
 streaming responses as streams, and emits NeMo Relay LLM start and end events
 under the active session scope.
 
+The gateway emits `gateway.provider.request` and `gateway.provider.response`
+telemetry events containing the exact `body_size_bytes` sent to and received
+from each provider. Request bytes are measured after interceptors and JSON
+re-encoding; streaming response bytes are counted before SSE decoding. The
+`full` and `openinference` OpenTelemetry projections export them as span events.
+
 ## Transparent Run
 
 Use the agent shortcuts for local observability. The wrapper starts a gateway on

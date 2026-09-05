@@ -1025,6 +1025,19 @@ fn structured_upstream_failure_classification_matches_retry_policy() {
 
 #[tokio::test]
 async fn sse_json_stream_yields_valid_event_before_later_batch_error() {
+    let subscriber_name = "gateway-streaming-provider-response-body-size-test";
+    let _ = nemo_relay::api::subscriber::deregister_subscriber(subscriber_name);
+    let captured_data = Arc::new(Mutex::new(None::<Value>));
+    let captured = captured_data.clone();
+    nemo_relay::api::subscriber::register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.name() == "gateway.provider.response" {
+                *captured.lock().unwrap() = event.data().cloned();
+            }
+        }),
+    )
+    .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let sse_body = concat!(
@@ -1060,6 +1073,119 @@ async fn sse_json_stream_yields_valid_event_before_later_batch_error() {
     assert!(stream.next().await.is_none());
 
     server.await.unwrap();
+    nemo_relay::api::subscriber::flush_subscribers().unwrap();
+    nemo_relay::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
+    assert_eq!(
+        captured_data.lock().unwrap().as_ref().unwrap()["body_size_bytes"],
+        json!(sse_body.len())
+    );
+}
+
+#[tokio::test]
+async fn incomplete_sse_error_emits_provider_response_body_size() {
+    let subscriber_name = "gateway-incomplete-sse-provider-response-body-size-test";
+    let _ = nemo_relay::api::subscriber::deregister_subscriber(subscriber_name);
+    let captured_data = Arc::new(Mutex::new(None::<Value>));
+    let captured = captured_data.clone();
+    nemo_relay::api::subscriber::register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.name() == "gateway.provider.response" {
+                *captured.lock().unwrap() = event.data().cloned();
+            }
+        }),
+    )
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let sse_body = "data: {not valid json";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        sse_body.len(),
+        sse_body
+    );
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = socket.read(&mut request).await.unwrap();
+        socket.write_all(response.as_bytes()).await.unwrap();
+    });
+
+    let response = test_http_client()
+        .get(format!("http://{address}"))
+        .send()
+        .await
+        .unwrap();
+    let mut stream = sse_json_stream(response);
+
+    assert!(stream.next().await.unwrap().is_err());
+    drop(stream);
+    server.await.unwrap();
+    nemo_relay::api::subscriber::flush_subscribers().unwrap();
+    nemo_relay::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
+    assert_eq!(
+        captured_data.lock().unwrap().as_ref().unwrap()["body_size_bytes"],
+        json!(sse_body.len())
+    );
+}
+
+#[tokio::test]
+async fn passthrough_transport_error_emits_provider_response_body_size() {
+    let subscriber_name = "gateway-passthrough-provider-response-body-size-test";
+    let _ = nemo_relay::api::subscriber::deregister_subscriber(subscriber_name);
+    let captured_data = Arc::new(Mutex::new(None::<Value>));
+    let captured = captured_data.clone();
+    nemo_relay::api::subscriber::register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.name() == "gateway.provider.response" {
+                *captured.lock().unwrap() = event.data().cloned();
+            }
+        }),
+    )
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let partial_body = "partial";
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = socket.read(&mut request).await.unwrap();
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: 64\r\nconnection: close\r\n\r\n{partial_body}"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    });
+    let state = AppState::new(GatewayConfig::default());
+    let prepared = PreparedGatewayRequest {
+        method: Method::POST,
+        headers: HeaderMap::new(),
+        path: "/v1/models".into(),
+        provider: ProviderRoute::OpenAiModels,
+        upstream_url: format!("http://{address}/v1/models"),
+        body_bytes: Bytes::new(),
+        request_json: Value::Null,
+        streaming: true,
+        authorization: crate::provider_auth::ProviderRequestAuthorization {
+            source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
+            allow_environment_provider_auth: false,
+        },
+    };
+
+    let response = passthrough_streaming(state, prepared).await.unwrap();
+    assert!(response.into_body().collect().await.is_err());
+    server.await.unwrap();
+    nemo_relay::api::subscriber::flush_subscribers().unwrap();
+    nemo_relay::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
+    assert_eq!(
+        captured_data.lock().unwrap().as_ref().unwrap()["body_size_bytes"],
+        json!(partial_body.len())
+    );
 }
 
 #[tokio::test]
@@ -1196,6 +1322,26 @@ async fn buffered_body_read_failure_stays_structured() {
 
 #[tokio::test]
 async fn buffered_invalid_json_becomes_safe_upstream_failure() {
+    let subscriber_name = "gateway-provider-request-body-size-test";
+    let _ = nemo_relay::api::subscriber::deregister_subscriber(subscriber_name);
+    let captured_data = Arc::new(Mutex::new(HashMap::<String, Value>::new()));
+    let captured = captured_data.clone();
+    nemo_relay::api::subscriber::register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if matches!(
+                event.name(),
+                "gateway.provider.request" | "gateway.provider.response"
+            ) && let Some(data) = event.data()
+            {
+                captured
+                    .lock()
+                    .unwrap()
+                    .insert(event.name().to_string(), data.clone());
+            }
+        }),
+    )
+    .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -1233,9 +1379,11 @@ async fn buffered_invalid_json_becomes_safe_upstream_failure() {
     );
     let mut request_headers = Map::new();
     request_headers.insert(INTERNAL_RETRY_AWARE_HEADER.to_string(), json!("true"));
+    let request_content = json!({"model": "rewritten"});
+    let expected_body_size = serde_json::to_vec(&request_content).unwrap().len();
     let error = func(LlmRequest {
         headers: request_headers,
-        content: json!({}),
+        content: request_content,
     })
     .await
     .unwrap_err();
@@ -1254,6 +1402,17 @@ async fn buffered_invalid_json_becomes_safe_upstream_failure() {
         Some(&"provider-request".to_string())
     );
     server.await.unwrap();
+    nemo_relay::api::subscriber::flush_subscribers().unwrap();
+    nemo_relay::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
+    let captured_data = captured_data.lock().unwrap();
+    assert_eq!(
+        captured_data["gateway.provider.request"]["body_size_bytes"],
+        json!(expected_body_size)
+    );
+    assert_eq!(
+        captured_data["gateway.provider.response"]["body_size_bytes"],
+        json!(22)
+    );
 }
 
 #[test]
