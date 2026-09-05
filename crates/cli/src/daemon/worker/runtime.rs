@@ -456,6 +456,20 @@ impl TestWorkerHandle {
     pub(crate) fn in_flight(&self) -> usize {
         self.state.in_flight.load(Ordering::Acquire)
     }
+
+    pub(crate) fn is_draining(&self) -> bool {
+        self.state.draining.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn stage_recovery_tokens(&self, data_token: &[u8], control_token: &[u8]) {
+        let mut auth = write_lock(&self.state.auth);
+        let data = TokenDigest::from_token(data_token);
+        auth.pending_data = Some(data);
+        auth.readiness_data = Some(data);
+        auth.control = TokenDigest::from_token(control_token);
+        auth.last_control_sequence = 0;
+        auth.last_control_request_id.clear();
+    }
 }
 
 /// Constructs the real authenticated worker router with an injected process-wide pool. This is a
@@ -467,6 +481,19 @@ pub(crate) fn test_router(
     upstream: PooledClient,
     data_token: &[u8],
 ) -> (Router, TestWorkerHandle) {
+    test_router_with_control_tokens(config, upstream, data_token, b"unused-test-control-token")
+}
+
+/// Constructs the authenticated worker router with both credentials issued by a broker control
+/// registration. This keeps end-to-end control-plane tests on the production authentication and
+/// drain handlers without weakening the normal runtime constructor.
+#[cfg(test)]
+pub(crate) fn test_router_with_control_tokens(
+    config: GatewayConfig,
+    upstream: PooledClient,
+    data_token: &[u8],
+    control_token: &[u8],
+) -> (Router, TestWorkerHandle) {
     let state = Arc::new(WorkerState {
         worker_id: "test-worker".into(),
         config,
@@ -476,7 +503,7 @@ pub(crate) fn test_router(
             data: TokenDigest::from_token(data_token),
             pending_data: None,
             readiness_data: None,
-            control: TokenDigest::from_token(b"unused-test-control-token"),
+            control: TokenDigest::from_token(control_token),
             last_control_sequence: 0,
             last_control_request_id: String::new(),
         }),

@@ -1146,12 +1146,16 @@ async fn public_proxy(
     if !public_method_allowed(request.method(), request.uri().path()) {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
-    let target = match state.registry.resolve_target(&credential.digest()) {
-        Ok(target) => target,
-        Err(ResolveError::UnknownToken) => {
-            return control_message(StatusCode::UNAUTHORIZED, "invalid route credential");
+    let target = if state.registry.is_global_pass_through() {
+        ResolvedTarget::PassThrough
+    } else {
+        match state.registry.resolve_target(&credential.digest()) {
+            Ok(target) => target,
+            Err(ResolveError::UnknownToken) => {
+                return control_message(StatusCode::UNAUTHORIZED, "invalid route credential");
+            }
+            Err(ResolveError::Unavailable(_)) => return unavailable_response(),
         }
-        Err(ResolveError::Unavailable(_)) => return unavailable_response(),
     };
     match (target, route) {
         (ResolvedTarget::PassThrough, PublicRoute::Hook(hook)) => {

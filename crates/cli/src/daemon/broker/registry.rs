@@ -32,6 +32,11 @@ pub(crate) struct Registry {
 }
 
 impl Registry {
+    /// Whether this broker was started in permanent pass-through mode.
+    pub(crate) const fn is_global_pass_through(&self) -> bool {
+        self.global_pass_through
+    }
+
     /// Authorizes a worker recovery without mutating route state.
     ///
     /// The returned permit captures the exact route generation and must be presented again when

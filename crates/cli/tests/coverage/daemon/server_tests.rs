@@ -4,7 +4,13 @@
 use base64::Engine;
 
 use super::*;
+use crate::daemon::common::client::{begin_handshake, control_client, post_json};
+use crate::daemon::common::control::{
+    WorkerBootstrap, WorkerNetworkHintProof, WorkerReadyPayload, WorkerRecoverRequest,
+    WorkerRegisterResponse,
+};
 use crate::daemon::common::worker_tls::pooled_worker_tls_client;
+use crate::daemon::worker::test_router_with_control_tokens;
 
 #[test]
 fn worker_endpoint_rejects_bind_only_and_non_origin_values() {
@@ -513,4 +519,261 @@ fn staged_worker_session(worker_id: &str, lease_expires_at_unix_ms: u64) -> Work
         )
         .expect("generation grant"),
     }
+}
+
+#[tokio::test]
+async fn authenticated_control_plane_activates_heartbeats_and_drains_a_worker() {
+    let route_token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x5a_u8; 32]);
+    let credential = RouteCredential::parse(route_token.clone()).expect("route credential");
+    let daemon_listener = TcpListener::bind("127.0.0.1:0").await.expect("daemon bind");
+    let daemon_address = daemon_listener.local_addr().expect("daemon address");
+    let daemon_origin = format!("http://{daemon_address}");
+    let generation_directory = tempfile::tempdir().expect("generation directory");
+    let daemon_identity = MachineIdentity::generate()
+        .expect("daemon identity")
+        .identity;
+    let state = Arc::new(DaemonState {
+        registry: Registry::new(false),
+        descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
+        instance_id: "control-plane-test-daemon".into(),
+        public_origin: daemon_origin.clone(),
+        config: GatewayConfig::default(),
+        upstream: pooled_client().expect("daemon client"),
+        worker_clients: WorkerClientPool::new().expect("worker clients"),
+        allowed_route_tokens: HashSet::from([credential.digest()]),
+        challenges: Mutex::new(HashMap::new()),
+        activations: Mutex::new(HashMap::new()),
+        mcp_sessions: Mutex::new(HashMap::new()),
+        mcp_heartbeat_serialization: Mutex::new(()),
+        worker_sessions: Mutex::new(HashMap::new()),
+        pending_directives: Mutex::new(HashMap::new()),
+        active_worker_generations: ActiveWorkerGenerations::load_for_test(
+            generation_directory.path().join("active-workers.json"),
+        )
+        .expect("generation state"),
+        worker_generation_publication: Mutex::new(()),
+        identity: daemon_identity,
+    });
+    let daemon_task = tokio::spawn({
+        let state = Arc::clone(&state);
+        async move {
+            axum::serve(daemon_listener, router(state))
+                .await
+                .expect("daemon serve");
+        }
+    });
+
+    let client = control_client().expect("control client");
+    let machine_identity = MachineIdentity::generate()
+        .expect("machine identity")
+        .identity;
+    let mcp_session_id = "control-plane-test-mcp";
+    let mcp_handshake = begin_handshake(
+        &client,
+        &daemon_origin,
+        ComponentRole::Mcp,
+        &machine_identity,
+        mcp_session_id,
+        Some(credential.digest()),
+    )
+    .await
+    .expect("MCP handshake");
+    let hint =
+        WorkerNetworkHint::new(Ipv4Addr::LOCALHOST.to_string(), None).expect("worker network hint");
+    let hint_proof = WorkerNetworkHintProof::sign(
+        hint,
+        &mcp_handshake.proof.transcript.daemon_target,
+        mcp_session_id,
+        &mcp_handshake.proof.transcript.challenge_id,
+        &machine_identity.fingerprint(),
+        &machine_identity,
+    )
+    .expect("worker network proof");
+    let mcp_registration: McpRegisterResponse = post_json(
+        &client,
+        &format!("{daemon_origin}{MCP_REGISTER_PATH}"),
+        &McpRegisterRequest {
+            proof: mcp_handshake.proof.clone(),
+            worker_network: hint_proof,
+        },
+        Some(&route_token),
+    )
+    .await
+    .expect("MCP registration");
+    mcp_handshake
+        .authenticate_daemon(&mcp_registration.daemon_proof)
+        .expect("daemon MCP proof");
+    let bootstrap = WorkerBootstrap::from_directive(mcp_registration.directive.clone())
+        .expect("launch directive");
+
+    let worker_listener = TcpListener::bind("127.0.0.1:0").await.expect("worker bind");
+    let worker_address = worker_listener.local_addr().expect("worker address");
+    let worker_endpoint = format!("http://{worker_address}");
+    let worker_id = "test-worker";
+    let worker_handshake = begin_handshake(
+        &client,
+        &daemon_origin,
+        ComponentRole::Worker,
+        &machine_identity,
+        worker_id,
+        None,
+    )
+    .await
+    .expect("worker handshake");
+    let worker_registration: WorkerRegisterResponse = post_json(
+        &client,
+        &format!("{daemon_origin}{WORKER_REGISTER_PATH}"),
+        &WorkerRegisterRequest {
+            proof: worker_handshake.proof.clone(),
+            worker_id: worker_id.into(),
+            endpoint: worker_endpoint,
+            activation_id: bootstrap.activation_id,
+            activation_token: bootstrap.activation_token,
+            tls_root_certificate: None,
+        },
+        None,
+    )
+    .await
+    .expect("worker registration");
+    worker_handshake
+        .authenticate_daemon(&worker_registration.daemon_proof)
+        .expect("daemon worker proof");
+
+    let (worker_router, worker_handle) = test_router_with_control_tokens(
+        GatewayConfig::default(),
+        pooled_client().expect("worker upstream client"),
+        worker_registration.data_token.expose().as_bytes(),
+        worker_registration.session_token.expose().as_bytes(),
+    );
+    let worker_task = tokio::spawn(async move {
+        axum::serve(worker_listener, worker_router)
+            .await
+            .expect("worker serve");
+    });
+
+    let ready = SessionRequest::new(
+        worker_id.into(),
+        worker_registration.session_token.clone(),
+        1,
+        WorkerReadyPayload {
+            worker_id: worker_id.into(),
+        },
+    )
+    .expect("ready request");
+    let response = client
+        .post(format!("{daemon_origin}{WORKER_READY_PATH}"))
+        .json(&ready)
+        .send()
+        .await
+        .expect("ready response");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(state.registry.resolve_target(&credential.digest()).is_ok());
+
+    let worker_heartbeat = SessionRequest::new(
+        worker_id.into(),
+        worker_registration.session_token,
+        2,
+        WorkerHeartbeatPayload {
+            worker_id: worker_id.into(),
+        },
+    )
+    .expect("worker heartbeat");
+    let response = client
+        .post(format!("{daemon_origin}{WORKER_HEARTBEAT_PATH}"))
+        .json(&worker_heartbeat)
+        .send()
+        .await
+        .expect("worker heartbeat response");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    lock(&state.worker_sessions).remove(worker_id);
+    let recovery_handshake = begin_handshake(
+        &client,
+        &daemon_origin,
+        ComponentRole::Worker,
+        &machine_identity,
+        worker_id,
+        None,
+    )
+    .await
+    .expect("recovery handshake");
+    let recovery: WorkerRegisterResponse = post_json(
+        &client,
+        &format!("{daemon_origin}{WORKER_RECOVER_PATH}"),
+        &WorkerRecoverRequest {
+            proof: recovery_handshake.proof.clone(),
+            worker_id: worker_id.into(),
+            endpoint: format!("http://{worker_address}"),
+            tls_root_certificate: None,
+            generation_grant: worker_registration.generation_grant,
+        },
+        None,
+    )
+    .await
+    .expect("worker recovery registration");
+    recovery_handshake
+        .authenticate_daemon(&recovery.daemon_proof)
+        .expect("daemon recovery proof");
+    worker_handle.stage_recovery_tokens(
+        recovery.data_token.expose().as_bytes(),
+        recovery.session_token.expose().as_bytes(),
+    );
+    let recovery_ready = SessionRequest::new(
+        worker_id.into(),
+        recovery.session_token.clone(),
+        1,
+        WorkerReadyPayload {
+            worker_id: worker_id.into(),
+        },
+    )
+    .expect("recovery ready request");
+    let response = client
+        .post(format!("{daemon_origin}{WORKER_READY_PATH}"))
+        .json(&recovery_ready)
+        .send()
+        .await
+        .expect("recovery ready response");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let mcp_heartbeat = SessionRequest::new(
+        mcp_session_id.into(),
+        mcp_registration.session_token.clone(),
+        1,
+        EmptyPayload::default(),
+    )
+    .expect("MCP heartbeat");
+    let heartbeat: McpHeartbeatResponse = post_json(
+        &client,
+        &format!("{daemon_origin}{MCP_HEARTBEAT_PATH}"),
+        &mcp_heartbeat,
+        None,
+    )
+    .await
+    .expect("MCP heartbeat response");
+    assert!(heartbeat.directive.is_none());
+
+    let release = SessionRequest::new(
+        mcp_session_id.into(),
+        mcp_registration.session_token,
+        2,
+        EmptyPayload::default(),
+    )
+    .expect("MCP release");
+    let response = client
+        .post(format!("{daemon_origin}{MCP_RELEASE_PATH}"))
+        .json(&release)
+        .send()
+        .await
+        .expect("MCP release response");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !worker_handle.is_draining() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("daemon sent authenticated drain request");
+    worker_task.abort();
+    daemon_task.abort();
 }

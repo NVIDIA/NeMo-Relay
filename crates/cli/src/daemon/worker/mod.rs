@@ -8,7 +8,7 @@ mod managed;
 mod runtime;
 
 #[cfg(test)]
-pub(crate) use runtime::{TestWorkerHandle, test_router};
+pub(crate) use runtime::{TestWorkerHandle, test_router, test_router_with_control_tokens};
 
 use std::net::{Ipv4Addr, SocketAddr};
 
