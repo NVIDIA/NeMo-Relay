@@ -3,6 +3,7 @@
 
 # Rust
 /target
+/scripts/latency_benchmark/daemon_transport/target
 
 # Python
 /.venv

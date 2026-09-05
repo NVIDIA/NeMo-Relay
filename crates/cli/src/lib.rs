@@ -8,6 +8,7 @@ mod banner;
 mod bootstrap;
 mod commands;
 mod configuration;
+mod daemon;
 mod diagnostics;
 mod error;
 mod events;

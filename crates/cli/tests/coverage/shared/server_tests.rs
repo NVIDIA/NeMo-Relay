@@ -301,18 +301,24 @@ async fn responses_websocket_upgrades_request_http_fallback() {
 #[tokio::test]
 async fn responses_plain_get_remains_method_not_allowed() {
     let app = router_with_state(AppState::new(test_config()));
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/responses")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    for path in [
+        "/responses",
+        "/v1/responses",
+        "/backend-api/codex/responses",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED, "{path}");
+    }
 }
 
 #[test]

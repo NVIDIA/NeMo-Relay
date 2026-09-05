@@ -1952,6 +1952,62 @@ pub(crate) async fn run_doctor(
     }
 }
 
+/// Runs the managed deployment doctor without loading or probing any personal runtime state.
+pub(crate) fn run_managed_bundle_doctor(
+    path: &Path,
+    expected_sha256: &crate::daemon::managed::ManagedBundleDigest,
+    json: bool,
+) -> Result<std::process::ExitCode, CliError> {
+    let report = collect_managed_bundle_report(path, expected_sha256);
+    let failed = matches!(report.managed_bundle.status, Status::Fail);
+    if json {
+        print!("{}", format_managed_bundle_json(&report)?);
+    } else {
+        crate::banner::print_doctor_header();
+        print!("{}", format_managed_bundle_human(&report));
+    }
+    Ok(if failed {
+        std::process::ExitCode::FAILURE
+    } else {
+        std::process::ExitCode::SUCCESS
+    })
+}
+
+pub(crate) fn collect_managed_bundle_report(
+    path: &Path,
+    expected_sha256: &crate::daemon::managed::ManagedBundleDigest,
+) -> ManagedBundleDoctorReport {
+    let expected_sha256_text = expected_sha256.to_string();
+    let managed_bundle = match crate::daemon::managed::refresh_bundle(path, expected_sha256) {
+        Ok(validation) => ManagedBundleDoctorInfo {
+            status: Status::Pass,
+            path: path.display().to_string(),
+            expected_sha256: expected_sha256_text,
+            artifact_count: Some(validation.artifact_count),
+            daemon_address: Some(validation.daemon_address),
+            platform: Some(validation.platform.as_str().into()),
+            details: format!(
+                "{} immutable artifacts match the trusted bundle digest {}",
+                validation.artifact_count, validation.sha256
+            ),
+        },
+        Err(error) => ManagedBundleDoctorInfo {
+            status: Status::Fail,
+            path: path.display().to_string(),
+            expected_sha256: expected_sha256_text,
+            artifact_count: None,
+            daemon_address: None,
+            platform: None,
+            details: error.to_string(),
+        },
+    };
+    ManagedBundleDoctorReport {
+        schema_version: 1,
+        binary_version: env!("CARGO_PKG_VERSION"),
+        managed_bundle,
+    }
+}
+
 /// Top-level entry point invoked by `nemo-relay agents`. Always exits 0; the data drives caller
 /// decisions (e.g., CI gating on JSON output).
 pub(crate) async fn run_agents(json: bool) -> Result<std::process::ExitCode, CliError> {

@@ -200,6 +200,46 @@ fn exit_code_fails_when_agent_readiness_fails() {
 }
 
 #[test]
+fn managed_bundle_doctor_report_is_managed_only() {
+    use base64::Engine;
+    use std::ffi::OsStr;
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("bundle");
+    let spec = crate::daemon::managed::ManagedBundleSpec::new(
+        "https://relay.example.com:443",
+        "/opt/nvidia/bin/nemo-relay-dispatch",
+        crate::daemon::managed::ManagedPlatform::Linux,
+        [crate::daemon::managed::ManagedAgent::Pi],
+    )
+    .unwrap();
+    let digest = crate::daemon::managed::write_new_bundle(&root, &spec).unwrap();
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x42_u8; 32]);
+    let _environment = EnvScope::set(&[(
+        crate::daemon::common::state::ROUTE_TOKEN_ENV,
+        Some(OsStr::new(&token)),
+    )]);
+
+    let report = collect_managed_bundle_report(&root, &digest);
+    assert_eq!(report.managed_bundle.status, Status::Pass);
+    let human = format_managed_bundle_human(&report);
+    assert!(human.contains("Managed bundle validation passed"));
+    let json: serde_json::Value =
+        serde_json::from_str(&format_managed_bundle_json(&report).unwrap()).unwrap();
+    assert_eq!(json["managed_bundle"]["status"], "pass");
+    for personal_section in [
+        "environment",
+        "configuration",
+        "agents",
+        "host_plugins",
+        "observability",
+        "completions",
+    ] {
+        assert!(json.get(personal_section).is_none(), "{personal_section}");
+    }
+}
+
+#[test]
 fn exit_code_fails_when_an_installed_host_plugin_is_unready() {
     let mut report = empty_report();
     report

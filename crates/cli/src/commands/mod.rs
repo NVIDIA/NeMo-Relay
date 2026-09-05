@@ -5,6 +5,7 @@
 
 mod completions;
 mod configure;
+mod daemon;
 mod diagnostics;
 mod gateway;
 mod hook_forward;
@@ -92,6 +93,14 @@ fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
             cli.logging.resolve_without_ambient_config()
         }
         Some(Command::Mcp) => cli.logging.resolve(None),
+        Some(Command::Daemon(command))
+            if matches!(
+                command.command.as_ref(),
+                Some(daemon::DaemonSubcommand::Mcp(_) | daemon::DaemonSubcommand::Hook(_))
+            ) =>
+        {
+            cli.logging.resolve_without_ambient_config()
+        }
         Some(Command::Run(command)) => cli
             .logging
             .resolve(command.config.as_deref().or(cli.server.config.as_deref())),
@@ -189,6 +198,7 @@ async fn run_command(
     bootstrap_shutdown_token: Option<String>,
 ) -> Result<ExitCode, error::CliError> {
     match command {
+        Command::Daemon(command) => daemon::execute(command, server).await,
         Command::HookForward(command) => {
             hook_forward::execute(command).await?;
             Ok(ExitCode::SUCCESS)

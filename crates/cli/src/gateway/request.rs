@@ -212,18 +212,33 @@ fn passthrough_body_error(error: axum::Error) -> CliError {
 }
 
 pub(super) fn build_llm_gateway_start(request: &PreparedGatewayRequest) -> LlmGatewayStart {
+    build_llm_gateway_start_from_parts(
+        &request.headers,
+        &request.path,
+        request.provider,
+        request.request_json.clone(),
+        request.streaming,
+    )
+}
+
+pub(super) fn build_llm_gateway_start_from_parts(
+    headers: &HeaderMap,
+    path: &str,
+    provider: ProviderRoute,
+    request_json: Value,
+    streaming: bool,
+) -> LlmGatewayStart {
     LlmGatewayStart {
-        session_id: gateway_session_id(&request.headers, &request.request_json, request.provider),
-        provider: request.provider.name().to_string(),
-        model_name: request
-            .request_json
+        session_id: gateway_session_id(headers, &request_json, provider),
+        provider: provider.name().to_string(),
+        model_name: request_json
             .get("model")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        subagent_id: gateway_subagent_id(&request.headers, &request.request_json, request.provider),
+        subagent_id: gateway_subagent_id(headers, &request_json, provider),
         conversation_id: gateway_identifier(
-            &request.headers,
-            &request.request_json,
+            headers,
+            &request_json,
             "x-nemo-relay-conversation-id",
             &[
                 &["conversation_id"],
@@ -232,14 +247,14 @@ pub(super) fn build_llm_gateway_start(request: &PreparedGatewayRequest) -> LlmGa
             ],
         ),
         generation_id: gateway_identifier(
-            &request.headers,
-            &request.request_json,
+            headers,
+            &request_json,
             "x-nemo-relay-generation-id",
             &[&["generation_id"], &["generationId"], &["generation", "id"]],
         ),
         request_id: gateway_identifier(
-            &request.headers,
-            &request.request_json,
+            headers,
+            &request_json,
             "x-nemo-relay-request-id",
             &[
                 &["request_id"],
@@ -248,12 +263,12 @@ pub(super) fn build_llm_gateway_start(request: &PreparedGatewayRequest) -> LlmGa
                 &["metadata", "request_id"],
             ],
         )
-        .or_else(|| crate::configuration::header_string(&request.headers, "x-request-id")),
+        .or_else(|| crate::configuration::header_string(headers, "x-request-id")),
         request: LlmRequest {
-            headers: observable_headers(&request.headers),
-            content: request.request_json.clone(),
+            headers: observable_headers(headers),
+            content: request_json,
         },
-        streaming: request.streaming,
-        metadata: json!({ "gateway_path": request.path }),
+        streaming,
+        metadata: json!({ "gateway_path": path }),
     }
 }

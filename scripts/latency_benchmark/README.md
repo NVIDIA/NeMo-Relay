@@ -10,6 +10,12 @@ around OpenAI Responses, Anthropic Messages, Codex hooks, Claude Code hooks,
 and Relay process startup. The fixture runs deterministic providers on
 loopback, so network and model-service latency do not hide Relay overhead.
 
+The daemon architecture has a separate Rust/Hyper transport fixture for
+HTTP/1.1, HTTP/2, stream-integrity, high-concurrency, and slow-stream capacity
+measurements. See
+[`daemon_transport/README.md`](daemon_transport/README.md) for its CI smoke
+check and opt-in full topology matrix.
+
 ## Before You Run
 
 Run all commands from the repository root. Start with the smoke test unless you

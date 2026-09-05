@@ -44,6 +44,162 @@ fn syntax_paths(source: &str) -> Vec<String> {
 struct PathVisitor {
     paths: Vec<String>,
     command_attributes: Vec<String>,
+    test_attributes: Vec<String>,
+}
+
+#[derive(Default)]
+struct StreamingSourceVisitor {
+    file: String,
+    function: Option<String>,
+    violations: Vec<String>,
+}
+
+impl StreamingSourceVisitor {
+    fn new(file: &str) -> Self {
+        Self {
+            file: file.to_owned(),
+            ..Self::default()
+        }
+    }
+
+    fn function_name(&self) -> &str {
+        self.function.as_deref().unwrap_or("<module>")
+    }
+
+    fn allows_request_body_decode(&self) -> bool {
+        self.file == "daemon/worker/managed.rs"
+            && matches!(self.function_name(), "handle_hook_inner" | "read")
+    }
+
+    fn allows_iterator_collect(&self) -> bool {
+        matches!(
+            (self.file.as_str(), self.function_name()),
+            ("daemon/broker/server.rs", "decode_pem_blocks")
+                | ("daemon/broker/server.rs", "load_tls_config")
+                | ("daemon/broker/server.rs", "prune_expired_mcp_control_state")
+                | ("daemon/broker/server.rs", "spawn_maintenance")
+                | ("daemon/broker/server.rs", "strip_public_relay_headers")
+                | (
+                    "daemon/worker/managed.rs",
+                    "incompatible_registration_names"
+                )
+                | ("daemon/worker/managed.rs", "strip_internal_headers")
+        )
+    }
+
+    fn allows_sse_observation(&self) -> bool {
+        self.file == "daemon/worker/managed.rs" && self.function_name() == "finish_stream"
+    }
+
+    fn is_delivery_function(&self) -> bool {
+        matches!(
+            self.function_name(),
+            "public_proxy"
+                | "forward_to_provider"
+                | "forward_to_worker"
+                | "forward"
+                | "proxy"
+                | "proxy_provider"
+                | "proxy_managed"
+                | "dispatch_unmanaged"
+                | "dispatch_observed"
+                | "poll_frame"
+        )
+    }
+
+    fn reject(&mut self, operation: &str) {
+        self.violations.push(format!(
+            "{} uses {operation} in {}",
+            self.file,
+            self.function_name()
+        ));
+    }
+
+    fn with_function(&mut self, name: String, visit: impl FnOnce(&mut Self)) {
+        let previous = self.function.replace(name);
+        visit(self);
+        self.function = previous;
+    }
+}
+
+impl<'ast> Visit<'ast> for StreamingSourceVisitor {
+    fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
+        self.with_function(function.sig.ident.to_string(), |visitor| {
+            syn::visit::visit_item_fn(visitor, function);
+        });
+    }
+
+    fn visit_impl_item_fn(&mut self, function: &'ast syn::ImplItemFn) {
+        self.with_function(function.sig.ident.to_string(), |visitor| {
+            syn::visit::visit_impl_item_fn(visitor, function);
+        });
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        let method = call.method.to_string();
+        match method.as_str() {
+            "bytes" | "text" | "json" | "bytes_stream" => self.reject(&format!(".{method}()")),
+            "collect" if !self.allows_iterator_collect() => self.reject(".collect()"),
+            "push_bytes_results" if !self.allows_sse_observation() => {
+                self.reject("SSE decoding on the delivery path")
+            }
+            "extend_from_slice" | "extend" | "push_str" if self.is_delivery_function() => {
+                self.reject(&format!("response accumulation via .{method}()"))
+            }
+            _ => {}
+        }
+        syn::visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = call.func.as_ref() {
+            let segments = path
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect::<Vec<_>>();
+            let last = segments.last().map(String::as_str).unwrap_or_default();
+            if last == "to_bytes" && !self.allows_request_body_decode() {
+                self.reject("to_bytes() response aggregation");
+            }
+            if last == "from_stream" {
+                self.reject("Body::from_stream()");
+            }
+            if segments.iter().any(|segment| segment.contains("Sse"))
+                && !self.allows_sse_observation()
+            {
+                self.reject("SSE construction or decoding on the delivery path");
+            }
+            let aggregate_constructor = segments
+                .iter()
+                .rev()
+                .take(2)
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            if self.is_delivery_function()
+                && matches!(
+                    aggregate_constructor.as_slice(),
+                    [constructor, container]
+                        if matches!(*container, "Vec" | "String")
+                            && matches!(*constructor, "new" | "with_capacity")
+                )
+            {
+                self.reject("response-wide Vec/String construction");
+            }
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
+
+    fn visit_use_rename(&mut self, rename: &'ast syn::UseRename) {
+        if matches!(
+            rename.ident.to_string().as_str(),
+            "to_bytes" | "from_stream"
+        ) {
+            self.reject("an alias for a forbidden aggregation API");
+        }
+        syn::visit::visit_use_rename(self, rename);
+    }
 }
 
 impl<'ast> Visit<'ast> for PathVisitor {
@@ -59,14 +215,19 @@ impl<'ast> Visit<'ast> for PathVisitor {
     }
 
     fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
-        let name = attribute
+        let path = attribute
             .path()
             .segments
-            .last()
+            .iter()
             .map(|segment| segment.ident.to_string())
-            .unwrap_or_default();
-        if matches!(name.as_str(), "arg" | "command" | "value") {
-            self.command_attributes.push(name);
+            .collect::<Vec<_>>()
+            .join("::");
+        let name = path.rsplit("::").next().unwrap_or_default();
+        if matches!(name, "arg" | "command" | "value") {
+            self.command_attributes.push(name.to_owned());
+        }
+        if matches!(path.as_str(), "test" | "tokio::test") {
+            self.test_attributes.push(path);
         }
         syn::visit::visit_attribute(self, attribute);
     }
@@ -171,10 +332,14 @@ fn tests_are_not_embedded_in_the_source_tree() {
     let src = source_root();
     for path in rust_files(&src) {
         let source = fs::read_to_string(&path).unwrap();
+        let file = syn::parse_file(&source).unwrap();
+        let mut visitor = PathVisitor::default();
+        visitor.visit_file(&file);
         assert!(
             !source.contains("#[cfg(test)]\nmod tests {")
-                && !source.contains("#[cfg(test)]\r\nmod tests {"),
-            "inline test module found under src: {}",
+                && !source.contains("#[cfg(test)]\r\nmod tests {")
+                && visitor.test_attributes.is_empty(),
+            "test body found under src instead of crates/cli/tests: {}",
             path.display()
         );
     }
@@ -268,6 +433,9 @@ const OPERATIONAL_LOG_TARGETS: &[&str] = &[
     "nemo_relay.hook",
     "nemo_relay.installation",
     "nemo_relay.diagnostics",
+    "nemo_relay.daemon",
+    "nemo_relay.daemon.mcp",
+    "nemo_relay.daemon.worker",
 ];
 
 #[derive(Default)]
@@ -371,6 +539,7 @@ fn operational_direct_stderr_is_limited_to_emergency_and_ui_boundaries() {
         "src/hooks/delivery.rs",
         "src/hooks/response.rs",
         "src/plugins/lifecycle/render.rs",
+        "src/daemon/hook/mod.rs",
     ];
     for path in rust_files(&crate_root.join("src")) {
         let source = fs::read_to_string(&path).unwrap();
@@ -414,6 +583,53 @@ fn operational_direct_stderr_is_limited_to_emergency_and_ui_boundaries() {
             }
         }
     }
+}
+
+#[test]
+fn daemon_streaming_modules_do_not_use_response_aggregation_apis() {
+    let src = source_root();
+    for relative in [
+        "daemon/broker/server.rs",
+        "daemon/common/transport.rs",
+        "daemon/worker/runtime.rs",
+        "daemon/worker/managed.rs",
+    ] {
+        let path = src.join(relative);
+        let source = fs::read_to_string(&path).unwrap();
+        let file = syn::parse_file(&source).unwrap();
+        let mut visitor = StreamingSourceVisitor::new(relative);
+        visitor.visit_file(&file);
+        assert!(
+            visitor.violations.is_empty(),
+            "daemon streaming architecture violations:\n{}",
+            visitor.violations.join("\n")
+        );
+    }
+}
+
+#[test]
+fn streaming_source_analysis_detects_formatted_aliased_and_manual_aggregation() {
+    let fixture = syn::parse_file(
+        r#"
+        use axum::body::to_bytes as aggregate;
+        async fn forward(body: Body) {
+            let _ = body.collect()
+                .await;
+            let mut response = Vec::new();
+            response.extend_from_slice(b"data");
+            let _ = Body::from_stream(response);
+            let _ = SseEventDecoder::new();
+        }
+        "#,
+    )
+    .unwrap();
+    let mut visitor = StreamingSourceVisitor::new("daemon/broker/server.rs");
+    visitor.visit_file(&fixture);
+    assert!(
+        visitor.violations.len() >= 5,
+        "fixture escaped streaming architecture analysis: {:?}",
+        visitor.violations
+    );
 }
 
 #[test]

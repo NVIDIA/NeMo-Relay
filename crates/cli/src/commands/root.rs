@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use super::completions::CompletionsCommand;
 use super::configure::ConfigCommand;
+use super::daemon::DaemonCommand;
 use super::diagnostics::{AgentsCommand, DoctorCommand};
 use super::gateway::GatewayCommand;
 use super::hook_forward::HookForwardCommand;
@@ -51,6 +52,8 @@ pub(crate) struct Cli {
 
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum Command {
+    /// Run or connect to the multi-user NeMo Relay daemon.
+    Daemon(DaemonCommand),
     /// Run Claude Code with observability (setup on first use)
     #[command(
         long_about = "Run Anthropic's `claude` CLI under an ephemeral NeMo Relay gateway. \
@@ -146,6 +149,7 @@ pub(crate) enum Command {
 impl Command {
     pub(crate) fn log_name(&self) -> &'static str {
         match self {
+            Self::Daemon(_) => "daemon",
             Self::Claude(_) => "claude",
             Self::Codex(_) => "codex",
             Self::Pi(_) => "pi",
@@ -165,12 +169,17 @@ impl Command {
         }
     }
 
-    /// Configuration-editing commands remain available even when operational logging settings are
-    /// invalid, so users can repair their configuration.
+    /// Administrative and configuration-editing commands must not depend on ambient personal
+    /// logging state. This keeps repair and managed deployment workflows deterministic.
     pub(crate) fn skips_logging(&self) -> bool {
         matches!(self, Self::Config(_))
             || matches!(self, Self::Gateway(command) if command.is_stop())
             || matches!(self, Self::Plugins(command) if command.is_edit())
+            || matches!(self, Self::Doctor(command) if command.managed_bundle.is_some())
+            || matches!(self, Self::Daemon(command) if matches!(
+                command.command.as_ref(),
+                Some(super::daemon::DaemonSubcommand::ManagedBundle(_))
+            ))
             || matches!(self, Self::HookForward(command) if transparent_hook_is_inert(command))
     }
 }

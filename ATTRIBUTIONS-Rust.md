@@ -18304,7 +18304,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-## h2 - 0.4.16
+## h2 - 0.4.19
 **Repository URL**: https://github.com/hyperium/h2
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
@@ -20273,7 +20273,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-## hyper - 1.9.0
+## hyper - 1.11.1
 **Repository URL**: https://github.com/hyperium/hyper
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html

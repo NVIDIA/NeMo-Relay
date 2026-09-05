@@ -163,12 +163,13 @@ rust:
   - 'Cargo.toml'
   - 'crates/**/Cargo.toml'
   - 'crates/**/*.rs'
-  # The embedded pi extension is `.ts`/`.json` under the CLI crate. Changes must run
+  # The managed pi extension is `.ts`/`.json` under the CLI daemon tree. Changes must run
   # the Rust tests that verify the embedded asset inventory and package contents.
-  - 'crates/cli/assets/**'
+  - 'crates/cli/src/daemon/managed/pi_extension/**'
   - 'crates/worker-proto/proto/**'
   - 'crates/ffi/cbindgen.toml'
   - 'integrations/coding-agents/**'
+  - 'scripts/latency_benchmark/daemon_transport/**'
 
 go:
   - 'crates/ffi/Cargo.toml'
@@ -211,6 +212,8 @@ pi:
   # suite and symlinks the rest, so an edit to the extension itself lands here and would
   # otherwise never reach the suite that tests it.
   - 'crates/cli/assets/pi-extension/**'
+  - 'crates/cli/src/daemon/managed/pi_extension/**'
+  - 'crates/cli/tests/managed_pi_extension_tests.mjs'
   - 'integrations/pi/**'
 
 python:

@@ -410,5 +410,14 @@ pub(crate) fn event_matches_tools(event: &str) -> bool {
 }
 
 pub(crate) fn event_requires_fail_closed(event: &str) -> bool {
-    matches!(event, "PreToolUse" | "PermissionRequest" | "pre_tool_call")
+    matches!(
+        event,
+        "PreToolUse"
+            | "PermissionRequest"
+            | "pre_tool_call"
+            | "tool_call"
+            | "toolCall"
+            | "user_bash"
+            | "userBash"
+    )
 }

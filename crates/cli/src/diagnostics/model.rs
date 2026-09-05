@@ -41,6 +41,28 @@ pub(crate) struct DoctorReport {
     pub completions: Vec<Check>,
 }
 
+/// Managed-only doctor output, intentionally separate from personal runtime diagnostics.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ManagedBundleDoctorReport {
+    pub schema_version: u32,
+    pub binary_version: &'static str,
+    pub managed_bundle: ManagedBundleDoctorInfo,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ManagedBundleDoctorInfo {
+    pub status: Status,
+    pub path: String,
+    pub expected_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon_address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    pub details: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct EnvironmentInfo {
     pub os: String,
