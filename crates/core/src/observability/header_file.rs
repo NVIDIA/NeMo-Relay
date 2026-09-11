@@ -139,35 +139,46 @@ impl HeaderFileHttpClient {
     pub(crate) fn new(inner: reqwest_otel::blocking::Client, resolver: HeaderFileResolver) -> Self {
         Self { inner, resolver }
     }
+
+    fn send_bytes_blocking(
+        client: reqwest_otel::blocking::Client,
+        resolver: HeaderFileResolver,
+        request: Request<Bytes>,
+    ) -> Result<Response<Bytes>, HttpError> {
+        validate_header_http_endpoint(&request.uri().to_string()).map_err(std::io::Error::other)?;
+        let mut request = request;
+        for (header, value) in resolver.resolve().map_err(std::io::Error::other)? {
+            let name = reqwest::header::HeaderName::from_bytes(header.as_bytes())
+                .map_err(std::io::Error::other)?;
+            let value =
+                reqwest::header::HeaderValue::from_str(&value).map_err(std::io::Error::other)?;
+            request.headers_mut().insert(name, value);
+        }
+        let request = request.try_into()?;
+        let mut response = client.execute(request)?.error_for_status()?;
+        let headers = std::mem::take(response.headers_mut());
+        let mut http_response = Response::builder()
+            .status(response.status())
+            .body(response.bytes()?)?;
+        *http_response.headers_mut() = headers;
+        Ok(http_response)
+    }
 }
 
 #[async_trait]
 impl HttpClient for HeaderFileHttpClient {
     async fn send_bytes(&self, request: Request<Bytes>) -> Result<Response<Bytes>, HttpError> {
-        let client = self.inner.clone();
-        let resolver = self.resolver.clone();
-        tokio::task::spawn_blocking(move || {
-            validate_header_http_endpoint(&request.uri().to_string())
-                .map_err(std::io::Error::other)?;
-            let mut request = request;
-            for (header, value) in resolver.resolve().map_err(std::io::Error::other)? {
-                let name = reqwest::header::HeaderName::from_bytes(header.as_bytes())
-                    .map_err(std::io::Error::other)?;
-                let value = reqwest::header::HeaderValue::from_str(&value)
-                    .map_err(std::io::Error::other)?;
-                request.headers_mut().insert(name, value);
-            }
-            let request = request.try_into()?;
-            let mut response = client.execute(request)?.error_for_status()?;
-            let headers = std::mem::take(response.headers_mut());
-            let mut http_response = Response::builder()
-                .status(response.status())
-                .body(response.bytes()?)?;
-            *http_response.headers_mut() = headers;
-            Ok(http_response)
-        })
-        .await
-        .map_err(std::io::Error::other)?
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let client = self.inner.clone();
+            let resolver = self.resolver.clone();
+            tokio::task::spawn_blocking(move || {
+                Self::send_bytes_blocking(client, resolver, request)
+            })
+            .await
+            .map_err(std::io::Error::other)?
+        } else {
+            Self::send_bytes_blocking(self.inner.clone(), self.resolver.clone(), request)
+        }
     }
 }
 

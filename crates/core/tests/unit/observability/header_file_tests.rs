@@ -251,3 +251,27 @@ fn http_client_reads_current_values_and_stops_before_network_on_resolution_failu
     );
     assert!(listener.accept().is_err());
 }
+
+#[test]
+fn http_client_works_without_a_tokio_runtime() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/v1/logs", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buffer = [0; 4_096];
+        stream.read(&mut buffer).unwrap();
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .unwrap();
+    });
+    let client = HeaderFileHttpClient::new(
+        reqwest_otel::blocking::Client::builder().build().unwrap(),
+        HeaderFileResolver::new(HashMap::new()),
+    );
+
+    futures::executor::block_on(
+        client.send_bytes(Request::builder().uri(endpoint).body(Bytes::new()).unwrap()),
+    )
+    .unwrap();
+    server.join().unwrap();
+}

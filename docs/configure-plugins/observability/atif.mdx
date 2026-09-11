@@ -212,7 +212,7 @@ The following table describes HTTP storage settings:
 | `endpoint` | required | Destination `http://` or `https://` URL. |
 | `headers` | `{}` | Static request headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
-| `header_file` | `{}` | Maps header names to regular files read before each completed-trajectory upload. Files must exist at activation. Relay removes trailing whitespace. |
+| `header_file` | `{}` | Maps header names to regular files read before each completed-trajectory upload. Files must exist at activation. Relay removes trailing whitespace. A header name cannot also appear in `headers` or `header_env`, even with different letter case. |
 | `timeout_millis` | `3000` | Per-request timeout in milliseconds. Must be positive. |
 
 When you set any header source (`headers`, `header_env`, or `header_file`),
