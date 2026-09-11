@@ -832,6 +832,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
 
     let otel = OpenTelemetrySectionConfig {
         enabled: true,
+        file_sinks: Vec::new(),
         endpoints: vec![OpenTelemetryEndpointConfig {
             otel_type: OpenTelemetryType::Full,
             endpoint: "http://localhost:4318/v1/traces".to_string(),
@@ -1248,6 +1249,7 @@ fn validate_opentelemetry_section_reports_empty_and_malformed_endpoints() {
         &policy,
         &OpenTelemetrySectionConfig {
             enabled: true,
+            file_sinks: Vec::new(),
             endpoints: Vec::new(),
             logs: None,
             metrics: None,
@@ -1273,6 +1275,7 @@ fn validate_opentelemetry_section_reports_empty_and_malformed_endpoints() {
         &policy,
         &OpenTelemetrySectionConfig {
             enabled: true,
+            file_sinks: Vec::new(),
             endpoints: vec![endpoint],
             logs: None,
             metrics: None,
@@ -1302,6 +1305,7 @@ fn validate_opentelemetry_section_reports_empty_and_malformed_endpoints() {
         &policy,
         &OpenTelemetrySectionConfig {
             enabled: true,
+            file_sinks: Vec::new(),
             endpoints: vec![endpoint],
             logs: None,
             metrics: None,
@@ -1411,6 +1415,7 @@ fn opentelemetry_registration_rejects_an_empty_endpoint_list() {
     let error = register_opentelemetry(
         OpenTelemetrySectionConfig {
             enabled: true,
+            file_sinks: Vec::new(),
             endpoints: Vec::new(),
             logs: None,
             metrics: None,
@@ -5642,4 +5647,245 @@ fn atif_filename_helpers_cover_metadata_resolution_and_rejection_paths() {
         )
         .is_err()
     );
+}
+
+// --- OpenTelemetry file sinks ----------------------------------------------
+
+fn file_sink_section(output_directory: &Path) -> OpenTelemetryFileSinkConfig {
+    OpenTelemetryFileSinkConfig {
+        otel_type: OpenTelemetryType::Full,
+        output_directory: output_directory.to_path_buf(),
+        filename: Some("trace.jsonl".to_string()),
+        format: OtlpFileFormat::JsonLines,
+        mode: default_otlp_file_sink_mode(),
+        mark_projection: MarkProjection::default(),
+        mark_exclude_names: default_mark_exclude_names(),
+        attribute_mappings: Vec::new(),
+        promote_metadata_prefixes: Vec::new(),
+        promote_resource_metadata_prefixes: Vec::new(),
+        resource_attributes: HashMap::new(),
+        service_name: default_otel_service_name(),
+        service_namespace: None,
+        service_version: None,
+        instrumentation_scope: default_otel_instrumentation_scope(),
+        max_queue_size: None,
+        max_export_batch_size: None,
+        scheduled_delay_millis: None,
+        completed_span_context_ttl_millis: None,
+    }
+}
+
+#[test]
+fn a_file_sink_section_parses_with_only_an_output_directory() {
+    let section: OpenTelemetryFileSinkConfig =
+        toml::from_str("output_directory = \"/tmp/relay-traces\"").unwrap();
+
+    assert_eq!(section.format, OtlpFileFormat::JsonLines);
+    assert_eq!(section.mode, "overwrite");
+    assert_eq!(section.otel_type, OpenTelemetryType::Full);
+    assert!(section.filename.is_none());
+}
+
+#[test]
+fn a_file_sink_section_parses_the_proto_format() {
+    let section: OpenTelemetryFileSinkConfig =
+        toml::from_str("output_directory = \"/tmp/relay-traces\"\nformat = \"proto\"").unwrap();
+
+    assert_eq!(section.format, OtlpFileFormat::Proto);
+}
+
+#[test]
+fn a_file_sink_config_resolves_its_path_under_the_output_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = build_otel_file_config(0, file_sink_section(directory.path())).unwrap();
+
+    let settings = config.file_sink().expect("a file sink config has settings");
+    assert_eq!(settings.path, directory.path().join("trace.jsonl"));
+    assert_eq!(settings.output_directory, directory.path());
+    assert!(!settings.append, "overwrite mode must not append");
+}
+
+#[test]
+fn a_file_sink_without_a_filename_names_the_file_after_its_format() {
+    let directory = tempfile::tempdir().unwrap();
+    for (format, extension) in [
+        (OtlpFileFormat::JsonLines, ".jsonl"),
+        (OtlpFileFormat::Proto, ".otlp.pb"),
+    ] {
+        let mut section = file_sink_section(directory.path());
+        section.filename = None;
+        section.format = format;
+        let config = build_otel_file_config(0, section).unwrap();
+
+        let path = config.file_sink().unwrap().path.display().to_string();
+        assert!(
+            path.ends_with(extension),
+            "unexpected default filename {path}"
+        );
+    }
+}
+
+#[test]
+fn a_file_sink_rejects_a_blank_output_directory() {
+    let mut section = file_sink_section(Path::new(""));
+    section.filename = None;
+    let error = build_otel_file_config(3, section).unwrap_err();
+
+    assert!(error.to_string().contains("file_sinks[3].output_directory"));
+}
+
+#[test]
+fn a_file_sink_rejects_an_unknown_mode() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut section = file_sink_section(directory.path());
+    section.mode = "truncate".to_string();
+    let error = build_otel_file_config(1, section).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("must be 'append' or 'overwrite'")
+    );
+}
+
+#[test]
+fn a_file_sink_accepts_append_mode() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut section = file_sink_section(directory.path());
+    section.mode = "append".to_string();
+    let config = build_otel_file_config(0, section).unwrap();
+
+    assert!(config.file_sink().unwrap().append);
+}
+
+#[test]
+fn a_file_sink_rejects_a_filename_that_leaves_its_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    for filename in ["../escape.jsonl", "nested/trace.jsonl", "/absolute.jsonl"] {
+        let mut section = file_sink_section(directory.path());
+        section.filename = Some(filename.to_string());
+        let error = build_otel_file_config(2, section).unwrap_err();
+
+        assert!(
+            error.to_string().contains("single path component"),
+            "{filename} should be rejected, got {error}"
+        );
+    }
+}
+
+#[test]
+fn a_file_sink_rejects_a_blank_or_padded_filename() {
+    let directory = tempfile::tempdir().unwrap();
+    for filename in ["", "   ", " trace.jsonl"] {
+        let mut section = file_sink_section(directory.path());
+        section.filename = Some(filename.to_string());
+        let error = build_otel_file_config(0, section).unwrap_err();
+
+        assert!(error.to_string().contains("nonblank and unpadded"));
+    }
+}
+
+#[test]
+fn a_file_sink_rejects_zero_and_inverted_batch_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    type MutateFileSink = Box<dyn Fn(&mut OpenTelemetryFileSinkConfig)>;
+    let cases: Vec<(MutateFileSink, &str)> = vec![
+        (Box::new(|s| s.max_queue_size = Some(0)), "max_queue_size"),
+        (
+            Box::new(|s| s.max_export_batch_size = Some(0)),
+            "max_export_batch_size",
+        ),
+        (
+            Box::new(|s| s.scheduled_delay_millis = Some(0)),
+            "scheduled_delay_millis",
+        ),
+        (
+            Box::new(|s| s.completed_span_context_ttl_millis = Some(0)),
+            "completed_span_context_ttl_millis",
+        ),
+        (
+            Box::new(|s| {
+                s.max_queue_size = Some(1);
+                s.max_export_batch_size = Some(2);
+            }),
+            "must be less than or equal to max_queue_size",
+        ),
+    ];
+    for (mutate, expected) in cases {
+        let mut section = file_sink_section(directory.path());
+        mutate(&mut section);
+        let error = build_otel_file_config(0, section).unwrap_err();
+        assert!(error.to_string().contains(expected), "got {error}");
+    }
+}
+
+#[test]
+fn two_file_sinks_writing_one_path_are_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let sinks = vec![
+        file_sink_section(directory.path()),
+        file_sink_section(directory.path()),
+    ];
+    let error = validate_distinct_opentelemetry_file_sinks(&sinks).unwrap_err();
+
+    assert!(error.to_string().contains("write the same path"));
+}
+
+#[test]
+fn file_sinks_writing_distinct_paths_are_accepted() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut second = file_sink_section(directory.path());
+    second.filename = Some("other.jsonl".to_string());
+    let sinks = vec![file_sink_section(directory.path()), second];
+
+    validate_distinct_opentelemetry_file_sinks(&sinks).unwrap();
+}
+
+#[test]
+fn a_file_sink_config_builds_a_subscriber_and_opens_its_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = build_otel_file_config(0, file_sink_section(directory.path())).unwrap();
+
+    // Endpoint validation must not apply: this destination has no endpoint.
+    let subscriber = crate::observability::otel::OpenTelemetrySubscriber::new(config).unwrap();
+    assert!(directory.path().join("trace.jsonl").is_file());
+    subscriber.shutdown().unwrap();
+}
+
+#[test]
+fn opentelemetry_registration_accepts_a_section_with_only_file_sinks() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut context = PluginRegistrationContext::new();
+
+    register_opentelemetry(
+        OpenTelemetrySectionConfig {
+            enabled: true,
+            file_sinks: vec![file_sink_section(directory.path())],
+            endpoints: Vec::new(),
+            logs: None,
+            metrics: None,
+        },
+        &mut context,
+    )
+    .unwrap();
+
+    assert!(directory.path().join("trace.jsonl").is_file());
+}
+
+#[test]
+fn opentelemetry_registration_rejects_an_empty_endpoint_and_file_sink_list() {
+    let mut context = PluginRegistrationContext::new();
+    let error = register_opentelemetry(
+        OpenTelemetrySectionConfig {
+            enabled: true,
+            file_sinks: Vec::new(),
+            endpoints: Vec::new(),
+            logs: None,
+            metrics: None,
+        },
+        &mut context,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("one file sink"));
 }

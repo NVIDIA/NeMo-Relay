@@ -79,6 +79,8 @@ base64 = "0.22"
 ring = ">=0.17.13, <0.18"
 jsonschema = { version = "0.46.6", default-features = false }
 percent-encoding = "2"
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace", "with-serde"] }
+prost = "0.14"
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "logs", "metrics", "http-proto", "reqwest-blocking-client", "reqwest-rustls", "grpc-tonic", "tls-ring", "tls-roots"] }
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "rustls-tls-native-roots", "stream"] }
 # Match the HTTP client version used by opentelemetry-otlp.
@@ -104,7 +106,6 @@ tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-mu
 futures = "0.3"
 opentelemetry_sdk = { workspace = true, features = ["trace", "logs", "metrics", "testing"] }
 opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic", "logs", "metrics"] }
-prost = "0.14"
 tonic = { version = "0.14.1", features = ["transport"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 serde_json = "1"
