@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[cfg(unix)]
@@ -1970,6 +1971,61 @@ async fn adapter_register_rejects_config_drift_even_without_validation_call() {
 }
 
 #[tokio::test]
+async fn install_registrations_requires_a_prepared_plan() {
+    enable_operational_logs();
+    let (mut instance, _shutdown) = fake_worker_instance(Vec::new()).await;
+    instance.registrations = tokio::sync::OnceCell::new();
+    let mut ctx = PluginRegistrationContext::new();
+
+    let error = instance
+        .install_registrations(&mut ctx)
+        .expect_err("an unprepared worker registration plan must fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("worker registration plan is not prepared"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn adapter_registration_requests_the_deferred_plan_once() {
+    enable_operational_logs();
+    let (client, _worker_shutdown, _cancel_rx, register_calls) = fake_worker_client_with_handlers(
+        |_| {
+            Box::pin(async {
+                InvokeResponse {
+                    result: Some(InvokeResult::Empty(EmptyResult {})),
+                }
+            })
+        },
+        |_| Box::pin(tokio_stream::empty()) as FakeInvokeStream,
+    )
+    .await;
+    let (mut instance, _instance_shutdown) = fake_worker_instance(Vec::new()).await;
+    instance.client = client;
+    instance.registrations = tokio::sync::OnceCell::new();
+    let adapter = WorkerPluginAdapter {
+        plugin_kind: "fixture_worker".into(),
+        allows_multiple_components: true,
+        instance: Arc::new(instance),
+    };
+    let config = serde_json::Map::new();
+
+    assert_eq!(register_calls.load(Ordering::Relaxed), 0);
+    adapter
+        .register(&config, &mut PluginRegistrationContext::new())
+        .await
+        .expect("the first component registration should request the plan");
+    adapter
+        .register(&config, &mut PluginRegistrationContext::new())
+        .await
+        .expect("the second component registration should reuse the plan");
+    assert_eq!(register_calls.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
 async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
     enable_operational_logs();
     let state = Arc::new(WorkerHostRuntimeState::new(
@@ -2829,7 +2885,7 @@ async fn fake_callback_service_with_handlers(
     oneshot::Sender<()>,
     mpsc::UnboundedReceiver<CancelInvocationRequest>,
 ) {
-    let (client, shutdown_tx, cancel_rx) =
+    let (client, shutdown_tx, cancel_rx, _register_calls) =
         fake_worker_client_with_handlers(invoke, invoke_stream).await;
     let (callback, shutdown_tx) = callback_for_client(client, shutdown_tx);
     (callback, shutdown_tx, cancel_rx)
@@ -2909,7 +2965,7 @@ async fn fake_worker_client_with_stream(
     invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync + 'static,
 ) -> (PluginWorkerClient<Channel>, oneshot::Sender<()>) {
     let invoke = Arc::new(invoke);
-    let (client, shutdown_tx, _cancel_rx) = fake_worker_client_with_handlers(
+    let (client, shutdown_tx, _cancel_rx, _register_calls) = fake_worker_client_with_handlers(
         move |request| {
             let invoke = invoke.clone();
             Box::pin(async move { invoke(request) })
@@ -2927,6 +2983,7 @@ async fn fake_worker_client_with_handlers(
     PluginWorkerClient<Channel>,
     oneshot::Sender<()>,
     mpsc::UnboundedReceiver<CancelInvocationRequest>,
+    Arc<AtomicUsize>,
 ) {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
@@ -2936,12 +2993,14 @@ async fn fake_worker_client_with_handlers(
         .expect("fake worker listener address should be available");
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let (cancel_tx, cancel_rx) = mpsc::unbounded_channel();
+    let register_calls = Arc::new(AtomicUsize::new(0));
     tokio::spawn(
         Server::builder()
             .add_service(PluginWorkerServer::new(FakePluginWorker {
                 invoke: Arc::new(invoke),
                 invoke_stream: Arc::new(invoke_stream),
                 cancel_tx,
+                register_calls: register_calls.clone(),
             }))
             .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
                 let _ = shutdown_rx.await;
@@ -2950,7 +3009,7 @@ async fn fake_worker_client_with_handlers(
     let client = PluginWorkerClient::connect(format!("http://{addr}"))
         .await
         .expect("fake worker client should connect");
-    (client, shutdown_tx, cancel_rx)
+    (client, shutdown_tx, cancel_rx, register_calls)
 }
 
 fn registration(surface: RegistrationSurface, local_name: &str) -> Registration {
@@ -2977,6 +3036,7 @@ struct FakePluginWorker {
     invoke: Arc<dyn Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync>,
     invoke_stream: Arc<dyn Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync>,
     cancel_tx: mpsc::UnboundedSender<CancelInvocationRequest>,
+    register_calls: Arc<AtomicUsize>,
 }
 
 type FakeInvokeFuture = Pin<Box<dyn Future<Output = InvokeResponse> + Send>>;
@@ -3071,6 +3131,7 @@ impl PluginWorker for FakePluginWorker {
         &self,
         _request: Request<RegisterRequest>,
     ) -> std::result::Result<tonic::Response<RegisterResponse>, tonic::Status> {
+        self.register_calls.fetch_add(1, Ordering::Relaxed);
         Ok(tonic::Response::new(RegisterResponse {
             registrations: Vec::new(),
             error: None,
