@@ -3,7 +3,7 @@
 
 //! Idle-session sweeping and shutdown closure.
 
-use std::collections::{HashMap, HashSet, hash_map::Entry};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -42,26 +42,16 @@ pub(super) async fn close_idle_sessions_from_parts(
     timeout: Duration,
     reason: &str,
 ) -> Result<usize, CliError> {
-    let idle_sessions = take_idle_sessions(inner, now, timeout).await;
-    if idle_sessions.is_empty() {
+    let candidate_ids = idle_session_ids(inner, now, timeout).await;
+    if candidate_ids.is_empty() {
         return Ok(0);
     }
-    let idle_session_ids = idle_sessions
+    let (closed_turns, closed_subagents, released_owner_ids, first_error) =
+        close_idle_turns(inner, session_gates, candidate_ids, now, timeout, reason).await;
+    let cleanup_sessions = closed_subagents
         .iter()
         .map(|(session_id, _)| session_id.clone())
-        .collect::<HashSet<_>>();
-    let (closed_turns, closed_subagents, retained_sessions, first_error) =
-        close_idle_turns(idle_sessions, reason).await;
-    let retained_session_ids = retained_sessions
-        .iter()
-        .map(|(session_id, _)| session_id.clone())
-        .collect::<HashSet<_>>();
-    let released_owner_ids = idle_session_ids
-        .difference(&retained_session_ids)
-        .cloned()
-        .collect::<HashSet<_>>();
-    let cleanup_sessions =
-        restore_retained_sessions(inner, retained_sessions, &closed_subagents).await;
+        .collect();
     clear_closed_subagents(alignment, closed_subagents, &cleanup_sessions).await;
     release_closed_owner_ids(
         inner,
@@ -90,25 +80,19 @@ pub(super) async fn release_closed_owner_ids(
     }
 }
 
-async fn take_idle_sessions(
+async fn idle_session_ids(
     inner: &Arc<Mutex<HashMap<String, Session>>>,
     now: Instant,
     timeout: Duration,
-) -> Vec<(String, Session)> {
-    let mut sessions = inner.lock().await;
-    let ids = sessions
+) -> Vec<String> {
+    inner
+        .lock()
+        .await
         .iter()
         .filter_map(|(session_id, session)| {
             session
                 .is_idle_for(now, timeout)
                 .then_some(session_id.clone())
-        })
-        .collect::<Vec<_>>();
-    ids.into_iter()
-        .filter_map(|session_id| {
-            sessions
-                .remove(&session_id)
-                .map(|session| (session_id, session))
         })
         .collect()
 }
@@ -116,16 +100,35 @@ async fn take_idle_sessions(
 type ClosedIdleTurns = (
     usize,
     Vec<(String, String)>,
-    Vec<(String, Session)>,
+    HashSet<String>,
     Option<CliError>,
 );
 
-async fn close_idle_turns(idle_sessions: Vec<(String, Session)>, reason: &str) -> ClosedIdleTurns {
+async fn close_idle_turns(
+    inner: &Arc<Mutex<HashMap<String, Session>>>,
+    session_gates: &SessionGates,
+    candidate_ids: Vec<String>,
+    now: Instant,
+    timeout: Duration,
+    reason: &str,
+) -> ClosedIdleTurns {
     let mut closed_turns = 0;
     let mut closed_subagents = Vec::new();
-    let mut retained_sessions = Vec::new();
+    let mut released_owner_ids = HashSet::new();
     let mut first_error = None;
-    for (session_id, mut session) in idle_sessions {
+    for session_id in candidate_ids {
+        let gate = session_gate(session_gates, &session_id).await;
+        let _gate = gate.lock().await;
+        let Some(mut session) = ({
+            let mut sessions = inner.lock().await;
+            sessions
+                .get(&session_id)
+                .is_some_and(|session| session.is_idle_for(now, timeout))
+                .then(|| sessions.remove(&session_id))
+                .flatten()
+        }) else {
+            continue;
+        };
         let stack = session.scope_stack.clone();
         match TASK_SCOPE_STACK
             .scope(stack, async {
@@ -151,36 +154,17 @@ async fn close_idle_turns(idle_sessions: Vec<(String, Session)>, reason: &str) -
             Err(_) => {}
         }
         if !session.is_empty() {
-            retained_sessions.push((session_id, session));
+            inner.lock().await.insert(session_id, session);
+        } else {
+            released_owner_ids.insert(session_id);
         }
     }
     (
         closed_turns,
         closed_subagents,
-        retained_sessions,
+        released_owner_ids,
         first_error,
     )
-}
-
-async fn restore_retained_sessions(
-    inner: &Arc<Mutex<HashMap<String, Session>>>,
-    retained_sessions: Vec<(String, Session)>,
-    closed_subagents: &[(String, String)],
-) -> HashSet<String> {
-    let mut cleanup_sessions = HashSet::new();
-    let mut sessions = inner.lock().await;
-    for (session_id, session) in retained_sessions {
-        if let Entry::Vacant(entry) = sessions.entry(session_id.clone()) {
-            entry.insert(session);
-            cleanup_sessions.insert(session_id);
-        }
-    }
-    for (session_id, _) in closed_subagents {
-        if !sessions.contains_key(session_id) {
-            cleanup_sessions.insert(session_id.clone());
-        }
-    }
-    cleanup_sessions
 }
 
 async fn clear_closed_subagents(

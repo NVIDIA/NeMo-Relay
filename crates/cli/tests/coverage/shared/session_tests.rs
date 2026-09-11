@@ -146,6 +146,20 @@ async fn authenticated_child_cannot_promote_into_another_clients_parent() {
             .subagents
             .contains_key("child-thread")
     );
+
+    // The rejected child never created session state, so its reservation is released for a
+    // future independent session with the same client-provided ID.
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "child-thread",
+                "SessionStart",
+            ))],
+            "client-c",
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1862,7 +1876,7 @@ async fn slow_tool_guardrail_does_not_block_another_session() {
 }
 
 #[tokio::test]
-async fn failed_authenticated_batch_releases_its_session_reservation() {
+async fn failed_guardrail_batch_keeps_its_partial_session_owner() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     const GUARDRAIL: &str = "cli-session-reservation-release";
     const TOOL: &str = "session-reservation-release";
@@ -1936,7 +1950,7 @@ async fn failed_authenticated_batch_releases_its_session_reservation() {
 
     release_tx.send(()).unwrap();
     assert!(pending.await.unwrap().is_err());
-    manager
+    let competing = manager
         .apply_authenticated_events(
             &HeaderMap::new(),
             vec![NormalizedEvent::AgentStarted(session_event(
@@ -1946,7 +1960,70 @@ async fn failed_authenticated_batch_releases_its_session_reservation() {
             "client-b",
         )
         .await
-        .unwrap();
+        .unwrap_err();
+    assert!(matches!(competing, CliError::Unauthorized(_)));
+    deregister_tool_conditional_execution_guardrail(GUARDRAIL).unwrap();
+}
+
+#[tokio::test]
+async fn partially_applied_authenticated_batch_keeps_its_owner() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-session-partial-batch-owner";
+    const TOOL: &str = "session-partial-batch-owner";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(|name, _| {
+            Box::pin(async move {
+                (name == TOOL)
+                    .then(|| FlowError::Internal("expected partial batch failure".into()))
+                    .map_or(Ok(None), Err)
+            })
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let result = manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event(
+                    "partially-applied-session",
+                    "SessionStart",
+                )),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "partially-applied-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "partially-applied-tool".into(),
+                    tool_name: TOOL.into(),
+                    subagent_id: None,
+                    arguments: json!({}),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+            "client-a",
+        )
+        .await;
+    assert!(result.is_err());
+
+    let competing = manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "partially-applied-session",
+                "SessionStart",
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(competing, CliError::Unauthorized(_)));
     deregister_tool_conditional_execution_guardrail(GUARDRAIL).unwrap();
 }
 

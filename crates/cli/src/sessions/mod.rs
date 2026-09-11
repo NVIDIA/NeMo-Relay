@@ -518,8 +518,34 @@ impl SessionManager {
                 Ok(())
             }
             Err(error) => {
+                drop(reservations);
+                drop(owners);
+                self.bind_retained_session_owners(&reserved_ids, owner)
+                    .await;
+                let mut reservations = self.authenticated_reservations.lock().await;
                 release_reservations(&mut reservations, &reserved_ids, owner);
                 Err(error)
+            }
+        }
+    }
+
+    // A hook batch can have applied an earlier event before a later event fails. The session is
+    // retained in that case, so bind the reserving client before releasing its reservation. The
+    // session gate makes the directory check and owner insertion one atomic lifecycle decision.
+    async fn bind_retained_session_owners(&self, session_ids: &HashSet<String>, owner: &str) {
+        for session_id in session_ids {
+            let gate = session_gate(&self.session_gates, session_id).await;
+            let _gate = gate.lock().await;
+            let sessions = self.inner.lock().await;
+            if sessions
+                .get(session_id)
+                .is_some_and(|session| !session.is_empty())
+            {
+                self.authenticated_owners
+                    .lock()
+                    .await
+                    .entry(session_id.clone())
+                    .or_insert_with(|| owner.to_string());
             }
         }
     }
