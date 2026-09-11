@@ -35,6 +35,7 @@ describe('observability plugin helpers', () => {
     assert.deepEqual(observability.openTelemetryConfig(), {
       enabled: false,
       endpoints: [],
+      file_sinks: [],
     });
     assert.deepEqual(
       observability.openTelemetryEndpoint({
@@ -111,6 +112,7 @@ describe('observability plugin helpers', () => {
     assert.deepEqual(observability.openTelemetryConfig({ enabled: true, logs, metrics }), {
       enabled: true,
       endpoints: [],
+      file_sinks: [],
       logs,
       metrics,
     });
@@ -337,5 +339,57 @@ describe('observability plugin helpers', () => {
     assert.match(secondPayload, /node-second-agent/);
     assert.doesNotMatch(secondPayload, /node-first-agent/);
     assert.doesNotMatch(secondPayload, /node-nested-agent/);
+  });
+});
+
+describe('opentelemetry file sinks', () => {
+  it('normalizes a file sink and validates its fields', () => {
+    const directory = tempDir('otlp-file-sink');
+    const sink = observability.openTelemetryFileSink({ output_directory: directory });
+
+    assert.equal(sink.type, 'full');
+    assert.equal(sink.format, 'json_lines');
+    assert.equal(sink.mode, 'overwrite');
+    assert.equal(sink.output_directory, directory);
+    // A file sink has no network destination to configure.
+    assert.equal(sink.endpoint, undefined);
+    assert.equal(sink.transport, undefined);
+
+    assert.throws(() => observability.openTelemetryFileSink(), /config is required/);
+    assert.throws(() => observability.openTelemetryFileSink({ output_directory: ' ' }), /nonblank/);
+    assert.throws(
+      () => observability.openTelemetryFileSink({ output_directory: directory, format: 'yaml' }),
+      /"json_lines" or "proto"/,
+    );
+    assert.throws(
+      () => observability.openTelemetryFileSink({ output_directory: directory, mode: 'truncate' }),
+      /"append" or "overwrite"/,
+    );
+  });
+
+  it('writes a trace file for a file-sink-only section', async () => {
+    const directory = tempDir('otlp-file-sink-write');
+    const config = {
+      version: 4,
+      opentelemetry: observability.openTelemetryConfig({
+        enabled: true,
+        file_sinks: [
+          observability.openTelemetryFileSink({
+            output_directory: directory,
+            filename: 'node-trace.jsonl',
+          }),
+        ],
+      }),
+    };
+
+    await pluginHost.initialize({
+      version: 1,
+      components: [observability.ComponentSpec(config)],
+    });
+    try {
+      assert.deepEqual(readdirSync(directory), ['node-trace.jsonl']);
+    } finally {
+      await pluginHost.close();
+    }
   });
 });

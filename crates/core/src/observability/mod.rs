@@ -44,6 +44,7 @@ mod confined_fs;
 pub(crate) mod manual;
 pub(crate) mod openinference;
 pub mod otel;
+pub mod otel_file;
 mod otel_genai;
 pub mod otel_logs;
 pub mod otel_metrics;

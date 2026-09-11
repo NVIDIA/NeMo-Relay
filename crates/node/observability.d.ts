@@ -120,9 +120,37 @@ export interface OpenTelemetryMetricSectionConfig {
   cardinality_limit?: number;
 }
 
+export interface OpenTelemetryFileSinkConfig {
+  type?: 'full' | 'gen_ai' | 'openinference';
+  output_directory: string;
+  filename?: string;
+  /**
+   * `json_lines` follows the OpenTelemetry Protocol File Exporter
+   * specification: one OTLP/JSON record per line. `proto` writes each record
+   * length-delimited.
+   */
+  format?: 'json_lines' | 'proto';
+  mode?: 'append' | 'overwrite';
+  mark_projection?: 'inherit' | 'event' | 'tool';
+  mark_exclude_names?: string[];
+  attribute_mappings?: Array<{ key: string; alias: string }>;
+  promote_metadata_prefixes?: string[];
+  promote_resource_metadata_prefixes?: string[];
+  resource_attributes?: Record<string, string>;
+  service_name?: string;
+  service_namespace?: string;
+  service_version?: string;
+  instrumentation_scope?: string;
+  max_queue_size?: number;
+  max_export_batch_size?: number;
+  scheduled_delay_millis?: number;
+  completed_span_context_ttl_millis?: number;
+}
+
 export interface OpenTelemetrySectionConfig {
   enabled?: boolean;
   endpoints?: OpenTelemetryEndpointConfig[];
+  file_sinks?: OpenTelemetryFileSinkConfig[];
   logs?: OpenTelemetryLogSectionConfig;
   metrics?: OpenTelemetryMetricSectionConfig;
 }
@@ -153,6 +181,7 @@ export declare function atofConfig(config?: AtofConfig): AtofConfig;
 export declare function atifConfig(config?: AtifConfig): AtifConfig;
 /** Create one typed OpenTelemetry endpoint. */
 export declare function openTelemetryEndpoint(config: OpenTelemetryEndpointConfig): OpenTelemetryEndpointConfig;
+export declare function openTelemetryFileSink(config: OpenTelemetryFileSinkConfig): OpenTelemetryFileSinkConfig;
 /** Create one signal-specific OpenTelemetry endpoint for logs or metrics. */
 export declare function openTelemetrySignalEndpoint(
   config: OpenTelemetrySignalEndpointConfig,

@@ -803,6 +803,46 @@ class TestOpenTelemetryTypes:
         assert config.promote_resource_metadata_prefixes == ["deployment."]
         assert "OpenTelemetryConfig" in repr(config)
 
+    def test_file_sink_config_writes_a_trace_file(self, tmp_path):
+        config = OpenTelemetryConfig.file_sink("full", str(tmp_path), "py-trace.jsonl")
+
+        # A file sink has no endpoint, so endpoint validation does not apply.
+        assert config.endpoint == ""
+
+        subscriber = OpenTelemetrySubscriber(config)
+        try:
+            assert (tmp_path / "py-trace.jsonl").is_file()
+        finally:
+            subscriber.shutdown()
+
+    def test_file_sink_defaults_name_the_file_after_the_format(self, tmp_path):
+        subscriber = OpenTelemetrySubscriber(OpenTelemetryConfig.file_sink("full", str(tmp_path), format="proto"))
+        try:
+            assert (tmp_path / "nemo-relay-otlp.otlp.pb").is_file()
+        finally:
+            subscriber.shutdown()
+
+    @pytest.mark.parametrize(
+        ("kwargs", "expected"),
+        [
+            ({"format": "yaml"}, "format must be"),
+            ({"mode": "truncate"}, "mode must be"),
+            ({"filename": "../escape.jsonl"}, "single path component"),
+        ],
+    )
+    def test_file_sink_rejects_invalid_inputs(self, tmp_path, kwargs, expected):
+        config = OpenTelemetryConfig.file_sink("full", str(tmp_path), **kwargs)
+
+        with pytest.raises(ValueError, match=expected):
+            OpenTelemetrySubscriber(config)
+
+    def test_file_sink_rejects_headers(self, tmp_path):
+        config = OpenTelemetryConfig.file_sink("full", str(tmp_path))
+        config.set_header("authorization", "Bearer token")
+
+        with pytest.raises(ValueError, match="do not apply to a file sink"):
+            OpenTelemetrySubscriber(config)
+
     def test_config_rejects_invalid_map_values(self):
         config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
 

@@ -164,6 +164,64 @@ exporters are unchanged.
 | `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
 | `promote_resource_metadata_prefixes` | `[]` | Literal prefixes that select root Scope-start metadata to copy to OTLP resource attributes. Each unique effective resource retains an exporter pipeline for the subscriber lifetime. |
 
+## Trace File Sinks
+
+A file sink writes the same OTLP `ExportTraceServiceRequest` an endpoint would
+receive to a local file. Use one when a trajectory is an artifact rather than
+telemetry: an evaluation harness that scores the trace it just produced, an
+offline replay, or any environment with no collector to export to. File sinks
+and endpoints can be configured together; each destination receives the same
+projected spans.
+
+```toml
+[[components.config.opentelemetry.file_sinks]]
+type = "full"
+output_directory = "/var/log/nemo-relay"
+format = "json_lines"
+```
+
+`json_lines` is the serialization described by the OpenTelemetry Protocol File
+Exporter specification: one OTLP/JSON-encoded `ExportTraceServiceRequest` per
+line, with `traceId` and `spanId` hex-encoded. `proto` writes each request
+length-delimited -- a big-endian `u32` byte count followed by that many bytes of
+encoded request -- matching the OpenTelemetry Collector file exporter's
+`format: proto` layout.
+
+Each export is flushed before it is reported as delivered, so a run that exits
+between batches still leaves a readable prefix rather than an empty file. Output
+files are created with owner-only permissions and confined to
+`output_directory`, the same as the ATOF and ATIF file sinks, because a
+trajectory carries prompt and response content.
+
+Endpoint validation does not apply: a file sink has no endpoint, transport,
+headers, or request timeout, and configuring those fields on one is an error.
+
+| Field | Default | Notes |
+|---|---|---|
+| `type` | `full` | `full`, `gen_ai`, or `openinference`. |
+| `output_directory` | Required | Directory containing the output file. Created if absent. |
+| `filename` | Timestamped | Single path component. Defaults to `nemo-relay-otlp-<timestamp>.jsonl` or `.otlp.pb` for the chosen format. |
+| `format` | `json_lines` | `json_lines` or `proto`. |
+| `mode` | `overwrite` | `append` or `overwrite`. |
+| `service_name` | `unknown_service` | `service.name` resource attribute. |
+| `service_namespace` | Omitted | Optional `service.namespace`. |
+| `service_version` | Omitted | Optional `service.version`. |
+| `instrumentation_scope` | `opentelemetry` | Instrumentation scope name. |
+| `max_queue_size` | Environment or `2048` | Maximum completed spans buffered before this sink drops new spans. |
+| `max_export_batch_size` | Environment or `512` | Maximum spans written in one batch; capped at the effective queue size. |
+| `scheduled_delay_millis` | Environment or `5000` ms | Maximum delay before this sink writes a non-full batch. |
+| `completed_span_context_ttl_millis` | `60000` | Positive duration for retaining completed scopes' trace context for late marks. |
+| `resource_attributes` | `{}` | String-to-string resource attributes. |
+| `mark_projection` | `inherit` | Mark representation for `full` and `openinference`: `inherit`, `event`, or `tool`. |
+| `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
+| `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
+| `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
+| `promote_resource_metadata_prefixes` | `[]` | Literal prefixes that select root Scope-start metadata to copy to OTLP resource attributes. |
+
+Two file sinks cannot write the same path: appending sinks would interleave
+their records and overwriting sinks would race, so the configuration is
+rejected at activation.
+
 ## Event Metadata Promotion
 
 Set `promote_metadata_prefixes` on a trace endpoint to copy selected keys from
