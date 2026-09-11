@@ -257,12 +257,70 @@ fn parse_attribute_mappings(
     Ok(mappings)
 }
 
+fn parse_otel_file_sink(
+    output_directory: &str,
+    filename: Option<&str>,
+    format: Option<&str>,
+    mode: Option<&str>,
+) -> napi::Result<nemo_relay::observability::otel::OtlpFileSinkSettings> {
+    let format = match format.unwrap_or("json_lines") {
+        "json_lines" => nemo_relay::observability::otel_file::OtlpFileFormat::JsonLines,
+        "proto" => nemo_relay::observability::otel_file::OtlpFileFormat::Proto,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "format must be 'json_lines' or 'proto', got {other:?}"
+            )));
+        }
+    };
+    let append = match mode.unwrap_or("overwrite") {
+        "overwrite" => false,
+        "append" => true,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "mode must be 'append' or 'overwrite', got {other:?}"
+            )));
+        }
+    };
+    let filename = match filename {
+        Some(filename) => {
+            if std::path::Path::new(filename).components().count() != 1 {
+                return Err(napi::Error::from_reason(
+                    "filename must be a single path component",
+                ));
+            }
+            filename.to_string()
+        }
+        None => format!("nemo-relay-otlp.{}", format.extension()),
+    };
+    let output_directory = std::path::PathBuf::from(output_directory);
+    Ok(nemo_relay::observability::otel::OtlpFileSinkSettings {
+        path: output_directory.join(filename),
+        output_directory,
+        format,
+        append,
+    })
+}
+
 fn build_otel_config(
     options: OpenTelemetryConfig,
 ) -> napi::Result<nemo_relay::observability::otel::OpenTelemetryConfig> {
     let otel_type = parse_otel_type(&options.r#type)?;
+    let file_sink = options
+        .output_directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|directory| !directory.is_empty())
+        .map(|directory| {
+            parse_otel_file_sink(
+                directory,
+                options.filename.as_deref(),
+                options.format.as_deref(),
+                options.mode.as_deref(),
+            )
+        })
+        .transpose()?;
     let endpoint = options.endpoint.trim().to_string();
-    if endpoint.is_empty() {
+    if file_sink.is_none() && endpoint.is_empty() {
         return Err(napi::Error::from_reason(
             "endpoint must be a nonblank string",
         ));
@@ -299,14 +357,19 @@ fn build_otel_config(
             .expect("the default completed span context TTL fits in u64 milliseconds")
         });
 
-    let mut config = nemo_relay::observability::otel::OpenTelemetryConfig::new(otel_type, endpoint)
-        .with_transport(transport)
-        .with_service_name(service_name)
-        .with_instrumentation_scope(instrumentation_scope)
-        .with_timeout(std::time::Duration::from_millis(timeout_millis.into()))
-        .with_completed_span_context_ttl(std::time::Duration::from_millis(
-            completed_span_context_ttl_millis,
-        ));
+    let mut config = match file_sink {
+        Some(file_sink) => nemo_relay::observability::otel::OpenTelemetryConfig::new_file_sink(
+            otel_type, file_sink,
+        ),
+        None => nemo_relay::observability::otel::OpenTelemetryConfig::new(otel_type, endpoint)
+            .with_transport(transport),
+    }
+    .with_service_name(service_name)
+    .with_instrumentation_scope(instrumentation_scope)
+    .with_timeout(std::time::Duration::from_millis(timeout_millis.into()))
+    .with_completed_span_context_ttl(std::time::Duration::from_millis(
+        completed_span_context_ttl_millis,
+    ));
 
     if let Some(namespace) = options.service_namespace {
         config = config.with_service_namespace(namespace);
@@ -5172,8 +5235,20 @@ pub struct OpenTelemetryConfig {
     pub r#type: String,
     /// `"http_binary"` (default) or `"grpc"`.
     pub transport: Option<String>,
-    /// OTLP endpoint, such as `http://localhost:4318/v1/traces`.
+    /// OTLP endpoint, such as `http://localhost:4318/v1/traces`. Leave empty
+    /// when `outputDirectory` selects a file sink.
     pub endpoint: String,
+    /// Directory for a local file destination. When set, spans are written
+    /// there instead of exported to `endpoint`.
+    pub output_directory: Option<String>,
+    /// Output filename. Defaults to a name derived from `format`.
+    pub filename: Option<String>,
+    /// `"json_lines"` (default) or `"proto"`. Only used with `outputDirectory`.
+    #[napi(ts_type = "\"json_lines\" | \"proto\"")]
+    pub format: Option<String>,
+    /// `"overwrite"` (default) or `"append"`. Only used with `outputDirectory`.
+    #[napi(ts_type = "\"append\" | \"overwrite\"")]
+    pub mode: Option<String>,
     /// Extra exporter headers/metadata as string key/value pairs.
     pub headers: Option<Json>,
     /// Header names mapped to environment variables resolved during subscriber activation.

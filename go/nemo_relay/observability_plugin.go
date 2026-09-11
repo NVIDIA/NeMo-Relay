@@ -23,8 +23,34 @@ type ObservabilityConfig struct {
 type ObservabilityOpenTelemetryConfig struct {
 	Enabled   bool                                       `json:"enabled,omitempty"`
 	Endpoints []ObservabilityOpenTelemetryEndpointConfig `json:"endpoints,omitempty"`
+	FileSinks []ObservabilityOpenTelemetryFileSinkConfig `json:"file_sinks,omitempty"`
 	Logs      *ObservabilityOpenTelemetryLogConfig       `json:"logs,omitempty"`
 	Metrics   *ObservabilityOpenTelemetryMetricConfig    `json:"metrics,omitempty"`
+}
+
+// ObservabilityOpenTelemetryFileSinkConfig configures one local file destination for
+// projected OTLP spans. Format "json_lines" follows the OpenTelemetry Protocol File
+// Exporter specification: one OTLP/JSON record per line. Format "proto" writes each
+// record length-delimited.
+type ObservabilityOpenTelemetryFileSinkConfig struct {
+	Type                          OpenTelemetryType      `json:"type,omitempty"`
+	OutputDirectory               string                 `json:"output_directory"`
+	Filename                      string                 `json:"filename,omitempty"`
+	Format                        string                 `json:"format,omitempty"`
+	Mode                          string                 `json:"mode,omitempty"`
+	MarkProjection                string                 `json:"mark_projection,omitempty"`
+	MarkExcludeNames              []string               `json:"mark_exclude_names,omitempty"`
+	AttributeMappings             []OtlpAttributeMapping `json:"attribute_mappings,omitempty"`
+	PromoteMetadataPrefixes       []string               `json:"promote_metadata_prefixes,omitempty"`
+	ResourceAttributes            map[string]string      `json:"resource_attributes,omitempty"`
+	ServiceName                   string                 `json:"service_name,omitempty"`
+	ServiceNamespace              string                 `json:"service_namespace,omitempty"`
+	ServiceVersion                string                 `json:"service_version,omitempty"`
+	InstrumentationScope          string                 `json:"instrumentation_scope,omitempty"`
+	MaxQueueSize                  *uint64                `json:"max_queue_size,omitempty"`
+	MaxExportBatchSize            *uint64                `json:"max_export_batch_size,omitempty"`
+	ScheduledDelayMillis          *uint64                `json:"scheduled_delay_millis,omitempty"`
+	CompletedSpanContextTTLMillis *uint64                `json:"completed_span_context_ttl_millis,omitempty"`
 }
 
 // ObservabilityOpenTelemetrySignalEndpointConfig configures one log or metric OTLP destination.

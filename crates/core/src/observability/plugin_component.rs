@@ -731,6 +731,7 @@ crate::editor_config! {
     impl OpenTelemetrySectionConfig {
         enabled => { label: "enabled", kind: Boolean },
         endpoints => { label: "traces", kind: List, name: "traces", list: &OPENTELEMETRY_ENDPOINT_LIST },
+        file_sinks => { label: "file_sinks", kind: List, list: &OPENTELEMETRY_FILE_SINK_LIST },
         logs => {
             label: "logs",
             kind: Section,
@@ -900,6 +901,84 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
     }
 }
 
+impl EditorConfig for OpenTelemetryFileSinkConfig {
+    fn editor_schema() -> &'static EditorSchema {
+        static SCHEMA: EditorSchema = EditorSchema {
+            fields: &[
+                otel_editor_field(
+                    "type",
+                    EditorFieldKind::Enum,
+                    &["full", "gen_ai", "openinference"],
+                    false,
+                ),
+                otel_editor_field("output_directory", EditorFieldKind::String, &[], false),
+                otel_editor_field("filename", EditorFieldKind::String, &[], true),
+                otel_editor_field(
+                    "format",
+                    EditorFieldKind::Enum,
+                    &["json_lines", "proto"],
+                    false,
+                ),
+                otel_editor_field(
+                    "mode",
+                    EditorFieldKind::Enum,
+                    &["append", "overwrite"],
+                    false,
+                ),
+                otel_editor_field(
+                    "mark_projection",
+                    EditorFieldKind::Enum,
+                    &["inherit", "event", "tool"],
+                    false,
+                ),
+                otel_list_editor_field(
+                    "mark_exclude_names",
+                    false,
+                    &crate::config_editor::STRING_LIST_ITEM,
+                ),
+                otel_editor_field("attribute_mappings", EditorFieldKind::List, &[], false),
+                otel_editor_field(
+                    "promote_metadata_prefixes",
+                    EditorFieldKind::List,
+                    &[],
+                    true,
+                ),
+                otel_editor_field(
+                    "promote_resource_metadata_prefixes",
+                    EditorFieldKind::List,
+                    &[],
+                    true,
+                ),
+                otel_editor_field("service_name", EditorFieldKind::String, &[], false),
+                otel_editor_field("service_namespace", EditorFieldKind::String, &[], true),
+                otel_editor_field("service_version", EditorFieldKind::String, &[], true),
+                otel_editor_field("instrumentation_scope", EditorFieldKind::String, &[], false),
+                otel_editor_field("max_queue_size", EditorFieldKind::Integer, &[], true),
+                otel_editor_field("max_export_batch_size", EditorFieldKind::Integer, &[], true),
+                otel_editor_field(
+                    "scheduled_delay_millis",
+                    EditorFieldKind::Integer,
+                    &[],
+                    true,
+                ),
+                otel_editor_field(
+                    "completed_span_context_ttl_millis",
+                    EditorFieldKind::Integer,
+                    &[],
+                    true,
+                ),
+                otel_editor_field(
+                    "resource_attributes",
+                    EditorFieldKind::StringMap,
+                    &[],
+                    false,
+                ),
+            ],
+        };
+        &SCHEMA
+    }
+}
+
 impl EditorConfig for OpenTelemetrySignalEndpointConfig {
     fn editor_schema() -> &'static EditorSchema {
         static SCHEMA: EditorSchema = EditorSchema {
@@ -948,6 +1027,26 @@ static OPENTELEMETRY_ENDPOINT_LIST: EditorListItemSpec = EditorListItemSpec {
     kind: EditorFieldKind::Section,
     schema: Some(<OpenTelemetryEndpointConfig as EditorConfig>::editor_schema),
     default: Some(default_opentelemetry_endpoint_editor_value),
+    tagged_union: None,
+    list_item: None,
+};
+
+fn default_opentelemetry_file_sink_editor_value() -> Json {
+    serde_json::json!({
+        "type": "full",
+        "output_directory": "",
+        "format": "json_lines",
+        "mode": "overwrite",
+        "service_name": "unknown_service",
+        "instrumentation_scope": "opentelemetry",
+        "resource_attributes": {},
+    })
+}
+
+static OPENTELEMETRY_FILE_SINK_LIST: EditorListItemSpec = EditorListItemSpec {
+    kind: EditorFieldKind::Section,
+    schema: Some(<OpenTelemetryFileSinkConfig as EditorConfig>::editor_schema),
+    default: Some(default_opentelemetry_file_sink_editor_value),
     tagged_union: None,
     list_item: None,
 };
@@ -4143,16 +4242,45 @@ fn validate_opentelemetry_section(
             .metrics
             .as_ref()
             .is_some_and(|signal| signal.enabled);
-    if section.enabled && section.endpoints.is_empty() && !has_enabled_signal {
+    if section.enabled
+        && section.endpoints.is_empty()
+        && section.file_sinks.is_empty()
+        && !has_enabled_signal
+    {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
             "observability.unsupported_value",
             Some("opentelemetry".to_string()),
             Some("endpoints".to_string()),
-            "enabled OpenTelemetry section requires at least one endpoint or an enabled log/metric signal"
+            "enabled OpenTelemetry section requires at least one endpoint, one file sink, or an enabled log/metric signal"
                 .to_string(),
         );
+    }
+    for (index, file_sink) in section.file_sinks.iter().enumerate() {
+        if file_sink.output_directory.as_os_str().is_empty() {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("opentelemetry".to_string()),
+                Some(format!("file_sinks[{index}].output_directory")),
+                "OpenTelemetry file sink output_directory must be a nonblank path".to_string(),
+            );
+        }
+        if !matches!(file_sink.mode.as_str(), "append" | "overwrite") {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("opentelemetry".to_string()),
+                Some(format!("file_sinks[{index}].mode")),
+                format!(
+                    "OpenTelemetry file sink mode must be 'append' or 'overwrite', got {:?}",
+                    file_sink.mode
+                ),
+            );
+        }
     }
     for (index, endpoint) in section.endpoints.iter().enumerate() {
         if endpoint.endpoint.trim().is_empty() {

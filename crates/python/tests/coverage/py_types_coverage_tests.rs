@@ -498,6 +498,116 @@ fn test_open_telemetry_config_and_subscriber_cover_lifecycle() {
 }
 
 #[test]
+fn test_open_telemetry_file_sink_config_writes_a_trace_file() {
+    let _python = crate::test_support::init_python_test();
+    let directory = tempfile::tempdir().unwrap();
+    Python::attach(|py| {
+        let config = PyOpenTelemetryConfig::file_sink(
+            "full".into(),
+            directory.path().display().to_string(),
+            Some("py-trace.jsonl".into()),
+            "json_lines".into(),
+            "overwrite".into(),
+        );
+        // A file sink carries no endpoint, so endpoint validation must not run.
+        assert!(config.endpoint.is_empty());
+
+        let config = pyo3::Py::new(py, config).unwrap();
+        let subscriber = PyOpenTelemetrySubscriber::new(config.bind(py).borrow()).unwrap();
+        assert!(directory.path().join("py-trace.jsonl").is_file());
+        subscriber.shutdown(py).unwrap();
+    });
+}
+
+#[test]
+fn test_open_telemetry_file_sink_defaults_name_the_file_after_the_format() {
+    let _python = crate::test_support::init_python_test();
+    let directory = tempfile::tempdir().unwrap();
+    Python::attach(|py| {
+        let config = PyOpenTelemetryConfig::file_sink(
+            "full".into(),
+            directory.path().display().to_string(),
+            None,
+            "proto".into(),
+            "overwrite".into(),
+        );
+        let config = pyo3::Py::new(py, config).unwrap();
+        let subscriber = PyOpenTelemetrySubscriber::new(config.bind(py).borrow()).unwrap();
+        assert!(directory.path().join("nemo-relay-otlp.otlp.pb").is_file());
+        subscriber.shutdown(py).unwrap();
+    });
+}
+
+#[test]
+fn test_open_telemetry_file_sink_rejects_invalid_inputs() {
+    let _python = crate::test_support::init_python_test();
+    let directory = tempfile::tempdir().unwrap();
+    Python::attach(|py| {
+        for (filename, format, mode, expected) in [
+            (None, "yaml", "overwrite", "format must be"),
+            (None, "proto", "truncate", "mode must be"),
+            (
+                Some("../escape.jsonl"),
+                "proto",
+                "append",
+                "single path component",
+            ),
+        ] {
+            let config = PyOpenTelemetryConfig::file_sink(
+                "full".into(),
+                directory.path().display().to_string(),
+                filename.map(str::to_string),
+                format.into(),
+                mode.into(),
+            );
+            let config = pyo3::Py::new(py, config).unwrap();
+            let Err(error) = PyOpenTelemetrySubscriber::new(config.bind(py).borrow()) else {
+                panic!("expected {expected:?} to be rejected");
+            };
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected:?}, got {error}"
+            );
+        }
+
+        let config = PyOpenTelemetryConfig::file_sink(
+            "full".into(),
+            String::new(),
+            None,
+            "json_lines".into(),
+            "overwrite".into(),
+        );
+        let config = pyo3::Py::new(py, config).unwrap();
+        let Err(error) = PyOpenTelemetrySubscriber::new(config.bind(py).borrow()) else {
+            panic!("a blank output_directory must be rejected");
+        };
+        assert!(error.to_string().contains("output_directory"));
+    });
+}
+
+#[test]
+fn test_open_telemetry_file_sink_rejects_headers() {
+    let _python = crate::test_support::init_python_test();
+    let directory = tempfile::tempdir().unwrap();
+    Python::attach(|py| {
+        let mut config = PyOpenTelemetryConfig::file_sink(
+            "full".into(),
+            directory.path().display().to_string(),
+            Some("headers.jsonl".into()),
+            "json_lines".into(),
+            "overwrite".into(),
+        );
+        config.set_header("authorization".into(), "Bearer token".into());
+
+        let config = pyo3::Py::new(py, config).unwrap();
+        let Err(error) = PyOpenTelemetrySubscriber::new(config.bind(py).borrow()) else {
+            panic!("headers on a file sink must be rejected");
+        };
+        assert!(error.to_string().contains("do not apply to a file sink"));
+    });
+}
+
+#[test]
 fn test_open_telemetry_config_rejects_invalid_inputs() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {

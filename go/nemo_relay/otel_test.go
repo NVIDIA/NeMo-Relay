@@ -375,3 +375,48 @@ func TestOpenTelemetrySubscriberExportsGenAIAgentProjection(t *testing.T) {
 		t.Fatal("timed out waiting for OTLP request")
 	}
 }
+
+// TestObservabilityOpenTelemetryFileSinkConfigSerializes checks the file-sink section
+// marshals to the keys the Rust plugin config deserializes, and that optional fields
+// stay absent so core defaults apply.
+func TestObservabilityOpenTelemetryFileSinkConfigSerializes(t *testing.T) {
+	config := ObservabilityOpenTelemetryConfig{
+		Enabled: true,
+		FileSinks: []ObservabilityOpenTelemetryFileSinkConfig{{
+			Type:            OpenTelemetryTypeFull,
+			OutputDirectory: "/var/log/nemo-relay",
+			Format:          "proto",
+		}},
+	}
+
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal file sink config: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal file sink config: %v", err)
+	}
+	sinks, ok := decoded["file_sinks"].([]any)
+	if !ok || len(sinks) != 1 {
+		t.Fatalf("expected one file_sinks entry, got %v", decoded["file_sinks"])
+	}
+	sink, ok := sinks[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected a file sink object, got %T", sinks[0])
+	}
+	if sink["output_directory"] != "/var/log/nemo-relay" {
+		t.Errorf("unexpected output_directory %v", sink["output_directory"])
+	}
+	if sink["format"] != "proto" {
+		t.Errorf("unexpected format %v", sink["format"])
+	}
+	// A file sink has no endpoint, and unset optionals must not be emitted:
+	// an empty mode would otherwise override the core default.
+	for _, absent := range []string{"endpoint", "transport", "filename", "mode"} {
+		if _, present := sink[absent]; present {
+			t.Errorf("unexpected %q in a file sink section", absent)
+		}
+	}
+}

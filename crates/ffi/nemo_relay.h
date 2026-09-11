@@ -1756,6 +1756,30 @@ NemoRelayStatus nemo_relay_otel_subscriber_create(const char *otel_type,
                                                   struct FfiOpenTelemetrySubscriber **out);
 
 /**
+ * Creates one typed OpenTelemetry exporter subscriber that writes OTLP to a file.
+ *
+ * `otel_type` must be `full`, `gen_ai`, or `openinference`. `output_directory` is
+ * required. `filename` may be null to use a default name for the format.
+ * `format` is `json_lines` (the OpenTelemetry file-exporter specification's
+ * serialization, and the default when null) or `proto`. `mode` is `overwrite`
+ * (the default when null) or `append`.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_subscriber_create_file_sink(const char *otel_type,
+                                                            const char *output_directory,
+                                                            const char *filename,
+                                                            const char *format,
+                                                            const char *mode,
+                                                            const char *resource_attributes_json,
+                                                            const char *service_name,
+                                                            const char *service_namespace,
+                                                            const char *service_version,
+                                                            const char *instrumentation_scope,
+                                                            struct FfiOpenTelemetrySubscriber **out);
+
+/**
  * Creates one typed OpenTelemetry exporter subscriber with projection controls.
  *
  * The JSON arrays use `mark_exclude_names: ["llm.chunk"]` and

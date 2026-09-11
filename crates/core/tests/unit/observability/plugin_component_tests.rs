@@ -5889,3 +5889,96 @@ fn opentelemetry_registration_rejects_an_empty_endpoint_and_file_sink_list() {
 
     assert!(error.to_string().contains("one file sink"));
 }
+
+#[test]
+fn file_sinks_are_offered_by_the_config_editor() {
+    let schema = OpenTelemetrySectionConfig::editor_schema();
+    let file_sinks = schema.field("file_sinks").expect("file_sinks editor field");
+    assert_eq!(file_sinks.kind, EditorFieldKind::List);
+
+    let item_schema = (file_sinks
+        .list_item
+        .expect("file_sinks list metadata")
+        .schema
+        .expect("file_sinks item schema"))();
+    let format = item_schema.field("format").expect("format editor field");
+    assert_eq!(format.enum_values, &["json_lines", "proto"]);
+    assert!(
+        item_schema.field("endpoint").is_none(),
+        "a file sink has no endpoint to configure"
+    );
+    assert!(
+        !item_schema
+            .field("output_directory")
+            .expect("output_directory editor field")
+            .optional,
+        "a file sink cannot default its output directory"
+    );
+}
+
+#[test]
+fn the_file_sink_editor_default_is_a_valid_section() {
+    let default = default_opentelemetry_file_sink_editor_value();
+    let section: OpenTelemetryFileSinkConfig = serde_json::from_value(default).unwrap();
+
+    assert_eq!(section.format, OtlpFileFormat::JsonLines);
+    assert_eq!(section.mode, "overwrite");
+}
+
+#[test]
+fn validate_opentelemetry_section_accepts_a_file_sink_as_the_only_destination() {
+    let directory = tempfile::tempdir().unwrap();
+    let policy = ConfigPolicy::default();
+    let mut diagnostics = Vec::new();
+
+    validate_opentelemetry_section(
+        &mut diagnostics,
+        &policy,
+        &OpenTelemetrySectionConfig {
+            enabled: true,
+            file_sinks: vec![file_sink_section(directory.path())],
+            endpoints: Vec::new(),
+            logs: None,
+            metrics: None,
+        },
+    );
+
+    // Static validation runs before activation, so a section it rejects never
+    // reaches `register_opentelemetry` at all.
+    assert!(
+        diagnostics.is_empty(),
+        "a file sink is a destination: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn validate_opentelemetry_section_reports_malformed_file_sinks() {
+    let directory = tempfile::tempdir().unwrap();
+    let policy = ConfigPolicy::default();
+    let mut blank_directory = file_sink_section(directory.path());
+    blank_directory.output_directory = PathBuf::new();
+    let mut bad_mode = file_sink_section(directory.path());
+    bad_mode.mode = "truncate".to_string();
+    let mut diagnostics = Vec::new();
+
+    validate_opentelemetry_section(
+        &mut diagnostics,
+        &policy,
+        &OpenTelemetrySectionConfig {
+            enabled: true,
+            file_sinks: vec![blank_directory, bad_mode],
+            endpoints: Vec::new(),
+            logs: None,
+            metrics: None,
+        },
+    );
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("file_sinks[0].output_directory")
+    }));
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.field.as_deref() == Some("file_sinks[1].mode"))
+    );
+}

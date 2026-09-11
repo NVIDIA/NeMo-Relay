@@ -80,6 +80,42 @@ function openTelemetryEndpoint(config) {
 }
 
 /**
+ * Create one local file destination for projected OTLP spans.
+ *
+ * `json_lines` is the OpenTelemetry file-exporter specification's serialization:
+ * one OTLP/JSON record per line. `proto` writes each record length-delimited.
+ *
+ * @param {object} config - File sink settings including required `output_directory`.
+ * @returns {object} A normalized OpenTelemetry file sink.
+ */
+function openTelemetryFileSink(config) {
+  if (!config || typeof config !== 'object') {
+    throw new TypeError('OpenTelemetry file sink config is required');
+  }
+  if (typeof config.output_directory !== 'string' || config.output_directory.trim() === '') {
+    throw new TypeError('OpenTelemetry file sink output_directory must be a nonblank string');
+  }
+  if (config.format !== undefined && !['json_lines', 'proto'].includes(config.format)) {
+    throw new TypeError('OpenTelemetry file sink format must be "json_lines" or "proto"');
+  }
+  if (config.mode !== undefined && !['append', 'overwrite'].includes(config.mode)) {
+    throw new TypeError('OpenTelemetry file sink mode must be "append" or "overwrite"');
+  }
+  return {
+    type: 'full',
+    format: 'json_lines',
+    mode: 'overwrite',
+    service_name: 'unknown_service',
+    instrumentation_scope: 'opentelemetry',
+    completed_span_context_ttl_millis: DEFAULT_COMPLETED_SPAN_CONTEXT_TTL_MILLIS,
+    resource_attributes: {},
+    promote_metadata_prefixes: [],
+    promote_resource_metadata_prefixes: [],
+    ...config,
+  };
+}
+
+/**
  * Create one signal-specific OpenTelemetry endpoint for logs or metrics.
  *
  * @param {object} config - Endpoint settings including required `endpoint`.
@@ -149,6 +185,7 @@ function openTelemetryConfig(config = {}) {
   return {
     enabled: false,
     endpoints: [],
+    file_sinks: [],
     ...config,
   };
 }
@@ -172,6 +209,7 @@ module.exports = {
   atofConfig,
   atifConfig,
   openTelemetryEndpoint,
+  openTelemetryFileSink,
   openTelemetrySignalEndpoint,
   openTelemetryLogConfig,
   openTelemetryMetricConfig,
