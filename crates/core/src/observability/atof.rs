@@ -23,6 +23,9 @@ use serde_json::Value as Json;
 #[cfg(feature = "atof-streaming")]
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
+use super::header_file::HeaderFiles;
+#[cfg(feature = "atof-streaming")]
+use super::header_file::{resolve_header_files, validate_header_files};
 use super::private_file::{create_private_dir_all, open_private};
 use crate::api::event::Event;
 use crate::api::runtime::EventSubscriberFn;
@@ -181,6 +184,9 @@ pub struct AtofStreamSinkConfig {
     /// Header names mapped to environment variables containing their values.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub header_env: HashMap<String, String>,
+    /// Header names mapped to files whose values are read for each request or connection.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub header_file: HeaderFiles,
     /// Per-endpoint timeout in milliseconds.
     #[serde(default = "default_endpoint_timeout_millis")]
     pub timeout_millis: u64,
@@ -197,6 +203,7 @@ impl AtofStreamSinkConfig {
             transport,
             headers: HashMap::new(),
             header_env: HashMap::new(),
+            header_file: HashMap::new(),
             timeout_millis: default_endpoint_timeout_millis(),
             field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
         }
@@ -216,6 +223,12 @@ impl AtofStreamSinkConfig {
     ) -> Self {
         self.header_env
             .insert(key.into(), environment_variable.into());
+        self
+    }
+
+    /// Add a header whose value is read from a file when the destination exports.
+    pub fn with_header_file(mut self, key: impl Into<String>, path: impl Into<String>) -> Self {
+        self.header_file.insert(key.into(), path.into());
         self
     }
 
@@ -778,6 +791,8 @@ fn validate_endpoint_config(config: AtofEndpointConfig) -> Result<ActivatedAtofE
             url.scheme()
         )));
     }
+    validate_header_files(&config.headers, &config.header_env, &config.header_file)
+        .map_err(AtofExporterError::InvalidEndpoint)?;
     let headers = resolved_header_map(&config.headers, &config.header_env)?;
     Ok(ActivatedAtofEndpoint { config, headers })
 }
@@ -883,8 +898,26 @@ async fn run_http_post_endpoint(
         match message {
             EndpointMessage::Event(raw_json) => {
                 let body = format!("{}\n", endpoint_event_json(&endpoint.config, raw_json));
-                let result = client
-                    .post(&endpoint.config.url)
+                let mut request = client.post(&endpoint.config.url);
+                let headers = match resolve_header_files(&endpoint.config.header_file) {
+                    Ok(headers) => headers,
+                    Err(_) => {
+                        log::warn!(
+                            target: "nemo_relay.observability",
+                            event = "endpoint_delivery_failed",
+                            exporter = "atof",
+                            endpoint_index = index,
+                            transport = "http_post",
+                            reason = "header_file_resolution";
+                            "ATOF endpoint delivery failed"
+                        );
+                        continue;
+                    }
+                };
+                for (header, value) in headers {
+                    request = request.header(header, value);
+                }
+                let result = request
                     .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson")
                     .body(body)
                     .send()
@@ -1135,6 +1168,15 @@ async fn connect_websocket(
         };
         request.headers_mut().insert(name, value);
     }
+    for (name, value) in resolve_header_files(&endpoint.config.header_file)
+        .map_err(|_| "header_file resolution failed".to_string())?
+    {
+        let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| "header_file contains an invalid header name".to_string())?;
+        let value = reqwest::header::HeaderValue::from_str(&value)
+            .map_err(|_| "header_file contains an invalid header value".to_string())?;
+        request.headers_mut().insert(name, value);
+    }
     tokio::time::timeout(
         Duration::from_millis(endpoint.config.timeout_millis),
         tokio_tungstenite::connect_async(request),
@@ -1201,9 +1243,19 @@ async fn run_ndjson_endpoint(
 fn build_ndjson_client(
     endpoint: &ActivatedAtofEndpoint,
 ) -> std::result::Result<reqwest::Client, String> {
+    let mut headers = endpoint.headers.clone();
+    for (name, value) in resolve_header_files(&endpoint.config.header_file)
+        .map_err(|_| "header_file resolution failed".to_string())?
+    {
+        let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| "header_file contains an invalid header name".to_string())?;
+        let value = reqwest::header::HeaderValue::from_str(&value)
+            .map_err(|_| "header_file contains an invalid header value".to_string())?;
+        headers.insert(name, value);
+    }
     reqwest::Client::builder()
         .connect_timeout(Duration::from_millis(endpoint.config.timeout_millis))
-        .default_headers(endpoint.headers.clone())
+        .default_headers(headers)
         .build()
         .map_err(|error| format!("client build failed: {error}"))
 }

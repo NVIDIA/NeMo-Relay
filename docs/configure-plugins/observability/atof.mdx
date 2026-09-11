@@ -112,11 +112,18 @@ The following table describes each stream sink:
 | `transport` | `http_post` | `http_post`, `websocket`, or `ndjson`. |
 | `headers` | `{}` | String-to-string headers for requests or handshakes. |
 | `header_env` | `{}` | Maps each header name to an environment variable that contains the full header value. Each variable must be set and nonblank, and the same header cannot also appear in `headers`. |
+| `header_file` | `{}` | Maps each header name to a file containing its full value. Files must exist at activation. HTTP POST reads it per event; WebSocket reads it when connecting or reconnecting; NDJSON reads it when its stream starts. |
 | `timeout_millis` | `3000` | Per-sink timeout for stream I/O and flush or close acknowledgement. Must be greater than `0`. |
 | `field_name_policy` | `preserve` | Field-name handling before Relay sends stream events. Accepted values are `preserve` and `replace_dots`. |
 
 Use `header_env` for secrets so the configuration stores the environment
 variable name instead of the secret value.
+
+Use `header_file` for credentials that another process rotates in place. The
+file content is read as UTF-8 at the transport point noted above, with trailing
+whitespace removed. A missing, unreadable, blank, or invalid value fails that
+delivery without logging the value. A header may appear in only one of
+`headers`, `header_env`, and `header_file`, ignoring ASCII case.
 
 `preserve` sends canonical ATOF field names unchanged. `replace_dots` replaces
 dots in JSON object keys with underscores recursively. If that creates a

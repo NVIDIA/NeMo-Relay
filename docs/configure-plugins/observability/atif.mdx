@@ -185,8 +185,8 @@ timeout_millis = 3000
 [components.config.atif.storage.headers]
 x-team = "agent-platform"
 
-[components.config.atif.storage.header_env]
-authorization = "NEMO_RELAY_ATIF_HTTP_AUTH"
+[components.config.atif.storage.header_file]
+authorization = "/var/run/secrets/telemetry/token"
 ```
 
 The HTTP backend sends one `POST` per completed trajectory. The request body is
@@ -194,6 +194,10 @@ the rendered ATIF JSON file with `content-type: application/json`. NeMo Relay
 also sets `x-nemo-relay-atif-filename` and
 `x-nemo-relay-atif-session-id` headers so receivers can keep the same object
 identity that local files and S3 uploads use.
+
+For an OIDC token-file flow, have the token writer produce the complete header
+value, such as `Bearer eyJ...`, at
+`/var/run/secrets/telemetry/token`; Relay does not add a `Bearer ` prefix.
 
 HTTP `2xx` responses are treated as success. Any non-`2xx` response or
 transport error records a runtime delivery diagnostic. Relay attempts every
@@ -208,6 +212,7 @@ The following table describes HTTP storage settings:
 | `endpoint` | required | Destination `http://` or `https://` URL. |
 | `headers` | `{}` | Static request headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
+| `header_file` | `{}` | Header names mapped to files read for every completed-trajectory upload. Files must exist at activation; trailing whitespace is removed from each value. |
 | `timeout_millis` | `3000` | Per-request timeout in milliseconds. Must be positive. |
 
 ### Multiple Destinations

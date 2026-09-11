@@ -47,6 +47,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		Transport:       "http_post",
 		Headers:         map[string]string{"X-Test": "yes"},
 		HeaderEnv:       map[string]string{"authorization": "NEMO_RELAY_ATOF_AUTH"},
+		HeaderFile:      map[string]string{"x-rotating-token": "/var/run/secrets/telemetry/token"},
 		TimeoutMillis:   1000,
 		FieldNamePolicy: "replace_dots",
 	}}
@@ -64,6 +65,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	httpStorage := NewObservabilityHttpStorageConfig(testAtifEndpoint)
 	httpStorage.Headers = map[string]string{testStaticHeader: "value"}
 	httpStorage.HeaderEnv = map[string]string{"authorization": "NEMO_RELAY_ATIF_HTTP_AUTH"}
+	httpStorage.HeaderFile = map[string]string{"x-rotating-token": "/var/run/secrets/telemetry/token"}
 	httpStorage.TimeoutMillis = 1500
 	assertS3StorageConfig(t, s3Storage)
 	assertHTTPStorageConfig(t, httpStorage)
@@ -77,6 +79,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		NewObservabilityOpenTelemetryEndpointConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces"),
 	}
 	otel.Endpoints[0].HeaderEnv["authorization"] = "OTEL_AUTHORIZATION"
+	otel.Endpoints[0].HeaderFile = map[string]string{"x-rotating-token": "/var/run/secrets/telemetry/token"}
 	otel.Endpoints[0].PromoteMetadataPrefixes = []string{"nv."}
 	maxQueueSize := uint64(4096)
 	maxExportBatchSize := uint64(256)
@@ -93,6 +96,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	metricEndpoint := NewObservabilityOpenTelemetrySignalEndpointConfig("https://collector.example/custom/metrics")
 	metricEndpoint.Headers["x-nv-project"] = observabilityDevProject
 	metricEndpoint.ResourceAttributes["nv.project"] = observabilityDevProject
+	metricEndpoint.HeaderFile = map[string]string{"x-rotating-token": "/var/run/secrets/telemetry/token"}
 	metrics.Endpoints = ObservabilityOpenTelemetrySignalEndpoints(metricEndpoint)
 	otel.Logs = &logs
 	otel.Metrics = &metrics
@@ -149,7 +153,8 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 	}
 	firstSink, ok := sinks[0].(map[string]any)
 	if !ok || firstSink["name"] != "archive" || firstSink["field_name_policy"] != "replace_dots" ||
-		firstSink["header_env"].(map[string]any)["authorization"] != "NEMO_RELAY_ATOF_AUTH" {
+		firstSink["header_env"].(map[string]any)["authorization"] != "NEMO_RELAY_ATOF_AUTH" ||
+		firstSink["header_file"].(map[string]any)["x-rotating-token"] != "/var/run/secrets/telemetry/token" {
 		t.Fatalf("expected serialized ATOF stream sink settings, got %#v", sinks)
 	}
 	serialized, err := json.Marshal(wrapped)
@@ -166,6 +171,9 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 	}
 	if otelEndpoints[0].(map[string]any)["header_env"].(map[string]any)["authorization"] != "OTEL_AUTHORIZATION" {
 		t.Fatalf("expected OpenTelemetry header_env in serialized config: %#v", wrapped.Config)
+	}
+	if otelEndpoints[0].(map[string]any)["header_file"].(map[string]any)["x-rotating-token"] != "/var/run/secrets/telemetry/token" {
+		t.Fatalf("expected OpenTelemetry header_file in serialized config: %#v", wrapped.Config)
 	}
 	promotePrefixes := otelEndpoints[0].(map[string]any)["promote_metadata_prefixes"].([]any)
 	if len(promotePrefixes) != 1 || promotePrefixes[0] != "nv." {
@@ -291,11 +299,13 @@ func assertHTTPStorageConfig(t *testing.T, storage ObservabilityHttpStorageConfi
 	serialized := marshalStorageConfig(t, storage)
 	headers := serialized["headers"].(map[string]any)
 	headerEnv := serialized["header_env"].(map[string]any)
+	headerFile := serialized["header_file"].(map[string]any)
 	if serialized["type"] != "http" ||
 		serialized["endpoint"] != testAtifEndpoint ||
 		serialized["timeout_millis"] != float64(1500) ||
 		headers[testStaticHeader] != "value" ||
-		headerEnv["authorization"] != "NEMO_RELAY_ATIF_HTTP_AUTH" {
+		headerEnv["authorization"] != "NEMO_RELAY_ATIF_HTTP_AUTH" ||
+		headerFile["x-rotating-token"] != "/var/run/secrets/telemetry/token" {
 		t.Fatalf("unexpected serialized HTTP storage config: %#v", serialized)
 	}
 }

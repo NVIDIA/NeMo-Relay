@@ -1498,6 +1498,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
         transport: AtofEndpointTransport::HttpPost,
         headers: headers.clone(),
         header_env: std::collections::HashMap::new(),
+        header_file: std::collections::HashMap::new(),
         timeout_millis: 1,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     })
@@ -1533,6 +1534,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
         transport: AtofEndpointTransport::HttpPost,
         headers: std::collections::HashMap::new(),
         header_env: std::collections::HashMap::new(),
+        header_file: std::collections::HashMap::new(),
         timeout_millis: 1,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     };
@@ -1548,6 +1550,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
         transport: AtofEndpointTransport::HttpPost,
         headers: std::collections::HashMap::new(),
         header_env: std::collections::HashMap::new(),
+        header_file: std::collections::HashMap::new(),
         timeout_millis: 0,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     };
@@ -1571,6 +1574,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
             transport: AtofEndpointTransport::Ndjson,
             headers: bad_header_value,
             header_env: std::collections::HashMap::new(),
+            header_file: std::collections::HashMap::new(),
             timeout_millis: 1,
             field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
         })
@@ -1591,6 +1595,7 @@ fn endpoint_activation_snapshots_header_env() {
         transport: AtofEndpointTransport::HttpPost,
         headers: std::collections::HashMap::new(),
         header_env: std::collections::HashMap::from([("authorization".into(), variable.clone())]),
+        header_file: std::collections::HashMap::new(),
         timeout_millis: 1,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     })
@@ -1809,6 +1814,7 @@ fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
         transport: AtofEndpointTransport::Websocket,
         headers: std::collections::HashMap::new(),
         header_env: std::collections::HashMap::new(),
+        header_file: std::collections::HashMap::new(),
         timeout_millis: 1,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     })

@@ -31,6 +31,10 @@ use crate::observability::{relay_span_id, relay_trace_id};
 use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
 
 use super::OpenTelemetryRuntimeDiagnostics;
+use super::header_file::{
+    HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
+    validate_header_files,
+};
 use super::otel::{
     DEFAULT_COMPLETED_SPAN_CONTEXT_TTL, OpenTelemetryError, OtlpTransport, Result,
     normalize_shutdown_result,
@@ -52,6 +56,7 @@ pub struct OpenTelemetryLogConfig {
     endpoint: String,
     headers: HashMap<String, String>,
     header_env: HashMap<String, String>,
+    header_file: HeaderFiles,
     resource_attributes: HashMap<String, String>,
     service_name: String,
     service_namespace: Option<String>,
@@ -74,6 +79,7 @@ impl OpenTelemetryLogConfig {
             endpoint: endpoint.into(),
             headers: HashMap::new(),
             header_env: HashMap::new(),
+            header_file: HashMap::new(),
             resource_attributes: HashMap::new(),
             service_name: "unknown_service".to_string(),
             service_namespace: None,
@@ -105,6 +111,15 @@ impl OpenTelemetryLogConfig {
     /// Map an exporter header name to the environment variable supplying its value.
     pub fn with_header_env(mut self, key: impl Into<String>, variable: impl Into<String>) -> Self {
         self.header_env.insert(key.into(), variable.into());
+        self
+    }
+
+    pub(crate) fn with_header_file(
+        mut self,
+        key: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Self {
+        self.header_file.insert(key.into(), path.into());
         self
     }
 
@@ -257,6 +272,8 @@ impl OpenTelemetryLogSubscriber {
 
     fn new_with_runtime_diagnostics(mut config: OpenTelemetryLogConfig) -> Result<Self> {
         config.validate()?;
+        validate_header_files(&config.headers, &config.header_env, &config.header_file)
+            .map_err(OpenTelemetryError::ExporterBuild)?;
         config.headers = resolve_header_env(&config.headers, &config.header_env)?;
         validate_signal_headers(&config.headers)?;
         let minimum_severity = config.minimum_severity;
@@ -372,6 +389,16 @@ fn build_log_provider(
                 .with_protocol(Protocol::HttpBinary)
                 .with_timeout(config.timeout)
                 .with_endpoint(resolve_http_log_endpoint(&config.endpoint).into_owned());
+            if !config.header_file.is_empty() {
+                let client = reqwest_otel::blocking::Client::builder()
+                    .timeout(config.timeout)
+                    .build()
+                    .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
+                builder = builder.with_http_client(HeaderFileHttpClient::new(
+                    client,
+                    HeaderFileResolver::new(config.header_file.clone()),
+                ));
+            }
             if !config.headers.is_empty() {
                 builder = builder.with_headers(config.headers.clone());
             }
@@ -387,6 +414,11 @@ fn build_log_provider(
                 .with_endpoint(config.endpoint.clone());
             if !config.headers.is_empty() {
                 builder = builder.with_metadata(build_grpc_metadata(&config.headers)?);
+            }
+            if !config.header_file.is_empty() {
+                builder = builder.with_interceptor(HeaderFileInterceptor::new(
+                    HeaderFileResolver::new(config.header_file.clone()),
+                ));
             }
             builder
                 .build()

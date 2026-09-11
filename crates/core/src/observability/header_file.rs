@@ -1,0 +1,141 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Request-time resolution for file-backed exporter headers.
+
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::Path;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
+
+/// File paths keyed by HTTP header name.
+pub(crate) type HeaderFiles = HashMap<String, String>;
+
+/// Validate header source names and require configured files to exist.
+pub(crate) fn validate_header_files(
+    headers: &HashMap<String, String>,
+    header_env: &HashMap<String, String>,
+    header_files: &HeaderFiles,
+) -> Result<(), String> {
+    let mut names = HashSet::new();
+    for key in headers
+        .keys()
+        .chain(header_env.keys())
+        .chain(header_files.keys())
+    {
+        if !names.insert(key.to_ascii_lowercase()) {
+            return Err(format!(
+                "header {key:?} must be unique across headers and header_env and header_file"
+            ));
+        }
+    }
+    for (header, path) in header_files {
+        reqwest::header::HeaderName::from_bytes(header.as_bytes())
+            .map_err(|_| format!("header_file.{header} has an invalid header name"))?;
+        if path.is_empty() {
+            return Err(format!(
+                "header_file.{header} must name a non-empty file path"
+            ));
+        }
+        if !Path::new(path).exists() {
+            return Err(format!("header_file.{header} file does not exist"));
+        }
+    }
+    Ok(())
+}
+
+/// Read header values immediately before a request. Never include a value in errors.
+pub(crate) fn resolve_header_files(
+    header_files: &HeaderFiles,
+) -> Result<HashMap<String, String>, String> {
+    let mut resolved = HashMap::with_capacity(header_files.len());
+    for (header, path) in header_files {
+        let value = fs::read_to_string(path)
+            .map_err(|_| format!("could not read header_file for header {header:?}"))?;
+        let value = value.trim_end();
+        if value.is_empty() {
+            return Err(format!("header_file for header {header:?} is blank"));
+        }
+        reqwest::header::HeaderValue::from_str(value)
+            .map_err(|_| format!("header_file for header {header:?} contains an invalid value"))?;
+        resolved.insert(header.clone(), value.to_string());
+    }
+    Ok(resolved)
+}
+
+/// A request-time header resolver shared by OTLP HTTP and gRPC exporters.
+#[derive(Clone, Debug)]
+pub(crate) struct HeaderFileResolver(Arc<HeaderFiles>);
+
+impl HeaderFileResolver {
+    pub(crate) fn new(header_files: HeaderFiles) -> Self {
+        Self(Arc::new(header_files))
+    }
+
+    pub(crate) fn resolve(&self) -> Result<HashMap<String, String>, String> {
+        resolve_header_files(&self.0)
+    }
+}
+
+/// Blocking OTLP HTTP client that applies current file-backed headers per request.
+#[derive(Debug)]
+pub(crate) struct HeaderFileHttpClient {
+    inner: reqwest_otel::blocking::Client,
+    resolver: HeaderFileResolver,
+}
+
+impl HeaderFileHttpClient {
+    pub(crate) fn new(inner: reqwest_otel::blocking::Client, resolver: HeaderFileResolver) -> Self {
+        Self { inner, resolver }
+    }
+}
+
+#[async_trait]
+impl HttpClient for HeaderFileHttpClient {
+    async fn send_bytes(&self, mut request: Request<Bytes>) -> Result<Response<Bytes>, HttpError> {
+        for (header, value) in self.resolver.resolve().map_err(std::io::Error::other)? {
+            let name = reqwest::header::HeaderName::from_bytes(header.as_bytes())
+                .map_err(std::io::Error::other)?;
+            let value =
+                reqwest::header::HeaderValue::from_str(&value).map_err(std::io::Error::other)?;
+            request.headers_mut().insert(name, value);
+        }
+        self.inner.send_bytes(request).await
+    }
+}
+
+/// Tonic request interceptor that applies current file-backed headers per RPC.
+#[derive(Clone, Debug)]
+pub(crate) struct HeaderFileInterceptor {
+    resolver: HeaderFileResolver,
+}
+
+impl HeaderFileInterceptor {
+    pub(crate) fn new(resolver: HeaderFileResolver) -> Self {
+        Self { resolver }
+    }
+}
+
+impl tonic::service::Interceptor for HeaderFileInterceptor {
+    fn call(
+        &mut self,
+        mut request: tonic::Request<()>,
+    ) -> Result<tonic::Request<()>, tonic::Status> {
+        for (header, value) in self.resolver.resolve().map_err(tonic::Status::internal)? {
+            let key = tonic::metadata::MetadataKey::from_bytes(header.as_bytes())
+                .map_err(|_| tonic::Status::internal("header_file has an invalid header name"))?;
+            let value = tonic::metadata::MetadataValue::try_from(value).map_err(|_| {
+                tonic::Status::internal("header_file contains an invalid header value")
+            })?;
+            request.metadata_mut().insert(key, value);
+        }
+        Ok(request)
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/observability/header_file_tests.rs"]
+mod tests;

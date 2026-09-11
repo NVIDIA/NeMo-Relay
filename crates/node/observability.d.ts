@@ -26,6 +26,7 @@ export interface AtofStreamSinkConfig {
   transport?: 'http_post' | 'websocket' | 'ndjson' | string;
   headers?: Record<string, string>;
   header_env?: Record<string, string>;
+  header_file?: Record<string, string>;
   timeout_millis?: number;
   field_name_policy?: 'preserve' | 'replace_dots' | string;
   name?: string;
@@ -51,6 +52,7 @@ export interface HttpStorageConfig {
   endpoint: string;
   headers?: Record<string, string>;
   header_env?: Record<string, string>;
+  header_file?: Record<string, string>;
   timeout_millis?: number;
 }
 
@@ -77,6 +79,7 @@ export interface OpenTelemetryEndpointConfig {
   transport?: 'http_binary' | 'grpc';
   headers?: Record<string, string>;
   header_env?: Record<string, string>;
+  header_file?: Record<string, string>;
   resource_attributes?: Record<string, string>;
   service_name?: string;
   service_namespace?: string;
@@ -94,6 +97,7 @@ export interface OpenTelemetrySignalEndpointConfig {
   transport?: 'http_binary' | 'grpc';
   headers?: Record<string, string>;
   header_env?: Record<string, string>;
+  header_file?: Record<string, string>;
   resource_attributes?: Record<string, string>;
   service_name?: string;
   service_namespace?: string;
