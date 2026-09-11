@@ -22,7 +22,16 @@ fn is_loopback_host(host: &str) -> bool {
             .is_ok_and(|ip| ip.is_loopback())
 }
 
-fn validate_header_file_destination(
+/// Return whether any configured header source adds request credentials or metadata.
+pub(crate) fn has_configured_headers(
+    headers: &HashMap<String, String>,
+    header_env: &HashMap<String, String>,
+    header_files: &HeaderFiles,
+) -> bool {
+    !headers.is_empty() || !header_env.is_empty() || !header_files.is_empty()
+}
+
+fn validate_header_destination(
     endpoint: &str,
     protected_scheme: &str,
     plaintext_scheme: &str,
@@ -35,20 +44,20 @@ fn validate_header_file_destination(
         Ok(())
     } else {
         Err(format!(
-            "header_file requires {protected_scheme} for remote endpoints; {plaintext_scheme} is allowed only for localhost or loopback IP addresses"
+            "configured headers require {protected_scheme} for remote endpoints; {plaintext_scheme} is allowed only for localhost or loopback IP addresses"
         ))
     }
 }
 
-/// Require protected HTTP transport before attaching file-backed values.
-pub(crate) fn validate_header_file_http_endpoint(endpoint: &str) -> Result<(), String> {
-    validate_header_file_destination(endpoint, "https", "http")
+/// Require protected HTTP transport before attaching configured headers.
+pub(crate) fn validate_header_http_endpoint(endpoint: &str) -> Result<(), String> {
+    validate_header_destination(endpoint, "https", "http")
 }
 
-/// Require protected WebSocket transport before attaching file-backed values.
+/// Require protected WebSocket transport before attaching configured headers.
 #[cfg_attr(not(feature = "atof-streaming"), allow(dead_code))]
-pub(crate) fn validate_header_file_websocket_endpoint(endpoint: &str) -> Result<(), String> {
-    validate_header_file_destination(endpoint, "wss", "ws")
+pub(crate) fn validate_header_websocket_endpoint(endpoint: &str) -> Result<(), String> {
+    validate_header_destination(endpoint, "wss", "ws")
 }
 
 /// Validate header source names and require configured files to exist.
@@ -138,7 +147,7 @@ impl HttpClient for HeaderFileHttpClient {
         let client = self.inner.clone();
         let resolver = self.resolver.clone();
         tokio::task::spawn_blocking(move || {
-            validate_header_file_http_endpoint(&request.uri().to_string())
+            validate_header_http_endpoint(&request.uri().to_string())
                 .map_err(std::io::Error::other)?;
             let mut request = request;
             for (header, value) in resolver.resolve().map_err(std::io::Error::other)? {

@@ -5543,6 +5543,14 @@ fn http_upload_config_rejects_endpoint_timeout_and_header_errors() {
     remote_file_header.header_file.clear();
     assert!(HttpUploadConfig::resolve(2, &remote_file_header).is_ok());
 
+    remote_file_header
+        .headers
+        .insert("authorization".into(), "Bearer static".into());
+    assert!(HttpUploadConfig::resolve(2, &remote_file_header).is_err());
+    remote_file_header.endpoint = "http://127.0.0.1:4318/atif".into();
+    assert!(HttpUploadConfig::resolve(2, &remote_file_header).is_ok());
+    remote_file_header.headers.clear();
+
     let variable = "NEMO_RELAY_TEST_ATIF_HTTP_RESOLVE_ZZZZ";
     // SAFETY: this uniquely named environment variable is serialized by the observability mutex.
     unsafe { std::env::set_var(variable, "Bearer resolved") };
@@ -5550,6 +5558,9 @@ fn http_upload_config_rejects_endpoint_timeout_and_header_errors() {
     config
         .header_env
         .insert("authorization".into(), variable.into());
+    config.endpoint = "http://collector.example/atif".into();
+    assert!(HttpUploadConfig::resolve(2, &config).is_err());
+    config.endpoint = "http://127.0.0.1:4318/atif".into();
     let resolved = HttpUploadConfig::resolve(2, &config).unwrap();
     assert_eq!(
         resolved.headers.get("authorization").map(String::as_str),

@@ -212,8 +212,14 @@ The following table describes HTTP storage settings:
 | `endpoint` | required | Destination `http://` or `https://` URL. |
 | `headers` | `{}` | Static request headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
-| `header_file` | `{}` | Maps header names to regular files read before each completed-trajectory upload. Files must exist at activation. Relay removes trailing whitespace. Remote destinations must use HTTPS. HTTP is allowed only for localhost and loopback IPs. Relay does not follow redirects, so a redirect fails that upload and does not send the file-backed value to the new destination. |
+| `header_file` | `{}` | Maps header names to regular files read before each completed-trajectory upload. Files must exist at activation. Relay removes trailing whitespace. |
 | `timeout_millis` | `3000` | Per-request timeout in milliseconds. Must be positive. |
+
+When you set any header source (`headers`, `header_env`, or `header_file`),
+remote HTTP storage must use HTTPS. HTTP is allowed only for localhost and
+loopback IP addresses. Relay does not follow redirects when headers are set.
+Use the final destination URL. A redirect fails that upload and Relay does not
+send headers to the new destination.
 
 ### Multiple Destinations
 

@@ -84,15 +84,31 @@ fn activation_requires_existing_files_and_unique_sources() {
 }
 
 #[test]
-fn file_backed_headers_require_protected_remote_destinations() {
-    assert!(validate_header_file_http_endpoint("https://collector.example/v1/logs").is_ok());
-    assert!(validate_header_file_http_endpoint("http://localhost:4318/v1/logs").is_ok());
-    assert!(validate_header_file_http_endpoint("http://127.0.0.1:4318/v1/logs").is_ok());
-    assert!(validate_header_file_http_endpoint("http://collector.example/v1/logs").is_err());
+fn configured_headers_require_protected_remote_destinations() {
+    assert!(validate_header_http_endpoint("https://collector.example/v1/logs").is_ok());
+    assert!(validate_header_http_endpoint("http://localhost:4318/v1/logs").is_ok());
+    assert!(validate_header_http_endpoint("http://127.0.0.1:4318/v1/logs").is_ok());
+    assert!(validate_header_http_endpoint("http://collector.example/v1/logs").is_err());
 
-    assert!(validate_header_file_websocket_endpoint("wss://collector.example/events").is_ok());
-    assert!(validate_header_file_websocket_endpoint("ws://[::1]:4318/events").is_ok());
-    assert!(validate_header_file_websocket_endpoint("ws://collector.example/events").is_err());
+    assert!(validate_header_websocket_endpoint("wss://collector.example/events").is_ok());
+    assert!(validate_header_websocket_endpoint("ws://[::1]:4318/events").is_ok());
+    assert!(validate_header_websocket_endpoint("ws://collector.example/events").is_err());
+
+    assert!(has_configured_headers(
+        &HashMap::from([("authorization".to_string(), "Bearer static".to_string())]),
+        &HashMap::new(),
+        &HashMap::new(),
+    ));
+    assert!(has_configured_headers(
+        &HashMap::new(),
+        &HashMap::from([("authorization".to_string(), "TOKEN".to_string())]),
+        &HashMap::new(),
+    ));
+    assert!(!has_configured_headers(
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+    ));
 }
 
 #[test]

@@ -5511,7 +5511,7 @@ impl AtifRemoteStorage {
                     }
                 };
                 let mut client_builder = reqwest::Client::builder().timeout(upload_config.timeout);
-                if !upload_config.header_file.is_empty() {
+                if !upload_config.headers.is_empty() || !upload_config.header_file.is_empty() {
                     client_builder = client_builder.redirect(reqwest::redirect::Policy::none());
                 }
                 let client = match client_builder.build() {
@@ -5726,8 +5726,12 @@ impl HttpUploadConfig {
             &http.header_file,
         )
         .map_err(std::io::Error::other)?;
-        if !http.header_file.is_empty() {
-            crate::observability::header_file::validate_header_file_http_endpoint(endpoint)
+        if crate::observability::header_file::has_configured_headers(
+            &http.headers,
+            &http.header_env,
+            &http.header_file,
+        ) {
+            crate::observability::header_file::validate_header_http_endpoint(endpoint)
                 .map_err(std::io::Error::other)?;
         }
         let mut headers = http.headers.clone();

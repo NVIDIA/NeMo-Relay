@@ -35,7 +35,7 @@ use sha2::{Digest, Sha256};
 use super::OpenTelemetryRuntimeDiagnostics;
 use super::header_file::{
     HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
-    validate_header_file_http_endpoint, validate_header_files,
+    has_configured_headers, validate_header_files, validate_header_http_endpoint,
 };
 use super::otel::{OpenTelemetryError, OtlpTransport, Result, normalize_shutdown_result};
 use super::otel_signal::{
@@ -264,8 +264,8 @@ impl OpenTelemetryMetricConfig {
         }
         reject_signal_header_environment("OTEL_EXPORTER_OTLP_METRICS_HEADERS")?;
         validate_signal_headers(&self.headers)?;
-        if !self.header_file.is_empty() {
-            validate_header_file_http_endpoint(&self.endpoint)
+        if has_configured_headers(&self.headers, &self.header_env, &self.header_file) {
+            validate_header_http_endpoint(&self.endpoint)
                 .map_err(OpenTelemetryError::ExporterBuild)?;
         }
         Ok(())
@@ -437,7 +437,7 @@ fn build_metric_provider(
                 .with_temporality(temporality)
                 .with_timeout(config.timeout)
                 .with_endpoint(resolve_http_metric_endpoint(&config.endpoint).into_owned());
-            if !config.header_file.is_empty() {
+            if !config.headers.is_empty() || !config.header_file.is_empty() {
                 let client = reqwest_otel::blocking::Client::builder()
                     .timeout(config.timeout)
                     .redirect(reqwest_otel::redirect::Policy::none())

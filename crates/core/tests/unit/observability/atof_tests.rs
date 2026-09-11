@@ -1593,7 +1593,13 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
 
 #[test]
 #[cfg(feature = "atof-streaming")]
-fn file_backed_headers_require_protected_remote_atof_destinations() {
+fn configured_headers_require_protected_remote_atof_destinations() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let variable = "NEMO_RELAY_TEST_ATOF_TRANSPORT_TOKEN";
+    // SAFETY: this uniquely named environment variable is serialized by the observability mutex.
+    unsafe { std::env::set_var(variable, "Bearer environment") };
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("token");
     fs::write(&path, "Bearer token\n").unwrap();
@@ -1601,6 +1607,22 @@ fn file_backed_headers_require_protected_remote_atof_destinations() {
         "authorization".to_string(),
         path.to_string_lossy().into_owned(),
     )]);
+    let header_sources = [
+        (
+            std::collections::HashMap::from([(
+                "authorization".to_string(),
+                "Bearer static".to_string(),
+            )]),
+            Default::default(),
+            Default::default(),
+        ),
+        (
+            Default::default(),
+            std::collections::HashMap::from([("authorization".to_string(), variable.to_string())]),
+            Default::default(),
+        ),
+        (Default::default(), Default::default(), header_file),
+    ];
 
     for (transport, remote, loopback) in [
         (
@@ -1619,32 +1641,34 @@ fn file_backed_headers_require_protected_remote_atof_destinations() {
             "ws://127.0.0.1:4318/events",
         ),
     ] {
-        let remote = AtofEndpointConfig {
-            url: remote.into(),
-            transport,
-            headers: Default::default(),
-            header_env: Default::default(),
-            header_file: header_file.clone(),
-            timeout_millis: 1,
-            field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
-        };
-        let error = validate_endpoint_config(remote).unwrap_err();
         let expected = match transport {
-            AtofEndpointTransport::HttpPost | AtofEndpointTransport::Ndjson => "requires https",
-            AtofEndpointTransport::Websocket => "requires wss",
+            AtofEndpointTransport::HttpPost | AtofEndpointTransport::Ndjson => "require https",
+            AtofEndpointTransport::Websocket => "require wss",
         };
-        assert!(error.to_string().contains(expected), "{error}");
+        for (headers, header_env, header_file) in &header_sources {
+            let remote = AtofEndpointConfig {
+                url: remote.into(),
+                transport,
+                headers: headers.clone(),
+                header_env: header_env.clone(),
+                header_file: header_file.clone(),
+                timeout_millis: 1,
+                field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+            };
+            let error = validate_endpoint_config(remote).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
 
-        let loopback = AtofEndpointConfig {
-            url: loopback.into(),
-            transport,
-            headers: Default::default(),
-            header_env: Default::default(),
-            header_file: header_file.clone(),
-            timeout_millis: 1,
-            field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
-        };
-        assert!(validate_endpoint_config(loopback).is_ok());
+            let loopback = AtofEndpointConfig {
+                url: loopback.into(),
+                transport,
+                headers: headers.clone(),
+                header_env: header_env.clone(),
+                header_file: header_file.clone(),
+                timeout_millis: 1,
+                field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+            };
+            assert!(validate_endpoint_config(loopback).is_ok());
+        }
     }
     assert!(
         validate_endpoint_config(AtofEndpointConfig::new(
@@ -1653,6 +1677,8 @@ fn file_backed_headers_require_protected_remote_atof_destinations() {
         ))
         .is_ok()
     );
+    // SAFETY: cleanup of the test-only environment variable.
+    unsafe { std::env::remove_var(variable) };
 }
 
 #[test]

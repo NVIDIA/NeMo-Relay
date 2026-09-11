@@ -224,19 +224,27 @@ fn log_config_rejects_blank_and_padded_headers() {
 }
 
 #[test]
-fn log_file_backed_headers_require_https_except_for_loopback() {
+fn log_configured_headers_require_https_except_for_loopback() {
     for transport in [OtlpTransport::HttpBinary, OtlpTransport::Grpc] {
-        let error = OpenTelemetryLogConfig::new("http://collector.example/v1/logs")
-            .with_transport(transport)
-            .with_header_file("authorization", "/var/run/secrets/telemetry/token")
-            .validate()
-            .unwrap_err();
-        assert!(error.to_string().contains("requires https"), "{error}");
+        for config in [
+            OpenTelemetryLogConfig::new("http://collector.example/v1/logs")
+                .with_transport(transport)
+                .with_header("authorization", "Bearer static"),
+            OpenTelemetryLogConfig::new("http://collector.example/v1/logs")
+                .with_transport(transport)
+                .with_header_env("authorization", "NEMO_RELAY_TEST_LOG_TOKEN"),
+            OpenTelemetryLogConfig::new("http://collector.example/v1/logs")
+                .with_transport(transport)
+                .with_header_file("authorization", "/var/run/secrets/telemetry/token"),
+        ] {
+            let error = config.validate().unwrap_err();
+            assert!(error.to_string().contains("require https"), "{error}");
+        }
 
         assert!(
             OpenTelemetryLogConfig::new("http://127.0.0.1:4318/v1/logs")
                 .with_transport(transport)
-                .with_header_file("authorization", "/var/run/secrets/telemetry/token")
+                .with_header("authorization", "Bearer static")
                 .validate()
                 .is_ok()
         );

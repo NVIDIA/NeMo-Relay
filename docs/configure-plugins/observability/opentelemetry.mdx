@@ -138,7 +138,7 @@ endpoints must migrate to HTTPS or use a loopback collector.
 OTLP/HTTP trace exporters do not follow redirects, even to another HTTPS
 endpoint. This keeps an export from bypassing transport checks or sending its
 payload and credentials to another destination. Use the final collector URL.
-Log and metric HTTP exporters do the same when `header_file` is configured.
+Log and metric HTTP exporters do the same when any header source is configured.
 gRPC does not use HTTP redirects.
 
 | Field | Default | Notes |
@@ -414,11 +414,12 @@ export, and diagnostics do not show the value. A header can use only one of
 `headers`, `header_env`, and `header_file`. Header names are case-insensitive.
 This applies to trace, log, and metric endpoints.
 
-Remote trace endpoints must use HTTPS. When `header_file` is configured, remote
-log and metric endpoints must also use HTTPS. HTTP is allowed only for localhost
-and loopback IP addresses. OTLP/HTTP exporters do not follow redirects when they
-add file-backed values. For example, an OIDC token-file writer must write the
-complete value `Bearer eyJ...` to the file. Relay does not add the authentication
+Remote trace endpoints must use HTTPS. When you set any header source
+(`headers`, `header_env`, or `header_file`), remote log and metric endpoints
+must also use HTTPS. HTTP is allowed only for localhost and loopback IP
+addresses. OTLP/HTTP exporters do not follow redirects when headers are set.
+For example, an OIDC token-file writer must write the complete value `Bearer
+eyJ...` to the file. Relay does not add the authentication
 scheme for you.
 
 Process-global `OTEL_EXPORTER_OTLP_HEADERS`,
