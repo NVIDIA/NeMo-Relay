@@ -875,6 +875,144 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create(
     NemoRelayStatus::Ok
 }
 
+/// Creates one typed OpenTelemetry exporter subscriber that writes OTLP to a file.
+///
+/// `otel_type` must be `full`, `gen_ai`, or `openinference`. `output_directory` is
+/// required. `filename` may be null to use a default name for the format.
+/// `format` is `json_lines` (the OpenTelemetry file-exporter specification's
+/// serialization, and the default when null) or `proto`. `mode` is `overwrite`
+/// (the default when null) or `append`.
+///
+/// # Safety
+/// Any non-null C strings must be valid and `out` must be non-null.
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_file_sink(
+    otel_type: *const c_char,
+    output_directory: *const c_char,
+    filename: *const c_char,
+    format: *const c_char,
+    mode: *const c_char,
+    resource_attributes_json: *const c_char,
+    service_name: *const c_char,
+    service_namespace: *const c_char,
+    service_version: *const c_char,
+    instrumentation_scope: *const c_char,
+    out: *mut *mut FfiOpenTelemetrySubscriber,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if let Err(status) = required_out_ptr(out) {
+        return status;
+    }
+    let otel_type = match parse_otel_type(otel_type) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let settings = match parse_ffi_file_sink_settings(output_directory, filename, format, mode) {
+        Ok(settings) => settings,
+        Err(status) => return status,
+    };
+    let mut config = OpenTelemetryConfig::new_file_sink(otel_type, settings);
+    config =
+        match apply_optional_string(config, service_name, OpenTelemetryConfig::with_service_name) {
+            Ok(config) => config,
+            Err(status) => return status,
+        };
+    config = match apply_optional_string(
+        config,
+        service_namespace,
+        OpenTelemetryConfig::with_service_namespace,
+    ) {
+        Ok(config) => config,
+        Err(status) => return status,
+    };
+    config = match apply_optional_string(
+        config,
+        service_version,
+        OpenTelemetryConfig::with_service_version,
+    ) {
+        Ok(config) => config,
+        Err(status) => return status,
+    };
+    config = match apply_optional_string(
+        config,
+        instrumentation_scope,
+        OpenTelemetryConfig::with_instrumentation_scope,
+    ) {
+        Ok(config) => config,
+        Err(status) => return status,
+    };
+    config = match apply_string_map(
+        config,
+        resource_attributes_json,
+        "resource_attributes",
+        OpenTelemetryConfig::with_resource_attribute,
+    ) {
+        Ok(config) => config,
+        Err(status) => return status,
+    };
+    let subscriber = match create_otel_subscriber(config) {
+        Ok(subscriber) => subscriber,
+        Err(status) => return status,
+    };
+    unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetrySubscriber(subscriber))) };
+    NemoRelayStatus::Ok
+}
+
+fn parse_ffi_file_sink_settings(
+    output_directory: *const c_char,
+    filename: *const c_char,
+    format: *const c_char,
+    mode: *const c_char,
+) -> Result<nemo_relay::observability::otel::OtlpFileSinkSettings, NemoRelayStatus> {
+    let output_directory = match parse_optional_string(output_directory)? {
+        Some(value) if !value.trim().is_empty() => value,
+        _ => {
+            set_last_error("output_directory is required");
+            return Err(NemoRelayStatus::InvalidArg);
+        }
+    };
+    let format = match parse_optional_string(format)?.as_deref() {
+        None | Some("json_lines") => {
+            nemo_relay::observability::otel_file::OtlpFileFormat::JsonLines
+        }
+        Some("proto") => nemo_relay::observability::otel_file::OtlpFileFormat::Proto,
+        Some(other) => {
+            set_last_error(&format!(
+                "format must be 'json_lines' or 'proto', got {other:?}"
+            ));
+            return Err(NemoRelayStatus::InvalidArg);
+        }
+    };
+    let append = match parse_optional_string(mode)?.as_deref() {
+        None | Some("overwrite") => false,
+        Some("append") => true,
+        Some(other) => {
+            set_last_error(&format!(
+                "mode must be 'append' or 'overwrite', got {other:?}"
+            ));
+            return Err(NemoRelayStatus::InvalidArg);
+        }
+    };
+    let filename = match parse_optional_string(filename)? {
+        Some(filename) => {
+            if std::path::Path::new(&filename).components().count() != 1 {
+                set_last_error("filename must be a single path component");
+                return Err(NemoRelayStatus::InvalidArg);
+            }
+            filename
+        }
+        None => format!("nemo-relay-otlp.{}", format.extension()),
+    };
+    let output_directory = std::path::PathBuf::from(output_directory);
+    Ok(nemo_relay::observability::otel::OtlpFileSinkSettings {
+        path: output_directory.join(filename),
+        output_directory,
+        format,
+        append,
+    })
+}
+
 /// Creates one typed OpenTelemetry exporter subscriber with projection controls.
 ///
 /// The JSON arrays use `mark_exclude_names: ["llm.chunk"]` and

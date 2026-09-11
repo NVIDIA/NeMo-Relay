@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use pyo3::prelude::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::runtime::{Handle, Runtime};
 
 use super::{
@@ -497,6 +497,64 @@ pub struct PyOpenTelemetryConfig {
     pub(crate) promote_metadata_prefixes: Vec<String>,
     #[pyo3(get, set)]
     pub(crate) promote_resource_metadata_prefixes: Vec<String>,
+    /// Set by [`PyOpenTelemetryConfig::file_sink`]; when present the spans are
+    /// written to this file instead of exported to `endpoint`.
+    pub(crate) file_sink: Option<PyOtlpFileSink>,
+}
+
+/// A local file destination for a programmatically built OpenTelemetry config.
+#[derive(Clone)]
+pub(crate) struct PyOtlpFileSink {
+    pub(crate) output_directory: String,
+    pub(crate) filename: Option<String>,
+    pub(crate) format: String,
+    pub(crate) mode: String,
+}
+
+impl PyOtlpFileSink {
+    fn to_settings(&self) -> PyResult<nemo_relay::observability::otel::OtlpFileSinkSettings> {
+        let format = match self.format.as_str() {
+            "json_lines" => nemo_relay::observability::otel_file::OtlpFileFormat::JsonLines,
+            "proto" => nemo_relay::observability::otel_file::OtlpFileFormat::Proto,
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "format must be 'json_lines' or 'proto', got {other:?}"
+                )));
+            }
+        };
+        let append = match self.mode.as_str() {
+            "append" => true,
+            "overwrite" => false,
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "mode must be 'append' or 'overwrite', got {other:?}"
+                )));
+            }
+        };
+        if self.output_directory.trim().is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "output_directory must be a nonblank path",
+            ));
+        }
+        let output_directory = PathBuf::from(&self.output_directory);
+        let filename = match &self.filename {
+            Some(filename) => {
+                if Path::new(filename).components().count() != 1 {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "filename must be a single path component",
+                    ));
+                }
+                filename.clone()
+            }
+            None => format!("nemo-relay-otlp.{}", format.extension()),
+        };
+        Ok(nemo_relay::observability::otel::OtlpFileSinkSettings {
+            path: output_directory.join(filename),
+            output_directory,
+            format,
+            append,
+        })
+    }
 }
 
 impl PyOpenTelemetryConfig {
@@ -513,19 +571,33 @@ impl PyOpenTelemetryConfig {
                 )));
             }
         };
-        validate_otel_signal_endpoint(&self.endpoint)?;
-        let transport = parse_otel_signal_transport(&self.transport)?;
-        let mut config = nemo_relay::observability::otel::OpenTelemetryConfig::new(
-            otel_type,
-            self.endpoint.clone(),
-        )
-        .with_transport(transport)
-        .with_service_name(self.service_name.clone())
-        .with_instrumentation_scope(self.instrumentation_scope.clone())
-        .with_timeout(Duration::from_millis(self.timeout_millis))
-        .with_completed_span_context_ttl(Duration::from_millis(
-            self.completed_span_context_ttl_millis,
-        ));
+        let mut config = match &self.file_sink {
+            Some(file_sink) => nemo_relay::observability::otel::OpenTelemetryConfig::new_file_sink(
+                otel_type,
+                file_sink.to_settings()?,
+            ),
+            None => {
+                validate_otel_signal_endpoint(&self.endpoint)?;
+                let transport = parse_otel_signal_transport(&self.transport)?;
+                nemo_relay::observability::otel::OpenTelemetryConfig::new(
+                    otel_type,
+                    self.endpoint.clone(),
+                )
+                .with_transport(transport)
+                .with_timeout(Duration::from_millis(self.timeout_millis))
+            }
+        };
+        if self.file_sink.is_some() && (!self.headers.is_empty() || !self.header_env.is_empty()) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "headers and header_env do not apply to a file sink",
+            ));
+        }
+        config = config
+            .with_service_name(self.service_name.clone())
+            .with_instrumentation_scope(self.instrumentation_scope.clone())
+            .with_completed_span_context_ttl(Duration::from_millis(
+                self.completed_span_context_ttl_millis,
+            ));
 
         if let Some(namespace) = &self.service_namespace {
             config = config.with_service_namespace(namespace.clone());
@@ -588,6 +660,38 @@ impl PyOpenTelemetryConfig {
             attribute_mappings: Vec::new(),
             promote_metadata_prefixes: Vec::new(),
             promote_resource_metadata_prefixes: Vec::new(),
+            file_sink: None,
+        }
+    }
+
+    /// Creates a config that writes OTLP to a local file rather than exporting
+    /// it to a collector.
+    ///
+    /// ``format`` is ``"json_lines"`` (the OpenTelemetry file-exporter
+    /// specification's serialization) or ``"proto"``. ``mode`` is ``"append"``
+    /// or ``"overwrite"``.
+    ///
+    /// Example:
+    /// ```python
+    /// config = OpenTelemetryConfig.file_sink("full", "/tmp/relay-traces")
+    /// ```
+    #[staticmethod]
+    #[pyo3(signature = (otel_type, output_directory, filename=None, format="json_lines".to_string(), mode="overwrite".to_string()))]
+    pub(crate) fn file_sink(
+        otel_type: String,
+        output_directory: String,
+        filename: Option<String>,
+        format: String,
+        mode: String,
+    ) -> Self {
+        Self {
+            file_sink: Some(PyOtlpFileSink {
+                output_directory,
+                filename,
+                format,
+                mode,
+            }),
+            ..Self::new(otel_type, String::new())
         }
     }
 
