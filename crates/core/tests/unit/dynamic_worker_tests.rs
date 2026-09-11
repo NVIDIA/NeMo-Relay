@@ -2871,7 +2871,8 @@ async fn fake_worker_instance(
             allows_multiple_components: false,
             config: serde_json::Map::new(),
             validation_diagnostics: Vec::new(),
-            registrations,
+            relay_compat: ">=0.9,<1.0".into(),
+            registrations: tokio::sync::OnceCell::new_with(Some(registrations)),
             runtime: OwnedWorkerRuntime::new(
                 RuntimeBuilder::new_multi_thread()
                     .enable_all()

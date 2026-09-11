@@ -77,11 +77,30 @@ impl NativePlugin for FixtureNativePlugin {
             return Ok(());
         }
         let runtime = ctx.runtime();
+        let subscriber_kinds = BTreeSet::from([RuntimeRegistrationKind::Subscriber]);
+        if plugin_config
+            .get("discover_observability")
+            .and_then(Json::as_bool)
+            .unwrap_or(false)
+        {
+            let observability_subscribers = runtime
+                .list_runtime_registrations(Some(&subscriber_kinds))?
+                .into_iter()
+                .filter(|registration| {
+                    registration.local_name == "opentelemetry"
+                        && registration.owner.plugin_kind.as_deref() == Some("observability")
+                })
+                .count();
+            if observability_subscribers != 1 {
+                return Err(format!(
+                    "expected one observability subscriber during registration; found {observability_subscribers}"
+                ));
+            }
+        }
         ctx.register_subscriber("fixture_subscriber", {
             let runtime = runtime.clone();
             move |event| subscriber_mark(&runtime, event)
         })?;
-        let subscriber_kinds = BTreeSet::from([RuntimeRegistrationKind::Subscriber]);
         if !runtime
             .list_runtime_registrations(Some(&subscriber_kinds))?
             .iter()

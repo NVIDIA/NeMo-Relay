@@ -195,12 +195,30 @@ pub fn load_worker_plugins<I>(specs: I) -> crate::plugin::Result<WorkerPluginAct
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
 {
+    load_worker_plugins_inner(specs, false)
+}
+
+/// Prepare workers without calling Register until their host component activates.
+pub(super) fn prepare_worker_plugins<I>(specs: I) -> crate::plugin::Result<WorkerPluginActivation>
+where
+    I: IntoIterator<Item = WorkerPluginLoadSpec>,
+{
+    load_worker_plugins_inner(specs, true)
+}
+
+fn load_worker_plugins_inner<I>(
+    specs: I,
+    defer_registration: bool,
+) -> crate::plugin::Result<WorkerPluginActivation>
+where
+    I: IntoIterator<Item = WorkerPluginLoadSpec>,
+{
     let mut activation = WorkerPluginActivation {
         plugins: Vec::new(),
         plugin_registrations: Vec::new(),
     };
     for spec in specs {
-        let instance = load_one_worker_plugin(&spec)?;
+        let instance = load_one_worker_plugin(&spec, defer_registration)?;
         let plugin_kind = instance.plugin_kind.clone();
         let registration_id = register_plugin_tracked(Arc::new(WorkerPluginAdapter {
             plugin_kind: plugin_kind.clone(),
@@ -254,6 +272,7 @@ impl Plugin for WorkerPluginAdapter {
                         .into(),
                 ));
             }
+            self.instance.prepare_registrations().await?;
             self.instance.install_registrations(ctx)
         })
     }
@@ -264,7 +283,8 @@ struct WorkerPluginInstance {
     allows_multiple_components: bool,
     config: Map<String, Json>,
     validation_diagnostics: Vec<ConfigDiagnostic>,
-    registrations: Vec<Registration>,
+    relay_compat: String,
+    registrations: tokio::sync::OnceCell<Vec<Registration>>,
     runtime: OwnedWorkerRuntime,
     client: PluginWorkerClient<Channel>,
     host_state: Arc<WorkerHostRuntimeState>,
@@ -464,6 +484,7 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
 
 fn load_one_worker_plugin(
     spec: &WorkerPluginLoadSpec,
+    defer_registration: bool,
 ) -> crate::plugin::Result<Arc<WorkerPluginInstance>> {
     log::info!(
         target: "nemo_relay.worker",
@@ -621,88 +642,13 @@ fn load_one_worker_plugin(
         None => Vec::new(),
     };
 
-    let (registrations, initial_gates) = if diagnostics_have_errors(&validation_diagnostics) {
-        (Vec::new(), Vec::new())
-    } else {
-        let register = block_on_runtime(
-            runtime_handle.runtime(),
-            worker_rpc(client.register(worker_rpc_request(RegisterRequest {
-                activation_id: activation_id.clone(),
-                plugin_id: spec.plugin_id.clone(),
-                auth_token: auth_token.clone(),
-                config: Some(json_envelope(JSON_SCHEMA, &config)?),
-            }))),
-        )
-        .map_err(|err| {
-            PluginError::RegistrationFailed(format!("worker registration RPC failed: {err}"))
-        })?;
-        let register = register.into_inner();
-        if let Some(error) = register.error {
-            return Err(worker_error_to_plugin(error, "worker registration failed"));
-        }
-        validate_registration_plan(&spec.plugin_id, &register)?;
-        (
-            register.registrations,
-            register.conditional_middleware_guardrails,
-        )
-    };
-    for gate in initial_gates {
-        let kinds = gate
-            .kinds
-            .into_iter()
-            .map(|kind| {
-                RegistrationSurface::try_from(kind)
-                    .map_err(|_| {
-                        PluginError::RegistrationFailed(format!(
-                            "worker plugin '{}' returned an unknown conditional middleware guardrail kind",
-                            spec.plugin_id
-                        ))
-                    })
-                    .and_then(|surface| {
-                        runtime_registration_kind_from_surface(surface).map_err(|status| {
-                            PluginError::RegistrationFailed(status.message().to_string())
-                        })
-                    })
-            })
-            .collect::<crate::plugin::Result<BTreeSet<_>>>()?;
-        if let Err(error) = host_state.register_owned_conditional_middleware_guardrail(
-            gate.name,
-            kinds,
-            gate.registration_name,
-            gate.reason,
-            gate.callback,
-        ) {
-            host_state.cleanup_conditional_middleware_guardrails();
-            return Err(PluginError::RegistrationFailed(format!(
-                "worker initial conditional middleware guardrail failed: {error}"
-            )));
-        }
-    }
-    if registrations.iter().any(|registration| {
-        RegistrationSurface::try_from(registration.surface)
-            .is_ok_and(|surface| surface == RegistrationSurface::LlmRequestIntercept)
-    }) {
-        validate_annotated_request_consumer_compatibility(&relay_compat, &spec.plugin_id)?;
-    }
-    if registrations.iter().any(|registration| {
-        RegistrationSurface::try_from(registration.surface)
-            .is_ok_and(|surface| surface == RegistrationSurface::ToolExecutionIntercept)
-    }) {
-        validate_tool_execution_context_compatibility(&relay_compat, &spec.plugin_id)?;
-    }
-
-    log::info!(
-        target: "nemo_relay.worker",
-        event = "worker_connected",
-        plugin_id = spec.plugin_id.as_str();
-        "Worker plugin connected and registered"
-    );
-    Ok(Arc::new(WorkerPluginInstance {
+    let instance = Arc::new(WorkerPluginInstance {
         plugin_kind: spec.plugin_id.clone(),
         allows_multiple_components: handshake.allows_multiple_components,
         config: spec.config.clone(),
         validation_diagnostics,
-        registrations,
+        relay_compat,
+        registrations: tokio::sync::OnceCell::new(),
         runtime: runtime_handle,
         client,
         host_state,
@@ -710,7 +656,11 @@ fn load_one_worker_plugin(
         process: Mutex::new(Some(child.take())),
         activation_dir: activation_dir_guard.keep(),
         teardown_started: AtomicBool::new(false),
-    }))
+    });
+    if !defer_registration && !diagnostics_have_errors(&instance.validation_diagnostics) {
+        block_on_runtime(instance.runtime.runtime(), instance.prepare_registrations())?;
+    }
+    Ok(instance)
 }
 
 enum HostRuntimeServer {
@@ -1136,11 +1086,104 @@ fn clear_host_python_environment(command: &mut Command) {
 }
 
 impl WorkerPluginInstance {
+    // Register needs the preceding components' live runtime registrations.
+    // Cache its plan once per worker so multiple components do not repeat setup.
+    async fn prepare_registrations(&self) -> crate::plugin::Result<()> {
+        self.registrations
+            .get_or_try_init(|| self.request_registration_plan())
+            .await?;
+        Ok(())
+    }
+
+    async fn request_registration_plan(&self) -> crate::plugin::Result<Vec<Registration>> {
+        let mut client = self.client.clone();
+        let register = worker_rpc(client.register(worker_rpc_request(RegisterRequest {
+            activation_id: self.host_state.activation_id.clone(),
+            plugin_id: self.plugin_kind.clone(),
+            auth_token: self.host_state.auth_token.clone(),
+            config: Some(json_envelope(
+                JSON_SCHEMA,
+                &Json::Object(self.config.clone()),
+            )?),
+        })))
+        .await
+        .map_err(|err| {
+            PluginError::RegistrationFailed(format!("worker registration RPC failed: {err}"))
+        })?
+        .into_inner();
+        if let Some(error) = register.error {
+            return Err(worker_error_to_plugin(error, "worker registration failed"));
+        }
+        validate_registration_plan(&self.plugin_kind, &register)?;
+        let registrations = register.registrations;
+        let initial_gates = register.conditional_middleware_guardrails;
+        for gate in initial_gates {
+            let kinds = gate
+                .kinds
+                .into_iter()
+                .map(|kind| {
+                    RegistrationSurface::try_from(kind)
+                        .map_err(|_| {
+                            PluginError::RegistrationFailed(format!(
+                                "worker plugin '{}' returned an unknown conditional middleware guardrail kind",
+                                self.plugin_kind
+                            ))
+                        })
+                        .and_then(|surface| {
+                            runtime_registration_kind_from_surface(surface).map_err(|status| {
+                                PluginError::RegistrationFailed(status.message().to_string())
+                            })
+                        })
+                })
+                .collect::<crate::plugin::Result<BTreeSet<_>>>()?;
+            if let Err(error) = self
+                .host_state
+                .register_owned_conditional_middleware_guardrail(
+                    gate.name,
+                    kinds,
+                    gate.registration_name,
+                    gate.reason,
+                    gate.callback,
+                )
+            {
+                self.host_state.cleanup_conditional_middleware_guardrails();
+                return Err(PluginError::RegistrationFailed(format!(
+                    "worker initial conditional middleware guardrail failed: {error}"
+                )));
+            }
+        }
+        if registrations.iter().any(|registration| {
+            RegistrationSurface::try_from(registration.surface)
+                .is_ok_and(|surface| surface == RegistrationSurface::LlmRequestIntercept)
+        }) {
+            validate_annotated_request_consumer_compatibility(
+                &self.relay_compat,
+                &self.plugin_kind,
+            )?;
+        }
+        if registrations.iter().any(|registration| {
+            RegistrationSurface::try_from(registration.surface)
+                .is_ok_and(|surface| surface == RegistrationSurface::ToolExecutionIntercept)
+        }) {
+            validate_tool_execution_context_compatibility(&self.relay_compat, &self.plugin_kind)?;
+        }
+
+        log::info!(
+            target: "nemo_relay.worker",
+            event = "worker_connected",
+            plugin_id = self.plugin_kind.as_str();
+            "Worker plugin connected and registered"
+        );
+        Ok(registrations)
+    }
+
     fn install_registrations(
         &self,
         ctx: &mut PluginRegistrationContext,
     ) -> crate::plugin::Result<()> {
-        for registration in &self.registrations {
+        for registration in self.registrations.get().ok_or_else(|| {
+            PluginError::Internal("worker registration plan is not prepared".into())
+        })? {
             let surface = RegistrationSurface::try_from(registration.surface).map_err(|_| {
                 PluginError::RegistrationFailed(format!(
                     "worker plugin '{}' returned unsupported registration surface {}",

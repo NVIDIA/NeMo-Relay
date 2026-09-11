@@ -46,6 +46,36 @@ impl WorkerPlugin for FixtureWorkerPlugin {
     }
 
     fn register(&self, ctx: &mut PluginContext, config: &Json) -> nemo_relay_worker::Result<()> {
+        if fixture_flag(config, "discover_observability") {
+            let runtime = ctx.runtime().expect("host runtime should be available");
+            let registrations = std::thread::spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("discovery runtime")
+                    .block_on(runtime.list_runtime_registrations(Some(BTreeSet::from([
+                        RuntimeRegistrationKind::Subscriber,
+                    ]))))
+            })
+            .join()
+            .expect("discovery thread")?;
+            let targets = registrations.into_iter().filter(|registration| {
+                registration.local_name == "opentelemetry"
+                    && registration.owner.plugin_kind.as_deref() == Some("observability")
+            }).collect::<Vec<_>>();
+            if targets.len() != 1 {
+                return Err(WorkerSdkError::Callback(format!(
+                    "expected one observability subscriber during registration; found {}",
+                    targets.len()
+                )));
+            }
+            ctx.register_conditional_middleware_guardrail(
+                "discovered_observability_gate",
+                BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+                &targets[0].effective_name,
+                |_, _| async { Ok(Some("fixture export policy".into())) },
+            );
+        }
         if fixture_flag(config, "exit_in_register") {
             std::process::exit(43);
         }
