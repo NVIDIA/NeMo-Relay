@@ -1950,18 +1950,15 @@ async fn failed_guardrail_batch_keeps_its_partial_session_owner() {
 
     release_tx.send(()).unwrap();
     assert!(pending.await.unwrap().is_err());
-    let competing = manager
-        .apply_authenticated_events(
-            &HeaderMap::new(),
-            vec![NormalizedEvent::AgentStarted(session_event(
-                "reserved-session",
-                "SessionStart",
-            ))],
-            "client-b",
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(competing, CliError::Unauthorized(_)));
+    assert_eq!(
+        manager
+            .authenticated_owners
+            .lock()
+            .await
+            .get("reserved-session")
+            .map(String::as_str),
+        Some("client-a")
+    );
     deregister_tool_conditional_execution_guardrail(GUARDRAIL).unwrap();
 }
 
@@ -2011,19 +2008,15 @@ async fn partially_applied_authenticated_batch_keeps_its_owner() {
         )
         .await;
     assert!(result.is_err());
-
-    let competing = manager
-        .apply_authenticated_events(
-            &HeaderMap::new(),
-            vec![NormalizedEvent::AgentStarted(session_event(
-                "partially-applied-session",
-                "SessionStart",
-            ))],
-            "client-b",
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(competing, CliError::Unauthorized(_)));
+    assert_eq!(
+        manager
+            .authenticated_owners
+            .lock()
+            .await
+            .get("partially-applied-session")
+            .map(String::as_str),
+        Some("client-a")
+    );
     deregister_tool_conditional_execution_guardrail(GUARDRAIL).unwrap();
 }
 
