@@ -48,17 +48,14 @@ impl WorkerPlugin for FixtureWorkerPlugin {
     fn register(&self, ctx: &mut PluginContext, config: &Json) -> nemo_relay_worker::Result<()> {
         if fixture_flag(config, "discover_observability") {
             let runtime = ctx.runtime().expect("host runtime should be available");
-            let registrations = std::thread::spawn(move || {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("discovery runtime")
-                    .block_on(runtime.list_runtime_registrations(Some(BTreeSet::from([
+            let registrations = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async move {
+                    runtime.list_runtime_registrations(Some(BTreeSet::from([
                         RuntimeRegistrationKind::Subscriber,
-                    ]))))
+                    ]))).await
+                })
             })
-            .join()
-            .expect("discovery thread")?;
+            ?;
             let targets = registrations.into_iter().filter(|registration| {
                 registration.local_name == "opentelemetry"
                     && registration.owner.plugin_kind.as_deref() == Some("observability")
