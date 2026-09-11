@@ -196,27 +196,30 @@ fn http_client_reads_current_values_and_stops_before_network_on_resolution_failu
         HeaderFileResolver::new(files),
     );
     let endpoint = format!("http://{address}/v1/logs");
+    let runtime = tokio::runtime::Runtime::new().unwrap();
 
     fs::write(&path, "Bearer first\n").unwrap();
-    futures::executor::block_on(
-        client.send_bytes(
-            Request::builder()
-                .uri(&endpoint)
-                .body(Bytes::new())
-                .unwrap(),
-        ),
-    )
-    .unwrap();
+    runtime
+        .block_on(
+            client.send_bytes(
+                Request::builder()
+                    .uri(&endpoint)
+                    .body(Bytes::new())
+                    .unwrap(),
+            ),
+        )
+        .unwrap();
     fs::write(&path, "Bearer second\n").unwrap();
-    futures::executor::block_on(
-        client.send_bytes(
-            Request::builder()
-                .uri(&endpoint)
-                .body(Bytes::new())
-                .unwrap(),
-        ),
-    )
-    .unwrap();
+    runtime
+        .block_on(
+            client.send_bytes(
+                Request::builder()
+                    .uri(&endpoint)
+                    .body(Bytes::new())
+                    .unwrap(),
+            ),
+        )
+        .unwrap();
     assert_eq!(received.join().unwrap(), ["Bearer first", "Bearer second"]);
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -224,10 +227,11 @@ fn http_client_reads_current_values_and_stops_before_network_on_resolution_failu
     fs::remove_file(&path).unwrap();
     let endpoint = format!("http://{}/v1/logs", listener.local_addr().unwrap());
     assert!(
-        futures::executor::block_on(
-            client.send_bytes(Request::builder().uri(endpoint).body(Bytes::new()).unwrap(),)
-        )
-        .is_err()
+        runtime
+            .block_on(
+                client.send_bytes(Request::builder().uri(endpoint).body(Bytes::new()).unwrap(),)
+            )
+            .is_err()
     );
     assert!(listener.accept().is_err());
 }
