@@ -4,18 +4,129 @@
 //! Child-session aliasing and lifecycle-event routing.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use nemo_relay::api::runtime::SubscriberDelivery;
 use serde_json::Value;
+use tokio::sync::Mutex;
 
 use crate::agents::shared::alignment::{
-    self, PendingSubagentStart, SessionAlias, SessionAlignmentState, merge_metadata,
+    PendingSubagentStart, SessionAlias, SessionAlignmentState, merge_metadata,
 };
 use crate::configuration::SessionConfig;
 use crate::error::CliError;
 use crate::events::{AgentKind, NormalizedEvent, SessionEvent};
 
-use super::{LlmGatewayStart, Session, ToolArgumentTransform};
+use super::{
+    AuthenticatedOwners, AuthenticatedReservations, LlmGatewayStart, Session, SessionActivity,
+    SessionGates, ToolArgumentTransform, session_gate,
+};
+
+#[derive(Clone, Copy)]
+pub(super) struct AuthenticatedRouting<'a> {
+    pub(super) owner: Option<&'a str>,
+    owners: Option<&'a AuthenticatedOwners>,
+    reservations: Option<&'a AuthenticatedReservations>,
+}
+
+impl<'a> AuthenticatedRouting<'a> {
+    pub(super) fn new(
+        owner: Option<&'a str>,
+        owners: &'a AuthenticatedOwners,
+        reservations: &'a AuthenticatedReservations,
+    ) -> Self {
+        Self {
+            owner,
+            owners: owner.map(|_| owners),
+            reservations: owner.map(|_| reservations),
+        }
+    }
+}
+
+pub(super) struct SessionEventApplier<'a> {
+    sessions: &'a Arc<Mutex<HashMap<String, Session>>>,
+    gates: &'a SessionGates,
+    activity: &'a SessionActivity,
+    config: SessionConfig,
+}
+
+impl<'a> SessionEventApplier<'a> {
+    pub(super) fn new(
+        sessions: &'a Arc<Mutex<HashMap<String, Session>>>,
+        gates: &'a SessionGates,
+        activity: &'a SessionActivity,
+        config: SessionConfig,
+    ) -> Self {
+        Self {
+            sessions,
+            gates,
+            activity,
+            config,
+        }
+    }
+
+    pub(super) async fn apply(
+        &self,
+        session_id: &str,
+        event: NormalizedEvent,
+        event_kind: AgentKind,
+        is_agent_started: bool,
+    ) -> Result<
+        Option<(
+            bool,
+            Option<SubscriberDelivery>,
+            Option<ToolArgumentTransform>,
+        )>,
+        CliError,
+    > {
+        let _activity = self.activity.begin();
+        let gate = session_gate(self.gates, session_id).await;
+        let _gate = gate.lock().await;
+        if self.activity.is_closing() {
+            return Ok(None);
+        }
+        let session = {
+            let mut sessions = self.sessions.lock().await;
+            sessions.remove(session_id)
+        };
+        if session.is_none() && event.is_terminal() {
+            return Ok(None);
+        }
+        let mut session = session.unwrap_or_else(|| {
+            Session::new(session_id.to_string(), event_kind, self.config.clone())
+        });
+        if is_agent_started
+            && session.agent_kind == AgentKind::Gateway
+            && event_kind != AgentKind::Gateway
+        {
+            session.agent_kind = event_kind;
+        }
+        match session.apply(event).await {
+            Ok(subscriber_delivery) => {
+                let is_empty = session.is_empty();
+                let tool_argument_transform = session.take_tool_argument_transform();
+                if !is_empty {
+                    self.sessions
+                        .lock()
+                        .await
+                        .insert(session_id.to_string(), session);
+                }
+                Ok(Some((
+                    is_empty,
+                    subscriber_delivery,
+                    tool_argument_transform,
+                )))
+            }
+            Err(error) => {
+                self.sessions
+                    .lock()
+                    .await
+                    .insert(session_id.to_string(), session);
+                Err(error)
+            }
+        }
+    }
+}
 
 pub(super) fn apply_start_alias(start: &mut LlmGatewayStart, alias: &SessionAlias) {
     start.session_id = Some(alias.parent_session_id.clone());
@@ -24,18 +135,16 @@ pub(super) fn apply_start_alias(start: &mut LlmGatewayStart, alias: &SessionAlia
 }
 
 pub(super) async fn queue_or_promote_child_start(
-    event: &mut NormalizedEvent,
+    pending_child: Option<(String, PendingSubagentStart)>,
     sessions: &mut HashMap<String, Session>,
     alignment_state: &mut SessionAlignmentState,
     config: SessionConfig,
-    authenticated_owners: Option<&HashMap<String, String>>,
-    authenticated_owner: Option<&str>,
+    authenticated: AuthenticatedRouting<'_>,
 ) -> Result<bool, CliError> {
-    let Some((child_session_id, mut pending)) = alignment::pending_subagent_start(event).await
-    else {
+    let Some((child_session_id, mut pending)) = pending_child else {
         return Ok(false);
     };
-    pending.set_authenticated_owner(authenticated_owner.map(ToOwned::to_owned));
+    pending.set_authenticated_owner(authenticated.owner.map(ToOwned::to_owned));
     if sessions
         .get(&child_session_id)
         .is_some_and(|session| !session.can_reparent_as_subagent_alias())
@@ -44,10 +153,12 @@ pub(super) async fn queue_or_promote_child_start(
     }
     if sessions.contains_key(pending.parent_session_id()) {
         if !parent_owner_matches(
-            authenticated_owners,
+            authenticated,
             pending.parent_session_id(),
             pending.authenticated_owner(),
-        ) {
+        )
+        .await
+        {
             return Err(CliError::Unauthorized(format!(
                 "Relay hook client does not own session '{}'",
                 pending.parent_session_id()
@@ -60,7 +171,7 @@ pub(super) async fn queue_or_promote_child_start(
             child_session_id,
             pending,
             config,
-            authenticated_owners,
+            authenticated,
         )
         .await?;
     } else {
@@ -70,52 +181,21 @@ pub(super) async fn queue_or_promote_child_start(
     Ok(true)
 }
 
-pub(super) async fn apply_event_to_session(
-    sessions: &mut HashMap<String, Session>,
-    session_id: &str,
-    event: NormalizedEvent,
-    event_kind: AgentKind,
-    config: SessionConfig,
-    is_agent_started: bool,
-) -> Result<
-    (
-        bool,
-        Option<SubscriberDelivery>,
-        Option<ToolArgumentTransform>,
-    ),
-    CliError,
-> {
-    let session = sessions
-        .entry(session_id.to_string())
-        .or_insert_with(|| Session::new(session_id.to_string(), event_kind, config));
-    if is_agent_started
-        && session.agent_kind == AgentKind::Gateway
-        && event_kind != AgentKind::Gateway
-    {
-        session.agent_kind = event_kind;
-    }
-    let subscriber_delivery = session.apply(event).await?;
-    let tool_argument_transform = session.take_tool_argument_transform();
-    Ok((
-        session.is_empty(),
-        subscriber_delivery,
-        tool_argument_transform,
-    ))
-}
-
 pub(super) async fn promote_pending_subagents_for_parent(
     sessions: &mut HashMap<String, Session>,
     alignment_state: &mut SessionAlignmentState,
     parent_session_id: &str,
     config: SessionConfig,
-    authenticated_owners: Option<&HashMap<String, String>>,
+    authenticated: AuthenticatedRouting<'_>,
 ) -> Result<(), CliError> {
     for (child_session_id, pending) in alignment_state.pending_for_parent(parent_session_id) {
         if !parent_owner_matches(
-            authenticated_owners,
+            authenticated,
             parent_session_id,
             pending.authenticated_owner(),
-        ) {
+        )
+        .await
+        {
             continue;
         }
         promote_pending_subagent(
@@ -124,7 +204,7 @@ pub(super) async fn promote_pending_subagents_for_parent(
             child_session_id,
             pending,
             config.clone(),
-            authenticated_owners,
+            authenticated,
         )
         .await?;
     }
@@ -137,7 +217,7 @@ pub(super) async fn promote_pending_subagent(
     child_session_id: String,
     pending: PendingSubagentStart,
     config: SessionConfig,
-    authenticated_owners: Option<&HashMap<String, String>>,
+    authenticated: AuthenticatedRouting<'_>,
 ) -> Result<Option<SessionAlias>, CliError> {
     if sessions
         .get(&child_session_id)
@@ -148,10 +228,12 @@ pub(super) async fn promote_pending_subagent(
     sessions.remove(&child_session_id);
     let parent_session_id = pending.parent_session_id().to_string();
     if !parent_owner_matches(
-        authenticated_owners,
+        authenticated,
         &parent_session_id,
         pending.authenticated_owner(),
-    ) {
+    )
+    .await
+    {
         return Ok(None);
     }
     let parent_session = sessions
@@ -181,30 +263,30 @@ pub(super) async fn promote_pending_subagent(
     Ok(Some(alias))
 }
 
-fn parent_owner_matches(
-    authenticated_owners: Option<&HashMap<String, String>>,
+async fn parent_owner_matches(
+    authenticated: AuthenticatedRouting<'_>,
     parent_session_id: &str,
     pending_owner: Option<&str>,
 ) -> bool {
-    match (authenticated_owners, pending_owner) {
-        (Some(owners), Some(owner)) => owners
-            .get(parent_session_id)
-            .is_some_and(|existing| existing == owner),
+    match (
+        authenticated.owners,
+        authenticated.reservations,
+        pending_owner,
+    ) {
+        (Some(owners), Some(reservations), Some(owner)) => {
+            super::owner_matches(owners, reservations, parent_session_id, owner).await
+        }
         _ => true,
     }
 }
 
 pub(super) fn route_event_for_session(
     event: NormalizedEvent,
-    sessions: &mut HashMap<String, Session>,
     alignment_state: &mut SessionAlignmentState,
 ) -> Option<(NormalizedEvent, String, bool)> {
     let event = alignment_state.route_event(event);
     let session_id = event.session_id().to_string();
     let is_agent_started = matches!(&event, NormalizedEvent::AgentStarted(_));
 
-    if event.is_terminal() && !sessions.contains_key(&session_id) {
-        return None;
-    }
     Some((event, session_id, is_agent_started))
 }

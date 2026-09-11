@@ -4,6 +4,9 @@
 use axum::http::HeaderMap;
 use nemo_relay::api::event::{Event, ScopeCategory};
 use nemo_relay::api::llm::{LlmCallExecuteParams, llm_call_execute};
+use nemo_relay::api::registry::{
+    deregister_tool_conditional_execution_guardrail, register_tool_conditional_execution_guardrail,
+};
 use nemo_relay::api::runtime::EventSubscriberFn;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::resolve::{
@@ -1773,6 +1776,87 @@ async fn terminal_subscriber_wait_releases_session_manager_locks() {
 
     parallel_result
         .expect("another session must remain writable while terminal subscribers are active")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn slow_tool_guardrail_does_not_block_another_session() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-session-isolation-slow-tool";
+    const TOOL: &str = "session-isolation-slow-tool";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started_tx = Arc::new(StdMutex::new(Some(started_tx)));
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let release_rx = Arc::new(StdMutex::new(Some(release_rx)));
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(move |name, _| {
+            let started_tx = Arc::clone(&started_tx);
+            let release_rx = Arc::clone(&release_rx);
+            let blocks = name == TOOL;
+            Box::pin(async move {
+                if blocks {
+                    if let Some(started) = started_tx.lock().unwrap().take() {
+                        let _ = started.send(());
+                    }
+                    let release = { release_rx.lock().unwrap().take() };
+                    if let Some(release) = release {
+                        let _ = release.await;
+                    }
+                }
+                Ok(None)
+            })
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let blocked_manager = manager.clone();
+    let blocked = tokio::spawn(async move {
+        blocked_manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "blocked-tool-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "blocked-tool".into(),
+                    tool_name: TOOL.into(),
+                    subagent_id: None,
+                    arguments: json!({}),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                })],
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), started_rx)
+        .await
+        .expect("slow guardrail should start")
+        .unwrap();
+
+    let parallel = tokio::time::timeout(
+        Duration::from_millis(250),
+        manager.apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::Notification(codex_session_event(
+                "parallel-tool-session",
+                "notification",
+                json!({ "session_id": "parallel-tool-session" }),
+            ))],
+        ),
+    )
+    .await;
+
+    release_tx.send(()).unwrap();
+    blocked.await.unwrap().unwrap();
+    deregister_tool_conditional_execution_guardrail(GUARDRAIL).unwrap();
+    parallel
+        .expect("another session must progress while a tool guardrail is waiting")
         .unwrap();
 }
 

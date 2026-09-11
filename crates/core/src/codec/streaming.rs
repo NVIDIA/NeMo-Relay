@@ -99,6 +99,11 @@ pub trait StreamingCodec: Send + Sync {
 #[derive(Default)]
 pub struct SseEventDecoder {
     buffer: String,
+    // Start the next delimiter search near the only position where a newly
+    // appended chunk can complete an unfinished `\n\n` terminator. Completed
+    // frames are compacted once after each push instead of shifting the buffer
+    // for every frame.
+    scan_from: usize,
 }
 
 /// One decoded SSE frame, paired with the parsed `data:` payload.
@@ -143,15 +148,25 @@ impl SseEventDecoder {
         // and remove it only when the next byte completes the sequence.
         if self.buffer.ends_with('\r') && bytes.first() == Some(&b'\n') {
             self.buffer.pop();
+            // Removing the trailing CR means the preceding LF can now pair with the incoming LF.
+            self.scan_from = self.scan_from.min(self.buffer.len().saturating_sub(1));
         }
-        let chunk = String::from_utf8_lossy(bytes).replace("\r\n", "\n");
-        self.buffer.push_str(&chunk);
+        let chunk = String::from_utf8_lossy(bytes);
+        if chunk.contains("\r\n") {
+            self.buffer.push_str(&chunk.replace("\r\n", "\n"));
+        } else {
+            self.buffer.push_str(&chunk);
+        }
         let mut results = Vec::new();
-        while let Some(cut) = self.buffer.find("\n\n") {
-            let frame: String = self.buffer.drain(..cut).collect();
-            // Drop the `\n\n` terminator itself.
-            self.buffer.drain(..2);
-            match parse_sse_frame(&frame) {
+        let mut consumed = 0;
+        let mut search_from = self.scan_from.min(self.buffer.len());
+        while let Some(relative_cut) = self.buffer[search_from..].find("\n\n") {
+            let cut = search_from + relative_cut;
+            // `consumed` marks the start of the unparsed frame. Borrowing the
+            // frame avoids allocating a string for every SSE event.
+            let frame = &self.buffer[consumed..cut];
+            consumed = cut + 2;
+            match parse_sse_frame(frame) {
                 Ok(Some(event)) => results.push(Ok(event)),
                 Ok(None) => {}
                 Err(error) => {
@@ -159,6 +174,16 @@ impl SseEventDecoder {
                     break;
                 }
             }
+            search_from = consumed;
+        }
+        if consumed > 0 {
+            self.buffer.drain(..consumed);
+            self.scan_from = 0;
+        }
+        if results.last().is_none_or(Result::is_ok) {
+            // The next terminator can only start at the prior final byte; do
+            // not rescan an incomplete frame from its beginning on every chunk.
+            self.scan_from = self.buffer.len().saturating_sub(1);
         }
         results
     }

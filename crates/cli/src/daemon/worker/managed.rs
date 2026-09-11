@@ -106,6 +106,11 @@ const INTERNAL_DISPATCH_ROUTE_HEADER: &str = "x-nemo-relay-internal-dispatch-rou
 const INTERNAL_DISPATCH_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
 const INTERNAL_RETRY_AWARE_HEADER: &str = "x-nemo-relay-internal-retry-aware";
 
+#[derive(Clone, Copy)]
+pub(super) struct ProviderMiddlewareRequirements {
+    request_body_decode_required: bool,
+}
+
 /// Runtime-owned plugin activation, hook sessions, and response observation.
 pub(super) struct ManagedRuntime {
     config: GatewayConfig,
@@ -125,7 +130,7 @@ impl ManagedRuntime {
         let activation =
             crate::server::initialize_plugin_host(config.plugin_config.clone(), dynamic_plugins)
                 .await?;
-        if let Err(error) = reject_incompatible_execution_middleware() {
+        if let Err(error) = provider_middleware_requirements() {
             if let Some(activation) = activation {
                 let _ = activation.clear();
             }
@@ -144,8 +149,18 @@ impl ManagedRuntime {
 
     /// Rechecks the transport contract before a provider body is polled. Plugin activation is
     /// normally static, but this also fails closed if a component installs middleware later.
+    #[cfg(test)]
     pub(super) fn ensure_streaming_transport_compatible(&self) -> Result<(), CliError> {
-        reject_incompatible_execution_middleware()
+        self.provider_middleware_requirements().map(|_| ())
+    }
+
+    /// Snapshots the middleware contract once for an incoming provider request.
+    /// This keeps late registration fail-closed while avoiding separate global
+    /// registry enumeration for raw-delivery compatibility and body decoding.
+    pub(super) fn provider_middleware_requirements(
+        &self,
+    ) -> Result<ProviderMiddlewareRequirements, CliError> {
+        provider_middleware_requirements()
     }
 
     pub(super) async fn close(&self) -> Result<(), CliError> {
@@ -256,16 +271,33 @@ impl ManagedRuntime {
         }
     }
 
+    #[cfg(test)]
     pub(super) async fn proxy_provider(
+        &self,
+        upstream: PooledClient,
+        request: Request<Body>,
+        route: ProviderRoute,
+    ) -> Result<Response<RelayBody>, CliError> {
+        self.proxy_provider_with_requirements(
+            upstream,
+            request,
+            route,
+            self.provider_middleware_requirements()?,
+        )
+        .await
+    }
+
+    pub(super) async fn proxy_provider_with_requirements(
         &self,
         upstream: PooledClient,
         mut request: Request<Body>,
         route: ProviderRoute,
+        middleware: ProviderMiddlewareRequirements,
     ) -> Result<Response<RelayBody>, CliError> {
         let Some(surface) = provider_surface(request.uri().path()) else {
             return dispatch_unmanaged(upstream, request, route, &self.config).await;
         };
-        if !request_body_decode_required()? {
+        if !middleware.request_body_decode_required {
             strip_worker_headers(request.headers_mut());
             strip_untrusted_dispatch_headers(request.headers_mut());
             let streaming_hint = request_streaming_hint(request.headers());
@@ -1015,14 +1047,30 @@ fn prepared_streaming(request: &LlmRequest) -> bool {
     stream_mode(request)
 }
 
-fn request_body_decode_required() -> Result<bool, CliError> {
+fn provider_middleware_requirements() -> Result<ProviderMiddlewareRequirements, CliError> {
     let kinds = BTreeSet::from([
         RuntimeRegistrationKind::LlmSanitizeRequestGuardrail,
         RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
         RuntimeRegistrationKind::LlmRequestIntercept,
+        RuntimeRegistrationKind::LlmExecutionIntercept,
+        RuntimeRegistrationKind::LlmStreamExecutionIntercept,
     ]);
     let registrations = list_runtime_registrations(Some(&kinds)).map_err(CliError::from)?;
-    Ok(registrations.iter().any(registration_reads_request_body))
+    let incompatible = incompatible_registration_names(&registrations);
+    if !incompatible.is_empty() {
+        return Err(CliError::Config(format!(
+            "daemon worker raw delivery is incompatible with LLM execution middleware: {}",
+            incompatible.join(", ")
+        )));
+    }
+    Ok(ProviderMiddlewareRequirements {
+        request_body_decode_required: registrations.iter().any(registration_reads_request_body),
+    })
+}
+
+#[cfg(test)]
+fn request_body_decode_required() -> Result<bool, CliError> {
+    provider_middleware_requirements().map(|requirements| requirements.request_body_decode_required)
 }
 
 fn registration_reads_request_body(registration: &RuntimeRegistrationIdentity) -> bool {
@@ -1034,24 +1082,9 @@ fn registration_reads_request_body(registration: &RuntimeRegistrationIdentity) -
     )
 }
 
+#[cfg(test)]
 fn reject_incompatible_execution_middleware() -> Result<(), CliError> {
-    // Execution intercepts own the provider callback and may replace, suppress, retry, or mutate
-    // its result. The raw worker transport cannot safely invoke that contract while also returning
-    // the provider's response head and frames unchanged. Request intercepts and conditional
-    // execution guardrails remain supported above the transport boundary.
-    let kinds = BTreeSet::from([
-        RuntimeRegistrationKind::LlmExecutionIntercept,
-        RuntimeRegistrationKind::LlmStreamExecutionIntercept,
-    ]);
-    let registrations = list_runtime_registrations(Some(&kinds)).map_err(CliError::from)?;
-    let incompatible = incompatible_registration_names(&registrations);
-    if incompatible.is_empty() {
-        return Ok(());
-    }
-    Err(CliError::Config(format!(
-        "daemon worker raw delivery is incompatible with LLM execution middleware: {}",
-        incompatible.join(", ")
-    )))
+    provider_middleware_requirements().map(|_| ())
 }
 
 fn incompatible_registration_names(registrations: &[RuntimeRegistrationIdentity]) -> Vec<String> {

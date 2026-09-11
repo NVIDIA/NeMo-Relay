@@ -74,10 +74,16 @@ pub(super) async fn release_closed_owner_ids(
     if released_owner_ids.is_empty() {
         return;
     }
-    let mut owners = authenticated_owners.lock().await;
     let sessions = inner.lock().await;
+    let retained = released_owner_ids
+        .iter()
+        .filter(|session_id| sessions.contains_key(session_id.as_str()))
+        .cloned()
+        .collect::<HashSet<_>>();
+    drop(sessions);
+    let mut owners = authenticated_owners.lock().await;
     owners.retain(|session_id, _| {
-        !released_owner_ids.contains(session_id) || sessions.contains_key(session_id)
+        !released_owner_ids.contains(session_id) || retained.contains(session_id)
     });
 }
 

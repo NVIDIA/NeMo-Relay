@@ -211,12 +211,29 @@ fn passthrough_body_error(error: axum::Error) -> CliError {
     }
 }
 
+#[cfg(test)]
 pub(super) fn build_llm_gateway_start(request: &PreparedGatewayRequest) -> LlmGatewayStart {
     build_llm_gateway_start_from_parts(
         &request.headers,
         &request.path,
         request.provider,
         request.request_json.clone(),
+        request.streaming,
+    )
+}
+
+/// Transfers the already-parsed request JSON into the session start event.
+///
+/// The gateway only needs this representation once after request preparation, so moving it avoids
+/// a second full copy for large provider prompts. The borrowed builder above remains available for
+/// callers that must retain a prepared request.
+pub(super) fn take_llm_gateway_start(request: &mut PreparedGatewayRequest) -> LlmGatewayStart {
+    let request_json = std::mem::take(&mut request.request_json);
+    build_llm_gateway_start_from_parts(
+        &request.headers,
+        &request.path,
+        request.provider,
+        request_json,
         request.streaming,
     )
 }
