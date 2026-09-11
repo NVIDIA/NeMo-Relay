@@ -123,6 +123,9 @@ pub(crate) struct SessionManager {
     // Applies to Codex child threads today; the generic state lives in `alignment` so session code
     // only orchestrates when promotion is safe.
     alignment: Arc<Mutex<SessionAlignmentState>>,
+    // Alignment routes coordinate ownership checks and session-directory updates. This lock is
+    // never held while middleware or subscriber delivery runs.
+    alignment_routing: Arc<Mutex<()>>,
     default_config: GatewayConfig,
 }
 
@@ -449,6 +452,7 @@ impl SessionManager {
             authenticated_owners: Arc::new(Mutex::new(HashMap::new())),
             authenticated_reservations: Arc::new(Mutex::new(HashMap::new())),
             alignment: Arc::new(Mutex::new(SessionAlignmentState::default())),
+            alignment_routing: Arc::new(Mutex::new(())),
             default_config,
         }
     }
@@ -506,6 +510,7 @@ impl SessionManager {
                 drop(owners);
                 release_closed_owner_ids(
                     &self.inner,
+                    &self.session_gates,
                     &self.authenticated_owners,
                     &released_owner_ids,
                 )
@@ -578,6 +583,7 @@ impl SessionManager {
     /// shutdown paths.
     pub(crate) fn start_idle_sweeper(&self) {
         let inner = Arc::downgrade(&self.inner);
+        let session_gates = Arc::downgrade(&self.session_gates);
         let authenticated_owners = Arc::downgrade(&self.authenticated_owners);
         let alignment = Arc::downgrade(&self.alignment);
         tokio::spawn(async move {
@@ -585,8 +591,9 @@ impl SessionManager {
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
-                let (Some(inner), Some(authenticated_owners), Some(alignment)) = (
+                let (Some(inner), Some(session_gates), Some(authenticated_owners), Some(alignment)) = (
                     inner.upgrade(),
+                    session_gates.upgrade(),
                     authenticated_owners.upgrade(),
                     alignment.upgrade(),
                 ) else {
@@ -594,6 +601,7 @@ impl SessionManager {
                 };
                 if let Err(error) = close_idle_sessions_from_parts(
                     &inner,
+                    &session_gates,
                     &authenticated_owners,
                     &alignment,
                     Instant::now(),
@@ -748,6 +756,17 @@ impl SessionManager {
         config: SessionConfig,
         authenticated: AuthenticatedRouting<'_>,
     ) -> Result<Option<(NormalizedEvent, String, bool)>, CliError> {
+        let _routing = self.alignment_routing.lock().await;
+        let parent_gate = match pending_child.as_ref() {
+            Some((_, pending)) => {
+                Some(session_gate(&self.session_gates, pending.parent_session_id()).await)
+            }
+            None => None,
+        };
+        let _parent_gate = match parent_gate.as_ref() {
+            Some(gate) => Some(gate.lock().await),
+            None => None,
+        };
         let (routed, alias) = {
             let mut alignment_state = self.alignment.lock().await;
             let mut sessions = self.inner.lock().await;
@@ -805,6 +824,9 @@ impl SessionManager {
         config: SessionConfig,
         authenticated: AuthenticatedRouting<'_>,
     ) -> Result<(), CliError> {
+        let _routing = self.alignment_routing.lock().await;
+        let gate = session_gate(&self.session_gates, parent_session_id).await;
+        let _gate = gate.lock().await;
         let mut alignment_state = self.alignment.lock().await;
         let mut sessions = self.inner.lock().await;
         promote_pending_subagents_for_parent(
@@ -929,7 +951,7 @@ impl SessionManager {
     /// provider request or streaming response is still active.
     pub(crate) async fn finish_gateway_call(&self, session_id: &str, finish: GatewaySessionFinish) {
         let gate = session_gate(&self.session_gates, session_id).await;
-        let _gate = gate.lock().await;
+        let gate_guard = gate.lock().await;
         let mut sessions = self.inner.lock().await;
         if let Some(session) = sessions.get_mut(session_id) {
             session.finish_gateway_call();
@@ -944,10 +966,12 @@ impl SessionManager {
         });
         let mut closing = completed.then(|| sessions.remove(session_id)).flatten();
         drop(sessions);
+        drop(gate_guard);
 
         if completed {
             release_closed_owner_ids(
                 &self.inner,
+                &self.session_gates,
                 &self.authenticated_owners,
                 &HashSet::from([session_id.to_string()]),
             )
@@ -1107,6 +1131,7 @@ impl SessionManager {
     ) -> Result<usize, CliError> {
         close_idle_sessions_from_parts(
             &self.inner,
+            &self.session_gates,
             &self.authenticated_owners,
             &self.alignment,
             now,
@@ -1128,6 +1153,7 @@ impl SessionManager {
         let Some(session_id) = start.session_id.clone() else {
             return Ok(None);
         };
+        let _routing = self.alignment_routing.lock().await;
         let mut owners = self.authenticated_owners.lock().await;
         let mut alignment_state = self.alignment.lock().await;
         if let Some(alias) = alignment_state.alias_for_session(&session_id) {
@@ -1165,6 +1191,8 @@ impl SessionManager {
         // map lock into session promotion; routing acquires the directory first
         // before checking ownership.
         drop(owners);
+        let gate = session_gate(&self.session_gates, pending.parent_session_id()).await;
+        let _gate = gate.lock().await;
         let mut sessions = self.inner.lock().await;
         let alias = promote_pending_subagent(
             &mut sessions,

@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 use crate::agents::shared::alignment::SessionAlignmentState;
 use crate::error::CliError;
 
-use super::Session;
+use super::{Session, SessionGates, session_gate};
 
 pub(super) const AGENT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) const AGENT_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
@@ -35,6 +35,7 @@ pub(super) async fn close_sessions_for_shutdown(
 
 pub(super) async fn close_idle_sessions_from_parts(
     inner: &Arc<Mutex<HashMap<String, Session>>>,
+    session_gates: &SessionGates,
     authenticated_owners: &Arc<Mutex<HashMap<String, String>>>,
     alignment: &Arc<Mutex<SessionAlignmentState>>,
     now: Instant,
@@ -62,29 +63,31 @@ pub(super) async fn close_idle_sessions_from_parts(
     let cleanup_sessions =
         restore_retained_sessions(inner, retained_sessions, &closed_subagents).await;
     clear_closed_subagents(alignment, closed_subagents, &cleanup_sessions).await;
-    release_closed_owner_ids(inner, authenticated_owners, &released_owner_ids).await;
+    release_closed_owner_ids(
+        inner,
+        session_gates,
+        authenticated_owners,
+        &released_owner_ids,
+    )
+    .await;
     first_error.map_or(Ok(closed_turns), Err)
 }
 
 pub(super) async fn release_closed_owner_ids(
     inner: &Arc<Mutex<HashMap<String, Session>>>,
+    session_gates: &SessionGates,
     authenticated_owners: &Arc<Mutex<HashMap<String, String>>>,
     released_owner_ids: &HashSet<String>,
 ) {
-    if released_owner_ids.is_empty() {
-        return;
+    for session_id in released_owner_ids {
+        // The gate protects this presence check and deletion from a hook recreating the same
+        // session while it is applying middleware.
+        let gate = session_gate(session_gates, session_id).await;
+        let _gate = gate.lock().await;
+        if !inner.lock().await.contains_key(session_id) {
+            authenticated_owners.lock().await.remove(session_id);
+        }
     }
-    let sessions = inner.lock().await;
-    let retained = released_owner_ids
-        .iter()
-        .filter(|session_id| sessions.contains_key(session_id.as_str()))
-        .cloned()
-        .collect::<HashSet<_>>();
-    drop(sessions);
-    let mut owners = authenticated_owners.lock().await;
-    owners.retain(|session_id, _| {
-        !released_owner_ids.contains(session_id) || retained.contains(session_id)
-    });
 }
 
 async fn take_idle_sessions(

@@ -149,7 +149,7 @@ impl SseEventDecoder {
         if self.buffer.ends_with('\r') && bytes.first() == Some(&b'\n') {
             self.buffer.pop();
             // Removing the trailing CR means the preceding LF can now pair with the incoming LF.
-            self.scan_from = self.scan_from.min(self.buffer.len().saturating_sub(1));
+            self.scan_from = self.buffer.len() - usize::from(self.buffer.ends_with('\n'));
         }
         let chunk = String::from_utf8_lossy(bytes);
         if chunk.contains("\r\n") {
@@ -183,7 +183,7 @@ impl SseEventDecoder {
         if results.last().is_none_or(Result::is_ok) {
             // The next terminator can only start at the prior final byte; do
             // not rescan an incomplete frame from its beginning on every chunk.
-            self.scan_from = self.buffer.len().saturating_sub(1);
+            self.scan_from = self.buffer.len() - usize::from(self.buffer.ends_with('\n'));
         }
         results
     }
