@@ -224,6 +224,31 @@ fn log_config_rejects_blank_and_padded_headers() {
 }
 
 #[test]
+fn log_file_backed_headers_require_https_except_for_loopback() {
+    for transport in [OtlpTransport::HttpBinary, OtlpTransport::Grpc] {
+        let error = OpenTelemetryLogConfig::new("http://collector.example/v1/logs")
+            .with_transport(transport)
+            .with_header_file("authorization", "/var/run/secrets/telemetry/token")
+            .validate()
+            .unwrap_err();
+        assert!(error.to_string().contains("requires https"), "{error}");
+
+        assert!(
+            OpenTelemetryLogConfig::new("http://127.0.0.1:4318/v1/logs")
+                .with_transport(transport)
+                .with_header_file("authorization", "/var/run/secrets/telemetry/token")
+                .validate()
+                .is_ok()
+        );
+    }
+    assert!(
+        OpenTelemetryLogConfig::new("http://collector.example/v1/logs")
+            .validate()
+            .is_ok()
+    );
+}
+
+#[test]
 fn log_config_validates_batch_limits_and_retains_resource_identity() {
     for config in [
         OpenTelemetryLogConfig::new("   "),

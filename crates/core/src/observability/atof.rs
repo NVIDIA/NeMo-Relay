@@ -25,7 +25,10 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use super::header_file::HeaderFiles;
 #[cfg(feature = "atof-streaming")]
-use super::header_file::{resolve_header_files, validate_header_files};
+use super::header_file::{
+    resolve_header_files, validate_header_file_http_endpoint,
+    validate_header_file_websocket_endpoint, validate_header_files,
+};
 use super::private_file::{create_private_dir_all, open_private};
 use crate::api::event::Event;
 use crate::api::runtime::EventSubscriberFn;
@@ -793,6 +796,17 @@ fn validate_endpoint_config(config: AtofEndpointConfig) -> Result<ActivatedAtofE
     }
     validate_header_files(&config.headers, &config.header_env, &config.header_file)
         .map_err(AtofExporterError::InvalidEndpoint)?;
+    if !config.header_file.is_empty() {
+        let validation = match config.transport {
+            AtofEndpointTransport::HttpPost | AtofEndpointTransport::Ndjson => {
+                validate_header_file_http_endpoint(&config.url)
+            }
+            AtofEndpointTransport::Websocket => {
+                validate_header_file_websocket_endpoint(&config.url)
+            }
+        };
+        validation.map_err(AtofExporterError::InvalidEndpoint)?;
+    }
     let headers = resolved_header_map(&config.headers, &config.header_env)?;
     Ok(ActivatedAtofEndpoint { config, headers })
 }
@@ -873,11 +887,13 @@ async fn run_http_post_endpoint(
     endpoint: ActivatedAtofEndpoint,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>,
 ) {
-    let client = match reqwest::Client::builder()
+    let mut client_builder = reqwest::Client::builder()
         .timeout(Duration::from_millis(endpoint.config.timeout_millis))
-        .default_headers(endpoint.headers)
-        .build()
-    {
+        .default_headers(endpoint.headers);
+    if !endpoint.config.header_file.is_empty() {
+        client_builder = client_builder.redirect(reqwest::redirect::Policy::none());
+    }
+    let client = match client_builder.build() {
         Ok(client) => client,
         Err(_) => {
             log::error!(
@@ -1253,9 +1269,13 @@ fn build_ndjson_client(
             .map_err(|_| "header_file contains an invalid header value".to_string())?;
         headers.insert(name, value);
     }
-    reqwest::Client::builder()
+    let mut client_builder = reqwest::Client::builder()
         .connect_timeout(Duration::from_millis(endpoint.config.timeout_millis))
-        .default_headers(headers)
+        .default_headers(headers);
+    if !endpoint.config.header_file.is_empty() {
+        client_builder = client_builder.redirect(reqwest::redirect::Policy::none());
+    }
+    client_builder
         .build()
         .map_err(|error| format!("client build failed: {error}"))
 }

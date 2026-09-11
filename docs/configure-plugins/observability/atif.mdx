@@ -212,7 +212,7 @@ The following table describes HTTP storage settings:
 | `endpoint` | required | Destination `http://` or `https://` URL. |
 | `headers` | `{}` | Static request headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
-| `header_file` | `{}` | Header names mapped to files read for every completed-trajectory upload. Files must exist at activation; trailing whitespace is removed from each value. |
+| `header_file` | `{}` | Header names mapped to regular files read for every completed-trajectory upload. Files must exist at activation; trailing whitespace is removed from each value. Remote destinations require HTTPS; HTTP is allowed only for localhost and loopback IPs. Redirects are not followed, so a redirect response fails that upload without forwarding the file-backed value. |
 | `timeout_millis` | `3000` | Per-request timeout in milliseconds. Must be positive. |
 
 ### Multiple Destinations

@@ -1584,6 +1584,65 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
 
 #[test]
 #[cfg(feature = "atof-streaming")]
+fn file_backed_headers_require_protected_remote_atof_destinations() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("token");
+    fs::write(&path, "Bearer token\n").unwrap();
+    let header_file = std::collections::HashMap::from([(
+        "authorization".to_string(),
+        path.to_string_lossy().into_owned(),
+    )]);
+
+    for (transport, remote, loopback) in [
+        (
+            AtofEndpointTransport::HttpPost,
+            "http://collector.example/events",
+            "http://127.0.0.1:4318/events",
+        ),
+        (
+            AtofEndpointTransport::Ndjson,
+            "http://collector.example/events",
+            "http://127.0.0.1:4318/events",
+        ),
+        (
+            AtofEndpointTransport::Websocket,
+            "ws://collector.example/events",
+            "ws://127.0.0.1:4318/events",
+        ),
+    ] {
+        let remote = AtofEndpointConfig {
+            url: remote.into(),
+            transport,
+            headers: Default::default(),
+            header_env: Default::default(),
+            header_file: header_file.clone(),
+            timeout_millis: 1,
+            field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+        };
+        assert!(validate_endpoint_config(remote).is_err());
+
+        let loopback = AtofEndpointConfig {
+            url: loopback.into(),
+            transport,
+            headers: Default::default(),
+            header_env: Default::default(),
+            header_file: header_file.clone(),
+            timeout_millis: 1,
+            field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+        };
+        assert!(validate_endpoint_config(loopback).is_ok());
+    }
+    assert!(
+        validate_endpoint_config(AtofEndpointConfig::new(
+            "http://collector.example/events",
+            AtofEndpointTransport::HttpPost,
+        ))
+        .is_ok()
+    );
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
 fn endpoint_activation_snapshots_header_env() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     let variable = format!("NEMO_RELAY_TEST_ATOF_HEADER_ENV_{}", std::process::id());

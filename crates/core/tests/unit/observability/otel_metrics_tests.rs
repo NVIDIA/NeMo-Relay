@@ -341,6 +341,31 @@ fn metric_config_rejects_blank_and_padded_headers() {
 }
 
 #[test]
+fn metric_file_backed_headers_require_https_except_for_loopback() {
+    for transport in [OtlpTransport::HttpBinary, OtlpTransport::Grpc] {
+        let error = OpenTelemetryMetricConfig::new("http://collector.example/v1/metrics")
+            .with_transport(transport)
+            .with_header_file("authorization", "/var/run/secrets/telemetry/token")
+            .validate()
+            .unwrap_err();
+        assert!(error.to_string().contains("requires https"), "{error}");
+
+        assert!(
+            OpenTelemetryMetricConfig::new("http://127.0.0.1:4318/v1/metrics")
+                .with_transport(transport)
+                .with_header_file("authorization", "/var/run/secrets/telemetry/token")
+                .validate()
+                .is_ok()
+        );
+    }
+    assert!(
+        OpenTelemetryMetricConfig::new("http://collector.example/v1/metrics")
+            .validate()
+            .is_ok()
+    );
+}
+
+#[test]
 fn metric_delivery_state_survives_exporter_error_wrapping() {
     let diagnostics = MetricDeliveryDiagnostics::new(
         "https://collector.example/v1/metrics".to_string(),

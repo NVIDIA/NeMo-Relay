@@ -138,8 +138,9 @@ endpoints must migrate to HTTPS or use a loopback collector.
 OTLP/HTTP trace exporters do not follow redirects, including redirects to other
 HTTPS endpoints. Redirects are disabled to prevent exports from bypassing transport
 validation or forwarding payloads and credentials to another destination. Configure
-the final collector URL directly. This policy applies to all trace projections; gRPC, log, and metric
-exporters are unchanged.
+the final collector URL directly. Log and metric HTTP exporters use the same
+no-redirect behavior when `header_file` is configured; gRPC does not follow HTTP
+redirects.
 
 | Field | Default | Notes |
 |---|---|---|
@@ -407,12 +408,16 @@ only by ASCII case. Reactivate the plugin to pick up a changed environment
 value.
 
 Use `header_file` when a credential is rotated in place by another process,
-such as a projected token file. Each configured file must exist when the plugin
+such as a projected token file. Each configured file must be a regular file and exist when the plugin
 activates, but its content is read only when Relay exports. Relay removes
 trailing whitespace, and a missing, unreadable, blank, or invalid value fails
 that export without exposing the value in diagnostics. A header name can appear
 in only one of `headers`, `header_env`, and `header_file`, including names that
 differ only by ASCII case. This applies to trace, log, and metric endpoints.
+Trace endpoints always require HTTPS remotely. When `header_file` is configured,
+log and metric endpoints likewise require HTTPS remotely; HTTP is allowed only
+for localhost and loopback IP addresses. OTLP/HTTP exporters do not follow
+redirects when they attach file-backed values.
 For example, an OIDC token-file writer should write the complete value
 `Bearer eyJ...` to the configured file; Relay does not infer or prepend the
 authentication scheme.

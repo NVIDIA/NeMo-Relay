@@ -3651,6 +3651,7 @@ fn validate_observability_section_fields(
             "transport",
             "endpoint",
             "headers",
+            "header_file",
             "resource_attributes",
             "service_name",
             "service_namespace",
@@ -5509,10 +5510,11 @@ impl AtifRemoteStorage {
                         return;
                     }
                 };
-                let client = match reqwest::Client::builder()
-                    .timeout(upload_config.timeout)
-                    .build()
-                {
+                let mut client_builder = reqwest::Client::builder().timeout(upload_config.timeout);
+                if !upload_config.header_file.is_empty() {
+                    client_builder = client_builder.redirect(reqwest::redirect::Policy::none());
+                }
+                let client = match client_builder.build() {
                     Ok(client) => client,
                     Err(err) => {
                         let _ = ready_tx.send(Err(std::io::Error::other(format!(
@@ -5724,6 +5726,10 @@ impl HttpUploadConfig {
             &http.header_file,
         )
         .map_err(std::io::Error::other)?;
+        if !http.header_file.is_empty() {
+            crate::observability::header_file::validate_header_file_http_endpoint(endpoint)
+                .map_err(std::io::Error::other)?;
+        }
         let mut headers = http.headers.clone();
         for (header, var_name) in &http.header_env {
             let value = resolve_env_var_field(

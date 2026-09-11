@@ -993,7 +993,8 @@ fn version_three_rejects_removed_otlp_controls() {
             "enabled": false,
             "mark_projection": "tool",
             "attribute_mappings": [],
-            "endpoint": "http://localhost:4318/v1/traces"
+            "endpoint": "http://localhost:4318/v1/traces",
+            "header_file": {"authorization": "/var/run/secrets/telemetry/token"}
         },
         "openinference": {
             "enabled": false,
@@ -1012,6 +1013,10 @@ fn version_three_rejects_removed_otlp_controls() {
     assert!(report.diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "observability.legacy_opentelemetry_field"
             && diagnostic.field.as_deref() == Some("endpoint")
+    }));
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "observability.legacy_opentelemetry_field"
+            && diagnostic.field.as_deref() == Some("header_file")
     }));
     assert!(report.diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "observability.legacy_openinference_section"
@@ -5523,6 +5528,20 @@ fn http_upload_config_rejects_endpoint_timeout_and_header_errors() {
     config.headers.clear();
     config.headers.insert("x-bad".into(), "bad\nvalue".into());
     assert!(HttpUploadConfig::resolve(2, &config).is_err());
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("token");
+    std::fs::write(&path, "Bearer token\n").unwrap();
+    let mut remote_file_header = http_storage_config("http://collector.example/atif");
+    remote_file_header
+        .header_file
+        .insert("authorization".into(), path.to_string_lossy().into_owned());
+    assert!(HttpUploadConfig::resolve(2, &remote_file_header).is_err());
+    remote_file_header.endpoint = "http://127.0.0.1:4318/atif".into();
+    assert!(HttpUploadConfig::resolve(2, &remote_file_header).is_ok());
+    remote_file_header.endpoint = "http://collector.example/atif".into();
+    remote_file_header.header_file.clear();
+    assert!(HttpUploadConfig::resolve(2, &remote_file_header).is_ok());
 
     let variable = "NEMO_RELAY_TEST_ATIF_HTTP_RESOLVE_ZZZZ";
     // SAFETY: this uniquely named environment variable is serialized by the observability mutex.

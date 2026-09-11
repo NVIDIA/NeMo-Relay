@@ -5,7 +5,11 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::thread;
 
+use opentelemetry_http::HttpClient;
 use tonic::service::Interceptor;
 
 use super::*;
@@ -45,7 +49,7 @@ fn activation_requires_existing_files_and_unique_sources() {
     assert!(
         validate_header_files(&HashMap::new(), &HashMap::new(), &files)
             .unwrap_err()
-            .contains("does not exist")
+            .contains("unavailable")
     );
 
     let files = HashMap::from([("invalid header".to_string(), "/missing".to_string())]);
@@ -69,6 +73,26 @@ fn activation_requires_existing_files_and_unique_sources() {
             .unwrap_err()
             .contains("unique across headers and header_env")
     );
+
+    let files = HashMap::from([(
+        "authorization".to_string(),
+        directory.path().to_string_lossy().into_owned(),
+    )]);
+    let error = validate_header_files(&HashMap::new(), &HashMap::new(), &files).unwrap_err();
+    assert!(error.contains("regular file"));
+    assert!(!error.contains(&directory.path().display().to_string()));
+}
+
+#[test]
+fn file_backed_headers_require_protected_remote_destinations() {
+    assert!(validate_header_file_http_endpoint("https://collector.example/v1/logs").is_ok());
+    assert!(validate_header_file_http_endpoint("http://localhost:4318/v1/logs").is_ok());
+    assert!(validate_header_file_http_endpoint("http://127.0.0.1:4318/v1/logs").is_ok());
+    assert!(validate_header_file_http_endpoint("http://collector.example/v1/logs").is_err());
+
+    assert!(validate_header_file_websocket_endpoint("wss://collector.example/events").is_ok());
+    assert!(validate_header_file_websocket_endpoint("ws://[::1]:4318/events").is_ok());
+    assert!(validate_header_file_websocket_endpoint("ws://collector.example/events").is_err());
 }
 
 #[test]
@@ -135,4 +159,75 @@ fn grpc_interceptor_reads_the_current_value_for_each_request() {
             .unwrap(),
         "Bearer second"
     );
+}
+
+#[test]
+fn http_client_reads_current_values_and_stops_before_network_on_resolution_failure() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("token");
+    let files: HeaderFiles = HashMap::from([(
+        "authorization".to_string(),
+        path.to_string_lossy().into_owned(),
+    )]);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let received = thread::spawn(move || {
+        let mut headers = Vec::new();
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0; 4_096];
+            let count = stream.read(&mut buffer).unwrap();
+            let request = String::from_utf8_lossy(&buffer[..count]);
+            headers.push(
+                request
+                    .lines()
+                    .find_map(|line| line.strip_prefix("authorization: "))
+                    .unwrap()
+                    .to_string(),
+            );
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        }
+        headers
+    });
+    let client = HeaderFileHttpClient::new(
+        reqwest_otel::blocking::Client::builder().build().unwrap(),
+        HeaderFileResolver::new(files),
+    );
+    let endpoint = format!("http://{address}/v1/logs");
+
+    fs::write(&path, "Bearer first\n").unwrap();
+    futures::executor::block_on(
+        client.send_bytes(
+            Request::builder()
+                .uri(&endpoint)
+                .body(Bytes::new())
+                .unwrap(),
+        ),
+    )
+    .unwrap();
+    fs::write(&path, "Bearer second\n").unwrap();
+    futures::executor::block_on(
+        client.send_bytes(
+            Request::builder()
+                .uri(&endpoint)
+                .body(Bytes::new())
+                .unwrap(),
+        ),
+    )
+    .unwrap();
+    assert_eq!(received.join().unwrap(), ["Bearer first", "Bearer second"]);
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    fs::remove_file(&path).unwrap();
+    let endpoint = format!("http://{}/v1/logs", listener.local_addr().unwrap());
+    assert!(
+        futures::executor::block_on(
+            client.send_bytes(Request::builder().uri(endpoint).body(Bytes::new()).unwrap(),)
+        )
+        .is_err()
+    );
+    assert!(listener.accept().is_err());
 }

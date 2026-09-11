@@ -35,7 +35,7 @@ use sha2::{Digest, Sha256};
 use super::OpenTelemetryRuntimeDiagnostics;
 use super::header_file::{
     HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
-    validate_header_files,
+    validate_header_file_http_endpoint, validate_header_files,
 };
 use super::otel::{OpenTelemetryError, OtlpTransport, Result, normalize_shutdown_result};
 use super::otel_signal::{
@@ -263,7 +263,12 @@ impl OpenTelemetryMetricConfig {
             ));
         }
         reject_signal_header_environment("OTEL_EXPORTER_OTLP_METRICS_HEADERS")?;
-        validate_signal_headers(&self.headers)
+        validate_signal_headers(&self.headers)?;
+        if !self.header_file.is_empty() {
+            validate_header_file_http_endpoint(&self.endpoint)
+                .map_err(OpenTelemetryError::ExporterBuild)?;
+        }
+        Ok(())
     }
 }
 
@@ -435,6 +440,7 @@ fn build_metric_provider(
             if !config.header_file.is_empty() {
                 let client = reqwest_otel::blocking::Client::builder()
                     .timeout(config.timeout)
+                    .redirect(reqwest_otel::redirect::Policy::none())
                     .build()
                     .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
                 builder = builder.with_http_client(HeaderFileHttpClient::new(

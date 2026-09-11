@@ -199,6 +199,7 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 	if metrics["temporality"] != "cumulative" || metrics["cardinality_limit"] != float64(2000) ||
 		metricEndpoint["endpoint"] != "https://collector.example/custom/metrics" ||
 		metricEndpoint["headers"].(map[string]any)["x-nv-project"] != observabilityDevProject ||
+		metricEndpoint["header_file"].(map[string]any)["x-rotating-token"] != "/var/run/secrets/telemetry/token" ||
 		metricEndpoint["resource_attributes"].(map[string]any)["nv.project"] != observabilityDevProject {
 		t.Fatalf("expected OpenTelemetry metric settings in serialized config: %#v", metrics)
 	}

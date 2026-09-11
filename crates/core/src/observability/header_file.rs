@@ -5,7 +5,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -13,6 +12,44 @@ use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
 
 /// File paths keyed by HTTP header name.
 pub(crate) type HeaderFiles = HashMap<String, String>;
+
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+fn validate_header_file_destination(
+    endpoint: &str,
+    protected_scheme: &str,
+    plaintext_scheme: &str,
+) -> Result<(), String> {
+    let protected = reqwest::Url::parse(endpoint).is_ok_and(|url| {
+        url.scheme() == protected_scheme
+            || (url.scheme() == plaintext_scheme && url.host_str().is_some_and(is_loopback_host))
+    });
+    if protected {
+        Ok(())
+    } else {
+        Err(format!(
+            "header_file requires {protected_scheme} for remote endpoints; {plaintext_scheme} is allowed only for localhost or loopback IP addresses"
+        ))
+    }
+}
+
+/// Require protected HTTP transport before attaching file-backed values.
+pub(crate) fn validate_header_file_http_endpoint(endpoint: &str) -> Result<(), String> {
+    validate_header_file_destination(endpoint, "https", "http")
+}
+
+/// Require protected WebSocket transport before attaching file-backed values.
+#[cfg_attr(not(feature = "atof-streaming"), allow(dead_code))]
+pub(crate) fn validate_header_file_websocket_endpoint(endpoint: &str) -> Result<(), String> {
+    validate_header_file_destination(endpoint, "wss", "ws")
+}
 
 /// Validate header source names and require configured files to exist.
 pub(crate) fn validate_header_files(
@@ -40,8 +77,10 @@ pub(crate) fn validate_header_files(
                 "header_file.{header} must name a non-empty file path"
             ));
         }
-        if !Path::new(path).exists() {
-            return Err(format!("header_file.{header} file does not exist"));
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => {}
+            Ok(_) => return Err(format!("header_file.{header} must name a regular file")),
+            Err(_) => return Err(format!("header_file.{header} file is unavailable")),
         }
     }
     Ok(())
@@ -96,6 +135,8 @@ impl HeaderFileHttpClient {
 #[async_trait]
 impl HttpClient for HeaderFileHttpClient {
     async fn send_bytes(&self, mut request: Request<Bytes>) -> Result<Response<Bytes>, HttpError> {
+        validate_header_file_http_endpoint(&request.uri().to_string())
+            .map_err(std::io::Error::other)?;
         for (header, value) in self.resolver.resolve().map_err(std::io::Error::other)? {
             let name = reqwest::header::HeaderName::from_bytes(header.as_bytes())
                 .map_err(std::io::Error::other)?;
