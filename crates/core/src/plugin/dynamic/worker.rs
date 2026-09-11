@@ -1116,6 +1116,21 @@ impl WorkerPluginInstance {
         }
         validate_registration_plan(&self.plugin_kind, &register)?;
         let registrations = register.registrations;
+        if registrations.iter().any(|registration| {
+            RegistrationSurface::try_from(registration.surface)
+                .is_ok_and(|surface| surface == RegistrationSurface::LlmRequestIntercept)
+        }) {
+            validate_annotated_request_consumer_compatibility(
+                &self.relay_compat,
+                &self.plugin_kind,
+            )?;
+        }
+        if registrations.iter().any(|registration| {
+            RegistrationSurface::try_from(registration.surface)
+                .is_ok_and(|surface| surface == RegistrationSurface::ToolExecutionIntercept)
+        }) {
+            validate_tool_execution_context_compatibility(&self.relay_compat, &self.plugin_kind)?;
+        }
         let initial_gates = register.conditional_middleware_guardrails;
         for gate in initial_gates {
             let kinds = gate
@@ -1151,21 +1166,6 @@ impl WorkerPluginInstance {
                     "worker initial conditional middleware guardrail failed: {error}"
                 )));
             }
-        }
-        if registrations.iter().any(|registration| {
-            RegistrationSurface::try_from(registration.surface)
-                .is_ok_and(|surface| surface == RegistrationSurface::LlmRequestIntercept)
-        }) {
-            validate_annotated_request_consumer_compatibility(
-                &self.relay_compat,
-                &self.plugin_kind,
-            )?;
-        }
-        if registrations.iter().any(|registration| {
-            RegistrationSurface::try_from(registration.surface)
-                .is_ok_and(|surface| surface == RegistrationSurface::ToolExecutionIntercept)
-        }) {
-            validate_tool_execution_context_compatibility(&self.relay_compat, &self.plugin_kind)?;
         }
 
         log::info!(
