@@ -112,3 +112,35 @@ fn preserves_successes_before_a_later_parse_error() {
     assert!(error.contains("not valid json"), "{error}");
     assert!(results.next().is_none());
 }
+
+#[test]
+fn resumes_with_frames_after_a_malformed_frame() {
+    let mut decoder = SseEventDecoder::new();
+    let results = decoder.push_bytes_results(
+        b"data: {\"chunk\":\"first\"}\n\ndata: {not valid json}\n\ndata: {\"chunk\":\"later\"}\n\n",
+    );
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].as_ref().unwrap().data, json!({"chunk": "first"}));
+    assert!(results[1].is_err());
+
+    let resumed = decoder.push_bytes_results(b"");
+    assert_eq!(resumed.len(), 1);
+    assert_eq!(resumed[0].as_ref().unwrap().data, json!({"chunk": "later"}));
+}
+
+#[test]
+fn resumes_after_a_multibyte_character_in_an_incomplete_frame() {
+    let mut decoder = SseEventDecoder::new();
+    assert!(
+        decoder
+            .push_bytes_results("data: {\"chunk\":\"café".as_bytes())
+            .is_empty()
+    );
+
+    let completed = decoder.push_bytes_results(b"\"}\n\n");
+    assert_eq!(completed.len(), 1);
+    assert_eq!(
+        completed[0].as_ref().unwrap().data,
+        json!({"chunk": "café"})
+    );
+}
