@@ -335,12 +335,7 @@ async fn serve_listener_with_dynamic_inner(
         };
     let shutdown = server_shutdown_future(shutdown_mode, idle_shutdown);
     let shutdown = combine_shutdown_futures(shutdown, bootstrap_shutdown_rx);
-    log::info!(
-        target: "nemo_relay.server",
-        event = "server_shutdown_started",
-        instance_id = instance_id.as_str();
-        "Gateway server shutdown started"
-    );
+    let shutdown = shutdown.map(|shutdown| log_shutdown_started(shutdown, instance_id.clone()));
     let serve_result = match shutdown {
         Some(shutdown) => {
             axum::serve(listener, app)
@@ -372,6 +367,18 @@ fn server_shutdown_future(
         })),
         None => idle_shutdown,
     }
+}
+
+fn log_shutdown_started(shutdown: ShutdownFuture, instance_id: String) -> ShutdownFuture {
+    Box::pin(async move {
+        shutdown.await;
+        log::info!(
+            target: "nemo_relay.server",
+            event = "server_shutdown_started",
+            instance_id = instance_id.as_str();
+            "Gateway server shutdown started"
+        );
+    })
 }
 
 fn combine_shutdown_futures(

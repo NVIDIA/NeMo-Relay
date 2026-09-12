@@ -119,6 +119,84 @@ fn worker_activation_with_no_specs_is_empty() {
 }
 
 #[tokio::test]
+async fn worker_registration_discovers_static_observability() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let collector = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    collector.set_nonblocking(true).unwrap();
+    let endpoint = format!("http://{}/v1/traces", collector.local_addr().unwrap());
+    let config: PluginConfig = serde_json::from_value(json!({
+        "components": [{"kind": "observability", "enabled": true, "config": {
+            "opentelemetry": {"enabled": true, "endpoints": [{
+                "type": "gen_ai", "endpoint": endpoint
+            }]}
+        }}]
+    }))
+    .unwrap();
+    let spec = VerifiedDynamicPluginSpec {
+        plugin_id: "fixture_worker".into(),
+        kind: DynamicPluginKind::Worker,
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
+        config: Map::from_iter([("discover_observability".into(), json!(true))]),
+    };
+    let mut failing_spec = spec.clone();
+    failing_spec
+        .config
+        .insert("register_error".into(), json!(true));
+    let error =
+        PluginHostActivation::initialize_with_verified_specs(config.clone(), [failing_spec])
+            .await
+            .err()
+            .expect("registration failure must abort activation");
+    assert!(
+        error
+            .to_string()
+            .contains("fixture registration error requested"),
+        "{error}"
+    );
+    assert!(
+        nemo_relay::api::registry::list_runtime_registrations(None)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !list_plugin_kinds()
+            .iter()
+            .any(|kind| kind == "fixture_worker")
+    );
+
+    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(config, [spec])
+        .await
+        .expect("worker must discover static subscribers during Register after rollback");
+    TASK_SCOPE_STACK
+        .scope(create_scope_stack(), async {
+            let scope = push_scope(
+                PushScopeParams::builder()
+                    .scope_type(ScopeType::Agent)
+                    .name("gated-worker-registration")
+                    .build(),
+            )
+            .unwrap();
+            pop_scope(PopScopeParams::builder().handle_uuid(&scope.uuid).build()).unwrap();
+        })
+        .await;
+    flush_subscribers().expect("gated events should finish delivery");
+    activation.close().expect("host should close cleanly");
+    assert_eq!(
+        collector.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "the discovered gate must prevent OTLP export"
+    );
+    assert!(
+        nemo_relay::api::registry::list_runtime_registrations(None)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn plugin_host_activation_owns_worker_lifecycle() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
