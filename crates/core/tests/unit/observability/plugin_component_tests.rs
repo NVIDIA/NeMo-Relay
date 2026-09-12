@@ -402,6 +402,7 @@ fn editor_schema_tracks_observability_config_types() {
             "timeout_millis": 3000,
             "headers": {},
             "header_env": {},
+            "header_file": {},
             "resource_attributes": {},
         })
     );
@@ -601,6 +602,7 @@ fn signal_endpoint_resolution_derives_or_preserves_the_expected_destination() {
         transport: default_otlp_transport(),
         headers: HashMap::new(),
         header_env: HashMap::new(),
+        header_file: HashMap::new(),
         resource_attributes: HashMap::new(),
         service_name: default_otel_service_name(),
         service_namespace: None,
@@ -656,6 +658,7 @@ fn signal_endpoint_resolution_rejects_explicit_wrong_signal_paths() {
         transport: default_otlp_transport(),
         headers: HashMap::new(),
         header_env: HashMap::new(),
+        header_file: HashMap::new(),
         resource_attributes: HashMap::new(),
         service_name: default_otel_service_name(),
         service_namespace: None,
@@ -847,6 +850,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
             completed_span_context_ttl_millis: None,
             headers: HashMap::new(),
             header_env: HashMap::new(),
+            header_file: HashMap::new(),
             resource_attributes: HashMap::new(),
             mark_projection: MarkProjection::default(),
             mark_exclude_names: default_mark_exclude_names(),
@@ -989,7 +993,8 @@ fn version_three_rejects_removed_otlp_controls() {
             "enabled": false,
             "mark_projection": "tool",
             "attribute_mappings": [],
-            "endpoint": "http://localhost:4318/v1/traces"
+            "endpoint": "http://localhost:4318/v1/traces",
+            "header_file": {"authorization": "/var/run/secrets/telemetry/token"}
         },
         "openinference": {
             "enabled": false,
@@ -1008,6 +1013,10 @@ fn version_three_rejects_removed_otlp_controls() {
     assert!(report.diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "observability.legacy_opentelemetry_field"
             && diagnostic.field.as_deref() == Some("endpoint")
+    }));
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "observability.legacy_opentelemetry_field"
+            && diagnostic.field.as_deref() == Some("header_file")
     }));
     assert!(report.diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "observability.legacy_openinference_section"
@@ -1037,6 +1046,7 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
             completed_span_context_ttl_millis: None,
             headers: HashMap::new(),
             header_env: HashMap::from([("authorization".to_string(), variable.to_string())]),
+            header_file: HashMap::new(),
             resource_attributes: HashMap::new(),
             mark_projection: MarkProjection::default(),
             mark_exclude_names: default_mark_exclude_names(),
@@ -1067,6 +1077,7 @@ fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
         completed_span_context_ttl_millis: None,
         headers: HashMap::new(),
         header_env: HashMap::new(),
+        header_file: HashMap::new(),
         resource_attributes: HashMap::new(),
         mark_projection: MarkProjection::default(),
         mark_exclude_names: default_mark_exclude_names(),
@@ -1126,6 +1137,7 @@ fn test_signal_endpoint() -> OpenTelemetrySignalEndpointConfig {
         transport: default_otlp_transport(),
         headers: HashMap::new(),
         header_env: HashMap::new(),
+        header_file: HashMap::new(),
         resource_attributes: HashMap::new(),
         service_name: default_otel_service_name(),
         service_namespace: None,
@@ -2531,6 +2543,7 @@ fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
                 "x-api-key".into(),
                 "SWITCHYARD_API_KEY".into(),
             )]),
+            header_file: std::collections::HashMap::new(),
             timeout_millis: 123,
             field_name_policy: "replace_dots".into(),
         }),
@@ -2564,6 +2577,7 @@ fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
             transport: "smtp".into(),
             headers: std::collections::HashMap::new(),
             header_env: std::collections::HashMap::new(),
+            header_file: std::collections::HashMap::new(),
             timeout_millis: 3_000,
             field_name_policy: "preserve".into(),
         }),
@@ -2579,6 +2593,7 @@ fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
             transport: "http_post".into(),
             headers: std::collections::HashMap::new(),
             header_env: std::collections::HashMap::new(),
+            header_file: std::collections::HashMap::new(),
             timeout_millis: 3_000,
             field_name_policy: "bogus".into(),
         }),
@@ -2826,6 +2841,7 @@ fn atif_remote_storage_validates_s3_configuration_and_http_access_outcomes() {
                 endpoint,
                 headers: std::collections::HashMap::new(),
                 header_env: std::collections::HashMap::new(),
+                header_file: std::collections::HashMap::new(),
                 timeout_millis: 5_000,
             }),
         )
@@ -5486,6 +5502,7 @@ fn http_storage_config(endpoint: impl Into<String>) -> HttpStorageConfig {
         endpoint: endpoint.into(),
         headers: std::collections::HashMap::new(),
         header_env: std::collections::HashMap::new(),
+        header_file: std::collections::HashMap::new(),
         timeout_millis: 1_000,
     }
 }
@@ -5512,6 +5529,28 @@ fn http_upload_config_rejects_endpoint_timeout_and_header_errors() {
     config.headers.insert("x-bad".into(), "bad\nvalue".into());
     assert!(HttpUploadConfig::resolve(2, &config).is_err());
 
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("token");
+    std::fs::write(&path, "Bearer token\n").unwrap();
+    let mut remote_file_header = http_storage_config("http://collector.example/atif");
+    remote_file_header
+        .header_file
+        .insert("authorization".into(), path.to_string_lossy().into_owned());
+    assert!(HttpUploadConfig::resolve(2, &remote_file_header).is_err());
+    remote_file_header.endpoint = "http://127.0.0.1:4318/atif".into();
+    assert!(HttpUploadConfig::resolve(2, &remote_file_header).is_ok());
+    remote_file_header.endpoint = "http://collector.example/atif".into();
+    remote_file_header.header_file.clear();
+    assert!(HttpUploadConfig::resolve(2, &remote_file_header).is_ok());
+
+    remote_file_header
+        .headers
+        .insert("authorization".into(), "Bearer static".into());
+    assert!(HttpUploadConfig::resolve(2, &remote_file_header).is_err());
+    remote_file_header.endpoint = "http://127.0.0.1:4318/atif".into();
+    assert!(HttpUploadConfig::resolve(2, &remote_file_header).is_ok());
+    remote_file_header.headers.clear();
+
     let variable = "NEMO_RELAY_TEST_ATIF_HTTP_RESOLVE_ZZZZ";
     // SAFETY: this uniquely named environment variable is serialized by the observability mutex.
     unsafe { std::env::set_var(variable, "Bearer resolved") };
@@ -5519,6 +5558,9 @@ fn http_upload_config_rejects_endpoint_timeout_and_header_errors() {
     config
         .header_env
         .insert("authorization".into(), variable.into());
+    config.endpoint = "http://collector.example/atif".into();
+    assert!(HttpUploadConfig::resolve(2, &config).is_err());
+    config.endpoint = "http://127.0.0.1:4318/atif".into();
     let resolved = HttpUploadConfig::resolve(2, &config).unwrap();
     assert_eq!(
         resolved.headers.get("authorization").map(String::as_str),

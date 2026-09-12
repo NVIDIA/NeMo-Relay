@@ -24,6 +24,10 @@ use std::sync::Arc;
 #[cfg(feature = "atof-streaming")]
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(feature = "atof-streaming")]
+use tokio_tungstenite::tungstenite::handshake::server::{
+    Request as WebSocketRequest, Response as WebSocketResponse,
+};
 use uuid::Uuid;
 
 fn enable_operational_logs() {
@@ -240,6 +244,11 @@ fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
 
 #[cfg(feature = "atof-streaming")]
 fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+    read_http_request_parts(stream).1
+}
+
+#[cfg(feature = "atof-streaming")]
+fn read_http_request_parts(stream: &mut std::net::TcpStream) -> (String, String) {
     let mut data = Vec::new();
     let mut buf = [0_u8; 1];
     while !data.ends_with(b"\r\n\r\n") {
@@ -259,7 +268,7 @@ fn read_http_request(stream: &mut std::net::TcpStream) -> String {
     {
         let mut body = vec![0_u8; length];
         stream.read_exact(&mut body).unwrap();
-        return String::from_utf8(body).unwrap();
+        return (headers, String::from_utf8(body).unwrap());
     }
     if headers
         .lines()
@@ -288,9 +297,9 @@ fn read_http_request(stream: &mut std::net::TcpStream) -> String {
             let mut crlf = [0_u8; 2];
             stream.read_exact(&mut crlf).unwrap();
         }
-        return String::from_utf8(body).unwrap();
+        return (headers, String::from_utf8(body).unwrap());
     }
-    String::new()
+    (headers, String::new())
 }
 
 #[cfg(feature = "atof-streaming")]
@@ -1498,6 +1507,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
         transport: AtofEndpointTransport::HttpPost,
         headers: headers.clone(),
         header_env: std::collections::HashMap::new(),
+        header_file: std::collections::HashMap::new(),
         timeout_millis: 1,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     })
@@ -1533,6 +1543,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
         transport: AtofEndpointTransport::HttpPost,
         headers: std::collections::HashMap::new(),
         header_env: std::collections::HashMap::new(),
+        header_file: std::collections::HashMap::new(),
         timeout_millis: 1,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     };
@@ -1548,6 +1559,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
         transport: AtofEndpointTransport::HttpPost,
         headers: std::collections::HashMap::new(),
         header_env: std::collections::HashMap::new(),
+        header_file: std::collections::HashMap::new(),
         timeout_millis: 0,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     };
@@ -1571,11 +1583,322 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
             transport: AtofEndpointTransport::Ndjson,
             headers: bad_header_value,
             header_env: std::collections::HashMap::new(),
+            header_file: std::collections::HashMap::new(),
             timeout_millis: 1,
             field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
         })
         .is_err()
     );
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
+fn configured_headers_require_protected_remote_atof_destinations() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let variable = "NEMO_RELAY_TEST_ATOF_TRANSPORT_TOKEN";
+    // SAFETY: this uniquely named environment variable is serialized by the observability mutex.
+    unsafe { std::env::set_var(variable, "Bearer environment") };
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("token");
+    fs::write(&path, "Bearer token\n").unwrap();
+    let header_file = std::collections::HashMap::from([(
+        "authorization".to_string(),
+        path.to_string_lossy().into_owned(),
+    )]);
+    let header_sources = [
+        (
+            std::collections::HashMap::from([(
+                "authorization".to_string(),
+                "Bearer static".to_string(),
+            )]),
+            Default::default(),
+            Default::default(),
+        ),
+        (
+            Default::default(),
+            std::collections::HashMap::from([("authorization".to_string(), variable.to_string())]),
+            Default::default(),
+        ),
+        (Default::default(), Default::default(), header_file),
+    ];
+
+    for (transport, remote, loopback) in [
+        (
+            AtofEndpointTransport::HttpPost,
+            "http://collector.example/events",
+            "http://127.0.0.1:4318/events",
+        ),
+        (
+            AtofEndpointTransport::Ndjson,
+            "http://collector.example/events",
+            "http://127.0.0.1:4318/events",
+        ),
+        (
+            AtofEndpointTransport::Websocket,
+            "ws://collector.example/events",
+            "ws://127.0.0.1:4318/events",
+        ),
+    ] {
+        let expected = match transport {
+            AtofEndpointTransport::HttpPost | AtofEndpointTransport::Ndjson => "require https",
+            AtofEndpointTransport::Websocket => "require wss",
+        };
+        for (headers, header_env, header_file) in &header_sources {
+            let remote = AtofEndpointConfig {
+                url: remote.into(),
+                transport,
+                headers: headers.clone(),
+                header_env: header_env.clone(),
+                header_file: header_file.clone(),
+                timeout_millis: 1,
+                field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+            };
+            let error = validate_endpoint_config(remote).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+
+            let loopback = AtofEndpointConfig {
+                url: loopback.into(),
+                transport,
+                headers: headers.clone(),
+                header_env: header_env.clone(),
+                header_file: header_file.clone(),
+                timeout_millis: 1,
+                field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+            };
+            assert!(validate_endpoint_config(loopback).is_ok());
+        }
+    }
+    assert!(
+        validate_endpoint_config(AtofEndpointConfig::new(
+            "http://collector.example/events",
+            AtofEndpointTransport::HttpPost,
+        ))
+        .is_ok()
+    );
+    // SAFETY: cleanup of the test-only environment variable.
+    unsafe { std::env::remove_var(variable) };
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
+fn file_backed_http_post_headers_reload_for_each_event() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("token");
+    fs::write(&path, "Bearer first\n").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/events", listener.local_addr().unwrap());
+    let (headers_tx, headers_rx) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let (headers, _) = read_http_request_parts(&mut stream);
+            let authorization = headers
+                .lines()
+                .find_map(|line| {
+                    line.split_once(':').and_then(|(name, value)| {
+                        name.eq_ignore_ascii_case("authorization")
+                            .then_some(value.trim().to_string())
+                    })
+                })
+                .unwrap();
+            headers_tx.send(authorization).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        }
+    });
+    let endpoint = validate_endpoint_config(AtofEndpointConfig {
+        url,
+        transport: AtofEndpointTransport::HttpPost,
+        headers: Default::default(),
+        header_env: Default::default(),
+        header_file: std::collections::HashMap::from([(
+            "authorization".into(),
+            path.to_string_lossy().into_owned(),
+        )]),
+        timeout_millis: 5_000,
+        field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+    })
+    .unwrap();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let worker = std::thread::spawn(move || {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(run_http_post_endpoint(0, endpoint, rx));
+    });
+
+    tx.send(EndpointMessage::Event("{\"sequence\":1}".into()))
+        .unwrap();
+    assert_eq!(
+        headers_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap(),
+        "Bearer first"
+    );
+    fs::write(&path, "Bearer second\n").unwrap();
+    tx.send(EndpointMessage::Event("{\"sequence\":2}".into()))
+        .unwrap();
+    assert_eq!(
+        headers_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap(),
+        "Bearer second"
+    );
+    let (close_tx, close_rx) = std::sync::mpsc::channel();
+    tx.send(EndpointMessage::Close(close_tx)).unwrap();
+    close_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    worker.join().unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
+fn file_backed_ndjson_headers_refresh_when_a_stream_starts() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("token");
+    fs::write(&path, "Bearer first\n").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/events", listener.local_addr().unwrap());
+    let (headers_tx, headers_rx) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let (headers, _) = read_http_request_parts(&mut stream);
+            let authorization = headers
+                .lines()
+                .find_map(|line| {
+                    line.split_once(':').and_then(|(name, value)| {
+                        name.eq_ignore_ascii_case("authorization")
+                            .then_some(value.trim().to_string())
+                    })
+                })
+                .unwrap();
+            headers_tx.send(authorization).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        }
+    });
+    let endpoint = validate_endpoint_config(AtofEndpointConfig {
+        url: url.clone(),
+        transport: AtofEndpointTransport::Ndjson,
+        headers: Default::default(),
+        header_env: Default::default(),
+        header_file: std::collections::HashMap::from([(
+            "authorization".into(),
+            path.to_string_lossy().into_owned(),
+        )]),
+        timeout_millis: 5_000,
+        field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+    })
+    .unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime
+        .block_on(build_ndjson_client(&endpoint).unwrap().post(&url).send())
+        .unwrap();
+    assert_eq!(
+        headers_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap(),
+        "Bearer first"
+    );
+    fs::write(&path, "Bearer second\n").unwrap();
+    runtime
+        .block_on(build_ndjson_client(&endpoint).unwrap().post(&url).send())
+        .unwrap();
+    assert_eq!(
+        headers_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap(),
+        "Bearer second"
+    );
+    server.join().unwrap();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    fs::remove_file(&path).unwrap();
+    assert!(build_ndjson_client(&endpoint).is_err());
+    assert!(matches!(
+        listener.accept(),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+    ));
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
+#[allow(clippy::result_large_err)]
+fn file_backed_websocket_headers_refresh_on_reconnect() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("token");
+    fs::write(&path, "Bearer first\n").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("ws://{}/events", listener.local_addr().unwrap());
+    let (headers_tx, headers_rx) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                for _ in 0..2 {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let headers_tx = headers_tx.clone();
+                    let mut socket = tokio_tungstenite::accept_hdr_async(
+                        stream,
+                        move |request: &WebSocketRequest, response: WebSocketResponse| {
+                            let authorization = request
+                                .headers()
+                                .get("authorization")
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .to_string();
+                            headers_tx.send(authorization).unwrap();
+                            Ok(response)
+                        },
+                    )
+                    .await
+                    .unwrap();
+                    socket.close(None).await.unwrap();
+                }
+            });
+    });
+    let endpoint = validate_endpoint_config(AtofEndpointConfig {
+        url,
+        transport: AtofEndpointTransport::Websocket,
+        headers: Default::default(),
+        header_env: Default::default(),
+        header_file: std::collections::HashMap::from([(
+            "authorization".into(),
+            path.to_string_lossy().into_owned(),
+        )]),
+        timeout_millis: 5_000,
+        field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+    })
+    .unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let socket = runtime.block_on(connect_websocket(&endpoint)).unwrap();
+    assert_eq!(
+        headers_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap(),
+        "Bearer first"
+    );
+    drop(socket);
+    fs::write(&path, "Bearer second\n").unwrap();
+    let socket = runtime.block_on(connect_websocket(&endpoint)).unwrap();
+    assert_eq!(
+        headers_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap(),
+        "Bearer second"
+    );
+    drop(socket);
+    server.join().unwrap();
 }
 
 #[test]
@@ -1591,6 +1914,7 @@ fn endpoint_activation_snapshots_header_env() {
         transport: AtofEndpointTransport::HttpPost,
         headers: std::collections::HashMap::new(),
         header_env: std::collections::HashMap::from([("authorization".into(), variable.clone())]),
+        header_file: std::collections::HashMap::new(),
         timeout_millis: 1,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     })
@@ -1809,6 +2133,7 @@ fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
         transport: AtofEndpointTransport::Websocket,
         headers: std::collections::HashMap::new(),
         header_env: std::collections::HashMap::new(),
+        header_file: std::collections::HashMap::new(),
         timeout_millis: 1,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     })

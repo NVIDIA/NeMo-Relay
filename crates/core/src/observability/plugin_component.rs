@@ -206,6 +206,9 @@ pub struct OpenTelemetrySignalEndpointConfig {
     /// Exporter headers mapped to environment variable names.
     #[serde(default)]
     pub header_env: HashMap<String, String>,
+    /// Exporter headers mapped to files read immediately before each export.
+    #[serde(default)]
+    pub header_file: HashMap<String, String>,
     /// Extra resource attributes.
     #[serde(default)]
     pub resource_attributes: HashMap<String, String>,
@@ -348,6 +351,9 @@ pub struct OpenTelemetryEndpointConfig {
     /// Exporter headers mapped to environment variable names.
     #[serde(default)]
     pub header_env: HashMap<String, String>,
+    /// Exporter headers mapped to files read immediately before each export.
+    #[serde(default)]
+    pub header_file: HashMap<String, String>,
     /// Extra resource attributes.
     #[serde(default)]
     pub resource_attributes: HashMap<String, String>,
@@ -442,6 +448,9 @@ pub struct AtofStreamSinkSectionConfig {
     /// Header names mapped to environment variables containing their values.
     #[serde(default)]
     pub header_env: HashMap<String, String>,
+    /// Header names mapped to files read for each request or connection.
+    #[serde(default)]
+    pub header_file: HashMap<String, String>,
     /// Per-endpoint timeout in milliseconds.
     #[serde(default = "default_timeout_millis")]
     pub timeout_millis: u64,
@@ -608,6 +617,9 @@ pub struct HttpStorageConfig {
     /// Request headers whose values are read from environment variables.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub header_env: HashMap<String, String>,
+    /// Request headers whose values are read from files at upload time.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub header_file: HashMap<String, String>,
     /// Request timeout in milliseconds.
     #[serde(default = "default_timeout_millis")]
     pub timeout_millis: u64,
@@ -812,6 +824,7 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
                 ),
                 otel_editor_field("headers", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field("header_env", EditorFieldKind::StringMap, &[], false),
+                otel_editor_field("header_file", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field(
                     "resource_attributes",
                     EditorFieldKind::StringMap,
@@ -842,6 +855,7 @@ impl EditorConfig for OpenTelemetrySignalEndpointConfig {
                 otel_editor_field("timeout_millis", EditorFieldKind::Integer, &[], false),
                 otel_editor_field("headers", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field("header_env", EditorFieldKind::StringMap, &[], false),
+                otel_editor_field("header_file", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field(
                     "resource_attributes",
                     EditorFieldKind::StringMap,
@@ -864,6 +878,7 @@ fn default_opentelemetry_endpoint_editor_value() -> Json {
         "timeout_millis": 3000,
         "headers": {},
         "header_env": {},
+        "header_file": {},
         "resource_attributes": {},
     })
 }
@@ -885,6 +900,7 @@ fn default_opentelemetry_signal_endpoint_editor_value() -> Json {
         "timeout_millis": 3000,
         "headers": {},
         "header_env": {},
+        "header_file": {},
         "resource_attributes": {},
     })
 }
@@ -918,6 +934,7 @@ crate::editor_config! {
         transport => { label: "transport", kind: Enum, values: ["http_post", "websocket", "ndjson"] },
         headers => { label: "headers", kind: StringMap },
         header_env => { label: "header_env", kind: StringMap },
+        header_file => { label: "header_file", kind: StringMap },
         timeout_millis => { label: "timeout_millis", kind: Integer },
         field_name_policy => { label: "field_name_policy", kind: Enum, values: ["preserve", "replace_dots"] },
         name => { label: "name", kind: String, optional: true },
@@ -929,6 +946,7 @@ crate::editor_config! {
         endpoint => { label: "endpoint", kind: String },
         headers => { label: "headers", kind: StringMap },
         header_env => { label: "header_env", kind: StringMap },
+        header_file => { label: "header_file", kind: StringMap },
         timeout_millis => { label: "timeout_millis", kind: Integer },
     }
 }
@@ -947,7 +965,7 @@ crate::editor_config! {
 }
 
 fn default_http_storage_editor_value() -> Json {
-    serde_json::json!({"type": "http", "endpoint": "", "headers": {}, "header_env": {}, "timeout_millis": 3000})
+    serde_json::json!({"type": "http", "endpoint": "", "headers": {}, "header_env": {}, "header_file": {}, "timeout_millis": 3000})
 }
 
 fn default_s3_storage_editor_value() -> Json {
@@ -1007,6 +1025,7 @@ fn default_atof_stream_sink_editor_value() -> Json {
         "transport": "http_post",
         "headers": {},
         "header_env": {},
+        "header_file": {},
         "timeout_millis": 3000,
         "field_name_policy": "preserve",
     })
@@ -1315,6 +1334,9 @@ fn build_atof_sink_config(
             }
             for (key, variable) in stream.header_env {
                 config = config.with_header_env(key, variable);
+            }
+            for (key, path) in stream.header_file {
+                config = config.with_header_file(key, path);
             }
             Ok(CoreAtofSinkConfig::Stream(config))
         }
@@ -1995,6 +2017,7 @@ fn derive_signal_endpoint(
         transport: trace.transport.clone(),
         headers: trace.headers.clone(),
         header_env: trace.header_env.clone(),
+        header_file: trace.header_file.clone(),
         resource_attributes: trace.resource_attributes.clone(),
         service_name: trace.service_name.clone(),
         service_namespace: trace.service_namespace.clone(),
@@ -2201,7 +2224,7 @@ fn build_log_config(
     minimum_severity: LogSeverity,
 ) -> PluginResult<CoreOpenTelemetryLogConfig> {
     let transport = parse_signal_transport("logs", index, &endpoint.transport)?;
-    let headers = resolve_signal_headers("logs", index, &endpoint)?;
+    let (headers, header_file) = resolve_signal_headers("logs", index, &endpoint)?;
     let mut config = CoreOpenTelemetryLogConfig::new(endpoint.endpoint.clone())
         .with_transport(transport)
         .with_service_name(endpoint.service_name.clone())
@@ -2214,7 +2237,7 @@ fn build_log_config(
         .with_completed_span_context_ttl(Duration::from_millis(
             section.completed_span_context_ttl_millis,
         ));
-    config = apply_signal_common(config, &endpoint, headers);
+    config = apply_signal_common(config, &endpoint, headers, header_file);
     Ok(config)
 }
 
@@ -2225,7 +2248,7 @@ fn build_metric_config(
     temporality: MetricTemporality,
 ) -> PluginResult<CoreOpenTelemetryMetricConfig> {
     let transport = parse_signal_transport("metrics", index, &endpoint.transport)?;
-    let headers = resolve_signal_headers("metrics", index, &endpoint)?;
+    let (headers, header_file) = resolve_signal_headers("metrics", index, &endpoint)?;
     let mut config = CoreOpenTelemetryMetricConfig::new(endpoint.endpoint)
         .with_transport(transport)
         .with_service_name(endpoint.service_name)
@@ -2244,6 +2267,9 @@ fn build_metric_config(
     for (key, value) in headers {
         config = config.with_header(key, value);
     }
+    for (key, path) in header_file {
+        config = config.with_header_file(key, path);
+    }
     for (key, value) in endpoint.resource_attributes {
         config = config.with_resource_attribute(key, value);
     }
@@ -2254,6 +2280,7 @@ fn apply_signal_common(
     mut config: CoreOpenTelemetryLogConfig,
     endpoint: &OpenTelemetrySignalEndpointConfig,
     headers: HashMap<String, String>,
+    header_file: HashMap<String, String>,
 ) -> CoreOpenTelemetryLogConfig {
     if let Some(namespace) = &endpoint.service_namespace {
         config = config.with_service_namespace(namespace.as_str());
@@ -2263,6 +2290,9 @@ fn apply_signal_common(
     }
     for (key, value) in headers {
         config = config.with_header(key, value);
+    }
+    for (key, path) in header_file {
+        config = config.with_header_file(key, path);
     }
     for (key, value) in &endpoint.resource_attributes {
         config = config.with_resource_attribute(key.as_str(), value.as_str());
@@ -2274,7 +2304,7 @@ fn resolve_signal_headers(
     signal: &str,
     index: usize,
     endpoint: &OpenTelemetrySignalEndpointConfig,
-) -> PluginResult<HashMap<String, String>> {
+) -> PluginResult<(HashMap<String, String>, HashMap<String, String>)> {
     let mut headers = endpoint.headers.clone();
     for (key, variable) in &endpoint.header_env {
         if variable.trim().is_empty() || variable.trim() != variable {
@@ -2302,12 +2332,20 @@ fn resolve_signal_headers(
         }
         headers.insert(key.clone(), value);
     }
+    crate::observability::header_file::validate_header_files(
+        &endpoint.headers,
+        &endpoint.header_env,
+        &endpoint.header_file,
+    )
+    .map_err(|error| {
+        PluginError::InvalidConfig(format!("OpenTelemetry {signal}.endpoints[{index}] {error}"))
+    })?;
     validate_signal_headers(&headers).map_err(|error| {
         PluginError::InvalidConfig(format!(
             "OpenTelemetry {signal}.endpoints[{index}] has invalid headers: {error}"
         ))
     })?;
-    Ok(headers)
+    Ok((headers, endpoint.header_file.clone()))
 }
 
 enum OpenTelemetryShutdownFailure {
@@ -3320,6 +3358,14 @@ fn build_otel_config(
         }
     };
     validate_otel_header_env(index, &section)?;
+    crate::observability::header_file::validate_header_files(
+        &section.headers,
+        &section.header_env,
+        &section.header_file,
+    )
+    .map_err(|error| {
+        PluginError::InvalidConfig(format!("OpenTelemetry endpoints[{index}] {error}"))
+    })?;
     validate_otel_batch_config(index, &section)?;
     let mut config = CoreOpenTelemetryConfig::new(section.otel_type, section.endpoint)
         .with_transport(transport)
@@ -3355,6 +3401,9 @@ fn build_otel_config(
         config = config.with_header(key, value);
     }
     config = apply_otel_environment_headers(config, index, section.header_env)?;
+    for (key, path) in section.header_file {
+        config = config.with_header_file(key, path);
+    }
     for (key, value) in section.resource_attributes {
         config = config.with_resource_attribute(key, value);
     }
@@ -3580,6 +3629,7 @@ fn validate_observability_section_fields(
             "transport",
             "endpoint",
             "headers",
+            "header_file",
             "resource_attributes",
             "service_name",
             "service_namespace",
@@ -3601,6 +3651,7 @@ fn validate_observability_section_fields(
             "transport",
             "endpoint",
             "headers",
+            "header_file",
             "resource_attributes",
             "service_name",
             "service_namespace",
@@ -3635,6 +3686,7 @@ fn validate_opentelemetry_signal_fields(
         "transport",
         "headers",
         "header_env",
+        "header_file",
         "resource_attributes",
         "service_name",
         "service_namespace",
@@ -3714,6 +3766,7 @@ fn validate_opentelemetry_endpoint_fields(
         "transport",
         "headers",
         "header_env",
+        "header_file",
         "resource_attributes",
         "service_name",
         "service_namespace",
@@ -5347,6 +5400,7 @@ struct AtifUploadRequest {
 struct HttpUploadConfig {
     endpoint: String,
     headers: HashMap<String, String>,
+    header_file: HashMap<String, String>,
     timeout: Duration,
 }
 
@@ -5456,10 +5510,11 @@ impl AtifRemoteStorage {
                         return;
                     }
                 };
-                let client = match reqwest::Client::builder()
-                    .timeout(upload_config.timeout)
-                    .build()
-                {
+                let mut client_builder = reqwest::Client::builder().timeout(upload_config.timeout);
+                if !upload_config.headers.is_empty() || !upload_config.header_file.is_empty() {
+                    client_builder = client_builder.redirect(reqwest::redirect::Policy::none());
+                }
+                let client = match client_builder.build() {
                     Ok(client) => client,
                     Err(err) => {
                         let _ = ready_tx.send(Err(std::io::Error::other(format!(
@@ -5665,6 +5720,20 @@ impl HttpUploadConfig {
             )));
         }
 
+        crate::observability::header_file::validate_header_files(
+            &http.headers,
+            &http.header_env,
+            &http.header_file,
+        )
+        .map_err(std::io::Error::other)?;
+        if crate::observability::header_file::has_configured_headers(
+            &http.headers,
+            &http.header_env,
+            &http.header_file,
+        ) {
+            crate::observability::header_file::validate_header_http_endpoint(endpoint)
+                .map_err(std::io::Error::other)?;
+        }
         let mut headers = http.headers.clone();
         for (header, var_name) in &http.header_env {
             let value = resolve_env_var_field(
@@ -5679,6 +5748,7 @@ impl HttpUploadConfig {
         Ok(Self {
             endpoint: parsed.to_string(),
             headers,
+            header_file: http.header_file.clone(),
             timeout: Duration::from_millis(http.timeout_millis),
         })
     }
@@ -5712,6 +5782,12 @@ async fn post_atif_http(
     let mut request = client.post(&config.endpoint);
     for (header, value) in &config.headers {
         request = request.header(header.as_str(), value.as_str());
+    }
+    for (header, value) in
+        crate::observability::header_file::resolve_header_files(&config.header_file)
+            .map_err(std::io::Error::other)?
+    {
+        request = request.header(header, value);
     }
     let response = request
         .header(reqwest::header::CONTENT_TYPE, "application/json")

@@ -224,6 +224,39 @@ fn log_config_rejects_blank_and_padded_headers() {
 }
 
 #[test]
+fn log_configured_headers_require_https_except_for_loopback() {
+    for transport in [OtlpTransport::HttpBinary, OtlpTransport::Grpc] {
+        for config in [
+            OpenTelemetryLogConfig::new("http://collector.example/v1/logs")
+                .with_transport(transport)
+                .with_header("authorization", "Bearer static"),
+            OpenTelemetryLogConfig::new("http://collector.example/v1/logs")
+                .with_transport(transport)
+                .with_header_env("authorization", "NEMO_RELAY_TEST_LOG_TOKEN"),
+            OpenTelemetryLogConfig::new("http://collector.example/v1/logs")
+                .with_transport(transport)
+                .with_header_file("authorization", "/var/run/secrets/telemetry/token"),
+        ] {
+            let error = config.validate().unwrap_err();
+            assert!(error.to_string().contains("require https"), "{error}");
+        }
+
+        assert!(
+            OpenTelemetryLogConfig::new("http://127.0.0.1:4318/v1/logs")
+                .with_transport(transport)
+                .with_header("authorization", "Bearer static")
+                .validate()
+                .is_ok()
+        );
+    }
+    assert!(
+        OpenTelemetryLogConfig::new("http://collector.example/v1/logs")
+            .validate()
+            .is_ok()
+    );
+}
+
+#[test]
 fn log_config_validates_batch_limits_and_retains_resource_identity() {
     for config in [
         OpenTelemetryLogConfig::new("   "),

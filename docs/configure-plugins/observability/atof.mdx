@@ -112,11 +112,27 @@ The following table describes each stream sink:
 | `transport` | `http_post` | `http_post`, `websocket`, or `ndjson`. |
 | `headers` | `{}` | String-to-string headers for requests or handshakes. |
 | `header_env` | `{}` | Maps each header name to an environment variable that contains the full header value. Each variable must be set and nonblank, and the same header cannot also appear in `headers`. |
+| `header_file` | `{}` | Maps each header name to a regular file that holds its full value. Files must exist at activation. HTTP POST reads it for each event. WebSocket reads it when it connects or reconnects. NDJSON reads it when its stream starts. |
 | `timeout_millis` | `3000` | Per-sink timeout for stream I/O and flush or close acknowledgement. Must be greater than `0`. |
 | `field_name_policy` | `preserve` | Field-name handling before Relay sends stream events. Accepted values are `preserve` and `replace_dots`. |
 
 Use `header_env` for secrets so the configuration stores the environment
 variable name instead of the secret value.
+
+Use `header_file` when another process updates a credential in place. Relay
+reads the UTF-8 file at the time listed above and removes trailing whitespace.
+If the file is missing, unreadable, blank, or invalid, only that delivery fails.
+Relay does not log the value. A header can use only one of `headers`,
+`header_env`, and `header_file`. Header names are case-insensitive.
+
+When you set any header source (`headers`, `header_env`, or `header_file`),
+remote ATOF HTTP destinations must use HTTPS and remote WebSocket destinations
+must use WSS. HTTP or WS is allowed only for localhost and loopback IP
+addresses.
+
+ATOF HTTP clients do not follow redirects when headers are set. Use the final
+collector URL. If a server sends a redirect, that delivery fails and Relay does
+not send headers to the new destination.
 
 `preserve` sends canonical ATOF field names unchanged. `replace_dots` replaces
 dots in JSON object keys with underscores recursively. If that creates a
