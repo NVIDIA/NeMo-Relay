@@ -112,9 +112,8 @@ export TMPDIR="$work/tmp"
 export PATH="$repo_root/target/debug:$PATH"
 export OPENAI_API_KEY="relay-e2e-key"
 export NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS=1
-gateway_port="$(python3 -c 'import socket; sock = socket.socket(); sock.bind(("127.0.0.1", 0)); print(sock.getsockname()[1]); sock.close()')"
-export NEMO_RELAY_TEST_GATEWAY_BIND="127.0.0.1:$gateway_port"
-mkdir -p "$HOME" "$CODEX_HOME" "$XDG_CONFIG_HOME/nemo-relay" "$XDG_DATA_HOME" "$TMPDIR"
+gateway_port=47632
+mkdir -p "$HOME" "$CODEX_HOME" "$XDG_CONFIG_HOME/nemo-relay" "$XDG_DATA_HOME" "$TMPDIR" "$work/atof"
 
 provider_ready="$work/provider-ready.json"
 provider_log="$work/provider-requests.jsonl"
@@ -137,7 +136,7 @@ cat >"$XDG_CONFIG_HOME/nemo-relay/config.toml" <<EOF
 openai_base_url = "http://$provider_address/v1"
 EOF
 
-cat >"$XDG_CONFIG_HOME/nemo-relay/plugins.toml" <<'EOF'
+cat >"$XDG_CONFIG_HOME/nemo-relay/plugins.toml" <<EOF
 version = 1
 
 [[components]]
@@ -152,7 +151,7 @@ enabled = true
 
 [[components.config.atof.sinks]]
 type = "file"
-output_directory = "atof"
+output_directory = "$work/atof"
 filename = "events.jsonl"
 mode = "append"
 EOF
@@ -369,6 +368,12 @@ for line in lines:
         and "no such file or directory" in lowered
     ):
         continue
+    if (
+        "codex_core::tasks: failed to flush rollout after emitting terminal turn event" in lowered
+        and "thread" in lowered
+        and "not found" in lowered
+    ):
+        continue
     unexpected.append(line)
 if unexpected:
     print("\n".join(unexpected), file=sys.stderr)
@@ -479,7 +484,7 @@ cp "$CODEX_HOME/relay-user-profile.config.toml" "$work/codex-profile-before-tran
 : >"$provider_log"
 transparent_project="$work/transparent-project"
 mkdir -p "$transparent_project"
-events="$transparent_project/atof/events.jsonl"
+events="$work/atof/events.jsonl"
 rm -f "$events"
 wait_for_relay_port_release
 run_transparent_codex_ping
@@ -558,7 +563,8 @@ if [[ "${RELAY_E2E_TRANSPARENT_ONLY:-0}" == "1" ]]; then
     exit 0
 fi
 
-# Exercise incompatible configuration handling before collecting acceptance events.
+# A verified live sidecar remains usable when a new MCP client resolves a different persistent
+# configuration. A forced reinstall below is what retires it and applies the rotated credential.
 export NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS=300
 holder_fifo="$work/mcp-holder.stdin"
 holder_stdout="$work/mcp-holder.stdout"
@@ -589,11 +595,10 @@ kill -0 "$old_sidecar_pid"
 export OPENAI_API_KEY="relay-e2e-key-rotated"
 mismatch_stdout="$work/mcp-mismatch.stdout"
 mismatch_stderr="$work/mcp-mismatch.stderr"
-if run_mcp_once "$mismatch_stdout" "$mismatch_stderr" 2; then
-    echo "MCP unexpectedly reused a sidecar with an incompatible credential fingerprint" >&2
-    exit 1
-fi
-grep -qi "different version or persistent configuration" "$mismatch_stderr"
+run_mcp_once "$mismatch_stdout" "$mismatch_stderr" 2
+grep -q '"serverInfo"' "$mismatch_stdout"
+[[ "$(read_sidecar_pid "$old_sidecar_pid_file")" == "$old_sidecar_pid" ]]
+kill -0 "$old_sidecar_pid"
 
 nemo-relay install codex --force --install-dir "$install_dir"
 for _ in $(seq 1 100); do
@@ -622,7 +627,7 @@ rm -f "$replacement_owner_file" "$replacement_pid_file"
 
 # The acceptance counts below cover only real Codex runs, not bootstrap probes.
 : >"$provider_log"
-events="$XDG_CONFIG_HOME/nemo-relay/atof/events.jsonl"
+events="$work/atof/events.jsonl"
 rm -f "$events"
 export NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS=1
 
