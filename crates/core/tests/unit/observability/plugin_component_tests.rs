@@ -607,6 +607,7 @@ fn signal_endpoint_resolution_derives_or_preserves_the_expected_destination() {
         service_version: None,
         instrumentation_scope: default_otel_instrumentation_scope(),
         timeout_millis: default_timeout_millis(),
+        session_filter: None,
     }];
     assert_eq!(
         resolve_signal_endpoints("metrics", Some(&custom), &[])
@@ -662,6 +663,7 @@ fn signal_endpoint_resolution_rejects_explicit_wrong_signal_paths() {
         service_version: None,
         instrumentation_scope: default_otel_instrumentation_scope(),
         timeout_millis: default_timeout_millis(),
+        session_filter: None,
     };
     assert!(resolve_signal_endpoints("logs", Some(&vec![explicit.clone()]), &[]).is_err());
     explicit.endpoint = "https://collector.example/".to_string();
@@ -853,6 +855,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
             attribute_mappings: Vec::new(),
             promote_metadata_prefixes: Vec::new(),
             promote_resource_metadata_prefixes: Vec::new(),
+            session_filter: None,
         }],
         logs: None,
         metrics: None,
@@ -1043,6 +1046,7 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
             attribute_mappings: Vec::new(),
             promote_metadata_prefixes: Vec::new(),
             promote_resource_metadata_prefixes: Vec::new(),
+            session_filter: None,
         },
     )
     .unwrap();
@@ -1073,6 +1077,7 @@ fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
         attribute_mappings: Vec::new(),
         promote_metadata_prefixes: Vec::new(),
         promote_resource_metadata_prefixes: Vec::new(),
+        session_filter: None,
     }
 }
 
@@ -1132,6 +1137,7 @@ fn test_signal_endpoint() -> OpenTelemetrySignalEndpointConfig {
         service_version: None,
         instrumentation_scope: default_otel_instrumentation_scope(),
         timeout_millis: default_timeout_millis(),
+        session_filter: None,
     }
 }
 
@@ -4414,6 +4420,7 @@ fn counting_callbacks(
     let counter = Arc::clone(counter);
     vec![IndexedOpenTelemetryResource {
         index: 0,
+        session_filter: None,
         value: OpenTelemetryResource::Active(Arc::new(move |_| {
             counter.fetch_add(1, Ordering::Relaxed);
         })),
@@ -4426,6 +4433,7 @@ fn counting_metric_callbacks(
     let counter = Arc::clone(counter);
     vec![IndexedOpenTelemetryResource {
         index: 0,
+        session_filter: None,
         value: OpenTelemetryResource::Active(Arc::new(move |_, _| {
             counter.fetch_add(1, Ordering::Relaxed);
         })),
@@ -4457,16 +4465,19 @@ fn opentelemetry_delivery_continues_after_an_endpoint_panics() {
     let callbacks: Vec<IndexedOpenTelemetryResource<EventSubscriberFn>> = vec![
         IndexedOpenTelemetryResource {
             index: 0,
+            session_filter: None,
             value: OpenTelemetryResource::Active(std::sync::Arc::new(|_: &Event| -> () {
                 panic!("simulated endpoint failure")
             })),
         },
         IndexedOpenTelemetryResource {
             index: 1,
+            session_filter: None,
             value: OpenTelemetryResource::Skipped("invalid endpoint".to_string()),
         },
         IndexedOpenTelemetryResource {
             index: 2,
+            session_filter: None,
             value: OpenTelemetryResource::Active(std::sync::Arc::new(move |_| {
                 delivered_after_panic.store(true, std::sync::atomic::Ordering::SeqCst);
             })),
@@ -4497,6 +4508,7 @@ fn opentelemetry_routes_marks_by_metric_schema() {
     let metric_callbacks: Vec<IndexedOpenTelemetryResource<MetricEventCallback>> =
         vec![IndexedOpenTelemetryResource {
             index: 0,
+            session_filter: None,
             value: OpenTelemetryResource::Active(Arc::new(
                 move |_: &Event, measurements: &[ValidatedMetricMeasurement]| {
                     assert_eq!(measurements.len(), 1);
@@ -5642,4 +5654,321 @@ fn atif_filename_helpers_cover_metadata_resolution_and_rejection_paths() {
         )
         .is_err()
     );
+}
+
+fn session_filter_event(
+    name: &str,
+    category: EventCategory,
+    scope_category: ScopeCategory,
+    metadata: Option<serde_json::Value>,
+    parent_uuid: Option<uuid::Uuid>,
+    uuid: uuid::Uuid,
+) -> Event {
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .name(name)
+            .metadata_opt(metadata)
+            .parent_uuid_opt(parent_uuid)
+            .uuid(uuid)
+            .build(),
+        scope_category,
+        vec![],
+        category,
+        None,
+    ))
+}
+
+fn email_session_filter() -> Arc<EndpointSessionFilter> {
+    build_endpoint_session_filter(Some(&email_session_filter_config()))
+        .unwrap()
+        .unwrap()
+}
+
+fn email_session_filter_config() -> OpenTelemetrySessionFilterConfig {
+    OpenTelemetrySessionFilterConfig::BlockAfterToolMatch(BlockAfterToolMatchSessionFilterConfig {
+        session_metadata_key: "session_id".to_string(),
+        tool_name_patterns: vec!["(?i)email".to_string()],
+        unattributed_events: UnattributedEventsPolicy::BlockAfterMatch,
+    })
+}
+
+#[test]
+fn endpoint_session_filter_uses_shared_validation_rules_for_builds_and_diagnostics() {
+    let blank_key = OpenTelemetrySessionFilterConfig::BlockAfterToolMatch(
+        BlockAfterToolMatchSessionFilterConfig {
+            session_metadata_key: " ".to_string(),
+            tool_name_patterns: vec!["email".to_string()],
+            unattributed_events: UnattributedEventsPolicy::BlockAfterMatch,
+        },
+    );
+    let error = build_endpoint_session_filter(Some(&blank_key)).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid config: OpenTelemetry session_filter requires a nonblank session_metadata_key and at least one tool_name_pattern"
+    );
+
+    let empty_patterns = OpenTelemetrySessionFilterConfig::BlockAfterToolMatch(
+        BlockAfterToolMatchSessionFilterConfig {
+            session_metadata_key: "session_id".to_string(),
+            tool_name_patterns: Vec::new(),
+            unattributed_events: UnattributedEventsPolicy::BlockAfterMatch,
+        },
+    );
+    let error = build_endpoint_session_filter(Some(&empty_patterns)).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid config: OpenTelemetry session_filter requires a nonblank session_metadata_key and at least one tool_name_pattern"
+    );
+
+    let invalid_regex = OpenTelemetrySessionFilterConfig::BlockAfterToolMatch(
+        BlockAfterToolMatchSessionFilterConfig {
+            session_metadata_key: "session_id".to_string(),
+            tool_name_patterns: vec!["(".to_string()],
+            unattributed_events: UnattributedEventsPolicy::BlockAfterMatch,
+        },
+    );
+    let error = build_endpoint_session_filter(Some(&invalid_regex)).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("session_filter.tool_name_patterns contains invalid regex")
+    );
+
+    let mut diagnostics = Vec::new();
+    validate_opentelemetry_session_filter(
+        &mut diagnostics,
+        &ConfigPolicy::default(),
+        "opentelemetry",
+        "endpoints[0].session_filter",
+        Some(&blank_key),
+    );
+    validate_opentelemetry_session_filter(
+        &mut diagnostics,
+        &ConfigPolicy::default(),
+        "opentelemetry",
+        "endpoints[1].session_filter",
+        Some(&empty_patterns),
+    );
+    validate_opentelemetry_session_filter(
+        &mut diagnostics,
+        &ConfigPolicy::default(),
+        "opentelemetry",
+        "endpoints[2].session_filter",
+        Some(&invalid_regex),
+    );
+    assert_eq!(diagnostics.len(), 3);
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("session_metadata_key must be nonblank")
+    }));
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("tool_name_patterns[0] is not a valid regex")
+    }));
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("tool_name_patterns must contain at least one pattern")
+    }));
+}
+
+#[test]
+fn metrics_endpoints_reject_session_filters_during_activation_and_diagnostics() {
+    let mut endpoint = test_signal_endpoint();
+    endpoint.endpoint = "http://localhost:4318/v1/metrics".to_string();
+    endpoint.session_filter = Some(email_session_filter_config());
+
+    let error = validate_explicit_signal_endpoint("metrics", 0, &endpoint).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid config: OpenTelemetry metrics.endpoints[0].session_filter is only supported for trace and log endpoints"
+    );
+
+    let mut diagnostics = Vec::new();
+    validate_opentelemetry_signal_endpoint_values(
+        &mut diagnostics,
+        &ConfigPolicy::default(),
+        "metrics",
+        0,
+        &endpoint,
+    );
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.component.as_deref() == Some("opentelemetry.metrics")
+            && diagnostic.field.as_deref() == Some("endpoints[0].session_filter")
+            && diagnostic
+                .message
+                .contains("is only supported for trace and log endpoints")
+    }));
+}
+
+#[test]
+fn endpoint_session_filter_blocks_only_the_matched_session_and_fails_closed_after_match() {
+    let filter = email_session_filter();
+    let parent = uuid::Uuid::now_v7();
+    let email = session_filter_event(
+        "gmail.email_send",
+        EventCategory::tool(),
+        ScopeCategory::Start,
+        Some(json!({"session_id": "blocked"})),
+        Some(parent),
+        uuid::Uuid::now_v7(),
+    );
+    filter.observe(&email);
+    assert!(filter.blocks_event(&email));
+    let later = session_filter_event(
+        "later",
+        EventCategory::llm(),
+        ScopeCategory::Start,
+        Some(json!({"session_id": "blocked"})),
+        None,
+        uuid::Uuid::now_v7(),
+    );
+    filter.observe(&later);
+    assert!(filter.blocks_event(&later));
+    let other = session_filter_event(
+        "other",
+        EventCategory::llm(),
+        ScopeCategory::Start,
+        Some(json!({"session_id": "other"})),
+        None,
+        uuid::Uuid::now_v7(),
+    );
+    filter.observe(&other);
+    assert!(!filter.blocks_event(&other));
+    let unattributed = session_filter_event(
+        "unattributed",
+        EventCategory::llm(),
+        ScopeCategory::Start,
+        None,
+        None,
+        uuid::Uuid::now_v7(),
+    );
+    filter.observe(&unattributed);
+    assert!(filter.blocks_event(&unattributed));
+}
+
+#[test]
+fn endpoint_session_filter_resolves_a_child_session_from_scope_ancestry() {
+    let filter = email_session_filter();
+    let root = uuid::Uuid::now_v7();
+    let root_start = session_filter_event(
+        "conversation",
+        EventCategory::agent(),
+        ScopeCategory::Start,
+        Some(json!({"session_id": "blocked"})),
+        None,
+        root,
+    );
+    filter.observe(&root_start);
+    assert!(!filter.blocks_event(&root_start));
+    let matching = session_filter_event(
+        "execute_tool gmail.email_send",
+        EventCategory::tool(),
+        ScopeCategory::Start,
+        None,
+        Some(root),
+        uuid::Uuid::now_v7(),
+    );
+    filter.observe(&matching);
+    assert!(filter.blocks_event(&matching));
+}
+
+#[test]
+fn endpoint_session_filter_removes_scope_session_mapping_on_end() {
+    let filter = email_session_filter();
+    let root = uuid::Uuid::now_v7();
+    let root_start = session_filter_event(
+        "conversation",
+        EventCategory::agent(),
+        ScopeCategory::Start,
+        Some(json!({"session_id": "ended"})),
+        None,
+        root,
+    );
+    filter.observe(&root_start);
+    let root_end = session_filter_event(
+        "conversation",
+        EventCategory::agent(),
+        ScopeCategory::End,
+        None,
+        None,
+        root,
+    );
+    filter.observe(&root_end);
+
+    let matching = session_filter_event(
+        "gmail.email_send",
+        EventCategory::tool(),
+        ScopeCategory::Start,
+        None,
+        Some(root),
+        uuid::Uuid::now_v7(),
+    );
+    filter.observe(&matching);
+    assert!(filter.blocks_event(&matching));
+
+    let later = session_filter_event(
+        "later",
+        EventCategory::llm(),
+        ScopeCategory::Start,
+        Some(json!({"session_id": "ended"})),
+        None,
+        uuid::Uuid::now_v7(),
+    );
+    filter.observe(&later);
+    assert!(
+        !filter.blocks_event(&later),
+        "an ended scope must not retain its session mapping"
+    );
+}
+
+#[test]
+fn endpoint_session_filter_observation_does_not_suppress_subscriber_delivery() {
+    let protected_deliveries = Arc::new(AtomicUsize::new(0));
+    let debug_deliveries = Arc::new(AtomicUsize::new(0));
+    let protected_counter = Arc::clone(&protected_deliveries);
+    let debug_counter = Arc::clone(&debug_deliveries);
+    let protected_filter = email_session_filter();
+    let callbacks: Vec<IndexedOpenTelemetryResource<EventSubscriberFn>> = vec![
+        IndexedOpenTelemetryResource {
+            index: 0,
+            session_filter: Some(Arc::clone(&protected_filter)),
+            value: OpenTelemetryResource::Active(Arc::new(move |_: &Event| {
+                protected_counter.fetch_add(1, Ordering::Relaxed);
+            }) as EventSubscriberFn),
+        },
+        IndexedOpenTelemetryResource {
+            index: 1,
+            session_filter: None,
+            value: OpenTelemetryResource::Active(Arc::new(move |_: &Event| {
+                debug_counter.fetch_add(1, Ordering::Relaxed);
+            }) as EventSubscriberFn),
+        },
+    ];
+    let matching = session_filter_event(
+        "gmail.email_send",
+        EventCategory::tool(),
+        ScopeCategory::Start,
+        Some(json!({"session_id": "private"})),
+        None,
+        uuid::Uuid::now_v7(),
+    );
+    let later = session_filter_event(
+        "later",
+        EventCategory::llm(),
+        ScopeCategory::Start,
+        Some(json!({"session_id": "private"})),
+        None,
+        uuid::Uuid::now_v7(),
+    );
+    observe_opentelemetry_session_filters(&callbacks, &[], &matching);
+    deliver_opentelemetry_callbacks(&callbacks, &matching);
+    observe_opentelemetry_session_filters(&callbacks, &[], &later);
+    deliver_opentelemetry_callbacks(&callbacks, &later);
+    assert!(protected_filter.blocks_event(&matching));
+    assert!(protected_filter.blocks_event(&later));
+    assert_eq!(protected_deliveries.load(Ordering::Relaxed), 2);
+    assert_eq!(debug_deliveries.load(Ordering::Relaxed), 2);
 }

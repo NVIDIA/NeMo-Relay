@@ -24,6 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::otel_session_filter::EndpointSessionFilter;
 use super::otel_signal::{
     MetricMarkClassification, SignalRuntimeDiagnostics, classify_metric_mark, resolve_header_env,
     should_relog_runtime_diagnostic,
@@ -275,6 +276,7 @@ pub struct OpenTelemetryConfig {
     max_export_batch_size: Option<usize>,
     scheduled_delay: Option<Duration>,
     completed_span_context_ttl: Duration,
+    session_filter: Option<Arc<EndpointSessionFilter>>,
 }
 
 impl OpenTelemetryConfig {
@@ -300,6 +302,7 @@ impl OpenTelemetryConfig {
             max_export_batch_size: None,
             scheduled_delay: None,
             completed_span_context_ttl: DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
+            session_filter: None,
         }
     }
 
@@ -407,6 +410,11 @@ impl OpenTelemetryConfig {
     /// [`OpenTelemetryError::ExporterBuild`] when the TTL is zero.
     pub fn with_completed_span_context_ttl(mut self, ttl: Duration) -> Self {
         self.completed_span_context_ttl = ttl;
+        self
+    }
+
+    pub(crate) fn with_session_filter(mut self, filter: Arc<EndpointSessionFilter>) -> Self {
+        self.session_filter = Some(filter);
         self
     }
 
@@ -1096,11 +1104,12 @@ fn build_tracer_provider_with_resource(
     if let Some(scheduled_delay) = config.scheduled_delay {
         batch_config = batch_config.with_scheduled_delay(scheduled_delay);
     }
-    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
+    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config_and_session_filter(
         exporter,
         config.endpoint.clone(),
         runtime_diagnostics,
         batch_config.build(),
+        config.session_filter.clone(),
     );
     Ok(builder.with_span_processor(processor).build())
 }
@@ -1135,11 +1144,27 @@ fn canonical_resource_key(attributes: &[KeyValue]) -> String {
 struct CountingSpanExporter<E> {
     inner: E,
     accepted_spans: Arc<AtomicU64>,
+    policy_filtered_spans: Arc<AtomicU64>,
     diagnostics: Arc<TraceDeliveryDiagnostics>,
+    session_filter: Option<Arc<EndpointSessionFilter>>,
 }
 
 impl<E: SpanExporter> SpanExporter for CountingSpanExporter<E> {
-    async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
+    async fn export(&self, mut batch: Vec<SpanData>) -> OTelSdkResult {
+        if let Some(filter) = &self.session_filter {
+            let before = batch.len();
+            batch.retain(|span| !filter.blocks_trace(span.span_context.trace_id()));
+            let filtered = before - batch.len();
+            if filtered > 0 {
+                self.policy_filtered_spans
+                    .fetch_add(filtered as u64, Ordering::Relaxed);
+                self.diagnostics
+                    .record_policy_filtered_spans(filtered as u64);
+            }
+        }
+        if batch.is_empty() {
+            return Ok(());
+        }
         self.accepted_spans
             .fetch_add(batch.len() as u64, Ordering::Relaxed);
         let result = self.inner.export(batch).await;
@@ -1208,6 +1233,17 @@ impl TraceDeliveryDiagnostics {
             .store(false, Ordering::Relaxed);
     }
 
+    fn record_policy_filtered_spans(&self, count: u64) {
+        self.runtime_diagnostics.record(
+            "otel.spans_session_filtered",
+            format!(
+                "OpenTelemetry session policy filtered {count} spans before export to endpoint {}",
+                self.endpoint
+            ),
+            count,
+        );
+    }
+
     fn unresolved_failure_summary(&self) -> Option<String> {
         self.unresolved_export_failure
             .load(Ordering::Relaxed)
@@ -1226,23 +1262,45 @@ struct DiagnosticBatchSpanProcessor {
     inner: BatchSpanProcessor,
     completed_spans: AtomicU64,
     accepted_spans: Arc<AtomicU64>,
+    policy_filtered_spans: Arc<AtomicU64>,
     diagnostics: Arc<TraceDeliveryDiagnostics>,
     reported_dropped_spans: AtomicU64,
+    session_filter: Option<Arc<EndpointSessionFilter>>,
 }
 
 impl DiagnosticBatchSpanProcessor {
+    #[cfg(test)]
     fn new_with_batch_config<E: SpanExporter + 'static>(
         exporter: E,
         endpoint: String,
         runtime_diagnostics: SignalRuntimeDiagnostics,
         batch_config: opentelemetry_sdk::trace::BatchConfig,
     ) -> Self {
+        Self::new_with_batch_config_and_session_filter(
+            exporter,
+            endpoint,
+            runtime_diagnostics,
+            batch_config,
+            None,
+        )
+    }
+
+    fn new_with_batch_config_and_session_filter<E: SpanExporter + 'static>(
+        exporter: E,
+        endpoint: String,
+        runtime_diagnostics: SignalRuntimeDiagnostics,
+        batch_config: opentelemetry_sdk::trace::BatchConfig,
+        session_filter: Option<Arc<EndpointSessionFilter>>,
+    ) -> Self {
         let accepted_spans = Arc::new(AtomicU64::new(0));
+        let policy_filtered_spans = Arc::new(AtomicU64::new(0));
         let diagnostics = Arc::new(TraceDeliveryDiagnostics::new(endpoint, runtime_diagnostics));
         let exporter = CountingSpanExporter {
             inner: exporter,
             accepted_spans: Arc::clone(&accepted_spans),
+            policy_filtered_spans: Arc::clone(&policy_filtered_spans),
             diagnostics: Arc::clone(&diagnostics),
+            session_filter: session_filter.clone(),
         };
         Self {
             inner: BatchSpanProcessor::builder(exporter)
@@ -1250,8 +1308,10 @@ impl DiagnosticBatchSpanProcessor {
                 .build(),
             completed_spans: AtomicU64::new(0),
             accepted_spans,
+            policy_filtered_spans,
             diagnostics,
             reported_dropped_spans: AtomicU64::new(0),
+            session_filter,
         }
     }
 
@@ -1259,7 +1319,8 @@ impl DiagnosticBatchSpanProcessor {
         let dropped = self
             .completed_spans
             .load(Ordering::Relaxed)
-            .saturating_sub(self.accepted_spans.load(Ordering::Relaxed));
+            .saturating_sub(self.accepted_spans.load(Ordering::Relaxed))
+            .saturating_sub(self.policy_filtered_spans.load(Ordering::Relaxed));
         let mut reported = self.reported_dropped_spans.load(Ordering::Relaxed);
         while dropped > reported {
             match self.reported_dropped_spans.compare_exchange_weak(
@@ -1293,6 +1354,15 @@ impl SpanProcessor for DiagnosticBatchSpanProcessor {
 
     fn on_end(&self, span: SpanData) {
         self.completed_spans.fetch_add(1, Ordering::Relaxed);
+        if self
+            .session_filter
+            .as_ref()
+            .is_some_and(|filter| filter.blocks_trace(span.span_context.trace_id()))
+        {
+            self.policy_filtered_spans.fetch_add(1, Ordering::Relaxed);
+            self.diagnostics.record_policy_filtered_spans(1);
+            return;
+        }
         self.inner.on_end(span);
     }
 

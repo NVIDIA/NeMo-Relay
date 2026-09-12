@@ -35,6 +35,7 @@ use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::{KeyValue as OtlpKeyValue, any_value};
 use opentelemetry_sdk::trace::{BatchConfigBuilder, InMemorySpanExporterBuilder};
 use prost::Message;
+use regex::Regex;
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -597,6 +598,106 @@ fn make_provider() -> (
         .with_simple_exporter(exporter.clone())
         .build();
     (provider, exporter)
+}
+
+#[test]
+fn session_filter_suppresses_export_without_stranding_active_spans() {
+    let session_filter = Arc::new(EndpointSessionFilter::new(
+        "session_id".to_string(),
+        vec![Regex::new("(?i)email").unwrap()],
+    ));
+    let exporter = InMemorySpanExporterBuilder::new().build();
+    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config_and_session_filter(
+        exporter.clone(),
+        "https://collector.example/v1/traces".to_string(),
+        SignalRuntimeDiagnostics::new(None),
+        BatchConfigBuilder::default()
+            .with_scheduled_delay(Duration::from_secs(60))
+            .build(),
+        Some(Arc::clone(&session_filter)),
+    );
+    let provider = SdkTracerProvider::builder()
+        .with_id_generator(RelayIdGenerator)
+        .with_span_processor(processor)
+        .build();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "session-filter");
+    let callback = subscriber.subscriber();
+    let root_uuid = Uuid::now_v7();
+    let pre_match_uuid = Uuid::now_v7();
+    let tool_uuid = Uuid::now_v7();
+
+    let mut root_start = make_start_event_with_metadata(
+        root_uuid,
+        None,
+        "conversation",
+        json!({"session_id": "private"}),
+    );
+    root_start.set_propagation_root_uuid(Some(root_uuid));
+    session_filter.observe(&root_start);
+    callback(&root_start);
+
+    // Complete one span before the match so it is already queued. The final
+    // exporter check must still suppress it once this trace becomes blocked.
+    for mut event in [
+        make_start_event(
+            pre_match_uuid,
+            Some(root_uuid),
+            "pre-match",
+            ScopeType::Llm,
+            None,
+        ),
+        make_end_event(
+            pre_match_uuid,
+            Some(root_uuid),
+            "pre-match",
+            ScopeType::Llm,
+            None,
+        ),
+    ] {
+        event.set_propagation_root_uuid(Some(root_uuid));
+        session_filter.observe(&event);
+        callback(&event);
+    }
+
+    let mut tool_start = make_scope_event(
+        ScopeCategory::Start,
+        tool_uuid,
+        Some(root_uuid),
+        "execute_tool gmail.email_send",
+        ScopeType::Tool,
+        None,
+    );
+    tool_start.set_propagation_root_uuid(Some(root_uuid));
+    session_filter.observe(&tool_start);
+    callback(&tool_start);
+
+    let mut tool_end = make_end_event(
+        tool_uuid,
+        Some(root_uuid),
+        "execute_tool gmail.email_send",
+        ScopeType::Tool,
+        None,
+    );
+    tool_end.set_propagation_root_uuid(Some(root_uuid));
+    session_filter.observe(&tool_end);
+    callback(&tool_end);
+
+    let mut root_end = make_end_event(root_uuid, None, "conversation", ScopeType::Agent, None);
+    root_end.set_propagation_root_uuid(Some(root_uuid));
+    session_filter.observe(&root_end);
+    callback(&root_end);
+
+    subscriber.force_flush().unwrap();
+    assert!(exporter.get_finished_spans().unwrap().is_empty());
+    assert!(
+        subscriber
+            .inner
+            .processor
+            .lock()
+            .unwrap()
+            .active_spans
+            .is_empty()
+    );
 }
 
 fn attr_map(attributes: &[KeyValue]) -> HashMap<String, String> {

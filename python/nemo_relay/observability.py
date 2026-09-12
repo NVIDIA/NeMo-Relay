@@ -212,6 +212,25 @@ class AtifConfig:
 
 
 @dataclass(slots=True)
+class OpenTelemetrySessionFilterConfig:
+    """Block endpoint delivery after a tool-name match in one session."""
+
+    tool_name_patterns: list[str]
+    type: Literal["block_after_tool_match"] = "block_after_tool_match"
+    session_metadata_key: str = "session_id"
+    unattributed_events: Literal["block_after_match"] = "block_after_match"
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this filter to the canonical plugin shape."""
+        return {
+            "type": self.type,
+            "session_metadata_key": self.session_metadata_key,
+            "tool_name_patterns": self.tool_name_patterns,
+            "unattributed_events": self.unattributed_events,
+        }
+
+
+@dataclass(slots=True)
 class OpenTelemetryEndpointConfig:
     """One typed OpenTelemetry OTLP destination."""
 
@@ -235,6 +254,7 @@ class OpenTelemetryEndpointConfig:
     completed_span_context_ttl_millis: int | None = None
     promote_metadata_prefixes: list[str] = field(default_factory=list)
     promote_resource_metadata_prefixes: list[str] = field(default_factory=list)
+    session_filter: OpenTelemetrySessionFilterConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this endpoint to the canonical plugin shape."""
@@ -260,13 +280,14 @@ class OpenTelemetryEndpointConfig:
                 "headers": self.headers,
                 "header_env": self.header_env,
                 "resource_attributes": self.resource_attributes,
+                "session_filter": self.session_filter,
             }
         )
 
 
 @dataclass(slots=True)
 class OpenTelemetrySignalEndpointConfig:
-    """One signal-specific OTLP destination for logs or metrics."""
+    """One log or metric OTLP destination; session filters are log-only."""
 
     endpoint: str
     transport: Literal["http_binary", "grpc"] = "http_binary"
@@ -278,6 +299,7 @@ class OpenTelemetrySignalEndpointConfig:
     service_version: str | None = None
     instrumentation_scope: str = "opentelemetry"
     timeout_millis: int = 3000
+    session_filter: OpenTelemetrySessionFilterConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this signal endpoint to the canonical plugin shape."""
@@ -293,6 +315,7 @@ class OpenTelemetrySignalEndpointConfig:
                 "service_version": self.service_version,
                 "instrumentation_scope": self.instrumentation_scope,
                 "timeout_millis": self.timeout_millis,
+                "session_filter": self.session_filter,
             }
         )
 
@@ -426,6 +449,7 @@ __all__ = [
     "AtifConfig",
     "HttpStorageConfig",
     "S3StorageConfig",
+    "OpenTelemetrySessionFilterConfig",
     "OpenTelemetryEndpointConfig",
     "OpenTelemetrySignalEndpointConfig",
     "OpenTelemetryLogSectionConfig",

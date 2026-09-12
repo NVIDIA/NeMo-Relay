@@ -47,6 +47,7 @@ pub mod otel;
 mod otel_genai;
 pub mod otel_logs;
 pub mod otel_metrics;
+pub(crate) mod otel_session_filter;
 mod otel_signal;
 pub mod plugin_component;
 mod private_file;

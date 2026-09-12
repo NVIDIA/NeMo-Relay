@@ -9,7 +9,10 @@ use crate::api::event::{
     METRIC_DATA_SCHEMA_VERSION, MarkEvent, ScopeCategory, ScopeEvent,
 };
 use crate::api::scope::ScopeType;
+use opentelemetry::InstrumentationScope;
+use opentelemetry::trace::TraceFlags;
 use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
+use regex::Regex;
 use serde_json::json;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -84,6 +87,148 @@ fn processor(
         exporter,
         provider,
     )
+}
+
+#[test]
+fn session_filter_suppresses_logs_without_stranding_scope_lineage() {
+    let session_filter = Arc::new(EndpointSessionFilter::new(
+        "session_id".to_string(),
+        vec![Regex::new("(?i)email").unwrap()],
+    ));
+    let exporter = InMemoryLogExporter::default();
+    let provider = SdkLoggerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let logger = provider.logger("nemo-relay-session-filter-test");
+    let mut processor = LogEventProcessor::new_with_runtime_diagnostics(
+        logger,
+        LogSeverity::Info,
+        DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
+        SignalRuntimeDiagnostics::new(None),
+        Some(Arc::clone(&session_filter)),
+    );
+    let root_uuid = Uuid::now_v7();
+    let tool_uuid = Uuid::now_v7();
+
+    let mut root_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(root_uuid)
+            .name("conversation")
+            .metadata(json!({"session_id": "private"}))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        ScopeType::Agent.into(),
+        None,
+    ));
+    root_start.set_propagation_root_uuid(Some(root_uuid));
+    session_filter.observe(&root_start);
+    processor.process(&root_start);
+
+    let mut tool_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(tool_uuid)
+            .parent_uuid(root_uuid)
+            .name("execute_tool gmail.email_send")
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        ScopeType::Tool.into(),
+        None,
+    ));
+    tool_start.set_propagation_root_uuid(Some(root_uuid));
+    session_filter.observe(&tool_start);
+    processor.process(&tool_start);
+
+    let mut blocked_mark = mark(
+        Some(tool_uuid),
+        "tool.result",
+        Some(json!({"value": "sensitive"})),
+        None,
+        None,
+    );
+    blocked_mark.set_propagation_root_uuid(Some(root_uuid));
+    session_filter.observe(&blocked_mark);
+    processor.process(&blocked_mark);
+
+    for mut end in [
+        Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .uuid(tool_uuid)
+                .parent_uuid(root_uuid)
+                .name("execute_tool gmail.email_send")
+                .build(),
+            ScopeCategory::End,
+            Vec::new(),
+            ScopeType::Tool.into(),
+            None,
+        )),
+        scope(root_uuid, ScopeCategory::End),
+    ] {
+        end.set_propagation_root_uuid(Some(root_uuid));
+        session_filter.observe(&end);
+        processor.process(&end);
+    }
+
+    provider.force_flush().unwrap();
+    assert!(exporter.get_emitted_logs().unwrap().is_empty());
+    assert!(processor.lineage.active.is_empty());
+}
+
+#[test]
+fn session_filter_removes_queued_logs_at_the_export_boundary() {
+    let session_filter = Arc::new(EndpointSessionFilter::new(
+        "session_id".to_string(),
+        vec![Regex::new("(?i)email").unwrap()],
+    ));
+    let root_uuid = Uuid::now_v7();
+    let root_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(root_uuid)
+            .name("conversation")
+            .metadata(json!({"session_id": "private"}))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        ScopeType::Agent.into(),
+        None,
+    ));
+    session_filter.observe(&root_start);
+    let mut tool_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(root_uuid)
+            .name("execute_tool gmail.email_send")
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        ScopeType::Tool.into(),
+        None,
+    ));
+    tool_start.set_propagation_root_uuid(Some(root_uuid));
+    session_filter.observe(&tool_start);
+
+    let provider = SdkLoggerProvider::builder().build();
+    let logger = provider.logger("nemo-relay-session-filter-export-test");
+    let mut record = logger.create_log_record();
+    record.set_trace_context(
+        relay_trace_id(root_uuid),
+        relay_span_id(root_uuid),
+        Some(TraceFlags::SAMPLED),
+    );
+    let scope = InstrumentationScope::builder("nemo-relay-session-filter-export-test").build();
+    let records = [(&record, &scope)];
+    let inner = InMemoryLogExporter::default();
+    let exporter = DiagnosticLogExporter {
+        inner: inner.clone(),
+        diagnostics: Arc::new(LogDeliveryDiagnostics::new(
+            "https://collector.example/v1/logs".to_string(),
+            SignalRuntimeDiagnostics::new(None),
+        )),
+        session_filter: Some(session_filter),
+    };
+
+    futures::executor::block_on(exporter.export(LogBatch::new(&records))).unwrap();
+    assert!(inner.get_emitted_logs().unwrap().is_empty());
 }
 
 #[test]

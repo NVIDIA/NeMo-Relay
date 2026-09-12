@@ -13,8 +13,23 @@ import {
   OpenTelemetryMetricSubscriber,
   OpenTelemetrySubscriber,
 } from '../index.js';
+import * as observability from '../observability.js';
 
 const dataSchema: DataSchema = { name: 'example.fixture', version: '1' };
+
+const sessionFilter: observability.OpenTelemetrySessionFilterConfig = {
+  type: 'block_after_tool_match',
+  tool_name_patterns: ['(?i)gmail|email'],
+};
+observability.openTelemetryEndpoint({
+  type: 'gen_ai',
+  endpoint: 'http://localhost:4318/v1/traces',
+  session_filter: sessionFilter,
+});
+observability.openTelemetrySignalEndpoint({
+  endpoint: 'http://localhost:4318/v1/logs',
+  session_filter: sessionFilter,
+});
 
 const logSubscriber = new OpenTelemetryLogSubscriber({
   endpoint: 'http://localhost:4318/v1/logs',

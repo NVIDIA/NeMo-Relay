@@ -108,6 +108,44 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	assertWrappedObservabilityConfig(t, wrapped)
 }
 
+func TestObservabilityOpenTelemetrySessionFilterSerializesForTraceAndLogEndpoints(t *testing.T) {
+	filter := NewObservabilityOpenTelemetrySessionFilterConfig("(?i)gmail|email")
+	traceEndpoint := NewObservabilityOpenTelemetryEndpointConfig(
+		OpenTelemetryTypeGenAI,
+		"http://localhost:4318/v1/traces",
+	)
+	traceEndpoint.SessionFilter = &filter
+	logEndpoint := NewObservabilityOpenTelemetrySignalEndpointConfig(
+		"http://localhost:4318/v1/logs",
+	)
+	logEndpoint.SessionFilter = &filter
+
+	for name, endpoint := range map[string]any{
+		"trace": traceEndpoint,
+		"log":   logEndpoint,
+	} {
+		t.Run(name, func(t *testing.T) {
+			payload, err := json.Marshal(endpoint)
+			if err != nil {
+				t.Fatalf("marshal endpoint: %v", err)
+			}
+			var encoded struct {
+				SessionFilter ObservabilityOpenTelemetrySessionFilterConfig `json:"session_filter"`
+			}
+			if err := json.Unmarshal(payload, &encoded); err != nil {
+				t.Fatalf("unmarshal endpoint: %v", err)
+			}
+			if encoded.SessionFilter.Type != "block_after_tool_match" ||
+				encoded.SessionFilter.SessionMetadataKey != "session_id" ||
+				encoded.SessionFilter.UnattributedEvents != "block_after_match" ||
+				len(encoded.SessionFilter.ToolNamePatterns) != 1 ||
+				encoded.SessionFilter.ToolNamePatterns[0] != "(?i)gmail|email" {
+				t.Fatalf("unexpected session filter: %#v", encoded.SessionFilter)
+			}
+		})
+	}
+}
+
 func TestObservabilityAtofSinkConfigConstructorsSerializeTheirDiscriminators(t *testing.T) {
 	file := NewObservabilityAtofFileSinkConfig()
 	if file.Mode != "append" {

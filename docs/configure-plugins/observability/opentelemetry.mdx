@@ -163,6 +163,40 @@ exporters are unchanged.
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
 | `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
 | `promote_resource_metadata_prefixes` | `[]` | Literal prefixes that select root Scope-start metadata to copy to OTLP resource attributes. Each unique effective resource retains an exporter pipeline for the subscriber lifetime. |
+| `session_filter` | Omitted | Optional endpoint-local trace and log delivery filter. See [Session filtering](#session-filtering). |
+
+## Session Filtering
+
+Trace endpoints and explicit log endpoints can independently stop delivery for
+a session after Relay observes a matching tool scope. The matching tool event is
+dropped at that endpoint, as are later trace and log events for the same
+session. Events exported before the match cannot be retracted, other endpoints
+remain independent, and metric delivery is unchanged.
+
+```toml
+[[components.config.opentelemetry.endpoints]]
+type = "gen_ai"
+endpoint = "https://collector.example/v1/traces"
+
+[components.config.opentelemetry.endpoints.session_filter]
+type = "block_after_tool_match"
+session_metadata_key = "session_id"
+tool_name_patterns = [
+  "(?i)(?:^|[^a-z0-9])(?:e-?mail|mail|gmail|outlook|inbox|imap|smtp|mailbox)(?:$|[^a-z0-9])",
+]
+unattributed_events = "block_after_match"
+```
+
+The supported filter type is `block_after_tool_match`.
+`session_metadata_key` defaults to `session_id`, and
+`unattributed_events` defaults to `block_after_match`. Once any session matches,
+`block_after_match` also drops events whose session cannot be resolved at that
+endpoint. Blocked-session state lasts until the Relay process restarts.
+
+Use the same `session_filter` object on an
+`opentelemetry.logs.endpoints[N]` entry to protect an explicit log destination.
+When logs are derived from trace endpoints, each log destination inherits its
+trace endpoint's filter. Metric endpoints reject `session_filter`.
 
 ## Event Metadata Promotion
 

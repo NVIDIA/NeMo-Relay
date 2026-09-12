@@ -38,6 +38,7 @@ from nemo_relay.observability import (
     OpenTelemetryLogSectionConfig,
     OpenTelemetryMetricSectionConfig,
     OpenTelemetrySectionConfig,
+    OpenTelemetrySessionFilterConfig,
     OpenTelemetrySignalEndpointConfig,
     S3StorageConfig,
 )
@@ -225,6 +226,30 @@ class TestObservabilityConfigHelpers:
         assert section["logs"] == logs.to_dict()
         assert section["metrics"] == metrics.to_dict()
         assert typing.cast(dict[str, object], section["metrics"])["endpoints"] == [endpoint.to_dict()]
+
+    def test_opentelemetry_session_filter_serializes_for_trace_and_log_endpoints(self):
+        session_filter = OpenTelemetrySessionFilterConfig(
+            tool_name_patterns=["(?i)gmail|email"],
+        )
+        expected = {
+            "type": "block_after_tool_match",
+            "session_metadata_key": "session_id",
+            "tool_name_patterns": ["(?i)gmail|email"],
+            "unattributed_events": "block_after_match",
+        }
+
+        trace_endpoint = OpenTelemetryEndpointConfig(
+            "gen_ai",
+            "http://localhost:4318/v1/traces",
+            session_filter=session_filter,
+        )
+        log_endpoint = OpenTelemetrySignalEndpointConfig(
+            "http://localhost:4318/v1/logs",
+            session_filter=session_filter,
+        )
+
+        assert trace_endpoint.to_dict()["session_filter"] == expected
+        assert log_endpoint.to_dict()["session_filter"] == expected
 
     def test_validation_rejects_bad_values(self):
         report = validate_plugin_config(

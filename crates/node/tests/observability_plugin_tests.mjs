@@ -120,6 +120,27 @@ describe('observability plugin helpers', () => {
     assert.throws(() => observability.openTelemetrySignalEndpoint({ endpoint: ' ' }), /nonblank/);
   });
 
+  it('preserves session filters on trace and explicit log endpoints', () => {
+    const sessionFilter = {
+      type: 'block_after_tool_match',
+      session_metadata_key: 'session_id',
+      tool_name_patterns: ['(?i)gmail|email'],
+      unattributed_events: 'block_after_match',
+    };
+    const traceEndpoint = observability.openTelemetryEndpoint({
+      type: 'gen_ai',
+      endpoint: 'http://localhost:4318/v1/traces',
+      session_filter: sessionFilter,
+    });
+    const logEndpoint = observability.openTelemetrySignalEndpoint({
+      endpoint: 'http://localhost:4318/v1/logs',
+      session_filter: sessionFilter,
+    });
+
+    assert.deepEqual(traceEndpoint.session_filter, sessionFilter);
+    assert.deepEqual(logEndpoint.session_filter, sessionFilter);
+  });
+
   it('initializes a version 4 log and metric configuration without exporting signals', async () => {
     const config = {
       version: 4,

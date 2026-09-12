@@ -39,7 +39,35 @@ type ObservabilityOpenTelemetrySignalEndpointConfig struct {
 	ServiceVersion       string            `json:"service_version,omitempty"`
 	InstrumentationScope string            `json:"instrumentation_scope,omitempty"`
 	TimeoutMillis        uint64            `json:"timeout_millis,omitempty"`
+
+	// SessionFilter is supported for explicit log endpoints; metric endpoints reject it.
+	SessionFilter *ObservabilityOpenTelemetrySessionFilterConfig `json:"session_filter,omitempty"`
 }
+
+// ObservabilityOpenTelemetrySessionFilterConfig blocks trace or log delivery
+// after a tool-name match in one session. Metric endpoints reject this field.
+type ObservabilityOpenTelemetrySessionFilterConfig struct {
+	Type               OpenTelemetrySessionFilterType        `json:"type"`
+	SessionMetadataKey string                                `json:"session_metadata_key,omitempty"`
+	ToolNamePatterns   []string                              `json:"tool_name_patterns"`
+	UnattributedEvents OpenTelemetryUnattributedEventsPolicy `json:"unattributed_events,omitempty"`
+}
+
+// OpenTelemetrySessionFilterType selects an endpoint-local session filter.
+type OpenTelemetrySessionFilterType string
+
+const (
+	// OpenTelemetrySessionFilterTypeBlockAfterToolMatch blocks a session after a matching tool event.
+	OpenTelemetrySessionFilterTypeBlockAfterToolMatch OpenTelemetrySessionFilterType = "block_after_tool_match"
+)
+
+// OpenTelemetryUnattributedEventsPolicy controls events with no resolved session after a match.
+type OpenTelemetryUnattributedEventsPolicy string
+
+const (
+	// OpenTelemetryUnattributedEventsPolicyBlockAfterMatch drops unattributed events after any match.
+	OpenTelemetryUnattributedEventsPolicyBlockAfterMatch OpenTelemetryUnattributedEventsPolicy = "block_after_match"
+)
 
 // ObservabilityOpenTelemetryLogConfig configures the plugin's OTLP log pipeline.
 // A nil Endpoints pointer derives log destinations from the trace endpoint list.
@@ -85,6 +113,9 @@ type ObservabilityOpenTelemetryEndpointConfig struct {
 	MaxExportBatchSize            *uint64                `json:"max_export_batch_size,omitempty"`
 	ScheduledDelayMillis          *uint64                `json:"scheduled_delay_millis,omitempty"`
 	CompletedSpanContextTTLMillis *uint64                `json:"completed_span_context_ttl_millis,omitempty"`
+
+	// SessionFilter optionally blocks endpoint delivery by session.
+	SessionFilter *ObservabilityOpenTelemetrySessionFilterConfig `json:"session_filter,omitempty"`
 }
 
 // ObservabilityAtofConfig configures filesystem-backed raw ATOF JSONL export.
@@ -284,6 +315,19 @@ func NewObservabilityHttpStorageConfig(endpoint string) ObservabilityHttpStorage
 // NewObservabilityOpenTelemetryConfig returns disabled multi-endpoint settings.
 func NewObservabilityOpenTelemetryConfig() ObservabilityOpenTelemetryConfig {
 	return ObservabilityOpenTelemetryConfig{}
+}
+
+// NewObservabilityOpenTelemetrySessionFilterConfig returns a session filter
+// that blocks endpoint delivery after a matching tool event.
+func NewObservabilityOpenTelemetrySessionFilterConfig(toolNamePatterns ...string) ObservabilityOpenTelemetrySessionFilterConfig {
+	patterns := make([]string, len(toolNamePatterns))
+	copy(patterns, toolNamePatterns)
+	return ObservabilityOpenTelemetrySessionFilterConfig{
+		Type:               OpenTelemetrySessionFilterTypeBlockAfterToolMatch,
+		SessionMetadataKey: "session_id",
+		ToolNamePatterns:   patterns,
+		UnattributedEvents: OpenTelemetryUnattributedEventsPolicyBlockAfterMatch,
+	}
 }
 
 // NewObservabilityOpenTelemetrySignalEndpointConfig returns a signal endpoint with native defaults.

@@ -35,6 +35,7 @@ use super::otel::{
     DEFAULT_COMPLETED_SPAN_CONTEXT_TTL, OpenTelemetryError, OtlpTransport, Result,
     normalize_shutdown_result,
 };
+use super::otel_session_filter::EndpointSessionFilter;
 use super::otel_signal::{
     MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics, build_grpc_metadata,
     build_in_owned_runtime, classify_metric_mark, reject_signal_header_environment,
@@ -65,6 +66,7 @@ pub struct OpenTelemetryLogConfig {
     scheduled_delay: Duration,
     completed_span_context_ttl: Duration,
     diagnostic_field: Option<String>,
+    session_filter: Option<Arc<EndpointSessionFilter>>,
 }
 
 impl OpenTelemetryLogConfig {
@@ -87,6 +89,7 @@ impl OpenTelemetryLogConfig {
             scheduled_delay: DEFAULT_SCHEDULED_DELAY,
             completed_span_context_ttl: DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
             diagnostic_field: None,
+            session_filter: None,
         }
     }
 
@@ -181,6 +184,11 @@ impl OpenTelemetryLogConfig {
         self
     }
 
+    pub(crate) fn with_session_filter(mut self, filter: Arc<EndpointSessionFilter>) -> Self {
+        self.session_filter = Some(filter);
+        self
+    }
+
     fn validate(&self) -> Result<()> {
         if self.endpoint.trim().is_empty() {
             return Err(OpenTelemetryError::ExporterBuild(
@@ -262,6 +270,7 @@ impl OpenTelemetryLogSubscriber {
         let minimum_severity = config.minimum_severity;
         let completed_span_context_ttl = config.completed_span_context_ttl;
         let instrumentation_scope = config.instrumentation_scope.clone();
+        let session_filter = config.session_filter.clone();
         let runtime_diagnostics = SignalRuntimeDiagnostics::new(config.diagnostic_field.clone());
         let delivery_diagnostics = Arc::new(LogDeliveryDiagnostics::new(
             config.endpoint.clone(),
@@ -277,6 +286,7 @@ impl OpenTelemetryLogSubscriber {
             minimum_severity,
             completed_span_context_ttl,
             runtime_diagnostics.clone(),
+            session_filter,
         )));
         let callback_processor = Arc::clone(&processor);
         let callback_recovery_warned = Arc::new(AtomicBool::new(false));
@@ -402,6 +412,7 @@ fn build_log_provider(
     let exporter = DiagnosticLogExporter {
         inner: exporter,
         diagnostics: Arc::clone(&diagnostics),
+        session_filter: config.session_filter.clone(),
     };
     let processor = BatchLogProcessor::builder(exporter)
         .with_batch_config(batch_config)
@@ -427,6 +438,7 @@ struct LogDeliveryDiagnostics {
     accepted: AtomicU64,
     export_failures: AtomicU64,
     reported_queue_drops: AtomicU64,
+    policy_filtered: AtomicU64,
     endpoint: String,
     runtime_diagnostics: SignalRuntimeDiagnostics,
 }
@@ -438,6 +450,7 @@ impl LogDeliveryDiagnostics {
             accepted: AtomicU64::new(0),
             export_failures: AtomicU64::new(0),
             reported_queue_drops: AtomicU64::new(0),
+            policy_filtered: AtomicU64::new(0),
             endpoint,
             runtime_diagnostics,
         }
@@ -459,7 +472,8 @@ impl LogDeliveryDiagnostics {
         let dropped = self
             .emitted
             .load(Ordering::Relaxed)
-            .saturating_sub(self.accepted.load(Ordering::Relaxed));
+            .saturating_sub(self.accepted.load(Ordering::Relaxed))
+            .saturating_sub(self.policy_filtered.load(Ordering::Relaxed));
         let mut reported = self.reported_queue_drops.load(Ordering::Relaxed);
         while dropped > reported {
             match self.reported_queue_drops.compare_exchange_weak(
@@ -485,6 +499,18 @@ impl LogDeliveryDiagnostics {
         dropped
     }
 
+    fn record_policy_filtered(&self, count: u64) {
+        self.policy_filtered.fetch_add(count, Ordering::Relaxed);
+        self.runtime_diagnostics.record(
+            "otel.logs_session_filtered",
+            format!(
+                "OpenTelemetry session policy filtered {count} logs before export to endpoint {}",
+                self.endpoint
+            ),
+            count,
+        );
+    }
+
     fn failure_summary(&self) -> Option<String> {
         let dropped = self.record_queue_drops();
         let export_failures = self.export_failures.load(Ordering::Relaxed);
@@ -498,10 +524,33 @@ impl LogDeliveryDiagnostics {
 struct DiagnosticLogExporter<E> {
     inner: E,
     diagnostics: Arc<LogDeliveryDiagnostics>,
+    session_filter: Option<Arc<EndpointSessionFilter>>,
 }
 
 impl<E: LogExporter> LogExporter for DiagnosticLogExporter<E> {
     async fn export(&self, batch: LogBatch<'_>) -> OTelSdkResult {
+        let filtered_batch;
+        let batch = if let Some(filter) = &self.session_filter {
+            let records = batch
+                .iter()
+                .filter(|(record, _)| {
+                    !record
+                        .trace_context()
+                        .is_some_and(|context| filter.blocks_trace(context.trace_id))
+                })
+                .collect::<Vec<_>>();
+            let filtered = batch.iter().count() - records.len();
+            if filtered > 0 {
+                self.diagnostics.record_policy_filtered(filtered as u64);
+            }
+            filtered_batch = records;
+            LogBatch::new(&filtered_batch)
+        } else {
+            batch
+        };
+        if batch.iter().next().is_none() {
+            return Ok(());
+        }
         self.diagnostics
             .accepted
             .fetch_add(batch.iter().count() as u64, Ordering::Relaxed);
@@ -714,6 +763,7 @@ struct LogEventProcessor {
     invalid_metric_count: u64,
     runtime_diagnostics: SignalRuntimeDiagnostics,
     completed_span_context_ttl: Duration,
+    session_filter: Option<Arc<EndpointSessionFilter>>,
 }
 
 impl LogEventProcessor {
@@ -728,6 +778,7 @@ impl LogEventProcessor {
             minimum_severity,
             DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
             SignalRuntimeDiagnostics::new(diagnostic_field),
+            None,
         )
     }
 
@@ -736,6 +787,7 @@ impl LogEventProcessor {
         minimum_severity: LogSeverity,
         completed_span_context_ttl: Duration,
         runtime_diagnostics: SignalRuntimeDiagnostics,
+        session_filter: Option<Arc<EndpointSessionFilter>>,
     ) -> Self {
         Self {
             logger,
@@ -745,6 +797,7 @@ impl LogEventProcessor {
             invalid_metric_count: 0,
             runtime_diagnostics,
             completed_span_context_ttl,
+            session_filter,
         }
     }
 
@@ -772,7 +825,24 @@ impl LogEventProcessor {
                 self.lineage.process_start(event);
             }
             Some(crate::api::event::ScopeCategory::End) => self.lineage.process_end(event),
-            None => self.process_mark(event),
+            None => {
+                if self
+                    .session_filter
+                    .as_ref()
+                    .is_some_and(|filter| filter.blocks_event(event))
+                {
+                    self.runtime_diagnostics.record(
+                        "otel.logs_session_filtered",
+                        format!(
+                            "OpenTelemetry session policy filtered log mark {:?}",
+                            event.name()
+                        ),
+                        1,
+                    );
+                } else {
+                    self.process_mark(event);
+                }
+            }
         }
     }
 

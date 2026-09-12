@@ -66,6 +66,15 @@ export interface AtifConfig {
   storage?: S3StorageConfig | HttpStorageConfig | Array<S3StorageConfig | HttpStorageConfig>;
 }
 
+export interface OpenTelemetrySessionFilterConfig {
+  type: 'block_after_tool_match';
+  /** Metadata key containing the session identity. Defaults to `session_id`. */
+  session_metadata_key?: string;
+  tool_name_patterns: string[];
+  /** Defaults to `block_after_match`. */
+  unattributed_events?: 'block_after_match';
+}
+
 export interface OpenTelemetryEndpointConfig {
   type: 'full' | 'gen_ai' | 'openinference';
   endpoint: string;
@@ -87,6 +96,7 @@ export interface OpenTelemetryEndpointConfig {
   max_export_batch_size?: number;
   scheduled_delay_millis?: number;
   completed_span_context_ttl_millis?: number;
+  session_filter?: OpenTelemetrySessionFilterConfig;
 }
 
 export interface OpenTelemetrySignalEndpointConfig {
@@ -100,6 +110,8 @@ export interface OpenTelemetrySignalEndpointConfig {
   service_version?: string;
   instrumentation_scope?: string;
   timeout_millis?: number;
+  /** Supported for explicit log endpoints; metric endpoints reject this field. */
+  session_filter?: OpenTelemetrySessionFilterConfig;
 }
 
 export interface OpenTelemetryLogSectionConfig {
