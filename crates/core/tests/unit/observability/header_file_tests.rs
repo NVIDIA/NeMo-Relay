@@ -259,7 +259,8 @@ fn http_client_works_without_a_tokio_runtime() {
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let mut buffer = [0; 4_096];
-        stream.read(&mut buffer).unwrap();
+        let bytes_read = stream.read(&mut buffer).unwrap();
+        assert!(bytes_read > 0);
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             .unwrap();
