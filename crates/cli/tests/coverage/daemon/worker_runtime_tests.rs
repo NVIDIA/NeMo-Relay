@@ -75,7 +75,9 @@ async fn authenticated_readiness_probe_opens_admission_before_publication() {
 #[tokio::test]
 async fn worker_stops_immediately_after_exit_or_an_empty_drain() {
     let exited = state();
-    exited.request_exit("test");
+    exited.request_exit("first");
+    exited.request_exit("second");
+    assert_eq!(*read_lock(&exited.exit_reason), Some("first"));
     tokio::time::timeout(Duration::from_millis(50), exited.wait_until_stopped())
         .await
         .expect("exit stops the worker");

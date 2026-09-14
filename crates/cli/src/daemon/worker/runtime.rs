@@ -401,6 +401,7 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
         },
     };
     state.request_exit(stop_reason);
+    let stop_reason = read_lock(&state.exit_reason).unwrap_or(stop_reason);
     control_task.abort();
     signal.abort();
     let result = match state.managed.as_ref() {
