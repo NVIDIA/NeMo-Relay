@@ -161,10 +161,11 @@ pub(crate) async fn passthrough(
 ) -> Result<Response<Body>, CliError> {
     state.touch();
     let authorization = state.authorize_provider_request(request.headers_mut())?;
-    let prepared = prepare_gateway_request(&state.config, request, authorization).await?;
+    let mut prepared = prepare_gateway_request(&state.config, request, authorization).await?;
+    let start = take_llm_gateway_start(&mut prepared);
     let prep = state
         .sessions
-        .prepare_gateway_call(&prepared.headers, build_llm_gateway_start(&prepared))
+        .prepare_gateway_call(&prepared.headers, start)
         .await?;
     run_managed_gateway(state, prepared, prep).await
 }
@@ -747,8 +748,7 @@ fn client_sse_body(
         while let Some(item) = json_stream.next().await {
             match item {
                 Ok(event_json) => {
-                    let frame = encode_sse_frame(&event_json, route);
-                    yield Ok::<Bytes, CliError>(Bytes::from(frame));
+                    yield Ok::<Bytes, CliError>(encode_sse_frame(&event_json, route));
                 }
                 Err(error) => {
                     guard.finish().await;
@@ -864,19 +864,25 @@ impl Drop for GatewayCallGuard {
 // Formats one SSE frame from a parsed event payload. Anthropic and OpenAI Responses events carry
 // the event name in the `type` field, so it is mirrored back onto the `event:` line; OpenAI Chat
 // chunks have no event name and emit only `data:`.
-fn encode_sse_frame(event_json: &Value, route: ProviderRoute) -> String {
-    let serialized = serde_json::to_string(event_json).unwrap_or_else(|_| "null".to_string());
+fn encode_sse_frame(event_json: &Value, route: ProviderRoute) -> Bytes {
     let event_name = match route {
-        ProviderRoute::AnthropicMessages | ProviderRoute::OpenAiResponses => event_json
-            .get("type")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
+        ProviderRoute::AnthropicMessages | ProviderRoute::OpenAiResponses => {
+            event_json.get("type").and_then(Value::as_str)
+        }
         _ => None,
     };
-    match event_name {
-        Some(name) => format!("event: {name}\ndata: {serialized}\n\n"),
-        None => format!("data: {serialized}\n\n"),
+    let mut frame = Vec::with_capacity(64);
+    if let Some(name) = event_name {
+        frame.extend_from_slice(b"event: ");
+        frame.extend_from_slice(name.as_bytes());
+        frame.push(b'\n');
     }
+    frame.extend_from_slice(b"data: ");
+    if serde_json::to_writer(&mut frame, event_json).is_err() {
+        frame.extend_from_slice(b"null");
+    }
+    frame.extend_from_slice(b"\n\n");
+    Bytes::from(frame)
 }
 
 // Forwards the buffered request to the upstream provider with only the safe request headers. This

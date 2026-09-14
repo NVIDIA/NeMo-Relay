@@ -889,6 +889,31 @@ fn recovery_completion_covers_live_empty_and_draining_routes() {
 }
 
 #[test]
+fn current_directive_promotes_a_recovered_target_before_reusing_it() {
+    let registry = Registry::new(false);
+    let fingerprint = fingerprint(33);
+    let token = TokenDigest::from_token(b"token-33");
+    let mcp = session("mcp");
+    registry
+        .register_mcp(registration(fingerprint, token, "mcp"), launch("launch"))
+        .unwrap();
+    registry
+        .begin_recovery(fingerprint, Some(worker("survivor")), 100)
+        .unwrap();
+
+    assert_eq!(
+        registry.current_directive(fingerprint, &mcp).unwrap(),
+        BrokerDirective::ReuseWorker {
+            endpoint: "http://127.0.0.1:41000".to_owned(),
+        }
+    );
+    assert_eq!(
+        registry.snapshot(fingerprint).unwrap().state,
+        RouteStateKind::Ready
+    );
+}
+
+#[test]
 fn registry_rejects_stale_worker_generations_and_invalid_state_transitions() {
     let registry = Registry::new(false);
     let fingerprint = fingerprint(33);

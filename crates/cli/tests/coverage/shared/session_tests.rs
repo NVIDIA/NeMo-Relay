@@ -4,11 +4,15 @@
 use axum::http::HeaderMap;
 use nemo_relay::api::event::{Event, ScopeCategory};
 use nemo_relay::api::llm::{LlmCallExecuteParams, llm_call_execute};
+use nemo_relay::api::registry::{
+    deregister_tool_conditional_execution_guardrail, register_tool_conditional_execution_guardrail,
+};
 use nemo_relay::api::runtime::EventSubscriberFn;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::resolve::{
     ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
 };
+use nemo_relay::error::FlowError;
 use nemo_relay::observability::OpenTelemetryType;
 use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig, AtofExporterMode};
 use nemo_relay::observability::otel::OpenTelemetrySubscriber;
@@ -142,6 +146,20 @@ async fn authenticated_child_cannot_promote_into_another_clients_parent() {
             .subagents
             .contains_key("child-thread")
     );
+
+    // The rejected child never created session state, so its reservation is released for a
+    // future independent session with the same client-provided ID.
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "child-thread",
+                "SessionStart",
+            ))],
+            "client-c",
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1774,6 +1792,307 @@ async fn terminal_subscriber_wait_releases_session_manager_locks() {
     parallel_result
         .expect("another session must remain writable while terminal subscribers are active")
         .unwrap();
+}
+
+#[tokio::test]
+async fn slow_tool_guardrail_does_not_block_another_session() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-session-isolation-slow-tool";
+    const TOOL: &str = "session-isolation-slow-tool";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started_tx = Arc::new(StdMutex::new(Some(started_tx)));
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let release_rx = Arc::new(StdMutex::new(Some(release_rx)));
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(move |name, _| {
+            let started_tx = Arc::clone(&started_tx);
+            let release_rx = Arc::clone(&release_rx);
+            let blocks = name == TOOL;
+            Box::pin(async move {
+                if blocks {
+                    if let Some(started) = started_tx.lock().unwrap().take() {
+                        let _ = started.send(());
+                    }
+                    let release = { release_rx.lock().unwrap().take() };
+                    if let Some(release) = release {
+                        let _ = release.await;
+                    }
+                }
+                Ok(None)
+            })
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let blocked_manager = manager.clone();
+    let blocked = tokio::spawn(async move {
+        blocked_manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "blocked-tool-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "blocked-tool".into(),
+                    tool_name: TOOL.into(),
+                    subagent_id: None,
+                    arguments: json!({}),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                })],
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), started_rx)
+        .await
+        .expect("slow guardrail should start")
+        .unwrap();
+
+    let parallel = tokio::time::timeout(
+        Duration::from_secs(5),
+        manager.apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::Notification(codex_session_event(
+                "parallel-tool-session",
+                "notification",
+                json!({ "session_id": "parallel-tool-session" }),
+            ))],
+        ),
+    )
+    .await;
+
+    release_tx.send(()).unwrap();
+    blocked.await.unwrap().unwrap();
+    deregister_tool_conditional_execution_guardrail(GUARDRAIL).unwrap();
+    parallel
+        .expect("another session must progress while a tool guardrail is waiting")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn failed_guardrail_batch_keeps_its_partial_session_owner() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-session-reservation-release";
+    const TOOL: &str = "session-reservation-release";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started_tx = Arc::new(StdMutex::new(Some(started_tx)));
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let release_rx = Arc::new(StdMutex::new(Some(release_rx)));
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(move |name, _| {
+            let started_tx = Arc::clone(&started_tx);
+            let release_rx = Arc::clone(&release_rx);
+            Box::pin(async move {
+                if name == TOOL {
+                    if let Some(started) = started_tx.lock().unwrap().take() {
+                        let _ = started.send(());
+                    }
+                    let release = { release_rx.lock().unwrap().take() };
+                    if let Some(release) = release {
+                        let _ = release.await;
+                    }
+                    return Err(FlowError::Internal("expected reservation failure".into()));
+                }
+                Ok(None)
+            })
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let event = || {
+        NormalizedEvent::ToolStarted(ToolEvent {
+            session_id: "reserved-session".into(),
+            agent_kind: AgentKind::Codex,
+            event_name: "PreToolUse".into(),
+            tool_call_id: "reserved-tool".into(),
+            tool_name: TOOL.into(),
+            subagent_id: None,
+            arguments: json!({}),
+            result: Value::Null,
+            status: None,
+            payload: json!({}),
+            metadata: json!({}),
+        })
+    };
+    let pending_manager = manager.clone();
+    let pending = tokio::spawn(async move {
+        pending_manager
+            .apply_authenticated_events(&HeaderMap::new(), vec![event()], "client-a")
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), started_rx)
+        .await
+        .expect("guardrail should start")
+        .unwrap();
+
+    let competing = manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "reserved-session",
+                "SessionStart",
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(competing, CliError::Unauthorized(_)));
+
+    release_tx.send(()).unwrap();
+    assert!(pending.await.unwrap().is_err());
+    assert_eq!(
+        manager
+            .authenticated_owners
+            .lock()
+            .await
+            .get("reserved-session")
+            .map(String::as_str),
+        Some("client-a")
+    );
+    deregister_tool_conditional_execution_guardrail(GUARDRAIL).unwrap();
+}
+
+#[tokio::test]
+async fn partially_applied_authenticated_batch_keeps_its_owner() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-session-partial-batch-owner";
+    const TOOL: &str = "session-partial-batch-owner";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(|name, _| {
+            Box::pin(async move {
+                (name == TOOL)
+                    .then(|| FlowError::Internal("expected partial batch failure".into()))
+                    .map_or(Ok(None), Err)
+            })
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let result = manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event(
+                    "partially-applied-session",
+                    "SessionStart",
+                )),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "partially-applied-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "partially-applied-tool".into(),
+                    tool_name: TOOL.into(),
+                    subagent_id: None,
+                    arguments: json!({}),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+            "client-a",
+        )
+        .await;
+    assert!(result.is_err());
+    assert_eq!(
+        manager
+            .authenticated_owners
+            .lock()
+            .await
+            .get("partially-applied-session")
+            .map(String::as_str),
+        Some("client-a")
+    );
+    deregister_tool_conditional_execution_guardrail(GUARDRAIL).unwrap();
+}
+
+#[tokio::test]
+async fn close_all_waits_for_an_in_flight_session_application() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-session-close-all-drain";
+    const TOOL: &str = "session-close-all-drain";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started_tx = Arc::new(StdMutex::new(Some(started_tx)));
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let release_rx = Arc::new(StdMutex::new(Some(release_rx)));
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(move |name, _| {
+            let started_tx = Arc::clone(&started_tx);
+            let release_rx = Arc::clone(&release_rx);
+            Box::pin(async move {
+                if name == TOOL {
+                    if let Some(started) = started_tx.lock().unwrap().take() {
+                        let _ = started.send(());
+                    }
+                    let release = { release_rx.lock().unwrap().take() };
+                    if let Some(release) = release {
+                        let _ = release.await;
+                    }
+                }
+                Ok(None)
+            })
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let applying_manager = manager.clone();
+    let applying = tokio::spawn(async move {
+        applying_manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "close-all-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "close-all-tool".into(),
+                    tool_name: TOOL.into(),
+                    subagent_id: None,
+                    arguments: json!({}),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                })],
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), started_rx)
+        .await
+        .expect("guardrail should start")
+        .unwrap();
+
+    let closing_manager = manager.clone();
+    let mut closing = tokio::spawn(async move { closing_manager.close_all("test_shutdown").await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut closing)
+            .await
+            .is_err(),
+        "close_all must wait until the in-flight event releases its activity"
+    );
+
+    release_tx.send(()).unwrap();
+    applying.await.unwrap().unwrap();
+    closing.await.unwrap().unwrap();
+    assert!(manager.inner.lock().await.is_empty());
+    deregister_tool_conditional_execution_guardrail(GUARDRAIL).unwrap();
 }
 
 #[tokio::test]

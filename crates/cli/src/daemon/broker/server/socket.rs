@@ -310,6 +310,13 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
                     if send.try_send(Message::Text(text.into())).is_err() { break; }
                     continue;
                 }
+                // ACKs affect only the peer's bounded directive queue. Challenge
+                // issuance has no routing effect either, so neither needs to
+                // wake every established control connection.
+                let local_control_command = matches!(
+                    &request.command,
+                    Command::Acknowledge { .. } | Command::Challenge(_)
+                );
                 let readiness = if let Command::Ready(payload) = &request.command {
                     Some(socket_ready(&state, role, id.as_deref(), &generation, payload).await)
                 } else {
@@ -328,7 +335,7 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
                     None => dispatch(&state, role, &mut id, &mut challenge, request.command).await,
                 };
                 let success = response.status().is_success();
-                if success && let Some(id) = &id {
+                if success && !local_control_command && let Some(id) = &id {
                     let mut peers = lock(&state.sockets.peers);
                     let entry = peers.entry(key(role, id));
                     use std::collections::hash_map::Entry;
@@ -362,7 +369,9 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
                 last_reply = Some((request.request_id, text.to_string(), event.clone()));
                 let Ok(text) = serde_json::to_string(&event) else { break };
                 if send.try_send(Message::Text(text.into())).is_err() { break; }
-                state.sockets.changed.notify_waiters();
+                if !local_control_command {
+                    state.sockets.changed.notify_waiters();
+                }
             }
         }
     }
