@@ -341,6 +341,39 @@ fn metric_config_rejects_blank_and_padded_headers() {
 }
 
 #[test]
+fn metric_configured_headers_require_https_except_for_loopback() {
+    for transport in [OtlpTransport::HttpBinary, OtlpTransport::Grpc] {
+        for config in [
+            OpenTelemetryMetricConfig::new("http://collector.example/v1/metrics")
+                .with_transport(transport)
+                .with_header("authorization", "Bearer static"),
+            OpenTelemetryMetricConfig::new("http://collector.example/v1/metrics")
+                .with_transport(transport)
+                .with_header_env("authorization", "NEMO_RELAY_TEST_METRIC_TOKEN"),
+            OpenTelemetryMetricConfig::new("http://collector.example/v1/metrics")
+                .with_transport(transport)
+                .with_header_file("authorization", "/var/run/secrets/telemetry/token"),
+        ] {
+            let error = config.validate().unwrap_err();
+            assert!(error.to_string().contains("require https"), "{error}");
+        }
+
+        assert!(
+            OpenTelemetryMetricConfig::new("http://127.0.0.1:4318/v1/metrics")
+                .with_transport(transport)
+                .with_header("authorization", "Bearer static")
+                .validate()
+                .is_ok()
+        );
+    }
+    assert!(
+        OpenTelemetryMetricConfig::new("http://collector.example/v1/metrics")
+            .validate()
+            .is_ok()
+    );
+}
+
+#[test]
 fn metric_delivery_state_survives_exporter_error_wrapping() {
     let diagnostics = MetricDeliveryDiagnostics::new(
         "https://collector.example/v1/metrics".to_string(),

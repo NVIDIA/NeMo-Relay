@@ -24,6 +24,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::header_file::{
+    HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
+    validate_header_files,
+};
 use super::otel_signal::{
     MetricMarkClassification, SignalRuntimeDiagnostics, classify_metric_mark, resolve_header_env,
     should_relog_runtime_diagnostic,
@@ -259,6 +263,7 @@ pub struct OpenTelemetryConfig {
     endpoint: String,
     headers: HashMap<String, String>,
     header_env: HashMap<String, String>,
+    header_file: HeaderFiles,
     resource_attributes: HashMap<String, String>,
     service_name: String,
     service_namespace: Option<String>,
@@ -284,6 +289,7 @@ impl OpenTelemetryConfig {
             endpoint: String::new(),
             headers: HashMap::new(),
             header_env: HashMap::new(),
+            header_file: HashMap::new(),
             resource_attributes: HashMap::new(),
             service_name: "unknown_service".to_string(),
             service_namespace: None,
@@ -359,6 +365,15 @@ impl OpenTelemetryConfig {
     /// Maps an exporter header name to the environment variable supplying its value.
     pub fn with_header_env(mut self, key: impl Into<String>, variable: impl Into<String>) -> Self {
         self.header_env.insert(key.into(), variable.into());
+        self
+    }
+
+    pub(crate) fn with_header_file(
+        mut self,
+        key: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Self {
+        self.header_file.insert(key.into(), path.into());
         self
     }
 
@@ -609,6 +624,8 @@ impl OpenTelemetrySubscriber {
             .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
         reject_global_header_environment()?;
         validate_headers(&config.headers)?;
+        validate_header_files(&config.headers, &config.header_env, &config.header_file)
+            .map_err(OpenTelemetryError::ExporterBuild)?;
         config.headers = resolve_header_env(&config.headers, &config.header_env)?;
         validate_headers(&config.headers)?;
         let runtime_diagnostics = SignalRuntimeDiagnostics::new(diagnostic_field);
@@ -1046,9 +1063,16 @@ fn build_tracer_provider_with_resource(
             .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
             let mut builder = OtlpSpanExporter::builder()
                 .with_http()
-                .with_http_client(client)
                 .with_protocol(Protocol::HttpBinary)
                 .with_timeout(config.timeout);
+            if !config.header_file.is_empty() {
+                builder = builder.with_http_client(HeaderFileHttpClient::new(
+                    client,
+                    HeaderFileResolver::new(config.header_file.clone()),
+                ));
+            } else {
+                builder = builder.with_http_client(client);
+            }
             builder =
                 builder.with_endpoint(resolve_http_trace_endpoint(&config.endpoint).into_owned());
             if !config.headers.is_empty() {
@@ -1066,6 +1090,11 @@ fn build_tracer_provider_with_resource(
             builder = builder.with_endpoint(config.endpoint.clone());
             if !config.headers.is_empty() {
                 builder = builder.with_metadata(build_grpc_metadata(&config.headers)?);
+            }
+            if !config.header_file.is_empty() {
+                builder = builder.with_interceptor(HeaderFileInterceptor::new(
+                    HeaderFileResolver::new(config.header_file.clone()),
+                ));
             }
             builder
                 .build()
