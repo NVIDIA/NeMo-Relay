@@ -13,4 +13,4 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 Initializes the process-wide static and dynamic plugin host.
 
-The returned handle must remain alive while any plugin-provided callback can run. Closing or dropping it unregisters components before unloading dynamic runtimes.
+The returned handle must remain alive while any plugin-provided callback can run. Closing or dropping it unregisters components before unloading dynamic runtimes. Workers are authenticated and validated before component initialization. Their `Register` RPC runs when the worker component activates, after earlier static components have installed their runtime registrations.
