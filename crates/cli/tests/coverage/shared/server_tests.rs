@@ -280,8 +280,12 @@ async fn gateway_clients_allow_active_streams_past_the_idle_timeout() {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut first_request_byte = [0_u8; 1];
-            socket.read_exact(&mut first_request_byte).await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0_u8; 1];
+                socket.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
             socket
                 .write_all(
                     b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n3\r\none\r\n",
@@ -304,6 +308,39 @@ async fn gateway_clients_allow_active_streams_past_the_idle_timeout() {
             response.bytes().await.unwrap(),
             b"onex!x!x!x!x!x!".as_slice()
         );
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn gateway_clients_reject_stalled_streams_after_the_idle_timeout() {
+    for no_redirect in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0_u8; 1];
+                socket.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n3\r\none\r\n",
+                )
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        });
+
+        let response = gateway_http_client(Duration::from_millis(200), no_redirect)
+            .get(format!("http://{address}"))
+            .send()
+            .await
+            .unwrap();
+        let error = response.bytes().await.unwrap_err();
+        assert!(error.is_timeout(), "expected a read timeout, got {error}");
         server.await.unwrap();
     }
 }
