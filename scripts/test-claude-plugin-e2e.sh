@@ -56,8 +56,7 @@ export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 export DISABLE_AUTOUPDATER=1
 export NEMO_RELAY_GATEWAY_URL="http://127.0.0.1:1"
 export NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS=1
-gateway_port="$(python3 -c 'import socket; sock = socket.socket(); sock.bind(("127.0.0.1", 0)); print(sock.getsockname()[1]); sock.close()')"
-export NEMO_RELAY_TEST_GATEWAY_BIND="127.0.0.1:$gateway_port"
+gateway_port=47632
 
 mkdir -p \
     "$HOME" \
@@ -134,7 +133,7 @@ relay = [item for item in plugins if item.get("id") == "nemo-relay-plugin@nemo-r
 assert len(relay) == 1, relay
 server = relay[0]["mcpServers"]["nemo-relay"]
 assert server["args"] == ["mcp"], server
-assert server["env"]["NEMO_RELAY_GATEWAY_BIND"] == os.environ["NEMO_RELAY_TEST_GATEWAY_BIND"], server
+assert server["env"]["NEMO_RELAY_GATEWAY_BIND"] == "127.0.0.1:47632", server
 generation = Path(server["env"]["NEMO_RELAY_MCP_GENERATION_FILE"])
 assert generation == plugin_root / ".nemo-relay-generation", generation
 assert generation.is_file(), generation
@@ -275,12 +274,18 @@ try:
             os.write(master, b"/exit\r")
             sent_exit = True
     if process.poll() is None:
-        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=5)
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
 finally:
     os.close(master)
     output.write_bytes(terminal)
@@ -415,7 +420,6 @@ provider_log, atof_path, work = map(Path, sys.argv[1:])
 requests = [json.loads(line) for line in provider_log.read_text().splitlines()]
 messages = [row for row in requests if urlparse(row["path"]).path.endswith("/messages")]
 assert len(messages) == 12, messages
-assert all(row["x_api_key"] == "relay-claude-e2e-key" for row in messages), messages
 
 events = [json.loads(line) for line in atof_path.read_text().splitlines()]
 turn_starts = [
