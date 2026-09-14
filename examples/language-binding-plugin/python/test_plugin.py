@@ -63,7 +63,7 @@ def test_validation_accepts_supported_mode() -> None:
 
 
 def test_default_registration_control_is_disabled_and_valid() -> None:
-    configuration = component("enforce").components[0].config
+    configuration = cast(plugin.ComponentSpec, component("enforce").components[0]).config
 
     assert cast(nemo_relay.JsonObject, configuration["registration_control"])["enabled"] is False
     assert DocumentationPlugin().validate(configuration) == []
@@ -137,7 +137,10 @@ def test_disabled_component_configuration_is_still_validated(tmp_path: Any, monk
 def test_registers_each_safe_plugin_surface() -> None:
     context = RecordingContext()
 
-    DocumentationPlugin().register(component("enforce").components[0].config, cast(plugin.PluginContext, context))
+    DocumentationPlugin().register(
+        cast(plugin.ComponentSpec, component("enforce").components[0]).config,
+        cast(plugin.PluginContext, context),
+    )
 
     assert set(context.registrations) == {
         "register_subscriber",
@@ -157,7 +160,7 @@ def test_registers_each_safe_plugin_surface() -> None:
         "register_llm_stream_execution_intercept",
     }
 
-    configuration = component("enforce").components[0].config
+    configuration = cast(plugin.ComponentSpec, component("enforce").components[0]).config
     cast(nemo_relay.JsonObject, configuration["registration_control"])["enabled"] = True
     context = RecordingContext()
     DocumentationPlugin().register(configuration, cast(plugin.PluginContext, context))
@@ -171,7 +174,8 @@ async def test_registration_control_is_owned_by_activation(tmp_path: Any, monkey
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     subscribers.register(target, lambda event: observed.append(event.name))
     configuration = component("enforce")
-    cast(nemo_relay.JsonObject, configuration.components[0].config["registration_control"])["enabled"] = True
+    component_spec = cast(plugin.ComponentSpec, configuration.components[0])
+    cast(nemo_relay.JsonObject, component_spec.config["registration_control"])["enabled"] = True
     plugin.register("documentation-plugin", cast(plugin.Plugin, DocumentationPlugin()))
     activation = None
     try:
@@ -262,7 +266,8 @@ async def test_runtime_events_do_not_depend_on_request_rewriting(
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     implementation = DocumentationPlugin()
     configuration = component("enforce")
-    cast(nemo_relay.JsonObject, configuration.components[0].config["requests"])["enabled"] = False
+    component_spec = cast(plugin.ComponentSpec, configuration.components[0])
+    cast(nemo_relay.JsonObject, component_spec.config["requests"])["enabled"] = False
     plugin.register("documentation-plugin", cast(plugin.Plugin, implementation))
     activation = None
     try:
