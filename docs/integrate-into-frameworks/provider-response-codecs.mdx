@@ -626,6 +626,7 @@ Use a custom response codec when the provider or framework response does not mat
 In Python, a custom response codec can route to built-in codecs and return their native `AnnotatedLLMResponse` values:
 
 ```python
+import nemo_relay
 from nemo_relay.codecs import OpenAIChatCodec, OpenAIResponsesCodec
 
 class OpenAIRoutingResponseCodec:

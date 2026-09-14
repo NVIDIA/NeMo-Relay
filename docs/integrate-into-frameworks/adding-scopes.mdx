@@ -61,6 +61,8 @@ def on_request_start(request_state: RequestState, request_id: str) -> None:
 
 def on_request_end(request_state: RequestState, status: str) -> None:
     handle = request_state.nemo_relay_scope
+    if handle is None:
+        return
     try:
         nemo_relay.scope.pop(handle, output={"status": status})
     finally:

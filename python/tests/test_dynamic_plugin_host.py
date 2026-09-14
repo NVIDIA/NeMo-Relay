@@ -21,7 +21,7 @@ import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Never, cast
+from typing import cast
 
 import pytest
 
@@ -238,7 +238,7 @@ async def test_native_host_owns_callbacks_and_close_is_idempotent(
 async def test_activate_closes_host_when_context_raises(
     native_dynamic_plugin: _BuiltPlugin,
     tmp_path: Path,
-) -> Never:
+) -> None:
     plugins_toml = _write_plugins_toml(tmp_path, [(native_dynamic_plugin.manifest, {})])
     activation = None
 

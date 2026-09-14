@@ -100,7 +100,7 @@ downstream result, then adds the pending mark without exposing it to the applica
 ```python
 from collections.abc import Awaitable, Callable
 
-from nemo_relay import Json, ToolExecutionContext, ToolExecutionInterceptOutcome, ToolExecutionResult
+from nemo_relay import Json, PendingMarkSpec, ToolExecutionContext, ToolExecutionInterceptOutcome, ToolExecutionResult
 
 async def tool_execution(
     context: ToolExecutionContext,

@@ -6,7 +6,6 @@
 import asyncio
 import contextvars
 import uuid
-from typing import Never
 
 import pytest
 from async_helpers import resolve_async_result
@@ -157,7 +156,7 @@ def test_use_scope_stack_restores_a_previously_bound_native_stack(restore_native
     assert nemo_relay.scope_stack_active()
 
 
-def test_use_scope_stack_restores_nested_and_failing_contexts(restore_native_scope_stack) -> Never:
+def test_use_scope_stack_restores_nested_and_failing_contexts(restore_native_scope_stack) -> None:
     previous = nemo_relay.create_scope_stack()
     outer = nemo_relay.create_scope_stack()
     inner = nemo_relay.create_scope_stack()

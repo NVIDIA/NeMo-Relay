@@ -10,7 +10,7 @@ import textwrap
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any, Never, cast
+from typing import Any, cast
 
 import pytest
 
@@ -379,7 +379,7 @@ class TestSubscriberEventDetails:
     )
     def test_scope_context_manager_timestamps_reject_invalid_datetime_values(
         self, bad_timestamp, error_type, message
-    ) -> Never:
+    ) -> None:
         with pytest.raises(error_type, match=message):
             with scope.scope("py_bad_ts_context_start", ScopeType.Agent, timestamp=bad_timestamp):
                 raise AssertionError("invalid start timestamp should fail before entering the body")
