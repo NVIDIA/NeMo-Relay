@@ -71,16 +71,16 @@ export NEMO_RELAY_PLUGIN_SNAPSHOT_DIR=/var/tmp/nrs
 <Tab title="Python" language="python">
 ```python
 import asyncio
-from nemo_relay_plugin import WorkerPlugin, serve_plugin
+from nemo_relay_plugin import ConfigDiagnostic, Json, PluginContext, WorkerPlugin, serve_plugin
 
 class ExamplePythonWorker(WorkerPlugin):
     plugin_id = "examples.python_grpc_worker"
     allows_multiple_components = False
 
-    def validate(self, config):
+    def validate(self, config: Json) -> list[ConfigDiagnostic]:
         return validate_config(config)
 
-    def register(self, context, config):
+    def register(self, context: PluginContext, config: Json) -> None:
         settings = normalized_config(config)
         if settings["observe"]["enabled"]:
             self._register_observation(
@@ -97,7 +97,7 @@ class ExamplePythonWorker(WorkerPlugin):
         if settings["execution"]["enabled"]:
             self._register_execution(context, settings["tag"], settings["execution"])
 
-async def main():
+async def main() -> None:
     await serve_plugin(ExamplePythonWorker())
 
 if __name__ == "__main__":

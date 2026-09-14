@@ -5,7 +5,7 @@ import os
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from types import TracebackType
-from typing import Literal, Protocol, Self, TypedDict
+from typing import Literal, Protocol, Self, TypeAlias, TypedDict
 
 from nemo_relay import (
     Event,
@@ -23,6 +23,10 @@ from nemo_relay import (
     ToolRequestIntercept,
     ToolSanitizeGuardrail,
 )
+from nemo_relay.adaptive import ComponentSpec as AdaptiveComponentSpec
+from nemo_relay.model_pricing import ComponentSpec as PricingComponentSpec
+from nemo_relay.observability import ComponentSpec as ObservabilityComponentSpec
+from nemo_relay.pii_redaction import ComponentSpec as PiiRedactionComponentSpec
 from nemo_relay.runtime_registrations import ConditionalMiddlewareGuardrail, RuntimeRegistrationKind
 
 UnsupportedBehavior = Literal["ignore", "warn", "error"]
@@ -165,15 +169,23 @@ class ComponentSpec:
     ) -> None: ...
     def to_dict(self) -> JsonObject: ...
 
+PluginComponentSpec: TypeAlias = (
+    ComponentSpec
+    | AdaptiveComponentSpec
+    | ObservabilityComponentSpec
+    | PricingComponentSpec
+    | PiiRedactionComponentSpec
+)
+
 class PluginConfig:
     version: int
-    components: list[object]
+    components: list[PluginComponentSpec]
     policy: ConfigPolicy
 
     def __init__(
         self,
         version: int = 1,
-        components: list[object] = ...,
+        components: list[PluginComponentSpec] = ...,
         policy: ConfigPolicy = ...,
     ) -> None: ...
     def to_dict(self) -> JsonObject: ...

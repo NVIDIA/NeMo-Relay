@@ -194,7 +194,7 @@ def _normalize_message(msg):
     return normalized
 
 
-def assert_round_trip(codec, payload):
+def assert_round_trip(codec, payload) -> None:
     """Verify that decode(encode(x)) preserves all fields in the original payload.
 
     Messages are compared semantically (key order and None values are normalized).
@@ -219,7 +219,7 @@ def assert_round_trip(codec, payload):
 
 
 class TestOpenAICodecDecode:
-    def test_openai_decode_simple_chat(self):
+    def test_openai_decode_simple_chat(self) -> None:
         """Verify messages, model, params extracted; stream goes to extra."""
         codec = OpenAICodec()
         request = LLMRequest({}, cast(JsonObject, SIMPLE_CHAT))
@@ -231,7 +231,7 @@ class TestOpenAICodecDecode:
         assert annotated.extra is not None
         assert annotated.extra["stream"] is True
 
-    def test_openai_decode_tool_calling(self):
+    def test_openai_decode_tool_calling(self) -> None:
         """Verify tools, tool_choice extracted; messages with tool_calls preserved as-is."""
         codec = OpenAICodec()
         request = LLMRequest({}, cast(JsonObject, TOOL_CALLING))
@@ -244,7 +244,7 @@ class TestOpenAICodecDecode:
         assert annotated.messages[1]["tool_calls"][0]["function"]["name"] == "get_weather"
         assert annotated.params == {"temperature": 0.0}
 
-    def test_openai_decode_multimodal(self):
+    def test_openai_decode_multimodal(self) -> None:
         """Content-as-array messages decoded correctly."""
         codec = OpenAICodec()
         request = LLMRequest({}, cast(JsonObject, MULTIMODAL_CONTENT))
@@ -258,7 +258,7 @@ class TestOpenAICodecDecode:
         assert annotated.messages[0]["content"][1]["text"] == "Please describe the main elements."
         assert annotated.params == {"max_tokens": 300}
 
-    def test_openai_decode_max_completion_tokens(self):
+    def test_openai_decode_max_completion_tokens(self) -> None:
         """max_completion_tokens normalized to max_tokens in params."""
         codec = OpenAICodec()
         request = LLMRequest({}, cast(JsonObject, MAX_COMPLETION_TOKENS))
@@ -271,7 +271,7 @@ class TestOpenAICodecDecode:
         assert annotated.extra is not None
         assert annotated.extra["reasoning_effort"] == "high"
 
-    def test_openai_decode_no_params(self):
+    def test_openai_decode_no_params(self) -> None:
         """When no param keys present, params is None."""
         codec = OpenAICodec()
         payload = {
@@ -290,7 +290,7 @@ class TestOpenAICodecDecode:
 
 
 class TestOpenAICodecEncode:
-    def test_openai_encode_preserves_unmodeled(self):
+    def test_openai_encode_preserves_unmodeled(self) -> None:
         """stream, response_format, reasoning_effort survive round-trip."""
         codec = OpenAICodec()
         payload = {
@@ -309,7 +309,7 @@ class TestOpenAICodecEncode:
         assert result.content["response_format"] == {"type": "json_object"}
         assert result.content["reasoning_effort"] == "medium"
 
-    def test_openai_encode_max_completion_tokens_key(self):
+    def test_openai_encode_max_completion_tokens_key(self) -> None:
         """When original had max_completion_tokens, encode writes back to that key."""
         codec = OpenAICodec()
         original = LLMRequest({}, cast(JsonObject, MAX_COMPLETION_TOKENS))
@@ -320,7 +320,7 @@ class TestOpenAICodecEncode:
         # max_tokens should not be injected as a separate key
         assert "max_tokens" not in result.content or result.content.get("max_tokens") is None
 
-    def test_openai_encode_overlay_messages(self):
+    def test_openai_encode_overlay_messages(self) -> None:
         """Modified messages in annotated reflected in output."""
         codec = OpenAICodec()
         original = LLMRequest({}, cast(JsonObject, SIMPLE_CHAT))
@@ -334,7 +334,7 @@ class TestOpenAICodecEncode:
         assert len(result.content["messages"]) == 3
         assert result.content["messages"][-1]["content"] == "Hello! How can I help?"
 
-    def test_openai_encode_overlay_model(self):
+    def test_openai_encode_overlay_model(self) -> None:
         """Changed model name reflected in output."""
         codec = OpenAICodec()
         original = LLMRequest({}, cast(JsonObject, SIMPLE_CHAT))
@@ -344,7 +344,7 @@ class TestOpenAICodecEncode:
         result = codec.encode(annotated, original)
         assert result.content["model"] == "gpt-4-turbo"
 
-    def test_openai_encode_extra_round_trip(self):
+    def test_openai_encode_extra_round_trip(self) -> None:
         """Extra fields from decode survive encode."""
         codec = OpenAICodec()
         payload = {
@@ -371,7 +371,7 @@ class TestOpenAICodecEncode:
 
 
 class TestNIMCodecDecode:
-    def test_nim_decode_guided_json_to_extra(self):
+    def test_nim_decode_guided_json_to_extra(self) -> None:
         """guided_json goes to extra, not lost."""
         codec = NIMCodec()
         request = LLMRequest({}, cast(JsonObject, NIM_STRUCTURED_OUTPUT))
@@ -382,7 +382,7 @@ class TestNIMCodecDecode:
         assert annotated.model == "meta/llama-3.1-70b-instruct"
         assert annotated.params == {"temperature": 0.0}
 
-    def test_nim_decode_nvext_to_extra(self):
+    def test_nim_decode_nvext_to_extra(self) -> None:
         """nvext goes to extra."""
         codec = NIMCodec()
         request = LLMRequest({}, cast(JsonObject, NIM_WITH_NVEXT))
@@ -392,7 +392,7 @@ class TestNIMCodecDecode:
         assert annotated.extra["nvext"] == NIM_WITH_NVEXT["nvext"]
         assert annotated.extra["stream_options"] == NIM_WITH_NVEXT["stream_options"]
 
-    def test_nim_inherits_openai(self):
+    def test_nim_inherits_openai(self) -> None:
         """NIMCodec is a subclass of OpenAICodec."""
         assert issubclass(NIMCodec, OpenAICodec)
         assert issubclass(NIMCodec, LlmCodec)
@@ -409,27 +409,27 @@ class TestNIMCodecDecode:
 
 
 class TestRoundTrip:
-    def test_roundtrip_simple_chat(self):
+    def test_roundtrip_simple_chat(self) -> None:
         """decode then encode == original content for simple chat."""
         assert_round_trip(OpenAICodec(), SIMPLE_CHAT)
 
-    def test_roundtrip_tool_calling(self):
+    def test_roundtrip_tool_calling(self) -> None:
         """Full tool conversation round-trips."""
         assert_round_trip(OpenAICodec(), TOOL_CALLING)
 
-    def test_roundtrip_multimodal(self):
+    def test_roundtrip_multimodal(self) -> None:
         """Content arrays preserved."""
         assert_round_trip(OpenAICodec(), MULTIMODAL_CONTENT)
 
-    def test_roundtrip_max_completion_tokens(self):
+    def test_roundtrip_max_completion_tokens(self) -> None:
         """max_completion_tokens key preserved in output."""
         assert_round_trip(OpenAICodec(), MAX_COMPLETION_TOKENS)
 
-    def test_roundtrip_nim_structured(self):
+    def test_roundtrip_nim_structured(self) -> None:
         """NIM guided_json preserved."""
         assert_round_trip(NIMCodec(), NIM_STRUCTURED_OUTPUT)
 
-    def test_roundtrip_nim_nvext(self):
+    def test_roundtrip_nim_nvext(self) -> None:
         """NIM nvext preserved."""
         assert_round_trip(NIMCodec(), NIM_WITH_NVEXT)
 
@@ -440,7 +440,7 @@ class TestRoundTrip:
 
 
 class TestLangGraphDelegation:
-    async def test_explicit_codec_delegates_to_provider(self):
+    async def test_explicit_codec_delegates_to_provider(self) -> None:
         """Pass OpenAI codec instance directly, verify it resolves.
 
         LangGraph does not need its own Codec -- it passes an explicit

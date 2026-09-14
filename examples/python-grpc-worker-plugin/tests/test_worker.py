@@ -180,7 +180,7 @@ def test_wrong_type_is_rejected(example: Any) -> None:
         ({"registration_control": {"reason": ""}}, "registration_control.reason"),
     ],
 )
-def test_invalid_registration_control_is_rejected(example: Any, config: dict[str, Any], field: str):
+def test_invalid_registration_control_is_rejected(example: Any, config: dict[str, Any], field: str) -> None:
     diagnostics = example.ExamplePythonWorker().validate(config)
 
     assert any(item.code == "examples.python_grpc_worker.invalid_type" and item.field == field for item in diagnostics)
@@ -239,7 +239,7 @@ def test_register_installs_all_protocol_surfaces(example: Any) -> None:
     assert all(getattr(context, method).call_count >= 1 for method in registration_methods)
 
 
-def test_enabled_registration_control_registers_expected_gate(example: Any):
+def test_enabled_registration_control_registers_expected_gate(example: Any) -> None:
     context, _runtime = configured_context()
     config = deepcopy(example.DEFAULT_CONFIG)
     config["registration_control"]["enabled"] = True

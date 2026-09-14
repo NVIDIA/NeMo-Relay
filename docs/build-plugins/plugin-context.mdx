@@ -98,7 +98,14 @@ downstream result, then adds the pending mark without exposing it to the applica
 <Tabs>
 <Tab title="Python" language="python">
 ```python
-async def tool_execution(context, next_call):
+from collections.abc import Awaitable, Callable
+
+from nemo_relay import Json, PendingMarkSpec, ToolExecutionContext, ToolExecutionInterceptOutcome, ToolExecutionResult
+
+async def tool_execution(
+    context: ToolExecutionContext,
+    next_call: Callable[[Json], Awaitable[ToolExecutionResult[Json]]],
+) -> ToolExecutionInterceptOutcome:
     downstream = await next_call(context.args)
     return ToolExecutionInterceptOutcome(
         downstream.result,

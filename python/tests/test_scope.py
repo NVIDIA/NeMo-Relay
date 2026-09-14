@@ -21,33 +21,33 @@ from nemo_relay import (
 
 
 class TestScope:
-    def test_get_handle_returns_root(self):
+    def test_get_handle_returns_root(self) -> None:
         handle = scope.get_handle()
         assert isinstance(handle, ScopeHandle)
         assert handle.name == "root"
 
-    def test_push_and_pop(self):
+    def test_push_and_pop(self) -> None:
         handle = scope.push("test_scope", ScopeType.Agent)
         assert handle.name == "test_scope"
         assert scope.get_handle().name == "test_scope"
         scope.pop(handle)
         assert scope.get_handle().name == "root"
 
-    def test_push_with_attributes(self):
+    def test_push_with_attributes(self) -> None:
         attrs = ScopeAttributes(ScopeAttributes.PARALLEL)
         handle = scope.push("parallel", ScopeType.Function, attributes=attrs)
         assert handle.name == "parallel"
         assert handle.attributes.is_parallel
         scope.pop(handle)
 
-    def test_push_with_parent(self):
+    def test_push_with_parent(self) -> None:
         parent = scope.push("parent", ScopeType.Agent)
         child = scope.push("child", ScopeType.Function, handle=parent)
         assert child.parent_uuid == parent.uuid
         scope.pop(child)
         scope.pop(parent)
 
-    def test_nested_scopes(self):
+    def test_nested_scopes(self) -> None:
         s1 = scope.push("level1", ScopeType.Agent)
         s2 = scope.push("level2", ScopeType.Function)
         s3 = scope.push("level3", ScopeType.Tool)
@@ -59,25 +59,25 @@ class TestScope:
         scope.pop(s1)
         assert scope.get_handle().name == "root"
 
-    def test_scope_handle_properties(self):
+    def test_scope_handle_properties(self) -> None:
         handle = scope.push("props_test", ScopeType.Retriever)
         assert handle.uuid is not None
         assert handle.name == "props_test"
         assert handle.scope_type == ScopeType.Retriever
         scope.pop(handle)
 
-    def test_event_emission(self):
+    def test_event_emission(self) -> None:
         scope.event("my_mark")  # Should not raise
 
-    def test_event_with_data(self):
+    def test_event_with_data(self) -> None:
         scope.event("data_mark", data={"key": "value"}, metadata={"version": 1})
 
-    def test_event_with_handle(self):
+    def test_event_with_handle(self) -> None:
         handle = scope.push("evt_scope", ScopeType.Agent)
         scope.event("scoped_mark", handle=handle)
         scope.pop(handle)
 
-    def test_event_with_data_schema_and_severity(self, subscribed_events):
+    def test_event_with_data_schema_and_severity(self, subscribed_events) -> None:
         scope.event(
             "structured_log",
             data={"message": "ready"},
@@ -95,7 +95,7 @@ class TestScope:
             "nemo_relay.log.severity": "warn",
         }
 
-    def test_metric_emits_validated_metric_mark(self, subscribed_events):
+    def test_metric_emits_validated_metric_mark(self, subscribed_events) -> None:
         measurement = MetricMeasurement(
             "relay.tokens",
             MetricKind.Counter,
@@ -125,7 +125,7 @@ class TestScope:
             ]
         }
 
-    def test_metric_rejects_invalid_measurements_atomically(self, subscribed_events):
+    def test_metric_rejects_invalid_measurements_atomically(self, subscribed_events) -> None:
         valid = MetricMeasurement(
             "relay.requests",
             MetricKind.Counter,
@@ -144,14 +144,14 @@ class TestScope:
         subscribers.flush()
         assert all(event.name != "invalid_metric" for event in subscribed_events)
 
-    def test_get_handle_preserves_explicit_worker_thread_scope_stack(self):
+    def test_get_handle_preserves_explicit_worker_thread_scope_stack(self) -> None:
         import threading
 
         import nemo_relay
 
         result = {}
 
-        def worker():
+        def worker() -> None:
             nemo_relay.set_thread_scope_stack(nemo_relay.create_scope_stack())
             result["name"] = scope.get_handle().name
 
@@ -161,13 +161,13 @@ class TestScope:
 
         assert result["name"] == "root"
 
-    def test_pop_invalid_raises(self):
+    def test_pop_invalid_raises(self) -> None:
         handle = scope.push("once", ScopeType.Agent)
         scope.pop(handle)
         with pytest.raises(RuntimeError):
             scope.pop(handle)
 
-    def test_scope_ctx_mgr(self):
+    def test_scope_ctx_mgr(self) -> None:
         with scope.scope("test_scope", ScopeType.Agent) as handle:
             assert handle.name == "test_scope"
             assert scope.get_handle().name == "test_scope"
@@ -186,7 +186,7 @@ class TestScope:
         subscribed_events,
         cancel_message,
         expected_status_description,
-    ):
+    ) -> None:
         async def cancel_within_scope() -> None:
             with scope.scope("cancelled_scope", ScopeType.Agent):
                 task = asyncio.current_task()
@@ -230,7 +230,7 @@ class TestAllScopeTypes:
             ScopeType.Unknown,
         ],
     )
-    def test_push_with_scope_type(self, scope_type):
+    def test_push_with_scope_type(self, scope_type) -> None:
         handle = scope.push(f"test_{scope_type}", scope_type)
         assert handle.name.startswith("test_")
         scope.pop(handle)

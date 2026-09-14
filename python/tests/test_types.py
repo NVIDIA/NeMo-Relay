@@ -133,7 +133,7 @@ def _scope_event(events, name: str, category: str, scope_category: str) -> Scope
 
 
 class TestScopeType:
-    def test_all_variants_exist(self):
+    def test_all_variants_exist(self) -> None:
         variants = [
             ScopeType.Agent,
             ScopeType.Function,
@@ -149,41 +149,41 @@ class TestScopeType:
         ]
         assert len(variants) == 11
 
-    def test_repr(self):
+    def test_repr(self) -> None:
         assert "Agent" in repr(ScopeType.Agent)
 
 
 class TestScopeAttributes:
-    def test_parallel_is_int(self):
+    def test_parallel_is_int(self) -> None:
         assert isinstance(ScopeAttributes.PARALLEL, int)
         assert ScopeAttributes.PARALLEL == 0b01
 
-    def test_relocatable_is_int(self):
+    def test_relocatable_is_int(self) -> None:
         assert isinstance(ScopeAttributes.RELOCATABLE, int)
         assert ScopeAttributes.RELOCATABLE == 0b10
 
-    def test_construct_from_value(self):
+    def test_construct_from_value(self) -> None:
         attrs = ScopeAttributes(ScopeAttributes.PARALLEL)
         assert attrs.is_parallel
         assert not attrs.is_relocatable
 
-    def test_construct_combined(self):
+    def test_construct_combined(self) -> None:
         attrs = ScopeAttributes(ScopeAttributes.PARALLEL | ScopeAttributes.RELOCATABLE)
         assert attrs.is_parallel
         assert attrs.is_relocatable
 
-    def test_or_operator(self):
+    def test_or_operator(self) -> None:
         a = ScopeAttributes(ScopeAttributes.PARALLEL)
         b = ScopeAttributes(ScopeAttributes.RELOCATABLE)
         combined = a | b
         assert combined.is_parallel
         assert combined.is_relocatable
 
-    def test_value_getter(self):
+    def test_value_getter(self) -> None:
         attrs = ScopeAttributes(ScopeAttributes.PARALLEL)
         assert attrs.value == ScopeAttributes.PARALLEL
 
-    def test_and_operator_and_repr(self):
+    def test_and_operator_and_repr(self) -> None:
         combined = ScopeAttributes(ScopeAttributes.PARALLEL | ScopeAttributes.RELOCATABLE)
         parallel_only = ScopeAttributes(ScopeAttributes.PARALLEL)
         intersected = combined & parallel_only
@@ -193,19 +193,19 @@ class TestScopeAttributes:
 
 
 class TestToolAttributes:
-    def test_remote_is_int(self):
+    def test_remote_is_int(self) -> None:
         assert isinstance(ToolAttributes.REMOTE, int)
         assert ToolAttributes.REMOTE == 0b01
 
-    def test_construct(self):
+    def test_construct(self) -> None:
         attrs = ToolAttributes(ToolAttributes.REMOTE)
         assert attrs.is_remote
 
-    def test_empty(self):
+    def test_empty(self) -> None:
         attrs = ToolAttributes(0)
         assert not attrs.is_remote
 
-    def test_or_and_and_repr(self):
+    def test_or_and_and_repr(self) -> None:
         remote = ToolAttributes(ToolAttributes.REMOTE)
         empty = ToolAttributes(0)
         combined = remote | empty
@@ -217,18 +217,18 @@ class TestToolAttributes:
 
 
 class TestLLMAttributes:
-    def test_stateful_is_int(self):
+    def test_stateful_is_int(self) -> None:
         assert isinstance(LLMAttributes.STATEFUL, int)
 
-    def test_streaming_is_int(self):
+    def test_streaming_is_int(self) -> None:
         assert isinstance(LLMAttributes.STREAMING, int)
 
-    def test_construct_combined(self):
+    def test_construct_combined(self) -> None:
         attrs = LLMAttributes(LLMAttributes.STATEFUL | LLMAttributes.STREAMING)
         assert attrs.is_stateful
         assert attrs.is_streaming
 
-    def test_or_and_and_repr(self):
+    def test_or_and_and_repr(self) -> None:
         stateful = LLMAttributes(LLMAttributes.STATEFUL)
         streaming = LLMAttributes(LLMAttributes.STREAMING)
         combined = stateful | streaming
@@ -241,27 +241,27 @@ class TestLLMAttributes:
 
 
 class TestLLMRequest:
-    def test_constructor(self):
+    def test_constructor(self) -> None:
         req = LLMRequest({"Authorization": "Bearer token"}, {"messages": []})
         assert req.headers == {"Authorization": "Bearer token"}
         assert req.content == {"messages": []}
 
-    def test_empty_headers(self):
+    def test_empty_headers(self) -> None:
         req = LLMRequest({}, {"q": "test"})
         assert req.headers == {}
 
-    def test_repr(self):
+    def test_repr(self) -> None:
         req = LLMRequest({}, {"model": "gpt-4"})
         r = repr(req)
         assert "LLMRequest" in r
 
-    def test_headers_must_be_dict(self):
+    def test_headers_must_be_dict(self) -> None:
         with pytest.raises(TypeError, match="not an instance of 'dict'"):
             LLMRequest(cast(dict[str, str], []), {"model": "gpt-4"})
 
 
 class TestHandleTypes:
-    def test_scope_type_roundtrip_all_variants(self):
+    def test_scope_type_roundtrip_all_variants(self) -> None:
         variants = [
             ScopeType.Agent,
             ScopeType.Function,
@@ -283,7 +283,7 @@ class TestHandleTypes:
             finally:
                 scope.pop(handle)
 
-    def test_scope_handle_properties_and_repr(self):
+    def test_scope_handle_properties_and_repr(self) -> None:
         handle = scope.push(
             "typed_scope",
             ScopeType.Agent,
@@ -302,7 +302,7 @@ class TestHandleTypes:
         finally:
             scope.pop(handle)
 
-    def test_tool_handle_properties_and_repr(self):
+    def test_tool_handle_properties_and_repr(self) -> None:
         parent = scope.push("typed_tool_parent", ScopeType.Agent)
         try:
             handle = tools.call(
@@ -324,7 +324,7 @@ class TestHandleTypes:
         finally:
             scope.pop(parent)
 
-    def test_llm_handle_properties_and_repr(self):
+    def test_llm_handle_properties_and_repr(self) -> None:
         parent = scope.push("typed_llm_parent", ScopeType.Agent)
         request = LLMRequest({}, {"messages": [], "model": "typed-model"})
         try:
@@ -351,7 +351,7 @@ class TestHandleTypes:
 
 
 class TestConcreteEvents:
-    def test_event_properties_include_tool_and_llm_fields(self):
+    def test_event_properties_include_tool_and_llm_fields(self) -> None:
         events = []
         subscribers.register("py_event_types_sub", lambda event: events.append(event))
         parent = scope.push("event_root", ScopeType.Agent, data={"root": True}, metadata={"meta": "root"})
@@ -414,7 +414,7 @@ class TestConcreteEvents:
         assert "MarkEvent" in repr(mark)
         assert "T" in mark.timestamp
 
-    def test_scope_type_is_only_present_on_scope_events(self):
+    def test_scope_type_is_only_present_on_scope_events(self) -> None:
         events = []
         subscribers.register("py_scope_type_contract_sub", lambda event: events.append(event))
         parent = scope.push("scope_contract_root", ScopeType.Agent)
@@ -443,7 +443,7 @@ class TestConcreteEvents:
 
 
 class TestAtifExporterType:
-    def test_exporter_register_export_clear_and_repr(self):
+    def test_exporter_register_export_clear_and_repr(self) -> None:
         exporter = AtifExporter(
             "session-types",
             "py-agent",
@@ -486,7 +486,7 @@ class TestAtifExporterType:
 
 
 class TestAtofExporterType:
-    def test_config_defaults_mutation_and_repr(self, tmp_path):
+    def test_config_defaults_mutation_and_repr(self, tmp_path) -> None:
         config = AtofExporterConfig()
 
         assert config.mode == AtofExporterMode.Append
@@ -516,14 +516,14 @@ class TestAtofExporterType:
         assert config.timeout_millis == 1000
         assert config.field_name_policy == "replace_dots"
 
-    def test_stream_sink_requires_url(self):
+    def test_stream_sink_requires_url(self) -> None:
         config = AtofExporterConfig()
         config.sink_type = "stream"
 
         with pytest.raises(ValueError, match="stream sink requires url"):
             AtofExporter(config)
 
-    def test_endpoint_field_name_policy_is_validated(self):
+    def test_endpoint_field_name_policy_is_validated(self) -> None:
         config = AtofExporterConfig()
         config.sink_type = "stream"
         config.url = "http://localhost:8080/events"
@@ -532,7 +532,7 @@ class TestAtofExporterType:
         with pytest.raises(ValueError, match="field_name_policy"):
             AtofExporter(config)
 
-    def test_exporter_lifecycle_writes_raw_jsonl_events(self, tmp_path):
+    def test_exporter_lifecycle_writes_raw_jsonl_events(self, tmp_path) -> None:
         config = AtofExporterConfig()
         config.output_directory = str(tmp_path)
         config.mode = AtofExporterMode.Overwrite
@@ -564,7 +564,7 @@ class TestAtofExporterType:
         assert lines[1]["data"] == {"step": 1}
         assert lines[2]["scope_category"] == "end"
 
-    def test_append_and_overwrite_modes(self, tmp_path):
+    def test_append_and_overwrite_modes(self, tmp_path) -> None:
         path = tmp_path / "events.jsonl"
         path.write_text('{"existing": true}\n')
 
@@ -586,7 +586,7 @@ class TestAtofExporterType:
 
 class TestOpenTelemetryTypes:
     @pytest.mark.parametrize("signal", ["traces", "logs", "metrics"])
-    def test_signal_subscribers_expose_runtime_diagnostics(self, signal):
+    def test_signal_subscribers_expose_runtime_diagnostics(self, signal) -> None:
         if signal == "traces":
             subscriber = OpenTelemetrySubscriber(OpenTelemetryConfig("full", "http://127.0.0.1:4318"))
         elif signal == "logs":
@@ -616,7 +616,7 @@ class TestOpenTelemetryTypes:
             subscriber.deregister(subscriber_name)
             subscriber.shutdown()
 
-    def test_signal_config_defaults_and_lifecycle(self, monkeypatch: pytest.MonkeyPatch):
+    def test_signal_config_defaults_and_lifecycle(self, monkeypatch: pytest.MonkeyPatch) -> None:
         variable = f"NEMO_RELAY_PY_SIGNAL_HEADER_{uuid4().hex}"
         monkeypatch.setenv(variable, "signal-route")
         log_config = OpenTelemetryLogConfig("http://localhost:4318/v1/logs")
@@ -664,7 +664,7 @@ class TestOpenTelemetryTypes:
             subscribers.deregister(metric_name)
             metric_subscriber.shutdown()
 
-    def test_signal_subscribers_validate_limits(self):
+    def test_signal_subscribers_validate_limits(self) -> None:
         log_config = OpenTelemetryLogConfig("http://localhost:4318/v1/logs")
         log_config.max_queue_size = 0
         with pytest.raises(RuntimeError, match="max_queue_size must be greater than 0"):
@@ -680,7 +680,7 @@ class TestOpenTelemetryTypes:
         with pytest.raises(RuntimeError, match="cardinality_limit must be greater than 0"):
             OpenTelemetryMetricSubscriber(metric_config)
 
-    def test_signal_subscribers_export_to_signal_relative_paths(self, monkeypatch: pytest.MonkeyPatch):
+    def test_signal_subscribers_export_to_signal_relative_paths(self, monkeypatch: pytest.MonkeyPatch) -> None:
         with _OtelCollector() as collector:
             variable = f"NEMO_RELAY_PY_LOG_HEADER_{uuid4().hex}"
             secret = "python-log-activation-route"
@@ -731,7 +731,7 @@ class TestOpenTelemetryTypes:
                 metric_subscriber.deregister(metric_name)
                 metric_subscriber.shutdown()
 
-    def test_direct_log_subscriber_reports_queue_drops_after_force_flush(self):
+    def test_direct_log_subscriber_reports_queue_drops_after_force_flush(self) -> None:
         emitted = 200
         with _OtelCollector() as collector:
             config = OpenTelemetryLogConfig(collector.endpoint)
@@ -761,7 +761,7 @@ class TestOpenTelemetryTypes:
                 subscriber.deregister(subscriber_name)
                 subscriber.shutdown()
 
-    def test_config_defaults_mutation_and_repr(self):
+    def test_config_defaults_mutation_and_repr(self) -> None:
         config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
 
         assert config.transport == "http_binary"
@@ -803,7 +803,7 @@ class TestOpenTelemetryTypes:
         assert config.promote_resource_metadata_prefixes == ["deployment."]
         assert "OpenTelemetryConfig" in repr(config)
 
-    def test_config_rejects_invalid_map_values(self):
+    def test_config_rejects_invalid_map_values(self) -> None:
         config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
 
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
@@ -828,7 +828,7 @@ class TestOpenTelemetryTypes:
         with pytest.raises(ValueError, match="literal prefix, not a glob"):
             OpenTelemetrySubscriber(config)
 
-    def test_subscriber_lifecycle_and_invalid_transport(self):
+    def test_subscriber_lifecycle_and_invalid_transport(self) -> None:
         config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
         config.service_name = "py-agent"
 
@@ -850,12 +850,12 @@ class TestOpenTelemetryTypes:
         with pytest.raises(ValueError, match="transport must be"):
             OpenTelemetrySubscriber(bad)
 
-    def test_subscriber_rejects_missing_or_invalid_required_fields(self):
+    def test_subscriber_rejects_missing_or_invalid_required_fields(self) -> None:
         with pytest.raises(TypeError):
             OpenTelemetryConfig()  # ty: ignore[missing-argument]
 
         invalid_type = OpenTelemetryConfig(
-            "invalid",  # ty: ignore[invalid-argument-type]
+            "invalid",
             "http://localhost:4318/v1/traces",
         )
         with pytest.raises(ValueError, match="type must be"):
@@ -870,7 +870,7 @@ class TestOpenTelemetryTypes:
         with pytest.raises(RuntimeError, match="completed_span_context_ttl must be greater than 0"):
             OpenTelemetrySubscriber(zero_ttl)
 
-    def test_subscriber_exports_scope_and_mark_events_end_to_end(self, monkeypatch: pytest.MonkeyPatch):
+    def test_subscriber_exports_scope_and_mark_events_end_to_end(self, monkeypatch: pytest.MonkeyPatch) -> None:
         with _OtelCollector() as collector:
             source = "python-é" * 20
             variable = f"NEMO_RELAY_PY_HEADER_{uuid4().hex}"
@@ -917,7 +917,7 @@ class TestOpenTelemetryTypes:
                 subscriber.deregister(subscriber_name)
                 subscriber.shutdown()
 
-    def test_subscriber_rejects_header_env_case_collision(self, monkeypatch: pytest.MonkeyPatch):
+    def test_subscriber_rejects_header_env_case_collision(self, monkeypatch: pytest.MonkeyPatch) -> None:
         variable = f"NEMO_RELAY_PY_DUPLICATE_HEADER_{uuid4().hex}"
         monkeypatch.setenv(variable, "Bearer secret")
         config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
@@ -927,7 +927,9 @@ class TestOpenTelemetryTypes:
         with pytest.raises(RuntimeError, match="unique across headers and header_env"):
             OpenTelemetrySubscriber(config)
 
-    def test_subscriber_rejects_unset_blank_and_invalid_header_env_values(self, monkeypatch: pytest.MonkeyPatch):
+    def test_subscriber_rejects_unset_blank_and_invalid_header_env_values(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         variable = f"NEMO_RELAY_PY_INVALID_HEADER_{uuid4().hex}"
         config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
         config.header_env = {"authorization": variable}
@@ -946,7 +948,7 @@ class TestOpenTelemetryTypes:
             OpenTelemetrySubscriber(config)
         assert secret not in str(failure.value)
 
-    def test_trace_export_failure_stays_unhealthy_until_a_later_export_succeeds(self):
+    def test_trace_export_failure_stays_unhealthy_until_a_later_export_succeeds(self) -> None:
         with _OtelCollector(response_status=503) as collector:
             subscriber = OpenTelemetrySubscriber(OpenTelemetryConfig("full", collector.endpoint))
             subscriber_name = f"py_otel_trace_failure_{uuid4().hex}"
@@ -975,7 +977,7 @@ class TestOpenTelemetryTypes:
                 subscriber.deregister(subscriber_name)
                 subscriber.shutdown()
 
-    def test_gen_ai_subscriber_exports_standardized_agent_span(self):
+    def test_gen_ai_subscriber_exports_standardized_agent_span(self) -> None:
         with _OtelCollector() as collector:
             config = OpenTelemetryConfig("gen_ai", collector.endpoint)
             subscriber = OpenTelemetrySubscriber(config)
@@ -998,7 +1000,7 @@ class TestOpenTelemetryTypes:
 
 
 class TestOpenInferenceTypes:
-    def test_config_defaults_mutation_and_repr(self):
+    def test_config_defaults_mutation_and_repr(self) -> None:
         config = OpenTelemetryConfig("openinference", "http://localhost:4318/v1/traces")
 
         assert config.transport == "http_binary"
@@ -1020,7 +1022,7 @@ class TestOpenInferenceTypes:
         assert config.resource_attributes == {"deployment.environment": "test"}
         assert "OpenTelemetryConfig" in repr(config)
 
-    def test_config_rejects_invalid_map_values(self):
+    def test_config_rejects_invalid_map_values(self) -> None:
         config = OpenTelemetryConfig("openinference", "http://localhost:4318/v1/traces")
 
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
@@ -1029,7 +1031,7 @@ class TestOpenInferenceTypes:
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
             config.resource_attributes = cast(dict[str, str], {"env": 1})
 
-    def test_subscriber_lifecycle_and_invalid_transport(self):
+    def test_subscriber_lifecycle_and_invalid_transport(self) -> None:
         config = OpenTelemetryConfig("openinference", "http://localhost:4318/v1/traces")
         config.service_name = "py-agent"
 
@@ -1057,7 +1059,7 @@ class TestOpenInferenceTypes:
         with pytest.raises(ValueError, match="transport must be"):
             OpenTelemetrySubscriber(bad)
 
-    def test_subscriber_exports_scope_and_mark_events_end_to_end(self):
+    def test_subscriber_exports_scope_and_mark_events_end_to_end(self) -> None:
         with _OtelCollector() as collector:
             source = "python-é" * 20
             config = OpenTelemetryConfig("openinference", collector.endpoint)

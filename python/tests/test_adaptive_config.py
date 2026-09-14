@@ -29,12 +29,12 @@ from nemo_relay.adaptive import (
 
 
 class TestDynamicConfigContract:
-    def test_file_covers_canonical_cache_telemetry_helper(self):
+    def test_file_covers_canonical_cache_telemetry_helper(self) -> None:
         source = Path(__file__).read_text()
         helper_call = "adaptive_module" + ".build_cache_telemetry_event("
         assert helper_call in source
 
-    def test_validate_config_exposes_native_validation_without_plugin_wrapper(self):
+    def test_validate_config_exposes_native_validation_without_plugin_wrapper(self) -> None:
         report = adaptive_module.validate_config(
             {
                 "version": 1,
@@ -44,7 +44,7 @@ class TestDynamicConfigContract:
 
         assert any(diag["code"] == "adaptive.section_disabled_missing_state" for diag in report["diagnostics"])
 
-    def test_unknown_field_warns_by_default(self):
+    def test_unknown_field_warns_by_default(self) -> None:
         report = validate_plugin_config(
             plugin.PluginConfig(
                 components=[
@@ -63,7 +63,7 @@ class TestDynamicConfigContract:
         )
         assert any(diag["code"] == "adaptive.unknown_field" for diag in report["diagnostics"])
 
-    def test_invalid_known_value_can_be_made_strict(self):
+    def test_invalid_known_value_can_be_made_strict(self) -> None:
         invalid_mode = cast(
             Literal["observe_only", "inject_hints", "schedule"],
             "definitely_not_supported",
@@ -82,7 +82,7 @@ class TestDynamicConfigContract:
         )
         assert any(diag["code"] == "adaptive.unsupported_value" for diag in report["diagnostics"])
 
-    def test_missing_state_warns_for_telemetry(self):
+    def test_missing_state_warns_for_telemetry(self) -> None:
         report = validate_plugin_config(
             plugin.PluginConfig(
                 components=[
@@ -95,7 +95,7 @@ class TestDynamicConfigContract:
         )
         assert any(diag["code"] == "adaptive.section_disabled_missing_state" for diag in report["diagnostics"])
 
-    def test_canonical_cache_telemetry_helper_preserves_missing_facts_diagnosis(self):
+    def test_canonical_cache_telemetry_helper_preserves_missing_facts_diagnosis(self) -> None:
         event = adaptive_module.build_cache_telemetry_event(
             provider="anthropic",
             request_id="00000000-0000-0000-0000-000000000102",
@@ -124,7 +124,7 @@ class TestDynamicConfigContract:
         evidence = cast(dict[str, object], miss_diagnosis["evidence"])
         assert evidence["missing_facts"] == ["acg_stability_unavailable"]
 
-    def test_in_memory_state_produces_clean_report(self):
+    def test_in_memory_state_produces_clean_report(self) -> None:
         report = validate_plugin_config(
             plugin.PluginConfig(
                 components=[
@@ -139,7 +139,7 @@ class TestDynamicConfigContract:
         )
         assert report["diagnostics"] == []
 
-    def test_openai_acg_config_serializes_without_transport_fields(self):
+    def test_openai_acg_config_serializes_without_transport_fields(self) -> None:
         assert AcgConfig(provider="openai").to_dict() == {
             "provider": "openai",
             "observation_window": 100,
@@ -151,7 +151,7 @@ class TestDynamicConfigContract:
             },
         }
 
-    def test_acg_config_allows_threshold_overrides(self):
+    def test_acg_config_allows_threshold_overrides(self) -> None:
         assert AcgConfig(
             stability_thresholds=AcgStabilityThresholds(
                 stable_threshold=0.99,
@@ -163,7 +163,7 @@ class TestDynamicConfigContract:
             "min_observations_for_full_confidence": 12,
         }
 
-    def test_response_cache_config_serializes_with_defaults(self):
+    def test_response_cache_config_serializes_with_defaults(self) -> None:
         assert ResponseCacheConfig().to_dict() == {
             "ttl_seconds": 3600,
             "namespace": "",
@@ -175,7 +175,7 @@ class TestDynamicConfigContract:
             "backend": {"kind": "in_memory", "config": {}},
         }
 
-    def test_response_cache_key_strategy_enum_serializes(self):
+    def test_response_cache_key_strategy_enum_serializes(self) -> None:
         config = ResponseCacheConfig(
             namespace="logical-cache",
             key_strategy=ResponseCacheKeyStrategy.LOGICAL,
@@ -183,21 +183,21 @@ class TestDynamicConfigContract:
 
         assert config.to_dict()["key_strategy"] == "logical"
 
-    def test_response_cache_default_preserves_positional_policy_argument(self):
+    def test_response_cache_default_preserves_positional_policy_argument(self) -> None:
         policy = ConfigPolicy(unknown_field="error")
         config = AdaptiveConfig(1, None, None, None, None, None, None, policy)
 
         assert config.policy is policy
         assert config.response_cache is None
 
-    def test_response_cache_rides_the_adaptive_component(self):
+    def test_response_cache_rides_the_adaptive_component(self) -> None:
         component = ComponentSpec(AdaptiveConfig(response_cache=ResponseCacheConfig(namespace="dev"))).to_dict()
         assert component["kind"] == "adaptive"
         config = cast(dict[str, object], component["config"])
         response_cache = cast(dict[str, object], config["response_cache"])
         assert response_cache["namespace"] == "dev"
 
-    def test_response_cache_clean_report(self):
+    def test_response_cache_clean_report(self) -> None:
         report = validate_plugin_config(
             plugin.PluginConfig(
                 components=[ComponentSpec(AdaptiveConfig(response_cache=ResponseCacheConfig(namespace="dev")))]
@@ -205,14 +205,14 @@ class TestDynamicConfigContract:
         )
         assert report["diagnostics"] == []
 
-    def test_unscoped_response_cache_is_rejected(self):
+    def test_unscoped_response_cache_is_rejected(self) -> None:
         report = validate_plugin_config(
             plugin.PluginConfig(components=[ComponentSpec(AdaptiveConfig(response_cache=ResponseCacheConfig()))])
         )
         codes = {diag["code"] for diag in report["diagnostics"]}
         assert "response_cache.missing_namespace" in codes
 
-    def test_invalid_response_cache_section_is_rejected(self):
+    def test_invalid_response_cache_section_is_rejected(self) -> None:
         report = validate_plugin_config(
             plugin.PluginConfig(
                 components=[
@@ -232,7 +232,7 @@ class TestDynamicConfigContract:
         assert "response_cache.invalid_ttl" in codes
         assert "response_cache.invalid_bypass_rate" in codes
 
-    def test_tool_cache_config_serializes_and_omits_unset_optionals(self):
+    def test_tool_cache_config_serializes_and_omits_unset_optionals(self) -> None:
         tools = ToolCacheConfig(
             enabled=True,
             cache_errors=True,
@@ -262,7 +262,7 @@ class TestDynamicConfigContract:
             "overrides": {"docs_lookup": {"tool_version": "v1"}},
         }
 
-    def test_canonical_cache_telemetry_helper_supports_openai_provider(self):
+    def test_canonical_cache_telemetry_helper_supports_openai_provider(self) -> None:
         event = adaptive_module.build_cache_telemetry_event(
             provider="openai",
             request_id="00000000-0000-0000-0000-000000000104",

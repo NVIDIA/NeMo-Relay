@@ -198,7 +198,7 @@ def validate_config(config: PiiRedactionConfig | JsonObject) -> ConfigReport:
     """
     report = plugin_module.validate_exact(
         plugin_module.PluginConfig(
-            components=[ComponentSpec(config)],
+            components=[cast("plugin_module.PluginComponentSpec", ComponentSpec(config))],
         )
     )
     return cast(ConfigReport, report["config"])

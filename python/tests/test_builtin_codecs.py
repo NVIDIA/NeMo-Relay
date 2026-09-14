@@ -37,60 +37,60 @@ from nemo_relay.codecs import (
 
 
 class TestBuiltinCodecConstruction:
-    def test_openai_chat_codec_constructable(self):
+    def test_openai_chat_codec_constructable(self) -> None:
         """OpenAIChatCodec() is constructable."""
         codec = OpenAIChatCodec()
         assert codec is not None
 
-    def test_openai_responses_codec_constructable(self):
+    def test_openai_responses_codec_constructable(self) -> None:
         """OpenAIResponsesCodec() is constructable."""
         codec = OpenAIResponsesCodec()
         assert codec is not None
 
-    def test_anthropic_messages_codec_constructable(self):
+    def test_anthropic_messages_codec_constructable(self) -> None:
         """AnthropicMessagesCodec() is constructable."""
         codec = AnthropicMessagesCodec()
         assert codec is not None
 
-    def test_openai_chat_codec_has_methods(self):
+    def test_openai_chat_codec_has_methods(self) -> None:
         """OpenAIChatCodec has decode, encode, decode_response methods."""
         codec = OpenAIChatCodec()
         assert hasattr(codec, "decode")
         assert hasattr(codec, "encode")
         assert hasattr(codec, "decode_response")
 
-    def test_openai_responses_codec_has_methods(self):
+    def test_openai_responses_codec_has_methods(self) -> None:
         """OpenAIResponsesCodec has decode, encode, decode_response methods."""
         codec = OpenAIResponsesCodec()
         assert hasattr(codec, "decode")
         assert hasattr(codec, "encode")
         assert hasattr(codec, "decode_response")
 
-    def test_anthropic_messages_codec_has_methods(self):
+    def test_anthropic_messages_codec_has_methods(self) -> None:
         """AnthropicMessagesCodec has decode, encode, decode_response methods."""
         codec = AnthropicMessagesCodec()
         assert hasattr(codec, "decode")
         assert hasattr(codec, "encode")
         assert hasattr(codec, "decode_response")
 
-    def test_oci_genai_chat_codec_constructable(self):
+    def test_oci_genai_chat_codec_constructable(self) -> None:
         """OCIGenAIChatCodec() is constructable."""
         codec = OCIGenAIChatCodec()
         assert codec is not None
 
-    def test_oci_genai_chat_codec_has_methods(self):
+    def test_oci_genai_chat_codec_has_methods(self) -> None:
         """OCIGenAIChatCodec has decode, encode, decode_response methods."""
         codec = OCIGenAIChatCodec()
         assert hasattr(codec, "decode")
         assert hasattr(codec, "encode")
         assert hasattr(codec, "decode_response")
 
-    def test_gemini_codec_constructable(self):
+    def test_gemini_codec_constructable(self) -> None:
         """GeminiGenerateContentCodec() is constructable."""
         codec = GeminiGenerateContentCodec()
         assert codec is not None
 
-    def test_gemini_codec_has_methods(self):
+    def test_gemini_codec_has_methods(self) -> None:
         """GeminiGenerateContentCodec has decode, encode, decode_response methods."""
         codec = GeminiGenerateContentCodec()
         assert hasattr(codec, "decode")
@@ -104,7 +104,7 @@ class TestBuiltinCodecConstruction:
 
 
 class TestBuiltinCodecDecodeEncode:
-    def test_openai_chat_decode(self):
+    def test_openai_chat_decode(self) -> None:
         """OpenAIChatCodec.decode() returns AnnotatedLLMRequest."""
         codec = OpenAIChatCodec()
         request = LLMRequest(
@@ -120,7 +120,7 @@ class TestBuiltinCodecDecodeEncode:
         assert annotated.model == "gpt-4"
         assert annotated.messages == [{"role": "user", "content": "hi"}]
 
-    def test_openai_chat_encode(self):
+    def test_openai_chat_encode(self) -> None:
         """OpenAIChatCodec.encode() returns LLMRequest preserving unmodeled fields."""
         codec = OpenAIChatCodec()
         original = LLMRequest(
@@ -144,7 +144,7 @@ class TestBuiltinCodecDecodeEncode:
         assert cast(float, encoded_content["temperature"]) == 0.7
         assert len(cast(list[JsonObject], encoded_content["messages"])) == 2
 
-    def test_anthropic_issue_501_roundtrip_and_annotated_edit(self):
+    def test_anthropic_issue_501_roundtrip_and_annotated_edit(self) -> None:
         """Anthropic cache blocks survive unchanged and edited Python annotations."""
         codec = AnthropicMessagesCodec()
         original = LLMRequest(
@@ -217,7 +217,7 @@ class TestBuiltinCodecDecodeEncode:
 
 
 class TestBuiltinCodecDecodeResponse:
-    def test_annotated_response_constructable_for_custom_codecs(self):
+    def test_annotated_response_constructable_for_custom_codecs(self) -> None:
         """AnnotatedLLMResponse() lets Python response codecs return normalized responses."""
         annotated = AnnotatedLLMResponse(
             id="langchain-response-1",
@@ -251,7 +251,7 @@ class TestBuiltinCodecDecodeResponse:
         assert annotated.api_specific == {"api": "custom", "api_name": "provider", "data": {"id": "raw"}}
         assert annotated.extra == {"framework": "langchain"}
 
-    def test_annotated_response_exposes_unknown_finish_reason(self):
+    def test_annotated_response_exposes_unknown_finish_reason(self) -> None:
         """Unknown native finish reasons are still visible to Python callers."""
         annotated = AnnotatedLLMResponse(
             message="done",
@@ -265,7 +265,7 @@ class TestBuiltinCodecDecodeResponse:
         assert annotated.finish_reason == "provider_custom_stop"
         assert annotated_from_native_shape.finish_reason == "provider_custom_stop"
 
-    def test_openai_chat_decode_response(self):
+    def test_openai_chat_decode_response(self) -> None:
         """OpenAIChatCodec.decode_response() returns AnnotatedLLMResponse."""
         codec = OpenAIChatCodec()
         response = {
@@ -286,7 +286,7 @@ class TestBuiltinCodecDecodeResponse:
         assert annotated.response_text() == "Hello!"
         assert annotated.has_tool_calls() is False
 
-    def test_anthropic_messages_decode_response(self):
+    def test_anthropic_messages_decode_response(self) -> None:
         """AnthropicMessagesCodec.decode_response() returns AnnotatedLLMResponse."""
         codec = AnthropicMessagesCodec()
         response = {
@@ -303,7 +303,7 @@ class TestBuiltinCodecDecodeResponse:
         assert annotated.model == "claude-3-sonnet-20240229"
         assert annotated.response_text() == "Hello!"
 
-    def test_oci_genai_request_decode_encode_round_trip(self):
+    def test_oci_genai_request_decode_encode_round_trip(self) -> None:
         """OCIGenAIChatCodec decodes and re-encodes an OCI ChatDetails request."""
         codec = OCIGenAIChatCodec()
         original = LLMRequest(
@@ -336,7 +336,7 @@ class TestBuiltinCodecDecodeResponse:
         assert messages[0]["content"] == [{"type": "TEXT", "text": "My SSN is [REDACTED]."}]
         assert cast(int, chat_request["maxTokens"]) == 600
 
-    def test_oci_genai_decode_response(self):
+    def test_oci_genai_decode_response(self) -> None:
         """OCIGenAIChatCodec.decode_response() returns AnnotatedLLMResponse."""
         codec = OCIGenAIChatCodec()
         response = {
@@ -362,7 +362,7 @@ class TestBuiltinCodecDecodeResponse:
         assert annotated.response_text() == "Hello!"
         assert annotated.finish_reason == "complete"
 
-    def test_gemini_codec_decode(self):
+    def test_gemini_codec_decode(self) -> None:
         """GeminiGenerateContentCodec.decode() returns AnnotatedLLMRequest with messages and params."""
         codec = GeminiGenerateContentCodec()
         request = LLMRequest(
@@ -383,7 +383,7 @@ class TestBuiltinCodecDecodeResponse:
         assert annotated.messages[1]["role"] == "user"
         assert annotated.params is not None
 
-    def test_gemini_codec_encode_round_trip(self):
+    def test_gemini_codec_encode_round_trip(self) -> None:
         """GeminiGenerateContentCodec.encode(decode(req), req) is idempotent when nothing changes."""
         codec = GeminiGenerateContentCodec()
         original = LLMRequest(
@@ -400,7 +400,7 @@ class TestBuiltinCodecDecodeResponse:
             "encode(decode(req), req) must be idempotent when nothing changes"
         )
 
-    def test_gemini_codec_decode_response_text(self):
+    def test_gemini_codec_decode_response_text(self) -> None:
         """GeminiGenerateContentCodec.decode_response() extracts text and usage from a generateContent response."""
         codec = GeminiGenerateContentCodec()
         response = {
@@ -426,7 +426,7 @@ class TestBuiltinCodecDecodeResponse:
         assert annotated.usage is not None
         assert annotated.usage["prompt_tokens"] == 8
 
-    def test_gemini_codec_decode_response_safety_finish_reason(self):
+    def test_gemini_codec_decode_response_safety_finish_reason(self) -> None:
         """GeminiGenerateContentCodec maps SAFETY finish reason to 'content_filter', not 'unknown'."""
         codec = GeminiGenerateContentCodec()
         response = {
@@ -444,7 +444,7 @@ class TestBuiltinCodecDecodeResponse:
             "SAFETY finish reason must map to content_filter, not unknown"
         )
 
-    def test_gemini_codec_decode_response_function_call(self):
+    def test_gemini_codec_decode_response_function_call(self) -> None:
         """GeminiGenerateContentCodec.decode_response() extracts functionCall parts as tool_calls."""
         codec = GeminiGenerateContentCodec()
         response = {
@@ -482,13 +482,13 @@ class TestBuiltinCodecDecodeResponse:
 
 
 class TestLlmResponseCodecProtocol:
-    def test_protocol_importable(self):
+    def test_protocol_importable(self) -> None:
         """LlmResponseCodec protocol is importable from codecs module."""
         from nemo_relay.codecs import LlmResponseCodec
 
         assert LlmResponseCodec.__name__ == "LlmResponseCodec"
 
-    def test_builtin_codecs_satisfy_protocol(self):
+    def test_builtin_codecs_satisfy_protocol(self) -> None:
         """Built-in codecs satisfy LlmResponseCodec protocol."""
         from nemo_relay.codecs import LlmResponseCodec
 
@@ -506,11 +506,11 @@ class TestLlmResponseCodecProtocol:
 
 
 class TestResponseCodecObjectParam:
-    def test_manual_call_end_response_codec_attaches_annotation(self):
+    def test_manual_call_end_response_codec_attaches_annotation(self) -> None:
         """manual llm.call_end() accepts response_codec for end-event annotations."""
         captured_events = []
 
-        def capture(event):
+        def capture(event) -> None:
             captured_events.append(event)
 
         subscribers.register("test-manual-call-end-response-codec", capture)
@@ -554,11 +554,11 @@ class TestResponseCodecObjectParam:
         finally:
             subscribers.deregister("test-manual-call-end-response-codec")
 
-    def test_manual_call_end_accepts_annotated_response_mapping(self):
+    def test_manual_call_end_accepts_annotated_response_mapping(self) -> None:
         """manual llm.call_end() accepts an explicit JSON annotation mapping."""
         captured_events = []
 
-        def capture(event):
+        def capture(event) -> None:
             captured_events.append(event)
 
         subscribers.register("test-manual-call-end-annotated-response", capture)
@@ -591,11 +591,11 @@ class TestResponseCodecObjectParam:
         finally:
             subscribers.deregister("test-manual-call-end-annotated-response")
 
-    def test_manual_call_end_response_codec_uses_sanitized_payload(self):
+    def test_manual_call_end_response_codec_uses_sanitized_payload(self) -> None:
         """manual llm.call_end() decodes response annotations from sanitized event data."""
         captured_events = []
 
-        def capture(event):
+        def capture(event) -> None:
             captured_events.append(event)
 
         def sanitize_response(response, context):
@@ -638,11 +638,11 @@ class TestResponseCodecObjectParam:
             subscribers.deregister("test-manual-call-end-sanitized-response-codec")
             guardrails.deregister_llm_sanitize_response("test-call-end-codec-sanitizer")
 
-    def test_manual_call_end_response_codec_failure_defers_without_raising(self):
+    def test_manual_call_end_response_codec_failure_defers_without_raising(self) -> None:
         """manual llm.call_end() records deferred response codec failures without blocking."""
         captured_events = []
 
-        def capture(event):
+        def capture(event) -> None:
             captured_events.append(event)
 
         subscribers.register("test-manual-call-end-response-codec-error", capture)
@@ -664,11 +664,11 @@ class TestResponseCodecObjectParam:
         finally:
             subscribers.deregister("test-manual-call-end-response-codec-error")
 
-    async def test_response_codec_accepts_builtin_object(self):
+    async def test_response_codec_accepts_builtin_object(self) -> None:
         """response_codec= accepts a built-in codec object, not a string."""
         captured_events = []
 
-        def capture(event):
+        def capture(event) -> None:
             captured_events.append(event)
 
         subscribers.register("test-builtin-codec-obj", capture)
@@ -721,11 +721,11 @@ class TestResponseCodecObjectParam:
         finally:
             subscribers.deregister("test-builtin-codec-obj")
 
-    async def test_response_codec_none_gives_no_annotation(self):
+    async def test_response_codec_none_gives_no_annotation(self) -> None:
         """response_codec=None still works (backward compat)."""
         captured_events = []
 
-        def capture(event):
+        def capture(event) -> None:
             captured_events.append(event)
 
         subscribers.register("test-no-codec-obj", capture)
@@ -755,7 +755,7 @@ class TestResponseCodecObjectParam:
 
 
 class TestBuiltinCodecsTupleRemoved:
-    def test_no_builtin_codecs_tuple(self):
+    def test_no_builtin_codecs_tuple(self) -> None:
         """BUILTIN_CODECS tuple is no longer in codecs module."""
         from nemo_relay import codecs as codecs_mod
 
@@ -768,7 +768,7 @@ class TestBuiltinCodecsTupleRemoved:
 
 
 class TestBuiltinCodecImports:
-    def test_importable_from_codecs_module(self):
+    def test_importable_from_codecs_module(self) -> None:
         """Built-in codecs are importable from nemo_relay.codecs."""
         from nemo_relay.codecs import (
             AnthropicMessagesCodec,
@@ -782,7 +782,7 @@ class TestBuiltinCodecImports:
         assert AnthropicMessagesCodec is not None
         assert GeminiGenerateContentCodec is not None
 
-    def test_not_reexported_from_top_level(self):
+    def test_not_reexported_from_top_level(self) -> None:
         """Built-in codecs are not re-exported from nemo_relay."""
         assert not hasattr(nemo_relay, "OpenAIChatCodec")
         assert not hasattr(nemo_relay, "OpenAIResponsesCodec")

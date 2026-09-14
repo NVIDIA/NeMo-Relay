@@ -7,17 +7,22 @@ import asyncio
 import contextvars
 import threading
 from collections.abc import AsyncIterator, Awaitable
-from typing import NoReturn, cast
+from typing import Never, NoReturn, cast
 
 import pytest
 from async_helpers import resolve_async_result
 
 from nemo_relay import (
+    AnnotatedLLMRequest,
     Event,
+    EventSanitizeFields,
+    Json,
     LLMAttributes,
     LLMHandle,
     LLMRequest,
     LLMRequestInterceptOutcome,
+    LlmSanitizeRequestContext,
+    LlmSanitizeResponseContext,
     LogSeverity,
     PendingMarkSpec,
     PropagationContext,
@@ -36,7 +41,7 @@ from nemo_relay import (
 from nemo_relay.codecs import OpenAIChatCodec
 
 
-def make_request():
+def make_request() -> LLMRequest:
     return LLMRequest({}, {"messages": [], "model": "test-model"})
 
 
@@ -44,7 +49,7 @@ def raise_runtime_error(message: str) -> NoReturn:
     raise RuntimeError(message)
 
 
-def _llm_event(events, name: str, scope_category: str) -> ScopeEvent:
+def _llm_event(events: list[Event], name: str, scope_category: str) -> ScopeEvent:
     return next(
         event
         for event in events
@@ -56,20 +61,20 @@ def _llm_event(events, name: str, scope_category: str) -> ScopeEvent:
 
 
 class TestLLM:
-    def test_call_and_call_end(self):
+    def test_call_and_call_end(self) -> None:
         request = make_request()
         handle = llm.call("my_llm", request)
         assert isinstance(handle, LLMHandle)
         assert handle.name == "my_llm"
         llm.call_end(handle, {"response": "ok"})
 
-    def test_call_with_attributes(self):
+    def test_call_with_attributes(self) -> None:
         request = make_request()
         attrs = LLMAttributes(LLMAttributes.STREAMING)
         handle = llm.call("streaming_llm", request, attributes=attrs)
         llm.call_end(handle, {})
 
-    def test_call_with_data_metadata(self):
+    def test_call_with_data_metadata(self) -> None:
         request = make_request()
         handle = llm.call(
             "llm_dm",
@@ -79,7 +84,7 @@ class TestLLM:
         )
         llm.call_end(handle, {"result": "ok"}, data={"end": True})
 
-    def test_call_with_parent(self):
+    def test_call_with_parent(self) -> None:
         parent = scope.push("llm_parent", ScopeType.Agent)
         request = make_request()
         handle = llm.call("child_llm", request, handle=parent)
@@ -89,27 +94,27 @@ class TestLLM:
 
 
 class TestLLMAsync:
-    async def test_execute_basic(self):
+    async def test_execute_basic(self) -> None:
         # LLM execute receives an LLMRequest object
-        def func(request):
+        def func(request: LLMRequest) -> dict[str, Json]:
             return {"model": request.content["model"]}
 
         request = make_request()
         result = await llm.execute("exec_llm", request, func)
         assert result["model"] == "test-model"
 
-    async def test_execute_with_sync_func(self):
-        def func(request):
+    async def test_execute_with_sync_func(self) -> None:
+        def func(request: LLMRequest) -> dict[str, Json]:
             return {"echoed_messages": request.content["messages"]}
 
         request = make_request()
         result = await llm.execute("sync_llm", request, func)
         assert result["echoed_messages"] == []
 
-    async def test_execute_async_func(self):
+    async def test_execute_async_func(self) -> None:
         """llm.execute should accept async functions."""
 
-        async def func(request):
+        async def func(request: LLMRequest) -> dict[str, Json]:
             return {"model": request.content["model"], "async": True}
 
         request = make_request()
@@ -117,33 +122,33 @@ class TestLLMAsync:
         assert result["model"] == "test-model"
         assert result["async"] is True
 
-    async def test_execute_async_func_with_messages(self):
-        async def func(request):
+    async def test_execute_async_func_with_messages(self) -> None:
+        async def func(request: LLMRequest) -> dict[str, Json]:
             return {"messages": request.content["messages"]}
 
         request = make_request()
         result = await llm.execute("async_method_llm", request, func)
         assert result["messages"] == []
 
-    async def test_event_and_response_sanitizers_use_independent_context_snapshots(self):
+    async def test_event_and_response_sanitizers_use_independent_context_snapshots(self) -> None:
         events = []
         start_entered = threading.Event()
         release_start = threading.Event()
         response_called = False
 
-        def sanitize_start(event, fields):
+        def sanitize_start(event: Event, fields: EventSanitizeFields) -> EventSanitizeFields:
             if event.name == "context_snapshot_llm":
                 start_entered.set()
                 assert release_start.wait(timeout=2)
             return fields
 
-        def sanitize_response(response, context):
+        def sanitize_response(response: Json, context: LlmSanitizeResponseContext) -> Json:
             nonlocal response_called
             del response, context
             response_called = True
             return {"sanitized": True}
 
-        async def provider(request):
+        async def provider(request: LLMRequest) -> Json:
             del request
             assert await asyncio.to_thread(start_entered.wait, 2)
             return {"raw": True}
@@ -180,12 +185,12 @@ class TestLLMGuardrails:
             (guardrails.register_llm_sanitize_response, object()),
         ],
     )
-    def test_sanitizer_registration_rejects_legacy_or_uninspectable_callbacks(self, register, callback):
+    def test_sanitizer_registration_rejects_legacy_or_uninspectable_callbacks(self, register, callback) -> None:
         with pytest.raises(TypeError, match="payload, context"):
             register("py_llm_invalid_signature", 1, callback)
 
-    def test_sanitize_request_guardrail(self):
-        def sanitizer(request, context):
+    def test_sanitize_request_guardrail(self) -> None:
+        def sanitizer(request: LLMRequest, context: LlmSanitizeRequestContext) -> LLMRequest:
             del context
             # request is an LLMRequest object; must return a new LLMRequest
             headers = request.headers
@@ -195,25 +200,26 @@ class TestLLMGuardrails:
         guardrails.register_llm_sanitize_request("py_llm_san_req", 1, sanitizer)
         guardrails.deregister_llm_sanitize_request("py_llm_san_req")
 
-    def test_sanitize_response_guardrail(self):
-        def sanitizer(response, context):
+    def test_sanitize_response_guardrail(self) -> None:
+        def sanitizer(response: Json, context: LlmSanitizeResponseContext) -> Json:
             del context
             # response is a plain dict
+            assert isinstance(response, dict)
             response["cleaned"] = True
             return response
 
         guardrails.register_llm_sanitize_response("py_llm_san_resp", 1, sanitizer)
         guardrails.deregister_llm_sanitize_response("py_llm_san_resp")
 
-    def test_sanitizers_receive_a_structured_codec_context(self):
+    def test_sanitizers_receive_a_structured_codec_context(self) -> None:
         request_contexts = []
         response_contexts = []
 
-        def sanitize_request(request, context):
+        def sanitize_request(request: LLMRequest, context: LlmSanitizeRequestContext) -> LLMRequest:
             request_contexts.append(context)
             return request
 
-        def sanitize_response(response, context):
+        def sanitize_response(response: Json, context: LlmSanitizeResponseContext) -> Json:
             response_contexts.append(context)
             return response
 
@@ -233,7 +239,7 @@ class TestLLMGuardrails:
             assert context.codec.kind == "none"
             assert context.codec.id is None
 
-    async def test_manual_async_sanitizers_can_flush_subscribers(self):
+    async def test_manual_async_sanitizers_can_flush_subscribers(self) -> None:
         request_flushed = False
         response_flushed = False
 
@@ -268,7 +274,7 @@ class TestLLMGuardrails:
         assert request_flushed
         assert response_flushed
 
-    async def test_sanitizers_resolve_active_builtin_codecs(self):
+    async def test_sanitizers_resolve_active_builtin_codecs(self) -> None:
         request_codec_used = False
         response_codec_used = False
 
@@ -317,14 +323,14 @@ class TestLLMGuardrails:
         assert request_codec_used is True
         assert response_codec_used is True
 
-    def test_none_omits_payload_and_short_circuits_later_sanitizers(self):
+    def test_none_omits_payload_and_short_circuits_later_sanitizers(self) -> None:
         events = []
         later_called = False
 
-        def omit(request, context):
+        def omit(request: LLMRequest, context: LlmSanitizeRequestContext) -> None:
             return None
 
-        def later(request, context):
+        def later(request: LLMRequest, context: LlmSanitizeRequestContext) -> LLMRequest:
             nonlocal later_called
             later_called = True
             return request
@@ -348,26 +354,26 @@ class TestLLMGuardrails:
         assert start.annotated_request is None
         assert later_called is False
 
-    def test_conditional_execution_guardrail(self):
-        def checker(request):
+    def test_conditional_execution_guardrail(self) -> None:
+        def checker(request: LLMRequest) -> None:
             return None
 
         guardrails.register_llm_conditional_execution("py_llm_cond", 1, checker)
         guardrails.deregister_llm_conditional_execution("py_llm_cond")
 
-    def test_conditional_execution_direct(self):
+    def test_conditional_execution_direct(self) -> None:
         guardrails.register_llm_conditional_execution("py_llm_cond_direct", 1, lambda request: "blocked directly")
         with pytest.raises(RuntimeError, match="guardrail rejected"):
             llm.conditional_execution(make_request())
         guardrails.deregister_llm_conditional_execution("py_llm_cond_direct")
 
-    def test_duplicate_raises(self):
+    def test_duplicate_raises(self) -> None:
         guardrails.register_llm_sanitize_request("py_llm_dup", 1, lambda r, context: r)
         with pytest.raises(RuntimeError):
             guardrails.register_llm_sanitize_request("py_llm_dup", 1, lambda r, context: r)
         guardrails.deregister_llm_sanitize_request("py_llm_dup")
 
-    def test_sanitize_request_callable_error_omits_observability_input(self):
+    def test_sanitize_request_callable_error_omits_observability_input(self) -> None:
         events = []
         subscribers.register("py_llm_sanitize_req_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_request(
@@ -393,7 +399,7 @@ class TestLLMGuardrails:
         assert start.data is None
         assert start.annotated_request is None
 
-    def test_sanitize_request_invalid_return_omits_observability_input(self):
+    def test_sanitize_request_invalid_return_omits_observability_input(self) -> None:
         events = []
         subscribers.register("py_llm_sanitize_req_bad_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_request(
@@ -419,7 +425,7 @@ class TestLLMGuardrails:
         assert start.data is None
         assert start.annotated_request is None
 
-    def test_sanitize_response_callable_error_omits_observability_output(self):
+    def test_sanitize_response_callable_error_omits_observability_output(self) -> None:
         events = []
         subscribers.register("py_llm_sanitize_resp_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_response(
@@ -441,7 +447,7 @@ class TestLLMGuardrails:
         assert end.data is None
         assert end.annotated_response is None
 
-    def test_sanitize_response_invalid_return_omits_observability_output(self):
+    def test_sanitize_response_invalid_return_omits_observability_output(self) -> None:
         events = []
         subscribers.register("py_llm_sanitize_resp_bad_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_response(
@@ -463,7 +469,7 @@ class TestLLMGuardrails:
         assert end.data is None
         assert end.annotated_response is None
 
-    def test_sanitize_response_guardrail_accepts_scalar_json_payloads(self):
+    def test_sanitize_response_guardrail_accepts_scalar_json_payloads(self) -> None:
         events = []
         subscribers.register("py_llm_sanitize_scalar_sub", lambda event: events.append(event))
         guardrails.register_llm_sanitize_response(
@@ -484,12 +490,12 @@ class TestLLMGuardrails:
         end = _llm_event(events, "llm_sanitize_scalar", "end")
         assert end.data == "sanitized:raw-response"
 
-    def test_deregister_nonexistent(self):
+    def test_deregister_nonexistent(self) -> None:
         assert not guardrails.deregister_llm_sanitize_request("nope")
         assert not guardrails.deregister_llm_sanitize_response("nope")
         assert not guardrails.deregister_llm_conditional_execution("nope")
 
-    def test_conditional_execution_invalid_return_type_raises(self):
+    def test_conditional_execution_invalid_return_type_raises(self) -> None:
         guardrails.register_llm_conditional_execution(
             "py_llm_cond_bad_type",
             1,
@@ -501,7 +507,7 @@ class TestLLMGuardrails:
         finally:
             guardrails.deregister_llm_conditional_execution("py_llm_cond_bad_type")
 
-    def test_conditional_execution_callable_error_raises(self):
+    def test_conditional_execution_callable_error_raises(self) -> None:
         guardrails.register_llm_conditional_execution(
             "py_llm_cond_error",
             1,
@@ -515,10 +521,10 @@ class TestLLMGuardrails:
 
 
 class TestLLMGuardrailsAsync:
-    async def test_conditional_blocks_execution(self):
+    async def test_conditional_blocks_execution(self) -> None:
         guardrails.register_llm_conditional_execution("py_llm_blocker", 1, lambda req: "LLM blocked")
 
-        def func(request):
+        def func(_request: LLMRequest) -> Json:
             return {"should": "not reach"}
 
         request = make_request()
@@ -529,7 +535,7 @@ class TestLLMGuardrailsAsync:
 
 
 class TestLLMIntercepts:
-    def test_request_intercept(self):
+    def test_request_intercept(self) -> None:
         # Request intercepts now operate on LLMRequest
         intercepts.register_llm_request(
             "py_llm_req",
@@ -539,7 +545,7 @@ class TestLLMIntercepts:
         )
         assert intercepts.deregister_llm_request("py_llm_req")
 
-    def test_request_intercepts_direct(self):
+    def test_request_intercepts_direct(self) -> None:
         pending_mark = PendingMarkSpec(
             "request.direct",
             data={"source": "python"},
@@ -547,7 +553,9 @@ class TestLLMIntercepts:
             severity=LogSeverity.Info,
         )
 
-        def intercept_fn(name, request, annotated):
+        def intercept_fn(
+            _name: str, request: LLMRequest, annotated: AnnotatedLLMRequest | None
+        ) -> LLMRequestInterceptOutcome:
             content = request.content
             content["direct"] = True
             return LLMRequestInterceptOutcome(
@@ -568,7 +576,7 @@ class TestLLMIntercepts:
         assert transformed.pending_marks[0].data_schema == pending_mark.data_schema
         assert transformed.pending_marks[0].severity == LogSeverity.Info
 
-    def test_request_intercept_raises_on_exception(self):
+    def test_request_intercept_raises_on_exception(self) -> None:
         intercepts.register_llm_request(
             "py_llm_req_raise",
             1,
@@ -581,15 +589,15 @@ class TestLLMIntercepts:
         finally:
             intercepts.deregister_llm_request("py_llm_req_raise")
 
-    def test_request_intercept_raises_on_invalid_return(self):
-        intercepts.register_llm_request("py_llm_req_bad_return", 1, False, lambda name, request, annotated: object())  # type: ignore[arg-type] # ty: ignore[invalid-argument-type]
+    def test_request_intercept_raises_on_invalid_return(self) -> None:
+        intercepts.register_llm_request("py_llm_req_bad_return", 1, False, lambda name, request, annotated: object())  # type: ignore[arg-type]
         try:
             with pytest.raises(RuntimeError, match="must return LLMRequestInterceptOutcome"):
                 llm.request_intercepts("bad_return_llm", make_request())
         finally:
             intercepts.deregister_llm_request("py_llm_req_bad_return")
 
-    def test_execution_intercept(self):
+    def test_execution_intercept(self) -> None:
         # Execution intercepts now take LLMRequest
         intercepts.register_llm_execution(
             "py_llm_exec",
@@ -598,7 +606,7 @@ class TestLLMIntercepts:
         )
         assert intercepts.deregister_llm_execution("py_llm_exec")
 
-    def test_stream_execution_intercept(self):
+    def test_stream_execution_intercept(self) -> None:
         def stream_fn(request, next):
             async def gen():
                 yield {"token": "test"}
@@ -612,7 +620,7 @@ class TestLLMIntercepts:
         )
         assert intercepts.deregister_llm_stream_execution("py_llm_sexec")
 
-    def test_deregister_nonexistent(self):
+    def test_deregister_nonexistent(self) -> None:
         assert not intercepts.deregister_llm_request("nope")
         assert not intercepts.deregister_llm_execution("nope")
         assert not intercepts.deregister_llm_stream_execution("nope")
@@ -621,7 +629,7 @@ class TestLLMIntercepts:
 
 
 class TestLLMInterceptsAsync:
-    async def test_execution_callback_capture_traceparent_matches_llm_scope(self):
+    async def test_execution_callback_capture_traceparent_matches_llm_scope(self) -> None:
         events = []
         observed = []
         subscribers.register("py_llm_capture_traceparent", events.append)
@@ -645,7 +653,7 @@ class TestLLMInterceptsAsync:
             intercepts.deregister_llm_execution("py_llm_capture_traceparent")
             subscribers.deregister("py_llm_capture_traceparent")
 
-    async def test_execution_callback_capture_traceparent_preserves_imported_root(self):
+    async def test_execution_callback_capture_traceparent_preserves_imported_root(self) -> None:
         root_uuid = "018f13f0-7c1a-7a80-8000-000000000701"
         parent_uuid = "018f13f0-7c1a-7a80-8000-000000000702"
         stack = create_scope_stack_from_propagation(PropagationContext(parent_uuid, root_uuid))
@@ -673,7 +681,7 @@ class TestLLMInterceptsAsync:
             intercepts.deregister_llm_execution("py_llm_capture_propagated_trace_root")
             subscribers.deregister("py_llm_capture_propagated_trace_root")
 
-    async def test_cancelling_execute_cancels_pending_execution_intercept(self):
+    async def test_cancelling_execute_cancels_pending_execution_intercept(self) -> None:
         started = asyncio.Event()
         release = asyncio.Event()
         cancelled = asyncio.Event()
@@ -714,7 +722,7 @@ class TestLLMInterceptsAsync:
         ]
         assert lifecycle == ["start", "end"]
 
-    async def test_cancelling_stream_execute_cancels_pending_stream_intercept(self):
+    async def test_cancelling_stream_execute_cancels_pending_stream_intercept(self) -> None:
         started = asyncio.Event()
         release = asyncio.Event()
         cancelled = asyncio.Event()
@@ -769,11 +777,11 @@ class TestLLMInterceptsAsync:
         ]
         assert lifecycle == ["start", "end"]
 
-    async def test_sync_middleware_preserves_async_caller_context(self):
+    async def test_sync_middleware_preserves_async_caller_context(self) -> None:
         request_id = contextvars.ContextVar("llm_middleware_request_id", default="registration")
         observed: list[tuple[str, str]] = []
 
-        def conditional(_request):
+        def conditional(_request) -> None:
             observed.append(("conditional", request_id.get()))
             return None
 
@@ -808,7 +816,7 @@ class TestLLMInterceptsAsync:
             ("request", "emitter"),
         ]
 
-    async def test_sync_stream_intercept_preserves_async_caller_context(self):
+    async def test_sync_stream_intercept_preserves_async_caller_context(self) -> None:
         request_id = contextvars.ContextVar("llm_stream_middleware_request_id", default="registration")
         observed: list[tuple[str, str]] = []
 
@@ -852,7 +860,7 @@ class TestLLMInterceptsAsync:
             ("generator-after", "emitter"),
         ]
 
-    async def test_custom_stream_iterator_methods_preserve_async_caller_context(self):
+    async def test_custom_stream_iterator_methods_preserve_async_caller_context(self) -> None:
         request_id = contextvars.ContextVar("llm_custom_iterator_request_id", default="registration")
         observed: list[tuple[str, str]] = []
 
@@ -874,7 +882,7 @@ class TestLLMInterceptsAsync:
             def aclose(self):
                 observed.append(("aclose-sync", request_id.get()))
 
-                async def close():
+                async def close() -> None:
                     observed.append(("aclose-before", request_id.get()))
                     await asyncio.sleep(0)
                     observed.append(("aclose-after", request_id.get()))
@@ -891,7 +899,7 @@ class TestLLMInterceptsAsync:
             stream = await llm.stream_execute(
                 "custom_iterator_context_llm",
                 make_request(),
-                lambda _request: None,  # ty: ignore[invalid-argument-type]
+                lambda _request: None,
                 lambda _chunk: None,
                 lambda: {},
             )
@@ -914,7 +922,7 @@ class TestLLMInterceptsAsync:
         ]
         assert all(value == "emitter" for _label, value in observed)
 
-    async def test_default_lazy_stream_preserves_managed_parent_context(self):
+    async def test_default_lazy_stream_preserves_managed_parent_context(self) -> None:
         events = []
         subscribers.register("py_default_lazy_stream_context", events.append)
         owner = scope.push("py-default-lazy-stream-owner", ScopeType.Agent)
@@ -942,7 +950,7 @@ class TestLLMInterceptsAsync:
         start = _llm_event(events, "py_default_lazy_stream_context", "start")
         assert chunks == [{"parent_uuid": start.uuid}]
 
-    async def test_terminal_stream_error_close_waits_for_real_producer_cleanup(self):
+    async def test_terminal_stream_error_close_waits_for_real_producer_cleanup(self) -> None:
         cleanup_started = asyncio.Event()
         release_cleanup = asyncio.Event()
         cleanup_finished = asyncio.Event()
@@ -954,7 +962,7 @@ class TestLLMInterceptsAsync:
             async def __anext__(self):
                 raise RuntimeError("provider stream failed")
 
-            async def aclose(self):
+            async def aclose(self) -> None:
                 cleanup_started.set()
                 await release_cleanup.wait()
                 cleanup_finished.set()
@@ -978,7 +986,7 @@ class TestLLMInterceptsAsync:
         await asyncio.wait_for(closing, timeout=2)
         assert cleanup_finished.is_set()
 
-    async def test_async_request_intercept_runs_on_originating_loop(self):
+    async def test_async_request_intercept_runs_on_originating_loop(self) -> None:
         originating_loop = asyncio.get_running_loop()
 
         async def intercept_fn(_name, request, annotated):
@@ -999,7 +1007,7 @@ class TestLLMInterceptsAsync:
 
         assert result == {"intercepted": True}
 
-    async def test_request_intercept_modifies(self):
+    async def test_request_intercept_modifies(self) -> None:
         def intercept_fn(name, request, annotated):
             # Request intercepts now operate on LLMRequest
             content = request.content
@@ -1017,7 +1025,7 @@ class TestLLMInterceptsAsync:
 
         intercepts.deregister_llm_request("py_llm_req_mod")
 
-    async def test_execution_intercept_replaces(self):
+    async def test_execution_intercept_replaces(self) -> None:
         intercepts.register_llm_execution(
             "py_llm_exec_rep",
             1,
@@ -1034,7 +1042,7 @@ class TestLLMInterceptsAsync:
 
         intercepts.deregister_llm_execution("py_llm_exec_rep")
 
-    async def test_execution_intercept_can_await_next(self):
+    async def test_execution_intercept_can_await_next(self) -> None:
         async def middleware(name, request, next):
             updated = LLMRequest(request.headers, {**request.content, "model": "via-next"})
             result = await next(updated)
@@ -1052,7 +1060,7 @@ class TestLLMInterceptsAsync:
         finally:
             intercepts.deregister_llm_execution("py_llm_exec_next")
 
-    async def test_execution_intercept_rejects_next_after_settlement(self):
+    async def test_execution_intercept_rejects_next_after_settlement(self) -> None:
         captured_next = None
         provider_calls = 0
 
@@ -1078,7 +1086,7 @@ class TestLLMInterceptsAsync:
 
         assert provider_calls == 0
 
-    async def test_stream_execution_intercept_can_await_next(self):
+    async def test_stream_execution_intercept_can_await_next(self) -> None:
         def middleware(request, next):
             async def gen():
                 updated = LLMRequest(request.headers, {**request.content, "prefix": "wrapped"})
@@ -1108,7 +1116,7 @@ class TestLLMInterceptsAsync:
         finally:
             intercepts.deregister_llm_stream_execution("py_llm_stream_next")
 
-    async def test_stream_execution_intercept_rejects_next_after_settlement(self):
+    async def test_stream_execution_intercept_rejects_next_after_settlement(self) -> None:
         captured_next = None
         provider_calls = 0
 
@@ -1144,7 +1152,7 @@ class TestLLMInterceptsAsync:
 
         assert provider_calls == 0
 
-    async def test_stream_execution_intercept_async_function_is_supported(self):
+    async def test_stream_execution_intercept_async_function_is_supported(self) -> None:
         def middleware(request, next):
             updated = LLMRequest(request.headers, {**request.content, "prefix": "async"})
 
@@ -1177,7 +1185,7 @@ class TestLLMInterceptsAsync:
 
 
 class TestLLMStreaming:
-    async def test_stream_execute(self):
+    async def test_stream_execute(self) -> None:
         # Stream functions now take LLMRequest and return async iterator of Json
         def stream_func(request):
             async def gen():
@@ -1188,7 +1196,7 @@ class TestLLMStreaming:
 
         collected = []
 
-        def collector(chunk):
+        def collector(chunk) -> None:
             collected.append(chunk)
 
         def finalizer():
@@ -1204,7 +1212,7 @@ class TestLLMStreaming:
         # Collector should have received all chunks
         assert len(collected) == len(chunks)
 
-    async def test_async_response_sanitizer_runs_during_stream_finalization(self):
+    async def test_async_response_sanitizer_runs_during_stream_finalization(self) -> None:
         events = []
         originating_loop = asyncio.get_running_loop()
         subscribers.register("py_llm_async_stream_sanitizer_sub", events.append)
@@ -1237,7 +1245,7 @@ class TestLLMStreaming:
         end = _llm_event(events, "stream_async_response_sanitizer", "end")
         assert end.data == {"sanitized": True}
 
-    async def test_stream_response_sanitizer_preserves_emitter_contextvars(self):
+    async def test_stream_response_sanitizer_preserves_emitter_contextvars(self) -> None:
         request_id = contextvars.ContextVar("stream_request_id", default="registration")
         observed = []
 
@@ -1274,7 +1282,7 @@ class TestLLMStreaming:
 
         assert observed == ["caller", "caller"]
 
-    async def test_stream_execute_aclose_stops_partially_consumed_stream(self):
+    async def test_stream_execute_aclose_stops_partially_consumed_stream(self) -> None:
         producer_closed = asyncio.Event()
         wait_for_more_chunks = asyncio.Event()
 
@@ -1300,7 +1308,7 @@ class TestLLMStreaming:
         with pytest.raises(StopAsyncIteration):
             await asyncio.wait_for(anext(stream), timeout=1)
 
-    async def test_stream_execute_propagates_generator_error(self):
+    async def test_stream_execute_propagates_generator_error(self) -> None:
         def stream_func(request):
             async def gen():
                 yield {"token": "hello"}
@@ -1315,18 +1323,18 @@ class TestLLMStreaming:
         with pytest.raises(RuntimeError, match="stream boom"):
             await anext(stream)
 
-    async def test_stream_execute_rejects_invalid_iterator(self):
+    async def test_stream_execute_rejects_invalid_iterator(self) -> None:
         stream = await llm.stream_execute(
             "stream_invalid_iter_llm",
             make_request(),
-            lambda request: object(),  # ty: ignore[invalid-argument-type]
+            lambda request: object(),
             lambda chunk: None,
             lambda: {},
         )
         with pytest.raises(RuntimeError, match="__anext__"):
             await anext(stream)
 
-    async def test_stream_execute_handles_iterator_that_stops_in___anext__(self):
+    async def test_stream_execute_handles_iterator_that_stops_in___anext__(self) -> None:
         stream = await llm.stream_execute(
             "stream_direct_stop_llm",
             make_request(),
@@ -1339,7 +1347,7 @@ class TestLLMStreaming:
             chunks.append(chunk)
         assert chunks == []
 
-    async def test_stream_execute_propagates_direct___anext__error(self):
+    async def test_stream_execute_propagates_direct___anext__error(self) -> None:
         stream = await llm.stream_execute(
             "stream_direct_error_llm",
             make_request(),
@@ -1350,7 +1358,7 @@ class TestLLMStreaming:
         with pytest.raises(RuntimeError, match="direct __anext__ boom"):
             await anext(stream)
 
-    async def test_stream_execution_intercept_rejects_invalid_iterator(self):
+    async def test_stream_execution_intercept_rejects_invalid_iterator(self) -> None:
         intercepts.register_llm_stream_execution(
             "py_llm_stream_bad_iter",
             1,
@@ -1369,7 +1377,7 @@ class TestLLMStreaming:
         finally:
             intercepts.deregister_llm_stream_execution("py_llm_stream_bad_iter")
 
-    async def test_stream_execution_intercept_handles_iterator_that_stops_in___anext__(self):
+    async def test_stream_execution_intercept_handles_iterator_that_stops_in___anext__(self) -> None:
         intercepts.register_llm_stream_execution(
             "py_llm_stream_direct_stop",
             1,
@@ -1390,7 +1398,7 @@ class TestLLMStreaming:
         finally:
             intercepts.deregister_llm_stream_execution("py_llm_stream_direct_stop")
 
-    async def test_stream_execution_intercept_propagates_direct___anext__error(self):
+    async def test_stream_execution_intercept_propagates_direct___anext__error(self) -> None:
         intercepts.register_llm_stream_execution(
             "py_llm_stream_direct_error",
             1,
@@ -1409,11 +1417,11 @@ class TestLLMStreaming:
         finally:
             intercepts.deregister_llm_stream_execution("py_llm_stream_direct_error")
 
-    async def test_stream_execution_intercept_failure_emits_exception_type(self):
+    async def test_stream_execution_intercept_failure_emits_exception_type(self) -> None:
         events = []
         subscribers.register("py_llm_stream_intercept_failure_sub", events.append)
 
-        def failing_middleware(request, next):
+        def failing_middleware(request, next) -> Never:
             raise ValueError("stream intercept boom")
 
         intercepts.register_llm_stream_execution(
@@ -1439,7 +1447,7 @@ class TestLLMStreaming:
         assert isinstance(metadata, dict)
         assert metadata["exception.type"] == "ValueError"
 
-    async def test_stream_execute_collector_failure_raises(self):
+    async def test_stream_execute_collector_failure_raises(self) -> None:
         events = []
         subscribers.register("py_llm_stream_collector_failure_sub", events.append)
 
@@ -1467,14 +1475,14 @@ class TestLLMStreaming:
         assert isinstance(metadata, dict)
         assert metadata["exception.type"] == "RuntimeError"
 
-    async def test_stream_execute_callback_failure_emits_exception_type(self):
+    async def test_stream_execute_callback_failure_emits_exception_type(self) -> None:
         events = []
         subscribers.register("py_llm_stream_callback_failure_sub", events.append)
 
-        def stream_func(request):
+        def stream_func(request) -> Never:
             raise ValueError("stream callback boom")
 
-        async def async_stream_func(request):
+        async def async_stream_func(request) -> Never:
             raise TypeError("async stream callback boom")
 
         try:
@@ -1490,7 +1498,7 @@ class TestLLMStreaming:
                 await llm.stream_execute(
                     "async_stream_callback_fail_llm",
                     make_request(),
-                    async_stream_func,  # ty: ignore[invalid-argument-type]
+                    async_stream_func,
                     lambda chunk: None,
                     lambda: {},
                 )
@@ -1505,7 +1513,7 @@ class TestLLMStreaming:
         assert isinstance(metadata, dict)
         assert metadata["exception.type"] == "TypeError"
 
-    async def test_stream_execute_finalizer_failure_records_null_output(self):
+    async def test_stream_execute_finalizer_failure_records_null_output(self) -> None:
         events = []
         subscribers.register("py_llm_finalizer_fail_sub", lambda event: events.append(event))
 
@@ -1521,7 +1529,7 @@ class TestLLMStreaming:
                 make_request(),
                 stream_func,
                 lambda chunk: None,
-                lambda: object(),  # ty: ignore[invalid-argument-type]
+                lambda: object(),
             )
             chunks = []
             async for chunk in stream:
@@ -1536,7 +1544,7 @@ class TestLLMStreaming:
         end = _llm_event(events, "stream_finalizer_fail_llm", "end")
         assert end.data is None
 
-    async def test_stream_execute_finalizer_callable_error_records_null_output(self):
+    async def test_stream_execute_finalizer_callable_error_records_null_output(self) -> None:
         events = []
         subscribers.register("py_llm_finalizer_callable_fail_sub", lambda event: events.append(event))
 
@@ -1567,7 +1575,7 @@ class TestLLMStreaming:
         end = _llm_event(events, "stream_finalizer_callable_fail_llm", "end")
         assert end.data is None
 
-    async def test_subscriber_exception_does_not_break_streaming(self):
+    async def test_subscriber_exception_does_not_break_streaming(self) -> None:
         seen = []
         subscribers.register("py_llm_bad_sub", lambda event: raise_runtime_error("subscriber boom"))
         subscribers.register("py_llm_good_sub", lambda event: seen.append(event.kind))

@@ -504,7 +504,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(f"event: {event_name}\ndata: {json.dumps(event)}\n\n".encode())
         self.wfile.flush()
 
-    def _send_non_stream_response(self, request, anthropic_stream, chat_stream) -> bool:
+    def _send_non_stream_response(self, request: dict[str, Any], anthropic_stream: Any, chat_stream: Any) -> bool:
         if request.get("stream", False):
             return False
         if anthropic_stream is not None:
@@ -515,7 +515,7 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return False
 
-    def _send_json(self, payload) -> None:
+    def _send_json(self, payload: Any) -> None:
         body = json.dumps(payload).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -524,7 +524,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     @staticmethod
-    def _anthropic_response(request):
+    def _anthropic_response(request: dict[str, Any]) -> dict[str, Any]:
         return {
             "id": f"msg_{uuid.uuid4().hex}",
             "type": "message",
@@ -537,7 +537,7 @@ class Handler(BaseHTTPRequestHandler):
         }
 
     @staticmethod
-    def _chat_response(request):
+    def _chat_response(request: dict[str, Any]) -> dict[str, Any]:
         return {
             "id": f"chatcmpl_{uuid.uuid4().hex}",
             "object": "chat.completion",

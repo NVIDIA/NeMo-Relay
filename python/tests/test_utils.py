@@ -12,7 +12,7 @@ from nemo_relay.utils import run_sync
 
 
 @pytest.mark.parametrize("from_async", [False, True])
-def test_run_sync(from_async: bool):
+def test_run_sync(from_async: bool) -> None:
     """
     Test that run_sync correctly propagates the NeMo Relay scope stack to the worker thread,
     and that it can be called from inside a running loop and outside a running loop.

@@ -103,7 +103,7 @@ report = nemo_relay.plugin.validate(plugin_config)["config"]
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
-def call_model(_request):
+def call_model(_request: nemo_relay.LLMRequest) -> dict[str, object]:
     return {
         "model": "gpt-4o",
         "choices": [{
@@ -112,7 +112,7 @@ def call_model(_request):
         }],
     }
 
-async def main():
+async def main() -> None:
     async with nemo_relay.plugin.activate(plugin_config):
         # Managed calls need no changes. The first call runs the provider;
         # an identical repeat can be served from the cache.
@@ -225,7 +225,7 @@ adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
     response_cache=nemo_relay.adaptive.ResponseCacheConfig(namespace="dev-harness"),
 )
 
-async def main():
+async def main() -> None:
     runtime = nemo_relay.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
     await runtime.register()
     try:

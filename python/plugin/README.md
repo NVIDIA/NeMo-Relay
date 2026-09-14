@@ -133,10 +133,14 @@ worker process.
 LLM request intercepts return one canonical outcome:
 
 ```python
-from nemo_relay_plugin import LlmRequestInterceptOutcome, PendingMarkSpec
+from nemo_relay_plugin import AnnotatedLLMRequest, Json, LlmRequestInterceptOutcome, PendingMarkSpec
 
 
-def intercept(model_name, request, annotated):
+def intercept(
+    model_name: str,
+    request: Json,
+    annotated: AnnotatedLLMRequest | None,
+) -> LlmRequestInterceptOutcome:
     del model_name
     headers = {**request.get("headers", {}), "x-policy": "checked"}
     return LlmRequestInterceptOutcome(

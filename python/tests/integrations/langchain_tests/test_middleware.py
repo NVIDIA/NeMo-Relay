@@ -126,7 +126,7 @@ def recording_middleware_fixture() -> RecordingMiddleware:
     from nemo_relay.integrations.langchain.middleware import NemoRelayMiddleware
 
     class _RecordingMiddleware(NemoRelayMiddleware, RecordingMiddleware):
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__()
             self.calls: list[dict[str, Any]] = []
 
@@ -188,7 +188,7 @@ def test_wrap_model_call_routes_through_llm_execute(
     model_request: ModelRequest[Any],
     model_request_handler: tuple[Callable[[ModelRequest[Any]], ModelResponse[Any]], dict[str, ModelRequest[Any]]],
     recording_middleware: RecordingMiddleware,
-):
+) -> None:
     (handler, seen_request) = model_request_handler
 
     response = recording_middleware.wrap_model_call(model_request, handler)
@@ -209,7 +209,7 @@ def test_awrap_model_call_routes_through_llm_execute(
         Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]], dict[str, ModelRequest[Any]]
     ],
     recording_middleware: RecordingMiddleware,
-):
+) -> None:
     (handler, seen_request) = async_model_request_handler
 
     response = asyncio.run(recording_middleware.awrap_model_call(model_request, handler))
@@ -224,7 +224,7 @@ def test_awrap_model_call_routes_through_llm_execute(
     assert recording_middleware.calls[0]["response_codec"] is recording_middleware.calls[0]["codec"]
 
 
-def test_langchain_model_request_codec_round_trips_messages(model_request: ModelRequest[Any]):
+def test_langchain_model_request_codec_round_trips_messages(model_request: ModelRequest[Any]) -> None:
     from nemo_relay.integrations.langchain._serialization import (
         LangChainCodec,
         model_request_to_payload,
@@ -244,7 +244,7 @@ def test_langchain_model_request_codec_round_trips_messages(model_request: Model
     assert round_tripped.messages[0].content == "hello from intercept"
 
 
-def test_langchain_request_codec_preserves_provider_tool_calls():
+def test_langchain_request_codec_preserves_provider_tool_calls() -> None:
     from langchain_core.messages import AIMessage, messages_from_dict, messages_to_dict
 
     from nemo_relay.integrations.langchain._serialization import LangChainCodec
@@ -294,7 +294,7 @@ def test_langchain_request_codec_preserves_provider_tool_calls():
     assert rebuilt.additional_kwargs["tool_calls"] == provider_tool_calls
 
 
-def test_langchain_request_codec_preserves_chat_nvidia_tool_call_payload_after_prepending_message():
+def test_langchain_request_codec_preserves_chat_nvidia_tool_call_payload_after_prepending_message() -> None:
     from langchain_core.messages import AIMessage, messages_from_dict, messages_to_dict
 
     from nemo_relay.integrations.langchain._serialization import LangChainCodec
@@ -342,7 +342,7 @@ def test_langchain_request_codec_preserves_chat_nvidia_tool_call_payload_after_p
     }
 
 
-def test_langchain_request_codec_preserves_reordered_provider_tool_calls():
+def test_langchain_request_codec_preserves_reordered_provider_tool_calls() -> None:
     from langchain_core.messages import AIMessage, messages_from_dict, messages_to_dict
 
     from nemo_relay.integrations.langchain._serialization import LangChainCodec
@@ -408,7 +408,7 @@ def test_langchain_request_codec_preserves_reordered_provider_tool_calls():
     ]
 
 
-def test_langchain_request_codec_rebuilds_provider_tool_calls_after_content_edit():
+def test_langchain_request_codec_rebuilds_provider_tool_calls_after_content_edit() -> None:
     from langchain_core.messages import AIMessage, messages_from_dict, messages_to_dict
 
     from nemo_relay.integrations.langchain._serialization import LangChainCodec
@@ -458,7 +458,7 @@ def test_langchain_request_codec_rebuilds_provider_tool_calls_after_content_edit
     ]
 
 
-def test_langchain_request_codec_builds_provider_tool_calls_for_new_assistant():
+def test_langchain_request_codec_builds_provider_tool_calls_for_new_assistant() -> None:
     from langchain_core.messages import AIMessage, HumanMessage, messages_from_dict, messages_to_dict
 
     from nemo_relay.integrations.langchain._serialization import LangChainCodec
@@ -493,7 +493,7 @@ def test_langchain_request_codec_builds_provider_tool_calls_for_new_assistant():
     ]
 
 
-def test_langchain_request_codec_preserves_multi_block_assistant_message():
+def test_langchain_request_codec_preserves_multi_block_assistant_message() -> None:
     from langchain_core.messages import AIMessage, messages_from_dict, messages_to_dict
 
     from nemo_relay.integrations.langchain._serialization import LangChainCodec
@@ -554,7 +554,7 @@ def test_langchain_request_codec_preserves_multi_block_assistant_message():
     }
 
 
-def test_langchain_request_codec_preserves_unchanged_bare_string_content_parts():
+def test_langchain_request_codec_preserves_unchanged_bare_string_content_parts() -> None:
     from langchain_core.messages import HumanMessage, messages_from_dict, messages_to_dict
 
     from nemo_relay.integrations.langchain._serialization import LangChainCodec
@@ -570,7 +570,7 @@ def test_langchain_request_codec_preserves_unchanged_bare_string_content_parts()
     assert rebuilt[0].content == original_content
 
 
-def test_langchain_request_codec_uses_canonical_blocks_after_bare_string_content_edit():
+def test_langchain_request_codec_uses_canonical_blocks_after_bare_string_content_edit() -> None:
     from langchain_core.messages import HumanMessage, messages_from_dict, messages_to_dict
 
     from nemo_relay.integrations.langchain._serialization import LangChainCodec
@@ -596,7 +596,7 @@ def test_langchain_request_codec_uses_canonical_blocks_after_bare_string_content
 
 
 @pytest.mark.parametrize("message_list_edit", ["prepend", "append", "delete"])
-def test_langchain_request_codec_preserves_bare_strings_across_message_list_edits(message_list_edit: str):
+def test_langchain_request_codec_preserves_bare_strings_across_message_list_edits(message_list_edit: str) -> None:
     from langchain_core.messages import AIMessage, HumanMessage, messages_from_dict, messages_to_dict
 
     from nemo_relay.integrations.langchain._serialization import LangChainCodec
@@ -622,7 +622,7 @@ def test_langchain_request_codec_preserves_bare_strings_across_message_list_edit
         assert preserved_messages[1].content == ["second"]
 
 
-def test_langchain_request_codec_preserves_bare_strings_after_name_edit():
+def test_langchain_request_codec_preserves_bare_strings_after_name_edit() -> None:
     from langchain_core.messages import HumanMessage, messages_from_dict, messages_to_dict
 
     from nemo_relay.integrations.langchain._serialization import LangChainCodec
@@ -640,7 +640,7 @@ def test_langchain_request_codec_preserves_bare_strings_after_name_edit():
     assert rebuilt[0].content == ["first"]
 
 
-def test_langchain_request_codec_does_not_guess_bare_string_shape_for_ambiguous_messages():
+def test_langchain_request_codec_does_not_guess_bare_string_shape_for_ambiguous_messages() -> None:
     from langchain_core.messages import HumanMessage, messages_from_dict, messages_to_dict
 
     from nemo_relay.integrations.langchain._serialization import LangChainCodec
@@ -665,7 +665,7 @@ def test_langchain_request_codec_does_not_guess_bare_string_shape_for_ambiguous_
     assert rebuilt[0].content == [{"type": "text", "text": "same"}]
 
 
-def test_langchain_request_codec_preserves_distinct_system_messages_and_native_blocks():
+def test_langchain_request_codec_preserves_distinct_system_messages_and_native_blocks() -> None:
     from langchain_core.messages import HumanMessage, SystemMessage, messages_from_dict, messages_to_dict
 
     from nemo_relay.integrations.langchain._serialization import LangChainCodec
@@ -687,7 +687,7 @@ def test_langchain_request_codec_preserves_distinct_system_messages_and_native_b
 
 def test_model_call_applies_edit_to_one_system_content_block(
     nemo_relay_middleware: NemoRelayMiddleware,
-):
+) -> None:
     from langchain.agents.middleware import ModelRequest, ModelResponse
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
@@ -744,7 +744,7 @@ def test_model_call_intercept_rebuilds_provider_tool_calls(
     nemo_relay_middleware: NemoRelayMiddleware,
     model_request: ModelRequest[Any],
     model_request_handler: tuple[Callable[[ModelRequest[Any]], ModelResponse[Any]], dict[str, ModelRequest[Any]]],
-):
+) -> None:
     from langchain_core.messages import AIMessage
 
     provider_tool_calls = [
@@ -811,7 +811,9 @@ def test_model_call_intercept_rebuilds_provider_tool_calls(
     ]
 
 
-def test_payload_to_model_request_moves_relay_headers_to_chat_nvidia_transport(model_request: ModelRequest[Any]):
+def test_payload_to_model_request_moves_relay_headers_to_chat_nvidia_transport(
+    model_request: ModelRequest[Any],
+) -> None:
     from nemo_relay.integrations.langchain._serialization import (
         model_request_to_payload,
         payload_to_model_request,
@@ -844,7 +846,7 @@ def test_payload_to_model_request_moves_relay_headers_to_chat_nvidia_transport(m
 
 def test_payload_to_model_request_leaves_chat_nvidia_model_unchanged_without_relay_headers(
     model_request: ModelRequest[Any],
-):
+) -> None:
     from nemo_relay.integrations.langchain._serialization import (
         model_request_to_payload,
         payload_to_model_request,
@@ -862,7 +864,9 @@ def test_payload_to_model_request_leaves_chat_nvidia_model_unchanged_without_rel
     assert converted.model_settings == {"temperature": 1.0}
 
 
-def test_payload_to_model_request_does_not_inject_relay_headers_for_generic_models(model_request: ModelRequest[Any]):
+def test_payload_to_model_request_does_not_inject_relay_headers_for_generic_models(
+    model_request: ModelRequest[Any],
+) -> None:
     from nemo_relay.integrations.langchain._serialization import (
         model_request_to_payload,
         payload_to_model_request,
@@ -881,7 +885,7 @@ def test_payload_to_model_request_does_not_inject_relay_headers_for_generic_mode
 
 def test_payload_to_model_request_forwards_relay_headers_as_extra_headers_for_anthropic(
     model_request: ModelRequest[Any],
-):
+) -> None:
     from nemo_relay.integrations.langchain._serialization import (
         model_request_to_payload,
         payload_to_model_request,
@@ -905,7 +909,7 @@ def test_payload_to_model_request_forwards_relay_headers_as_extra_headers_for_an
 
 def test_payload_to_model_request_merges_relay_headers_into_configured_extra_headers(
     model_request: ModelRequest[Any],
-):
+) -> None:
     from nemo_relay.integrations.langchain._serialization import (
         model_request_to_payload,
         payload_to_model_request,
@@ -929,7 +933,7 @@ def test_payload_to_model_request_merges_relay_headers_into_configured_extra_hea
 
 def test_wrap_model_call_does_not_inject_extra_headers_for_models_that_reject_them(
     nemo_relay_middleware: NemoRelayMiddleware,
-):
+) -> None:
     from langchain.agents.middleware import ModelRequest, ModelResponse
     from langchain_core.language_models import BaseChatModel
     from langchain_core.messages import AIMessage, HumanMessage
@@ -980,7 +984,7 @@ def test_wrap_model_call_does_not_inject_extra_headers_for_models_that_reject_th
     assert seen_request["request"].model_settings == {"temperature": 0.0}
 
 
-def test_langchain_model_response_codec_decodes_text_and_tool_calls():
+def test_langchain_model_response_codec_decodes_text_and_tool_calls() -> None:
     from langchain.agents.middleware import ModelResponse
     from langchain_core.messages import AIMessage
 
@@ -1043,7 +1047,7 @@ def test_model_call_applies_annotated_llm_request_intercept(
     async_model_request_handler: tuple[
         Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]], dict[str, ModelRequest[Any]]
     ],
-):
+) -> None:
     captured: dict[str, Any] = {}
 
     def change_request(name: str, request: nemo_relay.LLMRequest, annotated: Any):
@@ -1083,7 +1087,7 @@ def test_wrap_tool_call_routes_through_tool_execute(
     mock_tool_execute: AsyncMock,
     tool_call_request: ToolCallRequest,
     tool_request_handler: tuple[Callable[[ToolCallRequest], ToolMessage], dict[str, ToolCallRequest]],
-):
+) -> None:
     (handler, seen_request) = tool_request_handler
     parent_handle = MagicMock()
 
@@ -1111,7 +1115,7 @@ def test_awrap_tool_call_routes_through_tool_execute(
     mock_tool_execute: AsyncMock,
     tool_call_request: ToolCallRequest,
     async_tool_request_handler: tuple[Callable[[ToolCallRequest], Awaitable[ToolMessage]], dict[str, ToolCallRequest]],
-):
+) -> None:
     parent_handle = MagicMock()
     (handler, seen_request) = async_tool_request_handler
 
@@ -1136,7 +1140,7 @@ def test_awrap_tool_call_routes_through_tool_execute(
 def test_complete_skill_read_emits_mark_through_langchain_middleware(
     subscribed_events: list[nemo_relay.Event],
     nemo_relay_middleware: NemoRelayMiddleware,
-):
+) -> None:
     from langchain.agents.middleware import ToolCallRequest
     from langchain_core.messages import ToolMessage
 
@@ -1178,7 +1182,7 @@ def test_complete_skill_read_emits_mark_through_langchain_middleware(
 
 
 @pytest.mark.parametrize("use_async", [False, True])
-def test_agent_integration(use_async: bool, nemo_relay_middleware: NemoRelayMiddleware):
+def test_agent_integration(use_async: bool, nemo_relay_middleware: NemoRelayMiddleware) -> None:
     """An integration test to verify that the middleware correctly wraps a model call end-to-end."""
     from langchain.agents import create_agent
     from langchain_core.messages import AIMessage
@@ -1228,7 +1232,7 @@ def test_agent_integration(use_async: bool, nemo_relay_middleware: NemoRelayMidd
         "scope.end.langchain-request",
     ]
 
-    def event_recorder(event):
+    def event_recorder(event) -> None:
         events.append(f"{event.kind}.{event.scope_category}.{event.name}")
 
     nemo_relay.subscribers.register("event_recorder", event_recorder)

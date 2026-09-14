@@ -74,21 +74,25 @@ This example adds three behaviors around a `search` tool:
 <Tab title="Python" language="python">
 ```python
 import time
+from collections.abc import Awaitable, Callable
 
 import nemo_relay
 
-def redact_api_key(tool_name, args):
+def redact_api_key(_tool_name: str, args: nemo_relay.Json) -> nemo_relay.Json:
     safe_args = dict(args)
     if "api_key" in safe_args:
         safe_args["api_key"] = "<redacted>"
     return safe_args
 
-def require_query(tool_name, args):
+def require_query(_tool_name: str, args: nemo_relay.Json) -> str | None:
     if not args.get("query"):
         return "search.query is required"
     return None
 
-async def measure_tool(context, next_call):
+async def measure_tool(
+    context: nemo_relay.ToolExecutionContext,
+    next_call: Callable[[nemo_relay.Json], Awaitable[nemo_relay.ToolExecutionResult[nemo_relay.Json]]],
+) -> nemo_relay.ToolExecutionInterceptOutcome:
     started = time.perf_counter()
     try:
         execution_result = await next_call(context.args)

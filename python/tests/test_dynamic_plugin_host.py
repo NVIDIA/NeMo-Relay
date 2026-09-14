@@ -178,7 +178,7 @@ async def _initialize(
         return await plugin.initialize(config or plugin.PluginConfig(), plugins_toml)
 
 
-def test_removed_plugin_host_entry_points_are_not_exported():
+def test_removed_plugin_host_entry_points_are_not_exported() -> None:
     retired = {
         "load_dynamic_plugin_activation_specs",
         "validate_plugin_host",
@@ -191,7 +191,7 @@ def test_removed_plugin_host_entry_points_are_not_exported():
     assert all(not hasattr(plugin, name) for name in retired)
 
 
-def test_validate_initialize_and_activate_accept_the_same_arguments():
+def test_validate_initialize_and_activate_accept_the_same_arguments() -> None:
     initialize_parameters = tuple(inspect.signature(plugin.initialize).parameters.values())
     validate_parameters = tuple(inspect.signature(plugin.validate).parameters.values())
     activate_parameters = tuple(inspect.signature(plugin.activate).parameters.values())
@@ -202,7 +202,7 @@ def test_validate_initialize_and_activate_accept_the_same_arguments():
 def test_validate_uses_core_report(
     native_dynamic_plugin: _BuiltPlugin,
     tmp_path: Path,
-):
+) -> None:
     plugins_toml = _write_plugins_toml(tmp_path, [(native_dynamic_plugin.manifest, {})])
     report = plugin.validate(plugin.PluginConfig(), plugins_toml)
     assert not any(item["level"] == "error" for item in report["config"]["diagnostics"])
@@ -212,7 +212,7 @@ def test_validate_uses_core_report(
 
 async def test_native_host_owns_callbacks_and_close_is_idempotent(
     native_dynamic_plugin: _BuiltPlugin,
-):
+) -> None:
     activation = await _initialize(None, (native_dynamic_plugin, {}))
     assert activation.is_active
     assert activation.report["dynamic_plugins"][0]["plugin_id"] == "fixture_native"
@@ -238,7 +238,7 @@ async def test_native_host_owns_callbacks_and_close_is_idempotent(
 async def test_activate_closes_host_when_context_raises(
     native_dynamic_plugin: _BuiltPlugin,
     tmp_path: Path,
-):
+) -> None:
     plugins_toml = _write_plugins_toml(tmp_path, [(native_dynamic_plugin.manifest, {})])
     activation = None
 
@@ -256,14 +256,14 @@ async def test_discovered_configuration_layers_last(
     native_dynamic_plugin: _BuiltPlugin,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     static_kind = "python.fixture.file-static-base"
 
     class FileStaticPlugin:
-        def validate(self, _plugin_config):
+        def validate(self, _plugin_config) -> None:
             return None
 
-        def register(self, _plugin_config, context):
+        def register(self, _plugin_config, context) -> None:
             context.register_tool_request_intercept(
                 "mark-file-static-base", 0, False, lambda _name, args: {**args, "file_static_base": True}
             )
@@ -309,17 +309,17 @@ async def test_discovered_configuration_layers_last(
         plugin.deregister(static_kind)
 
 
-async def test_concurrent_close_waiters_share_teardown(native_dynamic_plugin: _BuiltPlugin):
+async def test_concurrent_close_waiters_share_teardown(native_dynamic_plugin: _BuiltPlugin) -> None:
     started = threading.Event()
     release = threading.Event()
     plugin_kind = "python.dynamic_close_waiter"
 
     class BlockingSubscriberPlugin:
-        def validate(self, _plugin_config):
+        def validate(self, _plugin_config) -> None:
             return None
 
-        def register(self, _plugin_config, context):
-            def block(_event):
+        def register(self, _plugin_config, context) -> None:
+            def block(_event) -> None:
                 started.set()
                 assert release.wait(timeout=5)
 
@@ -357,7 +357,7 @@ async def test_concurrent_close_waiters_share_teardown(native_dynamic_plugin: _B
 async def test_host_conflict_and_failed_preflight_leave_no_partial_activation(
     native_dynamic_plugin: _BuiltPlugin,
     tmp_path: Path,
-):
+) -> None:
     activation = await _initialize(None, (native_dynamic_plugin, {}))
     try:
         with pytest.raises(RuntimeError, match="active dynamic plugin host"):
@@ -373,13 +373,13 @@ async def test_host_conflict_and_failed_preflight_leave_no_partial_activation(
     await retry.close()
 
 
-async def test_invalid_dynamic_config_fails_closed(native_dynamic_plugin: _BuiltPlugin):
+async def test_invalid_dynamic_config_fails_closed(native_dynamic_plugin: _BuiltPlugin) -> None:
     with pytest.raises(ValueError, match="fixture rejection requested"):
         await _initialize(None, (native_dynamic_plugin, {"reject": True}))
     assert "fixture_native" not in plugin.list_kinds()
 
 
-async def test_native_finalizer_releases_callbacks(native_dynamic_plugin: _BuiltPlugin):
+async def test_native_finalizer_releases_callbacks(native_dynamic_plugin: _BuiltPlugin) -> None:
     activation = await _initialize(None, (native_dynamic_plugin, {}))
     assert "fixture_native" in plugin.list_kinds()
     del activation
@@ -396,7 +396,7 @@ async def test_native_finalizer_releases_callbacks(native_dynamic_plugin: _Built
 async def test_worker_finalizer_never_waits_on_python_thread(
     worker_dynamic_plugin: _BuiltPlugin,
     tmp_path: Path,
-):
+) -> None:
     with worker_dynamic_plugin.manifest.open("rb") as file:
         worker_entrypoint = Path(tomllib.load(file)["load"]["entrypoint"])
     pid_file = tmp_path / "worker.pid"
@@ -443,7 +443,7 @@ async def test_worker_finalizer_never_waits_on_python_thread(
     assert elapsed < 0.4
 
 
-async def test_worker_host_executes_and_releases_callbacks(worker_dynamic_plugin: _BuiltPlugin):
+async def test_worker_host_executes_and_releases_callbacks(worker_dynamic_plugin: _BuiltPlugin) -> None:
     activation = await _initialize(None, (worker_dynamic_plugin, {}))
     loop = asyncio.get_running_loop()
     loop_thread = threading.get_ident()
