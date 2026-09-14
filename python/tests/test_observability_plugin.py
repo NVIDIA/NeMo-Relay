@@ -122,6 +122,21 @@ class TestObservabilityConfigHelpers:
         assert endpoint.scheduled_delay_millis is None
         assert endpoint.completed_span_context_ttl_millis is None
 
+    def test_header_file_serializes_for_every_remote_observability_destination(self):
+        path = "/var/run/secrets/telemetry/token"
+        assert AtofStreamSinkConfig(url="https://example.com/events", header_file={"authorization": path}).to_dict()[
+            "header_file"
+        ] == {"authorization": path}
+        assert HttpStorageConfig(endpoint="https://example.com/atif", header_file={"authorization": path}).to_dict()[
+            "header_file"
+        ] == {"authorization": path}
+        assert OpenTelemetryEndpointConfig(
+            "full", "https://example.com/v1/traces", header_file={"authorization": path}
+        ).to_dict()["header_file"] == {"authorization": path}
+        assert OpenTelemetrySignalEndpointConfig(
+            "https://example.com/v1/logs", header_file={"authorization": path}
+        ).to_dict()["header_file"] == {"authorization": path}
+
     def test_defaults_and_component_wrapper(self):
         assert AtofConfig().to_dict() == {"enabled": False}
         assert AtifConfig().to_dict() == {

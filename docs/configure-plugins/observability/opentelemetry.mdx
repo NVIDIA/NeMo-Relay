@@ -135,11 +135,11 @@ for `localhost` and loopback IP addresses such as `127.0.0.1` and `[::1]`.
 Redaction does not disable this requirement. Existing remote plaintext trace
 endpoints must migrate to HTTPS or use a loopback collector.
 
-OTLP/HTTP trace exporters do not follow redirects, including redirects to other
-HTTPS endpoints. Redirects are disabled to prevent exports from bypassing transport
-validation or forwarding payloads and credentials to another destination. Configure
-the final collector URL directly. This policy applies to all trace projections; gRPC, log, and metric
-exporters are unchanged.
+OTLP/HTTP trace exporters do not follow redirects, even to another HTTPS
+endpoint. This keeps an export from bypassing transport checks or sending its
+payload and credentials to another destination. Use the final collector URL.
+Log and metric HTTP exporters do the same when any header source is configured.
+gRPC does not use HTTP redirects.
 
 | Field | Default | Notes |
 |---|---|---|
@@ -157,6 +157,7 @@ exporters are unchanged.
 | `completed_span_context_ttl_millis` | `60000` | Positive duration for retaining completed scopes' trace context for late marks. |
 | `headers` | `{}` | String-to-string exporter headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
+| `header_file` | `{}` | Header names mapped to files read immediately before each OTLP HTTP request or gRPC call. |
 | `resource_attributes` | `{}` | String-to-string resource attributes. |
 | `mark_projection` | `inherit` | Mark representation for `full` and `openinference`: `inherit`, `event`, or `tool`. |
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
@@ -404,6 +405,22 @@ nonblank, with no surrounding whitespace, when the component activates. A header
 cannot appear in both `headers` and `header_env`, including names that differ
 only by ASCII case. Reactivate the plugin to pick up a changed environment
 value.
+
+Use `header_file` when another process updates a credential in place, such as a
+projected token file. Each file must be regular and exist when the plugin
+activates. Relay reads the file only when it exports. Relay removes trailing
+whitespace. A missing, unreadable, blank, or invalid value fails only that
+export, and diagnostics do not show the value. A header can use only one of
+`headers`, `header_env`, and `header_file`. Header names are case-insensitive.
+This applies to trace, log, and metric endpoints.
+
+Remote trace endpoints must use HTTPS. When you set any header source
+(`headers`, `header_env`, or `header_file`), remote log and metric endpoints
+must also use HTTPS. HTTP is allowed only for localhost and loopback IP
+addresses. OTLP/HTTP exporters do not follow redirects when headers are set.
+For example, an OIDC token-file writer must write the complete value `Bearer
+eyJ...` to the file. Relay does not add the authentication
+scheme for you.
 
 Process-global `OTEL_EXPORTER_OTLP_HEADERS`,
 `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, `OTEL_EXPORTER_OTLP_LOGS_HEADERS`, and

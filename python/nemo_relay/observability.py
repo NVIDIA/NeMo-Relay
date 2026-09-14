@@ -63,6 +63,7 @@ class AtofStreamSinkConfig:
     timeout_millis: int = 3000
     field_name_policy: Literal["preserve", "replace_dots"] = "preserve"
     name: str | None = None
+    header_file: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATOF stream sink to the canonical JSON object shape."""
@@ -74,6 +75,7 @@ class AtofStreamSinkConfig:
                 "transport": self.transport,
                 "headers": self.headers,
                 "header_env": self.header_env,
+                "header_file": self.header_file or None,
                 "timeout_millis": self.timeout_millis,
                 "field_name_policy": self.field_name_policy,
             }
@@ -165,6 +167,7 @@ class HttpStorageConfig:
     headers: dict[str, str] = field(default_factory=dict)
     header_env: dict[str, str] = field(default_factory=dict)
     timeout_millis: int = 3000
+    header_file: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> JsonObject:
         """Serialize this HTTP storage config to the canonical JSON object shape."""
@@ -174,6 +177,7 @@ class HttpStorageConfig:
                 "endpoint": self.endpoint,
                 "headers": self.headers,
                 "header_env": self.header_env,
+                "header_file": self.header_file or None,
                 "timeout_millis": self.timeout_millis,
             }
         )
@@ -235,6 +239,7 @@ class OpenTelemetryEndpointConfig:
     completed_span_context_ttl_millis: int | None = None
     promote_metadata_prefixes: list[str] = field(default_factory=list)
     promote_resource_metadata_prefixes: list[str] = field(default_factory=list)
+    header_file: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> JsonObject:
         """Serialize this endpoint to the canonical plugin shape."""
@@ -259,6 +264,7 @@ class OpenTelemetryEndpointConfig:
                 "completed_span_context_ttl_millis": self.completed_span_context_ttl_millis,
                 "headers": self.headers,
                 "header_env": self.header_env,
+                "header_file": self.header_file or None,
                 "resource_attributes": self.resource_attributes,
             }
         )
@@ -278,6 +284,7 @@ class OpenTelemetrySignalEndpointConfig:
     service_version: str | None = None
     instrumentation_scope: str = "opentelemetry"
     timeout_millis: int = 3000
+    header_file: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> JsonObject:
         """Serialize this signal endpoint to the canonical plugin shape."""
@@ -287,6 +294,7 @@ class OpenTelemetrySignalEndpointConfig:
                 "transport": self.transport,
                 "headers": self.headers,
                 "header_env": self.header_env,
+                "header_file": self.header_file or None,
                 "resource_attributes": self.resource_attributes,
                 "service_name": self.service_name,
                 "service_namespace": self.service_namespace,

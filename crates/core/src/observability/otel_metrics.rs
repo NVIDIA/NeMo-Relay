@@ -33,6 +33,10 @@ use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 
 use super::OpenTelemetryRuntimeDiagnostics;
+use super::header_file::{
+    HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
+    has_configured_headers, validate_header_files, validate_header_http_endpoint,
+};
 use super::otel::{OpenTelemetryError, OtlpTransport, Result, normalize_shutdown_result};
 use super::otel_signal::{
     MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics, build_grpc_metadata,
@@ -98,6 +102,7 @@ pub struct OpenTelemetryMetricConfig {
     endpoint: String,
     headers: HashMap<String, String>,
     header_env: HashMap<String, String>,
+    header_file: HeaderFiles,
     resource_attributes: HashMap<String, String>,
     service_name: String,
     service_namespace: Option<String>,
@@ -119,6 +124,7 @@ impl OpenTelemetryMetricConfig {
             endpoint: endpoint.into(),
             headers: HashMap::new(),
             header_env: HashMap::new(),
+            header_file: HashMap::new(),
             resource_attributes: HashMap::new(),
             service_name: "unknown_service".to_string(),
             service_namespace: None,
@@ -149,6 +155,15 @@ impl OpenTelemetryMetricConfig {
     /// Map an exporter header name to the environment variable supplying its value.
     pub fn with_header_env(mut self, key: impl Into<String>, variable: impl Into<String>) -> Self {
         self.header_env.insert(key.into(), variable.into());
+        self
+    }
+
+    pub(crate) fn with_header_file(
+        mut self,
+        key: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Self {
+        self.header_file.insert(key.into(), path.into());
         self
     }
 
@@ -248,7 +263,12 @@ impl OpenTelemetryMetricConfig {
             ));
         }
         reject_signal_header_environment("OTEL_EXPORTER_OTLP_METRICS_HEADERS")?;
-        validate_signal_headers(&self.headers)
+        validate_signal_headers(&self.headers)?;
+        if has_configured_headers(&self.headers, &self.header_env, &self.header_file) {
+            validate_header_http_endpoint(&self.endpoint)
+                .map_err(OpenTelemetryError::ExporterBuild)?;
+        }
+        Ok(())
     }
 }
 
@@ -292,6 +312,8 @@ impl OpenTelemetryMetricSubscriber {
 
     fn new_with_runtime_diagnostics(mut config: OpenTelemetryMetricConfig) -> Result<Self> {
         config.validate()?;
+        validate_header_files(&config.headers, &config.header_env, &config.header_file)
+            .map_err(OpenTelemetryError::ExporterBuild)?;
         config.headers = resolve_header_env(&config.headers, &config.header_env)?;
         validate_signal_headers(&config.headers)?;
         let instrumentation_scope = config.instrumentation_scope.clone();
@@ -415,6 +437,17 @@ fn build_metric_provider(
                 .with_temporality(temporality)
                 .with_timeout(config.timeout)
                 .with_endpoint(resolve_http_metric_endpoint(&config.endpoint).into_owned());
+            if !config.headers.is_empty() || !config.header_file.is_empty() {
+                let client = reqwest_otel::blocking::Client::builder()
+                    .timeout(config.timeout)
+                    .redirect(reqwest_otel::redirect::Policy::none())
+                    .build()
+                    .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
+                builder = builder.with_http_client(HeaderFileHttpClient::new(
+                    client,
+                    HeaderFileResolver::new(config.header_file.clone()),
+                ));
+            }
             if !config.headers.is_empty() {
                 builder = builder.with_headers(config.headers.clone());
             }
@@ -431,6 +464,11 @@ fn build_metric_provider(
                 .with_endpoint(config.endpoint.clone());
             if !config.headers.is_empty() {
                 builder = builder.with_metadata(build_grpc_metadata(&config.headers)?);
+            }
+            if !config.header_file.is_empty() {
+                builder = builder.with_interceptor(HeaderFileInterceptor::new(
+                    HeaderFileResolver::new(config.header_file.clone()),
+                ));
             }
             builder
                 .build()

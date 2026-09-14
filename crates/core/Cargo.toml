@@ -80,6 +80,8 @@ ring = ">=0.17.13, <0.18"
 jsonschema = { version = "0.46.6", default-features = false }
 percent-encoding = "2"
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "logs", "metrics", "http-proto", "reqwest-blocking-client", "reqwest-rustls", "grpc-tonic", "tls-ring", "tls-roots"] }
+opentelemetry-http = "0.32"
+async-trait = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "rustls-tls-native-roots", "stream"] }
 # Match the HTTP client version used by opentelemetry-otlp.
 reqwest-otel = { package = "reqwest", version = "0.13", default-features = false, features = ["blocking", "rustls"] }
