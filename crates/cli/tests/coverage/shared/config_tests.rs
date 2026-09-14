@@ -598,6 +598,8 @@ fn config() -> GatewayConfig {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     }
 }
 
@@ -935,6 +937,7 @@ anthropic_auth_header = "Basic anthropic-file"
 [gateway]
 max_hook_payload_bytes = 12345
 max_passthrough_body_bytes = 67890
+http_timeout_secs = 777
 
 [agents.claude]
 command = "claude"
@@ -972,6 +975,7 @@ command = "codex --approval-mode never"
     );
     assert_eq!(resolved.gateway.max_hook_payload_bytes, 12345);
     assert_eq!(resolved.gateway.max_passthrough_body_bytes, 67890);
+    assert_eq!(resolved.gateway.http_timeout_secs, 777);
     assert_eq!(resolved.gateway.metadata, None);
     assert_eq!(resolved.gateway.plugin_config, None);
     assert_eq!(
@@ -2472,6 +2476,8 @@ anthropic_auth_header = "Basic file-anthropic"
         ready_file: None,
         max_hook_payload_bytes: Some(222),
         max_passthrough_body_bytes: Some(333),
+
+        http_timeout_secs: Some(crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS),
     };
 
     let resolved = resolve_server_config(&args).unwrap();
@@ -3676,6 +3682,10 @@ fn gateway_body_limit_defaults_are_stable() {
         gateway.max_passthrough_body_bytes,
         crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES
     );
+    assert_eq!(
+        gateway.http_timeout_secs,
+        crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS
+    );
 }
 
 #[test]
@@ -3689,6 +3699,7 @@ fn gateway_body_limit_file_values_must_be_nonzero() {
             "max_passthrough_body_bytes",
             "gateway.max_passthrough_body_bytes",
         ),
+        ("http_timeout_secs", "gateway.http_timeout_secs"),
     ] {
         std::fs::write(&path, format!("[gateway]\n{field} = 0\n")).unwrap();
         let args = GatewayOverrides {

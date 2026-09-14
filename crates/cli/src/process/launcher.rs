@@ -622,6 +622,7 @@ impl PreparedAgentLaunch {
             "max_passthrough_body_bytes = {}",
             resolved.gateway.max_passthrough_body_bytes
         );
+        println!("http_timeout_secs = {}", resolved.gateway.http_timeout_secs);
         let destinations = exporter_destinations(&resolved.gateway);
         if destinations.is_empty() {
             println!("exporters = not_configured");

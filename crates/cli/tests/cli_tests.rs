@@ -4415,6 +4415,7 @@ mode = "append"
         .env("NEMO_RELAY_ANTHROPIC_BASE_URL", "http://env-anthropic")
         .env("NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES", "444")
         .env("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES", "555")
+        .env("NEMO_RELAY_HTTP_TIMEOUT_SECS", "666")
         .env("NEMO_RELAY_PLUGIN_CONFIG_PATH", &plugin_config)
         .args(["run", "--agent", "codex", "--dry-run"])
         .output()
@@ -4426,6 +4427,7 @@ mode = "append"
     assert!(stdout.contains("anthropic_base_url = http://env-anthropic"));
     assert!(stdout.contains("max_hook_payload_bytes = 444"));
     assert!(stdout.contains("max_passthrough_body_bytes = 555"));
+    assert!(stdout.contains("http_timeout_secs = 666"));
     assert!(!stdout.contains("atif_dir"));
     assert!(!stdout.contains("openinference_endpoint"));
     assert!(stdout.contains("argv = codex"));

@@ -200,6 +200,7 @@ impl ConfigDocument {
     fn gateway_summary(&self) -> &'static str {
         if self.has_key("gateway", "max_hook_payload_bytes")
             || self.has_key("gateway", "max_passthrough_body_bytes")
+            || self.has_key("gateway", "http_timeout_secs")
         {
             "configured"
         } else {

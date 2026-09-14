@@ -268,6 +268,8 @@ fn test_config() -> GatewayConfig {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     }
 }
 

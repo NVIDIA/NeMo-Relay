@@ -575,6 +575,10 @@ pub(crate) fn resolve_plugin_gateway(
             "--max-passthrough-body-bytes",
             resolved.gateway.max_passthrough_body_bytes.to_string(),
         ),
+        (
+            "--http-timeout-secs",
+            resolved.gateway.http_timeout_secs.to_string(),
+        ),
     ]
     .into_iter()
     .flat_map(|(flag, value)| [OsString::from(flag), OsString::from(value)])

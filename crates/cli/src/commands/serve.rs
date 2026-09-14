@@ -32,6 +32,9 @@ pub(crate) struct ServerArgs {
     /// Maximum accepted provider passthrough request body size, in bytes.
     #[arg(long, env = "NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES")]
     pub(super) max_passthrough_body_bytes: Option<usize>,
+    /// Upstream HTTP request/read timeout for provider passthrough, in seconds.
+    #[arg(long, env = "NEMO_RELAY_HTTP_TIMEOUT_SECS")]
+    pub(super) http_timeout_secs: Option<u64>,
 }
 
 impl ServerArgs {
@@ -45,6 +48,7 @@ impl ServerArgs {
             ready_file: self.ready_file.clone(),
             max_hook_payload_bytes: self.max_hook_payload_bytes,
             max_passthrough_body_bytes: self.max_passthrough_body_bytes,
+            http_timeout_secs: self.http_timeout_secs,
         }
     }
 }

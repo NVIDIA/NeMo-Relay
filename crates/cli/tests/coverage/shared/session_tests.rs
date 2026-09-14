@@ -1007,6 +1007,8 @@ async fn nests_agent_subagent_and_tool_lifecycle() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -2496,6 +2498,8 @@ async fn writes_atif_on_session_end_from_plugin_config() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
     let manager = SessionManager::new(config);
     let mut headers = HeaderMap::new();
@@ -3105,6 +3109,8 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -3293,6 +3299,8 @@ async fn handles_out_of_order_subagent_and_tool_end_events() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -3371,6 +3379,8 @@ async fn out_of_order_started_subagent_end_does_not_leak_scope() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -3445,6 +3455,8 @@ async fn agent_end_closes_nested_active_subagents_lifo() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -3503,6 +3515,8 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
     let manager = SessionManager::new(config);
     let active = manager
@@ -3988,6 +4002,8 @@ async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() 
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
     let manager = SessionManager::new(config);
     manager
@@ -4117,6 +4133,8 @@ async fn single_pending_llm_hint_claims_next_gateway_llm() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
     let manager = SessionManager::new(config);
     manager
@@ -4216,6 +4234,8 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
     let manager = SessionManager::new(config);
     manager
@@ -4333,6 +4353,8 @@ async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
     let manager = SessionManager::new(config);
     manager
@@ -4428,6 +4450,8 @@ async fn no_active_hint_reuses_last_llm_owner() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
     let manager = SessionManager::new(config);
     manager
@@ -6261,6 +6285,8 @@ fn session_test_config() -> GatewayConfig {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     }
 }
 
@@ -6277,6 +6303,8 @@ async fn turn_ended_is_noop_without_active_turn_scope() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
     let manager = SessionManager::new(config);
     manager

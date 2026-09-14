@@ -15,7 +15,8 @@ use strum::{Display, IntoStaticStr};
 use crate::plugins::policy::DynamicPluginHostPolicy;
 
 use super::{
-    DEFAULT_MAX_HOOK_PAYLOAD_BYTES, DEFAULT_MAX_PASSTHROUGH_BODY_BYTES, header_json, header_string,
+    DEFAULT_HTTP_TIMEOUT_SECS, DEFAULT_MAX_HOOK_PAYLOAD_BYTES, DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+    header_json, header_string,
 };
 
 #[derive(Debug, Clone)]
@@ -29,6 +30,7 @@ pub(crate) struct GatewayConfig {
     pub(crate) plugin_config: Option<Value>,
     pub(crate) max_hook_payload_bytes: usize,
     pub(crate) max_passthrough_body_bytes: usize,
+    pub(crate) http_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -119,6 +121,7 @@ impl Default for GatewayConfig {
             plugin_config: None,
             max_hook_payload_bytes: DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
             max_passthrough_body_bytes: DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+            http_timeout_secs: DEFAULT_HTTP_TIMEOUT_SECS,
         }
     }
 }

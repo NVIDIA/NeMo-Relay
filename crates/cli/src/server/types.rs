@@ -14,6 +14,7 @@ pub(crate) struct GatewayOverrides {
     pub(crate) ready_file: Option<PathBuf>,
     pub(crate) max_hook_payload_bytes: Option<usize>,
     pub(crate) max_passthrough_body_bytes: Option<usize>,
+    pub(crate) http_timeout_secs: Option<u64>,
 }
 
 impl GatewayOverrides {
@@ -25,6 +26,7 @@ impl GatewayOverrides {
             || self.ready_file.is_some()
             || self.max_hook_payload_bytes.is_some()
             || self.max_passthrough_body_bytes.is_some()
+            || self.http_timeout_secs.is_some()
             || self.config.is_some()
     }
 }
