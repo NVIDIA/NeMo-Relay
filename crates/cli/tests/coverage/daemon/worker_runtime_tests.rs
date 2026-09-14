@@ -43,6 +43,7 @@ fn state_with_config(config: GatewayConfig) -> Arc<WorkerState> {
         exiting: AtomicBool::new(false),
         in_flight: AtomicUsize::new(0),
         drain_deadline: RwLock::new(None),
+        exit_reason: RwLock::new(None),
         lifecycle: Notify::new(),
     })
 }
@@ -74,7 +75,7 @@ async fn authenticated_readiness_probe_opens_admission_before_publication() {
 #[tokio::test]
 async fn worker_stops_immediately_after_exit_or_an_empty_drain() {
     let exited = state();
-    exited.request_exit();
+    exited.request_exit("test");
     tokio::time::timeout(Duration::from_millis(50), exited.wait_until_stopped())
         .await
         .expect("exit stops the worker");

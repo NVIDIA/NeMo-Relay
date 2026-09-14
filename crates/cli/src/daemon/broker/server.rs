@@ -8,7 +8,7 @@ use std::error::Error as StdError;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -51,10 +51,12 @@ use crate::daemon::common::control::{
 use crate::daemon::common::identity::{
     ChallengeId, ChallengeRecord, Fingerprint, MachineIdentity, TokenDigest,
 };
+use crate::daemon::common::logging::LogRateLimiter;
 use crate::daemon::common::protocol::{
     BrokerDirective, Capabilities, ComponentRole, HandshakeProof, SensitiveString, WorkerLaunch,
 };
 use crate::daemon::common::routes::{ProviderRoute, PublicRoute};
+use crate::daemon::common::socket::GRACE;
 use crate::daemon::common::state::{
     ActiveWorkerGenerations, RouteCredential, load_or_create_daemon_identity,
 };
@@ -74,6 +76,7 @@ const MAX_STAGED_WORKER_SESSIONS: usize = 4_096;
 const MAX_MCP_CONTROL_SESSIONS: usize = 8_192;
 const MAX_CONCURRENT_TLS_HANDSHAKES: usize = 256;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const UPSTREAM_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(10);
 // A single peer cannot consume either role's challenge pool, even across a window boundary.
 const CHALLENGES_PER_PEER_WINDOW: u32 = 16;
 const MAX_CHALLENGE_PEERS: usize = 1_024;
@@ -157,7 +160,9 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
     let public_origin = daemon_origin(&options, local)?;
     let resolved = crate::configuration::resolve_server_config(&options.gateway)?;
     let active_worker_generations = ActiveWorkerGenerations::load()?;
-    let sockets = socket::Hub::restarting(active_worker_generations.snapshot()?);
+    let restarting_workers = active_worker_generations.snapshot()?;
+    let recovery_worker_count = restarting_workers.len();
+    let sockets = socket::Hub::restarting(restarting_workers);
     let state = Arc::new(DaemonState {
         sockets,
         registry: Registry::new(options.pass_through),
@@ -176,6 +181,15 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
         active_worker_generations,
         worker_generation_publication: Mutex::new(()),
     });
+    if recovery_worker_count != 0 {
+        log::info!(
+            target: "nemo_relay.daemon",
+            event = "worker_recovery_started",
+            worker_count = recovery_worker_count,
+            grace_period_ms = GRACE.as_millis() as u64;
+            "Daemon is waiting for workers from the previous process to recover"
+        );
+    }
     socket::recover_after_restart(Arc::clone(&state));
     spawn_maintenance(Arc::clone(&state));
     let app = router(Arc::clone(&state));
@@ -188,7 +202,15 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
         pass_through = options.pass_through;
         "NeMo Relay daemon is listening"
     );
-    match (&options.tls_cert, &options.tls_key) {
+    if options.pass_through {
+        log::info!(
+            target: "nemo_relay.daemon",
+            event = "daemon_pass_through_enabled",
+            route_mode = "pass_through";
+            "Daemon bypass mode is enabled; requests will pass through without a worker"
+        );
+    }
+    let result = match (&options.tls_cert, &options.tls_key) {
         (Some(certificate), Some(key)) => {
             let tls = load_tls_config(certificate, key)?;
             serve_tls(listener, app, tls).await
@@ -204,7 +226,21 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
         _ => Err(CliError::Config(
             "--tls-cert and --tls-key must be supplied together".into(),
         )),
+    };
+    match &result {
+        Ok(()) => log::info!(
+            target: "nemo_relay.daemon",
+            event = "daemon_stopped";
+            "NeMo Relay daemon stopped"
+        ),
+        Err(error) => log::error!(
+            target: "nemo_relay.daemon",
+            event = "daemon_failed",
+            error_kind = error.log_kind();
+            "NeMo Relay daemon stopped after a failure: {error}"
+        ),
     }
+    result
 }
 
 fn router(state: Arc<DaemonState>) -> Router {
@@ -481,12 +517,24 @@ async fn register_mcp(
         lock(&state.pending_directives).remove(session_id.as_str());
     }
     remember_activation(&state, transcript.initiator_fingerprint, &directive);
+    let directive = state
+        .sockets
+        .directive(transcript.initiator_fingerprint, directive);
+    if !reuse_session {
+        let fingerprint = transcript.initiator_fingerprint.to_string();
+        log::info!(
+            target: "nemo_relay.daemon",
+            event = "mcp_added",
+            fingerprint = fingerprint.as_str(),
+            mcp_session_id = session_id.as_str(),
+            route_action = directive_name(&directive);
+            "MCP session added to daemon route"
+        );
+    }
     Json(McpRegisterResponse {
         daemon_proof,
         session_token,
-        directive: state
-            .sockets
-            .directive(transcript.initiator_fingerprint, directive),
+        directive,
     })
     .into_response()
 }
@@ -550,6 +598,12 @@ async fn release_mcp(
         }
         Err(error) => return registry_error(error),
     };
+    log_mcp_removed(
+        authenticated.fingerprint,
+        &authenticated.session_id,
+        "released",
+        &action,
+    );
     handle_release_action(Arc::clone(&state), authenticated.fingerprint, action);
     StatusCode::NO_CONTENT.into_response()
 }
@@ -585,6 +639,7 @@ async fn activation_failed(
                 target: "nemo_relay.daemon",
                 event = "worker_activation_failed",
                 fingerprint = fingerprint.as_str(),
+                route_mode = "pass_through",
                 reason = request.payload.reason.as_str();
                 "Worker activation failed; route changed to pass-through"
             );
@@ -664,10 +719,11 @@ async fn register_worker(
     let publication = WorkerPublication::Activation {
         activation_id: request.activation_id.clone(),
     };
+    let worker_id = request.worker_id;
     let response = stage_worker(
         &state,
         activation_fingerprint,
-        request.worker_id,
+        worker_id.clone(),
         request.endpoint,
         request.tls_root_certificate,
         None,
@@ -675,6 +731,16 @@ async fn register_worker(
         daemon_proof,
     );
     if !response.status().is_success() {
+        let fingerprint = activation_fingerprint.to_string();
+        log::error!(
+            target: "nemo_relay.daemon",
+            event = "worker_registration_failed",
+            fingerprint = fingerprint.as_str(),
+            worker_id = worker_id.as_str(),
+            status = response.status().as_u16(),
+            route_mode = "pass_through";
+            "Worker registration failed; route changed to pass-through"
+        );
         fail_worker_publication(&state, activation_fingerprint, &publication);
     }
     response
@@ -777,10 +843,11 @@ fn recover_worker_after_validation(
     };
     let publication = WorkerPublication::Recovery { permit };
     let generation_id = request.generation_grant.generation_id.clone();
+    let worker_id = request.worker_id;
     let response = stage_worker(
         &state,
         fingerprint,
-        request.worker_id,
+        worker_id.clone(),
         request.endpoint,
         request.tls_root_certificate,
         Some(request.generation_grant),
@@ -790,6 +857,16 @@ fn recover_worker_after_validation(
     if !response.status().is_success()
         && revoke_active_worker_generation(&state, fingerprint, &generation_id)
     {
+        let fingerprint_text = fingerprint.to_string();
+        log::error!(
+            target: "nemo_relay.daemon",
+            event = "worker_recovery_failed",
+            fingerprint = fingerprint_text.as_str(),
+            worker_id = worker_id.as_str(),
+            status = response.status().as_u16(),
+            route_mode = "pass_through";
+            "Worker recovery failed; route changed to pass-through"
+        );
         fail_worker_publication(&state, fingerprint, &publication);
     }
     response
@@ -929,13 +1006,23 @@ fn stage_worker(
             last_sequence: 0,
             last_request_id: String::new(),
             lease_expires_at_unix_ms: u64::MAX,
-            pending_target: target,
-            publication,
+            pending_target: Arc::clone(&target),
+            publication: publication.clone(),
             published: false,
             generation_grant: generation_grant.clone(),
         },
     );
     drop(worker_sessions);
+    let fingerprint = fingerprint.to_string();
+    log::info!(
+        target: "nemo_relay.daemon",
+        event = "worker_staged",
+        fingerprint = fingerprint.as_str(),
+        worker_id = target.worker_id(),
+        endpoint = target.endpoint(),
+        publication = publication_name(&publication);
+        "Worker registered and is awaiting readiness"
+    );
     Json(WorkerRegisterResponse {
         daemon_proof,
         session_token: control_secret,
@@ -1012,9 +1099,19 @@ async fn finish_ready_worker(
         published,
     } = candidate;
     if let Err(error) = probe {
-        // Retain a published session through recovery failures: its disconnect grace owns
-        // generation revocation and replacement, and another probe may still succeed.
         if published {
+            let fingerprint_text = fingerprint.to_string();
+            log::error!(
+                target: "nemo_relay.daemon",
+                event = "worker_readiness_failed",
+                fingerprint = fingerprint_text.as_str(),
+                worker_id = target.worker_id(),
+                error_kind = error.log_kind(),
+                route_mode = "recovering";
+                "Published worker readiness probe failed during control recovery: {error}"
+            );
+            // Retain a published session through recovery failures: its disconnect grace owns
+            // generation revocation and replacement, and another probe may still succeed.
             return control_error(StatusCode::BAD_GATEWAY, error);
         }
         let fail_route = match &publication {
@@ -1036,6 +1133,28 @@ async fn finish_ready_worker(
                 })
             }
         };
+        let fingerprint_text = fingerprint.to_string();
+        if fail_route {
+            log::error!(
+                target: "nemo_relay.daemon",
+                event = "worker_readiness_failed",
+                fingerprint = fingerprint_text.as_str(),
+                worker_id = target.worker_id(),
+                error_kind = error.log_kind(),
+                route_mode = "pass_through";
+                "Worker readiness probe failed; route changed to pass-through: {error}"
+            );
+        } else {
+            log::error!(
+                target: "nemo_relay.daemon",
+                event = "worker_readiness_failed",
+                fingerprint = fingerprint_text.as_str(),
+                worker_id = target.worker_id(),
+                error_kind = error.log_kind(),
+                route_mode = "recovering";
+                "Worker readiness probe failed during recovery: {error}"
+            );
+        }
         if fail_route {
             fail_worker_publication(&state, fingerprint, &publication);
         }
@@ -1156,6 +1275,17 @@ fn publish_ready_worker(
         session.published = true;
         session.lease_expires_at_unix_ms = u64::MAX;
     }
+    let fingerprint = fingerprint.to_string();
+    log::info!(
+        target: "nemo_relay.daemon",
+        event = "worker_added",
+        fingerprint = fingerprint.as_str(),
+        worker_id = target.worker_id(),
+        endpoint = target.endpoint(),
+        publication = publication_name(&publication),
+        route_mode = "worker";
+        "Worker added to daemon route"
+    );
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -1337,9 +1467,11 @@ async fn forward_to_provider(
     if allow_environment_provider_auth {
         inject_provider_auth(request.headers_mut(), route, &state.config);
     }
-    forward(&state.upstream, request, &destination, None, None)
-        .await
-        .response
+    let outcome = forward(&state.upstream, request, &destination, None, None).await;
+    if let Some(failure) = outcome.failure {
+        log_upstream_request_failed(route, failure);
+    }
+    outcome.response
 }
 
 fn inject_provider_auth(headers: &mut HeaderMap, route: ProviderRoute, config: &GatewayConfig) {
@@ -1407,7 +1539,7 @@ async fn forward_to_worker(
     )
     .await;
     let route_failure = take_worker_route_failure(&mut outcome.response);
-    if outcome.communication_failure || route_failure {
+    if outcome.failure.is_some() || route_failure {
         handle_worker_communication_failure(&state, fingerprint, &worker_id);
         return outcome.response;
     }
@@ -1465,23 +1597,59 @@ where
 
 struct ForwardOutcome {
     response: Response<Body>,
-    communication_failure: bool,
+    failure: Option<ForwardFailure>,
+}
+
+#[derive(Clone, Copy)]
+enum ForwardFailure {
+    InvalidDestination,
+    Transport,
+    ResponseHeadTimeout,
+    InvalidResponse,
+}
+
+impl ForwardFailure {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidDestination => "invalid_destination",
+            Self::Transport => "transport_error",
+            Self::ResponseHeadTimeout => "response_head_timeout",
+            Self::InvalidResponse => "invalid_response",
+        }
+    }
 }
 
 impl ForwardOutcome {
     fn response(response: Response<Body>) -> Self {
         Self {
             response,
-            communication_failure: false,
+            failure: None,
         }
     }
 
-    fn communication_failure(response: Response<Body>) -> Self {
+    fn failure(response: Response<Body>, failure: ForwardFailure) -> Self {
         Self {
             response,
-            communication_failure: true,
+            failure: Some(failure),
         }
     }
+}
+
+fn log_upstream_request_failed(route: ProviderRoute, failure: ForwardFailure) {
+    static LIMITER: OnceLock<LogRateLimiter> = OnceLock::new();
+    let limiter = LIMITER.get_or_init(|| LogRateLimiter::new(UPSTREAM_FAILURE_LOG_INTERVAL));
+    let Some(suppressed_since_last_emit) = limiter.record() else {
+        return;
+    };
+    log::warn!(
+        target: "nemo_relay.daemon",
+        event = "upstream_request_failed",
+        provider = route.as_str(),
+        reason = failure.as_str(),
+        route_mode = "pass_through",
+        suppressed_since_last_emit = suppressed_since_last_emit;
+        "Pass-through provider request failed"
+    );
 }
 
 async fn forward(
@@ -1494,10 +1662,10 @@ async fn forward(
     let destination = match destination.parse::<Uri>() {
         Ok(destination) => destination,
         Err(_) => {
-            return ForwardOutcome::response(control_message(
-                StatusCode::BAD_GATEWAY,
-                "invalid upstream destination",
-            ));
+            return ForwardOutcome::failure(
+                control_message(StatusCode::BAD_GATEWAY, "invalid upstream destination"),
+                ForwardFailure::InvalidDestination,
+            );
         }
     };
     let strip = [
@@ -1527,23 +1695,23 @@ async fn forward(
             return if is_request_body_failure(&error) {
                 ForwardOutcome::response(response)
             } else {
-                ForwardOutcome::communication_failure(response)
+                ForwardOutcome::failure(response, ForwardFailure::Transport)
             };
         }
         Err(_) => {
-            return ForwardOutcome::communication_failure(control_message(
-                StatusCode::GATEWAY_TIMEOUT,
-                "response-head timeout",
-            ));
+            return ForwardOutcome::failure(
+                control_message(StatusCode::GATEWAY_TIMEOUT, "response-head timeout"),
+                ForwardFailure::ResponseHeadTimeout,
+            );
         }
     };
     let response = match prepare_forward_response(response, &strip) {
         Ok(response) => response,
         Err(error) => {
-            return ForwardOutcome::communication_failure(control_error(
-                StatusCode::BAD_GATEWAY,
-                error,
-            ));
+            return ForwardOutcome::failure(
+                control_error(StatusCode::BAD_GATEWAY, error),
+                ForwardFailure::InvalidResponse,
+            );
         }
     };
     let (parts, body) = response.into_parts();
@@ -1610,7 +1778,8 @@ fn handle_worker_communication_failure(
         target: "nemo_relay.daemon",
         event = "worker_communication_failed",
         fingerprint = fingerprint.as_str(),
-        worker_id = worker_id;
+        worker_id = worker_id,
+        route_mode = "pass_through";
         "Worker communication failed; route changed to pass-through"
     );
 }
@@ -1830,7 +1999,8 @@ fn expire_activation_routes(state: &DaemonState, now_unix_ms: u64) {
         log::error!(
             target: "nemo_relay.daemon",
             event = "worker_activation_expired",
-            fingerprint = fingerprint.as_str();
+            fingerprint = fingerprint.as_str(),
+            route_mode = "pass_through";
             "Worker activation expired; route changed to pass-through"
         );
     }
@@ -1841,11 +2011,28 @@ fn handle_release_action(state: Arc<DaemonState>, fingerprint: Fingerprint, acti
         ReleaseAction::NoChange => {}
         ReleaseAction::CancelActivation { activation_id } => {
             revoke_activation(&state, &activation_id);
+            let fingerprint = fingerprint.to_string();
+            log::info!(
+                target: "nemo_relay.daemon",
+                event = "worker_activation_cancelled",
+                fingerprint = fingerprint.as_str();
+                "Worker activation cancelled because its last MCP session left"
+            );
         }
         ReleaseAction::BeginDrain {
             target,
             deadline_unix_ms,
         } => {
+            let fingerprint_text = fingerprint.to_string();
+            log::info!(
+                target: "nemo_relay.daemon",
+                event = "worker_drain_started",
+                fingerprint = fingerprint_text.as_str(),
+                worker_id = target.worker_id(),
+                in_flight = target.in_flight(),
+                deadline_unix_ms = deadline_unix_ms;
+                "Worker drain started after its last MCP session left"
+            );
             tokio::spawn(async move {
                 let revoke_state = Arc::clone(&state);
                 let worker_id = target.worker_id().to_owned();
@@ -1865,7 +2052,26 @@ fn handle_release_action(state: Arc<DaemonState>, fingerprint: Fingerprint, acti
                 loop {
                     let now = now_unix_ms();
                     if target.in_flight() == 0 || now >= deadline_unix_ms {
-                        let _ = state.registry.finish_draining(fingerprint, now);
+                        let forced = target.in_flight() != 0;
+                        match state.registry.finish_draining(fingerprint, now) {
+                            Ok(_) => {
+                                let fingerprint = fingerprint.to_string();
+                                log::info!(
+                                    target: "nemo_relay.daemon",
+                                    event = "worker_removed",
+                                    fingerprint = fingerprint.as_str(),
+                                    worker_id = target.worker_id(),
+                                    reason = if forced { "drain_deadline_reached" } else { "drained" };
+                                    "Worker removed from daemon route"
+                                );
+                            }
+                            Err(error) => log::error!(
+                                target: "nemo_relay.daemon",
+                                event = "worker_drain_completion_failed",
+                                worker_id = target.worker_id();
+                                "Failed to complete worker drain: {error}"
+                            ),
+                        }
                         state.sockets.changed.notify_waiters();
                         break;
                     }
@@ -1929,25 +2135,108 @@ fn revoke_active_worker_generation(
 }
 
 fn nominate_relaunch(state: &Arc<DaemonState>, fingerprint: Fingerprint, session_id: McpSessionId) {
+    let fingerprint_text = fingerprint.to_string();
     let worker_network = lock(&state.mcp_sessions)
         .get(session_id.as_str())
         .filter(|session| !session.released)
         .map(|session| session.worker_network.clone());
     let Some(worker_network) = worker_network else {
+        log::error!(
+            target: "nemo_relay.daemon",
+            event = "worker_relaunch_failed",
+            fingerprint = fingerprint_text.as_str(),
+            mcp_session_id = session_id.as_str(),
+            reason = "mcp_session_unavailable";
+            "Worker relaunch could not be assigned to the nominated MCP session"
+        );
         return;
     };
-    let Ok(launch) = fresh_launch(worker_network) else {
-        return;
+    let launch = match fresh_launch(worker_network) {
+        Ok(launch) => launch,
+        Err(error) => {
+            log::error!(
+                target: "nemo_relay.daemon",
+                event = "worker_relaunch_failed",
+                fingerprint = fingerprint_text.as_str(),
+                mcp_session_id = session_id.as_str(),
+                reason = "launch_preparation_failed",
+                error_kind = error.log_kind();
+                "Worker relaunch preparation failed: {error}"
+            );
+            return;
+        }
     };
-    let Ok(directive) = state
+    let directive = match state
         .registry
         .begin_relaunch(fingerprint, &session_id, launch)
-    else {
-        return;
+    {
+        Ok(directive) => directive,
+        Err(error) => {
+            log::error!(
+                target: "nemo_relay.daemon",
+                event = "worker_relaunch_failed",
+                fingerprint = fingerprint_text.as_str(),
+                mcp_session_id = session_id.as_str(),
+                reason = "registry_rejected";
+                "Worker relaunch was rejected by the route registry: {error}"
+            );
+            return;
+        }
     };
     remember_activation(state, fingerprint, &directive);
     lock(&state.pending_directives).insert(session_id.as_str().to_owned(), directive);
     state.sockets.changed.notify_waiters();
+    log::info!(
+        target: "nemo_relay.daemon",
+        event = "worker_relaunch_requested",
+        fingerprint = fingerprint_text.as_str(),
+        mcp_session_id = session_id.as_str();
+        "A live MCP session was asked to relaunch the worker"
+    );
+}
+
+fn directive_name(directive: &BrokerDirective) -> &'static str {
+    match directive {
+        BrokerDirective::ReuseWorker { .. } => "reuse_worker",
+        BrokerDirective::WaitForWorker { .. } => "wait_for_worker",
+        BrokerDirective::LaunchWorker { .. } => "launch_worker",
+        BrokerDirective::UsePassThrough => "use_pass_through",
+    }
+}
+
+fn publication_name(publication: &WorkerPublication) -> &'static str {
+    match publication {
+        WorkerPublication::Activation { .. } => "activation",
+        WorkerPublication::Recovery { .. } => "recovery",
+    }
+}
+
+fn release_action_name(action: &ReleaseAction) -> &'static str {
+    match action {
+        ReleaseAction::NoChange => "route_retained",
+        ReleaseAction::CancelActivation { .. } => "cancel_activation",
+        ReleaseAction::BeginDrain { .. } => "begin_worker_drain",
+        ReleaseAction::TransferActivation { .. } => "transfer_activation",
+        ReleaseAction::NominateMcp { .. } => "nominate_relaunch",
+    }
+}
+
+fn log_mcp_removed(
+    fingerprint: Fingerprint,
+    session_id: &McpSessionId,
+    reason: &'static str,
+    action: &ReleaseAction,
+) {
+    let fingerprint = fingerprint.to_string();
+    log::info!(
+        target: "nemo_relay.daemon",
+        event = "mcp_removed",
+        fingerprint = fingerprint.as_str(),
+        mcp_session_id = session_id.as_str(),
+        reason = reason,
+        route_action = release_action_name(action);
+        "MCP session removed from daemon route"
+    );
 }
 
 async fn request_worker_drain(

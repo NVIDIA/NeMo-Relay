@@ -4,7 +4,7 @@
 //! Authenticated worker listener and lossless provider data plane.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 
 use axum::body::Body;
@@ -28,6 +28,7 @@ use super::super::common::control::{
     WORKER_ROUTE_FAILURE_HEADER, WORKER_TOKEN_HEADER, WorkerDrainRequest, now_unix_ms,
 };
 use super::super::common::identity::{MachineIdentity, TokenDigest};
+use super::super::common::logging::LogRateLimiter;
 use super::super::common::routes::{ProviderRoute, PublicRoute};
 use super::super::common::transport::{
     PooledClient, RelayBody, box_body, hold_body, pooled_client, prepare_forward_request,
@@ -46,6 +47,7 @@ const RESPONSE_HEAD_TIMEOUT: Duration = Duration::from_secs(60);
 const INITIAL_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_CONCURRENT_TLS_HANDSHAKES: usize = 256;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const UPSTREAM_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 pub(super) struct RuntimeOptions {
     pub(super) daemon_origin: String,
@@ -79,6 +81,7 @@ struct WorkerState {
     exiting: AtomicBool,
     in_flight: AtomicUsize,
     drain_deadline: RwLock<Option<tokio::time::Instant>>,
+    exit_reason: RwLock<Option<&'static str>>,
     lifecycle: Notify,
 }
 
@@ -108,6 +111,7 @@ impl WorkerState {
             exiting: AtomicBool::new(false),
             in_flight: AtomicUsize::new(0),
             drain_deadline: RwLock::new(None),
+            exit_reason: RwLock::new(None),
             lifecycle: Notify::new(),
         })
     }
@@ -250,7 +254,12 @@ impl WorkerState {
         self.accepting.store(false, Ordering::Release);
     }
 
-    fn request_exit(&self) {
+    fn request_exit(&self, reason: &'static str) {
+        let mut exit_reason = write_lock(&self.exit_reason);
+        if exit_reason.is_none() {
+            *exit_reason = Some(reason);
+        }
+        drop(exit_reason);
         self.exiting.store(true, Ordering::Release);
         self.accepting.store(false, Ordering::Release);
         self.lifecycle.notify_waiters();
@@ -373,17 +382,49 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
     let signal_state = Arc::clone(&state);
     let signal = tokio::spawn(async move {
         shutdown_signal().await;
-        signal_state.request_exit();
+        signal_state.request_exit("signal");
     });
-    let result = tokio::select! {
-        result = &mut server => result,
-        _ = state.wait_until_stopped() => Ok(()),
+    let (result, stop_reason) = tokio::select! {
+        result = &mut server => {
+            let reason = if result.is_ok() { "listener_stopped" } else { "listener_failed" };
+            (result, reason)
+        },
+        _ = state.wait_until_stopped() => {
+            let reason = read_lock(&state.exit_reason).unwrap_or_else(|| {
+                if state.in_flight.load(Ordering::Acquire) == 0 {
+                    "drained"
+                } else {
+                    "drain_deadline_reached"
+                }
+            });
+            (Ok(()), reason)
+        },
     };
-    state.request_exit();
+    state.request_exit(stop_reason);
     control_task.abort();
     signal.abort();
-    if let Some(managed) = state.managed.as_ref() {
-        managed.close().await?;
+    let result = match state.managed.as_ref() {
+        Some(managed) => result.and(managed.close().await),
+        None => result,
+    };
+    match &result {
+        Ok(()) => log::info!(
+            target: "nemo_relay.daemon.worker",
+            event = "worker_stopped",
+            worker_id = state.worker_id.as_str(),
+            reason = stop_reason,
+            outcome = "success";
+            "Daemon worker stopped"
+        ),
+        Err(error) => log::error!(
+            target: "nemo_relay.daemon.worker",
+            event = "worker_stopped",
+            worker_id = state.worker_id.as_str(),
+            reason = stop_reason,
+            outcome = "failure",
+            error_kind = error.log_kind();
+            "Daemon worker stopped after a failure: {error}"
+        ),
     }
     result
 }
@@ -509,6 +550,7 @@ pub(crate) fn test_router_with_control_tokens(
         exiting: AtomicBool::new(false),
         in_flight: AtomicUsize::new(0),
         drain_deadline: RwLock::new(None),
+        exit_reason: RwLock::new(None),
         lifecycle: Notify::new(),
     });
     (router(Arc::clone(&state)), TestWorkerHandle { state })
@@ -624,7 +666,12 @@ async fn proxy(State(state): State<Arc<WorkerState>>, request: Request<Body>) ->
                     Err(error) if super::managed::requires_route_pass_through(&error) => {
                         route_failure_response(error)
                     }
-                    Err(error) => error.into_response(),
+                    Err(error) => {
+                        if let Some(reason) = managed_upstream_failure_reason(&error) {
+                            log_worker_upstream_request_failed(&state, provider, reason);
+                        }
+                        error.into_response()
+                    }
                 };
             }
             forward_to_provider(Arc::clone(&state), request, provider, in_flight).await
@@ -667,7 +714,10 @@ async fn forward_to_provider(
     }
     let destination = match destination.parse::<Uri>() {
         Ok(destination) => destination,
-        Err(_) => return message(StatusCode::BAD_GATEWAY, "invalid provider destination"),
+        Err(_) => {
+            log_worker_upstream_request_failed(&state, route, "invalid_destination");
+            return message(StatusCode::BAD_GATEWAY, "invalid provider destination");
+        }
     };
     let strip = [
         HeaderName::from_static(CLIENT_TOKEN_HEADER),
@@ -682,8 +732,12 @@ async fn forward_to_provider(
     let response =
         match tokio::time::timeout(RESPONSE_HEAD_TIMEOUT, state.upstream.request(request)).await {
             Ok(Ok(response)) => response,
-            Ok(Err(error)) => return message(StatusCode::BAD_GATEWAY, &error.to_string()),
+            Ok(Err(error)) => {
+                log_worker_upstream_request_failed(&state, route, "transport_error");
+                return message(StatusCode::BAD_GATEWAY, &error.to_string());
+            }
             Err(_) => {
+                log_worker_upstream_request_failed(&state, route, "response_head_timeout");
                 return message(
                     StatusCode::GATEWAY_TIMEOUT,
                     "provider response-head timeout",
@@ -692,11 +746,49 @@ async fn forward_to_provider(
         };
     let response = match prepare_forward_response(response, &strip) {
         Ok(response) => response,
-        Err(error) => return message(StatusCode::BAD_GATEWAY, &error.to_string()),
+        Err(error) => {
+            log_worker_upstream_request_failed(&state, route, "invalid_response");
+            return message(StatusCode::BAD_GATEWAY, &error.to_string());
+        }
     };
     let (parts, body) = response.into_parts();
     let body: RelayBody = hold_body(body, in_flight);
     Response::from_parts(parts, Body::new(body))
+}
+
+fn managed_upstream_failure_reason(error: &CliError) -> Option<&'static str> {
+    match error {
+        CliError::Upstream(_) => Some("transport_error"),
+        CliError::Io(_) => Some("io_error"),
+        CliError::Http(_) => Some("invalid_response"),
+        CliError::Launch(message) if message.contains("response-head timeout") => {
+            Some("response_head_timeout")
+        }
+        CliError::Launch(_) => Some("transport_error"),
+        _ => None,
+    }
+}
+
+fn log_worker_upstream_request_failed(
+    state: &WorkerState,
+    route: ProviderRoute,
+    reason: &'static str,
+) {
+    static LIMITER: OnceLock<LogRateLimiter> = OnceLock::new();
+    let limiter = LIMITER.get_or_init(|| LogRateLimiter::new(UPSTREAM_FAILURE_LOG_INTERVAL));
+    let Some(suppressed_since_last_emit) = limiter.record() else {
+        return;
+    };
+    log::warn!(
+        target: "nemo_relay.daemon.worker",
+        event = "upstream_request_failed",
+        worker_id = state.worker_id.as_str(),
+        provider = route.as_str(),
+        reason = reason,
+        route_mode = "worker",
+        suppressed_since_last_emit = suppressed_since_last_emit;
+        "Worker provider request failed"
+    );
 }
 
 fn inject_provider_auth(headers: &mut HeaderMap, route: ProviderRoute, config: &GatewayConfig) {
@@ -814,8 +906,15 @@ async fn monitor_control(
                 registration = next;
                 log::info!(target: "nemo_relay.daemon.worker", event = "worker_control_restored", worker_id = state.worker_id.as_str(); "Worker control restored");
             }
-            Err(_) => {
-                state.request_exit();
+            Err(error) => {
+                log::error!(
+                    target: "nemo_relay.daemon.worker",
+                    event = "worker_control_recovery_failed",
+                    worker_id = state.worker_id.as_str(),
+                    error_kind = error.log_kind();
+                    "Worker control recovery deadline was exhausted: {error}"
+                );
+                state.request_exit("control_recovery_failed");
                 return;
             }
         }
