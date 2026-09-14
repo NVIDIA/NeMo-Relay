@@ -10,7 +10,7 @@ import textwrap
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any, cast
+from typing import Any, Never, cast
 
 import pytest
 
@@ -41,7 +41,7 @@ def parse_event_timestamp(value: str) -> datetime:
 
 
 class TestSubscribers:
-    def test_register_and_deregister(self):
+    def test_register_and_deregister(self) -> None:
         events = []
         subscribers.register("py_test_sub", lambda e: events.append(e))
         handle = scope.push("sub_test", ScopeType.Function)
@@ -50,7 +50,7 @@ class TestSubscribers:
         assert subscribers.deregister("py_test_sub")
         assert len(events) >= 2
 
-    def test_event_emission_does_not_wait_for_blocked_subscriber(self):
+    def test_event_emission_does_not_wait_for_blocked_subscriber(self) -> None:
         started = threading.Event()
         release = threading.Event()
 
@@ -70,7 +70,7 @@ class TestSubscribers:
             subscribers.flush()
             subscribers.deregister("py_blocked_sub")
 
-    def test_flush_waits_for_queued_subscriber_delivery(self):
+    def test_flush_waits_for_queued_subscriber_delivery(self) -> None:
         events = []
         subscribers.register("py_flush_sub", events.append)
         try:
@@ -80,7 +80,7 @@ class TestSubscribers:
         finally:
             subscribers.deregister("py_flush_sub")
 
-    def test_subscriber_receives_event_objects(self):
+    def test_subscriber_receives_event_objects(self) -> None:
         events = []
         subscribers.register("py_evt_sub", events.append)
         handle = scope.push("evt_obj_test", ScopeType.Agent)
@@ -94,17 +94,17 @@ class TestSubscribers:
             assert e.uuid is not None
             assert e.kind is not None
 
-    def test_duplicate_subscriber_raises(self):
+    def test_duplicate_subscriber_raises(self) -> None:
         subscribers.register("py_dup_sub", lambda e: None)
         with pytest.raises(RuntimeError):
             subscribers.register("py_dup_sub", lambda e: None)
         subscribers.deregister("py_dup_sub")
 
-    def test_deregister_nonexistent(self):
+    def test_deregister_nonexistent(self) -> None:
         assert not subscribers.deregister("nonexistent_sub")
 
     @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork")
-    def test_fork_does_not_wait_for_pending_async_sanitizer(self):
+    def test_fork_does_not_wait_for_pending_async_sanitizer(self) -> None:
         script = textwrap.dedent(
             """
             import asyncio
@@ -148,7 +148,7 @@ class TestSubscribers:
         )
         assert completed.returncode == 0, completed.stderr
 
-    def test_concurrent_cancelled_async_flushes_share_one_bridge_thread(self):
+    def test_concurrent_cancelled_async_flushes_share_one_bridge_thread(self) -> None:
         script = textwrap.dedent(
             """
             import asyncio
@@ -195,7 +195,7 @@ class TestSubscribers:
         )
         assert completed.returncode == 0, completed.stderr
 
-    def test_cancelled_async_flush_does_not_block_process_exit(self):
+    def test_cancelled_async_flush_does_not_block_process_exit(self) -> None:
         script = textwrap.dedent(
             """
             import asyncio
@@ -237,7 +237,7 @@ class TestSubscribers:
 
 
 class TestSubscriberEventDetails:
-    def test_scope_events_have_correct_types(self):
+    def test_scope_events_have_correct_types(self) -> None:
         events = []
         subscribers.register("py_detail_sub", lambda e: events.append(e))
         handle = scope.push("detail_test", ScopeType.Evaluator)
@@ -253,7 +253,7 @@ class TestSubscriberEventDetails:
         assert events[0].category == "evaluator"
         assert events[1].category == "evaluator"
 
-    def test_tool_events(self):
+    def test_tool_events(self) -> None:
         events = []
         subscribers.register("py_tool_evt", lambda e: events.append(e))
         handle = tools.call("evt_tool", {"x": 1})
@@ -270,7 +270,7 @@ class TestSubscriberEventDetails:
         assert len(start_events) >= 1
         assert len(end_events) >= 1
 
-    def test_llm_events(self):
+    def test_llm_events(self) -> None:
         events = []
         subscribers.register("py_llm_evt", lambda e: events.append(e))
         request = make_request()
@@ -288,7 +288,7 @@ class TestSubscriberEventDetails:
         assert len(start_events) >= 1
         assert len(end_events) >= 1
 
-    def test_mark_event(self):
+    def test_mark_event(self) -> None:
         events = []
         subscribers.register("py_mark_evt", lambda e: events.append(e))
         scope.event("test_mark", data={"info": "test"})
@@ -298,7 +298,7 @@ class TestSubscriberEventDetails:
         mark_events = [e for e in events if isinstance(e, MarkEvent)]
         assert len(mark_events) >= 1
 
-    def test_manual_lifecycle_timestamps_accept_datetime(self):
+    def test_manual_lifecycle_timestamps_accept_datetime(self) -> None:
         events = []
         subscribers.register("py_timestamp_evt", lambda e: events.append(e))
         timestamps = [
@@ -334,7 +334,9 @@ class TestSubscriberEventDetails:
             (datetime(2026, 1, 1), ValueError, "timezone-aware"),
         ],
     )
-    def test_manual_lifecycle_timestamps_reject_invalid_datetime_values(self, bad_timestamp, error_type, message):
+    def test_manual_lifecycle_timestamps_reject_invalid_datetime_values(
+        self, bad_timestamp, error_type, message
+    ) -> None:
         with pytest.raises(error_type, match=message):
             scope.push("py_bad_ts_scope_start", ScopeType.Agent, timestamp=bad_timestamp)
 
@@ -375,7 +377,9 @@ class TestSubscriberEventDetails:
             (datetime(2026, 1, 1), ValueError, "timezone-aware"),
         ],
     )
-    def test_scope_context_manager_timestamps_reject_invalid_datetime_values(self, bad_timestamp, error_type, message):
+    def test_scope_context_manager_timestamps_reject_invalid_datetime_values(
+        self, bad_timestamp, error_type, message
+    ) -> Never:
         with pytest.raises(error_type, match=message):
             with scope.scope("py_bad_ts_context_start", ScopeType.Agent, timestamp=bad_timestamp):
                 raise AssertionError("invalid start timestamp should fail before entering the body")
@@ -389,7 +393,7 @@ class TestSubscriberEventDetails:
 
 
 class TestHandleProperties:
-    def test_scope_handle_all_properties(self):
+    def test_scope_handle_all_properties(self) -> None:
         handle = scope.push("prop_test", ScopeType.Embedder)
         assert isinstance(handle.uuid, str)
         assert len(handle.uuid) > 0
@@ -399,7 +403,7 @@ class TestHandleProperties:
         # data and metadata are None by default for scope handles
         scope.pop(handle)
 
-    def test_tool_handle_all_properties(self):
+    def test_tool_handle_all_properties(self) -> None:
         handle = tools.call("prop_tool", {"x": 1}, data={"d": "v"}, metadata={"m": "v"})
         assert isinstance(handle.uuid, str)
         assert handle.name == "prop_tool"
@@ -407,7 +411,7 @@ class TestHandleProperties:
         assert handle.data is not None
         tools.call_end(handle, ToolExecutionResult({}))
 
-    def test_llm_handle_all_properties(self):
+    def test_llm_handle_all_properties(self) -> None:
         request = make_request()
         handle = llm.call("prop_llm", request, data={"d": 1}, metadata={"m": 2})
         assert isinstance(handle.uuid, str)
@@ -415,7 +419,7 @@ class TestHandleProperties:
         assert handle.data is not None
         llm.call_end(handle, {})
 
-    def test_event_all_properties(self):
+    def test_event_all_properties(self) -> None:
         events = []
         subscribers.register("py_prop_evt", lambda e: events.append(e))
         scope.event("prop_mark", data={"key": "val"}, metadata={"meta": "data"})

@@ -10,11 +10,11 @@ from nemo_relay import intercepts, runtime_registrations, tools
 from nemo_relay.runtime_registrations import RuntimeRegistrationKind
 
 
-def test_native_list_runtime_registrations_defaults_to_all_kinds():
+def test_native_list_runtime_registrations_defaults_to_all_kinds() -> None:
     assert isinstance(native.list_runtime_registrations(), list)
 
 
-def test_conditional_middleware_guardrail_toggles_existing_registration():
+def test_conditional_middleware_guardrail_toggles_existing_registration() -> None:
     suffix = uuid4().hex
     target_name = f"python-runtime-target-{suffix}"
     gate_name = f"python-runtime-gate-{suffix}"
@@ -50,7 +50,7 @@ def test_conditional_middleware_guardrail_toggles_existing_registration():
         intercepts.deregister_tool_request(target_name)
 
 
-def test_conditional_middleware_guardrail_callback_error_fails_open():
+def test_conditional_middleware_guardrail_callback_error_fails_open() -> None:
     suffix = uuid4().hex
     target_name = f"python-runtime-fail-open-target-{suffix}"
     gate_name = f"python-runtime-fail-open-gate-{suffix}"

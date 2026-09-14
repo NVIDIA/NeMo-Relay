@@ -189,7 +189,7 @@ def _mark_metadata(mark: nemo_relay.MarkEvent) -> dict[str, Any]:
 def test_before_agent_emits_configuration_mark(
     subscribed_events: list[nemo_relay.Event],
     deepagents_integration_module: types.ModuleType,
-):
+) -> None:
     middleware = deepagents_integration_module.NemoRelayDeepAgentsMiddleware(
         agent_name="main-agent",
         skills=["/skills/research/"],
@@ -213,14 +213,14 @@ def test_before_agent_emits_configuration_mark(
 def test_model_call_routes_through_langchain_execution_middleware(
     use_async: bool,
     deepagents_integration_module: types.ModuleType,
-):
+) -> None:
     from langchain.agents.middleware import ModelRequest, ModelResponse
     from langchain_core.messages import AIMessage, HumanMessage
 
     from nemo_relay.integrations.langchain._serialization import LangChainCodec
 
     class _RecordingMiddleware(deepagents_integration_module.NemoRelayDeepAgentsMiddleware):
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__()
             self.calls: list[dict[str, Any]] = []
 
@@ -280,7 +280,7 @@ def test_model_call_routes_through_langchain_execution_middleware(
 def test_model_call_preserves_multi_block_system_message(
     use_async: bool,
     deepagents_integration_module: types.ModuleType,
-):
+) -> None:
     from langchain.agents.middleware import ModelRequest, ModelResponse
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
@@ -324,7 +324,7 @@ def test_tool_call_routes_through_langchain_execution_middleware(
     use_async: bool,
     monkeypatch: pytest.MonkeyPatch,
     deepagents_integration_module: types.ModuleType,
-):
+) -> None:
     from langchain.agents.middleware import ToolCallRequest
     from langchain_core.messages import ToolMessage
 
@@ -376,7 +376,7 @@ def test_tool_call_routes_through_langchain_execution_middleware(
 def test_skill_load_mark_survives_deepagents_middleware(
     subscribed_events: list[nemo_relay.Event],
     deepagents_integration_module: types.ModuleType,
-):
+) -> None:
     from langchain.agents.middleware import ToolCallRequest
     from langchain_core.messages import ToolMessage
 
@@ -421,7 +421,7 @@ def test_skill_load_mark_survives_deepagents_middleware(
 def test_callback_handler_emits_human_in_the_loop_marks(
     subscribed_events: list[nemo_relay.Event],
     callback_handler: deepagents_integration.NemoRelayDeepAgentsCallbackHandler,
-):
+) -> None:
     from langgraph.callbacks import GraphInterruptEvent, GraphResumeEvent
     from langgraph.types import Interrupt
 
@@ -470,7 +470,7 @@ def test_callback_handler_emits_human_in_the_loop_marks(
 def test_callback_handler_falls_back_for_non_hitl_interrupt(
     subscribed_events: list[nemo_relay.Event],
     callback_handler: deepagents_integration.NemoRelayDeepAgentsCallbackHandler,
-):
+) -> None:
     from langgraph.callbacks import GraphInterruptEvent, GraphResumeEvent
     from langgraph.types import Interrupt
 
@@ -505,7 +505,7 @@ def test_callback_handler_falls_back_for_non_hitl_interrupt(
 def test_callback_handler_creates_only_semantic_agent_scopes(
     subscribed_events: list[nemo_relay.Event],
     callback_handler: deepagents_integration.NemoRelayDeepAgentsCallbackHandler,
-):
+) -> None:
     root_run_id = uuid4()
     node_run_id = uuid4()
     subagent_run_id = uuid4()
@@ -598,7 +598,7 @@ def test_callback_handler_ignores_nonsemantic_graph_nodes(
     callback_handler: deepagents_integration.NemoRelayDeepAgentsCallbackHandler,
     name: str | None,
     langgraph_node: str,
-):
+) -> None:
     run_id = uuid4()
 
     with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
@@ -627,7 +627,7 @@ def test_callback_handler_ignores_nonsemantic_graph_nodes(
 def test_callback_handler_uses_fallback_for_unnamed_agent(
     subscribed_events: list[nemo_relay.Event],
     callback_handler: deepagents_integration.NemoRelayDeepAgentsCallbackHandler,
-):
+) -> None:
     run_id = uuid4()
 
     with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
@@ -656,7 +656,7 @@ def test_callback_handler_uses_fallback_for_unnamed_agent(
 def test_callback_handler_closes_semantic_agent_scope_on_error(
     subscribed_events: list[nemo_relay.Event],
     callback_handler: deepagents_integration.NemoRelayDeepAgentsCallbackHandler,
-):
+) -> None:
     run_id = uuid4()
     error = RuntimeError("agent failed")
 
@@ -687,7 +687,7 @@ def test_callback_handler_closes_semantic_agent_scope_on_error(
     assert agent_end_metadata["deepagents_agent_role"] == "orchestrator"
 
 
-def test_add_nemo_relay_integration_preserves_backend(deepagents_integration_module: types.ModuleType):
+def test_add_nemo_relay_integration_preserves_backend(deepagents_integration_module: types.ModuleType) -> None:
     mock_backend = MagicMock(name="mock_backend")
     mock_compiled_subagent = MagicMock(name="mock_compiled_subagent")
     kwargs = deepagents_integration_module.add_nemo_relay_integration(
@@ -719,7 +719,7 @@ def test_e2e_agent(
     tmp_path: Path,
     subscribed_events: list[nemo_relay.Event],
     deepagents_integration_module: types.ModuleType,
-):
+) -> None:
     from deepagents import create_deep_agent
     from deepagents.backends import LocalShellBackend
     from langchain_core.messages import AIMessage, ToolMessage
@@ -854,7 +854,7 @@ def test_e2e_general_purpose_subagent_scope(
     use_async: bool,
     subscribed_events: list[nemo_relay.Event],
     deepagents_integration_module: types.ModuleType,
-):
+) -> None:
     from deepagents import create_deep_agent
     from langchain_core.messages import AIMessage
 
@@ -913,7 +913,7 @@ def test_e2e_general_purpose_subagent_scope(
 def test_e2e_agent_exports_openinference_output_contract(
     tmp_path: Path,
     deepagents_integration_module: types.ModuleType,
-):
+) -> None:
     from deepagents import create_deep_agent
     from deepagents.backends import LocalShellBackend
     from langchain_core.messages import AIMessage

@@ -17,7 +17,7 @@ if typing.TYPE_CHECKING:
 
 
 @pytest.fixture(autouse=True)
-def isolate_user_plugin_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def isolate_user_plugin_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Prevent local user plugin configuration from affecting test behavior."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
 

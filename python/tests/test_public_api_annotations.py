@@ -30,7 +30,7 @@ def _public_modules() -> list[ModuleType]:
     return modules
 
 
-def test_exported_functions_have_complete_type_annotations():
+def test_exported_functions_have_complete_type_annotations() -> None:
     modules = _public_modules()
 
     missing = []
@@ -51,7 +51,7 @@ def test_exported_functions_have_complete_type_annotations():
     assert not missing, "public API functions missing annotations:\n" + "\n".join(missing)
 
 
-def test_exported_functions_have_comprehensive_docstrings():
+def test_exported_functions_have_comprehensive_docstrings() -> None:
     """Require public functions to document parameters and return behavior."""
     modules = _public_modules()
 

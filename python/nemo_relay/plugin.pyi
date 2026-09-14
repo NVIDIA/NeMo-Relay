@@ -167,7 +167,7 @@ class ComponentSpec:
 
 class PluginConfig:
     version: int
-    components: list[object]
+    components: list[ComponentSpec]
     policy: ConfigPolicy
 
     def __init__(

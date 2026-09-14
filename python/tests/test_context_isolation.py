@@ -6,6 +6,7 @@
 import asyncio
 import contextvars
 import uuid
+from typing import Never
 
 import pytest
 from async_helpers import resolve_async_result
@@ -24,14 +25,14 @@ def restore_native_scope_stack():
         restore_thread_scope_stack(binding)
 
 
-def test_create_scope_stack_returns_scope_stack():
+def test_create_scope_stack_returns_scope_stack() -> None:
     """create_scope_stack returns a ScopeStack instance."""
     stack = nemo_relay.create_scope_stack()
     assert isinstance(stack, nemo_relay.ScopeStack)
     assert repr(stack) == "<ScopeStack>"
 
 
-def test_propagation_context_installs_and_restores_a_scoped_stack():
+def test_propagation_context_installs_and_restores_a_scoped_stack() -> None:
     original = nemo_relay.get_scope_stack()
     root_uuid = str(uuid.uuid4())
     parent_uuid = str(uuid.uuid4())
@@ -45,7 +46,7 @@ def test_propagation_context_installs_and_restores_a_scoped_stack():
     assert nemo_relay.get_scope_stack() is original
 
 
-def test_propagation_context_capture_and_constructor_validation():
+def test_propagation_context_capture_and_constructor_validation() -> None:
     root_uuid = str(uuid.uuid4())
 
     with nemo_relay.scope.scope("sender", nemo_relay.ScopeType.Agent) as sender:
@@ -73,7 +74,7 @@ def test_propagation_context_capture_and_constructor_validation():
         nemo_relay.capture_propagation_context_with_root("not-a-uuid")
 
 
-def test_propagation_context_json_round_trip_and_validation():
+def test_propagation_context_json_round_trip_and_validation() -> None:
     context = nemo_relay.PropagationContext(str(uuid.uuid4()), str(uuid.uuid4()))
 
     encoded = context.to_json()
@@ -88,7 +89,7 @@ def test_propagation_context_json_round_trip_and_validation():
         nemo_relay.PropagationContext.from_json(f'{{"version":2,"parent_uuid":"{uuid.uuid4()}"}}')
 
 
-def test_rootless_and_root_parent_propagation_contexts_install_current_handle():
+def test_rootless_and_root_parent_propagation_contexts_install_current_handle() -> None:
     parent_uuid = str(uuid.uuid4())
     rootless_stack = nemo_relay.create_scope_stack_from_propagation(nemo_relay.PropagationContext(parent_uuid))
 
@@ -100,7 +101,7 @@ def test_rootless_and_root_parent_propagation_contexts_install_current_handle():
         assert nemo_relay.scope.get_handle().uuid == parent_uuid
 
 
-async def test_fork_asyncio_context_isolates_siblings_and_preserves_parentage():
+async def test_fork_asyncio_context_isolates_siblings_and_preserves_parentage() -> None:
     marker = contextvars.ContextVar("fork-marker", default="missing")
     marker.set("parent")
 
@@ -142,7 +143,7 @@ async def test_fork_asyncio_context_isolates_siblings_and_preserves_parentage():
     assert second_result.result == {"name": "second"}
 
 
-def test_use_scope_stack_restores_a_previously_bound_native_stack(restore_native_scope_stack):
+def test_use_scope_stack_restores_a_previously_bound_native_stack(restore_native_scope_stack) -> None:
     previous = nemo_relay.create_scope_stack()
     replacement = nemo_relay.create_scope_stack()
     nemo_relay.set_thread_scope_stack(previous)
@@ -156,7 +157,7 @@ def test_use_scope_stack_restores_a_previously_bound_native_stack(restore_native
     assert nemo_relay.scope_stack_active()
 
 
-def test_use_scope_stack_restores_nested_and_failing_contexts(restore_native_scope_stack):
+def test_use_scope_stack_restores_nested_and_failing_contexts(restore_native_scope_stack) -> Never:
     previous = nemo_relay.create_scope_stack()
     outer = nemo_relay.create_scope_stack()
     inner = nemo_relay.create_scope_stack()
@@ -174,18 +175,18 @@ def test_use_scope_stack_restores_nested_and_failing_contexts(restore_native_sco
     assert nemo_relay.scope.get_handle().uuid == previous_uuid
 
 
-def test_get_scope_stack_returns_same_in_same_context():
+def test_get_scope_stack_returns_same_in_same_context() -> None:
     """get_scope_stack returns the same instance within the same context."""
     s1 = nemo_relay.get_scope_stack()
     s2 = nemo_relay.get_scope_stack()
     assert s1 is s2
 
 
-def test_get_scope_stack_different_across_tasks():
+def test_get_scope_stack_different_across_tasks() -> None:
     """Two asyncio tasks get different scope stacks."""
     results = {}
 
-    async def task(name):
+    async def task(name) -> None:
         # Each task gets its own context (asyncio.create_task copies ContextVar)
         # But since the ContextVar hasn't been set yet at fork time,
         # each task creates its own when get_scope_stack is first called.
@@ -194,7 +195,7 @@ def test_get_scope_stack_different_across_tasks():
         stack = nemo_relay.get_scope_stack()
         results[name] = id(stack)
 
-    async def main():
+    async def main() -> None:
         t1 = asyncio.create_task(task("a"))
         t2 = asyncio.create_task(task("b"))
         await t1
@@ -204,11 +205,11 @@ def test_get_scope_stack_different_across_tasks():
     assert results["a"] != results["b"], "Tasks should have different scope stacks"
 
 
-def test_scope_context_manager_closes_on_its_own_task_stack():
+def test_scope_context_manager_closes_on_its_own_task_stack() -> None:
     """Concurrent scope exits restore the stack owned by the exiting task."""
     completed = []
 
-    async def run_scope(name):
+    async def run_scope(name) -> None:
         token = nemo_relay._scope_stack_var.set(nemo_relay.create_scope_stack())
         try:
             with nemo_relay.scope.scope(name, nemo_relay.ScopeType.Agent):
@@ -217,14 +218,14 @@ def test_scope_context_manager_closes_on_its_own_task_stack():
         finally:
             nemo_relay._scope_stack_var.reset(token)
 
-    async def main():
+    async def main() -> None:
         await asyncio.gather(run_scope("agent-a"), run_scope("agent-b"))
 
     asyncio.run(main())
     assert completed == ["agent-a", "agent-b"]
 
 
-def test_concurrent_tool_lifecycle_uses_owning_task_stack(subscribed_events):
+def test_concurrent_tool_lifecycle_uses_owning_task_stack(subscribed_events) -> None:
     """Tool lifecycle helpers preserve task-local middleware and event ancestry."""
 
     async def run_tool(owner):
@@ -281,7 +282,7 @@ def test_concurrent_tool_lifecycle_uses_owning_task_stack(subscribed_events):
             assert {event.parent_uuid for event in tool_events} == {scope_uuid}
 
 
-def test_concurrent_llm_lifecycle_uses_owning_task_stack(subscribed_events):
+def test_concurrent_llm_lifecycle_uses_owning_task_stack(subscribed_events) -> None:
     """LLM lifecycle helpers preserve task-local middleware and event ancestry."""
 
     async def run_llm(owner):
@@ -360,19 +361,19 @@ def test_concurrent_llm_lifecycle_uses_owning_task_stack(subscribed_events):
             assert {event.parent_uuid for event in llm_events} == {scope_uuid}
 
 
-def test_scope_stack_repr():
+def test_scope_stack_repr() -> None:
     """ScopeStack has a meaningful repr."""
     stack = nemo_relay.create_scope_stack()
     assert "<ScopeStack>" in repr(stack)
 
 
-def test_scope_stack_active_false_by_default():
+def test_scope_stack_active_false_by_default() -> None:
     """scope_stack_active returns False before any scope stack is initialized."""
     import threading
 
     result = {}
 
-    def worker():
+    def worker() -> None:
         # Fresh thread, no ContextVar set
         result["active"] = nemo_relay.scope_stack_active()
 
@@ -382,13 +383,13 @@ def test_scope_stack_active_false_by_default():
     assert result["active"] is False
 
 
-def test_scope_stack_active_true_after_get_scope_stack():
+def test_scope_stack_active_true_after_get_scope_stack() -> None:
     """scope_stack_active returns True after get_scope_stack is called (ContextVar path)."""
     import threading
 
     result = {}
 
-    def worker():
+    def worker() -> None:
         nemo_relay.get_scope_stack()
         result["active"] = nemo_relay.scope_stack_active()
 
@@ -398,14 +399,14 @@ def test_scope_stack_active_true_after_get_scope_stack():
     assert result["active"] is True
 
 
-def test_scope_stack_active_true_after_set_thread():
+def test_scope_stack_active_true_after_set_thread() -> None:
     """scope_stack_active returns True after set_thread_scope_stack on a fresh thread."""
     import threading
 
     result = {}
     stack = nemo_relay.create_scope_stack()
 
-    def worker():
+    def worker() -> None:
         nemo_relay.set_thread_scope_stack(stack)
         result["active"] = nemo_relay.scope_stack_active()
 
@@ -415,13 +416,13 @@ def test_scope_stack_active_true_after_set_thread():
     assert result["active"] is True
 
 
-def test_propagate_scope_to_thread_fails_when_inactive():
+def test_propagate_scope_to_thread_fails_when_inactive() -> None:
     """propagate_scope_to_thread raises RuntimeError when no scope is active."""
     import threading
 
     result = {}
 
-    def worker():
+    def worker() -> None:
         try:
             nemo_relay.propagate_scope_to_thread()
             result["raised"] = False
@@ -434,14 +435,14 @@ def test_propagate_scope_to_thread_fails_when_inactive():
     assert result["raised"] is True
 
 
-def test_propagate_scope_to_thread_returns_scope_stack():
+def test_propagate_scope_to_thread_returns_scope_stack() -> None:
     """propagate_scope_to_thread returns the current ScopeStack."""
     nemo_relay.get_scope_stack()
     stack = nemo_relay.propagate_scope_to_thread()
     assert isinstance(stack, nemo_relay.ScopeStack)
 
 
-def test_propagate_scope_to_thread_cross_thread():
+def test_propagate_scope_to_thread_cross_thread() -> None:
     """Propagated scope stack works on a worker thread."""
     import threading
 
@@ -452,7 +453,7 @@ def test_propagate_scope_to_thread_cross_thread():
     propagated = nemo_relay.propagate_scope_to_thread()
     result = {}
 
-    def worker():
+    def worker() -> None:
         nemo_relay.set_thread_scope_stack(propagated)
         h = nemo_relay.scope.get_handle()
         result["name"] = h.name
@@ -465,7 +466,7 @@ def test_propagate_scope_to_thread_cross_thread():
     nemo_relay.scope.pop(handle)
 
 
-def test_propagate_scope_to_thread_uses_native_active_stack_without_contextvar():
+def test_propagate_scope_to_thread_uses_native_active_stack_without_contextvar() -> None:
     """Verify propagate_scope_to_thread uses current_scope_stack().
 
     This covers the case where set_thread_scope_stack() initializes only the
@@ -477,7 +478,7 @@ def test_propagate_scope_to_thread_uses_native_active_stack_without_contextvar()
     result = {}
     stack = nemo_relay.create_scope_stack()
 
-    def worker():
+    def worker() -> None:
         nemo_relay.set_thread_scope_stack(stack)
         propagated = nemo_relay.propagate_scope_to_thread()
         result["active"] = nemo_relay.scope_stack_active()

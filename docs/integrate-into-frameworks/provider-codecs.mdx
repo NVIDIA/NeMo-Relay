@@ -133,7 +133,11 @@ import nemo_relay
 from nemo_relay import LLMRequest
 from nemo_relay.codecs import OpenAIChatCodec
 
-def add_system_message(_name, request, annotated):
+def add_system_message(
+    _name: str,
+    request: LLMRequest,
+    annotated: nemo_relay.AnnotatedLLMRequest | None,
+) -> nemo_relay.LLMRequestInterceptOutcome:
     if annotated is None:
         return nemo_relay.LLMRequestInterceptOutcome(request)
 
@@ -153,7 +157,7 @@ nemo_relay.intercepts.register_llm_request(
     add_system_message,
 )
 
-async def invoke_provider(request: LLMRequest):
+async def invoke_provider(request: LLMRequest) -> dict[str, object]:
     return {
         "id": "chatcmpl-demo",
         "model": request.content["model"],
@@ -300,7 +304,11 @@ so retrieve, edit, and reassign the value. The same reassignment pattern works
 for a provider-native component inside `messages`.
 
 ```python
-def tune_responses_request(_name, request, annotated):
+def tune_responses_request(
+    _name: str,
+    request: LLMRequest,
+    annotated: nemo_relay.AnnotatedLLMRequest | None,
+) -> nemo_relay.LLMRequestInterceptOutcome:
     if annotated is None:
         return nemo_relay.LLMRequestInterceptOutcome(request)
 

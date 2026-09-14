@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import contextvars
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AbstractContextManager
 from typing import Literal, Optional, TypeAlias, TypedDict
 
 from nemo_relay import adaptive as adaptive
@@ -465,7 +466,7 @@ def fork_asyncio_context() -> contextvars.Context:
     """
     ...
 
-def use_scope_stack(stack: ScopeStack): ...
+def use_scope_stack(stack: ScopeStack) -> AbstractContextManager[ScopeStack]: ...
 def set_thread_scope_stack(stack: ScopeStack) -> None:
     """Install a scope stack into the current thread's native runtime context.
 

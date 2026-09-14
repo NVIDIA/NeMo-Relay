@@ -111,7 +111,7 @@ async def _overlapping_sibling_runs(handler: NemoRelayCallbackHandler) -> int:
     return open_at_overlap
 
 
-async def test_strictly_nested_runs_close_cleanly(handler: NemoRelayCallbackHandler):
+async def test_strictly_nested_runs_close_cleanly(handler: NemoRelayCallbackHandler) -> None:
     """Control: the harness itself is sound when the runs nest properly."""
 
     baseline = nemo_relay.scope.get_handle()
@@ -131,7 +131,7 @@ async def test_strictly_nested_runs_close_cleanly(handler: NemoRelayCallbackHand
 async def test_sibling_runs_are_parented_to_a_common_run(
     handler: NemoRelayCallbackHandler,
     subscribed_events: list[nemo_relay.Event],
-):
+) -> None:
     """Pin the topology the regression tests below depend on.
 
     ``scope.push`` parents to the current top of stack when no explicit handle is given,
@@ -162,7 +162,7 @@ async def test_sibling_runs_are_parented_to_a_common_run(
 async def test_a_deferred_close_records_when_the_run_actually_ended(
     handler: NemoRelayCallbackHandler,
     subscribed_events: list[nemo_relay.Event],
-):
+) -> None:
     """A close held back for ordering must not be dated to when it was replayed.
 
     A ends before B but can only be closed after it, so recording the replay time would
@@ -207,7 +207,7 @@ async def test_a_deferred_close_records_when_the_run_actually_ended(
 
 async def test_overlapping_sibling_runs_leave_the_outer_scope_closable(
     handler: NemoRelayCallbackHandler,
-):
+) -> None:
     """A sibling closing out of order must not break the enclosing scope.
 
     The out-of-order pop is the handler's problem to absorb. Today it is swallowed and
@@ -232,7 +232,7 @@ async def test_overlapping_sibling_runs_leave_the_outer_scope_closable(
 
 async def test_overlapping_sibling_runs_do_not_strand_a_scope(
     handler: NemoRelayCallbackHandler,
-):
+) -> None:
     """Every scope the handler opened must be closed by the time its runs have ended.
 
     ``_pop_scope`` drops the handle from ``_scope_handles`` before attempting the pop, so
@@ -256,7 +256,7 @@ async def test_overlapping_sibling_runs_do_not_strand_a_scope(
 
 async def test_a_close_is_queued_only_until_the_scopes_above_it_go(
     handler: NemoRelayCallbackHandler,
-):
+) -> None:
     """Observe the queue itself, rather than inferring it from the end state.
 
     Driven step by step so the state between callbacks is visible: an implementation that
@@ -285,7 +285,7 @@ async def test_a_close_is_queued_only_until_the_scopes_above_it_go(
 
 async def test_a_scope_closed_out_of_band_does_not_block_other_closes(
     handler: NemoRelayCallbackHandler,
-):
+) -> None:
     """A completion whose scope is gone waits forever, but holds nothing else up.
 
     Closing only what is on top means there is no failed attempt to classify, and so no
@@ -317,7 +317,7 @@ async def test_a_scope_closed_out_of_band_does_not_block_other_closes(
 
 async def test_a_queued_close_is_not_discarded_by_another_stacks_drain(
     handler: NemoRelayCallbackHandler,
-):
+) -> None:
     """A completion is only closed when its scope is the top of the active stack.
 
     That is what confines a shared handler to one stack at a time: draining while another
@@ -348,7 +348,7 @@ async def test_a_queued_close_is_not_discarded_by_another_stacks_drain(
 
 async def test_one_handler_shared_across_two_scope_stacks(
     handler: NemoRelayCallbackHandler,
-):
+) -> None:
     """The reported failure: two concurrent invocations sharing one handler.
 
     Invocation 1 queues A behind B. Invocation 2 then closes a run of its own, and its
@@ -388,7 +388,7 @@ async def test_one_handler_shared_across_two_scope_stacks(
 async def test_the_output_is_snapshotted_when_the_callback_fires(
     handler: NemoRelayCallbackHandler,
     subscribed_events: list[nemo_relay.Event],
-):
+) -> None:
     """A deferred close must report the output as it was when the run ended.
 
     The caller owns the mapping passed to the callback and may reuse or mutate it, so
@@ -424,7 +424,7 @@ async def test_the_output_is_snapshotted_when_the_callback_fires(
 
 def test_a_run_completed_on_a_worker_thread_still_closes(
     handler: NemoRelayCallbackHandler,
-):
+) -> None:
     """A handler reused by worker-thread callbacks must still close its scopes.
 
     Propagating a stack to a thread hands back a different ``ScopeStack`` wrapper for the
@@ -463,7 +463,7 @@ def test_a_run_completed_on_a_worker_thread_still_closes(
 
 def test_completing_a_run_without_a_stack_does_not_create_one(
     handler: NemoRelayCallbackHandler,
-):
+) -> None:
     """Reading the top scope must not leave a stack behind in a context that had none.
 
     ``get_handle`` creates one on demand, so an unguarded read would materialise an empty
@@ -490,7 +490,7 @@ def test_completing_a_run_without_a_stack_does_not_create_one(
 
 async def test_two_handlers_on_one_stack_only_close_their_own_scopes(
     handler: NemoRelayCallbackHandler,
-):
+) -> None:
     """Ownership is per handler, not per stack.
 
     Applications can attach more than one callback handler. Each closes only the runs it
@@ -524,7 +524,7 @@ async def test_two_handlers_on_one_stack_only_close_their_own_scopes(
     assert nemo_relay.scope.get_handle().uuid == baseline.uuid
 
 
-def test_the_handler_lock_is_reentrant(handler: NemoRelayCallbackHandler):
+def test_the_handler_lock_is_reentrant(handler: NemoRelayCallbackHandler) -> None:
     """Closing a scope can re-enter the handler, so the lock has to be reentrant.
 
     A subscriber or middleware reacting to a scope end may issue another callback on the
@@ -545,7 +545,7 @@ async def test_a_transient_pop_failure_keeps_the_completion_for_a_later_close(
     handler: NemoRelayCallbackHandler,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """The runtime can refuse a close before it mutates the stack.
 
     The completion is the only record able to close that scope, so dropping it on the
@@ -583,7 +583,7 @@ async def test_a_pop_value_error_keeps_the_original_completion(
     handler: NemoRelayCallbackHandler,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """A non-output validation failure must not trigger an output-less retry."""
     run_id = uuid4()
     request = nemo_relay.scope.push("request", nemo_relay.ScopeType.Agent)
@@ -614,7 +614,7 @@ async def test_a_pop_value_error_keeps_the_original_completion(
 async def test_an_unserializable_output_does_not_strand_the_scope(
     handler: NemoRelayCallbackHandler,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """Serializing the output walks caller data and can fail on its own.
 
     A cyclic output raises ``RecursionError``. If that escaped after the run had been
@@ -642,7 +642,7 @@ async def test_an_unserializable_output_does_not_strand_the_scope(
 async def test_invalid_output_does_not_block_the_completion_queue(
     handler: NemoRelayCallbackHandler,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """A permanently invalid output cannot strand every completed scope below it."""
     parent_run, run_a, run_b = uuid4(), uuid4(), uuid4()
     request = nemo_relay.scope.push("request", nemo_relay.ScopeType.Agent)
@@ -669,7 +669,7 @@ async def test_invalid_output_does_not_block_the_completion_queue(
 async def test_pydantic_output_is_serialized_before_scope_close(
     handler: NemoRelayCallbackHandler,
     subscribed_events: list[nemo_relay.Event],
-):
+) -> None:
     """Structured outputs retain their fields without blocking scope closure."""
     from pydantic import BaseModel
 
@@ -713,7 +713,7 @@ async def test_pydantic_output_is_serialized_before_scope_close(
 
 async def test_a_failed_run_completes_its_scope_the_same_way(
     handler: NemoRelayCallbackHandler,
-):
+) -> None:
     """``on_chain_error`` completes a run exactly as ``on_chain_end`` does.
 
     A failed sibling that finished out of order strands its scope just as readily as a
@@ -741,7 +741,7 @@ async def test_a_failed_run_completes_its_scope_the_same_way(
 
 async def test_two_concurrent_invocations_share_one_handler(
     handler: NemoRelayCallbackHandler,
-):
+) -> None:
     """Two asyncio tasks, each on its own stack, interleaved through one handler.
 
     Invocation 2 is active while invocation 1 has a completion waiting, so anything that
@@ -794,7 +794,7 @@ async def test_two_concurrent_invocations_share_one_handler(
 
 async def test_a_propagated_stack_does_not_consume_another_stacks_completion(
     handler: NemoRelayCallbackHandler,
-):
+) -> None:
     """A propagated stack seeds a scope carrying an existing scope's uuid.
 
     ``create_scope_stack_from_propagation`` rebuilds a parent scope from a captured
@@ -835,7 +835,7 @@ async def test_a_propagated_stack_does_not_consume_another_stacks_completion(
 
 async def test_propagated_stand_ins_keep_their_reserved_names(
     handler: NemoRelayCallbackHandler,
-):
+) -> None:
     """Pin the naming the uuid+name check depends on.
 
     A propagated stack rebuilds scopes carrying an existing uuid, so the name is what

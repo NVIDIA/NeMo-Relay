@@ -28,8 +28,12 @@ different, but the identity, validation, and ownership rules are the same.
 <Tabs>
 <Tab title="Python" language="python">
 ```python
+from typing import Any
+
+from nemo_relay.plugin import PluginContext
+
 class AuditPlugin:
-    def validate(self, config):
+    def validate(self, config: dict[str, Any]) -> list[dict[str, str]]:
         tag = config.get("tag", "documentation")
         if isinstance(tag, str):
             return []
@@ -41,7 +45,7 @@ class AuditPlugin:
             "message": "tag must be a string",
         }]
 
-    def register(self, _config, context):
+    def register(self, _config: dict[str, Any], context: PluginContext) -> None:
         context.register_subscriber("events", lambda event: print(event.name))
 ```
 </Tab>

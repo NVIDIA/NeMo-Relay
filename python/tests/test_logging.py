@@ -28,7 +28,7 @@ def _import_nemo_relay(**logging_environment: str) -> subprocess.CompletedProces
     )
 
 
-def test_binding_initializes_logging_from_environment():
+def test_binding_initializes_logging_from_environment() -> None:
     completed = _import_nemo_relay(
         NEMO_RELAY_LOG="info",
         NEMO_RELAY_LOG_STDERR_FORMAT="jsonl",
@@ -38,7 +38,7 @@ def test_binding_initializes_logging_from_environment():
     assert '"event":"logging_initialized"' in completed.stderr
 
 
-def test_binding_disables_stderr_logging_from_environment():
+def test_binding_disables_stderr_logging_from_environment() -> None:
     completed = _import_nemo_relay(
         NEMO_RELAY_LOG="info",
         NEMO_RELAY_LOG_STDERR="false",
@@ -48,14 +48,14 @@ def test_binding_disables_stderr_logging_from_environment():
     assert not completed.stderr
 
 
-def test_binding_rejects_invalid_logging_environment():
+def test_binding_rejects_invalid_logging_environment() -> None:
     completed = _import_nemo_relay(NEMO_RELAY_LOG="")
 
     assert completed.returncode != 0
     assert "NEMO_RELAY_LOG must not be empty" in completed.stderr
 
 
-def test_binding_flushes_file_sink_during_shutdown(tmp_path):
+def test_binding_flushes_file_sink_during_shutdown(tmp_path) -> None:
     config_path = tmp_path / "logging.toml"
     log_path = tmp_path / "operational.jsonl"
     config_path.write_text(

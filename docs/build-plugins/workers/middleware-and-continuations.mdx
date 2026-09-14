@@ -39,7 +39,9 @@ Choose a worker language to register a callback that proposes metadata additions
 <Tabs>
 <Tab title="Python" language="python">
 ```python
-async def add_plugin_context(event):
+from nemo_relay_plugin import Event, EventMetadata, EventSanitizeFields, Json, LlmRequest, LlmSanitizeRequestContext
+
+async def add_plugin_context(event: Event) -> EventMetadata:
     del event
     return {"app.source": "plugin"}
 
@@ -83,7 +85,9 @@ sanitizer because codec operations call back to the host. All three event saniti
 return the same complete field object.
 
 ```python
-def sanitize_event(_event, fields):
+from nemo_relay_plugin import Event, EventSanitizeFields, LlmRequest, LlmSanitizeRequestContext
+
+def sanitize_event(_event: Event, fields: EventSanitizeFields) -> EventSanitizeFields:
     metadata = _redact(fields.get("metadata") or {}, redact_keys)
     if not isinstance(metadata, dict):
         metadata = {"original": metadata}
@@ -95,7 +99,9 @@ def sanitize_event(_event, fields):
         "metadata": {**metadata, "plugin_tag": tag},
     }
 
-async def sanitize_llm_request(request, codec_context):
+async def sanitize_llm_request(
+    request: LlmRequest, codec_context: LlmSanitizeRequestContext
+) -> LlmRequest:
     request = deepcopy(request)
     codec = codec_context.resolve_codec()
     if codec is not None:
@@ -163,12 +169,16 @@ request because Relay must carry its normalized annotation and accounting separa
 <Tabs>
 <Tab title="Python" language="python">
 ```python
+from nemo_relay_plugin import AnnotatedLlmRequest, Json, LlmRequest, LlmRequestInterceptOutcome, PendingMarkSpec
+
 priority = requests["priority"]
 break_chain = requests["break_chain"]
 header_name = requests["header_name"]
 header_value = requests["header_value"]
 
-def llm_request(_name, request, annotated):
+def llm_request(
+    _name: str, request: LlmRequest, annotated: AnnotatedLlmRequest | None
+) -> LlmRequestInterceptOutcome:
     rewritten = deepcopy(request)
     rewritten["headers"] = {
         **(rewritten.get("headers") or {}),
@@ -298,7 +308,24 @@ priority = execution["priority"]
 emit_pending_marks = execution["emit_pending_marks"]
 tag = settings["tag"]
 
-async def tool_execution(context, next_call):
+from collections.abc import AsyncIterator
+
+from nemo_relay_plugin import (
+    Json,
+    LlmExecutionCallback,
+    LlmNext,
+    LlmRequest,
+    LlmStreamExecutionCallback,
+    LlmStreamNext,
+    ToolExecutionCallback,
+    ToolExecutionContext,
+    ToolExecutionInterceptOutcome,
+    ToolNext,
+)
+
+async def tool_execution(
+    context: ToolExecutionContext, next_call: ToolNext
+) -> ToolExecutionInterceptOutcome:
     downstream = await next_call.call(context.args)
     marks = (
         [PendingMarkSpec(
@@ -317,7 +344,7 @@ async def tool_execution(context, next_call):
         pending_marks=marks,
     )
 
-async def llm_execution(_name, request, next_call):
+async def llm_execution(_name: str, request: LlmRequest, next_call: LlmNext) -> Json:
     content = request.get("content")
     repeat = isinstance(content, dict) and content.get("repeat_downstream") is True
     if repeat:
@@ -331,7 +358,9 @@ async def llm_execution(_name, request, next_call):
         return first
     return await next_call.call(request)
 
-async def llm_stream_execution(_name, request, next_call):
+async def llm_stream_execution(
+    _name: str, request: LlmRequest, next_call: LlmStreamNext
+) -> AsyncIterator[Json]:
     async for chunk in next_call.call(request):
         if isinstance(chunk, dict):
             yield {**chunk, "plugin_stream": True}

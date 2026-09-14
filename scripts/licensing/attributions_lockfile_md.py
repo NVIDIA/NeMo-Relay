@@ -18,6 +18,7 @@ import tarfile
 import tomllib
 import urllib.request
 import zipfile
+from email.message import Message
 from email.parser import Parser
 from pathlib import Path
 from typing import Any, TypedDict, cast
@@ -537,7 +538,7 @@ def _download_locked_artifact(url: str, expected_hash: str) -> bytes:
     return data
 
 
-def _metadata_license_classifiers(msg) -> list[str]:
+def _metadata_license_classifiers(msg: Message) -> list[str]:
     """Extract the license portion of Trove classifiers from parsed package metadata."""
     found: list[str] = []
     for classifier in msg.get_all("Classifier", []):
@@ -549,7 +550,7 @@ def _metadata_license_classifiers(msg) -> list[str]:
     return found
 
 
-def _metadata_license_name(msg) -> str:
+def _metadata_license_name(msg: Message) -> str:
     """Choose the best human-readable license label from package metadata.
 
     Prefer modern SPDX-style fields, then legacy free-form license text, then
