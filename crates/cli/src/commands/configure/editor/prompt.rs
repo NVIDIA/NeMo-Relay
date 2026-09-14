@@ -96,12 +96,17 @@ fn edit_gateway(theme: &ColorfulTheme, document: &mut ConfigDocument) -> Result<
                 "Maximum passthrough body bytes: {}",
                 document.integer_summary("gateway", "max_passthrough_body_bytes")
             ),
+            format!(
+                "HTTP timeout seconds: {}",
+                document.integer_summary("gateway", "http_timeout_secs")
+            ),
             "Back".into(),
         ];
         match select(theme, "Gateway limits", &choices)? {
             0 => edit_positive_integer(theme, document, "gateway", "max_hook_payload_bytes")?,
             1 => edit_positive_integer(theme, document, "gateway", "max_passthrough_body_bytes")?,
-            2 => return Ok(()),
+            2 => edit_positive_integer(theme, document, "gateway", "http_timeout_secs")?,
+            3 => return Ok(()),
             _ => unreachable!(),
         }
     }

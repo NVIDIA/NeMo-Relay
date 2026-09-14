@@ -43,8 +43,6 @@ use crate::plugins::lifecycle::{ActiveDynamicPluginComponent, DynamicPluginActiv
 use crate::sessions::SessionManager;
 
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
-const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -512,10 +510,11 @@ impl AppState {
     ) -> Self {
         let sessions = SessionManager::new(config.clone());
         sessions.start_idle_sweeper();
+        let http_timeout = Duration::from_secs(config.http_timeout_secs);
         let http = Client::builder()
             .connect_timeout(HTTP_CONNECT_TIMEOUT)
-            .timeout(HTTP_REQUEST_TIMEOUT)
-            .read_timeout(HTTP_READ_TIMEOUT)
+            .timeout(http_timeout)
+            .read_timeout(http_timeout)
             .build()
             .expect("gateway HTTP client configuration is valid");
         // A second client for destinations the caller named, which must not follow redirects.
@@ -527,8 +526,8 @@ impl AppState {
         // endpoint could 307 a caller's provider key to any host, including over plain http.
         let http_no_redirect = Client::builder()
             .connect_timeout(HTTP_CONNECT_TIMEOUT)
-            .timeout(HTTP_REQUEST_TIMEOUT)
-            .read_timeout(HTTP_READ_TIMEOUT)
+            .timeout(http_timeout)
+            .read_timeout(http_timeout)
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("gateway HTTP client configuration is valid");

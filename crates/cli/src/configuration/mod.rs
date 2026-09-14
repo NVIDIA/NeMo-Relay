@@ -45,6 +45,9 @@ pub(crate) const PLUGIN_HEARTBEAT_INTERVAL_ENV: &str = "NEMO_RELAY_PLUGIN_HEARTB
 pub(crate) const RELAY_PLUGIN_ID: &str = "nemo-relay-plugin@nemo-relay-local";
 pub(crate) const RELAY_SOURCE_PLUGIN_ID: &str = "nemo-relay-plugin@nemo-relay";
 pub(crate) const DEFAULT_MAX_HOOK_PAYLOAD_BYTES: usize = 20 * 1024 * 1024;
+/// Upstream HTTP request/read timeout for provider passthrough. Long streaming generations
+/// (large file writes, session compaction) can exceed the historical 300s default mid-stream.
+pub(crate) const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 300;
 pub(crate) const DEFAULT_MAX_PASSTHROUGH_BODY_BYTES: usize = 100 * 1024 * 1024;
 pub(crate) const GATEWAY_URL_ENV: &str = "NEMO_RELAY_GATEWAY_URL";
 pub(crate) const TRANSPARENT_RUN_ENV: &str = "NEMO_RELAY_TRANSPARENT_RUN";
@@ -66,6 +69,7 @@ struct FileConfig {
 struct FileGatewayConfig {
     max_hook_payload_bytes: Option<usize>,
     max_passthrough_body_bytes: Option<usize>,
+    http_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -301,6 +305,7 @@ fn persistent_bootstrap_fingerprint(
         "plugin_config": gateway.plugin_config,
         "max_hook_payload_bytes": gateway.max_hook_payload_bytes,
         "max_passthrough_body_bytes": gateway.max_passthrough_body_bytes,
+        "http_timeout_secs": gateway.http_timeout_secs,
         "plugin_idle_timeout_secs": idle_timeout_secs,
         "dynamic_plugins": dynamic_plugins,
         "dynamic_plugin_policy": format!("{:?}", resolved.dynamic_plugin_policy),
@@ -1145,6 +1150,9 @@ fn apply_server_overrides(
         config.max_passthrough_body_bytes =
             validate_body_limit("max passthrough body bytes", value)?;
     }
+    if let Some(value) = args.http_timeout_secs {
+        config.http_timeout_secs = validate_timeout_secs("http timeout secs", value)?;
+    }
     Ok(())
 }
 
@@ -1379,6 +1387,9 @@ fn apply_file_gateway_config(
     if let Some(value) = config.max_passthrough_body_bytes {
         gateway.max_passthrough_body_bytes =
             validate_body_limit("gateway.max_passthrough_body_bytes", value)?;
+    }
+    if let Some(value) = config.http_timeout_secs {
+        gateway.http_timeout_secs = validate_timeout_secs("gateway.http_timeout_secs", value)?;
     }
     Ok(())
 }
@@ -1724,6 +1735,9 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
         config.max_passthrough_body_bytes =
             parse_env_body_limit("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES", &value)?;
     }
+    if let Ok(value) = std::env::var("NEMO_RELAY_HTTP_TIMEOUT_SECS") {
+        config.http_timeout_secs = parse_env_timeout_secs("NEMO_RELAY_HTTP_TIMEOUT_SECS", &value)?;
+    }
     Ok(())
 }
 
@@ -1774,7 +1788,21 @@ fn parse_env_body_limit(name: &str, raw: &str) -> Result<usize, CliError> {
     validate_body_limit(name, value)
 }
 
+fn parse_env_timeout_secs(name: &str, raw: &str) -> Result<u64, CliError> {
+    let value = raw
+        .parse::<u64>()
+        .map_err(|error| CliError::Config(format!("{name} must be a positive integer: {error}")))?;
+    validate_timeout_secs(name, value)
+}
+
 fn validate_body_limit(name: &str, value: usize) -> Result<usize, CliError> {
+    if value == 0 {
+        return Err(CliError::Config(format!("{name} must be greater than 0")));
+    }
+    Ok(value)
+}
+
+fn validate_timeout_secs(name: &str, value: u64) -> Result<u64, CliError> {
     if value == 0 {
         return Err(CliError::Config(format!("{name} must be greater than 0")));
     }

@@ -495,6 +495,8 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
 
     assert_eq!(
@@ -544,6 +546,8 @@ fn openai_upstream_url_accepts_origin_or_v1_base() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
 
     assert_eq!(
@@ -578,6 +582,8 @@ fn anthropic_upstream_url_accepts_origin_or_v1_base() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
 
     assert_eq!(
@@ -2125,6 +2131,8 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
     let state = AppState {
         config: config.clone(),
@@ -2164,6 +2172,8 @@ async fn models_rejects_non_get_requests_directly() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
     let state = AppState {
         config: config.clone(),
@@ -2560,6 +2570,8 @@ async fn models_refuses_an_unusable_named_upstream() {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+
+        http_timeout_secs: crate::configuration::DEFAULT_HTTP_TIMEOUT_SECS,
     };
     let state = AppState {
         config: config.clone(),
