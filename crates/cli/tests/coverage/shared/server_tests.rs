@@ -6,6 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::State;
@@ -31,6 +32,7 @@ use nemo_relay::plugin::{
     ensure_builtin_plugins_registered, register_plugin,
 };
 use serde_json::{Map, Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, oneshot};
 use tokio::task::JoinHandle;
@@ -268,6 +270,41 @@ fn test_config() -> GatewayConfig {
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+    }
+}
+
+#[tokio::test]
+async fn gateway_clients_allow_active_streams_past_the_idle_timeout() {
+    for no_redirect in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut first_request_byte = [0_u8; 1];
+            socket.read_exact(&mut first_request_byte).await.unwrap();
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n3\r\none\r\n",
+                )
+                .await
+                .unwrap();
+            for _ in 0..6 {
+                tokio::time::sleep(Duration::from_millis(60)).await;
+                socket.write_all(b"2\r\nx!\r\n").await.unwrap();
+            }
+            socket.write_all(b"0\r\n\r\n").await.unwrap();
+        });
+
+        let response = gateway_http_client(Duration::from_millis(300), no_redirect)
+            .get(format!("http://{address}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.bytes().await.unwrap(),
+            b"onex!x!x!x!x!x!".as_slice()
+        );
+        server.await.unwrap();
     }
 }
 
