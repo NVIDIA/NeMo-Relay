@@ -226,6 +226,22 @@ impl Registry {
         fingerprint: Fingerprint,
         session_id: &McpSessionId,
     ) -> Result<BrokerDirective, RegistryError> {
+        // Most directive polls observe stable ready/pass-through state. Keep
+        // those polls on the shared read lock; recovering-with-target remains
+        // intentionally mutable because it transitions to Ready below.
+        let inner = self.read();
+        let route = inner
+            .routes
+            .get(&fingerprint)
+            .ok_or(RegistryError::UnknownRoute)?;
+        if !route.refs.contains_key(session_id) {
+            return Err(RegistryError::UnknownMcpSession);
+        }
+        if let Some(directive) = route.stable_current_directive(session_id, self.retry_after_ms) {
+            return Ok(directive);
+        }
+        drop(inner);
+
         let mut inner = self.write();
         let route = inner
             .routes
@@ -884,6 +900,38 @@ impl RouteEntry {
                 BrokerDirective::ReuseWorker { endpoint }
             }
         }
+    }
+
+    // Return a directive without mutating the route. `Recovering` with an
+    // existing target deliberately returns None because the write-path
+    // promotes it back to Ready as part of serving the directive.
+    fn stable_current_directive(
+        &self,
+        session_id: &McpSessionId,
+        retry_after_ms: u64,
+    ) -> Option<BrokerDirective> {
+        Some(match &self.state {
+            RouteState::Empty => BrokerDirective::WaitForWorker { retry_after_ms },
+            RouteState::Activating {
+                owner,
+                launch: active_launch,
+            } if owner == session_id => active_launch.clone().into_directive(),
+            RouteState::Activating { .. }
+            | RouteState::Draining { .. }
+            | RouteState::Recovering { target: None, .. } => {
+                BrokerDirective::WaitForWorker { retry_after_ms }
+            }
+            RouteState::Ready { target } if !target.control_available() => {
+                BrokerDirective::WaitForWorker { retry_after_ms }
+            }
+            RouteState::Ready { target } => BrokerDirective::ReuseWorker {
+                endpoint: target.endpoint().to_owned(),
+            },
+            RouteState::PassThrough { .. } => BrokerDirective::UsePassThrough,
+            RouteState::Recovering {
+                target: Some(_), ..
+            } => return None,
+        })
     }
 
     fn after_reference_removed(

@@ -565,12 +565,19 @@ async fn proxy(State(state): State<Arc<WorkerState>>, request: Request<Body>) ->
     let Some(route) = PublicRoute::from_path(request.uri().path()) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    if matches!(route, PublicRoute::Provider(_))
-        && let Some(managed) = state.managed.as_ref()
-        && let Err(error) = managed.ensure_streaming_transport_compatible()
-    {
-        return route_failure_response(error);
-    }
+    let middleware = if matches!(route, PublicRoute::Provider(_)) {
+        match state
+            .managed
+            .as_ref()
+            .map(|managed| managed.provider_middleware_requirements())
+        {
+            Some(Ok(requirements)) => Some(requirements),
+            Some(Err(error)) => return route_failure_response(error),
+            None => None,
+        }
+    } else {
+        None
+    };
     let Some(in_flight) = state.admit() else {
         let mut response = message(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -601,7 +608,12 @@ async fn proxy(State(state): State<Arc<WorkerState>>, request: Request<Body>) ->
         PublicRoute::Provider(provider) => {
             if let Some(managed) = state.managed.as_ref() {
                 let response = managed
-                    .proxy_provider(state.upstream.clone(), request, provider)
+                    .proxy_provider_with_requirements(
+                        state.upstream.clone(),
+                        request,
+                        provider,
+                        middleware.expect("managed provider requests have middleware requirements"),
+                    )
                     .await;
                 return match response {
                     Ok(response) => {

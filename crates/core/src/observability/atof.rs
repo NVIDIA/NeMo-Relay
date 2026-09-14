@@ -440,6 +440,9 @@ impl AtofExporter {
                 state.last_error = Some(error);
                 return;
             }
+            if state.endpoints.is_empty() {
+                return;
+            }
             let Ok(raw_json) = serde_json::to_string(&value) else {
                 state.last_error = Some("failed to serialize ATOF event".to_string());
                 return;
