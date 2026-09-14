@@ -246,7 +246,7 @@ def validate_config(config: PricingConfig | JsonObject) -> ConfigReport:
     """
     report = plugin_module.validate_exact(
         plugin_module.PluginConfig(
-            components=[cast(plugin_module.PluginComponentSpec, ComponentSpec(config))],
+            components=[cast("plugin_module.PluginComponentSpec", ComponentSpec(config))],
         )
     )
     return cast(ConfigReport, report["config"])
