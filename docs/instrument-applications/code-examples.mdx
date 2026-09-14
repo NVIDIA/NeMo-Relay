@@ -93,7 +93,7 @@ from nemo_relay import LLMRequest
 
 request = LLMRequest({}, {"messages": [{"role": "user", "content": "hello"}]})
 
-async def invoke(req: LLMRequest):
+async def invoke(req: LLMRequest) -> dict[str, object]:
     return {"text": "hi", "request": req.content}
 
 response = await nemo_relay.llm.execute(
@@ -158,6 +158,7 @@ Use the streaming helper when subscribers need chunk collection plus one final r
 <Tab title="Python" language="python">
 ```python
 from dataclasses import dataclass
+from collections.abc import AsyncIterator
 
 from nemo_relay import LLMRequest
 from nemo_relay.typed import DataclassCodec, llm_stream_execute
@@ -173,7 +174,7 @@ class FinalResponse:
 request = LLMRequest({}, {"messages": [{"role": "user", "content": "hello"}]})
 collected: list[Chunk] = []
 
-async def stream_impl(_request: LLMRequest):
+async def stream_impl(_request: LLMRequest) -> AsyncIterator[Chunk]:
     yield Chunk(delta="hi")
 
 stream = await llm_stream_execute(

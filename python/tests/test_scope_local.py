@@ -9,17 +9,23 @@ intercepts, and subscribers registered via ``nemo_relay.scope_local`` only
 take effect within their owning scope and do not leak to other scopes.
 """
 
-from typing import cast
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any, cast
 
 import pytest
 
 from nemo_relay import (
+    AnnotatedLLMRequest,
+    Event,
+    Json,
     JsonObject,
     LLMRequest,
     LLMRequestInterceptOutcome,
+    LlmSanitizeRequestContext,
     MarkEvent,
     ScopeEvent,
     ScopeType,
+    ToolExecutionContext,
     ToolExecutionInterceptOutcome,
     ToolExecutionResult,
     guardrails,
@@ -36,7 +42,7 @@ EVENT_VARIANTS = (
 )
 
 
-def _scope_event(events, name: str, category: str, scope_category: str) -> ScopeEvent:
+def _scope_event(events: list[Event], name: str, category: str, scope_category: str) -> ScopeEvent:
     return next(
         event
         for event in events
@@ -58,15 +64,16 @@ def _event_data_object(event: ScopeEvent) -> JsonObject:
 
 
 class TestScopeLocalGuardrail:
-    async def test_sanitize_request_runs_within_scope(self):
+    async def test_sanitize_request_runs_within_scope(self) -> None:
         """A scope-local tool sanitize-request guardrail transforms the event input (observability only)."""
         events = []
 
-        def sanitizer(tool_name, args):
+        def sanitizer(_tool_name: str, args: Json) -> Json:
+            assert isinstance(args, dict)
             args["sanitized"] = True
             return args
 
-        def my_tool(args):
+        def my_tool(args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult(args)
 
         with scope.scope("guardrail_scope", ScopeType.Agent) as handle:
@@ -84,15 +91,16 @@ class TestScopeLocalGuardrail:
         start_event = _scope_event(events, "sanitized_tool", "tool", "start")
         assert _event_data_object(start_event)["sanitized"] is True
 
-    async def test_sanitize_response_runs_within_scope(self):
+    async def test_sanitize_response_runs_within_scope(self) -> None:
         """A scope-local tool sanitize-response guardrail transforms the event output (observability only)."""
         events = []
 
-        def response_sanitizer(tool_name, result):
+        def response_sanitizer(_tool_name: str, result: Json) -> Json:
+            assert isinstance(result, dict)
             result["response_sanitized"] = True
             return result
 
-        def my_tool(args):
+        def my_tool(_args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult({"output": "raw"})
 
         with scope.scope("resp_guard_scope", ScopeType.Agent) as handle:
@@ -117,15 +125,16 @@ class TestScopeLocalGuardrail:
 
 
 class TestScopeLocalAutoCleanup:
-    async def test_guardrail_inactive_after_scope_exit(self):
+    async def test_guardrail_inactive_after_scope_exit(self) -> None:
         """Scope-local guardrail no longer affects tool calls after the scope is popped."""
         events_inside = []
 
-        def sanitizer(tool_name, args):
+        def sanitizer(_tool_name: str, args: Json) -> Json:
+            assert isinstance(args, dict)
             args["sanitized"] = True
             return args
 
-        def my_tool(args):
+        def my_tool(args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult(args)
 
         # Register guardrail inside a scope, then exit
@@ -152,14 +161,15 @@ class TestScopeLocalAutoCleanup:
         start_outside = _scope_event(events_outside, "tool_outside", "tool", "start")
         assert "sanitized" not in _event_data_object(start_outside)
 
-    async def test_intercept_inactive_after_scope_exit(self):
+    async def test_intercept_inactive_after_scope_exit(self) -> None:
         """Scope-local request intercept no longer affects calls after scope exit."""
 
-        def intercept_fn(tool_name, args):
+        def intercept_fn(_tool_name: str, args: Json) -> Json:
+            assert isinstance(args, dict)
             args["intercepted"] = True
             return args
 
-        def my_tool(args):
+        def my_tool(args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult(args)
 
         with scope.scope("intercept_cleanup", ScopeType.Agent) as handle:
@@ -171,7 +181,7 @@ class TestScopeLocalAutoCleanup:
         assert result_inside.result["intercepted"] is True
         assert "intercepted" not in result_outside.result
 
-    async def test_subscriber_inactive_after_scope_exit(self):
+    async def test_subscriber_inactive_after_scope_exit(self) -> None:
         """Scope-local subscriber stops receiving events after scope exit."""
         events_inside = []
 
@@ -203,7 +213,7 @@ class TestScopeLocalAutoCleanup:
 
 
 class TestScopeLocalPriorityOrdering:
-    async def test_scope_local_lower_priority_runs_first(self):
+    async def test_scope_local_lower_priority_runs_first(self) -> None:
         """Scope-local guardrail at priority 5 runs before global at priority 10.
 
         Lower numeric priority means it executes first. We use an execution
@@ -211,15 +221,15 @@ class TestScopeLocalPriorityOrdering:
         """
         execution_order = []
 
-        def global_sanitizer(tool_name, args):
+        def global_sanitizer(_tool_name: str, args: Json) -> Json:
             execution_order.append("global_p10")
             return args
 
-        def scope_local_sanitizer(tool_name, args):
+        def scope_local_sanitizer(_tool_name: str, args: Json) -> Json:
             execution_order.append("scope_local_p5")
             return args
 
-        def my_tool(args):
+        def my_tool(args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult(args)
 
         guardrails.register_tool_sanitize_request("sl_global_guard", 10, global_sanitizer)
@@ -235,19 +245,19 @@ class TestScopeLocalPriorityOrdering:
         assert execution_order[0] == "scope_local_p5"
         assert execution_order[1] == "global_p10"
 
-    async def test_scope_local_higher_priority_runs_after_global(self):
+    async def test_scope_local_higher_priority_runs_after_global(self) -> None:
         """Scope-local guardrail at priority 20 runs after global at priority 10."""
         execution_order = []
 
-        def global_sanitizer(tool_name, args):
+        def global_sanitizer(_tool_name: str, args: Json) -> Json:
             execution_order.append("global_p10")
             return args
 
-        def scope_local_sanitizer(tool_name, args):
+        def scope_local_sanitizer(_tool_name: str, args: Json) -> Json:
             execution_order.append("scope_local_p20")
             return args
 
-        def my_tool(args):
+        def my_tool(args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult(args)
 
         guardrails.register_tool_sanitize_request("sl_global_guard2", 10, global_sanitizer)
@@ -270,7 +280,7 @@ class TestScopeLocalPriorityOrdering:
 
 
 class TestScopeLocalSubscriber:
-    async def test_subscriber_receives_events_in_scope(self):
+    async def test_subscriber_receives_events_in_scope(self) -> None:
         """A scope-local subscriber receives tool lifecycle events within the scope."""
         events = []
 
@@ -286,7 +296,7 @@ class TestScopeLocalSubscriber:
             assert isinstance(e, EVENT_VARIANTS)
             assert e.uuid is not None
 
-    async def test_subscriber_receives_mark_events(self):
+    async def test_subscriber_receives_mark_events(self) -> None:
         """A scope-local subscriber receives mark events emitted within the scope."""
         events = []
 
@@ -298,7 +308,7 @@ class TestScopeLocalSubscriber:
         mark_events = [e for e in events if isinstance(e, MarkEvent)]
         assert len(mark_events) >= 1
 
-    def test_subscriber_deregister_within_scope(self):
+    def test_subscriber_deregister_within_scope(self) -> None:
         """A scope-local subscriber can be explicitly deregistered before scope exit."""
         events = []
 
@@ -323,16 +333,16 @@ class TestScopeLocalSubscriber:
 
 
 class TestScopeLocalConditionalExecution:
-    async def test_conditional_rejects_blocked_tool(self):
+    async def test_conditional_rejects_blocked_tool(self) -> None:
         """A scope-local conditional guardrail rejects tool calls matching a name pattern."""
         blocked_tools = {"dangerous_tool", "unsafe_operation"}
 
-        def blocker(tool_name, args):
+        def blocker(tool_name: str, _args: Json) -> str | None:
             if tool_name in blocked_tools:
                 return f"tool '{tool_name}' is blocked by policy"
             return None
 
-        def my_tool(args):
+        def my_tool(_args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult({"should": "not reach"})
 
         with scope.scope("cond_scope", ScopeType.Agent) as handle:
@@ -340,16 +350,16 @@ class TestScopeLocalConditionalExecution:
             with pytest.raises(RuntimeError, match="guardrail rejected"):
                 await tools.execute("dangerous_tool", {"payload": "x"}, my_tool)
 
-    async def test_conditional_allows_non_blocked_tool(self):
+    async def test_conditional_allows_non_blocked_tool(self) -> None:
         """A scope-local conditional guardrail allows tool calls that don't match."""
         blocked_tools = {"dangerous_tool"}
 
-        def blocker(tool_name, args):
+        def blocker(tool_name: str, _args: Json) -> str | None:
             if tool_name in blocked_tools:
                 return f"tool '{tool_name}' is blocked"
             return None
 
-        def my_tool(args):
+        def my_tool(_args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult({"result": "success"})
 
         with scope.scope("cond_allow_scope", ScopeType.Agent) as handle:
@@ -358,16 +368,16 @@ class TestScopeLocalConditionalExecution:
 
         assert result.result["result"] == "success"
 
-    async def test_conditional_inactive_after_scope_exit(self):
+    async def test_conditional_inactive_after_scope_exit(self) -> None:
         """Conditional guardrail does not reject after its scope has been popped."""
         blocked_tools = {"blocked_tool"}
 
-        def blocker(tool_name, args):
+        def blocker(tool_name: str, _args: Json) -> str | None:
             if tool_name in blocked_tools:
                 return "blocked"
             return None
 
-        def my_tool(args):
+        def my_tool(_args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult({"ok": True})
 
         with scope.scope("cond_cleanup_scope", ScopeType.Agent) as handle:
@@ -384,22 +394,24 @@ class TestScopeLocalConditionalExecution:
 
 
 class TestScopeLocalIsolation:
-    async def test_no_leaking_between_sequential_scopes(self):
+    async def test_no_leaking_between_sequential_scopes(self) -> None:
         """Middleware registered in scope A does not affect scope B.
 
         Uses request intercepts (which DO modify the execution pipeline args)
         instead of sanitize guardrails (which are observability-only).
         """
 
-        def interceptor_a(tool_name, args):
+        def interceptor_a(_tool_name: str, args: Json) -> Json:
+            assert isinstance(args, dict)
             args["from_scope_a"] = True
             return args
 
-        def interceptor_b(tool_name, args):
+        def interceptor_b(_tool_name: str, args: Json) -> Json:
+            assert isinstance(args, dict)
             args["from_scope_b"] = True
             return args
 
-        def my_tool(args):
+        def my_tool(args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult(args)
 
         # Scope A: registers interceptor_a
@@ -420,18 +432,19 @@ class TestScopeLocalIsolation:
         assert result_b.result["from_scope_b"] is True
         assert "from_scope_a" not in result_b.result
 
-    async def test_no_leaking_with_different_middleware_types(self):
+    async def test_no_leaking_with_different_middleware_types(self) -> None:
         """Different middleware types in sequential scopes stay isolated."""
         intercept_ran = []
         events_a = []
         events_b = []
 
-        def intercept_fn(tool_name, args):
+        def intercept_fn(_tool_name: str, args: Json) -> Json:
             intercept_ran.append("intercept")
+            assert isinstance(args, dict)
             args["intercepted"] = True
             return args
 
-        def my_tool(args):
+        def my_tool(args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult(args)
 
         # Scope A: request intercept + subscriber
@@ -455,15 +468,15 @@ class TestScopeLocalIsolation:
         assert len(events_a) >= 1
         assert len(events_b) >= 1
 
-    async def test_global_guardrail_unaffected_by_scope_local(self):
+    async def test_global_guardrail_unaffected_by_scope_local(self) -> None:
         """A global guardrail persists across scope-local scope boundaries."""
         execution_order = []
 
-        def global_guard(tool_name, args):
+        def global_guard(_tool_name: str, args: Json) -> Json:
             execution_order.append("global")
             return args
 
-        def my_tool(args):
+        def my_tool(args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult(args)
 
         guardrails.register_tool_sanitize_request("sl_persist_global", 1, global_guard)
@@ -490,10 +503,10 @@ class TestScopeLocalIsolation:
 
 
 class TestScopeLocalExecutionIntercept:
-    async def test_execution_intercept_replaces_function(self):
+    async def test_execution_intercept_replaces_function(self) -> None:
         """A scope-local execution intercept can replace the tool function entirely."""
 
-        def my_tool(args):
+        def my_tool(_args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult({"from": "original"})
 
         with scope.scope("exec_int_scope", ScopeType.Agent) as handle:
@@ -507,7 +520,7 @@ class TestScopeLocalExecutionIntercept:
 
         assert result.result["from"] == "intercept"
 
-    async def test_execution_intercept_calls_next(self):
+    async def test_execution_intercept_calls_next(self) -> None:
         """A scope-local execution intercept can modify args and return a result.
 
         NOTE: Calling ``next_call`` from a synchronous execution intercept is
@@ -517,10 +530,13 @@ class TestScopeLocalExecutionIntercept:
         ``test_execution_intercept_replaces_function``).
         """
 
-        def my_tool(args):
+        def my_tool(args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult({"value": args["x"] * 2})
 
-        def intercept_fn(context, next_call):
+        def intercept_fn(
+            context: ToolExecutionContext,
+            _next_call: Callable[[Json], Awaitable[ToolExecutionResult[Json]]],
+        ) -> ToolExecutionInterceptOutcome:
             # Cannot call next_call here — it returns a Future.
             arguments = {**context.args, "x": context.args["x"] + 1}
             return ToolExecutionInterceptOutcome({"value": arguments["x"] * 2, "intercepted": True})
@@ -533,10 +549,13 @@ class TestScopeLocalExecutionIntercept:
         assert result.result["value"] == 12
         assert result.result["intercepted"] is True
 
-    async def test_execution_intercept_receives_tool_call_id(self):
+    async def test_execution_intercept_receives_tool_call_id(self) -> None:
         seen = {}
 
-        async def context_intercept(context, next_call):
+        async def context_intercept(
+            context: ToolExecutionContext,
+            next_call: Callable[[Json], Awaitable[ToolExecutionResult[Json]]],
+        ) -> ToolExecutionInterceptOutcome:
             seen["tool_name"] = context.tool_name
             seen["tool_call_id"] = context.tool_call_id
             seen["arguments"] = context.args
@@ -565,15 +584,16 @@ class TestScopeLocalExecutionIntercept:
 
 
 class TestScopeLocalDeregistration:
-    async def test_deregister_guardrail_within_scope(self):
+    async def test_deregister_guardrail_within_scope(self) -> None:
         """A scope-local guardrail can be explicitly deregistered before scope exit."""
         events = []
 
-        def sanitizer(tool_name, args):
+        def sanitizer(_tool_name: str, args: Json) -> Json:
+            assert isinstance(args, dict)
             args["sanitized"] = True
             return args
 
-        def my_tool(args):
+        def my_tool(args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult(args)
 
         with scope.scope("dereg_scope", ScopeType.Agent) as handle:
@@ -598,7 +618,7 @@ class TestScopeLocalDeregistration:
         start_after = _scope_event(events, "dereg_tool_2", "tool", "start")
         assert "sanitized" not in _event_data_object(start_after)
 
-    def test_deregister_nonexistent_returns_false(self):
+    def test_deregister_nonexistent_returns_false(self) -> None:
         """Deregistering a name that was never registered returns False."""
         with scope.scope("dereg_none_scope", ScopeType.Agent) as handle:
             result = scope_local.deregister_tool_sanitize_request(handle, "nonexistent_guard")
@@ -615,16 +635,21 @@ class TestScopeLocalLlmWrappers:
             (scope_local.register_llm_sanitize_response, object()),
         ],
     )
-    def test_sanitizer_registration_rejects_legacy_or_uninspectable_callbacks(self, register, callback):
+    def test_sanitizer_registration_rejects_legacy_or_uninspectable_callbacks(
+        self, register: Callable[..., Any], callback: object
+    ) -> None:
         with scope.scope("invalid_scope_local_sanitizer", ScopeType.Agent) as handle:
             with pytest.raises(TypeError, match="payload, context"):
                 register(handle, "invalid_scope_local_sanitizer", 1, callback)
 
-    def test_register_and_deregister_scope_local_wrappers(self):
+    def test_register_and_deregister_scope_local_wrappers(self) -> None:
         """Scope-local wrapper functions round-trip through the native API for both tool and LLM middleware."""
         request = LLMRequest({}, {"messages": [], "model": "scope-local"})
 
-        async def stream_intercept(request_inner, next_fn):
+        async def stream_intercept(
+            request_inner: LLMRequest,
+            next_fn: Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]],
+        ) -> AsyncIterator[Json]:
             if request_inner.content.get("emit_test_chunk"):
                 yield {}
 
@@ -689,11 +714,11 @@ class TestScopeLocalLlmWrappers:
 
 
 class TestScopeLocalLlmBehavior:
-    async def test_scope_local_llm_sanitize_request_rewrites_event_input(self):
+    async def test_scope_local_llm_sanitize_request_rewrites_event_input(self) -> None:
         events = []
         request = LLMRequest({}, {"messages": [], "model": "scope-local"})
 
-        def sanitize_request(req, context):
+        def sanitize_request(req: LLMRequest, context: LlmSanitizeRequestContext) -> LLMRequest:
             del context
             return LLMRequest({"X-Scope-Local": "yes"}, req.content)
 
@@ -710,10 +735,10 @@ class TestScopeLocalLlmBehavior:
             "content": {"messages": [], "model": "scope-local"},
         }
 
-    async def test_scope_local_llm_request_intercept_modifies_request(self):
+    async def test_scope_local_llm_request_intercept_modifies_request(self) -> None:
         request = LLMRequest({}, {"messages": [], "model": "scope-local"})
 
-        def intercept(name, req, annotated):
+        def intercept(_name: str, req: LLMRequest, annotated: AnnotatedLLMRequest | None) -> LLMRequestInterceptOutcome:
             return LLMRequestInterceptOutcome(
                 LLMRequest(req.headers, {**req.content, "intercepted": True}),
                 annotated,
@@ -729,12 +754,13 @@ class TestScopeLocalLlmBehavior:
 
         assert result == {"intercepted": True}
 
-    async def test_scope_local_llm_execution_intercept_can_await_next(self):
+    async def test_scope_local_llm_execution_intercept_can_await_next(self) -> None:
         request = LLMRequest({}, {"messages": [], "model": "scope-local"})
 
-        async def middleware(name, req, next_fn):
+        async def middleware(_name: str, req: LLMRequest, next_fn: Callable[[LLMRequest], Awaitable[Json]]) -> Json:
             updated = LLMRequest(req.headers, {**req.content, "model": "via-scope-local"})
             result = await next_fn(updated)
+            assert isinstance(result, dict)
             result["scope_local"] = True
             return result
 
@@ -748,7 +774,7 @@ class TestScopeLocalLlmBehavior:
 
         assert result == {"model": "via-scope-local", "scope_local": True}
 
-    async def test_scope_local_llm_conditional_execution_blocks(self):
+    async def test_scope_local_llm_conditional_execution_blocks(self) -> None:
         request = LLMRequest({}, {"messages": [], "model": "scope-local"})
 
         with scope.scope("sl_llm_conditional_scope", ScopeType.Agent) as handle:

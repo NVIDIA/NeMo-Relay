@@ -46,16 +46,23 @@ The scope end hook should:
 <Tab title="Python" language="python">
 ```python
 import nemo_relay
+from dataclasses import dataclass
 
-def on_request_start(request_state, request_id: str) -> None:
+@dataclass
+class RequestState:
+    nemo_relay_scope: nemo_relay.ScopeHandle | None = None
+
+def on_request_start(request_state: RequestState, request_id: str) -> None:
     request_state.nemo_relay_scope = nemo_relay.scope.push(
         "framework-request",
         nemo_relay.ScopeType.Agent,
         input={"request_id": request_id},
     )
 
-def on_request_end(request_state, status: str) -> None:
+def on_request_end(request_state: RequestState, status: str) -> None:
     handle = request_state.nemo_relay_scope
+    if handle is None:
+        return
     try:
         nemo_relay.scope.pop(handle, output={"status": status})
     finally:

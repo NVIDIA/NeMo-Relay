@@ -40,7 +40,7 @@ _TYPE_ALIASES = {
 }
 
 
-def test_public_exports_have_documentation():
+def test_public_exports_have_documentation() -> None:
     package_doc = inspect.getdoc(nemo_relay_plugin) or ""
 
     for name in nemo_relay_plugin.__all__:
@@ -51,7 +51,7 @@ def test_public_exports_have_documentation():
         assert value.__doc__ and value.__doc__.strip(), f"{name} is missing a direct public docstring"
 
 
-def test_public_class_members_have_docstrings():
+def test_public_class_members_have_docstrings() -> None:
     for exported_name in nemo_relay_plugin.__all__:
         exported = getattr(nemo_relay_plugin, exported_name)
         if not inspect.isclass(exported):

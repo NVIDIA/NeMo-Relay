@@ -25,7 +25,7 @@ from nemo_relay.model_pricing import (
 
 
 class TestPricingConfigHelpers:
-    def test_defaults_and_component_wrapper(self, tmp_path: Path):
+    def test_defaults_and_component_wrapper(self, tmp_path: Path) -> None:
         pricing_file = tmp_path / "pricing.json"
         rates = TokenPricingRates(1.0, 2.0, cache_read_per_million=0.25)
         entry = ModelPricing(
@@ -56,7 +56,7 @@ class TestPricingConfigHelpers:
             "path": str(pricing_file),
         }
 
-    def test_rate_schedule_serialization(self):
+    def test_rate_schedule_serialization(self) -> None:
         schedule = PromptTokenThresholdRateSchedule(
             tiers=[
                 TokenRateTier(
@@ -80,7 +80,7 @@ class TestPricingConfigHelpers:
             ],
         }
 
-    def test_component_configures_plugin_validation(self, tmp_path: Path, monkeypatch):
+    def test_component_configures_plugin_validation(self, tmp_path: Path, monkeypatch) -> None:
         config_home = tmp_path / "config"
         relay_config = config_home / "nemo-relay"
         relay_config.mkdir(parents=True)
@@ -108,7 +108,7 @@ class TestPricingConfigHelpers:
         )
         assert report["diagnostics"] == []
 
-    def test_validation_rejects_invalid_catalog(self):
+    def test_validation_rejects_invalid_catalog(self) -> None:
         report = validate_config(
             PricingConfig(
                 sources=[
@@ -130,5 +130,5 @@ class TestPricingConfigHelpers:
         )
         assert any(diag["code"] == "pricing.invalid_config" for diag in report["diagnostics"])
 
-    def test_list_kinds_includes_builtin_pricing(self):
+    def test_list_kinds_includes_builtin_pricing(self) -> None:
         assert PRICING_PLUGIN_KIND in plugin.list_kinds()

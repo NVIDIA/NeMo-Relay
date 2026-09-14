@@ -10,7 +10,7 @@ import nemo_relay
 from nemo_relay import event_metadata, plugin, scope, scope_local, subscribers
 
 
-async def test_global_python_injectors_support_sync_async_and_failure_safe_output(subscribed_events):
+async def test_global_python_injectors_support_sync_async_and_failure_safe_output(subscribed_events) -> None:
     sync_name = f"python-sync-{uuid4()}"
     async_name = f"python-async-{uuid4()}"
     failure_name = f"python-failure-{uuid4()}"
@@ -70,7 +70,7 @@ async def test_global_python_injectors_support_sync_async_and_failure_safe_outpu
 
 async def test_python_injectors_accept_numeric_lists_with_integer_and_fractional_values(
     subscribed_events,
-):
+) -> None:
     integers_name = f"python-integers-{uuid4()}"
     doubles_name = f"python-doubles-{uuid4()}"
     mixed_name = f"python-mixed-numbers-{uuid4()}"
@@ -106,7 +106,7 @@ async def test_python_injectors_accept_numeric_lists_with_integer_and_fractional
     }
 
 
-async def test_scope_local_python_injector_applies_only_to_owned_events(subscribed_events):
+async def test_scope_local_python_injector_applies_only_to_owned_events(subscribed_events) -> None:
     with scope.scope("python-scope-owner", nemo_relay.ScopeType.Agent) as owner:
         scope_local.register_event_metadata_injector(
             owner,
@@ -138,7 +138,7 @@ async def test_scope_local_python_injector_applies_only_to_owned_events(subscrib
     assert events["python-scope-outside"].metadata is None
 
 
-async def test_scope_local_python_injector_can_be_deregistered_while_owner_is_active(subscribed_events):
+async def test_scope_local_python_injector_can_be_deregistered_while_owner_is_active(subscribed_events) -> None:
     with scope.scope("python-scope-deregister-owner", nemo_relay.ScopeType.Agent) as owner:
         scope_local.register_event_metadata_injector(
             owner,
@@ -158,9 +158,9 @@ async def test_scope_local_python_injector_can_be_deregistered_while_owner_is_ac
     assert events["python-scope-after-deregister"].metadata is None
 
 
-async def test_in_process_python_plugin_registers_configured_injector_and_cleans_up(subscribed_events):
+async def test_in_process_python_plugin_registers_configured_injector_and_cleans_up(subscribed_events) -> None:
     class ConfiguredMetadataPlugin:
-        def validate(self, _config: nemo_relay.JsonObject):
+        def validate(self, _config: nemo_relay.JsonObject) -> None:
             return None
 
         def register(

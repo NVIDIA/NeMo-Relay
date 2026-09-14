@@ -7,10 +7,10 @@ import nemo_relay
 
 
 class TestRuntime:
-    def test_runtime_control_module_is_not_exported(self):
+    def test_runtime_control_module_is_not_exported(self) -> None:
         assert not hasattr(nemo_relay, "runtime")
 
-    def test_scope_stack_helpers_remain_available(self):
+    def test_scope_stack_helpers_remain_available(self) -> None:
         stack = nemo_relay.create_scope_stack()
 
         assert stack is not None

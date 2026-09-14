@@ -34,7 +34,7 @@ from nemo_relay.codecs import (
 class SimpleCodec(LlmCodec):
     """Test codec that treats LLMRequest.content as an OpenAI-like payload."""
 
-    def decode(self, request):
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
         content = request.content
         messages = content.get("messages", [])
         return AnnotatedLLMRequest(
@@ -43,7 +43,7 @@ class SimpleCodec(LlmCodec):
             params={"temperature": content.get("temperature")} if "temperature" in content else None,
         )
 
-    def encode(self, annotated, original):
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
         content = {**original.content, "messages": annotated.messages}
         if annotated.model is not None:
             content["model"] = annotated.model
@@ -53,7 +53,7 @@ class SimpleCodec(LlmCodec):
 class AlternateCodec(LlmCodec):
     """Second codec for testing codec parameter selection."""
 
-    def decode(self, request):
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
         content = request.content
         messages = content.get("messages", [])
         return AnnotatedLLMRequest(
@@ -62,14 +62,14 @@ class AlternateCodec(LlmCodec):
             extra={"codec_used": "alternate"},
         )
 
-    def encode(self, annotated, original):
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
         content = {**original.content, "messages": annotated.messages}
         if annotated.extra and "codec_used" in annotated.extra:
             content["codec_used"] = annotated.extra["codec_used"]
         return LLMRequest(original.headers, content)
 
 
-def make_request():
+def make_request() -> LLMRequest:
     return LLMRequest(
         {"Authorization": "Bearer test"},
         {"messages": [{"role": "user", "content": "hello"}], "model": "gpt-4"},
@@ -82,7 +82,7 @@ def make_request():
 
 
 class TestAnnotatedLLMRequestConstruction:
-    def test_annotated_llm_request_construction(self):
+    def test_annotated_llm_request_construction(self) -> None:
         """Construct AnnotatedLLMRequest with messages and verify all fields."""
         messages = [
             {"role": "system", "content": "You are helpful."},
@@ -98,7 +98,7 @@ class TestAnnotatedLLMRequestConstruction:
         # extra defaults to an empty dict (not None)
         assert annotated.extra == {} or annotated.extra is None
 
-    def test_annotated_llm_request_setter_roundtrip(self):
+    def test_annotated_llm_request_setter_roundtrip(self) -> None:
         """Construct, set messages to new value via setter, verify getter returns new value."""
         original_messages = [{"role": "user", "content": "first"}]
         annotated = AnnotatedLLMRequest(original_messages)
@@ -116,7 +116,7 @@ class TestAnnotatedLLMRequestConstruction:
         annotated.model = "gpt-4-turbo"
         assert annotated.model == "gpt-4-turbo"
 
-    def test_annotated_llm_request_helpers(self):
+    def test_annotated_llm_request_helpers(self) -> None:
         """Test system_prompt(), last_user_message(), has_tool_calls()."""
         messages = [
             {"role": "system", "content": "You are helpful."},
@@ -130,14 +130,14 @@ class TestAnnotatedLLMRequestConstruction:
         assert annotated.last_user_message() == "Thanks!"
         assert annotated.has_tool_calls() is False
 
-    def test_annotated_llm_request_helpers_no_system(self):
+    def test_annotated_llm_request_helpers_no_system(self) -> None:
         """system_prompt() returns None when there is no system message."""
         messages = [{"role": "user", "content": "hi"}]
         annotated = AnnotatedLLMRequest(messages)
         assert annotated.system_prompt() is None
         assert annotated.last_user_message() == "hi"
 
-    def test_annotated_llm_request_has_tool_calls(self):
+    def test_annotated_llm_request_has_tool_calls(self) -> None:
         """has_tool_calls() returns True when messages contain tool_calls."""
         messages = [
             {"role": "user", "content": "search for cats"},
@@ -150,7 +150,7 @@ class TestAnnotatedLLMRequestConstruction:
         annotated = AnnotatedLLMRequest(messages)
         assert annotated.has_tool_calls() is True
 
-    def test_annotated_llm_request_all_fields(self):
+    def test_annotated_llm_request_all_fields(self) -> None:
         """Construct with all optional fields populated and verify round-trip."""
         messages = [{"role": "user", "content": "hello"}]
         tools_list = [
@@ -200,7 +200,7 @@ class TestAnnotatedLLMRequestConstruction:
 
 
 class TestCodecDecodeEncode:
-    def test_codec_decode_encode_roundtrip(self):
+    def test_codec_decode_encode_roundtrip(self) -> None:
         """Decode an LLMRequest into AnnotatedLLMRequest, then encode back."""
         codec = SimpleCodec()
         request = LLMRequest(
@@ -243,14 +243,14 @@ class TestCodecDecodeEncode:
 
 
 class TestCodecInstantiation:
-    def test_llm_codec_subclass_creation(self):
+    def test_llm_codec_subclass_creation(self) -> None:
         """LlmCodec subclass can be instantiated and has decode/encode methods."""
         codec = SimpleCodec()
         assert isinstance(codec, LlmCodec)
         assert hasattr(codec, "decode")
         assert hasattr(codec, "encode")
 
-    def test_llm_codec_is_runtime_checkable_protocol(self):
+    def test_llm_codec_is_runtime_checkable_protocol(self) -> None:
         """LlmCodec is a runtime-checkable Protocol."""
         codec = SimpleCodec()
         assert isinstance(codec, LlmCodec)
@@ -265,13 +265,15 @@ class TestCodecInstantiation:
 
 
 class TestCodecPipeline:
-    async def test_pipeline_with_codec(self):
+    async def test_pipeline_with_codec(self) -> None:
         """Full pipeline: pass codec instance directly + annotated intercept, execute LLM call."""
         codec = SimpleCodec()
 
         intercept_called = []
 
-        def annotated_intercept(name, request, annotated):
+        def annotated_intercept(
+            _name: str, request: LLMRequest, annotated: AnnotatedLLMRequest | None
+        ) -> LLMRequestInterceptOutcome:
             intercept_called.append(True)
             assert annotated is not None
             assert isinstance(annotated, AnnotatedLLMRequest)
@@ -287,7 +289,7 @@ class TestCodecPipeline:
 
         try:
 
-            def func(request):
+            def func(request: LLMRequest) -> dict[str, object]:
                 return {"messages": request.content.get("messages", []), "model": request.content.get("model")}
 
             request = make_request()
@@ -300,15 +302,17 @@ class TestCodecPipeline:
         finally:
             intercepts.deregister_llm_request("test-annot-intercept-pipeline")
 
-    async def test_codec_rejects_raw_content_edits_before_provider(self):
+    async def test_codec_rejects_raw_content_edits_before_provider(self) -> None:
         """Codec-aware intercepts must edit the annotation, not the raw body."""
         provider_called = False
 
-        def raw_content_intercept(name, request, annotated):
+        def raw_content_intercept(
+            _name: str, request: LLMRequest, annotated: AnnotatedLLMRequest | None
+        ) -> LLMRequestInterceptOutcome:
             content = {**request.content, "model": "raw-model-edit"}
             return LLMRequestInterceptOutcome(LLMRequest(request.headers, content), annotated)
 
-        def provider(request):
+        def provider(_request: LLMRequest) -> dict[str, bool]:
             nonlocal provider_called
             provider_called = True
             return {"unexpected": True}
@@ -321,15 +325,17 @@ class TestCodecPipeline:
         finally:
             intercepts.deregister_llm_request("test-codec-raw-content")
 
-    async def test_codec_rejects_missing_annotation_before_provider(self):
+    async def test_codec_rejects_missing_annotation_before_provider(self) -> None:
         """Codec-aware intercepts must return the decoded annotation."""
         provider_called = False
 
-        def missing_annotation_intercept(name, request, annotated):
+        def missing_annotation_intercept(
+            _name: str, request: LLMRequest, annotated: AnnotatedLLMRequest | None
+        ) -> LLMRequestInterceptOutcome:
             assert annotated is not None
             return LLMRequestInterceptOutcome(request, None)
 
-        def provider(request):
+        def provider(_request: LLMRequest) -> dict[str, bool]:
             nonlocal provider_called
             provider_called = True
             return {"unexpected": True}
@@ -342,13 +348,15 @@ class TestCodecPipeline:
         finally:
             intercepts.deregister_llm_request("test-codec-missing-annotation")
 
-    async def test_codec_parameter(self):
+    async def test_codec_parameter(self) -> None:
         """codec parameter passes the specified codec instance directly."""
         alternate = AlternateCodec()
 
         intercept_data = {}
 
-        def annotated_intercept(name, request, annotated):
+        def annotated_intercept(
+            _name: str, request: LLMRequest, annotated: AnnotatedLLMRequest | None
+        ) -> LLMRequestInterceptOutcome:
             if annotated is not None:
                 intercept_data["extra"] = annotated.extra
             return LLMRequestInterceptOutcome(request, annotated)
@@ -357,7 +365,7 @@ class TestCodecPipeline:
 
         try:
 
-            def func(request):
+            def func(_request: LLMRequest) -> dict[str, bool]:
                 return {"ok": True}
 
             request = make_request()
@@ -369,13 +377,15 @@ class TestCodecPipeline:
         finally:
             intercepts.deregister_llm_request("test-annot-intercept-cn")
 
-    async def test_annotated_request_intercept_receives_typed(self):
+    async def test_annotated_request_intercept_receives_typed(self) -> None:
         """Annotated intercept receives an AnnotatedLLMRequest instance when codec is active."""
         codec = SimpleCodec()
 
         intercept_called = []
 
-        def annotated_intercept(name, request, annotated):
+        def annotated_intercept(
+            _name: str, request: LLMRequest, annotated: AnnotatedLLMRequest | None
+        ) -> LLMRequestInterceptOutcome:
             intercept_called.append(True)
             assert annotated is not None
             assert isinstance(annotated, AnnotatedLLMRequest)
@@ -386,7 +396,7 @@ class TestCodecPipeline:
 
         try:
 
-            def func(request):
+            def func(_request: LLMRequest) -> dict[str, bool]:
                 return {"ok": True}
 
             await llm.execute("typed-llm", make_request(), func, codec=codec)
@@ -401,7 +411,7 @@ class TestCodecPipeline:
 
 
 class TestCodecsModuleImport:
-    def test_codecs_module_import(self):
+    def test_codecs_module_import(self) -> None:
         """Verify module import structure works correctly."""
         from nemo_relay import codecs as codecs_mod
 

@@ -38,7 +38,7 @@ def _make_mock_nemo_relay() -> MagicMock:
         stack.append(handle)
         return handle
 
-    def pop(handle, **kwargs):
+    def pop(handle, **kwargs) -> None:
         # Closing anything but the top is what the real stack rejects, so the mock has to
         # reject it too; otherwise a handler that closed the wrong scope would pass.
         assert handle is stack[-1], "closed a scope that was not on top"
@@ -79,10 +79,10 @@ def handler(mock_nemo_relay: MagicMock) -> NemoRelayCallbackHandler:
 class TestScopeLifecycle:
     """Verify that chain start/end/error map to scope push/pop."""
 
-    def test_handler_runs_inline_for_async_callback_managers(self, handler: NemoRelayCallbackHandler):
+    def test_handler_runs_inline_for_async_callback_managers(self, handler: NemoRelayCallbackHandler) -> None:
         assert handler.run_inline is True
 
-    def test_on_chain_start_pushes_scope(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock):
+    def test_on_chain_start_pushes_scope(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock) -> None:
         run_id = uuid4()
 
         handler.on_chain_start(
@@ -102,7 +102,9 @@ class TestScopeLifecycle:
         }
         assert run_id in handler._scope_handles
 
-    def test_on_chain_start_uses_callback_name(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock):
+    def test_on_chain_start_uses_callback_name(
+        self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock
+    ) -> None:
         run_id = uuid4()
 
         handler.on_chain_start(
@@ -114,7 +116,7 @@ class TestScopeLifecycle:
 
         assert mock_nemo_relay.scope.push.call_args.args[0] == "LangGraph"
 
-    def test_on_chain_end_pops_scope(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock):
+    def test_on_chain_end_pops_scope(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock) -> None:
         run_id = uuid4()
         handler.on_chain_start(
             {"name": "MyChain"},
@@ -136,7 +138,7 @@ class TestScopeLifecycle:
         )
         assert run_id not in handler._scope_handles
 
-    def test_on_chain_error_pops_scope(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock):
+    def test_on_chain_error_pops_scope(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock) -> None:
         run_id = uuid4()
         handler.on_chain_start(
             {"name": "MyChain"},
@@ -158,7 +160,9 @@ class TestScopeLifecycle:
         )
         assert run_id not in handler._scope_handles
 
-    def test_on_chain_end_prepares_command_outputs(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock):
+    def test_on_chain_end_prepares_command_outputs(
+        self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock
+    ) -> None:
         from langchain_core.messages import ToolMessage
         from langgraph.types import Command
 
@@ -216,7 +220,7 @@ class TestScopeLifecycle:
             timestamp=ANY,
         )
 
-    def test_parent_scope_passed_to_push(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock):
+    def test_parent_scope_passed_to_push(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock) -> None:
         parent_id = uuid4()
         child_id = uuid4()
         handler.on_chain_start(
@@ -236,7 +240,9 @@ class TestScopeLifecycle:
         child_call = mock_nemo_relay.scope.push.call_args_list[1]
         assert child_call.kwargs["handle"] is parent_handle
 
-    def test_chain_end_without_start_is_noop(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock):
+    def test_chain_end_without_start_is_noop(
+        self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock
+    ) -> None:
         handler.on_chain_end(
             {"output": "result"},
             run_id=uuid4(),
@@ -244,7 +250,7 @@ class TestScopeLifecycle:
 
         mock_nemo_relay.scope.pop.assert_not_called()
 
-    def test_name_fallback_to_id(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock):
+    def test_name_fallback_to_id(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock) -> None:
         run_id = uuid4()
 
         handler.on_chain_start(
@@ -259,7 +265,9 @@ class TestScopeLifecycle:
 class TestGracefulNoOp:
     """Verify callbacks are silent if the module-level runtime is unavailable."""
 
-    def test_no_nemo_relay_on_chain_start(self, monkeypatch: pytest.MonkeyPatch, callbacks_module: types.ModuleType):
+    def test_no_nemo_relay_on_chain_start(
+        self, monkeypatch: pytest.MonkeyPatch, callbacks_module: types.ModuleType
+    ) -> None:
         monkeypatch.setattr(callbacks_module, "nemo_relay", None)
         from nemo_relay.integrations.langchain.callbacks import NemoRelayCallbackHandler
 
@@ -267,7 +275,9 @@ class TestGracefulNoOp:
 
         handler.on_chain_start({"name": "x"}, {}, run_id=uuid4())
 
-    def test_no_nemo_relay_on_chain_end(self, monkeypatch: pytest.MonkeyPatch, callbacks_module: types.ModuleType):
+    def test_no_nemo_relay_on_chain_end(
+        self, monkeypatch: pytest.MonkeyPatch, callbacks_module: types.ModuleType
+    ) -> None:
         monkeypatch.setattr(callbacks_module, "nemo_relay", None)
         from nemo_relay.integrations.langchain.callbacks import NemoRelayCallbackHandler
 
@@ -275,7 +285,9 @@ class TestGracefulNoOp:
 
         handler.on_chain_end({}, run_id=uuid4())
 
-    def test_no_nemo_relay_on_chain_error(self, monkeypatch: pytest.MonkeyPatch, callbacks_module: types.ModuleType):
+    def test_no_nemo_relay_on_chain_error(
+        self, monkeypatch: pytest.MonkeyPatch, callbacks_module: types.ModuleType
+    ) -> None:
         monkeypatch.setattr(callbacks_module, "nemo_relay", None)
         from nemo_relay.integrations.langchain.callbacks import NemoRelayCallbackHandler
 
@@ -287,12 +299,12 @@ class TestGracefulNoOp:
 class TestErrorSwallowing:
     """Ensure NeMo Relay errors never propagate."""
 
-    def test_scope_push_error_swallowed(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock):
+    def test_scope_push_error_swallowed(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock) -> None:
         mock_nemo_relay.scope.push.side_effect = RuntimeError("nemo relay failure")
 
         handler.on_chain_start({"name": "x"}, {}, run_id=uuid4())
 
-    def test_scope_pop_error_swallowed(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock):
+    def test_scope_pop_error_swallowed(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock) -> None:
         run_id = uuid4()
         handler.on_chain_start({"name": "x"}, {}, run_id=run_id)
         mock_nemo_relay.scope.pop.side_effect = RuntimeError("nemo relay failure")

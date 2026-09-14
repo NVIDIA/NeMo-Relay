@@ -59,17 +59,17 @@ the framework's business payload before closing the tool span.
 import nemo_relay
 from nemo_relay import LLMRequest
 
-def framework_tool_started(name: str, args: dict):
+def framework_tool_started(name: str, args: dict[str, object]) -> nemo_relay.ToolCallHandle:
     return nemo_relay.tools.call(name, args)
 
-def framework_tool_finished(handle, result: dict) -> None:
+def framework_tool_finished(handle: nemo_relay.ToolCallHandle, result: dict[str, object]) -> None:
     nemo_relay.tools.call_end(handle, nemo_relay.ToolExecutionResult(result))
 
-def framework_llm_started(provider: str, payload: dict):
+def framework_llm_started(provider: str, payload: dict[str, object]) -> nemo_relay.LLMCallHandle:
     request = LLMRequest({}, payload)
     return nemo_relay.llm.call(provider, request, model_name=payload.get("model"))
 
-def framework_llm_finished(handle, response: dict) -> None:
+def framework_llm_finished(handle: nemo_relay.LLMCallHandle, response: dict[str, object]) -> None:
     nemo_relay.llm.call_end(handle, response)
 ```
 </Tab>

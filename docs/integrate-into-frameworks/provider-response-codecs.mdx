@@ -257,7 +257,7 @@ report = nemo_relay.plugin.validate_exact(config)["config"]
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
-async def main():
+async def main() -> None:
     async with nemo_relay.plugin.activate(config):
         # Run instrumented application work here.
         pass
@@ -476,7 +476,7 @@ import nemo_relay
 from nemo_relay import LLMRequest
 from nemo_relay.codecs import OpenAIChatCodec
 
-async def invoke_provider(request: LLMRequest):
+async def invoke_provider(request: LLMRequest) -> dict[str, object]:
     return {
         "id": "chatcmpl-demo",
         "model": request.content["model"],
@@ -585,7 +585,7 @@ Subscribers can inspect `annotated_response` on LLM end events. The exact event 
 ```python
 import nemo_relay
 
-def on_event(event):
+def on_event(event: nemo_relay.Event) -> None:
     annotated = getattr(event, "annotated_response", None)
     if annotated is None:
         return
@@ -626,14 +626,15 @@ Use a custom response codec when the provider or framework response does not mat
 In Python, a custom response codec can route to built-in codecs and return their native `AnnotatedLLMResponse` values:
 
 ```python
+import nemo_relay
 from nemo_relay.codecs import OpenAIChatCodec, OpenAIResponsesCodec
 
 class OpenAIRoutingResponseCodec:
-    def __init__(self):
+    def __init__(self) -> None:
         self.chat = OpenAIChatCodec()
         self.responses = OpenAIResponsesCodec()
 
-    def decode_response(self, response):
+    def decode_response(self, response: nemo_relay.Json) -> nemo_relay.AnnotatedLLMResponse:
         if response.get("object") == "response":
             return self.responses.decode_response(response)
         return self.chat.decode_response(response)

@@ -79,10 +79,10 @@ import asyncio
 
 import nemo_relay
 
-def log_event(event) -> None:
+def log_event(event: nemo_relay.Event) -> None:
     print(f"{event.kind} {event.name}")
 
-async def call_provider(request: nemo_relay.LLMRequest):
+async def call_provider(request: nemo_relay.LLMRequest) -> dict[str, object]:
     return {
         "text": "hello",
         "messages": request.content["messages"],

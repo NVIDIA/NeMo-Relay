@@ -77,16 +77,16 @@ export NEMO_RELAY_PLUGIN_SNAPSHOT_DIR=/var/tmp/nrs
 ```
 
 ```python
-from nemo_relay_plugin import DiagnosticLevel, WorkerPlugin, serve_plugin
+from nemo_relay_plugin import ConfigDiagnostic, DiagnosticLevel, Json, PluginContext, WorkerPlugin, serve_plugin
 
 class ExamplePythonWorker(WorkerPlugin):
     plugin_id = "examples.python_grpc_worker"
     allows_multiple_components = False
 
-    def validate(self, config):
+    def validate(self, config: Json) -> list[ConfigDiagnostic]:
         return validate_config(config)
 
-    def register(self, ctx, config):
+    def register(self, ctx: PluginContext, config: Json) -> None:
         diagnostics = validate_config(config)
         errors = [
             item for item in diagnostics
@@ -110,7 +110,7 @@ class ExamplePythonWorker(WorkerPlugin):
         if settings["execution"]["enabled"]:
             self._register_execution(ctx, settings["tag"], settings["execution"])
 
-async def main():
+async def main() -> None:
     await serve_plugin(ExamplePythonWorker())
 ```
 

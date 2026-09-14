@@ -84,7 +84,10 @@ The following examples register a component-owned callback through `PluginContex
 <Tabs>
 <Tab title="Python" language="python">
 ```python
-def register(self, plugin_config, context):
+from nemo_relay import EventMetadata, Json
+from nemo_relay.plugin import PluginContext
+
+def register(self, plugin_config: dict[str, Json], context: PluginContext) -> None:
     tag = plugin_config["tag"]
     context.register_event_metadata_injector(
         "component-metadata",
@@ -148,6 +151,10 @@ this common center.
 <Tabs>
 <Tab title="Python" language="python">
 ```python
+from collections.abc import AsyncIterator, Awaitable, Callable
+
+from nemo_relay import AnnotatedLLMRequest, Json, LLMRequest, LLMRequestInterceptOutcome
+
 settings = normalized_config(config)
 tag = settings["tag"]
 observe = settings["observe"]
@@ -159,7 +166,7 @@ if observe["enabled"]:
         "events", lambda event: self.events.append(event.name)
     )
 
-def tool_policy(name, _args):
+def tool_policy(name: str, _args: Json) -> str | None:
     if requests["mode"] == "enforce" and name in requests["blocked_tools"]:
         return f"tool '{name}' is blocked"
     return None
@@ -174,7 +181,9 @@ context.register_tool_request_intercept(
     lambda _name, args: {**args, "plugin_tag": tag},
 )
 
-def add_header(name, request, annotated):
+def add_header(
+    _name: str, request: LLMRequest, annotated: AnnotatedLLMRequest | None
+) -> LLMRequestInterceptOutcome:
     headers = dict(request.headers)
     headers[requests["header_name"]] = requests["header_value"]
     return LLMRequestInterceptOutcome(
@@ -189,7 +198,9 @@ context.register_llm_request_intercept(
     add_header,
 )
 
-async def stream_request(request, next_call):
+async def stream_request(
+    request: LLMRequest, next_call: Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]]
+) -> AsyncIterator[Json]:
     async for chunk in await next_call(request):
         yield {**chunk, "plugin_stream": True}
 

@@ -23,7 +23,7 @@ from nemo_relay.pii_redaction import (
 
 
 class TestPiiRedactionConfigHelpers:
-    def test_defaults_and_component_wrapper(self):
+    def test_defaults_and_component_wrapper(self) -> None:
         assert BuiltinConfig().to_dict() == {
             "action": "remove",
             "target_paths": [],
@@ -48,7 +48,7 @@ class TestPiiRedactionConfigHelpers:
         opted_out = PiiRedactionConfig(mark=False).to_dict()
         assert opted_out["mark"] is False
 
-    def test_validation_rejects_bad_values(self, tmp_path: Path, monkeypatch):
+    def test_validation_rejects_bad_values(self, tmp_path: Path, monkeypatch) -> None:
         config_home = tmp_path / "config"
         relay_config = config_home / "nemo-relay"
         relay_config.mkdir(parents=True)
@@ -67,7 +67,7 @@ class TestPiiRedactionConfigHelpers:
         )
         assert any(diag.get("field") == "builtin.detector" for diag in report["diagnostics"])
 
-    def test_component_configures_plugin_validation(self):
+    def test_component_configures_plugin_validation(self) -> None:
         report = validate_plugin_config(
             plugin.PluginConfig(
                 components=[
@@ -86,7 +86,7 @@ class TestPiiRedactionConfigHelpers:
         )
         assert report["diagnostics"] == []
 
-    async def test_initialize_and_activate_reject_no_enabled_surfaces_with_value_error(self):
+    async def test_initialize_and_activate_reject_no_enabled_surfaces_with_value_error(self) -> None:
         config = plugin.PluginConfig(
             components=[
                 ComponentSpec(
@@ -114,5 +114,5 @@ class TestPiiRedactionConfigHelpers:
             async with plugin.activate(config):
                 pass
 
-    def test_list_kinds_includes_builtin_pii_redaction(self):
+    def test_list_kinds_includes_builtin_pii_redaction(self) -> None:
         assert PII_REDACTION_PLUGIN_KIND in plugin.list_kinds()

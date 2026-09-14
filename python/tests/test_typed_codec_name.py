@@ -29,7 +29,7 @@ class SimpleCodec(LlmCodec):
 
 
 class TestLlmExecuteCodec:
-    async def test_llm_execute_accepts_codec(self):
+    async def test_llm_execute_accepts_codec(self) -> None:
         """typed.llm_execute accepts codec kwarg without error."""
         request = LLMRequest({}, {"messages": [{"role": "user", "content": "hi"}], "model": "gpt-4"})
 
@@ -45,7 +45,7 @@ class TestLlmExecuteCodec:
         )
         assert result == {"ok": True}
 
-    async def test_llm_execute_codec_none_default(self):
+    async def test_llm_execute_codec_none_default(self) -> None:
         """typed.llm_execute works with codec=None (default behavior)."""
         request = LLMRequest({}, {"messages": [{"role": "user", "content": "hi"}], "model": "gpt-4"})
 
@@ -61,7 +61,7 @@ class TestLlmExecuteCodec:
         )
         assert result == {"ok": True}
 
-    async def test_llm_execute_forwards_codec(self):
+    async def test_llm_execute_forwards_codec(self) -> None:
         """typed.llm_execute forwards codec to llm.execute."""
         request = LLMRequest({}, {"messages": [{"role": "user", "content": "hi"}], "model": "gpt-4"})
 
@@ -86,7 +86,7 @@ class TestLlmExecuteCodec:
 
 
 class TestLlmStreamExecuteCodec:
-    async def test_llm_stream_execute_accepts_codec(self):
+    async def test_llm_stream_execute_accepts_codec(self) -> None:
         """typed.llm_stream_execute accepts codec kwarg without error."""
         request = LLMRequest({}, {"messages": [{"role": "user", "content": "hi"}], "model": "gpt-4"})
         chunks = []
@@ -94,7 +94,7 @@ class TestLlmStreamExecuteCodec:
         async def func(req):
             yield {"chunk": 1}
 
-        def collector(chunk):
+        def collector(chunk) -> None:
             chunks.append(chunk)
 
         def finalizer():
@@ -112,14 +112,14 @@ class TestLlmStreamExecuteCodec:
         )
         assert [chunk async for chunk in stream] == [{"chunk": 1}]
 
-    async def test_llm_stream_execute_forwards_codec(self):
+    async def test_llm_stream_execute_forwards_codec(self) -> None:
         """typed.llm_stream_execute forwards codec to llm.stream_execute."""
         request = LLMRequest({}, {"messages": [{"role": "user", "content": "hi"}], "model": "gpt-4"})
 
         async def func(req):
             yield {"chunk": 1}
 
-        def collector(chunk):
+        def collector(chunk) -> None:
             del chunk
 
         def finalizer():
