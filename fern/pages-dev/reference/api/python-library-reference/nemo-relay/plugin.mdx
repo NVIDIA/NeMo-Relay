@@ -256,7 +256,7 @@ Canonical plugin configuration document.
 ##### `PluginConfig`
 
 ```python
-def PluginConfig(version: int = 1, components: list[object] = ..., policy: ConfigPolicy = ...) -> None
+def PluginConfig(version: int = 1, components: list[PluginComponentSpec] = ..., policy: ConfigPolicy = ...) -> None
 ```
 
 Create an instance.
@@ -361,5 +361,6 @@ Deregister a custom plugin kind.
 
 - `DynamicPluginCheckState`
 - `DynamicPluginKind`
+- `PluginComponentSpec`
 - `UnsupportedBehavior`
 

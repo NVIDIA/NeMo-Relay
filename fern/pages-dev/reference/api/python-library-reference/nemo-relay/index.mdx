@@ -108,7 +108,7 @@ Create an asyncio child context with an isolated Relay scope stack.
 ### `use_scope_stack`
 
 ```python
-def use_scope_stack(stack: ScopeStack)
+def use_scope_stack(stack: ScopeStack) -> AbstractContextManager[ScopeStack]
 ```
 
 Temporarily install `stack` in the current Python context.

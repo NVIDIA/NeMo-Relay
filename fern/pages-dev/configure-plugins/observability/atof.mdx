@@ -280,7 +280,7 @@ report = plugin.validate(config)["config"]
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
-async def main():
+async def main() -> None:
     async with plugin.activate(config):
         # Run instrumented application work here.
         pass

@@ -122,7 +122,15 @@ The callback takes two parameters because the tool name and arguments move
 onto the context:
 
 ```python
-async def measure(context, next_call):
+from collections.abc import Awaitable, Callable
+
+import nemo_relay
+from nemo_relay import Json, ToolExecutionContext, ToolExecutionInterceptOutcome, ToolExecutionResult
+
+async def measure(
+    context: ToolExecutionContext,
+    next_call: Callable[[Json], Awaitable[ToolExecutionResult[Json]]],
+) -> ToolExecutionInterceptOutcome:
     downstream = await next_call(context.args)
     record(context.tool_call_id, context.tool_name, downstream.result)
     return ToolExecutionInterceptOutcome(result=downstream.result)

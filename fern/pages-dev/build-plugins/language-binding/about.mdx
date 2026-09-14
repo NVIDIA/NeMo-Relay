@@ -29,11 +29,12 @@ component-local JSON, installs component-owned middleware, the host activates a
 <Tab title="Python" language="python">
 ```python
 import asyncio
+from typing import Any
 import nemo_relay
 from nemo_relay import plugin, tools
 
 class AddTagPlugin:
-    def validate(self, config):
+    def validate(self, config: dict[str, Any]) -> list[dict[str, str]]:
         tag = config.get("tag")
         if not isinstance(tag, str) or not tag:
             return [{
@@ -45,7 +46,7 @@ class AddTagPlugin:
             }]
         return []
 
-    def register(self, config, context):
+    def register(self, config: dict[str, Any], context: plugin.PluginContext) -> None:
         tag = config["tag"]
         context.register_tool_request_intercept(
             "add-tag",
@@ -54,7 +55,7 @@ class AddTagPlugin:
             lambda _name, request: {**request, "plugin_tag": tag},
         )
 
-async def main():
+async def main() -> None:
     plugin.register("example.add-tag", AddTagPlugin())
     config = plugin.PluginConfig(components=[
         plugin.ComponentSpec(
