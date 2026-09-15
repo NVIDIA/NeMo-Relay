@@ -56,6 +56,13 @@ impl HookRoute {
 }
 
 impl ProviderRoute {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAi => "openai",
+            Self::Anthropic => "anthropic",
+        }
+    }
+
     pub(crate) fn upstream_url(self, config: &GatewayConfig, path_and_query: &str) -> String {
         let base = match self {
             Self::OpenAi => config.openai_base_url.as_str(),
