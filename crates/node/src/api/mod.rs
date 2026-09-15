@@ -3905,8 +3905,11 @@ napi_intercept_tool_api!(
 
 /// Register a tool execution intercept following the middleware chain pattern.
 ///
-/// The `callable` receives a `ToolExecutionContext` and a `next` function.
-/// Call `next(context.args)` to invoke the remaining chain.
+/// The `callable` receives `ToolExecutionContext` and `next`. The context
+/// exposes `toolName`, `args`, and `toolCallId`; `toolCallId` is `null` when
+/// the managed call has no provider-issued correlation identifier. Call
+/// `next(context.args)` to continue the chain, or return an outcome directly
+/// to short-circuit execution.
 #[napi]
 pub fn register_tool_execution_intercept(
     env: Env,
@@ -4512,7 +4515,11 @@ napi_scope_intercept_tool_api!(
 
 /// Register a scope-local tool execution intercept following the middleware chain pattern.
 ///
-/// The `callable` receives a `ToolExecutionContext` and a `next` function.
+/// The `callable` receives `ToolExecutionContext` and `next`. The context
+/// exposes `toolName`, `args`, and `toolCallId`; `toolCallId` is `null` when
+/// the managed call has no provider-issued correlation identifier. Call
+/// `next(context.args)` to continue the chain, or return an outcome directly
+/// to short-circuit execution.
 #[napi]
 pub fn scope_register_tool_execution_intercept(
     env: Env,

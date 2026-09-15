@@ -485,6 +485,19 @@ describe('Tool execute', () => {
     assert.match(declarations, /toolCallExecuteAsync\([\s\S]*?metadata\?: Json[^,\n]*,[\s\S]*?toolCallId\?: string/);
   });
 
+  it('generated execution-intercept declarations use context and next parameters', () => {
+    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+
+    assert.match(
+      declarations,
+      /registerToolExecutionIntercept\([\s\S]*?context: import\('\.\/plugin'\)\.ToolExecutionContext, next: \(args: Json\) => ToolExecutionResult \| Promise<ToolExecutionResult>/,
+    );
+    assert.match(
+      declarations,
+      /The context\n \* exposes `toolName`, `args`, and `toolCallId`; `toolCallId` is `null` when/,
+    );
+  });
+
   it('async execute surfaces plain string rejections', async () => {
     await assert.rejects(
       () =>
