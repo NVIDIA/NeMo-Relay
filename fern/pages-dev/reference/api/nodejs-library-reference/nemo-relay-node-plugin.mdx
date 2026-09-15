@@ -14,30 +14,6 @@ Plugin configuration, validation, activation, and registration helpers.
 
 ## Interfaces
 
-### `LlmSanitizeRequestContext`
-
-Codec context available while an LLM request is sanitized.
-
-```ts
-export interface LlmSanitizeRequestContext {
-  codec: LlmCodecIdentity;
-  /** Resolve the active codec for this callback. Do not retain the result after the callback returns. */
-  resolveCodec(): LlmCodec | null;
-}
-```
-
-### `LlmSanitizeResponseContext`
-
-Codec context available while an LLM response is sanitized.
-
-```ts
-export interface LlmSanitizeResponseContext {
-  codec: LlmCodecIdentity;
-  /** Resolve the active codec for this callback. Do not retain the result after the callback returns. */
-  resolveCodec(): LlmResponseCodec | null;
-}
-```
-
 ### `ConfigPolicy`
 
 Plugin-level policy for unknown or unsupported plugin configuration.
@@ -184,123 +160,6 @@ export interface DynamicPluginValidationReport {
 }
 ```
 
-### `PendingMarkSpec`
-
-A mark Relay materializes under a managed lifecycle.
-
-```ts
-export interface PendingMarkSpec {
-  name: string;
-  category?: string | null;
-  categoryProfile?: Json;
-  data?: Json;
-  dataSchema?: { name: string; version: string } | null;
-  metadata?: Json;
-  severity?: 'trace' | 'debug' | 'info' | 'warn' | 'warning' | 'error' | null;
-}
-```
-
-### `LlmOptimizationDataSchema`
-
-Schema tag attached to an opaque optimization contribution payload.
-
-```ts
-export interface LlmOptimizationDataSchema {
-  name: string;
-  version: string;
-}
-```
-
-### `LlmOptimizationModel`
-
-Model identity retained for counterfactual pricing and downstream repricing.
-
-```ts
-export interface LlmOptimizationModel {
-  model: string;
-  provider?: string;
-}
-```
-
-### `LlmOptimizationModelTransition`
-
-Baseline and effective model identities for a routing optimization.
-
-```ts
-export interface LlmOptimizationModelTransition {
-  baseline?: LlmOptimizationModel;
-  effective?: LlmOptimizationModel;
-}
-```
-
-### `LlmOptimizationTokens`
-
-Explicit token evidence, independent from a pricing catalog.
-
-```ts
-export interface LlmOptimizationTokens {
-  /** Token counts must be non-negative JavaScript safe integers. */
-  prompt_tokens?: number;
-  /** Token counts must be non-negative JavaScript safe integers. */
-  completion_tokens?: number;
-  /** Token counts must be non-negative JavaScript safe integers. */
-  cache_read_tokens?: number;
-  /** Token counts must be non-negative JavaScript safe integers. */
-  cache_write_tokens?: number;
-  /** Token counts must be non-negative JavaScript safe integers. */
-  total_tokens?: number;
-}
-```
-
-### `LlmOptimizationTokenImpact`
-
-Baseline, effective, and saved token evidence for one optimization.
-
-```ts
-export interface LlmOptimizationTokenImpact {
-  baseline?: LlmOptimizationTokens;
-  effective?: LlmOptimizationTokens;
-  saved?: LlmOptimizationTokens;
-  quality?: 'observed' | 'estimated';
-  estimation_method?: string;
-}
-```
-
-### `LlmOptimizationContribution`
-
-One plugin's optimization evidence.
-
-`kind` is deliberately an open string so new optimizer categories round-trip without a Relay release. Unknown top-level fields are retained by the wire contract and represented by this interface's JSON extension surface.
-
-```ts
-export interface LlmOptimizationContribution {
-  id?: string;
-  /** Relay ordering must remain within JavaScript's safe-integer range. */
-  sequence?: number;
-  producer: string;
-  kind: 'input_compression' | 'model_routing' | (string & {});
-  applied: boolean;
-  model_transition?: LlmOptimizationModelTransition;
-  token_impact?: LlmOptimizationTokenImpact;
-  payload_schema?: LlmOptimizationDataSchema;
-  payload?: Json;
-  [key: string]: Json | undefined;
-}
-```
-
-### `LlmRequestInterceptOutcome`
-
-Canonical result returned by an LLM request intercept.
-
-```ts
-export interface LlmRequestInterceptOutcome {
-  request: Json;
-  annotated?: Json | null;
-  pendingMarks?: PendingMarkSpec[];
-  optimizationContributions?: LlmOptimizationContribution[];
-}
-```
-
 ### `ToolExecutionInterceptOutcome`
 
 Canonical result returned by a tool execution intercept.
@@ -312,20 +171,6 @@ export interface ToolExecutionInterceptOutcome {
   result: Json;
   annotation?: Json;
   pendingMarks?: PendingMarkSpec[];
-}
-```
-
-### `ToolExecutionContext`
-
-Per-call context delivered to a tool execution intercept.
-
-`toolCallId` is the provider-issued correlation identifier recorded on the managed tool call, or `null` when the call did not record one. It lets an intercept that completes execution without invoking the remaining chain associate its result with the originating tool call.
-
-```ts
-export interface ToolExecutionContext {
-  toolName: string;
-  args: Json;
-  toolCallId: string | null;
 }
 ```
 
@@ -534,7 +379,7 @@ Resolves an explicit or discovered user file with the system configuration, then
 **Parameters**
 
 - `config`: Programmatic configuration. It overrides file values.
-- `additionalPluginsToml`: Optional explicit `plugins.toml` layer.
+- `additionalPluginsToml`: Optional explicit `plugins.toml` layer. A missing explicit file is reported as a `plugin.configuration_file_missing` warning in the host report.
 
 **Returns**
 
@@ -557,7 +402,7 @@ Resolves the same layered configuration and trust policy used by activation whil
 **Parameters**
 
 - `config`: Programmatic configuration. It overrides file values.
-- `additionalPluginsToml`: Optional explicit `plugins.toml` layer.
+- `additionalPluginsToml`: Optional explicit `plugins.toml` layer. A missing explicit file is reported as a `plugin.configuration_file_missing` warning in the host report.
 
 **Returns**
 
@@ -654,17 +499,6 @@ export declare function deregister(pluginKind: string): boolean;
 
 ## Type Aliases
 
-### `LlmCodecIdentity`
-
-Codec identity available while a managed LLM event is sanitized.
-
-```ts
-export type LlmCodecIdentity =
-  | { kind: 'none' }
-  | {
-      kind: 'builtin';
-```
-
 ### `UnsupportedBehavior`
 
 Policy behavior for unsupported configuration.
@@ -685,29 +519,5 @@ export type DynamicPluginKind = 'rust_dynamic' | 'worker';
 
 ```ts
 export type DynamicPluginCheckState = 'unknown' | 'valid' | 'invalid';
-```
-
-### `EventMetadataScalar`
-
-Scalar value accepted in event metadata additions.
-
-```ts
-export type EventMetadataScalar = string | number | boolean;
-```
-
-### `EventMetadataValue`
-
-Flat value accepted in event metadata additions. After JSON conversion, numeric arrays must contain only integer values or only floating-point values.
-
-```ts
-export type EventMetadataValue = EventMetadataScalar | string[] | number[] | boolean[];
-```
-
-### `EventMetadata`
-
-Metadata additions returned by an event metadata injector.
-
-```ts
-export type EventMetadata = Record<string, EventMetadataValue>;
 ```
 
