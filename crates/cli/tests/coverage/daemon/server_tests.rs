@@ -501,7 +501,10 @@ async fn forwarding_rejects_invalid_destinations_and_worker_credentials_before_i
         invalid_destination.response.status(),
         StatusCode::BAD_GATEWAY
     );
-    assert!(!invalid_destination.communication_failure);
+    assert!(matches!(
+        invalid_destination.failure,
+        Some(ForwardFailure::InvalidDestination)
+    ));
 
     let invalid_credential = forward(
         &client,
@@ -518,7 +521,7 @@ async fn forwarding_rejects_invalid_destinations_and_worker_credentials_before_i
         invalid_credential.response.status(),
         StatusCode::INTERNAL_SERVER_ERROR
     );
-    assert!(!invalid_credential.communication_failure);
+    assert!(invalid_credential.failure.is_none());
 }
 
 #[tokio::test]

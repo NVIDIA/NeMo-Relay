@@ -22,12 +22,40 @@ pub(super) struct Hub {
 struct Peer {
     generation: String,
     sender: Option<mpsc::Sender<Message>>,
-    cancel: Arc<Notify>,
+    cancel: Arc<ControlCancellation>,
     disconnected: Option<tokio::time::Instant>,
     ready: bool,
     acknowledgments: HashMap<String, tokio::time::Instant>,
     last_acknowledged: Option<String>,
     drain: Option<(String, WorkerDrainRequest, tokio::time::Instant)>,
+}
+
+struct ControlCancellation {
+    notify: Notify,
+    reason: Mutex<Option<&'static str>>,
+}
+
+impl ControlCancellation {
+    fn new() -> Self {
+        Self {
+            notify: Notify::new(),
+            reason: Mutex::new(None),
+        }
+    }
+
+    fn cancel(&self, reason: &'static str) {
+        let mut current = lock(&self.reason);
+        if current.is_none() {
+            *current = Some(reason);
+        }
+        drop(current);
+        self.notify.notify_one();
+    }
+
+    async fn cancelled(&self) -> &'static str {
+        self.notify.notified().await;
+        lock(&self.reason).unwrap_or("cancelled")
+    }
 }
 fn key(role: ComponentRole, id: &str) -> String {
     format!("{role:?}:{id}")
@@ -94,7 +122,7 @@ impl Hub {
             Event::Reply { .. } => return,
         };
         if peer.acknowledgments.len() >= QUEUE_CAPACITY {
-            peer.cancel.notify_one();
+            peer.cancel.cancel("acknowledgement_queue_full");
             return;
         }
         peer.acknowledgments.insert(
@@ -102,18 +130,18 @@ impl Hub {
             tokio::time::Instant::now() + ATTEMPT_TIMEOUT,
         );
         let Ok(text) = serde_json::to_string(&event) else {
-            peer.cancel.notify_one();
+            peer.cancel.cancel("event_serialization_failed");
             return;
         };
-        if text.len() > MAX_CONTROL_BODY_BYTES
-            || sender.try_send(Message::Text(text.into())).is_err()
-        {
-            peer.cancel.notify_one();
+        if text.len() > MAX_CONTROL_BODY_BYTES {
+            peer.cancel.cancel("event_too_large");
+        } else if sender.try_send(Message::Text(text.into())).is_err() {
+            peer.cancel.cancel("outbound_queue_full");
         }
     }
     pub(super) fn cancel_worker(&self, worker_id: &str) {
         if let Some(peer) = lock(&self.peers).get(&key(ComponentRole::Worker, worker_id)) {
-            peer.cancel.notify_one();
+            peer.cancel.cancel("activation_expired");
         }
     }
     pub(super) fn draining(&self, worker_id: &str) -> bool {
@@ -189,16 +217,25 @@ pub(super) fn recover_after_restart(state: Arc<DaemonState>) {
             let _publication = lock(&work.worker_generation_publication);
             let generations = std::mem::take(&mut *lock(&work.sockets.restarting));
             for (fingerprint, generation) in generations {
-                if let Err(error) = work
+                let fingerprint_text = fingerprint.to_string();
+                match work
                     .active_worker_generations
                     .revoke_if_matches(fingerprint, &generation)
                 {
-                    log::error!(
+                    Ok(revoked) => log::warn!(
+                        target: "nemo_relay.daemon",
+                        event = "worker_recovery_expired",
+                        fingerprint = fingerprint_text.as_str(),
+                        generation_revoked = revoked;
+                        "Worker did not recover before the daemon restart grace period elapsed"
+                    ),
+                    Err(error) => log::error!(
                         target: "nemo_relay.daemon",
                         event = "worker_generation_revocation_failed",
+                        fingerprint = fingerprint_text.as_str(),
                         error_kind = error.log_kind();
                         "Failed to revoke expired worker generation"
-                    );
+                    ),
                 }
             }
         })
@@ -211,7 +248,7 @@ pub(super) fn recover_after_restart(state: Arc<DaemonState>) {
 async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: WebSocket) {
     let (mut writer, mut reader) = socket.split();
     let (send, mut outgoing) = mpsc::channel::<Message>(QUEUE_CAPACITY);
-    let cancel = Arc::new(Notify::new());
+    let cancel = Arc::new(ControlCancellation::new());
     let writer_cancel = cancel.clone();
     let writing = tokio::spawn(async move {
         while let Some(message) = outgoing.recv().await {
@@ -222,7 +259,7 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
                 break;
             }
         }
-        writer_cancel.notify_one();
+        writer_cancel.cancel("socket_write_failed");
     });
     let generation = uuid::Uuid::now_v7().to_string();
     let mut id: Option<String> = None;
@@ -232,7 +269,7 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
     let auth_deadline = tokio::time::Instant::now() + ATTEMPT_TIMEOUT;
     let mut ping_at = tokio::time::Instant::now() + Duration::from_secs(30);
     let mut pong: Option<(Bytes, tokio::time::Instant)> = None;
-    loop {
+    let disconnect_reason = loop {
         let changed = state.sockets.changed.notified();
         tokio::pin!(changed);
         changed.as_mut().enable();
@@ -242,7 +279,7 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
                 .get_mut(&key(role, id))
                 .filter(|p| p.generation == generation)
             else {
-                break;
+                break "connection_replaced";
             };
             if role == ComponentRole::Mcp {
                 let session = lock(&state.mcp_sessions)
@@ -278,18 +315,22 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
         });
         let pong_deadline = pong.as_ref().map_or(ping_at, |(_, deadline)| *deadline);
         tokio::select! {
-            _ = cancel.notified() => break,
-            _ = tokio::time::sleep_until(ack_deadline.unwrap_or(auth_deadline)), if ack_deadline.is_some() => break,
-            _ = tokio::time::sleep_until(auth_deadline), if id.is_none() => break,
+            reason = cancel.cancelled() => break reason,
+            _ = tokio::time::sleep_until(ack_deadline.unwrap_or(auth_deadline)), if ack_deadline.is_some() => break "acknowledgement_timeout",
+            _ = tokio::time::sleep_until(auth_deadline), if id.is_none() => break "authentication_timeout",
             _ = &mut changed => continue,
             _ = tokio::time::sleep_until(pong_deadline), if !local && id.is_some() => {
-                if pong.is_some() { break; }
+                if pong.is_some() { break "pong_timeout"; }
                 let bytes = Bytes::copy_from_slice(uuid::Uuid::now_v7().as_bytes());
-                if send.try_send(Message::Ping(bytes.clone())).is_err() { break; }
+                if send.try_send(Message::Ping(bytes.clone())).is_err() { break "outbound_queue_full"; }
                 pong = Some((bytes, tokio::time::Instant::now() + Duration::from_secs(10)));
             }
             message = reader.next() => {
-                let Some(Ok(message)) = message else { break };
+                let message = match message {
+                    Some(Ok(message)) => message,
+                    Some(Err(_)) => break "socket_read_failed",
+                    None => break "peer_closed",
+                };
                 let text = match message {
                     Message::Text(text) => text,
                     Message::Pong(bytes) => {
@@ -299,15 +340,16 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
                         }
                         continue;
                     }
-                    Message::Ping(bytes) => { if send.try_send(Message::Pong(bytes)).is_err() { break; } continue; }
-                    _ => break,
+                    Message::Ping(bytes) => { if send.try_send(Message::Pong(bytes)).is_err() { break "outbound_queue_full"; } continue; }
+                    Message::Close(_) => break "peer_closed",
+                    _ => break "unsupported_frame",
                 };
-                let Ok(request) = serde_json::from_str::<ControlRequest>(&text) else { break };
-                if request.request_id.is_empty() || request.request_id.len() > 128 { break; }
+                let Ok(request) = serde_json::from_str::<ControlRequest>(&text) else { break "malformed_request" };
+                if request.request_id.is_empty() || request.request_id.len() > 128 { break "invalid_request_id"; }
                 if let Some((id, original, reply)) = &last_reply && *id == request.request_id {
-                    if original != text.as_str() { break; }
-                    let Ok(text) = serde_json::to_string(reply) else { break };
-                    if send.try_send(Message::Text(text.into())).is_err() { break; }
+                    if original != text.as_str() { break "request_id_reused"; }
+                    let Ok(text) = serde_json::to_string(reply) else { break "reply_serialization_failed" };
+                    if send.try_send(Message::Text(text.into())).is_err() { break "outbound_queue_full"; }
                     continue;
                 }
                 // ACKs affect only the peer's bounded directive queue. Challenge
@@ -329,7 +371,7 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
                     _ => id.as_deref().unwrap_or(&generation),
                 };
                 let _transaction = state.sockets.transaction(role, session_id).await;
-                if let Some(id) = &id && lock(&state.sockets.peers).get(&key(role, id)).is_none_or(|p| p.generation != generation) { break; }
+                if let Some(id) = &id && lock(&state.sockets.peers).get(&key(role, id)).is_none_or(|p| p.generation != generation) { break "connection_replaced"; }
                 let response = match readiness {
                     Some(response) => response,
                     None => dispatch(&state, role, &mut id, &mut challenge, request.command).await,
@@ -339,11 +381,17 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
                     let mut peers = lock(&state.sockets.peers);
                     let entry = peers.entry(key(role, id));
                     use std::collections::hash_map::Entry;
+                    let mut connected = false;
+                    let mut reconnected = false;
                     match entry {
-                        Entry::Vacant(entry) => { entry.insert(Peer { generation: generation.clone(), sender: Some(send.clone()), cancel: cancel.clone(), disconnected: None, ready: false, acknowledgments: HashMap::new(), last_acknowledged: None, drain: None }); }
+                        Entry::Vacant(entry) => {
+                            connected = true;
+                            entry.insert(Peer { generation: generation.clone(), sender: Some(send.clone()), cancel: cancel.clone(), disconnected: None, ready: false, acknowledgments: HashMap::new(), last_acknowledged: None, drain: None });
+                        }
                         Entry::Occupied(mut entry) if entry.get().generation != generation => {
+                            reconnected = true;
                             let peer = entry.get_mut();
-                            peer.cancel.notify_one();
+                            peer.cancel.cancel("connection_replaced");
                             peer.generation = generation.clone(); peer.sender = Some(send.clone());
                             peer.cancel = cancel.clone(); peer.disconnected = None; peer.ready = false;
                             peer.acknowledgments.clear(); peer.last_acknowledged = None;
@@ -355,6 +403,9 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
                         _ => {}
                     }
                     drop(peers);
+                    if connected || reconnected {
+                        log_control_connected(role, id, reconnected);
+                    }
                     if role == ComponentRole::Mcp {
                         if let Some(session) = lock(&state.mcp_sessions).get_mut(id) {
                             session.lease_expires_at_unix_ms = u64::MAX;
@@ -363,24 +414,24 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
                     } else if let Some(session) = lock(&state.worker_sessions).get_mut(id) { session.lease_expires_at_unix_ms = u64::MAX; }
                 }
                 let status = response.status().as_u16();
-                let Ok(bytes) = axum::body::to_bytes(response.into_body(), MAX_CONTROL_BODY_BYTES).await else { break };
+                let Ok(bytes) = axum::body::to_bytes(response.into_body(), MAX_CONTROL_BODY_BYTES).await else { break "reply_body_failed" };
                 let payload = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
                 let event = Event::Reply { request_id: request.request_id.clone(), status, payload };
                 last_reply = Some((request.request_id, text.to_string(), event.clone()));
-                let Ok(text) = serde_json::to_string(&event) else { break };
-                if send.try_send(Message::Text(text.into())).is_err() { break; }
+                let Ok(text) = serde_json::to_string(&event) else { break "reply_serialization_failed" };
+                if send.try_send(Message::Text(text.into())).is_err() { break "outbound_queue_full"; }
                 if !local_control_command {
                     state.sockets.changed.notify_waiters();
                 }
             }
         }
-    }
+    };
     writing.abort();
     if let Some(challenge) = challenge {
         lock(&state.challenges).remove(&challenge);
     }
     if let Some(id) = id {
-        disconnected(state, role, id, generation).await;
+        disconnected(state, role, id, generation, disconnect_reason).await;
     }
 }
 
@@ -594,6 +645,7 @@ async fn disconnected(
     role: ComponentRole,
     id: String,
     generation: String,
+    reason: &'static str,
 ) {
     let _transaction = state.sockets.transaction(role, &id).await;
     let deadline = {
@@ -614,6 +666,7 @@ async fn disconnected(
     {
         session.pending_target.set_control_available(false);
     }
+    log_control_disconnected(role, &id, reason);
     state.sockets.changed.notify_waiters();
     drop(_transaction);
     tokio::spawn(async move {
@@ -628,13 +681,21 @@ async fn disconnected(
         if role == ComponentRole::Mcp {
             let session = lock(&state.mcp_sessions).remove(&id);
             if let Some(session) = session
-                && let Ok(id) = McpSessionId::new(id.clone())
+                && let Ok(session_id) = McpSessionId::new(id.clone())
                 && let Ok(action) = state.registry.release_mcp(
                     session.fingerprint,
-                    &id,
+                    &session_id,
                     now_unix_ms().saturating_add(DRAIN_LIFETIME_MS),
                 )
             {
+                if !session.released {
+                    log_mcp_removed(
+                        session.fingerprint,
+                        &session_id,
+                        "control_disconnect_timeout",
+                        &action,
+                    );
+                }
                 handle_release_action(state.clone(), session.fingerprint, action);
             }
             lock(&state.pending_directives).remove(&id);
@@ -648,20 +709,96 @@ async fn disconnected(
                     revoke_active_worker_generation(&work, fingerprint, &generation_id)
                 })
                 .await;
-                if let Ok(WorkerFailureAction::NominateMcp { session_id }) =
-                    state.registry.worker_failed(
-                        fingerprint,
-                        &id,
-                        now_unix_ms().saturating_add(RECOVERY_LIFETIME_MS),
-                    )
-                {
-                    nominate_relaunch(&state, fingerprint, session_id);
+                match state.registry.worker_failed(
+                    fingerprint,
+                    &id,
+                    now_unix_ms().saturating_add(RECOVERY_LIFETIME_MS),
+                ) {
+                    Ok(action) => {
+                        let fingerprint_text = fingerprint.to_string();
+                        log::error!(
+                            target: "nemo_relay.daemon",
+                            event = "worker_failed",
+                            fingerprint = fingerprint_text.as_str(),
+                            worker_id = id.as_str(),
+                            route_action = worker_failure_action_name(&action);
+                            "Worker failed after its control disconnect grace period elapsed"
+                        );
+                        if let WorkerFailureAction::NominateMcp { session_id } = action {
+                            nominate_relaunch(&state, fingerprint, session_id);
+                        }
+                    }
+                    Err(error) => log::error!(
+                        target: "nemo_relay.daemon",
+                        event = "worker_failure_transition_failed",
+                        worker_id = id.as_str();
+                        "Failed to remove disconnected worker from its route: {error}"
+                    ),
                 }
             }
         }
         lock(&state.sockets.peers).remove(&key(role, &id));
         state.sockets.changed.notify_waiters();
     });
+}
+
+fn log_control_connected(role: ComponentRole, id: &str, reconnected: bool) {
+    match (role, reconnected) {
+        (ComponentRole::Mcp, false) => log::info!(
+            target: "nemo_relay.daemon",
+            event = "mcp_control_connected",
+            mcp_session_id = id;
+            "MCP control connection established"
+        ),
+        (ComponentRole::Mcp, true) => log::info!(
+            target: "nemo_relay.daemon",
+            event = "mcp_control_reconnected",
+            mcp_session_id = id;
+            "MCP control connection re-established"
+        ),
+        (ComponentRole::Worker, false) => log::info!(
+            target: "nemo_relay.daemon",
+            event = "worker_control_connected",
+            worker_id = id;
+            "Worker control connection established"
+        ),
+        (ComponentRole::Worker, true) => log::info!(
+            target: "nemo_relay.daemon",
+            event = "worker_control_reconnected",
+            worker_id = id;
+            "Worker control connection re-established"
+        ),
+        (ComponentRole::Daemon, _) => {}
+    }
+}
+
+fn log_control_disconnected(role: ComponentRole, id: &str, reason: &'static str) {
+    match role {
+        ComponentRole::Mcp => log::info!(
+            target: "nemo_relay.daemon",
+            event = "mcp_control_disconnected",
+            mcp_session_id = id,
+            reason = reason,
+            grace_period_ms = GRACE.as_millis() as u64;
+            "MCP control disconnected; waiting for reconnection"
+        ),
+        ComponentRole::Worker => log::warn!(
+            target: "nemo_relay.daemon",
+            event = "worker_control_disconnected",
+            worker_id = id,
+            reason = reason,
+            grace_period_ms = GRACE.as_millis() as u64;
+            "Worker control disconnected; waiting for recovery"
+        ),
+        ComponentRole::Daemon => {}
+    }
+}
+
+fn worker_failure_action_name(action: &WorkerFailureAction) -> &'static str {
+    match action {
+        WorkerFailureAction::NominateMcp { .. } => "nominate_relaunch",
+        WorkerFailureAction::RouteEmpty => "route_empty",
+    }
 }
 
 #[derive(Clone)]
@@ -706,7 +843,7 @@ pub(super) async fn test_expire_worker(state: Arc<DaemonState>, id: String) {
         Peer {
             generation: "fixture".into(),
             sender: None,
-            cancel: Arc::new(Notify::new()),
+            cancel: Arc::new(ControlCancellation::new()),
             disconnected: Some(tokio::time::Instant::now() - GRACE),
             ready: false,
             acknowledgments: HashMap::new(),
@@ -714,5 +851,12 @@ pub(super) async fn test_expire_worker(state: Arc<DaemonState>, id: String) {
             drain: None,
         },
     );
-    disconnected(state, ComponentRole::Worker, id, "fixture".into()).await;
+    disconnected(
+        state,
+        ComponentRole::Worker,
+        id,
+        "fixture".into(),
+        "test_expiry",
+    )
+    .await;
 }
