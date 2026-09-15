@@ -30,7 +30,8 @@ use super::header_file::{
 };
 use super::otel_signal::{
     MetricMarkClassification, SignalRuntimeDiagnostics, classify_metric_mark, resolve_header_env,
-    should_relog_runtime_diagnostic,
+    should_relog_runtime_diagnostic, telemetry_resource,
+    validate_telemetry_sdk_resource_attributes,
 };
 use super::{
     MarkProjection, OpenTelemetryRuntimeDiagnostics, OpenTelemetryType, OtlpAttributeMapping,
@@ -622,6 +623,7 @@ impl OpenTelemetrySubscriber {
             .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
         validate_metadata_promotion_prefixes(&config.promote_resource_metadata_prefixes)
             .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
+        validate_telemetry_sdk_resource_attributes(&config.resource_attributes)?;
         reject_global_header_environment()?;
         validate_headers(&config.headers)?;
         validate_header_files(&config.headers, &config.header_env, &config.header_file)
@@ -1106,11 +1108,7 @@ fn build_tracer_provider_with_resource(
     // sets on long-running spans; the OTel SDK default (128) silently drops
     // attributes added last in the span's lifecycle.
     let builder = SdkTracerProvider::builder()
-        .with_resource(
-            Resource::builder_empty()
-                .with_attributes(resource_attributes)
-                .build(),
-        )
+        .with_resource(telemetry_resource(resource_attributes))
         .with_id_generator(RelayIdGenerator)
         .with_max_attributes_per_span(u32::MAX)
         .with_max_attributes_per_event(u32::MAX);

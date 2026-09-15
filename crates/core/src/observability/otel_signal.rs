@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use opentelemetry::KeyValue;
-use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::{Resource, resource::TelemetryResourceDetector};
 use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
 
 use crate::api::event::{
@@ -23,6 +23,33 @@ use super::otel::{OpenTelemetryError, Result};
 
 const MAX_RUNTIME_DIAGNOSTICS: usize = 32;
 const MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS: usize = 1_024;
+const TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS: [&str; 3] = [
+    "telemetry.sdk.name",
+    "telemetry.sdk.language",
+    "telemetry.sdk.version",
+];
+
+/// Reject resource attributes owned by the OpenTelemetry SDK detector.
+pub(super) fn validate_telemetry_sdk_resource_attributes(
+    resource_attributes: &HashMap<String, String>,
+) -> Result<()> {
+    for key in TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS {
+        if resource_attributes.contains_key(key) {
+            return Err(OpenTelemetryError::ExporterBuild(format!(
+                "resource attribute {key:?} is set automatically by the OpenTelemetry SDK and must not be configured"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Build Relay's OTLP resource with only SDK-provided telemetry identity.
+pub(super) fn telemetry_resource(attributes: impl IntoIterator<Item = KeyValue>) -> Resource {
+    Resource::builder_empty()
+        .with_detector(Box::new(TelemetryResourceDetector))
+        .with_attributes(attributes)
+        .build()
+}
 
 /// A bounded aggregate describing an OpenTelemetry runtime problem.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -474,7 +501,5 @@ pub(super) fn signal_resource(
             .iter()
             .map(|(key, value)| KeyValue::new(key.clone(), value.clone())),
     );
-    Resource::builder_empty()
-        .with_attributes(attributes)
-        .build()
+    telemetry_resource(attributes)
 }

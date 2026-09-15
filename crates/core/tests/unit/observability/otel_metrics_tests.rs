@@ -23,6 +23,7 @@ use opentelemetry_proto::tonic::collector::metrics::v1::metrics_service_server::
 use opentelemetry_proto::tonic::collector::metrics::v1::{
     ExportMetricsServiceRequest, ExportMetricsServiceResponse,
 };
+use opentelemetry_proto::tonic::common::v1::{KeyValue as OtlpKeyValue, any_value};
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader};
 use prost::Message;
@@ -858,6 +859,12 @@ fn direct_http_subscribers_emit_decodable_signal_payloads() {
     assert_eq!(records[0].severity_text, "INFO");
     assert_ne!(records[0].time_unix_nano, 0);
     assert_ne!(records[0].observed_time_unix_nano, 0);
+    let log_resource = logs.resource_logs[0].resource.as_ref().unwrap();
+    assert_telemetry_sdk_resource(&log_resource.attributes);
+    assert_eq!(
+        otlp_string_attribute(&log_resource.attributes, "nv.project"),
+        Some("observability-dev")
+    );
 
     let metric_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let metric_receiver = capture_requests(metric_listener.try_clone().unwrap(), 2);
@@ -891,12 +898,44 @@ fn direct_http_subscribers_emit_decodable_signal_payloads() {
         metrics.resource_metrics[0].scope_metrics[0].metrics[0].name,
         "example.tokens.saved"
     );
+    let metric_resource = metrics.resource_metrics[0].resource.as_ref().unwrap();
+    assert_telemetry_sdk_resource(&metric_resource.attributes);
+    assert_eq!(
+        otlp_string_attribute(&metric_resource.attributes, "nv.project"),
+        Some("observability-dev")
+    );
 
     log_subscriber.shutdown().unwrap();
     metric_subscriber.shutdown().unwrap();
     metric_receiver
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
+}
+
+fn otlp_string_attribute<'a>(attributes: &'a [OtlpKeyValue], key: &str) -> Option<&'a str> {
+    attributes
+        .iter()
+        .find(|attribute| attribute.key == key)
+        .and_then(|attribute| attribute.value.as_ref())
+        .and_then(|value| match value.value.as_ref() {
+            Some(any_value::Value::StringValue(value)) => Some(value.as_str()),
+            _ => None,
+        })
+}
+
+fn assert_telemetry_sdk_resource(attributes: &[OtlpKeyValue]) {
+    assert_eq!(
+        otlp_string_attribute(attributes, "telemetry.sdk.name"),
+        Some("opentelemetry")
+    );
+    assert_eq!(
+        otlp_string_attribute(attributes, "telemetry.sdk.language"),
+        Some("rust")
+    );
+    assert_eq!(
+        otlp_string_attribute(attributes, "telemetry.sdk.version"),
+        Some("0.32.1")
+    );
 }
 
 #[derive(Clone)]
