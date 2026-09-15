@@ -496,7 +496,6 @@ fn validate_ready_connection(
     Ok(())
 }
 
-#[allow(clippy::cognitive_complexity)] // Keep role and authentication guards beside each command.
 async fn dispatch(
     state: &Arc<DaemonState>,
     role: ComponentRole,
@@ -533,24 +532,7 @@ async fn dispatch(
             && id.is_none()
             && *challenge == Some(request.proof.transcript.challenge_id) =>
         {
-            let session_id = request.proof.transcript.initiator_instance_id.clone();
-            if expired(state, role, &session_id) {
-                return control_message(StatusCode::UNAUTHORIZED, "session recovery grace expired");
-            }
-            let mut headers = HeaderMap::new();
-            let Ok(value) = HeaderValue::from_str(credential.expose()) else {
-                return StatusCode::BAD_REQUEST.into_response();
-            };
-            headers.insert(CLIENT_TOKEN_HEADER, value);
-            let response = register_mcp(State(state.clone()), headers, Json(request)).await;
-            if response.status().is_success() {
-                *id = Some(session_id.clone());
-                if let Some(session) = lock(&state.mcp_sessions).get_mut(&session_id) {
-                    session.last_sequence = 0;
-                    session.last_request_id.clear();
-                }
-            }
-            response
+            register_mcp_command(state, role, id, request, credential).await
         }
         Command::RegisterWorker(request)
             if role == ComponentRole::Worker
@@ -558,16 +540,7 @@ async fn dispatch(
                 && *challenge == Some(request.proof.transcript.challenge_id)
                 && request.worker_id == request.proof.transcript.initiator_instance_id =>
         {
-            let worker_id = request.worker_id.clone();
-            if expired(state, role, &worker_id) {
-                return control_message(StatusCode::UNAUTHORIZED, "session recovery grace expired");
-            }
-            let response = register_worker(State(state.clone()), Json(request)).await;
-            if response.status().is_success() {
-                *id = Some(worker_id.clone());
-                reset_worker(state, &worker_id);
-            }
-            response
+            register_worker_command(state, role, id, request).await
         }
         Command::RecoverWorker(request)
             if role == ComponentRole::Worker
@@ -575,16 +548,7 @@ async fn dispatch(
                 && *challenge == Some(request.proof.transcript.challenge_id)
                 && request.worker_id == request.proof.transcript.initiator_instance_id =>
         {
-            let worker_id = request.worker_id.clone();
-            if expired(state, role, &worker_id) {
-                return control_message(StatusCode::UNAUTHORIZED, "session recovery grace expired");
-            }
-            let response = recover_worker(State(state.clone()), Json(request)).await;
-            if response.status().is_success() {
-                *id = Some(worker_id.clone());
-                reset_worker(state, &worker_id);
-            }
-            response
+            recover_worker_command(state, role, id, request).await
         }
         Command::Release(request)
             if role == ComponentRole::Mcp && id.as_ref() == Some(&request.session_id) =>
@@ -596,34 +560,110 @@ async fn dispatch(
         {
             activation_failed(State(state.clone()), Json(request)).await
         }
-        Command::Acknowledge { request_id } if id.is_some() => {
-            let mut peers = lock(&state.sockets.peers);
-            let Some(peer) = peers.get_mut(&key(role, id.as_ref().unwrap())) else {
-                return StatusCode::UNAUTHORIZED.into_response();
-            };
-            if peer.last_acknowledged.as_ref() == Some(&request_id) {
-                return StatusCode::NO_CONTENT.into_response();
-            }
-            if peer
-                .acknowledgments
-                .remove(&request_id)
-                .is_some_and(|deadline| tokio::time::Instant::now() <= deadline)
-            {
-                peer.last_acknowledged = Some(request_id);
-                StatusCode::NO_CONTENT.into_response()
-            } else {
-                control_message(
-                    StatusCode::CONFLICT,
-                    "unknown or expired command acknowledgement",
-                )
-            }
-        }
+        Command::Acknowledge { request_id } if id.is_some() => acknowledge_command(
+            state,
+            role,
+            id.as_deref().expect("id was validated"),
+            request_id,
+        ),
         _ => control_message(
             StatusCode::UNAUTHORIZED,
             "command is not authorized on this control connection",
         ),
     }
 }
+
+async fn register_mcp_command(
+    state: &Arc<DaemonState>,
+    role: ComponentRole,
+    id: &mut Option<String>,
+    request: McpRegisterRequest,
+    credential: SensitiveString,
+) -> Response<Body> {
+    let session_id = request.proof.transcript.initiator_instance_id.clone();
+    if expired(state, role, &session_id) {
+        return control_message(StatusCode::UNAUTHORIZED, "session recovery grace expired");
+    }
+    let mut headers = HeaderMap::new();
+    let Ok(value) = HeaderValue::from_str(credential.expose()) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    headers.insert(CLIENT_TOKEN_HEADER, value);
+    let response = register_mcp(State(state.clone()), headers, Json(request)).await;
+    if response.status().is_success() {
+        *id = Some(session_id.clone());
+        if let Some(session) = lock(&state.mcp_sessions).get_mut(&session_id) {
+            session.last_sequence = 0;
+            session.last_request_id.clear();
+        }
+    }
+    response
+}
+
+async fn register_worker_command(
+    state: &Arc<DaemonState>,
+    role: ComponentRole,
+    id: &mut Option<String>,
+    request: WorkerRegisterRequest,
+) -> Response<Body> {
+    let worker_id = request.worker_id.clone();
+    if expired(state, role, &worker_id) {
+        return control_message(StatusCode::UNAUTHORIZED, "session recovery grace expired");
+    }
+    let response = register_worker(State(state.clone()), Json(request)).await;
+    if response.status().is_success() {
+        *id = Some(worker_id.clone());
+        reset_worker(state, &worker_id);
+    }
+    response
+}
+
+async fn recover_worker_command(
+    state: &Arc<DaemonState>,
+    role: ComponentRole,
+    id: &mut Option<String>,
+    request: WorkerRecoverRequest,
+) -> Response<Body> {
+    let worker_id = request.worker_id.clone();
+    if expired(state, role, &worker_id) {
+        return control_message(StatusCode::UNAUTHORIZED, "session recovery grace expired");
+    }
+    let response = recover_worker(State(state.clone()), Json(request)).await;
+    if response.status().is_success() {
+        *id = Some(worker_id.clone());
+        reset_worker(state, &worker_id);
+    }
+    response
+}
+
+fn acknowledge_command(
+    state: &DaemonState,
+    role: ComponentRole,
+    id: &str,
+    request_id: String,
+) -> Response<Body> {
+    let mut peers = lock(&state.sockets.peers);
+    let Some(peer) = peers.get_mut(&key(role, id)) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if peer.last_acknowledged.as_ref() == Some(&request_id) {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    if peer
+        .acknowledgments
+        .remove(&request_id)
+        .is_some_and(|deadline| tokio::time::Instant::now() <= deadline)
+    {
+        peer.last_acknowledged = Some(request_id);
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        control_message(
+            StatusCode::CONFLICT,
+            "unknown or expired command acknowledgement",
+        )
+    }
+}
+
 fn expired(state: &DaemonState, role: ComponentRole, id: &str) -> bool {
     lock(&state.sockets.peers)
         .get(&key(role, id))
