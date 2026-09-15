@@ -3458,9 +3458,7 @@ pub fn register_event_metadata_injector(
     env: Env,
     name: String,
     priority: i32,
-    #[napi(
-        ts_arg_type = "(event: Json) => import('./plugin').EventMetadata | Promise<import('./plugin').EventMetadata>"
-    )]
+    #[napi(ts_arg_type = "(event: Json) => EventMetadata | Promise<EventMetadata>")]
     injector: JsFunction,
 ) -> Result<()> {
     core_registry_api::register_event_metadata_injector(
@@ -3959,7 +3957,7 @@ pub fn register_llm_sanitize_request_guardrail(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(request: Json, context: import('./plugin').LlmSanitizeRequestContext) => Json | null | Promise<Json | null>"
+        ts_arg_type = "(request: Json, context: LlmSanitizeRequestContext) => Json | null | Promise<Json | null>"
     )]
     guardrail: JsFunction,
 ) -> Result<()> {
@@ -3993,7 +3991,7 @@ pub fn register_llm_sanitize_response_guardrail(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(response: Json, context: import('./plugin').LlmSanitizeResponseContext) => Json | null | Promise<Json | null>"
+        ts_arg_type = "(response: Json, context: LlmSanitizeResponseContext) => Json | null | Promise<Json | null>"
     )]
     guardrail: JsFunction,
 ) -> Result<()> {
@@ -4066,7 +4064,7 @@ pub fn register_llm_request_intercept(
     priority: i32,
     break_chain: bool,
     #[napi(
-        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => import('./plugin').LlmRequestInterceptOutcome | Promise<import('./plugin').LlmRequestInterceptOutcome>"
+        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => LlmRequestInterceptOutcome | Promise<LlmRequestInterceptOutcome>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -4246,9 +4244,7 @@ pub fn scope_register_event_metadata_injector(
     scope_uuid: String,
     name: String,
     priority: i32,
-    #[napi(
-        ts_arg_type = "(event: Json) => import('./plugin').EventMetadata | Promise<import('./plugin').EventMetadata>"
-    )]
+    #[napi(ts_arg_type = "(event: Json) => EventMetadata | Promise<EventMetadata>")]
     injector: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
@@ -4578,7 +4574,7 @@ pub fn scope_register_llm_sanitize_request_guardrail(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(request: Json, context: import('./plugin').LlmSanitizeRequestContext) => Json | null | Promise<Json | null>"
+        ts_arg_type = "(request: Json, context: LlmSanitizeRequestContext) => Json | null | Promise<Json | null>"
     )]
     guardrail: JsFunction,
 ) -> Result<()> {
@@ -4623,7 +4619,7 @@ pub fn scope_register_llm_sanitize_response_guardrail(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(response: Json, context: import('./plugin').LlmSanitizeResponseContext) => Json | null | Promise<Json | null>"
+        ts_arg_type = "(response: Json, context: LlmSanitizeResponseContext) => Json | null | Promise<Json | null>"
     )]
     guardrail: JsFunction,
 ) -> Result<()> {
@@ -4715,7 +4711,7 @@ pub fn scope_register_llm_request_intercept(
     priority: i32,
     break_chain: bool,
     #[napi(
-        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => import('./plugin').LlmRequestInterceptOutcome | Promise<import('./plugin').LlmRequestInterceptOutcome>"
+        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => LlmRequestInterceptOutcome | Promise<LlmRequestInterceptOutcome>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -4938,9 +4934,7 @@ pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<
 /// Run the registered LLM request intercept chain on the given request.
 /// The `request` should be a JSON object with `headers` and `content` fields matching
 /// the `LlmRequest` schema. Returns the transformed request as JSON.
-#[napi(
-    ts_return_type = "Promise<{ request: Json; annotated: Json | null; pendingMarks: Array<PendingMarkSpec>; optimizationContributions: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }>"
-)]
+#[napi(ts_return_type = "Promise<LlmRequestInterceptOutcome>")]
 pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<JsObject> {
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;

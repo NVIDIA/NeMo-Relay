@@ -2055,23 +2055,20 @@ describe('LLM intercepts', () => {
 
   it('generated request-intercept declarations reference the canonical open optimization type', () => {
     const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
-    const pluginDeclarations = readFileSync(new URL('../plugin.d.ts', import.meta.url), 'utf8');
     const openKind = "kind: 'input_compression' | 'model_routing' | (string & {})";
 
     assert.equal(declarations.split(openKind).length - 1, 1);
-    assert.equal(pluginDeclarations.split(openKind).length - 1, 1);
-    assert.match(declarations, /registerLlmRequestIntercept\([^\n]*import\('\.\/plugin'\)\.LlmRequestInterceptOutcome/);
-    assert.match(
-      declarations,
-      /scopeRegisterLlmRequestIntercept\([^\n]*import\('\.\/plugin'\)\.LlmRequestInterceptOutcome/,
-    );
+    assert.match(declarations, /registerLlmRequestIntercept\([^\n]*LlmRequestInterceptOutcome/);
+    assert.match(declarations, /scopeRegisterLlmRequestIntercept\([^\n]*LlmRequestInterceptOutcome/);
   });
 
   it('generated LLM sanitizer declarations expose directional codec contexts', () => {
     const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
 
-    assert.equal(declarations.split("context: import('./plugin').LlmSanitizeRequestContext").length - 1, 2);
-    assert.equal(declarations.split("context: import('./plugin').LlmSanitizeResponseContext").length - 1, 2);
+    assert.equal(declarations.split('context: LlmSanitizeRequestContext').length - 1, 2);
+    assert.equal(declarations.split('context: LlmSanitizeResponseContext').length - 1, 2);
+    assert.match(declarations, /export type EventMetadata = Record<string, EventMetadataValue>/);
+    assert.doesNotMatch(declarations, /import\('\.\/plugin'\)\./);
     assert.doesNotMatch(declarations, /registerLlmSanitizeRequestGuardrail\([^\n]*\.\.\.args: any\[\]/);
   });
 
