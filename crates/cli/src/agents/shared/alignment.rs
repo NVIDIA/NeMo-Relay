@@ -338,6 +338,8 @@ impl SessionAlignmentState {
         &self,
         event: NormalizedEvent,
     ) -> (NormalizedEvent, SessionRouteCleanup) {
+        let ended_session_id =
+            matches!(&event, NormalizedEvent::AgentEnded(_)).then(|| event.session_id().to_owned());
         let (event, finished_alias) = route_event_through_alias(event, &self.aliases);
         let finished_alias = finished_alias.and_then(|child_session_id| {
             self.aliases
@@ -345,8 +347,7 @@ impl SessionAlignmentState {
                 .cloned()
                 .map(|alias| (child_session_id, alias))
         });
-        let ended_session_id =
-            matches!(&event, NormalizedEvent::AgentEnded(_)).then(|| event.session_id());
+        let ended_session_id = ended_session_id.as_deref();
         let ended_aliases = ended_session_id.map_or_else(Vec::new, |session_id| {
             self.aliases
                 .iter()

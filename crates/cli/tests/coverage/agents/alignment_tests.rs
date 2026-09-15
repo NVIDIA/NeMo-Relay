@@ -537,6 +537,44 @@ fn route_cleanup_preserves_a_replacement_alias() {
     assert_eq!(alignment.alias_for_session("child"), Some(replacement));
 }
 
+#[tokio::test]
+async fn route_cleanup_removes_pending_descendants_of_an_ended_aliased_session() {
+    let mut alignment = SessionAlignmentState::default();
+    alignment.insert_alias(
+        "child".into(),
+        SessionAlias::new("parent".into(), "child".into(), json!({})),
+    );
+    let mut descendant_start = NormalizedEvent::AgentStarted(SessionEvent {
+        session_id: "grandchild".into(),
+        agent_kind: AgentKind::Codex,
+        event_name: "SessionStart".into(),
+        payload: json!({}),
+        metadata: json!({
+            "source": {
+                "subagent": {
+                    "thread_spawn": {
+                        "parent_thread_id": "child"
+                    }
+                }
+            }
+        }),
+    });
+    let (grandchild_session_id, pending) = pending_subagent_start(&mut descendant_start)
+        .await
+        .expect("grandchild should be recognized as a pending subagent");
+    alignment.insert_pending(grandchild_session_id, pending);
+
+    let (routed, cleanup) = alignment.prepare_route(NormalizedEvent::AgentEnded(session_event(
+        "child",
+        "SessionEnd",
+    )));
+    assert!(matches!(routed, NormalizedEvent::SubagentEnded(_)));
+    alignment.commit_route(&cleanup);
+
+    assert!(!alignment.has_alias("child"));
+    assert!(!alignment.has_pending_session("grandchild"));
+}
+
 #[test]
 fn agent_cleanup_preserves_an_alias_created_after_routing() {
     let mut alignment = SessionAlignmentState::default();
