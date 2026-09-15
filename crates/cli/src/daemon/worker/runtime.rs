@@ -835,6 +835,13 @@ fn header_value(value: &str) -> Option<HeaderValue> {
     HeaderValue::from_str(value).ok()
 }
 
+fn begin_drain(state: &WorkerState, request: &WorkerDrainRequest) {
+    // Retain the first deadline so duplicate delivery can never extend a drain.
+    if !state.draining.load(Ordering::Acquire) {
+        state.begin_drain(drain_timeout_ms(request));
+    }
+}
+
 async fn monitor_control(
     state: Arc<WorkerState>,
     daemon_origin: String,
@@ -850,11 +857,8 @@ async fn monitor_control(
                 request_id,
                 request,
             }) => {
-                // The daemon is authenticated by the socket handshake. Retain the first deadline
-                // so duplicate delivery can never extend a drain.
-                if !state.draining.load(Ordering::Acquire) {
-                    state.begin_drain(drain_timeout_ms(&request));
-                }
+                // The daemon is authenticated by the socket handshake.
+                begin_drain(&state, &request);
                 if registration.acknowledge(request_id).await.is_ok() {
                     continue;
                 }
@@ -886,9 +890,7 @@ async fn monitor_control(
                 request,
             }) = next.pending_event().await
             {
-                if !state.draining.load(Ordering::Acquire) {
-                    state.begin_drain(drain_timeout_ms(&request));
-                }
+                begin_drain(&state, &request);
                 next.acknowledge(request_id).await?;
             }
             if !state.draining.load(Ordering::Acquire) {
