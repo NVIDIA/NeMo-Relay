@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+harbor==0.18.0
+opentelemetry-proto==1.38.0
+protobuf==6.33.5
+typing-extensions==4.15.0
+tomli-w==1.2.0
