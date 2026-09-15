@@ -45,6 +45,83 @@ use crate::gateway::tls::RelayTlsIdentity;
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::test_support::{EnvScope, PLUGIN_CONFIG_TEST_LOCK};
 
+#[tokio::test]
+async fn disconnected_hook_request_retains_the_active_session() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-server-disconnected-hook-session";
+    const TOOL: &str = "disconnected-hook-session";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    let entered = Arc::new(tokio::sync::Notify::new());
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new({
+            let entered = Arc::clone(&entered);
+            move |name, _| {
+                let entered = Arc::clone(&entered);
+                Box::pin(async move {
+                    if name == TOOL {
+                        entered.notify_one();
+                        std::future::pending::<()>().await;
+                    }
+                    Ok(None)
+                })
+            }
+        }),
+    )
+    .unwrap();
+    let _guardrail_cleanup = ToolGuardrailCleanup(GUARDRAIL);
+
+    let state = AppState::new(test_config());
+    let sessions = state.sessions.clone();
+    let app = router_with_state(state);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let response = test_http_client()
+        .post(format!("http://{address}/hooks/codex"))
+        .json(&json!({
+            "session_id": "http-cancel-session",
+            "hook_event_name": "sessionStart"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let payload = json!({
+        "session_id": "http-cancel-session",
+        "hook_event_name": "PreToolUse",
+        "tool_call_id": "tool-1",
+        "tool_name": TOOL,
+        "tool_input": {}
+    })
+    .to_string();
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    let request = format!(
+        "POST /hooks/codex HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+        payload.len()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), entered.notified())
+        .await
+        .unwrap();
+    drop(stream);
+
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            sessions.test_contains_session("http-cancel-session")
+        )
+        .await
+        .expect("disconnect cleanup should finish")
+    );
+
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+}
+
 const GENERIC_TEST_PLUGIN_KIND: &str = "cli-test-generic-plugin";
 static GENERIC_TEST_PLUGIN_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static GENERIC_TEST_PLUGIN_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
