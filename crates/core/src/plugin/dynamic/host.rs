@@ -44,7 +44,11 @@ pub async fn initialize(
     additional_plugins_toml: Option<PathBuf>,
 ) -> Result<PluginHostActivation> {
     let resolved = resolve_plugin_host_config(config, additional_plugins_toml.as_deref())?;
-    let dynamic_reports = resolved.dynamic_reports;
+    let dynamic_reports = resolved
+        .dynamic_reports
+        .into_iter()
+        .map(|entry| entry.report)
+        .collect();
     let config_paths = resolved.config_paths;
     let resolved_config = resolved.resolved_config;
     let (mut activation, config_report) = PluginHostActivation::activate_validated(

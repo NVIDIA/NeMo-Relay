@@ -153,10 +153,20 @@ pub(crate) struct ResolvedPluginHostConfig {
     pub(crate) config: PluginConfig,
     pub(crate) policy: DynamicPluginHostPolicy,
     pub(crate) dynamic_plugins: Vec<super::VerifiedDynamicPluginSpec>,
-    pub(crate) dynamic_reports: Vec<DynamicPluginValidationReport>,
+    pub(super) dynamic_reports: Vec<ResolvedDynamicPluginReport>,
     pub(crate) diagnostics: Vec<crate::plugin::ConfigDiagnostic>,
     pub(crate) config_paths: Vec<String>,
     pub(crate) resolved_config: Json,
+}
+
+/// A validation report with the lifecycle selection used to request it.
+///
+/// `DynamicPluginValidationReport::selected` describes whether validation
+/// permits activation. Keep the requested selection separately so preflight
+/// validation can report a selected plugin that failed validation.
+pub(super) struct ResolvedDynamicPluginReport {
+    pub(super) requested: bool,
+    pub(super) report: DynamicPluginValidationReport,
 }
 
 #[derive(Debug, Deserialize)]
@@ -256,13 +266,15 @@ pub(crate) fn validate_request(request: PluginHostValidationRequest) -> Result<P
         PluginHostValidationTarget::All => resolved
             .dynamic_reports
             .into_iter()
-            .filter(|report| report.selected)
+            .filter(|entry| entry.requested)
+            .map(|entry| entry.report)
             .collect(),
         PluginHostValidationTarget::PluginId(plugin_id) => {
             let reports = resolved
                 .dynamic_reports
                 .into_iter()
-                .filter(|report| report.plugin_id == plugin_id)
+                .filter(|entry| entry.report.plugin_id == plugin_id)
+                .map(|entry| entry.report)
                 .collect::<Vec<_>>();
             if reports.is_empty() {
                 return Err(PluginError::NotFound(format!(
@@ -346,7 +358,10 @@ fn resolve_plugin_host_config_inner(
         let valid = report.failure.is_none();
         let effective_selected = report.selected;
         let failure = report.failure.clone();
-        reports.push(report);
+        reports.push(ResolvedDynamicPluginReport {
+            requested: selected,
+            report,
+        });
         if selected
             && !valid
             && reject_required_failures
