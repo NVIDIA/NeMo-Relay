@@ -197,6 +197,22 @@ manifest = {:?}
     );
     let disabled_report = validate(PluginConfig::default(), Some(plugins_toml)).unwrap();
     assert!(disabled_report.dynamic_plugins.is_empty());
+
+    let targeted_report = validate_request(PluginHostValidationRequest {
+        config: PluginConfig::default(),
+        additional_plugins_toml: Some(temp.path().join("plugins.toml")),
+        target: PluginHostValidationTarget::PluginId("fixture.trust".into()),
+    })
+    .unwrap();
+    assert_eq!(targeted_report.dynamic_plugins.len(), 1);
+    assert!(!targeted_report.dynamic_plugins[0].selected);
+    assert_eq!(
+        targeted_report.dynamic_plugins[0]
+            .failure
+            .as_ref()
+            .map(|failure| failure.code.as_str()),
+        Some("integrity_failed")
+    );
 }
 
 #[test]
