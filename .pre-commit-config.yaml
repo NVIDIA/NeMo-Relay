@@ -91,6 +91,8 @@ repos:
           - '^https://github\.com/NVIDIA/NeMo-Relay(?:/.*)?$'
           - --exclude
           - '^https://nvidia-nemo-relay\.docs\.buildwithfern\.com/nemo-relay(?:/.*)?$'
+          - --exclude
+          - '^https://docs\.nvidia\.com/(?:nemo/relay|dynamo|skills)(?:/.*)?$'
           - README.md
           - CONTRIBUTING.md
           - docs/**/*.mdx
