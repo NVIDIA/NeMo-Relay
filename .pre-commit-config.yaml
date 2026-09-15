@@ -93,6 +93,8 @@ repos:
           - '^https://nvidia-nemo-relay\.docs\.buildwithfern\.com/nemo-relay(?:/.*)?$'
           - --exclude
           - '^https://docs\.nvidia\.com/(?:nemo/relay|dynamo|skills)(?:/.*)?$'
+          - --exclude
+          - '^https://www\.freedesktop\.org/software/systemd/man/latest/(?:loginctl|systemd\.service)\.html$'
           - README.md
           - CONTRIBUTING.md
           - docs/**/*.mdx
