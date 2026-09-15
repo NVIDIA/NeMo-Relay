@@ -28,6 +28,14 @@ use super::*;
 use crate::events::{LlmHintEvent, SessionEvent, ToolEvent};
 use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
 
+struct ToolGuardrailCleanup(&'static str);
+
+impl Drop for ToolGuardrailCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_tool_conditional_execution_guardrail(self.0);
+    }
+}
+
 #[tokio::test]
 async fn cancelled_authenticated_hook_preserves_owner_until_session_ends() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
@@ -53,6 +61,7 @@ async fn cancelled_authenticated_hook_preserves_owner_until_session_ends() {
         }),
     )
     .unwrap();
+    let _guardrail_cleanup = ToolGuardrailCleanup(GUARDRAIL);
 
     let manager = SessionManager::new(session_test_config());
     let applying = tokio::spawn({
@@ -121,8 +130,6 @@ async fn cancelled_authenticated_hook_preserves_owner_until_session_ends() {
         )
         .await
         .unwrap();
-
-    deregister_tool_conditional_execution_guardrail(GUARDRAIL).unwrap();
 }
 
 #[tokio::test]
@@ -2364,6 +2371,7 @@ async fn partially_failed_authenticated_batch_releases_closed_owner() {
         }),
     )
     .unwrap();
+    let _guardrail_cleanup = ToolGuardrailCleanup(GUARDRAIL);
 
     let manager = SessionManager::new(session_test_config());
     manager
@@ -2416,8 +2424,6 @@ async fn partially_failed_authenticated_batch_releases_closed_owner() {
         )
         .await
         .unwrap();
-
-    deregister_tool_conditional_execution_guardrail(GUARDRAIL).unwrap();
 }
 
 #[tokio::test]
