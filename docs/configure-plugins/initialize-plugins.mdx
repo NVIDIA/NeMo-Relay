@@ -153,6 +153,14 @@ application work.
 A diagnostic has a level, code, and message. It also names the component and
 field when Relay knows them.
 
+For every lifecycle-selected dynamic plugin, `validate` returns a report even
+when integrity or signature verification fails. Trust failures do not make
+`validate` raise; inspect `status.integrity`, `status.authenticity`, and
+`failure`, then fail the deployment if the report is not acceptable. A failed
+trust report has `selected = false` because Relay will not activate that
+plugin. With `startup = "required"`, `initialize` still rejects the same
+failure before it loads plugin code.
+
 `validate` is a preflight. It proves that Relay can resolve and check the
 configuration without starting plugin code. It does not prove that a remote
 exporter can deliver data after activation. Use component health checks and

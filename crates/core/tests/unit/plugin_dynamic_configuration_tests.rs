@@ -109,6 +109,149 @@ fn validation_request_deserializes_every_target_and_rejects_invalid_shapes() {
 }
 
 #[test]
+fn validation_reports_selected_trust_failures_without_blocking() {
+    let temp = tempfile::tempdir().unwrap();
+    let artifact = temp.path().join("artifact.bin");
+    fs::write(&artifact, b"dynamic plugin trust fixture").unwrap();
+    let manifest = temp.path().join("relay-plugin.toml");
+    fs::write(
+        &manifest,
+        r#"
+manifest_version = 1
+
+[plugin]
+id = "fixture.trust"
+kind = "worker"
+
+[compat]
+relay = ">=0.8.0,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[source]
+artifact = "artifact.bin"
+
+[integrity]
+sha256 = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[load]
+runtime = "command"
+entrypoint = "fixture-worker"
+"#,
+    )
+    .unwrap();
+    let plugins_toml = temp.path().join("plugins.toml");
+    fs::write(
+        &plugins_toml,
+        format!(
+            r#"
+version = 1
+
+[plugins.policy.defaults]
+startup = "required"
+attestation = "integrity_only"
+
+[[plugins.dynamic]]
+manifest = {:?}
+"#,
+            manifest.display().to_string()
+        ),
+    )
+    .unwrap();
+
+    let report = validate(PluginConfig::default(), Some(plugins_toml.clone())).unwrap();
+    assert_eq!(report.dynamic_plugins.len(), 1);
+    let dynamic = &report.dynamic_plugins[0];
+    assert_eq!(dynamic.plugin_id, "fixture.trust");
+    assert!(!dynamic.selected);
+    assert_eq!(dynamic.status.integrity, DynamicPluginCheckState::Invalid);
+    assert_eq!(
+        dynamic
+            .failure
+            .as_ref()
+            .map(|failure| failure.code.as_str()),
+        Some("integrity_failed")
+    );
+
+    let startup_error =
+        match resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml)) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("required trust failure must reject startup"),
+        };
+    assert!(startup_error.contains("failed integrity verification"));
+
+    fs::write(
+        &plugins_toml,
+        format!(
+            r#"
+version = 1
+
+[plugins.policy.defaults]
+startup = "optional"
+attestation = "integrity_only"
+
+[[plugins.dynamic]]
+manifest = {:?}
+"#,
+            manifest.display().to_string()
+        ),
+    )
+    .unwrap();
+    let optional_report = validate(PluginConfig::default(), Some(plugins_toml.clone())).unwrap();
+    assert_eq!(optional_report.dynamic_plugins.len(), 1);
+    assert!(optional_report.dynamic_plugins[0].selected);
+    assert_eq!(
+        optional_report.dynamic_plugins[0]
+            .failure
+            .as_ref()
+            .map(|failure| failure.code.as_str()),
+        Some("integrity_failed")
+    );
+    let optional_resolved =
+        resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml)).unwrap();
+    assert_eq!(optional_resolved.dynamic_plugins.len(), 1);
+    assert_eq!(
+        optional_resolved.dynamic_plugins[0].plugin_id,
+        "fixture.trust"
+    );
+
+    let manifest_ref = fs::canonicalize(&manifest)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let mut disabled = lifecycle_record("fixture.trust", &manifest_ref);
+    disabled.spec.enabled = false;
+    write_state(
+        &temp.path().join(DYNAMIC_PLUGIN_STATE_FILENAME),
+        &[disabled],
+        Some(DYNAMIC_PLUGIN_STATE_SCHEMA_VERSION),
+    );
+    let disabled_report = validate(PluginConfig::default(), Some(plugins_toml)).unwrap();
+    assert!(disabled_report.dynamic_plugins.is_empty());
+
+    let targeted_report = validate_request(PluginHostValidationRequest {
+        config: PluginConfig::default(),
+        additional_plugins_toml: Some(temp.path().join("plugins.toml")),
+        target: PluginHostValidationTarget::PluginId("fixture.trust".into()),
+    })
+    .unwrap();
+    assert_eq!(targeted_report.dynamic_plugins.len(), 1);
+    assert!(!targeted_report.dynamic_plugins[0].selected);
+    assert_eq!(
+        targeted_report.dynamic_plugins[0]
+            .failure
+            .as_ref()
+            .map(|failure| failure.code.as_str()),
+        Some("integrity_failed")
+    );
+}
+
+#[test]
 fn resolved_config_redacts_secrets_without_hiding_its_structure() {
     let sanitized = sanitize_resolved_config(json!({
         "components": [{
