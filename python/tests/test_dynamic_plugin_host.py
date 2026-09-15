@@ -210,6 +210,61 @@ def test_validate_uses_core_report(
     assert report["dynamic_plugins"][0]["selected"] is True
 
 
+async def test_validate_reports_selected_dynamic_plugin_trust_failures(tmp_path: Path) -> None:
+    artifact = tmp_path / "artifact.bin"
+    artifact.write_bytes(b"dynamic plugin trust fixture")
+    manifest = tmp_path / "relay-plugin.toml"
+    manifest.write_text(
+        textwrap.dedent(
+            """
+            manifest_version = 1
+
+            [plugin]
+            id = "fixture.dynamic_trust"
+            kind = "worker"
+
+            [compat]
+            relay = ">=0.8.0,<1.0"
+            worker_protocol = "grpc-v1"
+
+            [defaults]
+            enabled = false
+
+            [capabilities]
+            items = ["plugin_worker"]
+
+            [source]
+            artifact = "artifact.bin"
+
+            [integrity]
+            sha256 = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+            [load]
+            runtime = "command"
+            entrypoint = "fixture-worker"
+            """
+        )
+    )
+    plugins_toml = _write_plugins_toml(tmp_path, [(manifest, {})])
+
+    report = plugin.validate(plugin.PluginConfig(), plugins_toml)
+    assert len(report["dynamic_plugins"]) == 1
+    dynamic = report["dynamic_plugins"][0]
+    assert dynamic["plugin_id"] == "fixture.dynamic_trust"
+    assert dynamic["selected"] is False
+    assert dynamic["status"]["integrity"] == "invalid"
+    assert dynamic["failure"]["code"] == "integrity_failed"
+
+    with pytest.raises(ValueError, match="failed integrity verification"):
+        await plugin.initialize(plugin.PluginConfig(), plugins_toml)
+
+    plugins_toml.write_text(plugins_toml.read_text().replace('startup = "required"', 'startup = "optional"'))
+    optional_report = plugin.validate(plugin.PluginConfig(), plugins_toml)
+    optional_dynamic = optional_report["dynamic_plugins"][0]
+    assert optional_dynamic["selected"] is True
+    assert optional_dynamic["failure"]["code"] == "integrity_failed"
+
+
 async def test_native_host_owns_callbacks_and_close_is_idempotent(
     native_dynamic_plugin: _BuiltPlugin,
 ) -> None:
