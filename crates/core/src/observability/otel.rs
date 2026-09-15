@@ -1053,9 +1053,9 @@ fn build_tracer_provider_with_resource(
             // matching the OTLP exporter's default client construction behavior.
             let timeout = config.timeout;
             let client = thread::spawn(move || {
-                reqwest_otel::blocking::Client::builder()
+                reqwest::blocking::Client::builder()
                     .timeout(timeout)
-                    .redirect(reqwest_otel::redirect::Policy::none())
+                    .redirect(reqwest::redirect::Policy::none())
                     .build()
             })
             .join()

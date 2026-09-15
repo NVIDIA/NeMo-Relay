@@ -4,7 +4,6 @@
 [bans]
 skip = [
     { crate = "block-buffer@0.10.4", reason = "required by sha1 0.10 alongside sha2 0.11" },
-    { crate = "console@0.15.11", reason = "required by dialoguer 0.11 alongside the CLI's console 0.16" },
     { crate = "cpufeatures@0.2.17", reason = "required by sha1 0.10 alongside sha2 0.11" },
     { crate = "crypto-common@0.1.7", reason = "required by sha1 0.10 alongside sha2 0.11" },
     { crate = "digest@0.10.7", reason = "required by sha1 0.10 alongside sha2 0.11" },
@@ -18,13 +17,8 @@ skip = [
     { crate = "rand@0.9.3", reason = "required by OpenTelemetry and tungstenite alongside object_store's rand 0.10" },
     { crate = "rand_core@0.9.5", reason = "required by rand 0.9 alongside rand 0.10" },
     { crate = "r-efi@6.0.0", reason = "target-specific build-only duplicate from cbindgen's tempfile stack" },
-    { crate = "reqwest@0.12.28", reason = "required by core and CLI dependencies alongside object_store's reqwest 0.13" },
-    { crate = "thiserror@1.0.69", reason = "required by dialoguer 0.11 alongside workspace dependencies using thiserror 2" },
-    { crate = "thiserror-impl@1.0.69", reason = "required by dialoguer 0.11 alongside workspace dependencies using thiserror 2" },
-    { crate = "wasm-streams@0.4.2", reason = "required by reqwest 0.12 alongside reqwest 0.13" },
     { crate = "winnow@1.0.1", reason = "build-only duplicate internal to cbindgen's TOML parser stack" },
     { crate = "windows-sys@0.52.0", reason = "target-specific dependency required alongside newer windows-sys releases" },
-    { crate = "windows-sys@0.59.0", reason = "target-specific dependency required alongside windows-sys 0.61" },
 ]
 
 [licenses]

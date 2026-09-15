@@ -131,17 +131,17 @@ impl HeaderFileResolver {
 /// Blocking OTLP HTTP client that applies current file-backed headers per request.
 #[derive(Debug)]
 pub(crate) struct HeaderFileHttpClient {
-    inner: reqwest_otel::blocking::Client,
+    inner: reqwest::blocking::Client,
     resolver: HeaderFileResolver,
 }
 
 impl HeaderFileHttpClient {
-    pub(crate) fn new(inner: reqwest_otel::blocking::Client, resolver: HeaderFileResolver) -> Self {
+    pub(crate) fn new(inner: reqwest::blocking::Client, resolver: HeaderFileResolver) -> Self {
         Self { inner, resolver }
     }
 
     fn send_bytes_blocking(
-        client: reqwest_otel::blocking::Client,
+        client: reqwest::blocking::Client,
         resolver: HeaderFileResolver,
         request: Request<Bytes>,
     ) -> Result<Response<Bytes>, HttpError> {

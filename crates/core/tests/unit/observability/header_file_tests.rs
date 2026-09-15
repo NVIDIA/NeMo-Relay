@@ -208,7 +208,7 @@ fn http_client_reads_current_values_and_stops_before_network_on_resolution_failu
         headers
     });
     let client = HeaderFileHttpClient::new(
-        reqwest_otel::blocking::Client::builder().build().unwrap(),
+        reqwest::blocking::Client::builder().build().unwrap(),
         HeaderFileResolver::new(files),
     );
     let endpoint = format!("http://{address}/v1/logs");
@@ -266,7 +266,7 @@ fn http_client_works_without_a_tokio_runtime() {
             .unwrap();
     });
     let client = HeaderFileHttpClient::new(
-        reqwest_otel::blocking::Client::builder().build().unwrap(),
+        reqwest::blocking::Client::builder().build().unwrap(),
         HeaderFileResolver::new(HashMap::new()),
     );
 

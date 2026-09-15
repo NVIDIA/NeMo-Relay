@@ -439,9 +439,9 @@ fn build_metric_provider(
                 .with_timeout(config.timeout)
                 .with_endpoint(resolve_http_metric_endpoint(&config.endpoint).into_owned());
             if !config.headers.is_empty() || !config.header_file.is_empty() {
-                let client = reqwest_otel::blocking::Client::builder()
+                let client = reqwest::blocking::Client::builder()
                     .timeout(config.timeout)
-                    .redirect(reqwest_otel::redirect::Policy::none())
+                    .redirect(reqwest::redirect::Policy::none())
                     .build()
                     .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
                 builder = builder.with_http_client(HeaderFileHttpClient::new(
