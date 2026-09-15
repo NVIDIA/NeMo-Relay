@@ -36,6 +36,19 @@ class TestPiiRedactionConfigHelpers:
         }
         assert LocalModelConfig().to_dict() == {}
 
+        assert BuiltinConfig(
+            preset="trajectory_context",
+            custom_mark_payload_policy="preserve",
+            metric_string_attribute_allowlist={"gen_ai.operation.name": ["chat"]},
+        ).to_dict() == {
+            "preset": "trajectory_context",
+            "custom_mark_payload_policy": "preserve",
+            "metric_string_attribute_allowlist": {"gen_ai.operation.name": ["chat"]},
+        }
+
+        trajectory_report = validate_config(PiiRedactionConfig(builtin=BuiltinConfig(preset="trajectory_context")))
+        assert trajectory_report["diagnostics"] == []
+
         wrapped = ComponentSpec(PiiRedactionConfig()).to_dict()
         assert wrapped["kind"] == PII_REDACTION_PLUGIN_KIND
         assert wrapped["enabled"] is True
