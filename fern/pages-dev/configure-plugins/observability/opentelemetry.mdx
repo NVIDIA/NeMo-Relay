@@ -158,7 +158,7 @@ gRPC does not use HTTP redirects.
 | `headers` | `{}` | String-to-string exporter headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
 | `header_file` | `{}` | Header names mapped to files read immediately before each OTLP HTTP request or gRPC call. |
-| `resource_attributes` | `{}` | String-to-string resource attributes. |
+| `resource_attributes` | `{}` | String-to-string resource attributes. Relay automatically adds `telemetry.sdk.name`, `telemetry.sdk.language`, and `telemetry.sdk.version`; do not configure those reserved keys. |
 | `mark_projection` | `inherit` | Mark representation for `full` and `openinference`: `inherit`, `event`, or `tool`. |
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
@@ -287,7 +287,10 @@ The signal endpoint fields are `endpoint`, `transport`, `headers`,
 `service_version`, `instrumentation_scope`, and `timeout_millis`. Their defaults
 match the corresponding trace fields. Each signal rejects duplicate
 destinations within that signal. Logs, metrics, and traces can share the same
-authority because OTLP treats them as different signals.
+authority because OTLP treats them as different signals. All three signals
+automatically include the reserved `telemetry.sdk.name`, `telemetry.sdk.language`,
+and `telemetry.sdk.version` resource attributes; configuring those keys in
+`resource_attributes` rejects the endpoint.
 
 ## Trace Batch Processor Configuration
 
