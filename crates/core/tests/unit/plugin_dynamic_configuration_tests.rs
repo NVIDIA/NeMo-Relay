@@ -184,6 +184,41 @@ manifest = {:?}
         };
     assert!(startup_error.contains("failed integrity verification"));
 
+    fs::write(
+        &plugins_toml,
+        format!(
+            r#"
+version = 1
+
+[plugins.policy.defaults]
+startup = "optional"
+attestation = "integrity_only"
+
+[[plugins.dynamic]]
+manifest = {:?}
+"#,
+            manifest.display().to_string()
+        ),
+    )
+    .unwrap();
+    let optional_report = validate(PluginConfig::default(), Some(plugins_toml.clone())).unwrap();
+    assert_eq!(optional_report.dynamic_plugins.len(), 1);
+    assert!(optional_report.dynamic_plugins[0].selected);
+    assert_eq!(
+        optional_report.dynamic_plugins[0]
+            .failure
+            .as_ref()
+            .map(|failure| failure.code.as_str()),
+        Some("integrity_failed")
+    );
+    let optional_resolved =
+        resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml)).unwrap();
+    assert_eq!(optional_resolved.dynamic_plugins.len(), 1);
+    assert_eq!(
+        optional_resolved.dynamic_plugins[0].plugin_id,
+        "fixture.trust"
+    );
+
     let manifest_ref = fs::canonicalize(&manifest)
         .unwrap()
         .to_string_lossy()

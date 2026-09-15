@@ -161,9 +161,9 @@ pub(crate) struct ResolvedPluginHostConfig {
 
 /// A validation report with the lifecycle selection used to request it.
 ///
-/// `DynamicPluginValidationReport::selected` describes whether validation
-/// permits activation. Keep the requested selection separately so preflight
-/// validation can report a selected plugin that failed validation.
+/// `DynamicPluginValidationReport::selected` describes whether the host will
+/// activate the plugin. Keep the requested selection separately so preflight
+/// validation can report a required plugin that failed validation.
 pub(super) struct ResolvedDynamicPluginReport {
     pub(super) requested: bool,
     pub(super) report: DynamicPluginValidationReport,
@@ -542,14 +542,18 @@ fn validate_declaration(
     if schema_failure.is_some() {
         status.manifest = DynamicPluginCheckState::Invalid;
     }
-    let is_valid = failure.is_none();
+    let effective_selected = selected
+        && evaluated_policy.policy_satisfied
+        && schema_failure.is_none()
+        && (trust.last_error(&plugin_id).is_none()
+            || evaluated_policy.startup_class == DynamicPluginStartupClass::Optional);
     DynamicPluginValidationReport {
         plugin_id,
         manifest_ref,
         kind: manifest.plugin.kind,
         status,
         failure,
-        selected: selected && is_valid,
+        selected: effective_selected,
     }
 }
 

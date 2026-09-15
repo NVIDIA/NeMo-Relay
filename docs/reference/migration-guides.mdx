@@ -172,10 +172,12 @@ API to check the chosen policy and artifact before deployment.
 
 Embedding `validate` calls return trust failures in the matching
 `dynamic_plugins` entry rather than raising them. Check that entry's
-`status.integrity`, `status.authenticity`, and `failure` before deployment;
-the entry has `selected = false` when Relay cannot activate it. Required
-startup remains fail-closed and rejects the same failed trust check before
-plugin code loads.
+`status.integrity`, `status.authenticity`, and `failure` before deployment.
+The entry has `selected = false` when Relay cannot activate it. With optional
+startup, an enabled plugin remains selected despite a failed trust check, so
+the failure stays visible without blocking its activation. Required startup
+remains fail-closed and rejects the same failed trust check before plugin code
+loads.
 
 `integrity_only` skips signature checks. It still requires a valid
 `source.artifact` and a matching `integrity.sha256` digest.

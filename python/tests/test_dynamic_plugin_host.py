@@ -258,6 +258,12 @@ async def test_validate_reports_selected_dynamic_plugin_trust_failures(tmp_path:
     with pytest.raises(ValueError, match="failed integrity verification"):
         await plugin.initialize(plugin.PluginConfig(), plugins_toml)
 
+    plugins_toml.write_text(plugins_toml.read_text().replace('startup = "required"', 'startup = "optional"'))
+    optional_report = plugin.validate(plugin.PluginConfig(), plugins_toml)
+    optional_dynamic = optional_report["dynamic_plugins"][0]
+    assert optional_dynamic["selected"] is True
+    assert optional_dynamic["failure"]["code"] == "integrity_failed"
+
 
 async def test_native_host_owns_callbacks_and_close_is_idempotent(
     native_dynamic_plugin: _BuiltPlugin,
