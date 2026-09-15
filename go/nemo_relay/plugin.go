@@ -417,6 +417,8 @@ func marshalPluginHostActivationConfig(config PluginConfig) ([]byte, error) {
 // Initialize activates the core-owned static and dynamic plugin host.
 // An optional explicit file replaces user-file discovery. Relay merges the
 // selected file with the system file, then applies programmatic config.
+// A missing explicit file is reported as a plugin.configuration_file_missing
+// warning in the returned host report rather than as an error.
 func Initialize(config PluginConfig, additionalPluginsTOML *string) (*PluginHostActivation, PluginHostReport, error) {
 	configPayload, err := marshalPluginHostActivationConfig(config)
 	if err != nil {
@@ -437,6 +439,8 @@ func Initialize(config PluginConfig, additionalPluginsTOML *string) (*PluginHost
 
 // Validate validates the same layered plugin-host configuration as Initialize
 // without loading code or acquiring the process-wide host lease.
+// A missing explicit file is reported as a plugin.configuration_file_missing
+// warning in the returned host report rather than as an error.
 func Validate(config PluginConfig, additionalPluginsTOML *string) (PluginHostReport, error) {
 	payload, err := marshalPluginHostActivationConfig(config)
 	if err != nil {
