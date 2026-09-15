@@ -2121,7 +2121,7 @@ describe('LLM intercepts', () => {
       'global and scope-local tool intercept declarations must expose canonical tool results',
     );
     assert.equal(
-      declarations.split("context: import('./plugin').ToolExecutionContext").length - 1,
+      declarations.split('context: ToolExecutionContext').length - 1,
       2,
       'global and scope-local context intercept declarations must expose the tool execution context',
     );

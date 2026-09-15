@@ -3,7 +3,14 @@
 
 /// <reference lib="esnext.disposable" />
 
-import type { EventSanitizeFields, Json, RuntimeRegistrationKind, ToolExecutionResult } from './index';
+import type {
+  EventSanitizeFields,
+  Json,
+  PendingMarkSpec,
+  RuntimeRegistrationKind,
+  ToolExecutionContext,
+  ToolExecutionResult,
+} from './index';
 import type { LlmCodec, LlmResponseCodec } from './typed';
 
 /** Codec identity available while a managed LLM event is sanitized. */
@@ -134,17 +141,6 @@ export interface DynamicPluginValidationReport {
   selected: boolean;
 }
 
-/** A mark Relay materializes under a managed lifecycle. */
-export interface PendingMarkSpec {
-  name: string;
-  category?: string | null;
-  categoryProfile?: Json;
-  data?: Json;
-  dataSchema?: { name: string; version: string } | null;
-  metadata?: Json;
-  severity?: 'trace' | 'debug' | 'info' | 'warn' | 'warning' | 'error' | null;
-}
-
 /** Schema tag attached to an opaque optimization contribution payload. */
 export interface LlmOptimizationDataSchema {
   name: string;
@@ -226,20 +222,6 @@ export interface ToolExecutionInterceptOutcome {
   result: Json;
   annotation?: Json;
   pendingMarks?: PendingMarkSpec[];
-}
-
-/**
- * Per-call context delivered to a tool execution intercept.
- *
- * `toolCallId` is the provider-issued correlation identifier recorded on the
- * managed tool call, or `null` when the call did not record one. It lets
- * an intercept that completes execution without invoking the remaining chain
- * associate its result with the originating tool call.
- */
-export interface ToolExecutionContext {
-  toolName: string;
-  args: Json;
-  toolCallId: string | null;
 }
 
 /** Scalar value accepted in event metadata additions. */

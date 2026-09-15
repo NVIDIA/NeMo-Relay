@@ -490,8 +490,17 @@ describe('Tool execute', () => {
 
     assert.match(
       declarations,
-      /registerToolExecutionIntercept\([\s\S]*?context: import\('\.\/plugin'\)\.ToolExecutionContext, next: \(args: Json\) => ToolExecutionResult \| Promise<ToolExecutionResult>/,
+      /export interface ToolExecutionContext \{[\s\S]*?toolName: string[\s\S]*?args: Json[\s\S]*?toolCallId: string \| null/,
     );
+    assert.match(
+      declarations,
+      /export interface PendingMarkSpec \{[\s\S]*?name: string[\s\S]*?category\?: string \| null/,
+    );
+    assert.match(
+      declarations,
+      /registerToolExecutionIntercept\([\s\S]*?context: ToolExecutionContext, next: \(args: Json\) => ToolExecutionResult \| Promise<ToolExecutionResult>[\s\S]*?pendingMarks\?: Array<PendingMarkSpec>/,
+    );
+    assert.doesNotMatch(declarations, /import\('\.\/plugin'\)\.PendingMarkSpec/);
     assert.match(
       declarations,
       /The context\n \* exposes `toolName`, `args`, and `toolCallId`; `toolCallId` is `null` when/,
@@ -1557,9 +1566,7 @@ describe('Tool intercepts', () => {
   });
 
   it('execution intercept may directly forward the canonical Node result', async () => {
-    registerToolExecutionIntercept('node_tool_exec_forward_result', 10, async (context, next) =>
-      next(context.args),
-    );
+    registerToolExecutionIntercept('node_tool_exec_forward_result', 10, async (context, next) => next(context.args));
     try {
       const result = await toolCallExecute('forward_result_tool', { ok: true }, (args) => toolResult(args));
       assert.deepEqual(result, toolResult({ ok: true }));

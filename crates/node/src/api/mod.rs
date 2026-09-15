@@ -3916,7 +3916,7 @@ pub fn register_tool_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(context: import('./plugin').ToolExecutionContext, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<import('./plugin').PendingMarkSpec> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<import('./plugin').PendingMarkSpec> }>"
+        ts_arg_type = "(context: ToolExecutionContext, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<PendingMarkSpec> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<PendingMarkSpec> }>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -4527,7 +4527,7 @@ pub fn scope_register_tool_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(context: import('./plugin').ToolExecutionContext, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<import('./plugin').PendingMarkSpec> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<import('./plugin').PendingMarkSpec> }>"
+        ts_arg_type = "(context: ToolExecutionContext, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<PendingMarkSpec> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<PendingMarkSpec> }>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -4939,7 +4939,7 @@ pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<
 /// The `request` should be a JSON object with `headers` and `content` fields matching
 /// the `LlmRequest` schema. Returns the transformed request as JSON.
 #[napi(
-    ts_return_type = "Promise<{ request: Json; annotated: Json | null; pendingMarks: Array<import('./plugin').PendingMarkSpec>; optimizationContributions: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }>"
+    ts_return_type = "Promise<{ request: Json; annotated: Json | null; pendingMarks: Array<PendingMarkSpec>; optimizationContributions: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }>"
 )]
 pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<JsObject> {
     let llm_request: LlmRequest = serde_json::from_value(request)
