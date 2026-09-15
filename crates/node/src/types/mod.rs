@@ -248,6 +248,34 @@ impl From<CoreToolExecutionResult> for ToolExecutionResult {
     }
 }
 
+/// Per-call context delivered to a tool execution intercept.
+///
+/// `toolCallId` is the provider-issued correlation identifier recorded on
+/// the managed tool call, or `null` when the call did not record one. It lets
+/// an intercept that completes execution without invoking the remaining chain
+/// associate its result with the originating tool call.
+#[napi(object, use_nullable = true)]
+pub struct ToolExecutionContext {
+    pub tool_name: String,
+    pub args: Json,
+    pub tool_call_id: Option<String>,
+}
+
+/// A mark Relay materializes under a managed lifecycle.
+#[napi(object)]
+pub struct PendingMarkSpec {
+    pub name: String,
+    #[napi(ts_type = "string | null")]
+    pub category: Option<String>,
+    pub category_profile: Option<Json>,
+    pub data: Option<Json>,
+    #[napi(ts_type = "{ name: string; version: string } | null")]
+    pub data_schema: Option<Json>,
+    pub metadata: Option<Json>,
+    #[napi(ts_type = "'trace' | 'debug' | 'info' | 'warn' | 'warning' | 'error' | null")]
+    pub severity: Option<String>,
+}
+
 /// Handle to an isolated scope stack for per-request/per-task isolation.
 #[napi]
 pub struct ScopeStack {
