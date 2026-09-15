@@ -42,7 +42,7 @@ use super::otel_signal::{
     MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics, build_grpc_metadata,
     build_in_owned_runtime, classify_metric_mark, reject_signal_header_environment,
     resolve_header_env, resolve_http_signal_endpoint, should_relog_runtime_diagnostic,
-    signal_resource, validate_signal_headers,
+    signal_resource, validate_signal_headers, validate_telemetry_sdk_resource_attributes,
 };
 
 const DEFAULT_EXPORT_INTERVAL: Duration = Duration::from_secs(60);
@@ -262,6 +262,7 @@ impl OpenTelemetryMetricConfig {
                 "cardinality_limit must be less than usize::MAX".to_string(),
             ));
         }
+        validate_telemetry_sdk_resource_attributes(&self.resource_attributes)?;
         reject_signal_header_environment("OTEL_EXPORTER_OTLP_METRICS_HEADERS")?;
         validate_signal_headers(&self.headers)?;
         if has_configured_headers(&self.headers, &self.header_env, &self.header_file) {
