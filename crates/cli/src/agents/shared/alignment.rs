@@ -27,7 +27,7 @@ pub(crate) mod codex;
 const REQUEST_AFFINITY_KEY_MIN_CHARS: usize = 24;
 const REQUEST_AFFINITY_KEY_MAX_CHARS: usize = 4096;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum SubagentSessionContext {
     Codex(codex::SubagentContext),
 }
@@ -212,7 +212,7 @@ impl ProviderRequestExtractor for AnthropicCountTokensRequestExtractor {
 // Records that a provider-created child session is really a subagent under another session. The
 // session manager stores this until the child emits its terminal AgentEnded event, then removes the
 // alias so future unrelated events cannot be reparented through stale state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SessionAlias {
     pub(crate) parent_session_id: String,
     pub(crate) subagent_id: String,
@@ -249,7 +249,7 @@ impl SessionAlias {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PendingSubagentStart {
     // The original child SessionStart is retained because promotion may happen on a later parent
     // hook or gateway request, after this hook request has already returned.
@@ -281,12 +281,17 @@ impl PendingSubagentStart {
 }
 
 // Owns all cross-session correlation state used by the session manager. Keeping aliases and
-// pending child starts together makes lifecycle cleanup atomic: any code that removes stale alias
-// state also removes the matching pending state before later events can observe a half-updated map.
+// pending child starts together makes route snapshots and lifecycle cleanup atomic.
 #[derive(Debug, Default)]
 pub(crate) struct SessionAlignmentState {
     aliases: HashMap<String, SessionAlias>,
     pending_subagents: HashMap<String, PendingSubagentStart>,
+}
+
+pub(crate) struct SessionRouteCleanup {
+    finished_alias: Option<(String, SessionAlias)>,
+    ended_aliases: Vec<(String, SessionAlias)>,
+    ended_pending_subagents: Vec<(String, PendingSubagentStart)>,
 }
 
 impl SessionAlignmentState {
@@ -309,8 +314,8 @@ impl SessionAlignmentState {
         self.pending_subagents.contains_key(session_id)
     }
 
-    pub(crate) fn pending_for_session(&mut self, session_id: &str) -> Option<PendingSubagentStart> {
-        self.pending_subagents.remove(session_id)
+    pub(crate) fn pending_for_session(&self, session_id: &str) -> Option<PendingSubagentStart> {
+        self.pending_subagents.get(session_id).cloned()
     }
 
     pub(crate) fn insert_pending(
@@ -329,19 +334,65 @@ impl SessionAlignmentState {
         self.aliases.insert(child_session_id, alias);
     }
 
-    pub(crate) fn route_event(&mut self, event: NormalizedEvent) -> NormalizedEvent {
+    pub(crate) fn prepare_route(
+        &self,
+        event: NormalizedEvent,
+    ) -> (NormalizedEvent, SessionRouteCleanup) {
         let (event, finished_alias) = route_event_through_alias(event, &self.aliases);
-        let session_id = event.session_id().to_string();
-        if let Some(child_session_id) = finished_alias.as_ref() {
-            // Remove aliases before terminal skip checks so a late child AgentEnd, or a child
-            // TurnEnded used as a subagent completion signal, cannot leave stale reparenting state.
+        let finished_alias = finished_alias.and_then(|child_session_id| {
+            self.aliases
+                .get(&child_session_id)
+                .cloned()
+                .map(|alias| (child_session_id, alias))
+        });
+        let ended_session_id =
+            matches!(&event, NormalizedEvent::AgentEnded(_)).then(|| event.session_id());
+        let ended_aliases = ended_session_id.map_or_else(Vec::new, |session_id| {
+            self.aliases
+                .iter()
+                .filter(|(child_session_id, alias)| {
+                    child_session_id.as_str() == session_id || alias.parent_session_id == session_id
+                })
+                .map(|(child_session_id, alias)| (child_session_id.clone(), alias.clone()))
+                .collect()
+        });
+        let ended_pending_subagents = ended_session_id.map_or_else(Vec::new, |session_id| {
+            self.pending_subagents
+                .iter()
+                .filter(|(child_session_id, pending)| {
+                    child_session_id.as_str() == session_id
+                        || pending.parent_session_id() == session_id
+                })
+                .map(|(child_session_id, pending)| (child_session_id.clone(), pending.clone()))
+                .collect()
+        });
+        let cleanup = SessionRouteCleanup {
+            finished_alias,
+            ended_aliases,
+            ended_pending_subagents,
+        };
+        (event, cleanup)
+    }
+
+    pub(crate) fn commit_route(&mut self, cleanup: &SessionRouteCleanup) {
+        if let Some((child_session_id, routed_alias)) = cleanup.finished_alias.as_ref()
+            && self.aliases.get(child_session_id) == Some(routed_alias)
+        {
+            // Remove the alias only after its terminal event completes session application. A
+            // request cancelled before that boundary can retry without losing its route. The
+            // identity check preserves a replacement route for a reused child session id.
             self.aliases.remove(child_session_id);
-            self.pending_subagents.remove(child_session_id);
         }
-        if matches!(&event, NormalizedEvent::AgentEnded(_)) {
-            self.clear_for_ended_agent(&session_id);
+        for (child_session_id, ended_alias) in &cleanup.ended_aliases {
+            if self.aliases.get(child_session_id) == Some(ended_alias) {
+                self.aliases.remove(child_session_id);
+            }
         }
-        event
+        for (child_session_id, ended_pending) in &cleanup.ended_pending_subagents {
+            if self.pending_subagents.get(child_session_id) == Some(ended_pending) {
+                self.pending_subagents.remove(child_session_id);
+            }
+        }
     }
 
     pub(crate) fn pending_for_parent(
@@ -364,15 +415,6 @@ impl SessionAlignmentState {
                     .map(|pending| (child_session_id, pending))
             })
             .collect()
-    }
-
-    pub(crate) fn clear_for_ended_agent(&mut self, session_id: &str) {
-        self.aliases.retain(|child_session_id, alias| {
-            child_session_id != session_id && alias.parent_session_id != session_id
-        });
-        self.pending_subagents.retain(|child_session_id, pending| {
-            child_session_id != session_id && pending.parent_session_id() != session_id
-        });
     }
 
     pub(crate) fn clear_for_ended_subagent(&mut self, parent_session_id: &str, subagent_id: &str) {

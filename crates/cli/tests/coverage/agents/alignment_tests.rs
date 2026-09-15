@@ -515,6 +515,55 @@ fn route_event_without_alias_is_unchanged() {
 }
 
 #[test]
+fn route_cleanup_preserves_a_replacement_alias() {
+    let mut alignment = SessionAlignmentState::default();
+    alignment.insert_alias(
+        "child".into(),
+        SessionAlias::new("original-parent".into(), "child".into(), json!({})),
+    );
+    let (_, cleanup) = alignment.prepare_route(NormalizedEvent::AgentEnded(session_event(
+        "child",
+        "SessionEnd",
+    )));
+
+    let replacement = SessionAlias::new(
+        "replacement-parent".into(),
+        "child".into(),
+        json!({ "generation": 2 }),
+    );
+    alignment.insert_alias("child".into(), replacement.clone());
+    alignment.commit_route(&cleanup);
+
+    assert_eq!(alignment.alias_for_session("child"), Some(replacement));
+}
+
+#[test]
+fn agent_cleanup_preserves_an_alias_created_after_routing() {
+    let mut alignment = SessionAlignmentState::default();
+    alignment.insert_alias(
+        "original-child".into(),
+        SessionAlias::new("ending-parent".into(), "original-child".into(), json!({})),
+    );
+    let (_, cleanup) = alignment.prepare_route(NormalizedEvent::AgentEnded(session_event(
+        "ending-parent",
+        "SessionEnd",
+    )));
+
+    let replacement = SessionAlias::new(
+        "replacement-parent".into(),
+        "original-child".into(),
+        json!({ "generation": 2 }),
+    );
+    alignment.insert_alias("original-child".into(), replacement.clone());
+    alignment.commit_route(&cleanup);
+
+    assert_eq!(
+        alignment.alias_for_session("original-child"),
+        Some(replacement)
+    );
+}
+
+#[test]
 fn json_helpers_and_metadata_merge_cover_edge_shapes() {
     let payload = json!({
         "string": "value",

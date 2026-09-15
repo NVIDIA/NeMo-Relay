@@ -25,7 +25,7 @@ const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 // The Codex fields needed to turn a child thread into a parent-owned subagent scope. Optional
 // display fields are copied through because they make Phoenix traces easier to inspect, but only
 // the parent session id is required for correlation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SubagentContext {
     pub(crate) parent_session_id: String,
     nickname: Option<String>,

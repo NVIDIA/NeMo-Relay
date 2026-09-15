@@ -591,6 +591,203 @@ async fn authenticated_alias_rejects_events_from_a_different_client() {
 }
 
 #[tokio::test]
+async fn cancelled_aliased_terminal_event_preserves_the_alias() {
+    let manager = SessionManager::new(session_test_config());
+    start_authenticated_codex_alias(&manager).await;
+    assert!(has_alignment_alias(&manager, "child-thread").await);
+
+    let parent_gate = session_gate(&manager.session_gates, "parent-thread").await;
+    let parent_gate = parent_gate.lock().await;
+    let ending = tokio::time::timeout(
+        Duration::from_millis(100),
+        manager.apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentEnded(codex_session_event(
+                "child-thread",
+                "SessionEnd",
+                json!({}),
+            ))],
+            "client-a",
+        ),
+    )
+    .await;
+    assert!(
+        ending.is_err(),
+        "terminal event should wait for its session"
+    );
+    drop(parent_gate);
+
+    assert!(has_alignment_alias(&manager, "child-thread").await);
+
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentEnded(codex_session_event(
+                "child-thread",
+                "SessionEnd",
+                json!({}),
+            ))],
+            "client-a",
+        )
+        .await
+        .unwrap();
+    assert!(!has_alignment_alias(&manager, "child-thread").await);
+}
+
+#[tokio::test]
+async fn hook_routing_rechecks_an_alias_removed_during_ownership_wait() {
+    let manager = SessionManager::new(session_test_config());
+    start_authenticated_codex_alias(&manager).await;
+
+    let child_gate = session_gate(&manager.session_gates, "child-thread").await;
+    let child_gate = child_gate.lock().await;
+    let owners = manager.authenticated_owners.lock().await;
+    let mut ending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            let config = manager
+                .default_config
+                .session_config_from_headers(&HeaderMap::new());
+            manager
+                .apply_hook_event(
+                    NormalizedEvent::AgentEnded(codex_session_event(
+                        "child-thread",
+                        "SessionEnd",
+                        json!({}),
+                    )),
+                    config,
+                    AuthenticatedRouting::new(
+                        Some("client-a"),
+                        &manager.authenticated_owners,
+                        &manager.authenticated_reservations,
+                    ),
+                    None,
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if manager.alignment_routing.try_lock().is_err() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("hook routing should reach the ownership check");
+
+    manager
+        .alignment
+        .lock()
+        .await
+        .clear_for_ended_subagent("parent-thread", "child-thread");
+    drop(owners);
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut ending)
+            .await
+            .is_err(),
+        "the routed event should wait for the original child session"
+    );
+    drop(child_gate);
+    tokio::time::timeout(Duration::from_secs(1), ending)
+        .await
+        .expect("hook routing should finish after the child gate opens")
+        .expect("hook routing task should not panic")
+        .expect("hook routing should succeed");
+}
+
+#[tokio::test]
+async fn shutdown_waits_for_cancelled_alignment_cleanup() {
+    let manager = SessionManager::new(session_test_config());
+    start_authenticated_codex_alias(&manager).await;
+
+    let cleanup = {
+        let alignment = manager.alignment.lock().await;
+        let (event, cleanup) = alignment.prepare_route(NormalizedEvent::AgentEnded(
+            codex_session_event("child-thread", "SessionEnd", json!({})),
+        ));
+        assert!(matches!(event, NormalizedEvent::SubagentEnded(_)));
+        cleanup
+    };
+    let gate = session_gate(&manager.session_gates, "parent-thread").await;
+    let session_gate = gate.lock_owned().await;
+    let routing = manager.alignment_routing.lock().await;
+    let commit = tokio::spawn(
+        AppliedRouteCleanup::new(
+            &manager,
+            cleanup,
+            session_gate,
+            manager.session_activity.begin(),
+        )
+        .commit(),
+    );
+    tokio::task::yield_now().await;
+    commit.abort();
+    assert!(commit.await.unwrap_err().is_cancelled());
+
+    let shutdown_blocker = manager.session_activity.begin();
+    let shutdown = tokio::spawn({
+        let manager = manager.clone();
+        async move { manager.close_all("test shutdown").await }
+    });
+    tokio::task::yield_now().await;
+    assert!(
+        !shutdown.is_finished(),
+        "shutdown should wait for cancelled alignment cleanup"
+    );
+    drop(routing);
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while has_alignment_alias(&manager, "child-thread").await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled alignment cleanup should remove the alias");
+    assert!(
+        !shutdown.is_finished(),
+        "shutdown should remain blocked until unrelated activity finishes"
+    );
+    drop(shutdown_blocker);
+
+    tokio::time::timeout(Duration::from_secs(1), shutdown)
+        .await
+        .expect("shutdown should finish after alignment cleanup")
+        .expect("shutdown task should not panic")
+        .expect("shutdown should succeed");
+}
+
+async fn start_authenticated_codex_alias(manager: &SessionManager) {
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(codex_session_event(
+                    "parent-thread",
+                    "SessionStart",
+                    json!({}),
+                )),
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "child-thread".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SessionStart".into(),
+                    payload: json!({
+                        "source": {"subagent": {"thread_spawn": {
+                            "parent_thread_id": "parent-thread"
+                        }}}
+                    }),
+                    metadata: json!({}),
+                }),
+            ],
+            "client-a",
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn pending_child_gateway_promotion_claims_its_authenticated_parent() {
     let manager = SessionManager::new(session_test_config());
     manager
@@ -629,6 +826,69 @@ async fn pending_child_gateway_promotion_claims_its_authenticated_parent() {
             .get("parent-thread"),
         Some(&"client-a".to_string())
     );
+    manager.end_llm(active, json!({}), json!({})).await.unwrap();
+}
+
+#[tokio::test]
+async fn gateway_alias_resolution_rechecks_a_pending_route_after_waiting_for_ownership() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: "child-thread".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SessionStart".into(),
+                payload: json!({
+                    "source": {"subagent": {"thread_spawn": {
+                        "parent_thread_id": "parent-thread"
+                    }}}
+                }),
+                metadata: json!({}),
+            })],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    let owners = manager.authenticated_owners.lock().await;
+    let starting = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .start_llm(
+                    &HeaderMap::new(),
+                    LlmGatewayStart {
+                        session_id: Some("child-thread".into()),
+                        ..llm_start()
+                    },
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if manager.alignment_routing.try_lock().is_err() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("gateway alias resolution should reach the ownership check");
+    manager
+        .alignment
+        .lock()
+        .await
+        .remove_pending("child-thread");
+    drop(owners);
+
+    let active = tokio::time::timeout(Duration::from_secs(1), starting)
+        .await
+        .expect("gateway start should finish after the route changes")
+        .expect("gateway start task should not panic")
+        .expect("gateway start should succeed without the removed alias");
+    assert_eq!(active.session_id, "child-thread");
     manager.end_llm(active, json!({}), json!({})).await.unwrap();
 }
 

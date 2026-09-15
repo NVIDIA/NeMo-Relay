@@ -22,7 +22,7 @@ use nemo_relay::api::tool::{
     tool_conditional_execution, tool_request_intercepts,
 };
 use serde_json::{Map, Value, json};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, OwnedMutexGuard};
 
 use crate::agents::shared::adapters::{SKILL_LOAD_SOURCE_KEY, SKILL_LOAD_SOURCE_PROMPT_EXPANSION};
 use crate::agents::shared::alignment::{
@@ -85,6 +85,70 @@ pub(crate) struct HookEffects {
 struct HookEventApplication {
     subscriber_delivery: Option<SubscriberDelivery>,
     tool_argument_transform: Option<ToolArgumentTransform>,
+}
+
+struct RoutedHookEvent {
+    event: NormalizedEvent,
+    cleanup: alignment::SessionRouteCleanup,
+    session_gate: OwnedMutexGuard<()>,
+}
+
+// Once a routed event has been applied, its alignment cleanup must finish even if the request is
+// cancelled while waiting for the routing lock. Retaining the session gate and activity guard
+// prevents another event or shutdown from observing the half-committed state.
+struct AppliedRouteCleanup {
+    alignment: Arc<Mutex<SessionAlignmentState>>,
+    alignment_routing: Arc<Mutex<()>>,
+    cleanup: Option<alignment::SessionRouteCleanup>,
+    session_gate: Option<OwnedMutexGuard<()>>,
+    activity: Option<SessionActivityGuard>,
+}
+
+impl AppliedRouteCleanup {
+    fn new(
+        manager: &SessionManager,
+        cleanup: alignment::SessionRouteCleanup,
+        session_gate: OwnedMutexGuard<()>,
+        activity: SessionActivityGuard,
+    ) -> Self {
+        Self {
+            alignment: Arc::clone(&manager.alignment),
+            alignment_routing: Arc::clone(&manager.alignment_routing),
+            cleanup: Some(cleanup),
+            session_gate: Some(session_gate),
+            activity: Some(activity),
+        }
+    }
+
+    async fn commit(mut self) {
+        let _routing = self.alignment_routing.lock().await;
+        self.alignment.lock().await.commit_route(
+            self.cleanup
+                .as_ref()
+                .expect("applied route cleanup should be armed"),
+        );
+        self.cleanup.take();
+        self.session_gate.take();
+        self.activity.take();
+    }
+}
+
+impl Drop for AppliedRouteCleanup {
+    fn drop(&mut self) {
+        let Some(cleanup) = self.cleanup.take() else {
+            return;
+        };
+        let alignment = Arc::clone(&self.alignment);
+        let alignment_routing = Arc::clone(&self.alignment_routing);
+        let session_gate = self.session_gate.take();
+        let activity = self.activity.take();
+        drop(tokio::spawn(async move {
+            let _routing = alignment_routing.lock().await;
+            alignment.lock().await.commit_route(&cleanup);
+            drop(session_gate);
+            drop(activity);
+        }));
+    }
 }
 
 impl HookEventApplication {
@@ -801,13 +865,14 @@ impl SessionManager {
         authenticated: AuthenticatedRouting<'_>,
         mut released_owner_progress: Option<&mut HashSet<String>>,
     ) -> Result<HookEventApplication, CliError> {
+        let activity = self.session_activity.begin();
         let original_session_id = event.session_id().to_string();
         let original_was_terminal = event.is_terminal();
         let mut event = event;
         // Provider-specific child discovery can await harness state. Do it before taking the
         // shared directory or alignment locks; the remaining routing work is map-only.
         let pending_child = alignment::pending_subagent_start(&mut event).await;
-        let Some((event, session_id, is_agent_started)) = self
+        let Some(routed) = self
             .route_hook_event(
                 pending_child,
                 event,
@@ -822,6 +887,13 @@ impl SessionManager {
             }
             return Ok(HookEventApplication::empty());
         };
+        let RoutedHookEvent {
+            event,
+            cleanup,
+            session_gate,
+        } = routed;
+        let session_id = event.session_id().to_string();
+        let is_agent_started = matches!(&event, NormalizedEvent::AgentStarted(_));
         let mut application = HookEventApplication::empty();
         if original_was_terminal && original_session_id != session_id {
             record_released_owner(
@@ -830,19 +902,34 @@ impl SessionManager {
             );
         }
         let event_kind = event_agent_kind(&event);
-        let applied = SessionEventApplier::new(
-            &self.inner,
-            &self.session_gates,
-            &self.session_activity,
-            config.clone(),
-        )
-        .apply(&session_id, event, event_kind, is_agent_started)
-        .await?;
-        let Some((should_remove_session, subscriber_delivery, tool_argument_transform)) = applied
-        else {
-            if original_was_terminal {
-                record_released_owner(released_owner_progress, original_session_id);
+        let applied = SessionEventApplier::new(&self.inner, &self.session_activity, config.clone())
+            .apply(
+                &session_id,
+                event,
+                event_kind,
+                is_agent_started,
+                session_gate,
+                activity,
+            )
+            .await?;
+        let AppliedSessionEvent {
+            outcome,
+            session_gate,
+            activity,
+        } = applied;
+        match outcome.as_ref() {
+            Some((true, _, _)) => {
+                record_released_owner(released_owner_progress, session_id.clone());
             }
+            None if original_was_terminal => {
+                record_released_owner(released_owner_progress, original_session_id.clone());
+            }
+            _ => {}
+        }
+        AppliedRouteCleanup::new(self, cleanup, session_gate, activity)
+            .commit()
+            .await;
+        let Some((_, subscriber_delivery, tool_argument_transform)) = outcome else {
             return Ok(application);
         };
         application.subscriber_delivery = subscriber_delivery;
@@ -850,9 +937,6 @@ impl SessionManager {
         if is_agent_started {
             self.promote_pending_children(&session_id, config, authenticated)
                 .await?;
-        }
-        if should_remove_session {
-            record_released_owner(released_owner_progress, session_id);
         }
         Ok(application)
     }
@@ -864,19 +948,11 @@ impl SessionManager {
         original_session_id: &str,
         config: SessionConfig,
         authenticated: AuthenticatedRouting<'_>,
-    ) -> Result<Option<(NormalizedEvent, String, bool)>, CliError> {
-        let _routing = self.alignment_routing.lock().await;
-        let parent_gate = match pending_child.as_ref() {
-            Some((_, pending)) => {
-                Some(session_gate(&self.session_gates, pending.parent_session_id()).await)
-            }
-            None => None,
-        };
-        let _parent_gate = match parent_gate.as_ref() {
-            Some(gate) => Some(gate.lock().await),
-            None => None,
-        };
-        let (routed, alias) = {
+    ) -> Result<Option<RoutedHookEvent>, CliError> {
+        if let Some((_, pending)) = pending_child.as_ref() {
+            let parent_gate = session_gate(&self.session_gates, pending.parent_session_id()).await;
+            let _parent_gate = parent_gate.lock().await;
+            let _routing = self.alignment_routing.lock().await;
             let mut alignment_state = self.alignment.lock().await;
             let mut sessions = self.inner.lock().await;
             if queue_or_promote_child_start(
@@ -890,12 +966,43 @@ impl SessionManager {
             {
                 return Ok(None);
             }
-            let alias = alignment_state.alias_for_session(original_session_id);
-            (route_event_for_session(event, &mut alignment_state), alias)
-        };
-        self.authorize_alias_owner(alias.as_ref(), authenticated)
-            .await?;
-        Ok(routed)
+        }
+
+        loop {
+            let alias = self
+                .alignment
+                .lock()
+                .await
+                .alias_for_session(original_session_id);
+            let session_id = alias
+                .as_ref()
+                .map_or(original_session_id, |alias| &alias.parent_session_id);
+            let gate = session_gate(&self.session_gates, session_id).await;
+            let session_gate = gate.lock_owned().await;
+
+            let _routing = self.alignment_routing.lock().await;
+            let alignment_state = self.alignment.lock().await;
+            let current_alias = alignment_state.alias_for_session(original_session_id);
+            if current_alias != alias {
+                drop(alignment_state);
+                drop(_routing);
+                drop(session_gate);
+                continue;
+            }
+            drop(alignment_state);
+            self.authorize_alias_owner(current_alias.as_ref(), authenticated)
+                .await?;
+            let alignment_state = self.alignment.lock().await;
+            if alignment_state.alias_for_session(original_session_id) != current_alias {
+                continue;
+            }
+            let (event, cleanup) = prepare_event_for_session(event, &alignment_state);
+            return Ok(Some(RoutedHookEvent {
+                event,
+                cleanup,
+                session_gate,
+            }));
+        }
     }
 
     async fn authorize_alias_owner(
@@ -933,9 +1040,9 @@ impl SessionManager {
         config: SessionConfig,
         authenticated: AuthenticatedRouting<'_>,
     ) -> Result<(), CliError> {
-        let _routing = self.alignment_routing.lock().await;
         let gate = session_gate(&self.session_gates, parent_session_id).await;
         let _gate = gate.lock().await;
+        let _routing = self.alignment_routing.lock().await;
         let mut alignment_state = self.alignment.lock().await;
         let mut sessions = self.inner.lock().await;
         promote_pending_subagents_for_parent(
@@ -1268,64 +1375,91 @@ impl SessionManager {
         let Some(session_id) = start.session_id.clone() else {
             return Ok(None);
         };
-        let _routing = self.alignment_routing.lock().await;
-        let mut owners = self.authenticated_owners.lock().await;
-        let mut alignment_state = self.alignment.lock().await;
-        if let Some(alias) = alignment_state.alias_for_session(&session_id) {
-            if let Some(alias_owner) = alias.authenticated_owner()
-                && owners
-                    .get(&alias.parent_session_id)
-                    .is_none_or(|existing| existing != alias_owner)
-            {
-                return Err(CliError::Unauthorized(format!(
-                    "Relay gateway request does not own session '{}'",
-                    alias.parent_session_id
-                )));
+        loop {
+            let (alias, pending, parent_session_id) = {
+                let alignment_state = self.alignment.lock().await;
+                if let Some(alias) = alignment_state.alias_for_session(&session_id) {
+                    let parent_session_id = alias.parent_session_id.clone();
+                    (Some(alias), None, parent_session_id)
+                } else if let Some(pending) = alignment_state.pending_for_session(&session_id) {
+                    let parent_session_id = pending.parent_session_id().to_string();
+                    (None, Some(pending), parent_session_id)
+                } else {
+                    return Ok(None);
+                }
+            };
+
+            let gate = session_gate(&self.session_gates, &parent_session_id).await;
+            let _gate = gate.lock().await;
+            let _routing = self.alignment_routing.lock().await;
+            let mut owners = self.authenticated_owners.lock().await;
+            let mut alignment_state = self.alignment.lock().await;
+            let route_is_unchanged = match alias.as_ref() {
+                Some(alias) => {
+                    alignment_state.alias_for_session(&session_id).as_ref() == Some(alias)
+                }
+                None => pending.as_ref().is_some_and(|pending| {
+                    alignment_state.alias_for_session(&session_id).is_none()
+                        && alignment_state.pending_for_session(&session_id).as_ref()
+                            == Some(pending)
+                }),
+            };
+            if !route_is_unchanged {
+                continue;
             }
-            apply_start_alias(start, &alias);
-            return Ok(Some(alias));
-        }
-        let Some(pending) = alignment_state.pending_for_session(&session_id) else {
-            return Ok(None);
-        };
-        if let Some(owner) = pending.authenticated_owner() {
-            match owners.get(pending.parent_session_id()) {
-                Some(existing) if existing != owner => {
+            if let Some(alias) = alias {
+                if let Some(alias_owner) = alias.authenticated_owner()
+                    && owners
+                        .get(&alias.parent_session_id)
+                        .is_none_or(|existing| existing != alias_owner)
+                {
                     return Err(CliError::Unauthorized(format!(
                         "Relay gateway request does not own session '{}'",
-                        pending.parent_session_id()
+                        alias.parent_session_id
                     )));
                 }
-                Some(_) => {}
-                None => {
-                    owners.insert(pending.parent_session_id().to_string(), owner.to_string());
+                apply_start_alias(start, &alias);
+                return Ok(Some(alias));
+            }
+
+            let pending = pending.expect("stable route should contain an alias or pending start");
+            if let Some(owner) = pending.authenticated_owner() {
+                match owners.get(pending.parent_session_id()) {
+                    Some(existing) if existing != owner => {
+                        return Err(CliError::Unauthorized(format!(
+                            "Relay gateway request does not own session '{}'",
+                            pending.parent_session_id()
+                        )));
+                    }
+                    Some(_) => {}
+                    None => {
+                        owners.insert(pending.parent_session_id().to_string(), owner.to_string());
+                    }
                 }
             }
+            alignment_state.remove_pending(&session_id);
+            // The parent ownership decision is complete. Do not carry the owner map lock into
+            // session promotion, which acquires the session directory before checking ownership.
+            drop(owners);
+            let mut sessions = self.inner.lock().await;
+            let alias = promote_pending_subagent(
+                &mut sessions,
+                &mut alignment_state,
+                session_id,
+                pending,
+                config,
+                AuthenticatedRouting::new(
+                    None,
+                    &self.authenticated_owners,
+                    &self.authenticated_reservations,
+                ),
+            )
+            .await?;
+            if let Some(alias) = alias.as_ref() {
+                apply_start_alias(start, alias);
+            }
+            return Ok(alias);
         }
-        // The parent ownership decision is complete. Do not carry the owner
-        // map lock into session promotion; routing acquires the directory first
-        // before checking ownership.
-        drop(owners);
-        let gate = session_gate(&self.session_gates, pending.parent_session_id()).await;
-        let _gate = gate.lock().await;
-        let mut sessions = self.inner.lock().await;
-        let alias = promote_pending_subagent(
-            &mut sessions,
-            &mut alignment_state,
-            session_id,
-            pending,
-            config,
-            AuthenticatedRouting::new(
-                None,
-                &self.authenticated_owners,
-                &self.authenticated_reservations,
-            ),
-        )
-        .await?;
-        if let Some(alias) = alias.as_ref() {
-            apply_start_alias(start, alias);
-        }
-        Ok(alias)
     }
 }
 
