@@ -116,8 +116,8 @@ a degraded or failed state:
 | --- | --- |
 | Daemon | `daemon_listening`, `daemon_pass_through_enabled`, `daemon_stopped`, `daemon_failed` |
 | MCP sessions | `mcp_added`, `mcp_removed`, `mcp_control_connected`, `mcp_control_reconnected`, `mcp_control_disconnected` |
-| Worker startup | `worker_staged`, `worker_added`, `worker_recovery_started`, `worker_relaunch_requested` |
-| Worker control | `worker_control_connected`, `worker_control_reconnected`, `worker_control_disconnected`, `worker_control_recovery_failed` |
+| Worker startup | `worker_staged`, `worker_added`, `worker_ready`, `worker_recovery_started`, `worker_relaunch_requested` |
+| Worker control | `worker_control_connected`, `worker_control_reconnected`, `worker_control_disconnected`, `worker_control_lost`, `worker_control_recovery_failed` |
 | Worker shutdown | `worker_drain_started`, `worker_removed`, `worker_stopped`, `worker_activation_cancelled` |
 | Worker degradation | `worker_registration_failed`, `worker_readiness_failed`, `worker_activation_failed`, `worker_activation_expired`, `worker_communication_failed`, `worker_failed`, `worker_recovery_failed`, `worker_recovery_expired`, `worker_relaunch_failed` |
 | Provider forwarding | `upstream_request_failed` |
