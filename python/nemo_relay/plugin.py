@@ -455,7 +455,8 @@ async def initialize(
 
     Args:
         config: Programmatic plugin configuration. It overrides file values.
-        additional_plugins_toml: Optional explicit configuration layer.
+        additional_plugins_toml: Optional explicit configuration layer. A
+            missing file is reported as a warning in the activation report.
 
     Returns:
         An owned activation whose report includes static and dynamic results.
@@ -463,8 +464,7 @@ async def initialize(
     Raises:
         ValueError: If the supplied configuration is malformed or fails plugin
             validation.
-        FileNotFoundError: If a referenced plugin configuration or resource is
-            unavailable.
+        FileNotFoundError: If a referenced plugin resource is unavailable.
         RuntimeError: If activation cannot acquire the host or a plugin cannot
             be registered.
     """
@@ -484,7 +484,8 @@ async def activate(
 
     Args:
         config: Programmatic plugin configuration. It overrides file values.
-        additional_plugins_toml: Optional explicit configuration layer.
+        additional_plugins_toml: Optional explicit configuration layer. A
+            missing file is reported as a warning in the activation report.
 
     Returns:
         An async context manager that yields the owned activation.
@@ -492,8 +493,7 @@ async def activate(
     Raises:
         ValueError: If the supplied configuration is malformed or fails plugin
             validation.
-        FileNotFoundError: If a referenced plugin configuration or resource is
-            unavailable.
+        FileNotFoundError: If a referenced plugin resource is unavailable.
         RuntimeError: If activation cannot acquire the host or a plugin cannot
             be registered.
     """
@@ -515,7 +515,8 @@ def validate(
 
     Args:
         config: Programmatic plugin configuration. It overrides file values.
-        additional_plugins_toml: Optional explicit configuration layer.
+        additional_plugins_toml: Optional explicit configuration layer. A
+            missing file is reported as a warning in the returned report.
 
     Returns:
         A static configuration report and selected dynamic validation reports.
@@ -523,8 +524,7 @@ def validate(
     Raises:
         ValueError: If the supplied configuration or a resolved configuration
             layer is malformed.
-        FileNotFoundError: If a referenced plugin configuration or resource is
-            unavailable.
+        FileNotFoundError: If a referenced plugin resource is unavailable.
         RuntimeError: If validation encounters an internal host failure.
 
     Notes:

@@ -297,7 +297,7 @@ fn resolve_plugin_host_config_inner(
     reject_required_failures: bool,
 ) -> Result<ResolvedPluginHostConfig> {
     let paths = plugin_config_paths(explicit_path, crate::plugin::user_config_dir());
-    let files = read_plugin_files(&paths)?;
+    let (files, mut diagnostics) = read_plugin_files(&paths, explicit_path)?;
     let resolved = resolve_plugin_config_documents(
         programmatic,
         explicit_path,
@@ -306,6 +306,7 @@ fn resolve_plugin_host_config_inner(
             .map(|document| (document.source.clone(), document.value.clone()))
             .collect(),
     )?;
+    diagnostics.extend(resolved.diagnostics.iter().cloned());
     let mut policy = DynamicPluginHostPolicy::default();
     let mut active = Vec::new();
     let mut reports = Vec::new();
@@ -375,7 +376,7 @@ fn resolve_plugin_host_config_inner(
         policy,
         dynamic_plugins: active,
         dynamic_reports: reports,
-        diagnostics: resolved.diagnostics,
+        diagnostics,
     })
 }
 
@@ -538,10 +539,29 @@ fn validate_declaration(
     }
 }
 
-fn read_plugin_files(paths: &[PathBuf]) -> Result<Vec<PluginFileDocument>> {
+fn read_plugin_files(
+    paths: &[PathBuf],
+    explicit_path: Option<&Path>,
+) -> Result<(
+    Vec<PluginFileDocument>,
+    Vec<crate::plugin::ConfigDiagnostic>,
+)> {
     let mut files = Vec::new();
+    let mut diagnostics = Vec::new();
     for source in paths {
         if !plugin_file_is_present(source, std::fs::symlink_metadata(source))? {
+            if explicit_path == Some(source.as_path()) {
+                diagnostics.push(crate::plugin::ConfigDiagnostic {
+                    level: crate::plugin::DiagnosticLevel::Warning,
+                    code: "plugin.configuration_file_missing".to_string(),
+                    component: None,
+                    field: Some("additional_plugins_toml".to_string()),
+                    message: format!(
+                        "explicit plugin configuration file does not exist: {}",
+                        source.display()
+                    ),
+                });
+            }
             continue;
         }
         let raw = read_utf8_plugin_file(source)?;
@@ -563,7 +583,7 @@ fn read_plugin_files(paths: &[PathBuf]) -> Result<Vec<PluginFileDocument>> {
             file,
         });
     }
-    Ok(files)
+    Ok((files, diagnostics))
 }
 
 fn plugin_file_is_present(

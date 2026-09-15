@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, json};
 
 use super::*;
-use crate::plugin::dynamic::{
-    DynamicPluginAttestationMode, DynamicPluginRecord, DynamicPluginStartupClass,
+use crate::plugin::{
+    DiagnosticLevel,
+    dynamic::{DynamicPluginAttestationMode, DynamicPluginRecord, DynamicPluginStartupClass},
 };
 
 fn worker_manifest(plugin_id: &str, schema: Option<&str>) -> DynamicPluginManifest {
@@ -319,9 +320,15 @@ fn lifecycle_state_selection_rejects_malformed_ambiguous_and_mismatched_state() 
 fn policy_and_utf8_file_loading_fail_closed_with_secure_defaults() {
     let temp = tempfile::tempdir().unwrap();
     let missing = temp.path().join("missing.toml");
-    let policy = resolve_plugin_host_config_inner(PluginConfig::default(), Some(&missing), false)
-        .unwrap()
-        .policy;
+    let resolved =
+        resolve_plugin_host_config_inner(PluginConfig::default(), Some(&missing), false).unwrap();
+    assert!(resolved.diagnostics.iter().any(|diagnostic| {
+        diagnostic.level == DiagnosticLevel::Warning
+            && diagnostic.code == "plugin.configuration_file_missing"
+            && diagnostic.field.as_deref() == Some("additional_plugins_toml")
+            && diagnostic.message.contains(&missing.display().to_string())
+    }));
+    let policy = resolved.policy;
     assert_eq!(
         policy.defaults.startup,
         Some(DynamicPluginStartupClass::Required)
@@ -376,11 +383,20 @@ attestation = "integrity_only"
 fn plugin_file_loading_skips_only_missing_paths() {
     let temp = tempfile::tempdir().unwrap();
     let missing = temp.path().join("missing.toml");
-    assert!(
-        read_plugin_files(std::slice::from_ref(&missing))
-            .unwrap()
-            .is_empty()
-    );
+    let (files, diagnostics) = read_plugin_files(std::slice::from_ref(&missing), None).unwrap();
+    assert!(files.is_empty());
+    assert!(diagnostics.is_empty());
+
+    let (files, diagnostics) =
+        read_plugin_files(std::slice::from_ref(&missing), Some(&missing)).unwrap();
+    assert!(files.is_empty());
+    assert_eq!(diagnostics.len(), 1);
+    let diagnostic = &diagnostics[0];
+    assert_eq!(diagnostic.level, DiagnosticLevel::Warning);
+    assert_eq!(diagnostic.code, "plugin.configuration_file_missing");
+    assert_eq!(diagnostic.component, None);
+    assert_eq!(diagnostic.field.as_deref(), Some("additional_plugins_toml"));
+    assert!(diagnostic.message.contains(&missing.display().to_string()));
 
     let error = plugin_file_is_present(
         &missing,

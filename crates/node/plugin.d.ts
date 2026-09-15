@@ -431,7 +431,9 @@ export declare function ComponentSpec(
  * then applies programmatic config and activates one owned lifetime.
  *
  * @param config - Programmatic configuration. It overrides file values.
- * @param additionalPluginsToml - Optional explicit `plugins.toml` layer.
+ * @param additionalPluginsToml - Optional explicit `plugins.toml` layer. A
+ * missing explicit file is reported as a `plugin.configuration_file_missing`
+ * warning in the host report.
  * @returns An owned activation with the unified host report.
  * @remarks Keep the returned activation alive while callbacks may run and call
  * `close()` or use `await using` for deterministic teardown.
@@ -444,7 +446,9 @@ export declare function initialize(config: PluginConfig, additionalPluginsToml?:
  * while leaving the process-wide host lease untouched.
  *
  * @param config - Programmatic configuration. It overrides file values.
- * @param additionalPluginsToml - Optional explicit `plugins.toml` layer.
+ * @param additionalPluginsToml - Optional explicit `plugins.toml` layer. A
+ * missing explicit file is reported as a `plugin.configuration_file_missing`
+ * warning in the host report.
  * @returns Structured static and dynamic validation report.
  * @remarks Validation performs no activation and does not acquire the host lease.
  */
