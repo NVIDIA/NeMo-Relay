@@ -8,15 +8,18 @@ const PiiRedactionPluginKind = "pii_redaction"
 
 // PiiRedactionBuiltinConfig configures deterministic built-in redaction.
 type PiiRedactionBuiltinConfig struct {
-	Action          string   `json:"action,omitempty"`
-	TargetPaths     []string `json:"target_paths,omitempty"`
-	TargetPathGlobs []string `json:"target_path_globs,omitempty"`
-	Pattern         string   `json:"pattern,omitempty"`
-	Detector        string   `json:"detector,omitempty"`
-	Replacement     string   `json:"replacement,omitempty"`
-	MaskChar        string   `json:"mask_char,omitempty"`
-	UnmaskedPrefix  *int32   `json:"unmasked_prefix,omitempty"`
-	UnmaskedSuffix  *int32   `json:"unmasked_suffix,omitempty"`
+	Preset                         string              `json:"preset,omitempty"`
+	Action                         string              `json:"action,omitempty"`
+	TargetPaths                    []string            `json:"target_paths,omitempty"`
+	TargetPathGlobs                []string            `json:"target_path_globs,omitempty"`
+	Pattern                        string              `json:"pattern,omitempty"`
+	Detector                       string              `json:"detector,omitempty"`
+	Replacement                    string              `json:"replacement,omitempty"`
+	MaskChar                       string              `json:"mask_char,omitempty"`
+	UnmaskedPrefix                 *int32              `json:"unmasked_prefix,omitempty"`
+	UnmaskedSuffix                 *int32              `json:"unmasked_suffix,omitempty"`
+	CustomMarkPayloadPolicy        string              `json:"custom_mark_payload_policy,omitempty"`
+	MetricStringAttributeAllowlist map[string][]string `json:"metric_string_attribute_allowlist,omitempty"`
 }
 
 // PiiRedactionLocalModelConfig configures the future local-model redaction backend.

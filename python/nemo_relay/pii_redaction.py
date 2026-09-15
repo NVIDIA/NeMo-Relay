@@ -76,6 +76,7 @@ class ConfigPolicy:
 class BuiltinConfig:
     """Deterministic built-in redaction backend settings."""
 
+    preset: Literal["trajectory_context"] | None = None
     action: Literal["remove", "redact", "regex_replace", "hash", "mask"] = "remove"
     target_paths: list[str] = field(default_factory=list)
     target_path_globs: list[str] = field(default_factory=list)
@@ -85,11 +86,14 @@ class BuiltinConfig:
     mask_char: str | None = None
     unmasked_prefix: int | None = None
     unmasked_suffix: int | None = None
+    custom_mark_payload_policy: Literal["preserve", "redact_all_leaves"] | None = None
+    metric_string_attribute_allowlist: dict[str, list[str]] | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this built-in backend config to the canonical JSON object shape."""
         return _normalize_object(
             {
+                "preset": self.preset,
                 "action": self.action,
                 "target_paths": self.target_paths,
                 "target_path_globs": self.target_path_globs,
@@ -99,6 +103,8 @@ class BuiltinConfig:
                 "mask_char": self.mask_char,
                 "unmasked_prefix": self.unmasked_prefix,
                 "unmasked_suffix": self.unmasked_suffix,
+                "custom_mark_payload_policy": self.custom_mark_payload_policy,
+                "metric_string_attribute_allowlist": self.metric_string_attribute_allowlist,
             }
         )
 

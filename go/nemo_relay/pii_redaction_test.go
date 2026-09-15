@@ -10,11 +10,11 @@ func TestPiiRedactionConfigHelpers(t *testing.T) {
 	if config.Version != 1 || config.Mode != "builtin" || !config.Input || !config.Output || !config.Mark || !config.ToolInput || !config.ToolOutput || config.Priority != 100 {
 		t.Fatalf("unexpected PII redaction defaults: %#v", config)
 	}
-	if config.Builtin == nil || config.Builtin.Action != "remove" || len(config.Builtin.TargetPaths) != 0 || len(config.Builtin.TargetPathGlobs) != 0 {
+	if config.Builtin == nil || config.Builtin.Action != "remove" || len(config.Builtin.TargetPaths) != 0 || len(config.Builtin.TargetPathGlobs) != 0 || config.Builtin.CustomMarkPayloadPolicy != "" || len(config.Builtin.MetricStringAttributeAllowlist) != 0 {
 		t.Fatalf("unexpected default built-in redaction config: %#v", config.Builtin)
 	}
 	builtin := NewPiiRedactionBuiltinConfig()
-	if builtin.Action != "remove" || len(builtin.TargetPaths) != 0 || len(builtin.TargetPathGlobs) != 0 {
+	if builtin.Action != "remove" || len(builtin.TargetPaths) != 0 || len(builtin.TargetPathGlobs) != 0 || builtin.CustomMarkPayloadPolicy != "" || len(builtin.MetricStringAttributeAllowlist) != 0 {
 		t.Fatalf("unexpected built-in redaction defaults: %#v", builtin)
 	}
 	local := NewPiiRedactionLocalModelConfig()
@@ -23,6 +23,9 @@ func TestPiiRedactionConfigHelpers(t *testing.T) {
 	}
 
 	config.Builtin = &builtin
+	config.Builtin.Preset = "trajectory_context"
+	config.Builtin.CustomMarkPayloadPolicy = "preserve"
+	config.Builtin.MetricStringAttributeAllowlist = map[string][]string{"gen_ai.operation.name": {"chat"}}
 	component := PiiRedactionComponent(config)
 	if component.Kind != PiiRedactionPluginKind || !component.Enabled {
 		t.Fatalf("unexpected PII redaction component: %#v", component)
@@ -39,6 +42,13 @@ func TestPiiRedactionConfigHelpers(t *testing.T) {
 	}
 	if serializedBuiltin["action"] != "remove" {
 		t.Fatalf("unexpected serialized builtin config: %#v", serializedBuiltin)
+	}
+	if serializedBuiltin["preset"] != "trajectory_context" || serializedBuiltin["custom_mark_payload_policy"] != "preserve" {
+		t.Fatalf("expected trajectory-context builtin settings: %#v", serializedBuiltin)
+	}
+	allowlist, ok := serializedBuiltin["metric_string_attribute_allowlist"].(map[string]any)
+	if !ok || len(allowlist) != 1 {
+		t.Fatalf("expected serialized metric allowlist: %#v", serializedBuiltin)
 	}
 }
 

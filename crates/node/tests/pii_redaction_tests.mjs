@@ -26,6 +26,19 @@ describe('pii_redaction plugin helpers', () => {
       action: 'remove',
       target_path_globs: ['/messages/*/content'],
     });
+    assert.deepEqual(
+      piiRedaction.builtinConfig({
+        preset: 'trajectory_context',
+        custom_mark_payload_policy: 'preserve',
+        metric_string_attribute_allowlist: { 'gen_ai.operation.name': ['chat'] },
+      }),
+      {
+        action: 'remove',
+        preset: 'trajectory_context',
+        custom_mark_payload_policy: 'preserve',
+        metric_string_attribute_allowlist: { 'gen_ai.operation.name': ['chat'] },
+      },
+    );
     assert.deepEqual(piiRedaction.localModelConfig(), {});
 
     const component = piiRedaction.ComponentSpec({
