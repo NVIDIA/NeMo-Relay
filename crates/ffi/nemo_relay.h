@@ -2101,6 +2101,9 @@ NemoRelayStatus nemo_relay_otel_metric_subscriber_shutdown(const struct FfiOpenT
  *
  * `additional_plugins_toml` may be null. When supplied it replaces user-file
  * discovery. Relay merges it with the system file, then applies `config_json`.
+ * A supplied path that does not exist adds a
+ * `plugin.configuration_file_missing` warning to `out_report_json` rather than
+ * causing initialization to fail.
  * The returned handle owns all activated plugin registrations and runtimes.
  *
  * # Safety
@@ -2139,7 +2142,9 @@ NemoRelayStatus nemo_relay_plugin_host_activation_is_active(struct FfiPluginHost
  * Validate dynamic plugins without loading plugin code or acquiring the host lease.
  *
  * `additional_plugins_toml` may be null. The inputs use the same configuration
- * layering contract as [`nemo_relay_plugin_initialize`].
+ * layering contract as [`nemo_relay_plugin_initialize`]. A supplied path that
+ * does not exist adds a `plugin.configuration_file_missing` warning to
+ * `out_report_json` rather than causing validation to fail.
  *
  * # Safety
  * `config_json` must be a valid C string, `additional_plugins_toml` must be a
