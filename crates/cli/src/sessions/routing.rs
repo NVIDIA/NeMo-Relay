@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use nemo_relay::api::runtime::SubscriberDelivery;
 use serde_json::Value;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use crate::agents::shared::alignment::{
     PendingSubagentStart, SessionAlias, SessionAlignmentState, merge_metadata,
@@ -19,8 +19,74 @@ use crate::events::{AgentKind, NormalizedEvent, SessionEvent};
 
 use super::{
     AuthenticatedOwners, AuthenticatedReservations, LlmGatewayStart, Session, SessionActivity,
-    SessionGates, ToolArgumentTransform, session_gate,
+    SessionActivityGuard, SessionGates, ToolArgumentTransform, session_gate,
 };
+
+// Event application temporarily removes a session from the shared directory so unrelated sessions
+// can progress during middleware awaits. If the request is cancelled, this guard restores that
+// session before releasing its gate or allowing shutdown to proceed.
+struct InFlightSession {
+    sessions: Arc<Mutex<HashMap<String, Session>>>,
+    session_id: String,
+    session: Option<Session>,
+    gate: Option<OwnedMutexGuard<()>>,
+    activity: Option<SessionActivityGuard>,
+}
+
+impl InFlightSession {
+    fn new(
+        sessions: Arc<Mutex<HashMap<String, Session>>>,
+        session_id: String,
+        session: Session,
+        gate: OwnedMutexGuard<()>,
+        activity: SessionActivityGuard,
+    ) -> Self {
+        Self {
+            sessions,
+            session_id,
+            session: Some(session),
+            gate: Some(gate),
+            activity: Some(activity),
+        }
+    }
+
+    fn session_mut(&mut self) -> &mut Session {
+        self.session
+            .as_mut()
+            .expect("in-flight session should own its session")
+    }
+
+    async fn restore(mut self) {
+        let mut sessions = self.sessions.lock().await;
+        sessions.insert(
+            self.session_id.clone(),
+            self.session
+                .take()
+                .expect("in-flight session should own its session"),
+        );
+    }
+
+    fn discard(mut self) {
+        self.session.take();
+    }
+}
+
+impl Drop for InFlightSession {
+    fn drop(&mut self) {
+        let Some(session) = self.session.take() else {
+            return;
+        };
+        let sessions = Arc::clone(&self.sessions);
+        let session_id = self.session_id.clone();
+        let gate = self.gate.take();
+        let activity = self.activity.take();
+        drop(tokio::spawn(async move {
+            sessions.lock().await.insert(session_id, session);
+            drop(gate);
+            drop(activity);
+        }));
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct AuthenticatedRouting<'a> {
@@ -79,9 +145,9 @@ impl<'a> SessionEventApplier<'a> {
         )>,
         CliError,
     > {
-        let _activity = self.activity.begin();
+        let activity = self.activity.begin();
         let gate = session_gate(self.gates, session_id).await;
-        let _gate = gate.lock().await;
+        let gate = gate.lock_owned().await;
         if self.activity.is_closing() {
             return Ok(None);
         }
@@ -92,24 +158,31 @@ impl<'a> SessionEventApplier<'a> {
         if session.is_none() && event.is_terminal() {
             return Ok(None);
         }
-        let mut session = session.unwrap_or_else(|| {
+        let session = session.unwrap_or_else(|| {
             Session::new(session_id.to_string(), event_kind, self.config.clone())
         });
+        let mut in_flight = InFlightSession::new(
+            Arc::clone(self.sessions),
+            session_id.to_string(),
+            session,
+            gate,
+            activity,
+        );
         if is_agent_started
-            && session.agent_kind == AgentKind::Gateway
+            && in_flight.session_mut().agent_kind == AgentKind::Gateway
             && event_kind != AgentKind::Gateway
         {
-            session.agent_kind = event_kind;
+            in_flight.session_mut().agent_kind = event_kind;
         }
-        match session.apply(event).await {
+        match in_flight.session_mut().apply(event).await {
             Ok(subscriber_delivery) => {
+                let session = in_flight.session_mut();
                 let is_empty = session.is_empty();
                 let tool_argument_transform = session.take_tool_argument_transform();
-                if !is_empty {
-                    self.sessions
-                        .lock()
-                        .await
-                        .insert(session_id.to_string(), session);
+                if is_empty {
+                    in_flight.discard();
+                } else {
+                    in_flight.restore().await;
                 }
                 Ok(Some((
                     is_empty,
@@ -118,10 +191,7 @@ impl<'a> SessionEventApplier<'a> {
                 )))
             }
             Err(error) => {
-                self.sessions
-                    .lock()
-                    .await
-                    .insert(session_id.to_string(), session);
+                in_flight.restore().await;
                 Err(error)
             }
         }

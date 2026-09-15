@@ -83,7 +83,6 @@ pub(crate) struct HookEffects {
 }
 
 struct HookEventApplication {
-    released_owner_ids: HashSet<String>,
     subscriber_delivery: Option<SubscriberDelivery>,
     tool_argument_transform: Option<ToolArgumentTransform>,
 }
@@ -91,16 +90,9 @@ struct HookEventApplication {
 impl HookEventApplication {
     fn empty() -> Self {
         Self {
-            released_owner_ids: HashSet::new(),
             subscriber_delivery: None,
             tool_argument_transform: None,
         }
-    }
-
-    fn release(session_id: String) -> Self {
-        let mut application = Self::empty();
-        application.released_owner_ids.insert(session_id);
-        application
     }
 }
 
@@ -232,6 +224,94 @@ fn release_reservations(
         if remove {
             reservations.remove(session_id);
         }
+    }
+}
+
+fn record_released_owner(progress: Option<&mut HashSet<String>>, session_id: String) {
+    if let Some(progress) = progress {
+        progress.insert(session_id);
+    }
+}
+
+// A client disconnect must not strand its temporary claims or closed-session owners. The drop path
+// first binds any retained session, then releases claims and owners after session cleanup settles.
+struct AuthenticatedReservationGuard {
+    manager: Option<SessionManager>,
+    session_ids: HashSet<String>,
+    released_owner_ids: HashSet<String>,
+    owner: String,
+    reservations_released: bool,
+    activity: Option<SessionActivityGuard>,
+}
+
+impl AuthenticatedReservationGuard {
+    fn new(
+        manager: SessionManager,
+        session_ids: HashSet<String>,
+        owner: &str,
+        activity: SessionActivityGuard,
+    ) -> Self {
+        Self {
+            manager: Some(manager),
+            session_ids,
+            released_owner_ids: HashSet::new(),
+            owner: owner.to_string(),
+            reservations_released: false,
+            activity: Some(activity),
+        }
+    }
+
+    fn session_ids(&self) -> &HashSet<String> {
+        &self.session_ids
+    }
+
+    async fn release(mut self) {
+        let manager = self
+            .manager
+            .as_ref()
+            .expect("authenticated reservation guard should be armed");
+        let mut reservations = manager.authenticated_reservations.lock().await;
+        release_reservations(&mut reservations, &self.session_ids, &self.owner);
+        self.reservations_released = true;
+        drop(reservations);
+        release_closed_owner_ids(
+            &manager.inner,
+            &manager.session_gates,
+            &manager.authenticated_owners,
+            &self.released_owner_ids,
+        )
+        .await;
+        self.manager.take();
+    }
+}
+
+impl Drop for AuthenticatedReservationGuard {
+    fn drop(&mut self) {
+        let Some(manager) = self.manager.take() else {
+            return;
+        };
+        let session_ids = std::mem::take(&mut self.session_ids);
+        let released_owner_ids = std::mem::take(&mut self.released_owner_ids);
+        let owner = std::mem::take(&mut self.owner);
+        let reservations_released = self.reservations_released;
+        let activity = self.activity.take();
+        drop(tokio::spawn(async move {
+            manager
+                .bind_retained_session_owners(&session_ids, &owner)
+                .await;
+            if !reservations_released {
+                let mut reservations = manager.authenticated_reservations.lock().await;
+                release_reservations(&mut reservations, &session_ids, &owner);
+            }
+            release_closed_owner_ids(
+                &manager.inner,
+                &manager.session_gates,
+                &manager.authenticated_owners,
+                &released_owner_ids,
+            )
+            .await;
+            drop(activity);
+        }));
     }
 }
 
@@ -464,6 +544,10 @@ impl SessionManager {
         events: Vec<NormalizedEvent>,
         owner: &str,
     ) -> Result<(), CliError> {
+        let activity = self.session_activity.begin();
+        if self.session_activity.is_closing() {
+            return Ok(());
+        }
         let owners = self.authenticated_owners.lock().await;
         let mut reservations = self.authenticated_reservations.lock().await;
         let mut reserved_ids = HashSet::new();
@@ -493,37 +577,34 @@ impl SessionManager {
         }
         drop(owners);
         drop(reservations);
+        let mut reservation =
+            AuthenticatedReservationGuard::new(self.clone(), reserved_ids, owner, activity);
 
-        let result = self.apply_events_inner(headers, events, Some(owner)).await;
+        let result = self
+            .apply_events_inner(
+                headers,
+                events,
+                Some(owner),
+                Some(&mut reservation.released_owner_ids),
+            )
+            .await;
 
-        let mut owners = self.authenticated_owners.lock().await;
-        let mut reservations = self.authenticated_reservations.lock().await;
         match result {
-            Ok((released_owner_ids, _effects)) => {
-                for session_id in &reserved_ids {
+            Ok(_effects) => {
+                let mut owners = self.authenticated_owners.lock().await;
+                for session_id in reservation.session_ids() {
                     owners
                         .entry(session_id.clone())
                         .or_insert_with(|| owner.to_string());
                 }
-                release_reservations(&mut reservations, &reserved_ids, owner);
-                drop(reservations);
                 drop(owners);
-                release_closed_owner_ids(
-                    &self.inner,
-                    &self.session_gates,
-                    &self.authenticated_owners,
-                    &released_owner_ids,
-                )
-                .await;
+                reservation.release().await;
                 Ok(())
             }
             Err(error) => {
-                drop(reservations);
-                drop(owners);
-                self.bind_retained_session_owners(&reserved_ids, owner)
+                self.bind_retained_session_owners(reservation.session_ids(), owner)
                     .await;
-                let mut reservations = self.authenticated_reservations.lock().await;
-                release_reservations(&mut reservations, &reserved_ids, owner);
+                reservation.release().await;
                 Err(error)
             }
         }
@@ -672,22 +753,19 @@ impl SessionManager {
         headers: &HeaderMap,
         events: Vec<NormalizedEvent>,
     ) -> Result<HookEffects, CliError> {
-        self.apply_events_inner(headers, events, None)
-            .await
-            .map(|(_, effects)| effects)
+        self.apply_events_inner(headers, events, None, None).await
     }
 
-    /// Returns the owner IDs whose sessions closed in this batch, plus what the batch produced for
-    /// the HTTP response.
+    /// Applies one hook batch and returns what its HTTP response must carry.
     async fn apply_events_inner(
         &self,
         headers: &HeaderMap,
         events: Vec<NormalizedEvent>,
         authenticated_owner: Option<&str>,
-    ) -> Result<(HashSet<String>, HookEffects), CliError> {
+        mut released_owner_progress: Option<&mut HashSet<String>>,
+    ) -> Result<HookEffects, CliError> {
         let mut effects = HookEffects::default();
         let mut subscriber_deliveries = Vec::new();
-        let mut released_owner_ids = HashSet::new();
         let config = self.default_config.session_config_from_headers(headers);
         let authenticated = AuthenticatedRouting::new(
             authenticated_owner,
@@ -696,9 +774,13 @@ impl SessionManager {
         );
         for event in events {
             let application = self
-                .apply_hook_event(event, config.clone(), authenticated)
+                .apply_hook_event(
+                    event,
+                    config.clone(),
+                    authenticated,
+                    released_owner_progress.as_deref_mut(),
+                )
                 .await?;
-            released_owner_ids.extend(application.released_owner_ids);
             if let Some(subscriber_delivery) = application.subscriber_delivery {
                 subscriber_deliveries.push(subscriber_delivery);
             }
@@ -709,7 +791,7 @@ impl SessionManager {
         for subscriber_delivery in subscriber_deliveries {
             subscriber_delivery.wait().await?;
         }
-        Ok((released_owner_ids, effects))
+        Ok(effects)
     }
 
     async fn apply_hook_event(
@@ -717,6 +799,7 @@ impl SessionManager {
         event: NormalizedEvent,
         config: SessionConfig,
         authenticated: AuthenticatedRouting<'_>,
+        mut released_owner_progress: Option<&mut HashSet<String>>,
     ) -> Result<HookEventApplication, CliError> {
         let original_session_id = event.session_id().to_string();
         let original_was_terminal = event.is_terminal();
@@ -734,17 +817,17 @@ impl SessionManager {
             )
             .await?
         else {
-            return Ok(if original_was_terminal {
-                HookEventApplication::release(original_session_id)
-            } else {
-                HookEventApplication::empty()
-            });
+            if original_was_terminal {
+                record_released_owner(released_owner_progress, original_session_id);
+            }
+            return Ok(HookEventApplication::empty());
         };
         let mut application = HookEventApplication::empty();
         if original_was_terminal && original_session_id != session_id {
-            application
-                .released_owner_ids
-                .insert(original_session_id.clone());
+            record_released_owner(
+                released_owner_progress.as_deref_mut(),
+                original_session_id.clone(),
+            );
         }
         let event_kind = event_agent_kind(&event);
         let applied = SessionEventApplier::new(
@@ -758,7 +841,7 @@ impl SessionManager {
         let Some((should_remove_session, subscriber_delivery, tool_argument_transform)) = applied
         else {
             if original_was_terminal {
-                application.released_owner_ids.insert(original_session_id);
+                record_released_owner(released_owner_progress, original_session_id);
             }
             return Ok(application);
         };
@@ -769,7 +852,7 @@ impl SessionManager {
                 .await?;
         }
         if should_remove_session {
-            application.released_owner_ids.insert(session_id);
+            record_released_owner(released_owner_progress, session_id);
         }
         Ok(application)
     }
@@ -1045,6 +1128,12 @@ impl SessionManager {
             .await
             .values()
             .any(Session::blocks_plugin_idle_shutdown)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn test_contains_session(&self, session_id: &str) -> bool {
+        self.session_activity.wait_for_idle().await;
+        self.inner.lock().await.contains_key(session_id)
     }
 
     /// Legacy manual-lifecycle close paired with [`Self::start_llm`]. Production gateway traffic
