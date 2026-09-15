@@ -62,8 +62,8 @@
     "triples": {}
   },
   "scripts": {
-    "build": "napi build --platform --release --dts index.d.ts && node scripts/append_root_types.mjs index.d.ts root-types.d.ts",
-    "build-debug": "napi build --platform --dts index.d.ts && node scripts/append_root_types.mjs index.d.ts root-types.d.ts",
+    "build": "node scripts/build.mjs --release",
+    "build-debug": "node scripts/build.mjs",
     "check:docstrings": "node ../../scripts/lint/check_public_docstrings.mjs node",
     "check:docstrings:all": "node ../../scripts/lint/check_public_docstrings.mjs all",
     "format": "prettier --write \"*.{js,ts,d.ts}\" \"tests/**/*.{mjs,cjs,js,mts,cts,ts,tsx}\"",
