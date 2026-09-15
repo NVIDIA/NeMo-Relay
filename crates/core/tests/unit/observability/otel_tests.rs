@@ -1496,6 +1496,39 @@ fn assert_config_defaults(defaults: &OpenTelemetryConfig) {
 }
 
 #[test]
+fn subscribers_reject_configured_telemetry_sdk_resource_attributes() {
+    for key in [
+        "telemetry.sdk.name",
+        "telemetry.sdk.language",
+        "telemetry.sdk.version",
+    ] {
+        let trace_error = OpenTelemetrySubscriber::new(
+            OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://127.0.0.1:4318/v1/traces")
+                .with_resource_attribute(key, "configured"),
+        )
+        .err()
+        .expect("configured telemetry SDK trace attribute must be rejected");
+        assert!(trace_error.to_string().contains(key));
+
+        let log_error = OpenTelemetryLogSubscriber::new(
+            OpenTelemetryLogConfig::new("http://127.0.0.1:4318/v1/logs")
+                .with_resource_attribute(key, "configured"),
+        )
+        .err()
+        .expect("configured telemetry SDK log attribute must be rejected");
+        assert!(log_error.to_string().contains(key));
+
+        let metric_error = OpenTelemetryMetricSubscriber::new(
+            OpenTelemetryMetricConfig::new("http://127.0.0.1:4318/v1/metrics")
+                .with_resource_attribute(key, "configured"),
+        )
+        .err()
+        .expect("configured telemetry SDK metric attribute must be rejected");
+        assert!(metric_error.to_string().contains(key));
+    }
+}
+
+#[test]
 fn http_trace_endpoint_resolution_preserves_an_explicit_root_path() {
     for (endpoint, expected) in [
         ("http://localhost:4318", "http://localhost:4318/v1/traces"),
@@ -3875,7 +3908,7 @@ fn http_config_exports_scope_push_pop_and_marks_without_tokio_runtime() {
 }
 
 #[test]
-fn root_metadata_promotes_to_a_shared_otlp_resource() {
+fn root_metadata_promotes_to_a_shared_otlp_resource_without_overriding_sdk_identity() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -3886,7 +3919,7 @@ fn root_metadata_promotes_to_a_shared_otlp_resource() {
         OpenTelemetryConfig::http_binary("resource-test")
             .with_endpoint(endpoint)
             .with_resource_attribute("tenant.region", "configured")
-            .with_promote_resource_metadata_prefixes(["tenant."]),
+            .with_promote_resource_metadata_prefixes(["tenant.", "telemetry.sdk."]),
     )
     .unwrap();
     let callback = subscriber.subscriber();
@@ -3896,7 +3929,13 @@ fn root_metadata_promotes_to_a_shared_otlp_resource() {
         root_uuid,
         None,
         "resource-root",
-        json!({"tenant.id": "root-tenant", "tenant.region": "metadata"}),
+        json!({
+            "tenant.id": "root-tenant",
+            "tenant.region": "metadata",
+            "telemetry.sdk.name": "metadata-name",
+            "telemetry.sdk.language": "metadata-language",
+            "telemetry.sdk.version": "metadata-version",
+        }),
     ));
     callback(&make_start_event_with_metadata(
         child_uuid,
@@ -3945,6 +3984,7 @@ fn root_metadata_promotes_to_a_shared_otlp_resource() {
         otlp_string_attribute(&resource.attributes, "tenant.region"),
         Some("configured")
     );
+    assert_telemetry_sdk_resource(&resource.attributes);
 
     let spans = resource_spans
         .scope_spans
@@ -3971,6 +4011,21 @@ fn otlp_string_attribute<'a>(attributes: &'a [OtlpKeyValue], key: &str) -> Optio
             Some(any_value::Value::StringValue(value)) => Some(value.as_str()),
             _ => None,
         })
+}
+
+fn assert_telemetry_sdk_resource(attributes: &[OtlpKeyValue]) {
+    assert_eq!(
+        otlp_string_attribute(attributes, "telemetry.sdk.name"),
+        Some("opentelemetry")
+    );
+    assert_eq!(
+        otlp_string_attribute(attributes, "telemetry.sdk.language"),
+        Some("rust")
+    );
+    assert_eq!(
+        otlp_string_attribute(attributes, "telemetry.sdk.version"),
+        Some("0.32.1")
+    );
 }
 
 fn has_promoted_resource_metadata(attributes: &[OtlpKeyValue]) -> bool {
