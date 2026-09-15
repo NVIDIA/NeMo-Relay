@@ -204,6 +204,25 @@ fn gateway_stop_selects_only_the_exact_relay_tcp_listener() {
 }
 
 #[test]
+fn gateway_stop_recognizes_the_published_cli_bin_process_name() {
+    let bind = "127.0.0.1:4040".parse().unwrap();
+
+    let process = gateway::select_relay_listener(
+        bind,
+        [test_listener(
+            "127.0.0.1:4040",
+            13,
+            "nemo-relay-pinned",
+            Protocol::TCP,
+        )],
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(process.pid, 13);
+}
+
+#[test]
 fn gateway_stop_refuses_foreign_or_ambiguous_listener_owners() {
     let bind = "127.0.0.1:4040".parse().unwrap();
     let foreign = gateway::select_relay_listener(
