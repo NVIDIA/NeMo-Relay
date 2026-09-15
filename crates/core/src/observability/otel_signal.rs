@@ -23,7 +23,7 @@ use super::otel::{OpenTelemetryError, Result};
 
 const MAX_RUNTIME_DIAGNOSTICS: usize = 32;
 const MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS: usize = 1_024;
-const TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS: [&str; 3] = [
+pub(super) const TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS: [&str; 3] = [
     "telemetry.sdk.name",
     "telemetry.sdk.language",
     "telemetry.sdk.version",

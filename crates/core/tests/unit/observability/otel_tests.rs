@@ -3908,7 +3908,7 @@ fn http_config_exports_scope_push_pop_and_marks_without_tokio_runtime() {
 }
 
 #[test]
-fn root_metadata_promotes_to_a_shared_otlp_resource() {
+fn root_metadata_promotes_to_a_shared_otlp_resource_without_overriding_sdk_identity() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -3919,7 +3919,7 @@ fn root_metadata_promotes_to_a_shared_otlp_resource() {
         OpenTelemetryConfig::http_binary("resource-test")
             .with_endpoint(endpoint)
             .with_resource_attribute("tenant.region", "configured")
-            .with_promote_resource_metadata_prefixes(["tenant."]),
+            .with_promote_resource_metadata_prefixes(["tenant.", "telemetry.sdk."]),
     )
     .unwrap();
     let callback = subscriber.subscriber();
@@ -3929,7 +3929,13 @@ fn root_metadata_promotes_to_a_shared_otlp_resource() {
         root_uuid,
         None,
         "resource-root",
-        json!({"tenant.id": "root-tenant", "tenant.region": "metadata"}),
+        json!({
+            "tenant.id": "root-tenant",
+            "tenant.region": "metadata",
+            "telemetry.sdk.name": "metadata-name",
+            "telemetry.sdk.language": "metadata-language",
+            "telemetry.sdk.version": "metadata-version",
+        }),
     ));
     callback(&make_start_event_with_metadata(
         child_uuid,

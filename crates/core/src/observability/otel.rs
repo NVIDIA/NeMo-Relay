@@ -29,8 +29,8 @@ use super::header_file::{
     validate_header_files,
 };
 use super::otel_signal::{
-    MetricMarkClassification, SignalRuntimeDiagnostics, classify_metric_mark, resolve_header_env,
-    should_relog_runtime_diagnostic, telemetry_resource,
+    MetricMarkClassification, SignalRuntimeDiagnostics, TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS,
+    classify_metric_mark, resolve_header_env, should_relog_runtime_diagnostic, telemetry_resource,
     validate_telemetry_sdk_resource_attributes,
 };
 use super::{
@@ -1628,7 +1628,7 @@ impl OtelEventProcessor {
         dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicTracePipeline>>>,
     ) -> Self {
         let tracer = provider.tracer(instrumentation_scope.clone());
-        let (resource_metadata_prefixes, resource_metadata_protected_keys) = owned_config
+        let (resource_metadata_prefixes, mut resource_metadata_protected_keys) = owned_config
             .as_ref()
             .map(|config| {
                 (
@@ -1636,10 +1636,15 @@ impl OtelEventProcessor {
                     configured_resource_attributes(config)
                         .into_iter()
                         .map(|attribute| attribute.key.as_str().to_string())
-                        .collect(),
+                        .collect::<HashSet<_>>(),
                 )
             })
             .unwrap_or_default();
+        resource_metadata_protected_keys.extend(
+            TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS
+                .iter()
+                .map(|key| (*key).to_string()),
+        );
         Self {
             active_spans: HashMap::new(),
             completed_span_contexts: HashMap::new(),
