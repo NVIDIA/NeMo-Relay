@@ -27,7 +27,7 @@ pub(crate) mod codex;
 const REQUEST_AFFINITY_KEY_MIN_CHARS: usize = 24;
 const REQUEST_AFFINITY_KEY_MAX_CHARS: usize = 4096;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) enum SubagentSessionContext {
     Codex(codex::SubagentContext),
 }
@@ -249,13 +249,28 @@ impl SessionAlias {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) struct PendingSubagentStart {
     // The original child SessionStart is retained because promotion may happen on a later parent
     // hook or gateway request, after this hook request has already returned.
     pub(crate) event: SessionEvent,
     context: SubagentSessionContext,
     authenticated_owner: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PendingRouteToken(uuid::Uuid);
+
+impl PendingRouteToken {
+    fn new() -> Self {
+        Self(uuid::Uuid::now_v7())
+    }
+}
+
+#[derive(Debug)]
+struct PendingSubagentRoute {
+    token: PendingRouteToken,
+    pending: PendingSubagentStart,
 }
 
 impl PendingSubagentStart {
@@ -285,13 +300,13 @@ impl PendingSubagentStart {
 #[derive(Debug, Default)]
 pub(crate) struct SessionAlignmentState {
     aliases: HashMap<String, SessionAlias>,
-    pending_subagents: HashMap<String, PendingSubagentStart>,
+    pending_subagents: HashMap<String, PendingSubagentRoute>,
 }
 
 pub(crate) struct SessionRouteCleanup {
     finished_alias: Option<(String, SessionAlias)>,
     ended_aliases: Vec<(String, SessionAlias)>,
-    ended_pending_subagents: Vec<(String, PendingSubagentStart)>,
+    ended_pending_subagents: Vec<(String, PendingRouteToken)>,
 }
 
 impl SessionAlignmentState {
@@ -314,8 +329,19 @@ impl SessionAlignmentState {
         self.pending_subagents.contains_key(session_id)
     }
 
-    pub(crate) fn pending_for_session(&self, session_id: &str) -> Option<PendingSubagentStart> {
-        self.pending_subagents.get(session_id).cloned()
+    pub(crate) fn pending_for_session(
+        &self,
+        session_id: &str,
+    ) -> Option<(PendingRouteToken, PendingSubagentStart)> {
+        self.pending_subagents
+            .get(session_id)
+            .map(|route| (route.token, route.pending.clone()))
+    }
+
+    pub(crate) fn pending_token_for_session(&self, session_id: &str) -> Option<PendingRouteToken> {
+        self.pending_subagents
+            .get(session_id)
+            .map(|route| route.token)
     }
 
     pub(crate) fn insert_pending(
@@ -323,11 +349,27 @@ impl SessionAlignmentState {
         child_session_id: String,
         pending: PendingSubagentStart,
     ) {
-        self.pending_subagents.insert(child_session_id, pending);
+        self.pending_subagents.insert(
+            child_session_id,
+            PendingSubagentRoute {
+                token: PendingRouteToken::new(),
+                pending,
+            },
+        );
     }
 
     pub(crate) fn remove_pending(&mut self, child_session_id: &str) {
         self.pending_subagents.remove(child_session_id);
+    }
+
+    pub(crate) fn remove_pending_if_current(
+        &mut self,
+        child_session_id: &str,
+        token: PendingRouteToken,
+    ) {
+        if self.pending_token_for_session(child_session_id) == Some(token) {
+            self.pending_subagents.remove(child_session_id);
+        }
     }
 
     pub(crate) fn insert_alias(&mut self, child_session_id: String, alias: SessionAlias) {
@@ -360,11 +402,11 @@ impl SessionAlignmentState {
         let ended_pending_subagents = ended_session_id.map_or_else(Vec::new, |session_id| {
             self.pending_subagents
                 .iter()
-                .filter(|(child_session_id, pending)| {
+                .filter(|(child_session_id, route)| {
                     child_session_id.as_str() == session_id
-                        || pending.parent_session_id() == session_id
+                        || route.pending.parent_session_id() == session_id
                 })
-                .map(|(child_session_id, pending)| (child_session_id.clone(), pending.clone()))
+                .map(|(child_session_id, route)| (child_session_id.clone(), route.token))
                 .collect()
         });
         let cleanup = SessionRouteCleanup {
@@ -389,10 +431,8 @@ impl SessionAlignmentState {
                 self.aliases.remove(child_session_id);
             }
         }
-        for (child_session_id, ended_pending) in &cleanup.ended_pending_subagents {
-            if self.pending_subagents.get(child_session_id) == Some(ended_pending) {
-                self.pending_subagents.remove(child_session_id);
-            }
+        for (child_session_id, ended_pending_token) in &cleanup.ended_pending_subagents {
+            self.remove_pending_if_current(child_session_id, *ended_pending_token);
         }
     }
 
@@ -403,8 +443,8 @@ impl SessionAlignmentState {
         let child_session_ids = self
             .pending_subagents
             .iter()
-            .filter_map(|(child_session_id, pending)| {
-                (pending.parent_session_id() == parent_session_id)
+            .filter_map(|(child_session_id, route)| {
+                (route.pending.parent_session_id() == parent_session_id)
                     .then_some(child_session_id.clone())
             })
             .collect::<Vec<_>>();
@@ -413,7 +453,7 @@ impl SessionAlignmentState {
             .filter_map(|child_session_id| {
                 self.pending_subagents
                     .remove(&child_session_id)
-                    .map(|pending| (child_session_id, pending))
+                    .map(|route| (child_session_id, route.pending))
             })
             .collect()
     }
@@ -424,10 +464,10 @@ impl SessionAlignmentState {
                 && !(alias.parent_session_id == parent_session_id
                     && alias.subagent_id == subagent_id)
         });
-        self.pending_subagents.retain(|child_session_id, pending| {
+        self.pending_subagents.retain(|child_session_id, route| {
             child_session_id != subagent_id
-                && !(pending.parent_session_id() == parent_session_id
-                    && pending.event.session_id == subagent_id)
+                && !(route.pending.parent_session_id() == parent_session_id
+                    && route.pending.event.session_id == subagent_id)
         });
     }
 }

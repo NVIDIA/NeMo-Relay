@@ -830,6 +830,120 @@ async fn pending_child_gateway_promotion_claims_its_authenticated_parent() {
 }
 
 #[tokio::test]
+async fn cancelled_gateway_promotion_preserves_the_pending_child_route() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: "child-thread".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SessionStart".into(),
+                payload: json!({
+                    "source": {"subagent": {"thread_spawn": {
+                        "parent_thread_id": "parent-thread"
+                    }}}
+                }),
+                metadata: json!({}),
+            })],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    let sessions = manager.inner.lock().await;
+    let starting = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .start_llm(
+                    &HeaderMap::new(),
+                    LlmGatewayStart {
+                        session_id: Some("child-thread".into()),
+                        ..llm_start()
+                    },
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if manager.alignment_routing.try_lock().is_err()
+                && manager.alignment.try_lock().is_err()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("gateway promotion should wait for the session directory");
+
+    starting.abort();
+    assert!(starting.await.unwrap_err().is_cancelled());
+    drop(sessions);
+
+    assert!(has_pending_alignment(&manager, "child-thread").await);
+    let active = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("child-thread".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(active.session_id, "parent-thread");
+    manager.end_llm(active, json!({}), json!({})).await.unwrap();
+}
+
+#[tokio::test]
+async fn completed_gateway_nonpromotion_removes_the_pending_child_route() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: "child-thread".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SessionStart".into(),
+                payload: json!({
+                    "source": {"subagent": {"thread_spawn": {
+                        "parent_thread_id": "parent-thread"
+                    }}}
+                }),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+    let mut child = Session::new(
+        "child-thread".into(),
+        AgentKind::Codex,
+        SessionConfig::default(),
+    );
+    child.session_started = true;
+    manager
+        .inner
+        .lock()
+        .await
+        .insert("child-thread".into(), child);
+
+    let mut start = LlmGatewayStart {
+        session_id: Some("child-thread".into()),
+        ..llm_start()
+    };
+    let alias = manager
+        .resolve_start_alias(&mut start, SessionConfig::default())
+        .await
+        .unwrap();
+
+    assert!(alias.is_none());
+    assert!(!has_pending_alignment(&manager, "child-thread").await);
+}
+
+#[tokio::test]
 async fn gateway_alias_resolution_rechecks_a_pending_route_after_waiting_for_ownership() {
     let manager = SessionManager::new(session_test_config());
     manager

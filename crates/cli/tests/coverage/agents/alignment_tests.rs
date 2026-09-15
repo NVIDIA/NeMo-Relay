@@ -575,6 +575,57 @@ async fn route_cleanup_removes_pending_descendants_of_an_ended_aliased_session()
     assert!(!alignment.has_pending_session("grandchild"));
 }
 
+#[tokio::test]
+async fn route_cleanup_preserves_an_identical_replacement_pending_route() {
+    let mut alignment = SessionAlignmentState::default();
+    let pending_start = || {
+        NormalizedEvent::AgentStarted(SessionEvent {
+            session_id: "child".into(),
+            agent_kind: AgentKind::Codex,
+            event_name: "SessionStart".into(),
+            payload: json!({}),
+            metadata: json!({
+                "source": {
+                    "subagent": {
+                        "thread_spawn": {
+                            "parent_thread_id": "parent"
+                        }
+                    }
+                }
+            }),
+        })
+    };
+
+    let mut original_start = pending_start();
+    let (child_session_id, original_pending) = pending_subagent_start(&mut original_start)
+        .await
+        .expect("child should be recognized as a pending subagent");
+    alignment.insert_pending(child_session_id.clone(), original_pending);
+    let original_token = alignment
+        .pending_token_for_session(&child_session_id)
+        .expect("original pending route should have an identity token");
+    let (_, cleanup) = alignment.prepare_route(NormalizedEvent::AgentEnded(session_event(
+        &child_session_id,
+        "SessionEnd",
+    )));
+
+    let mut replacement_start = pending_start();
+    let (_, replacement_pending) = pending_subagent_start(&mut replacement_start)
+        .await
+        .expect("replacement child should be recognized as a pending subagent");
+    alignment.insert_pending(child_session_id.clone(), replacement_pending);
+    let replacement_token = alignment
+        .pending_token_for_session(&child_session_id)
+        .expect("replacement pending route should have an identity token");
+    assert_ne!(replacement_token, original_token);
+    alignment.commit_route(&cleanup);
+
+    assert_eq!(
+        alignment.pending_token_for_session(&child_session_id),
+        Some(replacement_token)
+    );
+}
+
 #[test]
 fn agent_cleanup_preserves_an_alias_created_after_routing() {
     let mut alignment = SessionAlignmentState::default();

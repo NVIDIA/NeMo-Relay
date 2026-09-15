@@ -1376,14 +1376,16 @@ impl SessionManager {
             return Ok(None);
         };
         loop {
-            let (alias, pending, parent_session_id) = {
+            let (alias, pending, pending_token, parent_session_id) = {
                 let alignment_state = self.alignment.lock().await;
                 if let Some(alias) = alignment_state.alias_for_session(&session_id) {
                     let parent_session_id = alias.parent_session_id.clone();
-                    (Some(alias), None, parent_session_id)
-                } else if let Some(pending) = alignment_state.pending_for_session(&session_id) {
+                    (Some(alias), None, None, parent_session_id)
+                } else if let Some((token, pending)) =
+                    alignment_state.pending_for_session(&session_id)
+                {
                     let parent_session_id = pending.parent_session_id().to_string();
-                    (None, Some(pending), parent_session_id)
+                    (None, Some(pending), Some(token), parent_session_id)
                 } else {
                     return Ok(None);
                 }
@@ -1398,10 +1400,9 @@ impl SessionManager {
                 Some(alias) => {
                     alignment_state.alias_for_session(&session_id).as_ref() == Some(alias)
                 }
-                None => pending.as_ref().is_some_and(|pending| {
+                None => pending_token.is_some_and(|token| {
                     alignment_state.alias_for_session(&session_id).is_none()
-                        && alignment_state.pending_for_session(&session_id).as_ref()
-                            == Some(pending)
+                        && alignment_state.pending_token_for_session(&session_id) == Some(token)
                 }),
             };
             if !route_is_unchanged {
@@ -1423,6 +1424,8 @@ impl SessionManager {
             }
 
             let pending = pending.expect("stable route should contain an alias or pending start");
+            let pending_token =
+                pending_token.expect("stable pending route should contain an identity token");
             if let Some(owner) = pending.authenticated_owner() {
                 match owners.get(pending.parent_session_id()) {
                     Some(existing) if existing != owner => {
@@ -1437,15 +1440,14 @@ impl SessionManager {
                     }
                 }
             }
-            alignment_state.remove_pending(&session_id);
             // The parent ownership decision is complete. Do not carry the owner map lock into
             // session promotion, which acquires the session directory before checking ownership.
             drop(owners);
             let mut sessions = self.inner.lock().await;
-            let alias = promote_pending_subagent(
+            let promotion = promote_pending_subagent(
                 &mut sessions,
                 &mut alignment_state,
-                session_id,
+                session_id.clone(),
                 pending,
                 config,
                 AuthenticatedRouting::new(
@@ -1454,7 +1456,9 @@ impl SessionManager {
                     &self.authenticated_reservations,
                 ),
             )
-            .await?;
+            .await;
+            alignment_state.remove_pending_if_current(&session_id, pending_token);
+            let alias = promotion?;
             if let Some(alias) = alias.as_ref() {
                 apply_start_alias(start, alias);
             }
