@@ -11,7 +11,7 @@ use serde_json::Value;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use crate::agents::shared::alignment::{
-    PendingSubagentStart, SessionAlias, SessionAlignmentState, merge_metadata,
+    PendingSubagentStart, SessionAlias, SessionAlignmentState, SessionRouteCleanup, merge_metadata,
 };
 use crate::configuration::SessionConfig;
 use crate::error::CliError;
@@ -19,7 +19,7 @@ use crate::events::{AgentKind, NormalizedEvent, SessionEvent};
 
 use super::{
     AuthenticatedOwners, AuthenticatedReservations, LlmGatewayStart, Session, SessionActivity,
-    SessionActivityGuard, SessionGates, ToolArgumentTransform, session_gate,
+    SessionActivityGuard, ToolArgumentTransform,
 };
 
 // Event application temporarily removes a session from the shared directory so unrelated sessions
@@ -56,7 +56,7 @@ impl InFlightSession {
             .expect("in-flight session should own its session")
     }
 
-    async fn restore(mut self) {
+    async fn restore(mut self) -> (OwnedMutexGuard<()>, SessionActivityGuard) {
         let mut sessions = self.sessions.lock().await;
         sessions.insert(
             self.session_id.clone(),
@@ -64,10 +64,24 @@ impl InFlightSession {
                 .take()
                 .expect("in-flight session should own its session"),
         );
+        drop(sessions);
+        self.take_guards()
     }
 
-    fn discard(mut self) {
+    fn discard(mut self) -> (OwnedMutexGuard<()>, SessionActivityGuard) {
         self.session.take();
+        self.take_guards()
+    }
+
+    fn take_guards(&mut self) -> (OwnedMutexGuard<()>, SessionActivityGuard) {
+        (
+            self.gate
+                .take()
+                .expect("in-flight session should own its gate"),
+            self.activity
+                .take()
+                .expect("in-flight session should own its activity"),
+        )
     }
 }
 
@@ -111,21 +125,28 @@ impl<'a> AuthenticatedRouting<'a> {
 
 pub(super) struct SessionEventApplier<'a> {
     sessions: &'a Arc<Mutex<HashMap<String, Session>>>,
-    gates: &'a SessionGates,
     activity: &'a SessionActivity,
     config: SessionConfig,
+}
+
+pub(super) struct AppliedSessionEvent {
+    pub(super) outcome: Option<(
+        bool,
+        Option<SubscriberDelivery>,
+        Option<ToolArgumentTransform>,
+    )>,
+    pub(super) session_gate: OwnedMutexGuard<()>,
+    pub(super) activity: SessionActivityGuard,
 }
 
 impl<'a> SessionEventApplier<'a> {
     pub(super) fn new(
         sessions: &'a Arc<Mutex<HashMap<String, Session>>>,
-        gates: &'a SessionGates,
         activity: &'a SessionActivity,
         config: SessionConfig,
     ) -> Self {
         Self {
             sessions,
-            gates,
             activity,
             config,
         }
@@ -137,26 +158,26 @@ impl<'a> SessionEventApplier<'a> {
         event: NormalizedEvent,
         event_kind: AgentKind,
         is_agent_started: bool,
-    ) -> Result<
-        Option<(
-            bool,
-            Option<SubscriberDelivery>,
-            Option<ToolArgumentTransform>,
-        )>,
-        CliError,
-    > {
-        let activity = self.activity.begin();
-        let gate = session_gate(self.gates, session_id).await;
-        let gate = gate.lock_owned().await;
+        session_gate: OwnedMutexGuard<()>,
+        activity: SessionActivityGuard,
+    ) -> Result<AppliedSessionEvent, CliError> {
         if self.activity.is_closing() {
-            return Ok(None);
+            return Ok(AppliedSessionEvent {
+                outcome: None,
+                session_gate,
+                activity,
+            });
         }
         let session = {
             let mut sessions = self.sessions.lock().await;
             sessions.remove(session_id)
         };
         if session.is_none() && event.is_terminal() {
-            return Ok(None);
+            return Ok(AppliedSessionEvent {
+                outcome: None,
+                session_gate,
+                activity,
+            });
         }
         let session = session.unwrap_or_else(|| {
             Session::new(session_id.to_string(), event_kind, self.config.clone())
@@ -165,7 +186,7 @@ impl<'a> SessionEventApplier<'a> {
             Arc::clone(self.sessions),
             session_id.to_string(),
             session,
-            gate,
+            session_gate,
             activity,
         );
         if is_agent_started
@@ -179,19 +200,19 @@ impl<'a> SessionEventApplier<'a> {
                 let session = in_flight.session_mut();
                 let is_empty = session.is_empty();
                 let tool_argument_transform = session.take_tool_argument_transform();
-                if is_empty {
-                    in_flight.discard();
+                let (session_gate, activity) = if is_empty {
+                    in_flight.discard()
                 } else {
-                    in_flight.restore().await;
-                }
-                Ok(Some((
-                    is_empty,
-                    subscriber_delivery,
-                    tool_argument_transform,
-                )))
+                    in_flight.restore().await
+                };
+                Ok(AppliedSessionEvent {
+                    outcome: Some((is_empty, subscriber_delivery, tool_argument_transform)),
+                    session_gate,
+                    activity,
+                })
             }
             Err(error) => {
-                in_flight.restore().await;
+                drop(in_flight.restore().await);
                 Err(error)
             }
         }
@@ -350,13 +371,9 @@ async fn parent_owner_matches(
     }
 }
 
-pub(super) fn route_event_for_session(
+pub(super) fn prepare_event_for_session(
     event: NormalizedEvent,
-    alignment_state: &mut SessionAlignmentState,
-) -> Option<(NormalizedEvent, String, bool)> {
-    let event = alignment_state.route_event(event);
-    let session_id = event.session_id().to_string();
-    let is_agent_started = matches!(&event, NormalizedEvent::AgentStarted(_));
-
-    Some((event, session_id, is_agent_started))
+    alignment_state: &SessionAlignmentState,
+) -> (NormalizedEvent, SessionRouteCleanup) {
+    alignment_state.prepare_route(event)
 }
