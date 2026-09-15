@@ -91,22 +91,28 @@ class BuiltinConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this built-in backend config to the canonical JSON object shape."""
-        return _normalize_object(
-            {
-                "preset": self.preset,
-                "action": self.action,
-                "target_paths": self.target_paths,
-                "target_path_globs": self.target_path_globs,
-                "pattern": self.pattern,
-                "detector": self.detector,
-                "replacement": self.replacement,
-                "mask_char": self.mask_char,
-                "unmasked_prefix": self.unmasked_prefix,
-                "unmasked_suffix": self.unmasked_suffix,
-                "custom_mark_payload_policy": self.custom_mark_payload_policy,
-                "metric_string_attribute_allowlist": self.metric_string_attribute_allowlist,
-            }
-        )
+        config = {
+            "preset": self.preset,
+            "action": self.action,
+            "target_paths": self.target_paths,
+            "target_path_globs": self.target_path_globs,
+            "pattern": self.pattern,
+            "detector": self.detector,
+            "replacement": self.replacement,
+            "mask_char": self.mask_char,
+            "unmasked_prefix": self.unmasked_prefix,
+            "unmasked_suffix": self.unmasked_suffix,
+            "custom_mark_payload_policy": self.custom_mark_payload_policy,
+            "metric_string_attribute_allowlist": self.metric_string_attribute_allowlist,
+        }
+        if self.preset == "trajectory_context":
+            if self.action == "remove":
+                config["action"] = None
+            if not self.target_paths:
+                config["target_paths"] = None
+            if not self.target_path_globs:
+                config["target_path_globs"] = None
+        return _normalize_object(config)
 
 
 @dataclass(slots=True)

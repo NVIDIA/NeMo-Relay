@@ -3,7 +3,10 @@
 
 package nemo_relay
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestPiiRedactionConfigHelpers(t *testing.T) {
 	config := NewPiiRedactionConfig()
@@ -40,8 +43,8 @@ func TestPiiRedactionConfigHelpers(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected serialized builtin object, got %#v", component.Config["builtin"])
 	}
-	if serializedBuiltin["action"] != "remove" {
-		t.Fatalf("unexpected serialized builtin config: %#v", serializedBuiltin)
+	if _, ok := serializedBuiltin["action"]; ok {
+		t.Fatalf("trajectory-context config must omit the legacy action: %#v", serializedBuiltin)
 	}
 	if serializedBuiltin["preset"] != "trajectory_context" || serializedBuiltin["custom_mark_payload_policy"] != "preserve" {
 		t.Fatalf("expected trajectory-context builtin settings: %#v", serializedBuiltin)
@@ -49,6 +52,13 @@ func TestPiiRedactionConfigHelpers(t *testing.T) {
 	allowlist, ok := serializedBuiltin["metric_string_attribute_allowlist"].(map[string]any)
 	if !ok || len(allowlist) != 1 {
 		t.Fatalf("expected serialized metric allowlist: %#v", serializedBuiltin)
+	}
+	report, err := ValidatePiiRedactionConfig(config)
+	if err != nil {
+		t.Fatalf("ValidatePiiRedactionConfig failed: %v", err)
+	}
+	if len(report.Diagnostics) != 0 {
+		t.Fatalf("expected trajectory-context config to validate: %#v", report.Diagnostics)
 	}
 }
 
@@ -71,6 +81,48 @@ func TestPiiRedactionValidationRejectsBadValues(t *testing.T) {
 		}
 	}
 	t.Fatalf("expected builtin.detector diagnostic, got %#v", report.Diagnostics)
+}
+
+func TestPiiRedactionValidationRequiresTrajectoryPresetForTrajectoryOptions(t *testing.T) {
+	tests := []struct {
+		name    string
+		builtin PiiRedactionBuiltinConfig
+		field   string
+		message string
+	}{
+		{
+			name:    "custom mark payload policy",
+			builtin: PiiRedactionBuiltinConfig{CustomMarkPayloadPolicy: "preserve"},
+			field:   "builtin.custom_mark_payload_policy",
+			message: "requires builtin.preset = 'trajectory_context'",
+		},
+		{
+			name: "metric string attribute allowlist",
+			builtin: PiiRedactionBuiltinConfig{
+				MetricStringAttributeAllowlist: map[string][]string{"gen_ai.operation.name": {"chat"}},
+			},
+			field:   "builtin.metric_string_attribute_allowlist",
+			message: "requires builtin.preset = 'trajectory_context'",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := NewPiiRedactionConfig()
+			config.Builtin = &test.builtin
+
+			report, err := ValidatePiiRedactionConfig(config)
+			if err != nil {
+				t.Fatalf("ValidatePiiRedactionConfig failed: %v", err)
+			}
+			for _, diagnostic := range report.Diagnostics {
+				if diagnostic.Field != nil && *diagnostic.Field == test.field && strings.Contains(diagnostic.Message, test.message) {
+					return
+				}
+			}
+			t.Fatalf("expected %s diagnostic, got %#v", test.field, report.Diagnostics)
+		})
+	}
 }
 
 func TestPiiRedactionListKindIsAutomatic(t *testing.T) {

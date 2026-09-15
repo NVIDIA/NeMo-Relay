@@ -12,7 +12,7 @@ export interface ConfigPolicy {
 }
 
 export interface BuiltinConfig {
-  preset?: 'trajectory_context' | string;
+  preset?: 'trajectory_context';
   action?: 'remove' | 'redact' | 'regex_replace' | 'hash' | 'mask' | string;
   target_paths?: string[];
   target_path_globs?: string[];
@@ -22,7 +22,7 @@ export interface BuiltinConfig {
   mask_char?: string;
   unmasked_prefix?: number;
   unmasked_suffix?: number;
-  custom_mark_payload_policy?: 'preserve' | 'redact_all_leaves' | string;
+  custom_mark_payload_policy?: 'preserve' | 'redact_all_leaves';
   metric_string_attribute_allowlist?: Record<string, string[]>;
 }
 

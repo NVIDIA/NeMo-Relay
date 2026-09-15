@@ -42,12 +42,12 @@ class TestPiiRedactionConfigHelpers:
             metric_string_attribute_allowlist={"gen_ai.operation.name": ["chat"]},
         ).to_dict() == {
             "preset": "trajectory_context",
-            "action": "remove",
-            "target_paths": [],
-            "target_path_globs": [],
             "custom_mark_payload_policy": "preserve",
             "metric_string_attribute_allowlist": {"gen_ai.operation.name": ["chat"]},
         }
+
+        trajectory_report = validate_config(PiiRedactionConfig(builtin=BuiltinConfig(preset="trajectory_context")))
+        assert trajectory_report["diagnostics"] == []
 
         wrapped = ComponentSpec(PiiRedactionConfig()).to_dict()
         assert wrapped["kind"] == PII_REDACTION_PLUGIN_KIND

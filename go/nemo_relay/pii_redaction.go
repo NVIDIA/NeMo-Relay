@@ -3,6 +3,8 @@
 
 package nemo_relay
 
+import "encoding/json"
+
 // PiiRedactionPluginKind is the top-level plugin kind used by the built-in PII redaction component.
 const PiiRedactionPluginKind = "pii_redaction"
 
@@ -20,6 +22,15 @@ type PiiRedactionBuiltinConfig struct {
 	UnmaskedSuffix                 *int32              `json:"unmasked_suffix,omitempty"`
 	CustomMarkPayloadPolicy        string              `json:"custom_mark_payload_policy,omitempty"`
 	MetricStringAttributeAllowlist map[string][]string `json:"metric_string_attribute_allowlist,omitempty"`
+}
+
+// MarshalJSON omits the legacy default action for the trajectory-context preset.
+func (config PiiRedactionBuiltinConfig) MarshalJSON() ([]byte, error) {
+	type builtinConfig PiiRedactionBuiltinConfig
+	if config.Preset == "trajectory_context" && config.Action == "remove" {
+		config.Action = ""
+	}
+	return json.Marshal(builtinConfig(config))
 }
 
 // PiiRedactionLocalModelConfig configures the future local-model redaction backend.

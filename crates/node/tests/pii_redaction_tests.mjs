@@ -33,12 +33,21 @@ describe('pii_redaction plugin helpers', () => {
         metric_string_attribute_allowlist: { 'gen_ai.operation.name': ['chat'] },
       }),
       {
-        action: 'remove',
         preset: 'trajectory_context',
         custom_mark_payload_policy: 'preserve',
         metric_string_attribute_allowlist: { 'gen_ai.operation.name': ['chat'] },
       },
     );
+    const trajectoryReport = plugin.validate({
+      version: 1,
+      components: [
+        piiRedaction.ComponentSpec({
+          ...piiRedaction.defaultConfig(),
+          builtin: piiRedaction.builtinConfig({ preset: 'trajectory_context' }),
+        }),
+      ],
+    }).config;
+    assert.deepEqual(trajectoryReport.diagnostics, []);
     assert.deepEqual(piiRedaction.localModelConfig(), {});
 
     const component = piiRedaction.ComponentSpec({

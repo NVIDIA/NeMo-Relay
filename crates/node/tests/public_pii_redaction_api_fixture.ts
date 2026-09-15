@@ -10,3 +10,9 @@ const trajectoryContext: BuiltinConfig = {
 };
 
 builtinConfig(trajectoryContext);
+
+// @ts-expect-error PII redaction supports only the trajectory-context preset.
+builtinConfig({ preset: 'unknown_preset' });
+
+// @ts-expect-error PII redaction supports only the documented custom-mark policies.
+builtinConfig({ custom_mark_payload_policy: 'unknown_policy' });
