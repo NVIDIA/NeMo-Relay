@@ -142,6 +142,7 @@ async fn replacement_connection_fences_old_callbacks_and_grace_expires_once() {
         ComponentRole::Mcp,
         "reconnect".into(),
         old_generation,
+        "test_replacement",
     )
     .await;
     assert!(
@@ -462,7 +463,7 @@ async fn unauthenticated_and_legacy_control_requests_are_rejected() {
 #[tokio::test]
 async fn slow_consumer_queue_is_bounded_and_cancels_connection() {
     let (sender, _receiver) = mpsc::channel(QUEUE_CAPACITY);
-    let cancel = Arc::new(Notify::new());
+    let cancel = Arc::new(ControlCancellation::new());
     let mut peer = Peer {
         generation: "test".into(),
         sender: Some(sender),
@@ -482,9 +483,10 @@ async fn slow_consumer_queue_is_bounded_and_cancels_connection() {
             },
         );
     }
-    tokio::time::timeout(Duration::from_millis(100), cancel.notified())
+    let reason = tokio::time::timeout(Duration::from_millis(100), cancel.cancelled())
         .await
         .unwrap();
+    assert_eq!(reason, "outbound_queue_full");
 }
 
 type RawSocket =
@@ -952,6 +954,7 @@ async fn failed_recovery_probe_preserves_session_for_retry_and_expiry() {
         ComponentRole::Worker,
         "worker".into(),
         generation,
+        "test_disconnect",
     )
     .await;
     tokio::time::timeout(Duration::from_secs(2), async {
