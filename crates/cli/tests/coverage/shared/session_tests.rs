@@ -28,6 +28,339 @@ use super::*;
 use crate::events::{LlmHintEvent, SessionEvent, ToolEvent};
 use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
 
+struct ToolGuardrailCleanup(&'static str);
+
+impl Drop for ToolGuardrailCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_tool_conditional_execution_guardrail(self.0);
+    }
+}
+
+#[tokio::test]
+async fn cancelled_authenticated_hook_preserves_owner_until_session_ends() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-session-cancelled-hook-owner";
+    const TOOL: &str = "cancelled-hook-owner";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    let entered = Arc::new(tokio::sync::Notify::new());
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new({
+            let entered = Arc::clone(&entered);
+            move |name, _| {
+                let entered = Arc::clone(&entered);
+                Box::pin(async move {
+                    if name == TOOL {
+                        entered.notify_one();
+                        std::future::pending::<()>().await;
+                    }
+                    Ok(None)
+                })
+            }
+        }),
+    )
+    .unwrap();
+    let _guardrail_cleanup = ToolGuardrailCleanup(GUARDRAIL);
+
+    let manager = SessionManager::new(session_test_config());
+    let applying = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .apply_authenticated_events(
+                    &HeaderMap::new(),
+                    vec![NormalizedEvent::ToolStarted(ToolEvent {
+                        session_id: "cancelled-owner-session".into(),
+                        agent_kind: AgentKind::Codex,
+                        event_name: "PreToolUse".into(),
+                        tool_call_id: "cancelled-owner-tool".into(),
+                        tool_name: TOOL.into(),
+                        subagent_id: None,
+                        arguments: json!({}),
+                        result: Value::Null,
+                        status: None,
+                        payload: json!({}),
+                        metadata: json!({}),
+                    })],
+                    "client-a",
+                )
+                .await
+        }
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), entered.notified())
+        .await
+        .unwrap();
+    applying.abort();
+    assert!(applying.await.unwrap_err().is_cancelled());
+
+    let error = manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "cancelled-owner-session",
+                "SessionStart",
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CliError::Unauthorized(_)));
+
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentEnded(session_event(
+                "cancelled-owner-session",
+                "SessionEnd",
+            ))],
+            "client-a",
+        )
+        .await
+        .unwrap();
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "cancelled-owner-session",
+                "SessionStart",
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_authenticated_terminal_hook_releases_closed_owner() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "cancelled-terminal-session",
+                "SessionStart",
+            ))],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    let routing = manager.alignment_routing.lock().await;
+    let ending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .apply_authenticated_events(
+                    &HeaderMap::new(),
+                    vec![
+                        NormalizedEvent::AgentEnded(session_event(
+                            "cancelled-terminal-session",
+                            "SessionEnd",
+                        )),
+                        NormalizedEvent::AgentStarted(session_event(
+                            "cancelled-terminal-marker",
+                            "SessionStart",
+                        )),
+                    ],
+                    "client-a",
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if manager
+                .authenticated_reservations
+                .lock()
+                .await
+                .contains_key("cancelled-terminal-marker")
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("authenticated batch should reserve its new session");
+
+    let owners = manager.authenticated_owners.lock().await;
+    drop(routing);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if !manager
+                .inner
+                .lock()
+                .await
+                .contains_key("cancelled-terminal-session")
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("terminal event should remove its session");
+    ending.abort();
+    assert!(ending.await.unwrap_err().is_cancelled());
+    drop(owners);
+    manager.session_activity.wait_for_idle().await;
+
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "cancelled-terminal-session",
+                "SessionStart",
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_owner_cleanup_releases_each_reservation_once() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .authenticated_reservations
+        .lock()
+        .await
+        .insert("shared-reservation".into(), ("client-a".into(), 2));
+    manager
+        .authenticated_owners
+        .lock()
+        .await
+        .insert("closed-session".into(), "client-a".into());
+
+    let mut session_ids = HashSet::new();
+    session_ids.insert("shared-reservation".into());
+    let mut guard = AuthenticatedReservationGuard::new(
+        manager.clone(),
+        session_ids,
+        "client-a",
+        manager.session_activity.begin(),
+    );
+    guard.released_owner_ids.insert("closed-session".into());
+
+    let owners = manager.authenticated_owners.lock().await;
+    let releasing = tokio::spawn(guard.release());
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if manager
+                .authenticated_reservations
+                .lock()
+                .await
+                .get("shared-reservation")
+                .is_some_and(|(_, pending)| *pending == 1)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("reservation release should complete before owner cleanup");
+
+    releasing.abort();
+    assert!(releasing.await.unwrap_err().is_cancelled());
+    drop(owners);
+    manager.session_activity.wait_for_idle().await;
+
+    assert_eq!(
+        manager
+            .authenticated_reservations
+            .lock()
+            .await
+            .get("shared-reservation")
+            .map(|(_, pending)| *pending),
+        Some(1)
+    );
+}
+
+#[tokio::test]
+async fn terminal_event_for_unknown_session_does_not_claim_owner() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentEnded(session_event(
+                "unknown-terminal-session",
+                "SessionEnd",
+            ))],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "unknown-terminal-session",
+                "SessionStart",
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn authenticated_application_cannot_commit_owner_after_shutdown_begins() {
+    let manager = SessionManager::new(session_test_config());
+    let routing = manager.alignment_routing.lock().await;
+    let applying = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .apply_authenticated_events(
+                    &HeaderMap::new(),
+                    vec![NormalizedEvent::AgentStarted(session_event(
+                        "shutdown-owner-session",
+                        "SessionStart",
+                    ))],
+                    "client-a",
+                )
+                .await
+        }
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if manager
+                .authenticated_reservations
+                .lock()
+                .await
+                .contains_key("shutdown-owner-session")
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let closing_manager = manager.clone();
+    let mut closing = tokio::spawn(async move { closing_manager.close_all("test_shutdown").await });
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut closing)
+            .await
+            .is_err(),
+        "shutdown must wait for authenticated session routing"
+    );
+
+    drop(routing);
+    applying.await.unwrap().unwrap();
+    closing.await.unwrap().unwrap();
+
+    assert!(manager.inner.lock().await.is_empty());
+    assert!(manager.authenticated_owners.lock().await.is_empty());
+    assert!(manager.authenticated_reservations.lock().await.is_empty());
+}
+
 #[tokio::test]
 async fn authenticated_hook_clients_cannot_take_over_existing_sessions() {
     let manager = SessionManager::new(session_test_config());
@@ -2018,6 +2351,79 @@ async fn partially_applied_authenticated_batch_keeps_its_owner() {
         Some("client-a")
     );
     deregister_tool_conditional_execution_guardrail(GUARDRAIL).unwrap();
+}
+
+#[tokio::test]
+async fn partially_failed_authenticated_batch_releases_closed_owner() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-session-partial-batch-closed-owner";
+    const TOOL: &str = "session-partial-batch-closed-owner";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(|name, _| {
+            Box::pin(async move {
+                (name == TOOL)
+                    .then(|| FlowError::Internal("expected partial batch failure".into()))
+                    .map_or(Ok(None), Err)
+            })
+        }),
+    )
+    .unwrap();
+    let _guardrail_cleanup = ToolGuardrailCleanup(GUARDRAIL);
+
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "closed-before-batch-failure",
+                "SessionStart",
+            ))],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    let result = manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentEnded(session_event(
+                    "closed-before-batch-failure",
+                    "SessionEnd",
+                )),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "failing-batch-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "failing-batch-tool".into(),
+                    tool_name: TOOL.into(),
+                    subagent_id: None,
+                    arguments: json!({}),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+            "client-a",
+        )
+        .await;
+    assert!(result.is_err());
+
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "closed-before-batch-failure",
+                "SessionStart",
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
