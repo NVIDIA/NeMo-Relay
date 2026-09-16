@@ -71,6 +71,66 @@ fn activation_snapshots_use_the_configured_parent_directory() {
 }
 
 #[test]
+fn hydration_adds_the_effective_plugin_to_its_own_lifecycle_scope() {
+    let temp = tempfile::tempdir().unwrap();
+    let user_plugins_toml = temp.path().join("user/plugins.toml");
+    let system_plugins_toml = temp.path().join("system/plugins.toml");
+    let user_plugin_dir = temp.path().join("user/plugin");
+    let system_plugin_dir = temp.path().join("system/plugin");
+    std::fs::create_dir_all(&user_plugin_dir).unwrap();
+    std::fs::create_dir_all(&system_plugin_dir).unwrap();
+    let plugin_id = "acme.layered";
+    let user_manifest_path = write_dynamic_manifest(&user_plugin_dir, plugin_id);
+    let system_manifest_path = write_dynamic_manifest(&system_plugin_dir, plugin_id);
+    let (user_manifest, user_manifest_ref) =
+        DynamicPluginManifest::load_from_path(&user_manifest_path).unwrap();
+
+    let mut user_registry = nemo_relay::plugin::dynamic::DynamicPluginRegistry::new();
+    user_registry
+        .add(user_manifest.into_record(Some(user_manifest_ref)).unwrap())
+        .unwrap();
+    let mut scopes = vec![
+        ScopedRegistry {
+            scope: RegistryScope::User,
+            plugins_toml_path: user_plugins_toml.clone(),
+            state_path: temp.path().join("user/.dynamic-plugins.json"),
+            registry: user_registry,
+        },
+        ScopedRegistry {
+            scope: RegistryScope::Global,
+            plugins_toml_path: system_plugins_toml.clone(),
+            state_path: temp.path().join("system/.dynamic-plugins.json"),
+            registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+        },
+    ];
+    let mut resolved = ResolvedConfig {
+        dynamic_plugins: vec![ResolvedDynamicPluginConfig {
+            plugin_id: plugin_id.into(),
+            manifest_ref: system_manifest_path
+                .canonicalize()
+                .unwrap()
+                .display()
+                .to_string(),
+            config: serde_json::Map::new(),
+            has_explicit_config: false,
+            source: system_plugins_toml,
+        }],
+        ..ResolvedConfig::default()
+    };
+    allow_unsigned_test_plugins(&mut resolved);
+
+    let touched = hydrate_scoped_registries(&mut scopes, &resolved).unwrap();
+
+    assert_eq!(touched, BTreeSet::from([1]));
+    assert!(scopes[0].registry.get(plugin_id).is_some());
+    let system_record = scopes[1].registry.get(plugin_id).unwrap();
+    assert_eq!(
+        system_record.source.manifest_ref.as_deref(),
+        Some(resolved.dynamic_plugins[0].manifest_ref.as_str())
+    );
+}
+
+#[test]
 fn activation_snapshots_reject_a_parent_inside_the_plugin_directory() {
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugin");

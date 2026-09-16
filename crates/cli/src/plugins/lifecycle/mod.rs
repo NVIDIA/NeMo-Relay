@@ -2097,6 +2097,14 @@ fn load_and_hydrate_scopes_with_updates(
     resolved: &ResolvedConfig,
 ) -> Result<(Vec<ScopedRegistry>, Vec<usize>), CliError> {
     let mut scopes = load_scoped_registries(explicit_plugin_config)?;
+    let touched_scope_indices = hydrate_scoped_registries(&mut scopes, resolved)?;
+    Ok((scopes, touched_scope_indices.into_iter().collect()))
+}
+
+fn hydrate_scoped_registries(
+    scopes: &mut [ScopedRegistry],
+    resolved: &ResolvedConfig,
+) -> Result<BTreeSet<usize>, CliError> {
     let mut touched_scope_indices = BTreeSet::new();
     for plugin in &resolved.dynamic_plugins {
         let scope_index = scopes
@@ -2114,7 +2122,11 @@ fn load_and_hydrate_scopes_with_updates(
         let policy =
             evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
         let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
-        if find_record_by_id(&scopes, &plugin.plugin_id)?.is_some() {
+        if scopes[scope_index]
+            .registry
+            .get(&plugin.plugin_id)
+            .is_some()
+        {
             update_registry_validation_status(
                 &mut scopes[scope_index],
                 &plugin.plugin_id,
@@ -2138,7 +2150,7 @@ fn load_and_hydrate_scopes_with_updates(
                 .map_err(|error| CliError::Config(error.to_string()))?;
         }
     }
-    Ok((scopes, touched_scope_indices.into_iter().collect()))
+    Ok(touched_scope_indices)
 }
 
 fn validated_record_from_manifest(
