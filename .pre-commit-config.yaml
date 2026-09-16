@@ -177,6 +177,20 @@ repos:
         files: '(Cargo\.toml|Cargo\.lock|deny\.toml)$'
         pass_filenames: false
 
+      - id: pylic
+        name: pylic check
+        entry: uv run pylic check
+        language: system
+        files: '^uv\.lock$'
+        pass_filenames: false
+
+      - id: uv-audit
+        name: uv audit
+        entry: uv audit
+        language: system
+        files: '^uv\.lock$'
+        pass_filenames: false
+
       - id: attributions-rust
         name: ATTRIBUTIONS-Rust.md (Cargo.lock)
         entry: bash scripts/generate_attributions.sh rust
