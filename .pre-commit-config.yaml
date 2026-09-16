@@ -179,9 +179,15 @@ repos:
 
       - id: pylic
         name: pylic check
-        entry: uv run --no-sync pylic check
+        entry: >-
+          bash -c 'uv sync --frozen --all-groups --all-extras
+          --no-install-package nemo-relay
+          --no-install-package nemo-relay-cli-bin &&
+          uv run --no-sync pylic check
+          --allow-extra-unsafe-packages
+          --allow-extra-safe-licenses'
         language: system
-        files: '^(uv\.lock|pyproject\.toml)$'
+        files: '^(uv\.lock)$'
         pass_filenames: false
 
       - id: uv-audit
