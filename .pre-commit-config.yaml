@@ -191,6 +191,13 @@ repos:
         files: '^uv\.lock$'
         pass_filenames: false
 
+      - id: npm-audit
+        name: npm audit
+        entry: npm audit --audit-level=high
+        language: system
+        files: '^package-lock\.json$'
+        pass_filenames: false
+
       - id: attributions-rust
         name: ATTRIBUTIONS-Rust.md (Cargo.lock)
         entry: bash scripts/generate_attributions.sh rust
