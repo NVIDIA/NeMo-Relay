@@ -44,6 +44,8 @@ use crate::error::CliError;
 use crate::server::{GatewayOverrides, register_and_validate_plugin_components};
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(2);
+// Agent CLIs can take longer to initialize on a cold start than a live network health probe.
+const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const PRICING_PLUGIN_KIND: &str = "pricing";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -907,18 +909,18 @@ fn hook_status(agent: CodingAgent, agents: &AgentConfigs) -> (Status, String) {
 }
 
 async fn probe_version(argv: &[String]) -> Option<String> {
-    // Run the shared wrapper-preserving probe and read the first line of stdout. Bounded by the network
-    // timeout (re-used as a generic short timeout) so a misbehaving binary doesn't hang doctor.
+    // Run the shared wrapper-preserving probe and read the first line of stdout. Keep this separate
+    // from the short network timeout: an agent CLI can need a few seconds for a cold start.
     let mut cmd = crate::process::tokio_command(argv);
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .stdin(std::process::Stdio::null())
         // Ensure the child gets killed if our future is dropped on timeout. Without this a
-        // misbehaving agent binary that exceeds NETWORK_TIMEOUT would leak as an orphan
+        // misbehaving agent binary that exceeds VERSION_PROBE_TIMEOUT would leak as an orphan
         // process for the lifetime of the doctor invocation (and beyond).
         .kill_on_drop(true);
     let child = cmd.spawn().ok()?;
-    let output = timeout(NETWORK_TIMEOUT, child.wait_with_output())
+    let output = timeout(VERSION_PROBE_TIMEOUT, child.wait_with_output())
         .await
         .ok()?
         .ok()?;
