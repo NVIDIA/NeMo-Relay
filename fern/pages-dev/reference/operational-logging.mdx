@@ -15,6 +15,23 @@ Relay writes operational logs to stderr by default. Set `stderr_enabled` to
 `false` to disable that sink; optional file sinks continue receiving records.
 Each record includes a root Relay ID for correlation.
 
+MCP failure records include `error_kind`. The `mcp_session_failed` record and
+the matching `command_failed` record for `command = "mcp"` also include
+`failure_reason`. This field is a short, fixed code that names the MCP step that
+failed. It never includes the source error text. Use the shared root Relay ID to
+match the two records. Read stderr for the full error message.
+
+Gateway startup failures use the same pattern. `gateway_acquisition_failed` and
+`gateway_recovery_failed` include `failure_reason` as well as the existing
+`failure_kind`. For example, `gateway_recovered_then_unhealthy` means the
+gateway became unhealthy after Relay had already tried to recover it once.
+
+Daemon worker activation failures include `failure_reason` on both
+`worker_launch_failed` and the matching `worker_activation_failed` record. The
+code shows whether Relay could not find or start the worker, send its activation
+permission, or wait for it to become ready. It never includes activation data or the
+source error text.
+
 ## Defaults
 
 Without configuration, Relay uses:
