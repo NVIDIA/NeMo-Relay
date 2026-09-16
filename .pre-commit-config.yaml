@@ -179,7 +179,7 @@ repos:
 
       - id: pylic
         name: pylic check
-        entry: uv run --no-sync pylic check
+        entry: uv run --no-sync pylic check --allow-extra-unsafe-packages --allow-extra-safe-licenses
         language: system
         files: '^(uv\.lock|pyproject\.toml)$'
         pass_filenames: false
