@@ -62,7 +62,7 @@ use self::responses::{
 };
 use self::state::{
     RegistryScope, ScopedDynamicPluginRecord, ScopedRegistry, collect_records, find_record_by_id,
-    load_scoped_registries, scoped_paths_for_add,
+    find_record_in_source, load_scoped_registries, scoped_paths_for_add,
 };
 use self::target::PluginTarget;
 use self::trust::{EvaluatedDynamicPluginTrust, evaluate_dynamic_plugin_trust};
@@ -329,7 +329,7 @@ pub(crate) fn validate(
             )?;
             let host_config_by_id = host_config_by_id(&resolved);
             let mut scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
-            let entry = find_registered_entry(&scopes, "plugins validate", &plugin_id)?;
+            let entry = find_registered_entry(&scopes, &resolved, "plugins validate", &plugin_id)?;
             let manifest_ref = manifest_ref_from_record(&entry.record)?;
             let (manifest, manifest_ref) = load_manifest_for_action("validate", &manifest_ref)?;
             validate_python_entrypoint_artifact(&manifest, &manifest_ref)
@@ -352,7 +352,7 @@ pub(crate) fn validate(
                 &trust,
             )?;
             scopes[entry.scope_index].save()?;
-            let refreshed = find_record_by_id(&scopes, &plugin_id)?
+            let refreshed = find_effective_record_by_id(&scopes, &resolved, &plugin_id)?
                 .expect("validated registry record should still exist");
             if command.json {
                 print_response_json(&validate_success(ValidateResponseInput {
@@ -437,7 +437,7 @@ pub(crate) fn inspect(
     )?;
     let host_config_by_id = host_config_by_id(&resolved);
     let scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
-    let entry = find_registered_entry(&scopes, "plugins inspect", &command.id)?;
+    let entry = find_registered_entry(&scopes, &resolved, "plugins inspect", &command.id)?;
     let manifest_ref = manifest_ref_from_record(&entry.record)?;
     let (manifest, manifest_ref) = load_manifest_for_action("inspect", &manifest_ref)?;
     if command.json {
@@ -482,15 +482,12 @@ pub(crate) fn remove(
     server: &GatewayOverrides,
 ) -> Result<(), CliError> {
     let explicit_plugin_config = lifecycle_plugin_config_path(server);
-    let mut scopes = load_scoped_registries(explicit_plugin_config.as_ref())?;
-    if find_record_by_id(&scopes, &command.id)?.is_none() {
-        let resolved = resolve_plugins_config_with_path(
-            server.config.as_ref(),
-            server.plugin_config_path.as_ref(),
-        )?;
-        scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
-    }
-    let entry = find_registered_entry(&scopes, "plugins remove", &command.id)?;
+    let resolved = resolve_plugins_config_with_path(
+        server.config.as_ref(),
+        server.plugin_config_path.as_ref(),
+    )?;
+    let mut scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
+    let entry = find_registered_entry(&scopes, &resolved, "plugins remove", &command.id)?;
     let original_plugins_toml = std::fs::read(&entry.plugins_toml_path).ok();
     let environment_ref = entry.record.source.environment_ref.clone();
 
@@ -1975,13 +1972,13 @@ fn mutate_enabled_state(
         "plugins disable"
     };
     let explicit_plugin_config = lifecycle_plugin_config_path(server);
+    let resolved = resolve_plugins_config_with_path(
+        server.config.as_ref(),
+        server.plugin_config_path.as_ref(),
+    )?;
     let mut scopes = if enabled {
-        let resolved = resolve_plugins_config_with_path(
-            server.config.as_ref(),
-            server.plugin_config_path.as_ref(),
-        )?;
         let mut scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
-        let entry = find_registered_entry(&scopes, command, &plugin_id)?;
+        let entry = find_registered_entry(&scopes, &resolved, command, &plugin_id)?;
         if entry.record.is_tombstoned() {
             return Err(plugin_refused(
                 command,
@@ -2045,9 +2042,9 @@ fn mutate_enabled_state(
         }
         scopes
     } else {
-        load_scoped_registries(explicit_plugin_config.as_ref())?
+        load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?
     };
-    let entry = find_registered_entry(&scopes, command, &plugin_id)?;
+    let entry = find_registered_entry(&scopes, &resolved, command, &plugin_id)?;
     if entry.record.is_tombstoned() {
         return Err(plugin_refused(
             command,
@@ -2122,18 +2119,20 @@ fn hydrate_scoped_registries(
         let policy =
             evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
         let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
-        if scopes[scope_index]
-            .registry
-            .get(&plugin.plugin_id)
-            .is_some()
-        {
-            update_registry_validation_status(
-                &mut scopes[scope_index],
-                &plugin.plugin_id,
-                &manifest,
+        if let Some(existing) = scopes[scope_index].registry.get(&plugin.plugin_id) {
+            let environment_ref = existing.source.environment_ref.clone();
+            let record = validated_record_from_manifest(
+                manifest,
+                manifest_ref,
+                environment_ref,
+                &scopes[scope_index].state_path,
                 &policy,
                 &trust,
             )?;
+            scopes[scope_index]
+                .registry
+                .replace_declaration(&plugin.plugin_id, record)
+                .map_err(|error| CliError::Config(error.to_string()))?;
         } else {
             let state_path = scopes[scope_index].state_path.clone();
             let record = validated_record_from_manifest(
@@ -2284,12 +2283,28 @@ fn environment_last_error(
     })
 }
 
+fn find_effective_record_by_id(
+    scopes: &[ScopedRegistry],
+    resolved: &ResolvedConfig,
+    plugin_id: &str,
+) -> Result<Option<ScopedDynamicPluginRecord>, CliError> {
+    if let Some(plugin) = resolved
+        .dynamic_plugins
+        .iter()
+        .find(|plugin| plugin.plugin_id == plugin_id)
+    {
+        return Ok(find_record_in_source(scopes, &plugin.source, plugin_id));
+    }
+    find_record_by_id(scopes, plugin_id)
+}
+
 fn find_registered_entry(
     scopes: &[ScopedRegistry],
+    resolved: &ResolvedConfig,
     command: &'static str,
     plugin_id: &str,
 ) -> Result<self::state::ScopedDynamicPluginRecord, CliError> {
-    find_record_by_id(scopes, plugin_id)?.ok_or_else(|| {
+    find_effective_record_by_id(scopes, resolved, plugin_id)?.ok_or_else(|| {
         plugin_not_found(
             command,
             Some(plugin_id.to_owned()),

@@ -201,6 +201,32 @@ impl DynamicPluginRegistry {
         Ok(())
     }
 
+    /// Replaces declaration-owned fields while preserving lifecycle-owned state.
+    ///
+    /// The replacement must describe the same plugin ID. Desired state, runtime state, and
+    /// durable lifecycle metadata remain attached to the existing record.
+    pub fn replace_declaration(
+        &mut self,
+        plugin_id: &str,
+        mut replacement: DynamicPluginRecord,
+    ) -> Result<()> {
+        let record = self.lookup_mut(plugin_id)?;
+        if replacement.metadata.id != record.metadata.id {
+            return Err(PluginError::InvalidConfig(format!(
+                "replacement declaration id '{}' does not match registered plugin '{plugin_id}'",
+                replacement.metadata.id
+            )));
+        }
+        replacement.spec = record.spec.clone();
+        replacement.source.environment_ref = record.source.environment_ref.clone();
+        replacement.status.runtime = record.status.runtime.clone();
+        replacement.metadata.generation = record.metadata.generation;
+        replacement.metadata.created_at = record.metadata.created_at.clone();
+        replacement.metadata.updated_at = record.metadata.updated_at.clone();
+        *record = replacement;
+        Ok(())
+    }
+
     fn lookup_mut(&mut self, plugin_id: &str) -> Result<&mut DynamicPluginRecord> {
         self.records.get_mut(plugin_id).ok_or_else(|| {
             PluginError::NotFound(format!("dynamic plugin '{plugin_id}' is not registered"))

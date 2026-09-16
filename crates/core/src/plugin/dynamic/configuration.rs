@@ -200,6 +200,8 @@ struct FileDynamicPlugin {
 struct ResolvedDynamicPluginDeclaration {
     source: PathBuf,
     declared: FileDynamicPlugin,
+    manifest: DynamicPluginManifest,
+    manifest_ref: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -329,9 +331,13 @@ fn resolve_plugin_host_config_inner(
     let mut reports = Vec::new();
 
     policy.apply_secure_defaults();
-    for ResolvedDynamicPluginDeclaration { source, declared } in declarations {
-        let manifest_path = resolve_manifest_path(&source, &declared.manifest);
-        let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)?;
+    for ResolvedDynamicPluginDeclaration {
+        source,
+        declared,
+        manifest,
+        manifest_ref,
+    } in declarations
+    {
         let plugin_id = manifest.plugin.id.trim().to_owned();
         let state = state_for_plugin(&source, &manifest_ref, &plugin_id)?;
         let selected = state.as_ref().map(|state| state.selected).unwrap_or(true);
@@ -399,7 +405,7 @@ fn resolve_dynamic_plugin_declarations(
         let mut seen_ids = HashSet::new();
         for declared in file.plugins.dynamic {
             let manifest_path = resolve_manifest_path(&source, &declared.manifest);
-            let (manifest, _) = DynamicPluginManifest::load_from_path(&manifest_path)?;
+            let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)?;
             let plugin_id = manifest.plugin.id.trim().to_owned();
             if !seen_ids.insert(plugin_id.clone()) {
                 return Err(PluginError::InvalidConfig(format!(
@@ -410,6 +416,8 @@ fn resolve_dynamic_plugin_declarations(
             let declaration = ResolvedDynamicPluginDeclaration {
                 source: source.clone(),
                 declared,
+                manifest,
+                manifest_ref,
             };
             if let Some(index) = declaration_indices.get(&plugin_id) {
                 // Dynamic plugin declarations layer by manifest ID. The later source owns the
