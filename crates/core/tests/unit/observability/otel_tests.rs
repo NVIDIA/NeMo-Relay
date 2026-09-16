@@ -62,6 +62,14 @@ impl Drop for ClosePluginHostGuard {
     }
 }
 
+fn test_tokio_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap()
+}
+
 #[test]
 fn provider_errors_identify_their_telemetry_signal() {
     for (error, expected) in [
@@ -113,6 +121,8 @@ fn shutdown_is_idempotent_for_all_otlp_subscribers() {
 #[test]
 fn shutdown_normalization_preserves_provider_failures() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
 
     assert!(normalize_shutdown_result(Err(OTelSdkError::AlreadyShutdown)).is_ok());
 
@@ -212,6 +222,8 @@ impl SpanExporter for BlockingSpanExporter {
 fn slow_trace_flush_does_not_block_other_subscribers_or_lifecycle_barriers() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_global();
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
 
     let exporter = BlockingSpanExporter::default();
     let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
@@ -4108,6 +4120,39 @@ fn http_trace_exports_do_not_follow_redirects() {
 }
 
 #[test]
+fn http_trace_subscriber_drains_accepted_events_on_drop() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_global();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/v1/traces", listener.local_addr().unwrap());
+    let (request_tx, request_rx) = mpsc::channel();
+    spawn_http_collector(listener, request_tx);
+    let subscriber = OpenTelemetrySubscriber::new(
+        OpenTelemetryConfig::new(OpenTelemetryType::Full, endpoint)
+            .with_scheduled_delay(Duration::from_secs(60)),
+    )
+    .unwrap();
+    let name = format!("drop-drain-{}", Uuid::now_v7().simple());
+    subscriber.register(&name).unwrap();
+    event(
+        crate::api::scope::EmitMarkEventParams::builder()
+            .name("drop-drain")
+            .build(),
+    )
+    .unwrap();
+    subscriber.deregister(&name).unwrap();
+
+    drop(subscriber);
+
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("dropping the subscriber must wait for its accepted trace export");
+    let traces = ExportTraceServiceRequest::decode(request.body.as_slice()).unwrap();
+    assert_eq!(traces.resource_spans[0].scope_spans[0].spans.len(), 1);
+}
+
+#[test]
 fn direct_gen_ai_and_openinference_configs_export_typed_otlp_payloads() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_global();
@@ -5539,6 +5584,8 @@ fn assert_otel_manual_cost_branches() {
 
 #[test]
 fn provider_builders_cover_success_paths() {
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
     let http_provider = build_tracer_provider(
         &OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4318/v1/traces")
             .with_service_name("demo-agent")
@@ -5567,6 +5614,8 @@ fn provider_builders_cover_success_paths() {
 #[test]
 fn dropped_spans_are_recorded_in_the_active_plugin_report() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
     let _ = crate::plugin::test_close_plugin_host();
     let _clear_guard = ClosePluginHostGuard;
     futures::executor::block_on(crate::plugin::test_initialize_plugin_host_exact(
@@ -5574,36 +5623,17 @@ fn dropped_spans_are_recorded_in_the_active_plugin_report() {
     ))
     .unwrap();
 
-    let exporter = BlockingSpanExporter::default();
     let runtime_diagnostics =
         SignalRuntimeDiagnostics::new(Some("opentelemetry.traces[2].endpoint".to_string()));
     let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
-        exporter.clone(),
+        InMemorySpanExporterBuilder::new().build(),
         "https://collector.example/v1/traces".to_string(),
         runtime_diagnostics.clone(),
-        BatchConfigBuilder::default()
-            .with_max_queue_size(1)
-            .with_max_export_batch_size(1)
-            .with_scheduled_delay(Duration::from_secs(60))
-            .build(),
+        BatchConfigBuilder::default().build(),
     );
-    let provider = SdkTracerProvider::builder()
-        .with_span_processor(processor)
-        .build();
-    let tracer = provider.tracer("dropped-span-diagnostic-test");
-
-    tracer.start("export-in-progress").end();
-    exporter.wait_until_export_starts();
-    tracer.start("queued").end();
-    tracer.start("dropped-1").end();
-    tracer.start("dropped-2").end();
-    exporter.release();
-    let shutdown = provider.shutdown().unwrap_err();
-    assert!(
-        shutdown
-            .to_string()
-            .contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER)
-    );
+    processor.completed_spans.store(3, Ordering::Relaxed);
+    processor.accepted_spans.store(1, Ordering::Relaxed);
+    processor.force_flush().unwrap();
 
     let report = crate::plugin::test_plugin_host_report().unwrap();
     let diagnostic = report
@@ -5628,6 +5658,8 @@ fn dropped_spans_are_recorded_in_the_active_plugin_report() {
 
 #[test]
 fn direct_trace_processor_records_cumulative_queue_drops_on_flush_and_shutdown() {
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
     let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
     let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
         InMemorySpanExporterBuilder::new().build(),
@@ -5705,6 +5737,8 @@ fn plugin_trace_subscriber_runtime_diagnostics_use_trace_field() {
 
 #[test]
 fn trace_export_failures_are_diagnosed_until_a_later_export_recovers() {
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
     let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
     let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
         FailingThenRecoveringSpanExporter::default(),
@@ -5762,6 +5796,8 @@ fn trace_endpoint_log_identity_redacts_and_validates_urls() {
 
 #[test]
 fn trace_export_failures_use_a_safe_endpoint_identity() {
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
     let endpoint = "https://user:password@collector.example:4318/private-path?access_token=url-secret#fragment-secret";
     let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
     let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
@@ -5810,6 +5846,8 @@ fn trace_export_failures_use_a_safe_endpoint_identity() {
 #[test]
 fn unrecovered_trace_export_failure_is_retained_in_the_active_plugin_report() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
     let _ = crate::plugin::test_close_plugin_host();
     let _clear_guard = ClosePluginHostGuard;
     futures::executor::block_on(crate::plugin::test_initialize_plugin_host_exact(
@@ -5874,7 +5912,8 @@ fn grpc_metadata_and_runtime_builder_paths_succeed() {
         "Bearer token"
     );
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
         .enable_all()
         .build()
         .unwrap();

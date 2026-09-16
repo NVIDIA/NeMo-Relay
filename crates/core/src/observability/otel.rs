@@ -58,12 +58,13 @@ use opentelemetry::{Context, KeyValue};
 use opentelemetry_otlp::{
     Protocol, SpanExporter as OtlpSpanExporter, WithExportConfig, WithHttpConfig,
 };
-use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
+use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor as AsyncBatchSpanProcessor;
 use opentelemetry_sdk::trace::{
-    BatchConfigBuilder, BatchSpanProcessor, IdGenerator, RandomIdGenerator, SdkTracer,
-    SdkTracerProvider, Span, SpanData, SpanExporter, SpanProcessor,
+    BatchConfigBuilder, IdGenerator, RandomIdGenerator, SdkTracer, SdkTracerProvider, Span,
+    SpanData, SpanExporter, SpanProcessor,
 };
+use opentelemetry_sdk::{Resource, runtime};
 use uuid::Uuid;
 
 use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
@@ -571,6 +572,24 @@ struct Inner {
     _runtime: Option<ExporterRuntime>,
 }
 
+impl Drop for Inner {
+    fn drop(&mut self) {
+        // An externally supplied provider remains owned by its caller. Providers built by this
+        // subscriber, however, must finish their accepted exports before their runtime exits.
+        if self._runtime.is_none() {
+            return;
+        }
+        // Accept all Relay events queued before teardown before closing the provider.
+        let _ = flush_subscribers();
+        let dynamic_providers = self
+            .processor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .dynamic_providers();
+        let _ = shutdown_trace_providers(self.provider.clone(), dynamic_providers);
+    }
+}
+
 struct ExporterRuntime {
     stop: Option<mpsc::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
@@ -874,18 +893,8 @@ impl OpenTelemetrySubscriber {
                 OpenTelemetryError::TraceProvider("event processor lock poisoned".to_string())
             })?
             .dynamic_providers();
-        let mut errors = Vec::new();
-        if let Err(error) = self.inner.provider.force_flush() {
-            errors.push(error.to_string());
-        }
-        for provider in dynamic_providers {
-            if let Err(error) = provider.force_flush() {
-                errors.push(error.to_string());
-            }
-        }
-        errors.into_iter().next().map_or(Ok(()), |error| {
-            Err(OpenTelemetryError::TraceProvider(error))
-        })
+        flush_trace_providers(self.inner.provider.clone(), dynamic_providers)
+            .map_err(OpenTelemetryError::TraceProvider)
     }
 
     /// Shuts down the underlying tracer provider.
@@ -910,27 +919,48 @@ impl OpenTelemetrySubscriber {
                 OpenTelemetryError::TraceProvider("event processor lock poisoned".to_string())
             })?
             .dynamic_providers();
-        let mut dynamic_errors = Vec::new();
-        for provider in dynamic_providers {
-            if let Err(error) = normalize_shutdown_result(provider.shutdown()) {
-                dynamic_errors.push(error.to_string());
-            }
-        }
-        let provider_result = self.inner.provider.shutdown();
-        if provider_result.is_ok() {
-            log::info!(
-                target: "nemo_relay.observability",
-                event = "exporter_shutdown",
-                exporter = "opentelemetry";
-                "OpenTelemetry exporter shut down"
-            );
-        }
-        normalize_shutdown_result(provider_result)
-            .map_err(|error| OpenTelemetryError::TraceProvider(error.to_string()))?;
-        dynamic_errors.into_iter().next().map_or(Ok(()), |error| {
-            Err(OpenTelemetryError::TraceProvider(error))
-        })
+        shutdown_trace_providers(self.inner.provider.clone(), dynamic_providers)
+            .map_err(OpenTelemetryError::TraceProvider)
     }
+}
+
+fn flush_trace_providers(
+    provider: SdkTracerProvider,
+    dynamic_providers: Vec<SdkTracerProvider>,
+) -> std::result::Result<(), String> {
+    let mut errors = Vec::new();
+    if let Err(error) = provider.force_flush() {
+        errors.push(error.to_string());
+    }
+    for provider in dynamic_providers {
+        if let Err(error) = provider.force_flush() {
+            errors.push(error.to_string());
+        }
+    }
+    errors.into_iter().next().map_or(Ok(()), Err)
+}
+
+fn shutdown_trace_providers(
+    provider: SdkTracerProvider,
+    dynamic_providers: Vec<SdkTracerProvider>,
+) -> std::result::Result<(), String> {
+    let mut dynamic_errors = Vec::new();
+    for provider in dynamic_providers {
+        if let Err(error) = normalize_shutdown_result(provider.shutdown()) {
+            dynamic_errors.push(error.to_string());
+        }
+    }
+    let provider_result = provider.shutdown();
+    if provider_result.is_ok() {
+        log::info!(
+            target: "nemo_relay.observability",
+            event = "exporter_shutdown",
+            exporter = "opentelemetry";
+            "OpenTelemetry exporter shut down"
+        );
+    }
+    normalize_shutdown_result(provider_result).map_err(|error| error.to_string())?;
+    dynamic_errors.into_iter().next().map_or(Ok(()), Err)
 }
 
 fn build_owned_tracer_provider(
@@ -1049,20 +1079,11 @@ fn build_tracer_provider_with_resource(
 ) -> Result<SdkTracerProvider> {
     let exporter = match config.transport {
         OtlpTransport::HttpBinary => {
-            // Construct the blocking client outside any caller-owned async runtime,
-            // matching the OTLP exporter's default client construction behavior.
-            let timeout = config.timeout;
-            let client = thread::spawn(move || {
-                reqwest::blocking::Client::builder()
-                    .timeout(timeout)
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()
-            })
-            .join()
-            .map_err(|_| {
-                OpenTelemetryError::ExporterBuild("OTLP HTTP client construction panicked".into())
-            })?
-            .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
+            let client = reqwest::Client::builder()
+                .timeout(config.timeout)
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
             let mut builder = OtlpSpanExporter::builder()
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
@@ -1250,7 +1271,7 @@ impl TraceDeliveryDiagnostics {
 
 #[derive(Debug)]
 struct DiagnosticBatchSpanProcessor {
-    inner: BatchSpanProcessor,
+    inner: AsyncBatchSpanProcessor<runtime::Tokio>,
     completed_spans: AtomicU64,
     accepted_spans: Arc<AtomicU64>,
     diagnostics: Arc<TraceDeliveryDiagnostics>,
@@ -1272,7 +1293,7 @@ impl DiagnosticBatchSpanProcessor {
             diagnostics: Arc::clone(&diagnostics),
         };
         Self {
-            inner: BatchSpanProcessor::builder(exporter)
+            inner: AsyncBatchSpanProcessor::builder(exporter, runtime::Tokio)
                 .with_batch_config(batch_config)
                 .build(),
             completed_spans: AtomicU64::new(0),

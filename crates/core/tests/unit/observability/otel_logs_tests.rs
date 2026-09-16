@@ -384,6 +384,8 @@ fn log_delivery_state_reports_queue_and_export_failures_independently() {
 
 #[test]
 fn direct_log_processor_records_cumulative_queue_drops_on_flush_and_shutdown() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let runtime_guard = runtime.enter();
     let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
     let delivery_diagnostics = Arc::new(LogDeliveryDiagnostics::new(
         "https://collector.example/v1/logs".to_string(),
@@ -392,9 +394,14 @@ fn direct_log_processor_records_cumulative_queue_drops_on_flush_and_shutdown() {
     delivery_diagnostics.emitted.store(3, Ordering::Relaxed);
     delivery_diagnostics.accepted.store(1, Ordering::Relaxed);
     let processor = DiagnosticBatchLogProcessor {
-        inner: BatchLogProcessor::builder(InMemoryLogExporter::default()).build(),
+        inner: AsyncBatchLogProcessor::builder(
+            InMemoryLogExporter::default(),
+            opentelemetry_sdk::runtime::Tokio,
+        )
+        .build(),
         diagnostics: Arc::clone(&delivery_diagnostics),
     };
+    drop(runtime_guard);
 
     processor.force_flush().unwrap();
 

@@ -70,7 +70,7 @@ typed-builder = "0.23.2"
 futures-util = "0.3"
 opentelemetry = { workspace = true, features = ["trace", "logs", "metrics"] }
 opentelemetry-semantic-conventions.workspace = true
-opentelemetry_sdk = { workspace = true, features = ["trace", "logs", "metrics", "internal-logs"] }
+opentelemetry_sdk = { workspace = true, features = ["trace", "logs", "metrics", "internal-logs", "rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime", "experimental_logs_batch_log_processor_with_async_runtime", "experimental_metrics_periodicreader_with_async_runtime"] }
 tracing = { version = "0.1", default-features = false, features = ["std", "log"] }
 libloading = "0.8"
 semver = "1"
@@ -79,10 +79,10 @@ base64 = "0.22"
 ring = ">=0.17.13, <0.18"
 jsonschema = { version = "0.46.6", default-features = false }
 percent-encoding = "2"
-opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "logs", "metrics", "http-proto", "reqwest-blocking-client", "reqwest-rustls", "grpc-tonic", "tls-ring", "tls-roots"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "logs", "metrics", "http-proto", "reqwest-client", "reqwest-rustls", "grpc-tonic", "tls-ring", "tls-roots"] }
 opentelemetry-http = "0.32"
 async-trait = "0.1"
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "charset", "http2", "rustls", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["charset", "http2", "rustls", "stream"] }
 tonic = { version = "0.14.1", default-features = false }
 object_store = { version = "0.14.1", default-features = false, features = ["aws"], optional = true }
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-native-roots"], optional = true }

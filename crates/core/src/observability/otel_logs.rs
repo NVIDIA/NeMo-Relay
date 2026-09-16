@@ -16,11 +16,12 @@ use opentelemetry::{InstrumentationScope, Key};
 use opentelemetry_otlp::{
     LogExporter as OtlpLogExporter, Protocol, WithExportConfig, WithHttpConfig, WithTonicConfig,
 };
+use opentelemetry_sdk::logs::log_processor_with_async_runtime::BatchLogProcessor as AsyncBatchLogProcessor;
 use opentelemetry_sdk::logs::{
-    BatchConfigBuilder, BatchLogProcessor, LogBatch, LogExporter, LogProcessor, SdkLogRecord,
-    SdkLogger, SdkLoggerProvider,
+    BatchConfigBuilder, LogBatch, LogExporter, LogProcessor, SdkLogRecord, SdkLogger,
+    SdkLoggerProvider,
 };
-use opentelemetry_sdk::{Resource, error::OTelSdkResult};
+use opentelemetry_sdk::{Resource, error::OTelSdkResult, runtime};
 use serde_json::{Map, Value as Json};
 use uuid::Uuid;
 
@@ -260,6 +261,14 @@ struct LogSubscriberInner {
     _runtime: SignalExporterRuntime,
 }
 
+impl Drop for LogSubscriberInner {
+    fn drop(&mut self) {
+        // Drain Relay delivery before the provider drains accepted log records and its runtime drops.
+        let _ = flush_subscribers();
+        let _ = normalize_shutdown_result(self.provider.shutdown());
+    }
+}
+
 impl OpenTelemetryLogSubscriber {
     /// Build an OTLP log subscriber with an independently owned provider.
     pub fn new(config: OpenTelemetryLogConfig) -> Result<Self> {
@@ -369,8 +378,7 @@ impl OpenTelemetryLogSubscriber {
     /// Deregister this subscriber before calling shutdown.
     pub fn shutdown(&self) -> Result<()> {
         let barrier = flush_subscribers().map_err(OpenTelemetryError::Core);
-        let provider = normalize_shutdown_result(self.inner.provider.shutdown())
-            .map_err(|error| OpenTelemetryError::LogProvider(error.to_string()));
+        let provider = self.shutdown_provider();
         barrier.and(provider)
     }
 
@@ -396,15 +404,19 @@ fn build_log_provider(
                 .with_timeout(config.timeout)
                 .with_endpoint(resolve_http_log_endpoint(&config.endpoint).into_owned());
             if !config.headers.is_empty() || !config.header_file.is_empty() {
-                let client = reqwest::blocking::Client::builder()
+                let client = reqwest::Client::builder()
                     .timeout(config.timeout)
                     .redirect(reqwest::redirect::Policy::none())
                     .build()
                     .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
-                builder = builder.with_http_client(HeaderFileHttpClient::new(
-                    client,
-                    HeaderFileResolver::new(config.header_file.clone()),
-                ));
+                builder = if config.header_file.is_empty() {
+                    builder.with_http_client(client)
+                } else {
+                    builder.with_http_client(HeaderFileHttpClient::new(
+                        client,
+                        HeaderFileResolver::new(config.header_file.clone()),
+                    ))
+                };
             }
             if !config.headers.is_empty() {
                 builder = builder.with_headers(config.headers.clone());
@@ -442,7 +454,7 @@ fn build_log_provider(
         inner: exporter,
         diagnostics: Arc::clone(&diagnostics),
     };
-    let processor = BatchLogProcessor::builder(exporter)
+    let processor = AsyncBatchLogProcessor::builder(exporter, runtime::Tokio)
         .with_batch_config(batch_config)
         .build();
     let processor = DiagnosticBatchLogProcessor {
@@ -566,7 +578,7 @@ impl<E: LogExporter> LogExporter for DiagnosticLogExporter<E> {
 
 #[derive(Debug)]
 struct DiagnosticBatchLogProcessor {
-    inner: BatchLogProcessor,
+    inner: AsyncBatchLogProcessor<runtime::Tokio>,
     diagnostics: Arc<LogDeliveryDiagnostics>,
 }
 
