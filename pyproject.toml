@@ -168,7 +168,9 @@ known-first-party = ["nemo_relay", "nemo_relay_plugin"]
 safe_licenses = [
     # Apache
     "Apache-2.0",
+    "Apache-2.0 AND MIT",
     "Apache 2.0",
+    "Apache License 2.0",
     "Apache Software License",
     # BSD
     "BSD License",
@@ -187,5 +189,4 @@ safe_licenses = [
 unsafe_packages = [
     "certifi", # Mozilla Public License 2.0 (MPL 2.0)
     "matplotlib-inline", # unknown derived
-    "docutils", # Public Domain
 ]

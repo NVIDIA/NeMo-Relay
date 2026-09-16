@@ -186,7 +186,7 @@ repos:
 
       - id: uv-audit
         name: uv audit
-        entry: uv audit
+        entry: uv audit --locked
         language: system
         files: '^uv\.lock$'
         pass_filenames: false
