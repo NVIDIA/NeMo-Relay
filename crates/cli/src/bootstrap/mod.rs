@@ -50,6 +50,58 @@ pub(crate) struct GatewayEndpoint {
     pub(crate) instance_id: String,
 }
 
+/// An allowlisted operational reason for a gateway bootstrap failure.
+///
+/// The source diagnostics can contain endpoint and local-environment details, so they remain on
+/// stderr. These values identify only the failed gateway lifecycle stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GatewayFailureReason {
+    AcquisitionFailed,
+    RecoveryFailed,
+    RecoveredThenUnhealthy,
+}
+
+impl GatewayFailureReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::AcquisitionFailed => "gateway_acquisition_failed",
+            Self::RecoveryFailed => "gateway_recovery_failed",
+            Self::RecoveredThenUnhealthy => "gateway_recovered_then_unhealthy",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum GatewayRecoveryError {
+    UnhealthyAfterRecovery,
+    Other(String),
+}
+
+impl GatewayRecoveryError {
+    fn failure_reason(&self) -> GatewayFailureReason {
+        match self {
+            Self::UnhealthyAfterRecovery => GatewayFailureReason::RecoveredThenUnhealthy,
+            Self::Other(_) => GatewayFailureReason::RecoveryFailed,
+        }
+    }
+}
+
+impl std::fmt::Display for GatewayRecoveryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnhealthyAfterRecovery => formatter
+                .write_str("shared Relay gateway became unhealthy after its coordinated restart"),
+            Self::Other(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl From<String> for GatewayRecoveryError {
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
+}
+
 /// Inputs required to identify and, when absent, start one persistent gateway.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GatewaySpec {
@@ -91,7 +143,8 @@ impl GatewaySpec {
                     target: "nemo_relay.bootstrap",
                     event = "gateway_acquisition_failed",
                     bind = self.bind.to_string().as_str(),
-                    failure_kind = bootstrap_failure_kind(&error);
+                    failure_kind = bootstrap_failure_kind(&error),
+                    failure_reason = GatewayFailureReason::AcquisitionFailed.as_str();
                     "Gateway acquisition failed"
                 );
                 Err(error)
@@ -99,7 +152,10 @@ impl GatewaySpec {
         }
     }
 
-    pub(crate) fn recover(&self, expected_instance: &str) -> Result<GatewayEndpoint, String> {
+    pub(crate) fn recover(
+        &self,
+        expected_instance: &str,
+    ) -> Result<GatewayEndpoint, GatewayRecoveryError> {
         log::warn!(
             target: "nemo_relay.bootstrap",
             event = "gateway_recovery_started",
@@ -122,7 +178,8 @@ impl GatewaySpec {
                     target: "nemo_relay.bootstrap",
                     event = "gateway_recovery_failed",
                     instance_id = expected_instance,
-                    failure_kind = bootstrap_failure_kind(&error);
+                    failure_kind = recovery_failure_kind(&error),
+                    failure_reason = error.failure_reason().as_str();
                     "Gateway recovery failed"
                 );
                 Err(error)
@@ -216,7 +273,10 @@ fn acquire_gateway(spec: &GatewaySpec) -> Result<GatewayEndpoint, String> {
     }
 }
 
-fn recover_gateway(spec: &GatewaySpec, expected_instance: &str) -> Result<GatewayEndpoint, String> {
+fn recover_gateway(
+    spec: &GatewaySpec,
+    expected_instance: &str,
+) -> Result<GatewayEndpoint, GatewayRecoveryError> {
     let requested_url = format!("http://{}", spec.bind);
     let state = bootstrap_state_dir()?;
     state::create_private_dir(&state)?;
@@ -228,12 +288,14 @@ fn recover_gateway(spec: &GatewaySpec, expected_instance: &str) -> Result<Gatewa
             spec.bootstrap_fingerprint.as_deref(),
         ) {
             (RelayHealth::Compatible, instance_id) => {
-                return compatible_endpoint(spec.bind, requested_url, instance_id);
+                return Ok(compatible_endpoint(spec.bind, requested_url, instance_id)?);
             }
-            (RelayHealth::Incompatible, _) => return Err(incompatible_relay_error(&requested_url)),
+            (RelayHealth::Incompatible, _) => {
+                return Err(incompatible_relay_error(&requested_url).into());
+            }
             (RelayHealth::Foreign, _) => {
                 if !state::stop_unhealthy_owned_gateway_locked(&state, &requested_url)? {
-                    return Err(foreign_listener_error(&requested_url));
+                    return Err(foreign_listener_error(&requested_url).into());
                 }
             }
             (RelayHealth::Unavailable, _) => {
@@ -251,9 +313,13 @@ fn recover_gateway(spec: &GatewaySpec, expected_instance: &str) -> Result<Gatewa
                 == Some(previous.to_instance.as_str())
         {
             let address = loopback_bind(&previous.endpoint_url)?;
-            return compatible_endpoint(address, previous.endpoint_url, Some(previous.to_instance));
+            return Ok(compatible_endpoint(
+                address,
+                previous.endpoint_url,
+                Some(previous.to_instance),
+            )?);
         }
-        return Err("shared Relay gateway became unhealthy after its coordinated restart".into());
+        return Err(GatewayRecoveryError::UnhealthyAfterRecovery);
     }
 
     // Record the attempt while holding the startup lock. If the replacement
@@ -340,6 +406,13 @@ fn bootstrap_failure_kind(error: &str) -> &'static str {
         "gateway_readiness_timeout"
     } else {
         "bootstrap_failure"
+    }
+}
+
+fn recovery_failure_kind(error: &GatewayRecoveryError) -> &'static str {
+    match error {
+        GatewayRecoveryError::UnhealthyAfterRecovery => "unhealthy_gateway",
+        GatewayRecoveryError::Other(error) => bootstrap_failure_kind(error),
     }
 }
 

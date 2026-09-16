@@ -4,6 +4,49 @@
 use super::*;
 
 #[test]
+fn worker_activation_failure_reasons_are_static_and_keep_the_wire_field_stable() {
+    for reason in [
+        WorkerActivationFailureReason::WorkerExecutableResolutionFailed,
+        WorkerActivationFailureReason::WorkerProcessSpawnFailed,
+        WorkerActivationFailureReason::WorkerActivationPipeUnavailable,
+        WorkerActivationFailureReason::WorkerActivationGrantSerializationFailed,
+        WorkerActivationFailureReason::WorkerActivationGrantWriteFailed,
+        WorkerActivationFailureReason::WorkerActivationPipeCloseFailed,
+        WorkerActivationFailureReason::WorkerActivationCleanupFailed,
+        WorkerActivationFailureReason::WorkerExitedBeforeReady,
+        WorkerActivationFailureReason::WorkerReadinessTimeout,
+        WorkerActivationFailureReason::UnknownWorkerActivationFailure,
+    ] {
+        assert!(
+            reason
+                .as_str()
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'_'),
+            "{} must be snake case",
+            reason.as_str()
+        );
+    }
+
+    let payload = ActivationFailedPayload {
+        activation_id: "activation-1".into(),
+        failure_reason: WorkerActivationFailureReason::WorkerProcessSpawnFailed,
+    };
+    assert_eq!(
+        serde_json::to_value(payload).unwrap()["reason"],
+        "worker_process_spawn_failed"
+    );
+    let legacy_payload: ActivationFailedPayload = serde_json::from_value(serde_json::json!({
+        "activation_id": "activation-1",
+        "reason": "source error containing a local path and secret"
+    }))
+    .unwrap();
+    assert_eq!(
+        legacy_payload.failure_reason,
+        WorkerActivationFailureReason::UnknownWorkerActivationFailure
+    );
+}
+
+#[test]
 fn daemon_challenge_signature_binds_the_request_before_token_disclosure() {
     let daemon = MachineIdentity::generate().expect("daemon").identity;
     let mcp = MachineIdentity::generate().expect("mcp").identity;
@@ -44,7 +87,7 @@ fn session_request_hash_covers_the_payload_and_sensitive_values_are_redacted() {
         1,
         ActivationFailedPayload {
             activation_id: "activation-1".into(),
-            reason: "bind failed".into(),
+            failure_reason: WorkerActivationFailureReason::WorkerProcessSpawnFailed,
         },
     )
     .expect("request");
@@ -52,7 +95,7 @@ fn session_request_hash_covers_the_payload_and_sensitive_values_are_redacted() {
     assert!(!format!("{request:?}").contains("session-secret"));
 
     let mut changed = request;
-    changed.payload.reason = "different".into();
+    changed.payload.failure_reason = WorkerActivationFailureReason::WorkerReadinessTimeout;
     assert!(!changed.validate_payload_hash());
 }
 

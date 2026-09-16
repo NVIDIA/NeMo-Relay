@@ -26,6 +26,79 @@ pub(crate) type PluginLifecycleErrorContext<'a> = (
     &'a str,
 );
 
+/// An allowlisted operational reason for an MCP command failure.
+///
+/// Values are intentionally static: source errors can contain local paths, endpoints, or
+/// configuration values and must remain on stderr rather than becoming operational log fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub(crate) enum McpFailureReason {
+    GenerationCaptureFailed,
+    GatewayConfigurationFailed,
+    HeartbeatConfigurationFailed,
+    GatewayAcquisitionFailed,
+    StdinReaderStartFailed,
+    GatewayHeartbeatTaskFailed,
+    GenerationLifecycleInvalid,
+    GenerationLifecycleInvalidDuringRecovery,
+    GatewayLifecycleVerificationTaskFailed,
+    GatewayRecoveryTaskFailed,
+    GatewayRecoveryFailed,
+    GatewayLeaseClosedDuringRecovery,
+    GatewayRecoveredThenUnhealthy,
+    GatewayRecoveredThenReplaced,
+    GatewayMonitorTaskFailed,
+    TransparentGatewayInitialVerificationFailed,
+    TransparentGatewayHeartbeatVerificationFailed,
+    TransparentGatewayUnavailable,
+    TransparentGatewayReplaced,
+    StdinFrameReadFailed,
+    McpResponseSerializationFailed,
+    StdoutWriteFailed,
+    StdoutFlushFailed,
+    UnknownMcpFailure,
+}
+
+impl McpFailureReason {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::GenerationCaptureFailed => "generation_capture_failed",
+            Self::GatewayConfigurationFailed => "gateway_configuration_failed",
+            Self::HeartbeatConfigurationFailed => "heartbeat_configuration_failed",
+            Self::GatewayAcquisitionFailed => "gateway_acquisition_failed",
+            Self::StdinReaderStartFailed => "stdin_reader_start_failed",
+            Self::GatewayHeartbeatTaskFailed => "gateway_heartbeat_task_failed",
+            Self::GenerationLifecycleInvalid => "generation_lifecycle_invalid",
+            Self::GenerationLifecycleInvalidDuringRecovery => {
+                "generation_lifecycle_invalid_during_recovery"
+            }
+            Self::GatewayLifecycleVerificationTaskFailed => {
+                "gateway_lifecycle_verification_task_failed"
+            }
+            Self::GatewayRecoveryTaskFailed => "gateway_recovery_task_failed",
+            Self::GatewayRecoveryFailed => "gateway_recovery_failed",
+            Self::GatewayLeaseClosedDuringRecovery => "gateway_lease_closed_during_recovery",
+            Self::GatewayRecoveredThenUnhealthy => "gateway_recovered_then_unhealthy",
+            Self::GatewayRecoveredThenReplaced => "gateway_recovered_then_replaced",
+            Self::GatewayMonitorTaskFailed => "gateway_monitor_task_failed",
+            Self::TransparentGatewayInitialVerificationFailed => {
+                "transparent_gateway_initial_verification_failed"
+            }
+            Self::TransparentGatewayHeartbeatVerificationFailed => {
+                "transparent_gateway_heartbeat_verification_failed"
+            }
+            Self::TransparentGatewayUnavailable => "transparent_gateway_unavailable",
+            Self::TransparentGatewayReplaced => "transparent_gateway_replaced",
+            Self::StdinFrameReadFailed => "stdin_frame_read_failed",
+            Self::McpResponseSerializationFailed => "mcp_response_serialization_failed",
+            Self::StdoutWriteFailed => "stdout_write_failed",
+            Self::StdoutFlushFailed => "stdout_flush_failed",
+            Self::UnknownMcpFailure => "unknown_mcp_failure",
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CliError {
     #[error("guardrail rejected: {0}")]
@@ -50,6 +123,12 @@ pub(crate) enum CliError {
     Config(String),
     #[error("launcher error: {0}")]
     Launch(String),
+    #[error("{source}")]
+    McpFailure {
+        reason: McpFailureReason,
+        #[source]
+        source: Box<CliError>,
+    },
     #[error("nemo-relay hook forward failed: {source}")]
     HookDelivery {
         #[source]
@@ -68,6 +147,23 @@ pub(crate) enum CliError {
 }
 
 impl CliError {
+    pub(crate) fn with_mcp_failure_reason(self, reason: McpFailureReason) -> Self {
+        match self {
+            Self::McpFailure { .. } => self,
+            source => Self::McpFailure {
+                reason,
+                source: Box::new(source),
+            },
+        }
+    }
+
+    pub(crate) fn mcp_failure_reason(&self) -> Option<McpFailureReason> {
+        match self {
+            Self::McpFailure { reason, .. } => Some(*reason),
+            _ => None,
+        }
+    }
+
     pub(crate) fn log_kind(&self) -> &'static str {
         match self {
             Self::GuardrailRejected(_) => "guardrail_rejected",
@@ -81,6 +177,7 @@ impl CliError {
             Self::Install(_) => "install",
             Self::Config(_) => "configuration",
             Self::Launch(_) => "launch",
+            Self::McpFailure { source, .. } => source.log_kind(),
             Self::HookDelivery { source } => source.log_kind(),
             Self::PluginLifecycle { .. } => "plugin_lifecycle",
             Self::Flow(FlowError::GuardrailRejected(_)) => "guardrail_rejected",
@@ -92,6 +189,7 @@ impl CliError {
         match self {
             Self::GuardrailRejected(reason) => Some(reason),
             Self::Flow(FlowError::GuardrailRejected(reason)) => Some(reason),
+            Self::McpFailure { source, .. } => source.guardrail_rejection_reason(),
             Self::HookDelivery { source } => source.guardrail_rejection_reason(),
             _ => None,
         }
@@ -108,6 +206,7 @@ impl CliError {
                 code,
                 message,
             } => Some((command, target.as_deref(), *kind, *code, message.as_str())),
+            Self::McpFailure { source, .. } => source.as_plugin_lifecycle_error_context(),
             _ => None,
         }
     }
@@ -121,26 +220,10 @@ impl IntoResponse for CliError {
     fn into_response(self) -> Response {
         let message = self.to_string();
         let guardrail_reason = self.guardrail_rejection_reason().map(ToOwned::to_owned);
-        let status = match (guardrail_reason.is_some(), &self) {
-            (true, _) => StatusCode::FORBIDDEN,
-            (false, Self::PayloadTooLarge(_)) => StatusCode::PAYLOAD_TOO_LARGE,
-            (false, Self::Unauthorized(_)) => StatusCode::UNAUTHORIZED,
-            (false, Self::InvalidPayload(_)) => StatusCode::BAD_REQUEST,
-            (false, Self::Upstream(_)) => StatusCode::BAD_GATEWAY,
-            (false, Self::ProviderFailure(failure)) => failure
-                .status
-                .and_then(|status| StatusCode::from_u16(status).ok())
-                .unwrap_or(StatusCode::BAD_GATEWAY),
-            (
-                false,
-                Self::Http(_)
-                | Self::Io(_)
-                | Self::Install(_)
-                | Self::Config(_)
-                | Self::Launch(_)
-                | Self::Flow(_),
-            ) => StatusCode::INTERNAL_SERVER_ERROR,
-            (false, _) => StatusCode::INTERNAL_SERVER_ERROR,
+        let status = if guardrail_reason.is_some() {
+            StatusCode::FORBIDDEN
+        } else {
+            response_status(&self)
         };
         let error_type = if guardrail_reason.is_some() {
             "nemo_relay_guardrail_rejected"
@@ -158,6 +241,21 @@ impl IntoResponse for CliError {
             "error": Value::Object(error)
         }));
         (status, body).into_response()
+    }
+}
+
+fn response_status(error: &CliError) -> StatusCode {
+    match error {
+        CliError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+        CliError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+        CliError::InvalidPayload(_) => StatusCode::BAD_REQUEST,
+        CliError::Upstream(_) => StatusCode::BAD_GATEWAY,
+        CliError::ProviderFailure(failure) => failure
+            .status
+            .and_then(|status| StatusCode::from_u16(status).ok())
+            .unwrap_or(StatusCode::BAD_GATEWAY),
+        CliError::McpFailure { source, .. } => response_status(source),
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
