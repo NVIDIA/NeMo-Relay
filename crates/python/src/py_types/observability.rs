@@ -231,7 +231,7 @@ pub struct PyAtofEndpointConfig {
     pub(crate) headers: HashMap<String, String>,
     #[pyo3(get, set)]
     pub(crate) header_env: HashMap<String, String>,
-    #[pyo3(get, set)]
+    #[pyo3(get)]
     pub(crate) timeout_millis: u64,
     #[pyo3(get, set)]
     pub(crate) field_name_policy: String,
@@ -469,9 +469,9 @@ impl PyAtofExporter {
 pub struct PyOpenTelemetryConfig {
     #[pyo3(get, set, name = "type")]
     pub(crate) otel_type: String,
-    #[pyo3(get, set)]
+    #[pyo3(get)]
     pub(crate) transport: String,
-    #[pyo3(get, set)]
+    #[pyo3(get)]
     pub(crate) endpoint: String,
     #[pyo3(get, set)]
     pub(crate) service_name: String,
@@ -558,6 +558,21 @@ impl PyOtlpFileSink {
 }
 
 impl PyOpenTelemetryConfig {
+    /// Refuses an endpoint-only option once a file sink is configured.
+    ///
+    /// The two destinations are mutually exclusive, so assignment fails here
+    /// rather than being dropped on the way to the Rust config.
+    fn reject_endpoint_option(&self, name: &str) -> PyResult<()> {
+        if self.file_sink.is_some() {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "{name} does not apply to a file sink"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl PyOpenTelemetryConfig {
     pub(crate) fn to_rust_config(
         &self,
     ) -> PyResult<nemo_relay::observability::otel::OpenTelemetryConfig> {
@@ -592,6 +607,10 @@ impl PyOpenTelemetryConfig {
                 "headers and header_env do not apply to a file sink",
             ));
         }
+        debug_assert!(
+            self.file_sink.is_none() || self.endpoint.is_empty(),
+            "the endpoint setter rejects assignment once a file sink is configured"
+        );
         config = config
             .with_service_name(self.service_name.clone())
             .with_instrumentation_scope(self.instrumentation_scope.clone())
@@ -693,6 +712,27 @@ impl PyOpenTelemetryConfig {
             }),
             ..Self::new(otel_type, String::new())
         }
+    }
+
+    #[setter]
+    pub(crate) fn set_endpoint(&mut self, endpoint: String) -> PyResult<()> {
+        self.reject_endpoint_option("endpoint")?;
+        self.endpoint = endpoint;
+        Ok(())
+    }
+
+    #[setter]
+    pub(crate) fn set_transport(&mut self, transport: String) -> PyResult<()> {
+        self.reject_endpoint_option("transport")?;
+        self.transport = transport;
+        Ok(())
+    }
+
+    #[setter]
+    pub(crate) fn set_timeout_millis(&mut self, timeout_millis: u64) -> PyResult<()> {
+        self.reject_endpoint_option("timeout_millis")?;
+        self.timeout_millis = timeout_millis;
+        Ok(())
     }
 
     #[getter]

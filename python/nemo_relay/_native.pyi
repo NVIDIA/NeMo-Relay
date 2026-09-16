@@ -1178,6 +1178,9 @@ class OpenTelemetryConfig:
     ) -> None:
         """Create a typed OpenTelemetry config for the required endpoint."""
         ...
+    # `endpoint`, `transport`, and `timeout_millis` raise ValueError when
+    # assigned on a config created by `file_sink`: the destinations are
+    # mutually exclusive.
     @staticmethod
     def file_sink(
         otel_type: Literal["full", "gen_ai", "openinference"],

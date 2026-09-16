@@ -440,3 +440,117 @@ fn each_format_names_its_conventional_extension() {
     assert_eq!(OtlpFileFormat::Proto.extension(), "otlp.pb");
     assert_eq!(OtlpFileFormat::default(), OtlpFileFormat::JsonLines);
 }
+
+// --- Destination exclusivity ------------------------------------------------
+
+fn file_sink_config(directory: &Path) -> crate::observability::otel::OpenTelemetryConfig {
+    crate::observability::otel::OpenTelemetryConfig::new_file_sink(
+        crate::observability::OpenTelemetryType::Full,
+        crate::observability::otel::OtlpFileSinkSettings {
+            output_directory: directory.to_path_buf(),
+            path: directory.join("trace.jsonl"),
+            format: OtlpFileFormat::JsonLines,
+            append: false,
+        },
+    )
+}
+
+#[test]
+fn a_file_sink_destination_exposes_no_endpoint_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = file_sink_config(directory.path());
+
+    assert!(config.destination().endpoint_settings().is_none());
+    assert_eq!(
+        config
+            .destination()
+            .file_sink()
+            .map(|sink| sink.path.clone()),
+        Some(directory.path().join("trace.jsonl"))
+    );
+}
+
+#[test]
+fn an_endpoint_destination_exposes_no_file_sink() {
+    let config = crate::observability::otel::OpenTelemetryConfig::new(
+        crate::observability::OpenTelemetryType::Full,
+        "https://collector.example/v1/traces",
+    );
+
+    assert!(config.destination().file_sink().is_none());
+    assert!(config.file_sink().is_none());
+}
+
+#[test]
+fn endpoint_options_on_a_file_sink_are_refused_by_name() {
+    let directory = tempfile::tempdir().unwrap();
+    type ApplyOption = fn(
+        crate::observability::otel::OpenTelemetryConfig,
+    ) -> crate::observability::otel::OpenTelemetryConfig;
+    let cases: Vec<(&str, ApplyOption)> = vec![
+        ("endpoint", |config| {
+            config.with_endpoint("https://collector.example")
+        }),
+        ("transport", |config| {
+            config.with_transport(crate::observability::otel::OtlpTransport::Grpc)
+        }),
+        ("timeout", |config| {
+            config.with_timeout(Duration::from_secs(9))
+        }),
+        ("headers", |config| {
+            config.with_header("authorization", "Bearer token")
+        }),
+        ("header_env", |config| {
+            config.with_header_env("x-api-key", "SOME_VARIABLE")
+        }),
+        ("header_file", |config| {
+            config.with_header_file("x-api-key", "/run/secrets/key")
+        }),
+    ];
+
+    for (option, apply) in cases {
+        let config = apply(file_sink_config(directory.path()));
+        // Silently dropping the option would leave a config that looks like it
+        // exports to a collector but does not.
+        let error = crate::observability::otel::OpenTelemetrySubscriber::new(config)
+            .err()
+            .unwrap_or_else(|| panic!("{option} should be refused on a file sink"));
+        assert!(
+            error.to_string().contains(option)
+                && error.to_string().contains("do not apply to a file sink"),
+            "unexpected error for {option}: {error}"
+        );
+    }
+}
+
+#[test]
+fn several_refused_options_are_reported_together() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = file_sink_config(directory.path())
+        .with_endpoint("https://collector.example")
+        .with_transport(crate::observability::otel::OtlpTransport::Grpc)
+        .with_header("authorization", "Bearer token")
+        .with_header("x-other", "value");
+
+    let error = crate::observability::otel::OpenTelemetrySubscriber::new(config)
+        .err()
+        .expect("a file sink with endpoint options is refused");
+    let message = error.to_string();
+    // Deduplicated and sorted: two headers are one refused option, not two.
+    assert!(
+        message.contains("endpoint, headers, transport"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_file_sink_with_no_endpoint_options_still_builds() {
+    let directory = tempfile::tempdir().unwrap();
+    let subscriber = crate::observability::otel::OpenTelemetrySubscriber::new(file_sink_config(
+        directory.path(),
+    ))
+    .expect("a clean file sink config builds");
+
+    assert!(directory.path().join("trace.jsonl").is_file());
+    subscriber.shutdown().unwrap();
+}

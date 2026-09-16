@@ -325,6 +325,7 @@ fn build_otel_config(
             "endpoint must be a nonblank string",
         ));
     }
+    let transport_given = options.transport.is_some();
     let transport = parse_otel_transport(options.transport)?;
     let service_name = options
         .service_name
@@ -357,16 +358,35 @@ fn build_otel_config(
             .expect("the default completed span context TTL fits in u64 milliseconds")
         });
 
+    let is_file_sink = file_sink.is_some();
+    // Endpoint-only options are refused rather than dropped: a file sink that
+    // silently ignored `timeoutMillis` or `headers` would look configured.
+    if is_file_sink {
+        for (name, present) in [
+            ("endpoint", !endpoint.is_empty()),
+            ("transport", transport_given),
+            ("timeoutMillis", options.timeout_millis.is_some()),
+            ("headers", options.headers.is_some()),
+            ("headerEnv", options.header_env.is_some()),
+        ] {
+            if present {
+                return Err(napi::Error::from_reason(format!(
+                    "{name} does not apply to a file sink; remove it or drop outputDirectory"
+                )));
+            }
+        }
+    }
+
     let mut config = match file_sink {
         Some(file_sink) => nemo_relay::observability::otel::OpenTelemetryConfig::new_file_sink(
             otel_type, file_sink,
         ),
         None => nemo_relay::observability::otel::OpenTelemetryConfig::new(otel_type, endpoint)
-            .with_transport(transport),
+            .with_transport(transport)
+            .with_timeout(std::time::Duration::from_millis(timeout_millis.into())),
     }
     .with_service_name(service_name)
     .with_instrumentation_scope(instrumentation_scope)
-    .with_timeout(std::time::Duration::from_millis(timeout_millis.into()))
     .with_completed_span_context_ttl(std::time::Duration::from_millis(
         completed_span_context_ttl_millis,
     ));
@@ -377,11 +397,13 @@ fn build_otel_config(
     if let Some(version) = options.service_version {
         config = config.with_service_version(version);
     }
-    for (key, value) in parse_string_map(options.headers, "headers")? {
-        config = config.with_header(key, value);
-    }
-    for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
-        config = config.with_header_env(key, variable);
+    if !is_file_sink {
+        for (key, value) in parse_string_map(options.headers, "headers")? {
+            config = config.with_header(key, value);
+        }
+        for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
+            config = config.with_header_env(key, variable);
+        }
     }
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);

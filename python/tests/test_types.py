@@ -836,6 +836,33 @@ class TestOpenTelemetryTypes:
         with pytest.raises(ValueError, match=expected):
             OpenTelemetrySubscriber(config)
 
+    @pytest.mark.parametrize(
+        ("attribute", "value"),
+        [
+            ("endpoint", "https://collector.example/v1/traces"),
+            ("transport", "grpc"),
+            ("timeout_millis", 1250),
+        ],
+    )
+    def test_file_sink_rejects_endpoint_only_attributes(self, tmp_path, attribute, value) -> None:
+        config = OpenTelemetryConfig.file_sink("full", str(tmp_path))
+
+        # Assignment fails rather than being dropped: a config that looks like
+        # it exports to a collector but writes a file is worse than an error.
+        with pytest.raises(ValueError, match=f"{attribute} does not apply to a file sink"):
+            setattr(config, attribute, value)
+
+    def test_endpoint_config_still_accepts_those_attributes(self) -> None:
+        config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
+
+        config.endpoint = "http://localhost:4319/v1/traces"
+        config.transport = "grpc"
+        config.timeout_millis = 1250
+
+        assert config.endpoint == "http://localhost:4319/v1/traces"
+        assert config.transport == "grpc"
+        assert config.timeout_millis == 1250
+
     def test_file_sink_rejects_headers(self, tmp_path) -> None:
         config = OpenTelemetryConfig.file_sink("full", str(tmp_path))
         config.set_header("authorization", "Bearer token")

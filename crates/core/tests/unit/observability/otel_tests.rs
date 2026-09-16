@@ -1472,14 +1472,18 @@ fn config_defaults_and_builder_overrides_are_applied() {
 }
 
 fn assert_config_builder_overrides(config: &OpenTelemetryConfig) {
-    assert_eq!(config.transport, OtlpTransport::HttpBinary);
-    assert_eq!(config.endpoint, "http://localhost:4318/v1/traces");
+    let settings = config
+        .destination()
+        .endpoint_settings()
+        .expect("an endpoint destination");
+    assert_eq!(settings.transport, OtlpTransport::HttpBinary);
+    assert_eq!(settings.endpoint, "http://localhost:4318/v1/traces");
     assert_eq!(
-        config.headers.get("authorization"),
+        settings.headers.get("authorization"),
         Some(&"Bearer token".into())
     );
     assert_eq!(
-        config.header_env.get("x-api-key"),
+        settings.header_env.get("x-api-key"),
         Some(&"NEMO_RELAY_TEST_API_KEY".into())
     );
     assert_eq!(
@@ -1493,17 +1497,21 @@ fn assert_config_builder_overrides(config: &OpenTelemetryConfig) {
     assert_eq!(config.mark_projection, MarkProjection::Tool);
     assert_eq!(config.mark_exclude_names, vec!["notification"]);
     assert_eq!(config.attribute_mappings.len(), 1);
-    assert_eq!(config.timeout, Duration::from_millis(1250));
+    assert_eq!(settings.timeout, Duration::from_millis(1250));
 }
 
 fn assert_config_defaults(defaults: &OpenTelemetryConfig) {
-    assert_eq!(defaults.transport, OtlpTransport::HttpBinary);
+    let settings = defaults
+        .destination()
+        .endpoint_settings()
+        .expect("an endpoint destination");
+    assert_eq!(settings.transport, OtlpTransport::HttpBinary);
     assert_eq!(defaults.service_name, "unknown_service");
     assert_eq!(defaults.instrumentation_scope, "opentelemetry");
     assert_eq!(defaults.mark_projection, MarkProjection::Inherit);
     assert_eq!(defaults.mark_exclude_names, vec!["llm.chunk"]);
-    assert_eq!(defaults.timeout, Duration::from_secs(3));
-    assert!(defaults.headers.is_empty());
+    assert_eq!(settings.timeout, Duration::from_secs(3));
+    assert!(settings.headers.is_empty());
     assert!(defaults.resource_attributes.is_empty());
 }
 
@@ -4079,11 +4087,9 @@ fn http_trace_exports_do_not_follow_redirects() {
                 write!(stream, "HTTP/1.1 {status} Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
                 request
             });
-            let mut config =
-                OpenTelemetryConfig::new(otel_type, endpoint).with_timeout(Duration::from_secs(1));
-            config
-                .headers
-                .insert("x-collector-key".into(), "test-secret".into());
+            let config = OpenTelemetryConfig::new(otel_type, endpoint)
+                .with_timeout(Duration::from_secs(1))
+                .with_header("x-collector-key", "test-secret");
             let subscriber = OpenTelemetrySubscriber::new(config).unwrap();
             let callback = subscriber.subscriber();
             let uuid = Uuid::now_v7();
