@@ -3,7 +3,7 @@
 
 //! Core-owned `plugins.toml` discovery and dynamic-plugin selection.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -197,6 +197,13 @@ struct FileDynamicPlugin {
     config: Map<String, Json>,
 }
 
+struct ResolvedDynamicPluginDeclaration {
+    source: PathBuf,
+    declared: FileDynamicPlugin,
+    manifest: DynamicPluginManifest,
+    manifest_ref: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct PersistedDynamicPluginRegistry {
     #[serde(default = "default_state_schema_version")]
@@ -319,33 +326,19 @@ fn resolve_plugin_host_config_inner(
             .collect(),
     )?;
     diagnostics.extend(resolved.diagnostics.iter().cloned());
-    let mut policy = DynamicPluginHostPolicy::default();
+    let (mut policy, declarations) = resolve_dynamic_plugin_declarations(files)?;
     let mut active = Vec::new();
     let mut reports = Vec::new();
-    let mut seen_ids = HashSet::new();
-    let mut declarations = Vec::new();
 
-    for PluginFileDocument { source, file, .. } in files {
-        if let Some(file_policy) = file.plugins.policy {
-            policy.merge_from(file_policy.into());
-        }
-        declarations.extend(
-            file.plugins
-                .dynamic
-                .into_iter()
-                .map(|declared| (source.clone(), declared)),
-        );
-    }
     policy.apply_secure_defaults();
-    for (source, declared) in declarations {
-        let manifest_path = resolve_manifest_path(&source, &declared.manifest);
-        let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)?;
+    for ResolvedDynamicPluginDeclaration {
+        source,
+        declared,
+        manifest,
+        manifest_ref,
+    } in declarations
+    {
         let plugin_id = manifest.plugin.id.trim().to_owned();
-        if !seen_ids.insert(plugin_id.clone()) {
-            return Err(PluginError::InvalidConfig(format!(
-                "duplicate dynamic plugin id '{plugin_id}' in resolved plugins.toml layers"
-            )));
-        }
         let state = state_for_plugin(&source, &manifest_ref, &plugin_id)?;
         let selected = state.as_ref().map(|state| state.selected).unwrap_or(true);
         let evaluated_policy = evaluate_dynamic_plugin_host_policy(&policy, &manifest);
@@ -393,6 +386,50 @@ fn resolve_plugin_host_config_inner(
         dynamic_reports: reports,
         diagnostics,
     })
+}
+
+fn resolve_dynamic_plugin_declarations(
+    files: Vec<PluginFileDocument>,
+) -> Result<(
+    DynamicPluginHostPolicy,
+    Vec<ResolvedDynamicPluginDeclaration>,
+)> {
+    let mut policy = DynamicPluginHostPolicy::default();
+    let mut declarations = Vec::new();
+    let mut declaration_indices = HashMap::new();
+
+    for PluginFileDocument { source, file, .. } in files {
+        if let Some(file_policy) = file.plugins.policy {
+            policy.merge_from(file_policy.into());
+        }
+        let mut seen_ids = HashSet::new();
+        for declared in file.plugins.dynamic {
+            let manifest_path = resolve_manifest_path(&source, &declared.manifest);
+            let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)?;
+            let plugin_id = manifest.plugin.id.trim().to_owned();
+            if !seen_ids.insert(plugin_id.clone()) {
+                return Err(PluginError::InvalidConfig(format!(
+                    "duplicate dynamic plugin id '{plugin_id}' in {}",
+                    source.display()
+                )));
+            }
+            let declaration = ResolvedDynamicPluginDeclaration {
+                source: source.clone(),
+                declared,
+                manifest,
+                manifest_ref,
+            };
+            if let Some(index) = declaration_indices.get(&plugin_id) {
+                // Dynamic plugin declarations layer by manifest ID. The later source owns the
+                // effective manifest, lifecycle state, and opaque configuration.
+                declarations[*index] = declaration;
+            } else {
+                declaration_indices.insert(plugin_id, declarations.len());
+                declarations.push(declaration);
+            }
+        }
+    }
+    Ok((policy, declarations))
 }
 
 pub(crate) fn sanitized_plugin_config(config: &PluginConfig) -> Json {

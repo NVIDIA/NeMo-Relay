@@ -369,6 +369,115 @@ arbitrary_secret = "nested-secret"
 }
 
 #[test]
+fn dynamic_plugin_declarations_layer_by_id_with_higher_source_replacing_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let user_manifest = temp.path().join("user-relay-plugin.toml");
+    let system_manifest = temp.path().join("system-relay-plugin.toml");
+    fs::write(
+        &user_manifest,
+        r#"
+manifest_version = 1
+
+[plugin]
+id = "fixture.layered"
+kind = "worker"
+
+[compat]
+relay = ">=0.8.0,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[load]
+runtime = "command"
+entrypoint = "user-worker"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        &system_manifest,
+        r#"
+manifest_version = 1
+
+[plugin]
+id = "fixture.layered"
+kind = "worker"
+
+[compat]
+relay = ">=0.8.0,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[load]
+runtime = "command"
+entrypoint = "system-worker"
+"#,
+    )
+    .unwrap();
+    let user_source = temp.path().join("user-plugins.toml");
+    let system_source = temp.path().join("system-plugins.toml");
+    let files = vec![
+        PluginFileDocument {
+            source: user_source,
+            value: Json::Null,
+            file: PluginFile {
+                plugins: PluginFilePlugins {
+                    dynamic: vec![FileDynamicPlugin {
+                        manifest: user_manifest.display().to_string(),
+                        config: json!({"source": "user", "timeout": 5})
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    }],
+                    policy: None,
+                },
+            },
+        },
+        PluginFileDocument {
+            source: system_source.clone(),
+            value: Json::Null,
+            file: PluginFile {
+                plugins: PluginFilePlugins {
+                    dynamic: vec![FileDynamicPlugin {
+                        manifest: system_manifest.display().to_string(),
+                        config: json!({"source": "system", "items": ["system"]})
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    }],
+                    policy: None,
+                },
+            },
+        },
+    ];
+
+    let (_, declarations) = resolve_dynamic_plugin_declarations(files).unwrap();
+
+    assert_eq!(declarations.len(), 1);
+    assert_eq!(declarations[0].source, system_source);
+    assert_eq!(
+        declarations[0].declared.manifest,
+        system_manifest.display().to_string()
+    );
+    assert_eq!(
+        declarations[0].declared.config,
+        json!({"source": "system", "items": ["system"]})
+            .as_object()
+            .unwrap()
+            .clone()
+    );
+}
+
+#[test]
 fn lifecycle_state_selection_covers_absent_disabled_and_enabled_records() {
     let temp = tempfile::tempdir().unwrap();
     let plugins_toml = temp.path().join("plugins.toml");

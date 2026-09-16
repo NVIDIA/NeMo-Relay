@@ -71,6 +71,142 @@ fn activation_snapshots_use_the_configured_parent_directory() {
 }
 
 #[test]
+fn hydration_adds_the_effective_plugin_to_its_own_lifecycle_scope() {
+    let temp = tempfile::tempdir().unwrap();
+    let user_plugins_toml = temp.path().join("user/plugins.toml");
+    let system_plugins_toml = temp.path().join("system/plugins.toml");
+    let user_plugin_dir = temp.path().join("user/plugin");
+    let system_plugin_dir = temp.path().join("system/plugin");
+    std::fs::create_dir_all(&user_plugin_dir).unwrap();
+    std::fs::create_dir_all(&system_plugin_dir).unwrap();
+    let plugin_id = "acme.layered";
+    let user_manifest_path = write_dynamic_manifest(&user_plugin_dir, plugin_id);
+    let system_manifest_path = write_dynamic_manifest(&system_plugin_dir, plugin_id);
+    let (user_manifest, user_manifest_ref) =
+        DynamicPluginManifest::load_from_path(&user_manifest_path).unwrap();
+
+    let mut user_registry = nemo_relay::plugin::dynamic::DynamicPluginRegistry::new();
+    user_registry
+        .add(user_manifest.into_record(Some(user_manifest_ref)).unwrap())
+        .unwrap();
+    let mut scopes = vec![
+        ScopedRegistry {
+            scope: RegistryScope::User,
+            plugins_toml_path: user_plugins_toml.clone(),
+            state_path: temp.path().join("user/.dynamic-plugins.json"),
+            registry: user_registry,
+        },
+        ScopedRegistry {
+            scope: RegistryScope::Global,
+            plugins_toml_path: system_plugins_toml.clone(),
+            state_path: temp.path().join("system/.dynamic-plugins.json"),
+            registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+        },
+    ];
+    let mut resolved = ResolvedConfig {
+        dynamic_plugins: vec![ResolvedDynamicPluginConfig {
+            plugin_id: plugin_id.into(),
+            manifest_ref: system_manifest_path
+                .canonicalize()
+                .unwrap()
+                .display()
+                .to_string(),
+            config: serde_json::Map::new(),
+            has_explicit_config: false,
+            source: system_plugins_toml,
+        }],
+        ..ResolvedConfig::default()
+    };
+    allow_unsigned_test_plugins(&mut resolved);
+
+    let touched = hydrate_scoped_registries(&mut scopes, &resolved).unwrap();
+
+    assert_eq!(touched, BTreeSet::from([1]));
+    assert!(scopes[0].registry.get(plugin_id).is_some());
+    let system_record = scopes[1].registry.get(plugin_id).unwrap();
+    assert_eq!(
+        system_record.source.manifest_ref.as_deref(),
+        Some(resolved.dynamic_plugins[0].manifest_ref.as_str())
+    );
+    let effective = find_registered_entry(&scopes, Some(&resolved), "test", plugin_id).unwrap();
+    assert_eq!(effective.scope, RegistryScope::Global);
+    assert_eq!(effective.scope_index, 1);
+}
+
+#[test]
+fn hydration_replaces_declaration_fields_but_preserves_lifecycle_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugins_toml = temp.path().join("system/plugins.toml");
+    let old_plugin_dir = temp.path().join("old-plugin");
+    let replacement_plugin_dir = temp.path().join("replacement-plugin");
+    std::fs::create_dir_all(&old_plugin_dir).unwrap();
+    std::fs::create_dir_all(&replacement_plugin_dir).unwrap();
+    let plugin_id = "acme.replaced";
+    let old_manifest_path = write_dynamic_manifest(&old_plugin_dir, plugin_id);
+    let replacement_manifest_path = write_dynamic_manifest(&replacement_plugin_dir, plugin_id);
+    let replacement_artifact = replacement_plugin_dir.join("replacement.py");
+    std::fs::copy(
+        replacement_plugin_dir.join("plugin.py"),
+        &replacement_artifact,
+    )
+    .unwrap();
+    let replacement_manifest = std::fs::read_to_string(&replacement_manifest_path)
+        .unwrap()
+        .replace("plugin.py", "replacement.py");
+    std::fs::write(&replacement_manifest_path, replacement_manifest).unwrap();
+    let (old_manifest, old_manifest_ref) =
+        DynamicPluginManifest::load_from_path(&old_manifest_path).unwrap();
+    let mut old_record = old_manifest.into_record(Some(old_manifest_ref)).unwrap();
+    old_record.spec.enabled = true;
+    old_record.spec.config_ref = Some("lifecycle-config".into());
+    old_record.metadata.generation = 7;
+    let mut registry = nemo_relay::plugin::dynamic::DynamicPluginRegistry::new();
+    registry.add(old_record).unwrap();
+    let mut scopes = vec![ScopedRegistry {
+        scope: RegistryScope::Global,
+        plugins_toml_path: plugins_toml.clone(),
+        state_path: temp.path().join("system/.dynamic-plugins.json"),
+        registry,
+    }];
+    let replacement_ref = replacement_manifest_path
+        .canonicalize()
+        .unwrap()
+        .display()
+        .to_string();
+    let mut resolved = ResolvedConfig {
+        dynamic_plugins: vec![ResolvedDynamicPluginConfig {
+            plugin_id: plugin_id.into(),
+            manifest_ref: replacement_ref.clone(),
+            config: serde_json::Map::new(),
+            has_explicit_config: false,
+            source: plugins_toml,
+        }],
+        ..ResolvedConfig::default()
+    };
+    allow_unsigned_test_plugins(&mut resolved);
+    let (replacement_manifest, _) =
+        DynamicPluginManifest::load_from_path(&replacement_manifest_path).unwrap();
+    let expected = replacement_manifest
+        .into_record(Some(replacement_ref.clone()))
+        .unwrap();
+
+    hydrate_scoped_registries(&mut scopes, &resolved).unwrap();
+
+    let record = scopes[0].registry.get(plugin_id).unwrap();
+    assert_eq!(
+        record.source.manifest_ref.as_deref(),
+        Some(replacement_ref.as_str())
+    );
+    assert_eq!(record.source.artifact_ref, expected.source.artifact_ref);
+    assert_eq!(record.metadata.kind, expected.metadata.kind);
+    assert_eq!(record.compatibility, expected.compatibility);
+    assert_eq!(record.load, expected.load);
+    assert!(record.spec.enabled);
+    assert_eq!(record.spec.config_ref.as_deref(), Some("lifecycle-config"));
+    assert_eq!(record.metadata.generation, 7);
+}
+
+#[test]
 fn activation_snapshots_reject_a_parent_inside_the_plugin_directory() {
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugin");

@@ -196,6 +196,27 @@ fn registry_rejects_invalid_raw_record_load_shapes() {
 }
 
 #[test]
+fn registry_replacement_rejects_invalid_record_shapes() {
+    let mut registry = DynamicPluginRegistry::new();
+    registry.add(sample_record()).expect("register plugin");
+    let mut replacement = sample_record();
+    replacement.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        runtime: WorkerRuntime::Python,
+        entrypoint: String::new(),
+    });
+
+    let err = registry
+        .replace_declaration("acme.guardrails.pii", replacement)
+        .expect_err("invalid replacement shape should fail");
+    match err {
+        PluginError::InvalidConfig(message) => {
+            assert!(message.contains("load shape"), "{message}");
+        }
+        other => panic!("unexpected invalid replacement error: {other}"),
+    }
+}
+
+#[test]
 fn registry_rejects_invalid_raw_record_compatibility_shapes() {
     let mut registry = DynamicPluginRegistry::new();
     let mut record = sample_record();
