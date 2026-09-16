@@ -859,7 +859,7 @@ fn select_tagged_union_variant(
     Select::with_theme(theme)
         .with_prompt("Variant type")
         .items(
-            &tagged_union
+            tagged_union
                 .variants
                 .iter()
                 .map(|variant| variant.label)
@@ -1409,7 +1409,7 @@ fn prompt_value(
                 .unwrap_or(0);
             let idx = Select::with_theme(theme)
                 .with_prompt(field.label)
-                .items(&values)
+                .items(values)
                 .default(default_idx)
                 .interact()
                 .map_err(editor_error)?;

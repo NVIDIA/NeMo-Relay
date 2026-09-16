@@ -912,6 +912,135 @@ fn direct_http_subscribers_emit_decodable_signal_payloads() {
         .unwrap();
 }
 
+#[test]
+fn http_log_and_metric_exporters_do_not_follow_redirects_without_headers() {
+    for signal in ["logs", "metrics"] {
+        let destination = TcpListener::bind("127.0.0.1:0").unwrap();
+        destination.set_nonblocking(true).unwrap();
+        let location = format!("http://{}/leak", destination.local_addr().unwrap());
+        let redirector = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", redirector.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut stream, _) = redirector.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut buffer = [0; 4_096];
+            assert!(stream.read(&mut buffer).unwrap() > 0);
+            write!(stream, "HTTP/1.1 307 Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+
+        match signal {
+            "logs" => {
+                let subscriber = OpenTelemetryLogSubscriber::new(
+                    OpenTelemetryLogConfig::new(endpoint).with_timeout(Duration::from_secs(1)),
+                )
+                .unwrap();
+                subscriber.subscriber()(&Event::Mark(MarkEvent::new(
+                    BaseEvent::builder().name("redirect-test").build(),
+                    None,
+                    None,
+                )));
+                assert!(
+                    subscriber.force_flush().is_err(),
+                    "redirect must fail export"
+                );
+                let _ = subscriber.shutdown();
+            }
+            "metrics" => {
+                let subscriber = OpenTelemetryMetricSubscriber::new(
+                    OpenTelemetryMetricConfig::new(endpoint)
+                        .with_timeout(Duration::from_secs(1))
+                        .with_export_interval(Duration::from_secs(60)),
+                )
+                .unwrap();
+                subscriber.subscriber()(&metric_event(
+                    METRIC_DATA_SCHEMA_VERSION,
+                    serde_json::to_value(MetricEnvelope {
+                        measurements: vec![measurement(
+                            "redirect.test",
+                            MetricKind::Counter,
+                            MetricValueType::U64,
+                            json!(1),
+                        )],
+                    })
+                    .unwrap(),
+                ));
+                assert!(
+                    subscriber.force_flush().is_err(),
+                    "redirect must fail export"
+                );
+                let _ = subscriber.shutdown();
+            }
+            _ => unreachable!(),
+        }
+
+        server.join().unwrap();
+        assert!(
+            matches!(destination.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "redirect destination must receive no connection for {signal}"
+        );
+    }
+}
+
+#[test]
+fn direct_http_subscribers_drain_accepted_events_on_drop() {
+    let log_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let log_receiver = capture_one_request(log_listener.try_clone().unwrap());
+    let log_endpoint = format!("http://{}", log_listener.local_addr().unwrap());
+    drop(log_listener);
+    let log_subscriber = OpenTelemetryLogSubscriber::new(
+        OpenTelemetryLogConfig::new(log_endpoint).with_scheduled_delay(Duration::from_secs(60)),
+    )
+    .unwrap();
+    log_subscriber.subscriber()(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("log.drop-drain").build(),
+        None,
+        None,
+    )));
+
+    drop(log_subscriber);
+
+    let log_request = log_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("dropping the log subscriber must wait for its accepted export");
+    let logs = ExportLogsServiceRequest::decode(log_request.body.as_slice()).unwrap();
+    assert_eq!(logs.resource_logs[0].scope_logs[0].log_records.len(), 1);
+
+    let metric_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let metric_receiver = capture_one_request(metric_listener.try_clone().unwrap());
+    let metric_endpoint = format!("http://{}", metric_listener.local_addr().unwrap());
+    drop(metric_listener);
+    let metric_subscriber = OpenTelemetryMetricSubscriber::new(
+        OpenTelemetryMetricConfig::new(metric_endpoint)
+            .with_export_interval(Duration::from_secs(60)),
+    )
+    .unwrap();
+    metric_subscriber.subscriber()(&metric_event(
+        METRIC_DATA_SCHEMA_VERSION,
+        serde_json::to_value(MetricEnvelope {
+            measurements: vec![measurement(
+                "example.drop.drain",
+                MetricKind::Counter,
+                MetricValueType::U64,
+                json!(1),
+            )],
+        })
+        .unwrap(),
+    ));
+
+    drop(metric_subscriber);
+
+    let metric_request = metric_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("dropping the metric subscriber must wait for its final export");
+    let metrics = ExportMetricsServiceRequest::decode(metric_request.body.as_slice()).unwrap();
+    assert_eq!(
+        metrics.resource_metrics[0].scope_metrics[0].metrics[0].name,
+        "example.drop.drain"
+    );
+}
+
 fn otlp_string_attribute<'a>(attributes: &'a [OtlpKeyValue], key: &str) -> Option<&'a str> {
     attributes
         .iter()
