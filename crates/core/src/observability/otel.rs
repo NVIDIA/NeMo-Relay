@@ -30,7 +30,8 @@ use super::header_file::{
 };
 use super::otel_signal::{
     MetricMarkClassification, SignalRuntimeDiagnostics, TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS,
-    classify_metric_mark, resolve_header_env, should_relog_runtime_diagnostic, telemetry_resource,
+    classify_metric_mark, resolve_header_env, retry_batch_processor_channel_full,
+    should_relog_runtime_diagnostic, telemetry_resource,
     validate_telemetry_sdk_resource_attributes,
 };
 use super::{
@@ -668,6 +669,9 @@ impl OpenTelemetrySubscriber {
     }
 
     /// Builds a subscriber from an already-configured tracer provider.
+    ///
+    /// Keep the runtime that drives an asynchronous processor alive until after this subscriber
+    /// has been flushed or shut down.
     pub fn from_tracer_provider(
         provider: SdkTracerProvider,
         instrumentation_scope: impl Into<String>,
@@ -882,6 +886,7 @@ impl OpenTelemetrySubscriber {
     /// Flushes finished spans through the underlying tracer provider.
     ///
     /// After a successful flush, runtime diagnostics include queue drops observed so far.
+    /// This is a synchronous completion barrier; call it from a blocking task in async code.
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
         // Keep the processor lock guard temporary: subscriber callbacks also use it.
@@ -900,6 +905,7 @@ impl OpenTelemetrySubscriber {
     /// Shuts down the underlying tracer provider.
     ///
     /// Call `deregister(...)` first if the subscriber is still registered with NeMo Relay.
+    /// This waits for the final export and should run in a blocking task in async code.
     pub fn shutdown(&self) -> Result<()> {
         let barrier_error = flush_subscribers().err().map(OpenTelemetryError::Core);
         let provider_result = self.shutdown_provider();
@@ -1144,11 +1150,12 @@ fn build_tracer_provider_with_resource(
     if let Some(scheduled_delay) = config.scheduled_delay {
         batch_config = batch_config.with_scheduled_delay(scheduled_delay);
     }
-    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
+    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config_and_retry_timeout(
         exporter,
         config.endpoint.clone(),
         runtime_diagnostics,
         batch_config.build(),
+        config.timeout,
     );
     Ok(builder.with_span_processor(processor).build())
 }
@@ -1276,14 +1283,32 @@ struct DiagnosticBatchSpanProcessor {
     accepted_spans: Arc<AtomicU64>,
     diagnostics: Arc<TraceDeliveryDiagnostics>,
     reported_dropped_spans: AtomicU64,
+    retry_timeout: Duration,
 }
 
 impl DiagnosticBatchSpanProcessor {
+    #[cfg(test)]
     fn new_with_batch_config<E: SpanExporter + 'static>(
         exporter: E,
         endpoint: String,
         runtime_diagnostics: SignalRuntimeDiagnostics,
         batch_config: opentelemetry_sdk::trace::BatchConfig,
+    ) -> Self {
+        Self::new_with_batch_config_and_retry_timeout(
+            exporter,
+            endpoint,
+            runtime_diagnostics,
+            batch_config,
+            Duration::from_secs(3),
+        )
+    }
+
+    fn new_with_batch_config_and_retry_timeout<E: SpanExporter + 'static>(
+        exporter: E,
+        endpoint: String,
+        runtime_diagnostics: SignalRuntimeDiagnostics,
+        batch_config: opentelemetry_sdk::trace::BatchConfig,
+        retry_timeout: Duration,
     ) -> Self {
         let accepted_spans = Arc::new(AtomicU64::new(0));
         let diagnostics = Arc::new(TraceDeliveryDiagnostics::new(endpoint, runtime_diagnostics));
@@ -1300,6 +1325,7 @@ impl DiagnosticBatchSpanProcessor {
             accepted_spans,
             diagnostics,
             reported_dropped_spans: AtomicU64::new(0),
+            retry_timeout,
         }
     }
 
@@ -1345,7 +1371,8 @@ impl SpanProcessor for DiagnosticBatchSpanProcessor {
     }
 
     fn force_flush(&self) -> OTelSdkResult {
-        let result = self.inner.force_flush();
+        let result =
+            retry_batch_processor_channel_full(self.retry_timeout, || self.inner.force_flush());
         if result.is_ok() {
             self.record_dropped_spans();
         }
@@ -1358,7 +1385,9 @@ impl SpanProcessor for DiagnosticBatchSpanProcessor {
     }
 
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
-        let result = self.inner.shutdown_with_timeout(timeout);
+        let result = retry_batch_processor_channel_full(self.retry_timeout.min(timeout), || {
+            self.inner.shutdown_with_timeout(timeout)
+        });
         if result.is_ok() {
             let dropped = self.record_dropped_spans();
             let export_failure = self.diagnostics.unresolved_failure_summary();

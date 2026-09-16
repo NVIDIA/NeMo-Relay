@@ -9,6 +9,7 @@ use crate::api::event::{
     METRIC_DATA_SCHEMA_VERSION, MarkEvent, ScopeCategory, ScopeEvent,
 };
 use crate::api::scope::ScopeType;
+use opentelemetry_sdk::error::OTelSdkError;
 use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
 use serde_json::json;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -400,6 +401,7 @@ fn direct_log_processor_records_cumulative_queue_drops_on_flush_and_shutdown() {
         )
         .build(),
         diagnostics: Arc::clone(&delivery_diagnostics),
+        retry_timeout: Duration::from_secs(1),
     };
     drop(runtime_guard);
 
@@ -431,6 +433,22 @@ fn direct_log_processor_records_cumulative_queue_drops_on_flush_and_shutdown() {
             .message
             .contains("https://collector.example/v1/logs")
     );
+}
+
+#[test]
+fn batch_control_retry_waits_for_a_transiently_full_queue() {
+    let attempts = AtomicU64::new(0);
+
+    retry_batch_processor_channel_full(Duration::from_secs(1), || {
+        if attempts.fetch_add(1, Ordering::Relaxed) < 2 {
+            Err(OTelSdkError::InternalFailure("ChannelFull".to_string()))
+        } else {
+            Ok(())
+        }
+    })
+    .unwrap();
+
+    assert_eq!(attempts.load(Ordering::Relaxed), 3);
 }
 
 #[test]

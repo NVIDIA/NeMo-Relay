@@ -43,8 +43,9 @@ use super::otel::{
 use super::otel_signal::{
     MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics, build_grpc_metadata,
     build_in_owned_runtime, classify_metric_mark, reject_signal_header_environment,
-    resolve_header_env, resolve_http_signal_endpoint, should_relog_runtime_diagnostic,
-    signal_resource, validate_signal_headers, validate_telemetry_sdk_resource_attributes,
+    resolve_header_env, resolve_http_signal_endpoint, retry_batch_processor_channel_full,
+    should_relog_runtime_diagnostic, signal_resource, validate_signal_headers,
+    validate_telemetry_sdk_resource_attributes,
 };
 
 const DEFAULT_MAX_QUEUE_SIZE: usize = 2_048;
@@ -365,6 +366,7 @@ impl OpenTelemetryLogSubscriber {
     /// Flush queued Relay events and the OTLP log processor.
     ///
     /// After a successful flush, runtime diagnostics include queue drops observed so far.
+    /// This is a synchronous completion barrier; call it from a blocking task in async code.
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
         self.inner
@@ -376,6 +378,7 @@ impl OpenTelemetryLogSubscriber {
     /// Shut down the OTLP logger provider.
     ///
     /// Deregister this subscriber before calling shutdown.
+    /// This waits for the final export and should run in a blocking task in async code.
     pub fn shutdown(&self) -> Result<()> {
         let barrier = flush_subscribers().map_err(OpenTelemetryError::Core);
         let provider = self.shutdown_provider();
@@ -460,6 +463,7 @@ fn build_log_provider(
     let processor = DiagnosticBatchLogProcessor {
         inner: processor,
         diagnostics,
+        retry_timeout: config.timeout,
     };
     Ok(SdkLoggerProvider::builder()
         .with_resource(signal_resource(
@@ -580,6 +584,7 @@ impl<E: LogExporter> LogExporter for DiagnosticLogExporter<E> {
 struct DiagnosticBatchLogProcessor {
     inner: AsyncBatchLogProcessor<runtime::Tokio>,
     diagnostics: Arc<LogDeliveryDiagnostics>,
+    retry_timeout: Duration,
 }
 
 impl LogProcessor for DiagnosticBatchLogProcessor {
@@ -589,7 +594,8 @@ impl LogProcessor for DiagnosticBatchLogProcessor {
     }
 
     fn force_flush(&self) -> OTelSdkResult {
-        let result = self.inner.force_flush();
+        let result =
+            retry_batch_processor_channel_full(self.retry_timeout, || self.inner.force_flush());
         if result.is_ok() {
             self.diagnostics.record_queue_drops();
         }
@@ -597,7 +603,9 @@ impl LogProcessor for DiagnosticBatchLogProcessor {
     }
 
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
-        let result = self.inner.shutdown_with_timeout(timeout);
+        let result = retry_batch_processor_channel_full(self.retry_timeout.min(timeout), || {
+            self.inner.shutdown_with_timeout(timeout)
+        });
         if result.is_ok() {
             let dropped = self.diagnostics.record_queue_drops();
             let export_failures = self.diagnostics.export_failures.load(Ordering::Relaxed);

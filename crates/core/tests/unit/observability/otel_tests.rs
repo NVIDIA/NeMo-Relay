@@ -5917,15 +5917,16 @@ fn grpc_metadata_and_runtime_builder_paths_succeed() {
         .enable_all()
         .build()
         .unwrap();
-    runtime.block_on(async {
-        let provider = build_tracer_provider(
+    let provider = {
+        let _runtime_guard = runtime.enter();
+        build_tracer_provider(
             &OpenTelemetryConfig::grpc("grpc-demo")
                 .with_endpoint("http://127.0.0.1:4317")
                 .with_header("authorization", "Bearer token"),
             SignalRuntimeDiagnostics::new(None),
         )
-        .unwrap();
-        provider.force_flush().ok();
-        provider.shutdown().ok();
-    });
+        .unwrap()
+    };
+    provider.force_flush().ok();
+    provider.shutdown().ok();
 }

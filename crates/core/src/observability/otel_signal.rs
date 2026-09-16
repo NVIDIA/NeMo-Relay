@@ -8,9 +8,14 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use opentelemetry::KeyValue;
-use opentelemetry_sdk::{Resource, resource::TelemetryResourceDetector};
+use opentelemetry_sdk::{
+    Resource,
+    error::{OTelSdkError, OTelSdkResult},
+    resource::TelemetryResourceDetector,
+};
 use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
 
 use crate::api::event::{
@@ -172,6 +177,36 @@ impl SignalRuntimeDiagnostics {
 
 pub(super) fn should_relog_runtime_diagnostic(count: u64) -> bool {
     count.is_power_of_two()
+}
+
+/// Retry a batch-processor control message while the data queue is transiently full.
+///
+/// The SDK sends flush and shutdown control messages with `try_send`. A full data queue can
+/// therefore reject the control message before it reaches the worker, even though the worker
+/// will make room shortly. Retrying that specific condition preserves the flush/shutdown
+/// barrier without masking exporter or shutdown failures.
+pub(super) fn retry_batch_processor_channel_full(
+    timeout: Duration,
+    mut operation: impl FnMut() -> OTelSdkResult,
+) -> OTelSdkResult {
+    const RETRY_DELAY: Duration = Duration::from_millis(1);
+
+    let started = Instant::now();
+    loop {
+        let result = operation();
+        let is_channel_full = matches!(
+            &result,
+            Err(OTelSdkError::InternalFailure(message))
+                if message.contains("ChannelFull")
+                    || message.to_ascii_lowercase().contains("channel is full")
+        );
+        let elapsed = started.elapsed();
+        if !is_channel_full || elapsed >= timeout {
+            return result;
+        }
+
+        thread::sleep(RETRY_DELAY.min(timeout - elapsed));
+    }
 }
 
 fn truncate_runtime_diagnostic_message(message: String) -> String {

@@ -407,6 +407,8 @@ impl OpenTelemetryMetricSubscriber {
     }
 
     /// Collect and export current metric aggregates immediately.
+    ///
+    /// This is a synchronous completion barrier; call it from a blocking task in async code.
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
         self.inner
@@ -418,6 +420,8 @@ impl OpenTelemetryMetricSubscriber {
     /// Shut down the meter provider, including its final collection.
     ///
     /// Deregister this subscriber before calling shutdown.
+    /// This waits for the final collection and export and should run in a blocking task in async
+    /// code.
     pub fn shutdown(&self) -> Result<()> {
         let barrier = flush_subscribers().map_err(OpenTelemetryError::Core);
         let provider = self.shutdown_provider();
