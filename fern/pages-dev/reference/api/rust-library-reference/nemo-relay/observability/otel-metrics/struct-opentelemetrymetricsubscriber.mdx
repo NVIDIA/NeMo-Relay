@@ -58,13 +58,15 @@ Deregister a previously registered subscriber.
 
 Collect and export current metric aggregates immediately.
 
+This is a synchronous completion barrier; call it from a blocking task in async code.
+
 #### `shutdown`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn shutdown(&amp;self) -&gt; <a href=\"../otel/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 Shut down the meter provider, including its final collection.
 
-Deregister this subscriber before calling shutdown.
+Deregister this subscriber before calling shutdown. This waits for the final collection and export and should run in a blocking task in async code.
 
 ## Trait Implementations
 

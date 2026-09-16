@@ -33,6 +33,8 @@ Builds a subscriber backed by a new OTLP tracer provider.
 
 Builds a subscriber from an already-configured tracer provider.
 
+Keep the runtime that drives an asynchronous processor alive until after this subscriber has been flushed or shut down.
+
 #### `from_tracer_provider_with_type`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_type(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    otel_type: <a href=\"../enum-opentelemetrytype\">OpenTelemetryType</a>,\n) -&gt; Self"}} /></pre>
@@ -87,7 +89,7 @@ Deregisters a previously-registered global subscriber by name.
 
 Flushes finished spans through the underlying tracer provider.
 
-After a successful flush, runtime diagnostics include queue drops observed so far.
+After a successful flush, runtime diagnostics include queue drops observed so far. This is a synchronous completion barrier; call it from a blocking task in async code.
 
 #### `shutdown`
 
@@ -95,7 +97,7 @@ After a successful flush, runtime diagnostics include queue drops observed so fa
 
 Shuts down the underlying tracer provider.
 
-Call `deregister(...)` first if the subscriber is still registered with NeMo Relay.
+Call `deregister(...)` first if the subscriber is still registered with NeMo Relay. This waits for the final export and should run in a blocking task in async code.
 
 ## Trait Implementations
 
