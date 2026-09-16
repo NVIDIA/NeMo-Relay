@@ -146,10 +146,13 @@ binary.
 The required plugin MCP process is a lightweight lifecycle client. When it
 launches, it starts or reuses a detached Rust
 `nemo-relay --bind 127.0.0.1:47632` sidecar. It completes MCP initialization
-only after `/healthz` confirms the Relay identity, version, bootstrap protocol,
-and effective persistent configuration. The compatibility check uses a one-way
-fingerprint that includes relevant environment values; it
-does not return credentials or configuration secrets. Dynamic plugin manifests,
+only after `/healthz` authenticates the Relay identity and confirms its version
+and bootstrap protocol. The compatibility check binds a one-way fingerprint
+that includes relevant environment values into a per-user bootstrap proof; it
+does not return credentials or configuration secrets. A different effective
+persistent configuration fingerprint does not by itself prevent reuse. Clients
+that share the same user bootstrap state can reuse a healthy local sidecar, so
+the fingerprint is not the gateway ownership boundary. Dynamic plugin manifests,
 artifacts, and signatures included in this identity must be regular files. Relay
 limits the complete activation snapshot—including adjacent runtime files and a
 copied managed Python environment—to 100,000 filesystem entries, 512 MiB, and a
@@ -168,8 +171,8 @@ system user service, scheduled task, login item, or persistent supervisor.
 When a newly launched MCP client detects a verified Relay-owned gateway from a
 different Relay version, it stops that old sidecar and starts a matching one.
 This intentionally interrupts MCP clients still attached to the old gateway.
-Configuration-only compatibility mismatches remain errors and are not replaced
-automatically.
+Configuration-only fingerprint differences neither replace nor reject a healthy
+authenticated gateway.
 
 After upgrading Relay, refresh every Relay-managed coding-agent integration
 before starting a new Codex session:
