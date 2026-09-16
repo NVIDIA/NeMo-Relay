@@ -612,7 +612,7 @@ async fn activation_failed(
     State(state): State<Arc<DaemonState>>,
     Json(request): Json<SessionRequest<ActivationFailedPayload>>,
 ) -> Response<Body> {
-    if request.payload.activation_id.len() > 128 || request.payload.reason.len() > 2_048 {
+    if request.payload.activation_id.len() > 128 {
         return control_message(
             StatusCode::BAD_REQUEST,
             "activation failure payload is too large",
@@ -640,7 +640,7 @@ async fn activation_failed(
                 event = "worker_activation_failed",
                 fingerprint = fingerprint.as_str(),
                 route_mode = "pass_through",
-                reason = request.payload.reason.as_str();
+                failure_reason = request.payload.failure_reason.as_str();
                 "Worker activation failed; route changed to pass-through"
             );
             StatusCode::NO_CONTENT.into_response()

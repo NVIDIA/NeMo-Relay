@@ -9,7 +9,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use crate::bootstrap::{GatewayEndpoint, GatewaySpec};
-use crate::error::CliError;
+use crate::error::{CliError, McpFailureReason};
 use crate::installation::generation::{ActiveGenerationGuard, InstallGeneration};
 use crate::server::GatewayOverrides;
 
@@ -30,15 +30,25 @@ impl GatewayPlan {
             .await
             .map_err(|error| {
                 CliError::Launch(format!("MCP generation capture task failed: {error}"))
+                    .with_mcp_failure_reason(McpFailureReason::GenerationCaptureFailed)
             })?
-            .map_err(CliError::Launch)?;
+            .map_err(CliError::Launch)
+            .map_err(|error| {
+                error.with_mcp_failure_reason(McpFailureReason::GenerationCaptureFailed)
+            })?;
         let (generation, generation_guard) = captured
             .map(|(generation, guard)| (Some(generation), Some(guard)))
             .unwrap_or((None, None));
         let bind = server_args.bind.unwrap_or_else(super::default_mcp_bind);
-        let launch = crate::bootstrap::resolve_plugin_gateway(server_args, bind)?;
-        let heartbeat_interval =
-            crate::bootstrap::plugin_heartbeat_interval().map_err(CliError::Launch)?;
+        let launch =
+            crate::bootstrap::resolve_plugin_gateway(server_args, bind).map_err(|error| {
+                error.with_mcp_failure_reason(McpFailureReason::GatewayConfigurationFailed)
+            })?;
+        let heartbeat_interval = crate::bootstrap::plugin_heartbeat_interval()
+            .map_err(CliError::Launch)
+            .map_err(|error| {
+                error.with_mcp_failure_reason(McpFailureReason::HeartbeatConfigurationFailed)
+            })?;
         Ok(Self {
             spec: launch.gateway,
             heartbeat_interval,
@@ -75,6 +85,9 @@ impl GatewayPlan {
                         .await
                         .map_err(|error| {
                             CliError::Launch(format!("gateway heartbeat task failed: {error}"))
+                                .with_mcp_failure_reason(
+                                    McpFailureReason::GatewayHeartbeatTaskFailed,
+                                )
                         })
                 }
             },
@@ -132,30 +145,43 @@ impl GatewayLease {
             gateway_url.clone(),
             bootstrap_fingerprint.clone(),
         )
-        .await?
+        .await
+        .map_err(|error| {
+            error.with_mcp_failure_reason(
+                McpFailureReason::TransparentGatewayInitialVerificationFailed,
+            )
+        })?
         .ok_or_else(|| {
             CliError::Launch(format!(
                 "{} does not identify the authenticated NeMo Relay gateway owned by this transparent run",
                 crate::configuration::GATEWAY_URL_ENV
             ))
+            .with_mcp_failure_reason(McpFailureReason::TransparentGatewayInitialVerificationFailed)
         })?;
         let monitor = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(heartbeat_interval).await;
                 let current =
                     authenticated_instance_id(gateway_url.clone(), bootstrap_fingerprint.clone())
-                        .await?;
+                        .await
+                        .map_err(|error| {
+                            error.with_mcp_failure_reason(
+                                McpFailureReason::TransparentGatewayHeartbeatVerificationFailed,
+                            )
+                        })?;
                 match current {
                     Some(instance) if instance == expected_instance => {}
                     Some(instance) => {
                         return Err(CliError::Launch(format!(
                             "transparent Relay gateway instance changed from {expected_instance} to {instance}"
-                        )));
+                        ))
+                        .with_mcp_failure_reason(McpFailureReason::TransparentGatewayReplaced));
                     }
                     None => {
                         return Err(CliError::Launch(format!(
                             "transparent Relay gateway at {gateway_url} is no longer available"
-                        )));
+                        ))
+                        .with_mcp_failure_reason(McpFailureReason::TransparentGatewayUnavailable));
                     }
                 }
             }
@@ -169,6 +195,7 @@ impl GatewayLease {
     pub(super) async fn wait(&mut self) -> Result<(), CliError> {
         (&mut self.monitor).await.map_err(|error| {
             CliError::Launch(format!("gateway maintenance task failed: {error}"))
+                .with_mcp_failure_reason(McpFailureReason::GatewayMonitorTaskFailed)
         })?
     }
 }
@@ -210,7 +237,8 @@ impl LeaseShutdown {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.stopped.load(Ordering::Acquire) {
-            return Err(CliError::Launch("gateway lease is shutting down".into()));
+            return Err(CliError::Launch("gateway lease is shutting down".into())
+                .with_mcp_failure_reason(McpFailureReason::GatewayLeaseClosedDuringRecovery));
         }
         *count += 1;
         Ok(RecoveryGuard(self.clone()))
@@ -257,8 +285,12 @@ async fn acquire_gateway(
         spec.acquire()
     })
     .await
-    .map_err(|error| CliError::Launch(format!("gateway bootstrap task failed: {error}")))?
+    .map_err(|error| {
+        CliError::Launch(format!("gateway bootstrap task failed: {error}"))
+            .with_mcp_failure_reason(McpFailureReason::GatewayAcquisitionFailed)
+    })?
     .map_err(CliError::Launch)
+    .map_err(|error| error.with_mcp_failure_reason(McpFailureReason::GatewayAcquisitionFailed))
 }
 
 async fn recover_gateway(
@@ -273,17 +305,34 @@ async fn recover_gateway(
         let _generation_guard = generation
             .as_ref()
             .map(InstallGeneration::guard_current)
-            .transpose()?;
+            .transpose()
+            .map_err(CliError::Launch)
+            .map_err(|error| {
+                error.with_mcp_failure_reason(
+                    McpFailureReason::GenerationLifecycleInvalidDuringRecovery,
+                )
+            })?;
         spec.recover(&expected_instance)
+            .map_err(|error| match error {
+                crate::bootstrap::GatewayRecoveryError::UnhealthyAfterRecovery => CliError::Launch(
+                    "shared Relay gateway became unhealthy after its coordinated restart".into(),
+                )
+                .with_mcp_failure_reason(McpFailureReason::GatewayRecoveredThenUnhealthy),
+                crate::bootstrap::GatewayRecoveryError::Other(message) => CliError::Launch(message)
+                    .with_mcp_failure_reason(McpFailureReason::GatewayRecoveryFailed),
+            })
     })
     .await
-    .map_err(|error| CliError::Launch(format!("gateway recovery task failed: {error}")))?
-    .map_err(CliError::Launch)
+    .map_err(|error| {
+        CliError::Launch(format!("gateway recovery task failed: {error}"))
+            .with_mcp_failure_reason(McpFailureReason::GatewayRecoveryTaskFailed)
+    })?
     .and_then(|endpoint| {
         if shutdown.stopped.load(Ordering::Acquire) {
-            Err(CliError::Launch(
-                "gateway lease closed during recovery".into(),
-            ))
+            Err(
+                CliError::Launch("gateway lease closed during recovery".into())
+                    .with_mcp_failure_reason(McpFailureReason::GatewayLeaseClosedDuringRecovery),
+            )
         } else {
             Ok(endpoint)
         }
@@ -304,8 +353,12 @@ async fn verify_lifecycle_async(generation: Option<InstallGeneration>) -> Result
         .await
         .map_err(|error| {
             CliError::Launch(format!("MCP lifecycle verification task failed: {error}"))
+                .with_mcp_failure_reason(McpFailureReason::GatewayLifecycleVerificationTaskFailed)
         })?
-        .map_err(CliError::Launch)?;
+        .map_err(CliError::Launch)
+        .map_err(|error| {
+            error.with_mcp_failure_reason(McpFailureReason::GenerationLifecycleInvalid)
+        })?;
         if current {
             return Ok(());
         }
@@ -452,7 +505,8 @@ impl RecoveryState {
         if self.recovered {
             return Err(CliError::Launch(
                 "shared Relay gateway was replaced again after its coordinated restart".into(),
-            ));
+            )
+            .with_mcp_failure_reason(McpFailureReason::GatewayRecoveredThenReplaced));
         }
         self.instance_id = instance_id;
         self.recovered = true;
@@ -463,7 +517,8 @@ impl RecoveryState {
         if self.recovered {
             Err(CliError::Launch(
                 "shared Relay gateway became unhealthy after its coordinated restart".into(),
-            ))
+            )
+            .with_mcp_failure_reason(McpFailureReason::GatewayRecoveredThenUnhealthy))
         } else {
             Ok(())
         }

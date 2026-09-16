@@ -8,7 +8,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use super::gateway::GatewayLease;
 use super::protocol::{FrameAction, evaluate_frame};
 use super::transport::FrameReceiver;
-use crate::error::CliError;
+use crate::error::{CliError, McpFailureReason};
 
 pub(super) async fn run<W>(
     mut lease: GatewayLease,
@@ -33,7 +33,10 @@ where
     W: AsyncWrite + Unpin,
 {
     while let Some(frame) = frames.recv().await {
-        write_response(evaluate_frame(&frame?), &mut writer).await?;
+        let frame = frame.map_err(CliError::Io).map_err(|error| {
+            error.with_mcp_failure_reason(McpFailureReason::StdinFrameReadFailed)
+        })?;
+        write_response(evaluate_frame(&frame), &mut writer).await?;
     }
     Ok(())
 }
@@ -45,11 +48,21 @@ where
     let Some(response) = action.response else {
         return Ok(());
     };
-    let mut encoded = serde_json::to_vec(&response)
-        .map_err(|error| CliError::Launch(format!("failed to encode MCP response: {error}")))?;
+    let mut encoded = serde_json::to_vec(&response).map_err(|error| {
+        CliError::Launch(format!("failed to encode MCP response: {error}"))
+            .with_mcp_failure_reason(McpFailureReason::McpResponseSerializationFailed)
+    })?;
     encoded.push(b'\n');
-    writer.write_all(&encoded).await?;
-    writer.flush().await?;
+    writer
+        .write_all(&encoded)
+        .await
+        .map_err(CliError::Io)
+        .map_err(|error| error.with_mcp_failure_reason(McpFailureReason::StdoutWriteFailed))?;
+    writer
+        .flush()
+        .await
+        .map_err(CliError::Io)
+        .map_err(|error| error.with_mcp_failure_reason(McpFailureReason::StdoutFlushFailed))?;
     Ok(())
 }
 
