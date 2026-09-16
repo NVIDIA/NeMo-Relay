@@ -2142,36 +2142,70 @@ allowed = true
 }
 
 #[test]
-fn plugins_toml_rejects_duplicate_dynamic_plugin_ids_across_sources() {
+fn plugins_toml_layers_dynamic_plugin_ids_across_sources() {
     let temp = tempfile::tempdir().unwrap();
-    let plugin_dir = temp.path().join("plugins/acme");
-    std::fs::create_dir_all(&plugin_dir).unwrap();
-    write_dynamic_manifest(&plugin_dir, "acme.worker");
-    let project_plugin = temp.path().join("project-plugins.toml");
+    let user_plugin_dir = temp.path().join("plugins/user");
+    let system_plugin_dir = temp.path().join("plugins/system");
+    std::fs::create_dir_all(&user_plugin_dir).unwrap();
+    std::fs::create_dir_all(&system_plugin_dir).unwrap();
+    let user_manifest = write_dynamic_manifest(&user_plugin_dir, "acme.worker");
+    let system_manifest = write_dynamic_manifest(&system_plugin_dir, "acme.worker");
     let user_plugin = temp.path().join("user-plugins.toml");
-    std::fs::write(
-        &project_plugin,
-        r#"
-[[plugins.dynamic]]
-manifest = "plugins/acme/relay-plugin.toml"
-"#,
-    )
-    .unwrap();
+    let system_plugin = temp.path().join("system-plugins.toml");
     std::fs::write(
         &user_plugin,
-        r#"
+        format!(
+            r#"
 [[plugins.dynamic]]
-manifest = "plugins/acme"
+manifest = {:?}
+
+[plugins.dynamic.config]
+source = "user"
+timeout = 5
+items = ["user"]
 "#,
+            user_manifest.display().to_string()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &system_plugin,
+        format!(
+            r#"
+[[plugins.dynamic]]
+manifest = {:?}
+
+[plugins.dynamic.config]
+source = "system"
+items = ["system"]
+"#,
+            system_manifest.display().to_string()
+        ),
     )
     .unwrap();
 
-    let error = load_plugin_toml_config_from_paths(vec![project_plugin, user_plugin])
-        .unwrap_err()
-        .to_string();
+    let resolved = load_plugin_toml_config_from_paths(vec![user_plugin, system_plugin]).unwrap();
+    let dynamic = resolved.unwrap().dynamic_plugins;
 
-    assert!(error.contains("duplicate dynamic plugin id"));
-    assert!(error.contains("acme.worker"));
+    assert_eq!(dynamic.len(), 1);
+    assert_eq!(dynamic[0].plugin_id, "acme.worker");
+    assert_eq!(
+        dynamic[0].manifest_ref,
+        system_manifest
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+    );
+    assert_eq!(dynamic[0].source, temp.path().join("system-plugins.toml"));
+    assert!(dynamic[0].has_explicit_config);
+    assert_eq!(
+        dynamic[0].config,
+        json!({"source": "system", "items": ["system"]})
+            .as_object()
+            .unwrap()
+            .clone()
+    );
 }
 
 #[test]
@@ -4554,9 +4588,7 @@ level = "error"
 fn configuration_value_helpers_cover_empty_and_invalid_shapes() {
     let source = Path::new("plugins.toml");
     let mut scalar = toml::Value::String("not a table".into());
-    let resolved =
-        resolve_dynamic_plugin_refs(source, &mut scalar, &mut std::collections::HashSet::new())
-            .unwrap();
+    let resolved = resolve_dynamic_plugin_refs(source, &mut scalar).unwrap();
     assert!(resolved.dynamic_plugins.is_empty());
     assert_eq!(
         resolved.dynamic_plugin_policy,

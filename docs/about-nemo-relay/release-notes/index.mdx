@@ -104,6 +104,10 @@ Plugin settings and response caching include the following updates:
   which files contributed settings and how Relay combined them with application
   settings. Reports redact literal credentials and values in dynamic-plugin
   settings whose meaning Relay does not know.
+- Dynamic plugin declarations now layer by manifest plugin ID. When a
+  higher-precedence file declares the same ID, its complete record replaces the
+  lower-precedence record instead of blocking startup with a duplicate-ID
+  error. For details, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
 - Response caching adds `key_strategy = "logical"`. It ignores changes to tool
   descriptions and tool order. Other tool-definition changes still affect the
   key. `exact_request` remains the default. Each strategy has its own set of
@@ -165,6 +169,11 @@ Review the following changes before upgrading:
   policy fields default to `startup = "required"` and
   `attestation = "signature_required"`. An unsigned plugin that an embedded
   host previously accepted can now fail at startup.
+- A higher-precedence `[[plugins.dynamic]]` record with the same manifest
+  plugin ID now replaces the complete lower-precedence record. Relay no longer
+  rejects that collision, and it does not inherit the lower record's `config`.
+  Move every setting needed by the effective plugin into the higher-precedence
+  record.
 - Python plugin initialization and activation now raise `ValueError` for
   invalid static settings. They raise `FileNotFoundError` when a referenced
   configuration or resource is unavailable. These errors replace
