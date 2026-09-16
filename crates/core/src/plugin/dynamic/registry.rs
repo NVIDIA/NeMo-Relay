@@ -210,6 +210,8 @@ impl DynamicPluginRegistry {
         plugin_id: &str,
         mut replacement: DynamicPluginRecord,
     ) -> Result<()> {
+        normalize_record_shape(&mut replacement);
+        validate_record_shape(&replacement)?;
         let record = self.lookup_mut(plugin_id)?;
         if replacement.metadata.id != record.metadata.id {
             return Err(PluginError::InvalidConfig(format!(

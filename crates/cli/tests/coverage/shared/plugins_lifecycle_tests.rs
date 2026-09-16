@@ -128,7 +128,7 @@ fn hydration_adds_the_effective_plugin_to_its_own_lifecycle_scope() {
         system_record.source.manifest_ref.as_deref(),
         Some(resolved.dynamic_plugins[0].manifest_ref.as_str())
     );
-    let effective = find_registered_entry(&scopes, &resolved, "test", plugin_id).unwrap();
+    let effective = find_registered_entry(&scopes, Some(&resolved), "test", plugin_id).unwrap();
     assert_eq!(effective.scope, RegistryScope::Global);
     assert_eq!(effective.scope_index, 1);
 }
@@ -144,6 +144,16 @@ fn hydration_replaces_declaration_fields_but_preserves_lifecycle_state() {
     let plugin_id = "acme.replaced";
     let old_manifest_path = write_dynamic_manifest(&old_plugin_dir, plugin_id);
     let replacement_manifest_path = write_dynamic_manifest(&replacement_plugin_dir, plugin_id);
+    let replacement_artifact = replacement_plugin_dir.join("replacement.py");
+    std::fs::copy(
+        replacement_plugin_dir.join("plugin.py"),
+        &replacement_artifact,
+    )
+    .unwrap();
+    let replacement_manifest = std::fs::read_to_string(&replacement_manifest_path)
+        .unwrap()
+        .replace("plugin.py", "replacement.py");
+    std::fs::write(&replacement_manifest_path, replacement_manifest).unwrap();
     let (old_manifest, old_manifest_ref) =
         DynamicPluginManifest::load_from_path(&old_manifest_path).unwrap();
     let mut old_record = old_manifest.into_record(Some(old_manifest_ref)).unwrap();

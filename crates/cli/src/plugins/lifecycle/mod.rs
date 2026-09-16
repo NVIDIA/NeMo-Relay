@@ -329,7 +329,8 @@ pub(crate) fn validate(
             )?;
             let host_config_by_id = host_config_by_id(&resolved);
             let mut scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
-            let entry = find_registered_entry(&scopes, &resolved, "plugins validate", &plugin_id)?;
+            let entry =
+                find_registered_entry(&scopes, Some(&resolved), "plugins validate", &plugin_id)?;
             let manifest_ref = manifest_ref_from_record(&entry.record)?;
             let (manifest, manifest_ref) = load_manifest_for_action("validate", &manifest_ref)?;
             validate_python_entrypoint_artifact(&manifest, &manifest_ref)
@@ -352,7 +353,7 @@ pub(crate) fn validate(
                 &trust,
             )?;
             scopes[entry.scope_index].save()?;
-            let refreshed = find_effective_record_by_id(&scopes, &resolved, &plugin_id)?
+            let refreshed = find_effective_record_by_id(&scopes, Some(&resolved), &plugin_id)?
                 .expect("validated registry record should still exist");
             if command.json {
                 print_response_json(&validate_success(ValidateResponseInput {
@@ -437,7 +438,7 @@ pub(crate) fn inspect(
     )?;
     let host_config_by_id = host_config_by_id(&resolved);
     let scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
-    let entry = find_registered_entry(&scopes, &resolved, "plugins inspect", &command.id)?;
+    let entry = find_registered_entry(&scopes, Some(&resolved), "plugins inspect", &command.id)?;
     let manifest_ref = manifest_ref_from_record(&entry.record)?;
     let (manifest, manifest_ref) = load_manifest_for_action("inspect", &manifest_ref)?;
     if command.json {
@@ -482,12 +483,19 @@ pub(crate) fn remove(
     server: &GatewayOverrides,
 ) -> Result<(), CliError> {
     let explicit_plugin_config = lifecycle_plugin_config_path(server);
-    let resolved = resolve_plugins_config_with_path(
-        server.config.as_ref(),
-        server.plugin_config_path.as_ref(),
-    )?;
-    let mut scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
-    let entry = find_registered_entry(&scopes, &resolved, "plugins remove", &command.id)?;
+    let mut scopes = load_scoped_registries(explicit_plugin_config.as_ref())?;
+    let resolved = match find_record_by_id(&scopes, &command.id) {
+        Ok(Some(_)) => None,
+        Ok(None) | Err(_) => {
+            let resolved = resolve_plugins_config_with_path(
+                server.config.as_ref(),
+                server.plugin_config_path.as_ref(),
+            )?;
+            scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
+            Some(resolved)
+        }
+    };
+    let entry = find_registered_entry(&scopes, resolved.as_ref(), "plugins remove", &command.id)?;
     let original_plugins_toml = std::fs::read(&entry.plugins_toml_path).ok();
     let environment_ref = entry.record.source.environment_ref.clone();
 
@@ -1972,13 +1980,13 @@ fn mutate_enabled_state(
         "plugins disable"
     };
     let explicit_plugin_config = lifecycle_plugin_config_path(server);
-    let resolved = resolve_plugins_config_with_path(
-        server.config.as_ref(),
-        server.plugin_config_path.as_ref(),
-    )?;
-    let mut scopes = if enabled {
+    let (mut scopes, resolved) = if enabled {
+        let resolved = resolve_plugins_config_with_path(
+            server.config.as_ref(),
+            server.plugin_config_path.as_ref(),
+        )?;
         let mut scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
-        let entry = find_registered_entry(&scopes, &resolved, command, &plugin_id)?;
+        let entry = find_registered_entry(&scopes, Some(&resolved), command, &plugin_id)?;
         if entry.record.is_tombstoned() {
             return Err(plugin_refused(
                 command,
@@ -2040,11 +2048,23 @@ fn mutate_enabled_state(
                 message,
             ));
         }
-        scopes
+        (scopes, Some(resolved))
     } else {
-        load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?
+        let mut scopes = load_scoped_registries(explicit_plugin_config.as_ref())?;
+        let resolved = match find_record_by_id(&scopes, &plugin_id) {
+            Ok(Some(_)) => None,
+            Ok(None) | Err(_) => {
+                let resolved = resolve_plugins_config_with_path(
+                    server.config.as_ref(),
+                    server.plugin_config_path.as_ref(),
+                )?;
+                scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
+                Some(resolved)
+            }
+        };
+        (scopes, resolved)
     };
-    let entry = find_registered_entry(&scopes, &resolved, command, &plugin_id)?;
+    let entry = find_registered_entry(&scopes, resolved.as_ref(), command, &plugin_id)?;
     if entry.record.is_tombstoned() {
         return Err(plugin_refused(
             command,
@@ -2119,7 +2139,9 @@ fn hydrate_scoped_registries(
         let policy =
             evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
         let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
-        if let Some(existing) = scopes[scope_index].registry.get(&plugin.plugin_id) {
+        if let Some(existing) = scopes[scope_index].registry.get(&plugin.plugin_id)
+            && existing.source.manifest_ref.is_some()
+        {
             let environment_ref = existing.source.environment_ref.clone();
             let record = validated_record_from_manifest(
                 manifest,
@@ -2133,6 +2155,18 @@ fn hydrate_scoped_registries(
                 .registry
                 .replace_declaration(&plugin.plugin_id, record)
                 .map_err(|error| CliError::Config(error.to_string()))?;
+        } else if scopes[scope_index]
+            .registry
+            .get(&plugin.plugin_id)
+            .is_some()
+        {
+            update_registry_validation_status(
+                &mut scopes[scope_index],
+                &plugin.plugin_id,
+                &manifest,
+                &policy,
+                &trust,
+            )?;
         } else {
             let state_path = scopes[scope_index].state_path.clone();
             let record = validated_record_from_manifest(
@@ -2285,14 +2319,15 @@ fn environment_last_error(
 
 fn find_effective_record_by_id(
     scopes: &[ScopedRegistry],
-    resolved: &ResolvedConfig,
+    resolved: Option<&ResolvedConfig>,
     plugin_id: &str,
 ) -> Result<Option<ScopedDynamicPluginRecord>, CliError> {
-    if let Some(plugin) = resolved
-        .dynamic_plugins
-        .iter()
-        .find(|plugin| plugin.plugin_id == plugin_id)
-    {
+    if let Some(plugin) = resolved.and_then(|resolved| {
+        resolved
+            .dynamic_plugins
+            .iter()
+            .find(|plugin| plugin.plugin_id == plugin_id)
+    }) {
         return Ok(find_record_in_source(scopes, &plugin.source, plugin_id));
     }
     find_record_by_id(scopes, plugin_id)
@@ -2300,7 +2335,7 @@ fn find_effective_record_by_id(
 
 fn find_registered_entry(
     scopes: &[ScopedRegistry],
-    resolved: &ResolvedConfig,
+    resolved: Option<&ResolvedConfig>,
     command: &'static str,
     plugin_id: &str,
 ) -> Result<self::state::ScopedDynamicPluginRecord, CliError> {
