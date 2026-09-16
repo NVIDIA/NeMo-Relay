@@ -179,9 +179,9 @@ repos:
 
       - id: pylic
         name: pylic check
-        entry: uv run pylic check
+        entry: uv run --no-sync pylic check
         language: system
-        files: '^uv\.lock$'
+        files: '^(uv\.lock|pyproject\.toml)$'
         pass_filenames: false
 
       - id: uv-audit
