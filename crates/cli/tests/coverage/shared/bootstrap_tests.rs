@@ -9,6 +9,26 @@ use std::net::TcpListener;
 use std::process::Command;
 
 #[test]
+fn gateway_failure_reasons_are_static_and_stage_specific() {
+    assert_eq!(
+        GatewayFailureReason::AcquisitionFailed.as_str(),
+        "gateway_acquisition_failed"
+    );
+    assert_eq!(
+        GatewayRecoveryError::Other("secret local detail".into())
+            .failure_reason()
+            .as_str(),
+        "gateway_recovery_failed"
+    );
+    assert_eq!(
+        GatewayRecoveryError::UnhealthyAfterRecovery
+            .failure_reason()
+            .as_str(),
+        "gateway_recovered_then_unhealthy"
+    );
+}
+
+#[test]
 fn failed_reaper_spawn_terminates_and_reaps_the_retained_child() {
     let _cwd = crate::test_support::CwdTestScope::locked();
     let child = Command::new(std::env::current_exe().unwrap())

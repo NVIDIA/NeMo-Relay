@@ -117,6 +117,24 @@ fn read_jsonl_event(path: &Path, event: &str) -> serde_json::Value {
         .unwrap_or_else(|| panic!("missing {event} record in {}", path.display()))
 }
 
+fn wait_for_jsonl_event(path: &Path, event: &str) -> serde_json::Value {
+    let deadline = Instant::now() + SIDECAR_PUBLICATION_TIMEOUT;
+    loop {
+        if let Ok(contents) = std::fs::read_to_string(path)
+            && let Some(record) = contents
+                .lines()
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .find(|record: &serde_json::Value| record["event"] == event)
+        {
+            return record;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for {event} record in {}", path.display());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn write_dynamic_plugin_manifest(dir: &std::path::Path, plugin_id: &str) {
     write_dynamic_plugin_manifest_with_options(dir, plugin_id, &["plugin_worker"], None);
 }
@@ -827,9 +845,23 @@ fn start_mcp_client_with_generation(
     idle_timeout_secs: &str,
     generation: Option<&std::path::Path>,
 ) -> (Child, ChildStdin) {
+    start_mcp_client_with_generation_and_logging(temp, bind, idle_timeout_secs, generation, None)
+}
+
+fn start_mcp_client_with_generation_and_logging(
+    temp: &std::path::Path,
+    bind: SocketAddr,
+    idle_timeout_secs: &str,
+    generation: Option<&std::path::Path>,
+    logging_config: Option<&std::path::Path>,
+) -> (Child, ChildStdin) {
     let mut command = Command::new(gateway_bin());
+    command.arg("--bind").arg(bind.to_string());
+    if let Some(logging_config) = logging_config {
+        command.arg("--log-config-path").arg(logging_config);
+    }
     command
-        .args(["--bind", &bind.to_string(), "mcp"])
+        .arg("mcp")
         .env("HOME", temp)
         .env("XDG_CONFIG_HOME", temp.join("xdg"))
         .env("XDG_RUNTIME_DIR", temp.join("runtime"))
@@ -1739,19 +1771,105 @@ fn cli_mcp_clients_share_gateway_until_final_idle_shutdown() {
 #[test]
 fn cli_mcp_restarts_one_stopped_gateway_then_fails_after_the_second_stop() {
     let temp = tempfile::tempdir().unwrap();
-    let (mut client, _stdin) = start_mcp_client(temp.path(), "127.0.0.1:0".parse().unwrap());
+    let (logging_config, log_path) = write_jsonl_logging_config(temp.path());
+    let (mut client, _stdin) = start_mcp_client_with_generation_and_logging(
+        temp.path(),
+        "127.0.0.1:0".parse().unwrap(),
+        "1",
+        None,
+        Some(&logging_config),
+    );
     let first = wait_for_owned_sidecar(temp.path(), None);
     let first_pid = first["pid"].as_u64().unwrap();
 
     stop_owned_sidecar(&first);
     let second = wait_for_owned_sidecar(temp.path(), Some(first_pid));
     assert_ne!(second["pid"], first["pid"]);
+    wait_for_jsonl_event(&log_path, "gateway_recovered");
 
     stop_owned_sidecar(&second);
     let status = wait_child(&mut client);
     assert!(
         !status.success(),
         "MCP client unexpectedly restarted the shared gateway twice"
+    );
+    let records = read_jsonl_records(&log_path);
+    let session_failure = records
+        .iter()
+        .find(|record| record["event"] == "mcp_session_failed")
+        .expect("mcp_session_failed record");
+    let command_failure = records
+        .iter()
+        .find(|record| record["event"] == "command_failed" && record["fields"]["command"] == "mcp")
+        .expect("MCP command_failed record");
+    assert_eq!(
+        session_failure["fields"]["failure_reason"],
+        "gateway_recovered_then_unhealthy"
+    );
+    assert_eq!(
+        command_failure["fields"]["failure_reason"],
+        "gateway_recovered_then_unhealthy"
+    );
+}
+
+#[test]
+fn cli_mcp_logs_static_heartbeat_configuration_failure_reason() {
+    let temp = tempfile::tempdir().unwrap();
+    let (logging_config, log_path) = write_jsonl_logging_config(temp.path());
+    let secret = "NEMO_RELAY_HEARTBEAT_SECRET_SENTINEL";
+    let output = Command::new(gateway_bin())
+        .args(["--log-config-path"])
+        .arg(&logging_config)
+        .args(["--bind", "127.0.0.1:0", "mcp"])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
+        .env("TMPDIR", temp.path())
+        .env("NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS", secret)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS")
+    );
+    let contents = std::fs::read_to_string(&log_path).unwrap();
+    assert!(!contents.contains(secret));
+    let failure = read_jsonl_event(&log_path, "command_failed");
+    assert_eq!(failure["fields"]["command"], "mcp");
+    assert_eq!(
+        failure["fields"]["failure_reason"],
+        "heartbeat_configuration_failed"
+    );
+}
+
+#[test]
+fn cli_mcp_logs_gateway_acquisition_failure_reason() {
+    let temp = tempfile::tempdir().unwrap();
+    let (logging_config, log_path) = write_jsonl_logging_config(temp.path());
+    let output = Command::new(gateway_bin())
+        .args(["--log-config-path"])
+        .arg(&logging_config)
+        .args(["--bind", "0.0.0.0:0", "mcp"])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
+        .env("TMPDIR", temp.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let gateway_failure = read_jsonl_event(&log_path, "gateway_acquisition_failed");
+    assert_eq!(
+        gateway_failure["fields"]["failure_reason"],
+        "gateway_acquisition_failed"
+    );
+    let command_failure = read_jsonl_event(&log_path, "command_failed");
+    assert_eq!(command_failure["fields"]["command"], "mcp");
+    assert_eq!(
+        command_failure["fields"]["failure_reason"],
+        "gateway_acquisition_failed"
     );
 }
 

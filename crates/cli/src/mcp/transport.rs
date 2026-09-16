@@ -3,7 +3,7 @@
 
 //! Bounded newline framing for MCP stdio.
 
-use crate::error::CliError;
+use crate::error::{CliError, McpFailureReason};
 
 pub(super) const MAX_MCP_FRAME_BYTES: usize = 1024 * 1024;
 pub(super) type FrameReceiver = tokio::sync::mpsc::Receiver<Result<String, std::io::Error>>;
@@ -35,7 +35,10 @@ pub(super) fn spawn_stdin_reader() -> Result<FrameReceiver, CliError> {
                 }
             }
         })
-        .map_err(|error| CliError::Launch(format!("failed to start MCP stdin reader: {error}")))?;
+        .map_err(|error| {
+            CliError::Launch(format!("failed to start MCP stdin reader: {error}"))
+                .with_mcp_failure_reason(McpFailureReason::StdinReaderStartFailed)
+        })?;
     Ok(receiver)
 }
 

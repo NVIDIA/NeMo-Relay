@@ -352,7 +352,10 @@ async fn worker_activation_failure_sends_sequence_one_and_propagates_socket_reje
         assert_eq!(payload.sequence, 1);
         assert_eq!(payload.session_id, "mcp-test-session");
         assert_eq!(payload.payload.activation_id, "failed-activation");
-        assert!(!payload.payload.reason.is_empty());
+        assert_eq!(
+            payload.payload.failure_reason,
+            WorkerActivationFailureReason::WorkerExitedBeforeReady
+        );
         assert!(payload.validate_payload_hash());
         let response = Event::Reply {
             request_id: request.request_id,

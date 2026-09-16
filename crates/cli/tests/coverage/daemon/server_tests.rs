@@ -7,7 +7,8 @@ use std::sync::Arc;
 use super::*;
 use crate::daemon::common::client::{begin_handshake, control_client};
 use crate::daemon::common::control::{
-    WorkerNetworkHintProof, WorkerReadyPayload, WorkerRegisterResponse,
+    WorkerActivationFailureReason, WorkerNetworkHintProof, WorkerReadyPayload,
+    WorkerRegisterResponse,
 };
 use crate::daemon::common::routes::HookRoute;
 use crate::daemon::common::state::ROUTE_TOKEN_ENV;
@@ -1513,7 +1514,7 @@ async fn control_handlers_reject_unknown_sessions_and_oversized_failure_payloads
         1,
         ActivationFailedPayload {
             activation_id: "x".repeat(129),
-            reason: "reason".into(),
+            failure_reason: WorkerActivationFailureReason::WorkerProcessSpawnFailed,
         },
     )
     .unwrap();

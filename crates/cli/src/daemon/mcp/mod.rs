@@ -16,8 +16,8 @@ use super::common::address::{daemon_url, explicit_daemon_origin};
 use super::common::client::{begin_handshake, control_client};
 use super::common::control::{
     ACTIVATION_LIFETIME_MS, ActivationFailedPayload, EmptyPayload, McpRegisterRequest,
-    McpRegisterResponse, SessionRequest, WorkerBootstrap, WorkerNetworkHint,
-    WorkerNetworkHintProof,
+    McpRegisterResponse, SessionRequest, WorkerActivationFailureReason, WorkerBootstrap,
+    WorkerNetworkHint, WorkerNetworkHintProof,
 };
 use super::common::identity::MachineIdentity;
 use super::common::protocol::{BrokerDirective, ComponentRole, SensitiveString};
@@ -259,6 +259,20 @@ struct ActivationChild {
     published: bool,
 }
 
+struct WorkerActivationError {
+    failure_reason: WorkerActivationFailureReason,
+    source: CliError,
+}
+
+impl WorkerActivationError {
+    fn new(failure_reason: WorkerActivationFailureReason, source: CliError) -> Self {
+        Self {
+            failure_reason,
+            source,
+        }
+    }
+}
+
 impl Drop for ActivationChild {
     fn drop(&mut self) {
         if !self.published {
@@ -323,8 +337,13 @@ async fn make_route_ready(
                                 ));
                             }
                             Err(error) => {
-                                report_activation_failed(lease, &bootstrap.activation_id, &error)
-                                    .await?;
+                                report_activation_failed(
+                                    lease,
+                                    &bootstrap.activation_id,
+                                    error.failure_reason,
+                                    &error.source,
+                                )
+                                .await?;
                                 directive = refresh_registration(lease).await?.directive;
                                 continue;
                             }
@@ -337,7 +356,13 @@ async fn make_route_ready(
                         let error = CliError::Launch(format!(
                             "activated worker exited before readiness with {status}"
                         ));
-                        report_activation_failed(lease, &bootstrap.activation_id, &error).await?;
+                        report_activation_failed(
+                            lease,
+                            &bootstrap.activation_id,
+                            WorkerActivationFailureReason::WorkerExitedBeforeReady,
+                            &error,
+                        )
+                        .await?;
                         directive = refresh_registration(lease).await?.directive;
                         continue;
                     }
@@ -356,7 +381,13 @@ async fn make_route_ready(
                             "activated worker did not register within 15 seconds".into(),
                         );
                         stop_pending_launch(&mut launched).await?;
-                        report_activation_failed(lease, &bootstrap.activation_id, &error).await?;
+                        report_activation_failed(
+                            lease,
+                            &bootstrap.activation_id,
+                            WorkerActivationFailureReason::WorkerReadinessTimeout,
+                            &error,
+                        )
+                        .await?;
                         directive = refresh_registration(lease).await?.directive;
                         continue;
                     }
@@ -436,40 +467,98 @@ fn apply_registration(lease: &mut McpSession, registration: &Registration) {
 async fn launch_worker(
     daemon_origin: &str,
     bootstrap: &WorkerBootstrap,
-) -> Result<ActivationChild, CliError> {
-    let executable = std::env::current_exe().map_err(|error| {
-        CliError::Launch(format!(
-            "failed to resolve the nemo-relay executable: {error}"
-        ))
-    })?;
+) -> Result<ActivationChild, WorkerActivationError> {
+    let executable = std::env::current_exe()
+        .map_err(|error| {
+            CliError::Launch(format!(
+                "failed to resolve the nemo-relay executable: {error}"
+            ))
+        })
+        .map_err(|error| {
+            WorkerActivationError::new(
+                WorkerActivationFailureReason::WorkerExecutableResolutionFailed,
+                error,
+            )
+        })?;
     let mut command = worker_command(&executable, daemon_origin, bootstrap);
     let child = command
         .spawn()
-        .map_err(|error| CliError::Launch(format!("failed to launch daemon worker: {error}")))?;
+        .map_err(|error| CliError::Launch(format!("failed to launch daemon worker: {error}")))
+        .map_err(|error| {
+            WorkerActivationError::new(
+                WorkerActivationFailureReason::WorkerProcessSpawnFailed,
+                error,
+            )
+        })?;
     let mut child = ActivationChild {
         child,
         published: false,
     };
     let transfer = async {
-        let mut stdin = child.child.stdin.take().ok_or_else(|| {
-            CliError::Launch("failed to create the protected worker activation pipe".into())
-        })?;
-        let payload = serde_json::to_vec(bootstrap).map_err(|error| {
-            CliError::Launch(format!("failed to encode worker activation grant: {error}"))
-        })?;
-        stdin.write_all(&payload).await.map_err(|error| {
-            CliError::Launch(format!(
-                "failed to transfer worker activation grant: {error}"
-            ))
-        })?;
-        stdin.shutdown().await.map_err(|error| {
-            CliError::Launch(format!("failed to close worker activation pipe: {error}"))
-        })?;
-        Ok::<(), CliError>(())
+        let mut stdin = child
+            .child
+            .stdin
+            .take()
+            .ok_or_else(|| {
+                CliError::Launch("failed to create the protected worker activation pipe".into())
+            })
+            .map_err(|error| {
+                WorkerActivationError::new(
+                    WorkerActivationFailureReason::WorkerActivationPipeUnavailable,
+                    error,
+                )
+            })?;
+        let payload = serde_json::to_vec(bootstrap)
+            .map_err(|error| {
+                CliError::Launch(format!("failed to encode worker activation grant: {error}"))
+            })
+            .map_err(|error| {
+                WorkerActivationError::new(
+                    WorkerActivationFailureReason::WorkerActivationGrantSerializationFailed,
+                    error,
+                )
+            })?;
+        stdin
+            .write_all(&payload)
+            .await
+            .map_err(|error| {
+                CliError::Launch(format!(
+                    "failed to transfer worker activation grant: {error}"
+                ))
+            })
+            .map_err(|error| {
+                WorkerActivationError::new(
+                    WorkerActivationFailureReason::WorkerActivationGrantWriteFailed,
+                    error,
+                )
+            })?;
+        stdin
+            .shutdown()
+            .await
+            .map_err(|error| {
+                CliError::Launch(format!("failed to close worker activation pipe: {error}"))
+            })
+            .map_err(|error| {
+                WorkerActivationError::new(
+                    WorkerActivationFailureReason::WorkerActivationPipeCloseFailed,
+                    error,
+                )
+            })?;
+        Ok::<(), WorkerActivationError>(())
     }
     .await;
     if let Err(error) = transfer {
-        child.child.kill().await.map_err(CliError::Io)?;
+        child
+            .child
+            .kill()
+            .await
+            .map_err(CliError::Io)
+            .map_err(|error| {
+                WorkerActivationError::new(
+                    WorkerActivationFailureReason::WorkerActivationCleanupFailed,
+                    error,
+                )
+            })?;
         return Err(error);
     }
     Ok(child)
@@ -505,12 +594,14 @@ fn worker_command(
 async fn report_activation_failed(
     lease: &mut McpSession,
     activation_id: &str,
+    failure_reason: WorkerActivationFailureReason,
     error: &CliError,
 ) -> Result<(), CliError> {
     log::error!(
         target: "nemo_relay.daemon.mcp",
         event = "worker_launch_failed",
-        error_kind = error.log_kind();
+        error_kind = error.log_kind(),
+        failure_reason = failure_reason.as_str();
         "MCP could not activate the broker-selected worker"
     );
     lease.sequence = lease.sequence.saturating_add(1);
@@ -520,7 +611,7 @@ async fn report_activation_failed(
         lease.sequence,
         ActivationFailedPayload {
             activation_id: activation_id.to_owned(),
-            reason: error.to_string(),
+            failure_reason,
         },
     )?;
     lease
