@@ -229,7 +229,9 @@ have independent parentage. The `finally` block drops the stack even if isolated
 emission fails or the callback is cancelled.
 
 ```python
-async def emit_runtime_events(ctx, tag, settings):
+from nemo_relay_plugin import Json, PluginContext
+
+async def emit_runtime_events(ctx: PluginContext, tag: str, settings: dict[str, Json]) -> None:
     handle = await ctx.runtime.push_scope(
         "example.python_worker.request",
         scope_type=ScopeType.CUSTOM,

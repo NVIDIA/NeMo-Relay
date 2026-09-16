@@ -13,7 +13,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 Validate dynamic plugins without loading plugin code or acquiring the host lease.
 
-`additional_plugins_toml` may be null. The inputs use the same configuration layering contract as [`nemo_relay_plugin_initialize`](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-initialize).
+`additional_plugins_toml` may be null. The inputs use the same configuration layering contract as [`nemo_relay_plugin_initialize`](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-initialize). A supplied path that does not exist adds a `plugin.configuration_file_missing` warning to `out_report_json` rather than causing validation to fail.
 
 ## Safety
 

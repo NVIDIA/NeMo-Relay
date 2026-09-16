@@ -58,7 +58,7 @@ Deregister a previously registered subscriber.
 
 Flush queued Relay events and the OTLP log processor.
 
-After a successful flush, runtime diagnostics include queue drops observed so far.
+After a successful flush, runtime diagnostics include queue drops observed so far. This is a synchronous completion barrier; call it from a blocking task in async code.
 
 #### `shutdown`
 
@@ -66,7 +66,7 @@ After a successful flush, runtime diagnostics include queue drops observed so fa
 
 Shut down the OTLP logger provider.
 
-Deregister this subscriber before calling shutdown.
+Deregister this subscriber before calling shutdown. This waits for the final export and should run in a blocking task in async code.
 
 ## Trait Implementations
 

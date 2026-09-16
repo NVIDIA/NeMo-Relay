@@ -131,7 +131,9 @@ preserving the category profile.
 import nemo_relay
 from nemo_relay import guardrails
 
-def sanitize_mark(event, fields: nemo_relay.EventSanitizeFields):
+def sanitize_mark(
+    event: nemo_relay.Event, fields: nemo_relay.EventSanitizeFields
+) -> nemo_relay.EventSanitizeFields:
     return {
         "data": {"checkpoint": event.name},
         "category_profile": fields["category_profile"],

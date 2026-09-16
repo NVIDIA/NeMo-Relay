@@ -13,7 +13,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 Initialize the unified static and dynamic plugin host from core-owned `plugins.toml` discovery.
 
-`additional_plugins_toml` may be null. When supplied it replaces user-file discovery. Relay merges it with the system file, then applies `config_json`. The returned handle owns all activated plugin registrations and runtimes.
+`additional_plugins_toml` may be null. When supplied it replaces user-file discovery. Relay merges it with the system file, then applies `config_json`. A supplied path that does not exist adds a `plugin.configuration_file_missing` warning to `out_report_json` rather than causing initialization to fail. The returned handle owns all activated plugin registrations and runtimes.
 
 ## Safety
 
