@@ -117,6 +117,24 @@ fn read_jsonl_event(path: &Path, event: &str) -> serde_json::Value {
         .unwrap_or_else(|| panic!("missing {event} record in {}", path.display()))
 }
 
+fn wait_for_jsonl_event(path: &Path, event: &str) -> serde_json::Value {
+    let deadline = Instant::now() + SIDECAR_PUBLICATION_TIMEOUT;
+    loop {
+        if let Ok(contents) = std::fs::read_to_string(path)
+            && let Some(record) = contents
+                .lines()
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .find(|record: &serde_json::Value| record["event"] == event)
+        {
+            return record;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for {event} record in {}", path.display());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn write_dynamic_plugin_manifest(dir: &std::path::Path, plugin_id: &str) {
     write_dynamic_plugin_manifest_with_options(dir, plugin_id, &["plugin_worker"], None);
 }
@@ -1767,8 +1785,7 @@ fn cli_mcp_restarts_one_stopped_gateway_then_fails_after_the_second_stop() {
     stop_owned_sidecar(&first);
     let second = wait_for_owned_sidecar(temp.path(), Some(first_pid));
     assert_ne!(second["pid"], first["pid"]);
-    // Let the MCP monitor observe its one permitted recovery before forcing the terminal state.
-    thread::sleep(Duration::from_secs(1));
+    wait_for_jsonl_event(&log_path, "gateway_recovered");
 
     stop_owned_sidecar(&second);
     let status = wait_child(&mut client);
