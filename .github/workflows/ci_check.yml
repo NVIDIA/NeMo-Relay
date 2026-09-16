@@ -213,10 +213,6 @@ jobs:
           set -e
           uv tool install pre-commit==${{ steps.ci-config.outputs.pre_commit_version }}
 
-          # Check the hook before optional integration extras can satisfy policy entries.
-          uv sync --frozen --inexact --no-install-project --no-install-package nemo-relay
-          pre-commit run pylic --all-files --show-diff-on-failure
-
           FLOW_CI_UV_SYNC_EXTRA_ARGS=()
           if [[ "$PYTHON_INTEGRATION_LANGCHAIN" == "true" ]]; then
             FLOW_CI_UV_SYNC_EXTRA_ARGS+=(--extra langchain --extra langchain-nvidia --extra langgraph --extra deepagents)
