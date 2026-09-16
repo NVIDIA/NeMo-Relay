@@ -913,6 +913,77 @@ fn direct_http_subscribers_emit_decodable_signal_payloads() {
 }
 
 #[test]
+fn http_log_and_metric_exporters_do_not_follow_redirects_without_headers() {
+    for signal in ["logs", "metrics"] {
+        let destination = TcpListener::bind("127.0.0.1:0").unwrap();
+        destination.set_nonblocking(true).unwrap();
+        let location = format!("http://{}/leak", destination.local_addr().unwrap());
+        let redirector = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", redirector.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut stream, _) = redirector.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut buffer = [0; 4_096];
+            assert!(stream.read(&mut buffer).unwrap() > 0);
+            write!(stream, "HTTP/1.1 307 Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+
+        match signal {
+            "logs" => {
+                let subscriber = OpenTelemetryLogSubscriber::new(
+                    OpenTelemetryLogConfig::new(endpoint).with_timeout(Duration::from_secs(1)),
+                )
+                .unwrap();
+                subscriber.subscriber()(&Event::Mark(MarkEvent::new(
+                    BaseEvent::builder().name("redirect-test").build(),
+                    None,
+                    None,
+                )));
+                assert!(
+                    subscriber.force_flush().is_err(),
+                    "redirect must fail export"
+                );
+                let _ = subscriber.shutdown();
+            }
+            "metrics" => {
+                let subscriber = OpenTelemetryMetricSubscriber::new(
+                    OpenTelemetryMetricConfig::new(endpoint)
+                        .with_timeout(Duration::from_secs(1))
+                        .with_export_interval(Duration::from_secs(60)),
+                )
+                .unwrap();
+                subscriber.subscriber()(&metric_event(
+                    METRIC_DATA_SCHEMA_VERSION,
+                    serde_json::to_value(MetricEnvelope {
+                        measurements: vec![measurement(
+                            "redirect.test",
+                            MetricKind::Counter,
+                            MetricValueType::U64,
+                            json!(1),
+                        )],
+                    })
+                    .unwrap(),
+                ));
+                assert!(
+                    subscriber.force_flush().is_err(),
+                    "redirect must fail export"
+                );
+                let _ = subscriber.shutdown();
+            }
+            _ => unreachable!(),
+        }
+
+        server.join().unwrap();
+        assert!(
+            matches!(destination.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "redirect destination must receive no connection for {signal}"
+        );
+    }
+}
+
+#[test]
 fn direct_http_subscribers_drain_accepted_events_on_drop() {
     let log_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let log_receiver = capture_one_request(log_listener.try_clone().unwrap());

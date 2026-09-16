@@ -451,21 +451,19 @@ fn build_metric_provider(
                 .with_temporality(temporality)
                 .with_timeout(config.timeout)
                 .with_endpoint(resolve_http_metric_endpoint(&config.endpoint).into_owned());
-            if !config.headers.is_empty() || !config.header_file.is_empty() {
-                let client = reqwest::Client::builder()
-                    .timeout(config.timeout)
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()
-                    .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
-                builder = if config.header_file.is_empty() {
-                    builder.with_http_client(client)
-                } else {
-                    builder.with_http_client(HeaderFileHttpClient::new(
-                        client,
-                        HeaderFileResolver::new(config.header_file.clone()),
-                    ))
-                };
-            }
+            let client = reqwest::Client::builder()
+                .timeout(config.timeout)
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
+            builder = if config.header_file.is_empty() {
+                builder.with_http_client(client)
+            } else {
+                builder.with_http_client(HeaderFileHttpClient::new(
+                    client,
+                    HeaderFileResolver::new(config.header_file.clone()),
+                ))
+            };
             if !config.headers.is_empty() {
                 builder = builder.with_headers(config.headers.clone());
             }

@@ -146,7 +146,12 @@ impl HttpClient for HeaderFileHttpClient {
     async fn send_bytes(&self, request: Request<Bytes>) -> Result<Response<Bytes>, HttpError> {
         validate_header_http_endpoint(&request.uri().to_string()).map_err(std::io::Error::other)?;
         let mut request = request;
-        for (header, value) in self.resolver.resolve().map_err(std::io::Error::other)? {
+        let resolver = self.resolver.clone();
+        let headers = tokio::task::spawn_blocking(move || resolver.resolve())
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?
+            .map_err(std::io::Error::other)?;
+        for (header, value) in headers {
             let name = reqwest::header::HeaderName::from_bytes(header.as_bytes())
                 .map_err(std::io::Error::other)?;
             let value =
