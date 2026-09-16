@@ -245,9 +245,11 @@ The following limitations still apply in this release:
 - Pi support is a proof of concept tested with 0.84.x. By default, its personal
   extension lets work continue if the gateway is unavailable. Later extensions
   can change arguments after Relay checks them. Unsupported provider routes
-  produce no LLM spans, and nested Pi processes appear as separate sessions.
-  SIGINT in headless mode can stop Pi before queued events are sent. For
-  details, refer to [Pi Limitations](/nemo-relay-cli/pi#limitations).
+  produce no LLM spans. This includes Google's native Gemini and Vertex APIs.
+  To route Gemini model traffic through Relay, use a provider or proxy that
+  accepts an OpenAI- or Anthropic-compatible API. Nested Pi processes appear as
+  separate sessions. SIGINT in headless mode can stop Pi before queued events
+  are sent. For details, refer to [Pi Limitations](/nemo-relay-cli/pi#limitations).
 - If a managed daemon worker fails to start, its authenticated route can enter
   pass-through mode. This mode forwards model requests without worker plugins
   until all MCP clients leave the route. MCP readiness alone does not prove
