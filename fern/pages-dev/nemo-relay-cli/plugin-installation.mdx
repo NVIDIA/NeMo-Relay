@@ -190,17 +190,25 @@ if it was already running so it reloads the provider and hook configuration.
 
 Claude Code and Codex processes use the same
 `nemo-relay mcp` lifecycle client. Before reading MCP protocol frames, it starts
-or reuses a detached native sidecar on `127.0.0.1:47632`. The client verifies
-Relay identity, version, protocol readiness, and effective user-level
-configuration, then heartbeats the sidecar every 3 seconds by default. Relay
-shortens the default automatically when necessary to keep it below the gateway
-idle timeout. Set `NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS` to a positive
-integer shorter than the idle timeout to override it. Concurrent
-processes from any host share the gateway. After the final MCP client closes,
-the sidecar exits after 300 idle seconds by default. If the gateway exits while
-MCP stdio is open, the client performs one coordinated restart and fails if
-recovery does not succeed. Relay reports a port conflict for a foreign process
-instead of accepting it merely because it returned HTTP 200.
+or reuses a detached native sidecar on `127.0.0.1:47632`. The client
+authenticates Relay with a per-user bootstrap proof and confirms its version and
+protocol readiness. It binds the effective user-level configuration fingerprint
+into that proof without requiring it to match the running gateway's fingerprint.
+Therefore, a configuration-only difference does not reject or replace a healthy
+gateway: clients that share the same user bootstrap state can reuse it. The
+fingerprint does not expose credentials or configuration secrets, and it is not
+the gateway ownership boundary.
+
+The client heartbeats the sidecar every 3 seconds by default. Relay shortens the
+default automatically when necessary to keep it below the gateway idle timeout.
+Set `NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS` to a positive integer shorter
+than the idle timeout to override it. Concurrent Claude Code and Codex MCP
+clients that share the bootstrap state reuse the gateway. After the final MCP
+client closes, the sidecar exits after 300 idle seconds by default. If the
+gateway exits while MCP stdio is open, the client performs one coordinated
+restart and fails if recovery does not succeed. Relay reports a port conflict
+for a foreign process instead of accepting it merely because it returned HTTP
+200.
 
 Health and readiness responses include a per-process instance ID. A per-user
 startup lock serializes launch and recovery, while a small recovery record lets
@@ -210,8 +218,6 @@ own activity, idle shutdown, and authenticated ownership-record cleanup.
 When a newly launched MCP client detects a verified Relay-owned gateway from a
 different Relay version, it stops that old sidecar and starts a matching one.
 This intentionally interrupts MCP clients still attached to the old gateway.
-Configuration-only compatibility mismatches remain errors and are not replaced
-automatically.
 
 Codex marks the MCP server as required, so the captured turn waits for verified
 gateway readiness. Claude Code 2.1.121 or newer uses `alwaysLoad`, which blocks

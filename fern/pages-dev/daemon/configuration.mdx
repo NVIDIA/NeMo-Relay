@@ -489,6 +489,26 @@ and Pi's exact runtime-selected endpoint in
 `x-nemo-relay-upstream-base-url`. No per-user upstream, fingerprint,
 generation, user path, or route value is written into the managed artifact.
 
+### Supported Provider Routes
+
+The managed daemon accepts provider requests for only these API types:
+
+- OpenAI Completions
+- OpenAI Responses
+- Anthropic Messages
+
+The daemon does not have a route for Google's Gemini or Vertex API. Requests to
+those normal Google endpoints do not pass through Relay, so Relay cannot record
+the LLM call or apply LLM request rules to it.
+
+To send Gemini model traffic through the daemon, use a provider or proxy that
+accepts OpenAI Completions, OpenAI Responses, or Anthropic Messages requests,
+then configure the client to use that compatible API. Do not point a Gemini
+endpoint at the daemon's OpenAI or Anthropic routes; the request formats are
+different. Relay's Gemini codec can translate Gemini data in
+[application integrations](/integrate-into-frameworks/provider-codecs), but it
+does not add a managed daemon route.
+
 ### Codex Responses Compatibility
 
 Both the personal gateway and managed daemon accept Codex's ChatGPT-shaped
