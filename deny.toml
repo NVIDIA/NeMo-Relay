@@ -4,7 +4,6 @@
 [bans]
 skip = [
     { crate = "block-buffer@0.10.4", reason = "required by sha1 0.10 alongside sha2 0.11" },
-    { crate = "console@0.15.11", reason = "required by dialoguer 0.11 alongside the CLI's console 0.16" },
     { crate = "cpufeatures@0.2.17", reason = "required by sha1 0.10 alongside sha2 0.11" },
     { crate = "crypto-common@0.1.7", reason = "required by sha1 0.10 alongside sha2 0.11" },
     { crate = "digest@0.10.7", reason = "required by sha1 0.10 alongside sha2 0.11" },
@@ -18,27 +17,141 @@ skip = [
     { crate = "rand@0.9.3", reason = "required by OpenTelemetry and tungstenite alongside object_store's rand 0.10" },
     { crate = "rand_core@0.9.5", reason = "required by rand 0.9 alongside rand 0.10" },
     { crate = "r-efi@6.0.0", reason = "target-specific build-only duplicate from cbindgen's tempfile stack" },
-    { crate = "reqwest@0.12.28", reason = "required by core and CLI dependencies alongside object_store's reqwest 0.13" },
-    { crate = "thiserror@1.0.69", reason = "required by dialoguer 0.11 alongside workspace dependencies using thiserror 2" },
-    { crate = "thiserror-impl@1.0.69", reason = "required by dialoguer 0.11 alongside workspace dependencies using thiserror 2" },
-    { crate = "wasm-streams@0.4.2", reason = "required by reqwest 0.12 alongside reqwest 0.13" },
     { crate = "winnow@1.0.1", reason = "build-only duplicate internal to cbindgen's TOML parser stack" },
     { crate = "windows-sys@0.52.0", reason = "target-specific dependency required alongside newer windows-sys releases" },
-    { crate = "windows-sys@0.59.0", reason = "target-specific dependency required alongside windows-sys 0.61" },
 ]
 
 [licenses]
 allow = [
-    "Apache-2.0 WITH LLVM-exception",
     "Apache-2.0",
     "BSD-3-Clause", # required by redis crate
-    "BSL-1.0",      # Boost Software License, required by xxhash-rust
-    "CDLA-Permissive-2.0", # Mozilla root certificate data used by object_store's Rustls transport
     "ISC",
     "MIT",
-    "MIT-0",       # required by borrow-or-share through jsonschema/referencing
-    "MPL-2.0",
-    "Unicode-3.0",
     "Zlib",        # required by foldhash through tonic-prost-build/prost-build
 ]
 private = { ignore = true }
+
+[[licenses.exceptions]]
+name = "target-lexicon"
+version = "*"
+allow = ["Apache-2.0 WITH LLVM-exception"]
+
+[[licenses.exceptions]]
+name = "xxhash-rust"
+version = "*"
+allow = ["BSL-1.0"]
+
+[[licenses.exceptions]]
+name = "webpki-root-certs"
+version = "*"
+allow = ["CDLA-Permissive-2.0"]
+
+[[licenses.exceptions]]
+name = "aws-lc-sys"
+version = "*"
+allow = ["MIT-0"]
+
+[[licenses.exceptions]]
+name = "borrow-or-share"
+version = "*"
+allow = ["MIT-0"]
+
+[[licenses.exceptions]]
+name = "cbindgen"
+version = "*"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "icu_collections"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "icu_locale_core"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "icu_normalizer"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "icu_normalizer_data"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "icu_properties"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "icu_properties_data"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "icu_provider"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "litemap"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "potential_utf"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "tinystr"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "unicode-ident"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "writeable"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "yoke"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "yoke-derive"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "zerofrom"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "zerofrom-derive"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "zerotrie"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "zerovec"
+version = "*"
+allow = ["Unicode-3.0"]
+
+[[licenses.exceptions]]
+name = "zerovec-derive"
+version = "*"
+allow = ["Unicode-3.0"]

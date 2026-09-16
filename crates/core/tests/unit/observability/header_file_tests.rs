@@ -208,7 +208,7 @@ fn http_client_reads_current_values_and_stops_before_network_on_resolution_failu
         headers
     });
     let client = HeaderFileHttpClient::new(
-        reqwest_otel::blocking::Client::builder().build().unwrap(),
+        reqwest::Client::builder().build().unwrap(),
         HeaderFileResolver::new(files),
     );
     let endpoint = format!("http://{address}/v1/logs");
@@ -252,8 +252,15 @@ fn http_client_reads_current_values_and_stops_before_network_on_resolution_failu
     assert!(listener.accept().is_err());
 }
 
-#[test]
-fn http_client_works_without_a_tokio_runtime() {
+#[tokio::test]
+async fn http_client_resolves_file_backed_headers_in_a_tokio_runtime() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("token");
+    fs::write(&path, "Bearer token\n").unwrap();
+    let files = HashMap::from([(
+        "authorization".to_string(),
+        path.to_string_lossy().into_owned(),
+    )]);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}/v1/logs", listener.local_addr().unwrap());
     let server = thread::spawn(move || {
@@ -261,18 +268,21 @@ fn http_client_works_without_a_tokio_runtime() {
         let mut buffer = [0; 4_096];
         let bytes_read = stream.read(&mut buffer).unwrap();
         assert!(bytes_read > 0);
+        assert!(
+            String::from_utf8_lossy(&buffer[..bytes_read]).contains("authorization: Bearer token")
+        );
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             .unwrap();
     });
     let client = HeaderFileHttpClient::new(
-        reqwest_otel::blocking::Client::builder().build().unwrap(),
-        HeaderFileResolver::new(HashMap::new()),
+        reqwest::Client::builder().build().unwrap(),
+        HeaderFileResolver::new(files),
     );
 
-    futures::executor::block_on(
-        client.send_bytes(Request::builder().uri(endpoint).body(Bytes::new()).unwrap()),
-    )
-    .unwrap();
+    client
+        .send_bytes(Request::builder().uri(endpoint).body(Bytes::new()).unwrap())
+        .await
+        .unwrap();
     server.join().unwrap();
 }

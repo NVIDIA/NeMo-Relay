@@ -9,6 +9,7 @@ use crate::api::event::{
     METRIC_DATA_SCHEMA_VERSION, MarkEvent, ScopeCategory, ScopeEvent,
 };
 use crate::api::scope::ScopeType;
+use opentelemetry_sdk::error::OTelSdkError;
 use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
 use serde_json::json;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -384,6 +385,8 @@ fn log_delivery_state_reports_queue_and_export_failures_independently() {
 
 #[test]
 fn direct_log_processor_records_cumulative_queue_drops_on_flush_and_shutdown() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let runtime_guard = runtime.enter();
     let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
     let delivery_diagnostics = Arc::new(LogDeliveryDiagnostics::new(
         "https://collector.example/v1/logs".to_string(),
@@ -392,9 +395,15 @@ fn direct_log_processor_records_cumulative_queue_drops_on_flush_and_shutdown() {
     delivery_diagnostics.emitted.store(3, Ordering::Relaxed);
     delivery_diagnostics.accepted.store(1, Ordering::Relaxed);
     let processor = DiagnosticBatchLogProcessor {
-        inner: BatchLogProcessor::builder(InMemoryLogExporter::default()).build(),
+        inner: AsyncBatchLogProcessor::builder(
+            InMemoryLogExporter::default(),
+            opentelemetry_sdk::runtime::Tokio,
+        )
+        .build(),
         diagnostics: Arc::clone(&delivery_diagnostics),
+        retry_timeout: Duration::from_secs(1),
     };
+    drop(runtime_guard);
 
     processor.force_flush().unwrap();
 
@@ -424,6 +433,22 @@ fn direct_log_processor_records_cumulative_queue_drops_on_flush_and_shutdown() {
             .message
             .contains("https://collector.example/v1/logs")
     );
+}
+
+#[test]
+fn batch_control_retry_waits_for_a_transiently_full_queue() {
+    let attempts = AtomicU64::new(0);
+
+    retry_batch_processor_channel_full(Duration::from_secs(1), || {
+        if attempts.fetch_add(1, Ordering::Relaxed) < 2 {
+            Err(OTelSdkError::InternalFailure("ChannelFull".to_string()))
+        } else {
+            Ok(())
+        }
+    })
+    .unwrap();
+
+    assert_eq!(attempts.load(Ordering::Relaxed), 3);
 }
 
 #[test]
