@@ -46,3 +46,17 @@ fn gateway_context_replaces_a_caller_supplied_operation_id() {
     );
     assert!(!headers.contains_key(OPERATION_ID_HEADER));
 }
+
+#[test]
+fn session_correlation_is_stable_and_does_not_retain_native_text() {
+    let native_session_id = "private-session-sentinel";
+    let first = OperationalContext::new().with_session(native_session_id);
+    let second = OperationalContext::new().with_session(native_session_id);
+    let different = OperationalContext::new().with_session("other-private-session");
+
+    let first_tag = first.test_session_tag().unwrap();
+    assert_eq!(first_tag, second.test_session_tag().unwrap());
+    assert_ne!(first_tag, different.test_session_tag().unwrap());
+    assert_ne!(first_tag, native_session_id);
+    assert!(!first_tag.contains(native_session_id));
+}

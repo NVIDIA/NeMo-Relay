@@ -9,6 +9,8 @@ use std::time::Instant;
 use std::sync::{LazyLock, Mutex};
 
 use axum::http::{HeaderMap, HeaderValue};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 /// Internal-only header that joins a short-lived hook-forward process to the gateway that handles
@@ -25,6 +27,13 @@ static TEST_DELAYED_EVENTS: LazyLock<Mutex<Vec<(String, &'static str)>>> =
 
 #[cfg(test)]
 static TEST_UPSTREAM_STARTED: LazyLock<Mutex<Vec<(String, &'static str)>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+
+#[cfg(test)]
+type TestHookStarted = Vec<(String, Option<String>)>;
+
+#[cfg(test)]
+static TEST_HOOK_STARTED: LazyLock<Mutex<TestHookStarted>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 
 #[derive(Clone, Debug)]
@@ -65,8 +74,11 @@ impl OperationalContext {
         }
     }
 
-    pub(crate) fn with_session(mut self, session_id: impl Into<String>) -> Self {
-        self.session_id = Some(session_id.into());
+    /// Attaches a stable, derived session tag. Native session IDs can contain user-provided text,
+    /// so they must never be written directly to operational records.
+    pub(crate) fn with_session(mut self, session_id: impl AsRef<str>) -> Self {
+        self.session_id =
+            Some(URL_SAFE_NO_PAD.encode(Sha256::digest(session_id.as_ref().as_bytes())));
         self
     }
 
@@ -88,6 +100,11 @@ impl OperationalContext {
 
     fn fields(&self) -> (&str, Option<&str>) {
         (&self.operation_id, self.session_id.as_deref())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_session_tag(&self) -> Option<&str> {
+        self.session_id.as_deref()
     }
 }
 
@@ -119,6 +136,11 @@ macro_rules! operational_log {
 }
 
 pub(crate) fn hook_started(context: &OperationalContext, boundary: &'static str) {
+    #[cfg(test)]
+    TEST_HOOK_STARTED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((context.operation_id.clone(), context.session_id.clone()));
     operational_log!(
         log::Level::Debug,
         "hook_started",
@@ -127,6 +149,17 @@ pub(crate) fn hook_started(context: &OperationalContext, boundary: &'static str)
         outcome = "started",
         elapsed_millis = 0
     );
+}
+
+#[cfg(test)]
+pub(crate) fn test_hook_session_tags(operation_id: &str) -> Vec<Option<String>> {
+    TEST_HOOK_STARTED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .filter(|(recorded_operation_id, _)| recorded_operation_id == operation_id)
+        .map(|(_, session_tag)| session_tag.clone())
+        .collect()
 }
 
 pub(crate) fn hook_completed(

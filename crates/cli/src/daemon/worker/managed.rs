@@ -219,11 +219,7 @@ impl ManagedRuntime {
                 let operational = outcome
                     .events
                     .first()
-                    .map(|event| {
-                        operational
-                            .clone()
-                            .with_session(event.session_id().to_string())
-                    })
+                    .map(|event| operational.clone().with_session(event.session_id()))
                     .unwrap_or(operational);
                 operational::hook_started(&operational, "managed_worker_hook");
                 if let Err(error) = self
@@ -256,11 +252,7 @@ impl ManagedRuntime {
                 let operational = outcome
                     .events
                     .first()
-                    .map(|event| {
-                        operational
-                            .clone()
-                            .with_session(event.session_id().to_string())
-                    })
+                    .map(|event| operational.clone().with_session(event.session_id()))
                     .unwrap_or(operational);
                 operational::hook_started(&operational, "managed_worker_hook");
                 if let Err(error) = self
@@ -315,11 +307,7 @@ impl ManagedRuntime {
                 let operational = outcome
                     .events
                     .first()
-                    .map(|event| {
-                        operational
-                            .clone()
-                            .with_session(event.session_id().to_string())
-                    })
+                    .map(|event| operational.clone().with_session(event.session_id()))
                     .unwrap_or(operational);
                 operational::hook_started(&operational, "managed_worker_hook");
                 // A daemon worker is already isolated to one authenticated machine owner. Keep

@@ -1114,11 +1114,7 @@ async fn codex_hook(
     let operational = outcome
         .events
         .first()
-        .map(|event| {
-            operational
-                .clone()
-                .with_session(event.session_id().to_string())
-        })
+        .map(|event| operational.clone().with_session(event.session_id()))
         .unwrap_or(operational);
     operational::hook_started(&operational, "hook_server");
     if let Err(error) = state
@@ -1163,11 +1159,7 @@ async fn claude_code_hook(
     let operational = outcome
         .events
         .first()
-        .map(|event| {
-            operational
-                .clone()
-                .with_session(event.session_id().to_string())
-        })
+        .map(|event| operational.clone().with_session(event.session_id()))
         .unwrap_or(operational);
     operational::hook_started(&operational, "hook_server");
     if let Err(error) = state
@@ -1240,11 +1232,7 @@ async fn pi_hook(
     let operational = outcome
         .events
         .first()
-        .map(|event| {
-            operational
-                .clone()
-                .with_session(event.session_id().to_string())
-        })
+        .map(|event| operational.clone().with_session(event.session_id()))
         .unwrap_or(operational);
     operational::hook_started(&operational, "hook_server");
     let effects = match state.sessions.apply_events(&headers, outcome.events).await {

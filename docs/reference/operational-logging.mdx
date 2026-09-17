@@ -38,7 +38,8 @@ At `debug` level, the CLI writes lifecycle records for hooks and for gateway cal
 to an upstream LLM. This includes local hooks, persistent hooks, daemon hooks, and
 managed-worker hooks. A hook forwarder and the Relay handler use the same random
 `operation_id`. Each gateway call gets a new ID. If Relay selects a session, the
-record also includes `session_id`.
+record also includes `session_id`. This is a stable, derived tag, not the native
+session ID.
 
 Normal lifecycle records are `hook_started`, `hook_completed`,
 `upstream_started`, `upstream_headers_received`, `upstream_first_event`,
