@@ -138,6 +138,21 @@ Check `dynamic_plugins` separately for errors in manifests, version rules,
 file integrity, environments, signatures, and policy. Exact validation does
 not check dynamic plugins.
 
+### Review Layered Dynamic Plugin Declarations
+
+<Warning title="Behavior Change">
+When user or explicit and system `plugins.toml` files declare dynamic records
+with the same manifest plugin ID, the higher-precedence record now replaces the
+lower-precedence record. Relay no longer fails with a duplicate-ID error, and
+it does not merge the lower record's `config` into the effective plugin.
+</Warning>
+
+If a system deployment repeats a user's dynamic-plugin ID, copy every setting
+needed at runtime into the system record. The system manifest reference and its
+lifecycle state also become authoritative. This applies to CLI gateway,
+wrapper, persistent gateway, daemon broker, and every binding that uses the
+normal `initialize(config, path)` API.
+
 #### Python-Specific Errors
 
 `nemo_relay.plugin.initialize()` and `nemo_relay.plugin.activate()` now raise

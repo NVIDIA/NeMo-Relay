@@ -104,6 +104,10 @@ Plugin settings and response caching include the following updates:
   which files contributed settings and how Relay combined them with application
   settings. Reports redact literal credentials and values in dynamic-plugin
   settings whose meaning Relay does not know.
+- Dynamic plugin declarations now layer by manifest plugin ID. When a
+  higher-precedence file declares the same ID, its complete record replaces the
+  lower-precedence record instead of blocking startup with a duplicate-ID
+  error. For details, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
 - Response caching adds `key_strategy = "logical"`. It ignores changes to tool
   descriptions and tool order. Other tool-definition changes still affect the
   key. `exact_request` remains the default. Each strategy has its own set of
@@ -165,6 +169,11 @@ Review the following changes before upgrading:
   policy fields default to `startup = "required"` and
   `attestation = "signature_required"`. An unsigned plugin that an embedded
   host previously accepted can now fail at startup.
+- A higher-precedence `[[plugins.dynamic]]` record with the same manifest
+  plugin ID now replaces the complete lower-precedence record. Relay no longer
+  rejects that collision, and it does not inherit the lower record's `config`.
+  Move every setting needed by the effective plugin into the higher-precedence
+  record.
 - Python plugin initialization and activation now raise `ValueError` for
   invalid static settings. They raise `FileNotFoundError` when a referenced
   configuration or resource is unavailable. These errors replace
@@ -245,9 +254,11 @@ The following limitations still apply in this release:
 - Pi support is a proof of concept tested with 0.84.x. By default, its personal
   extension lets work continue if the gateway is unavailable. Later extensions
   can change arguments after Relay checks them. Unsupported provider routes
-  produce no LLM spans, and nested Pi processes appear as separate sessions.
-  SIGINT in headless mode can stop Pi before queued events are sent. For
-  details, refer to [Pi Limitations](/nemo-relay-cli/pi#limitations).
+  produce no LLM spans. This includes Google's native Gemini and Vertex APIs.
+  To route Gemini model traffic through Relay, use a provider or proxy that
+  accepts an OpenAI- or Anthropic-compatible API. Nested Pi processes appear as
+  separate sessions. SIGINT in headless mode can stop Pi before queued events
+  are sent. For details, refer to [Pi Limitations](/nemo-relay-cli/pi#limitations).
 - If a managed daemon worker fails to start, its authenticated route can enter
   pass-through mode. This mode forwards model requests without worker plugins
   until all MCP clients leave the route. MCP readiness alone does not prove

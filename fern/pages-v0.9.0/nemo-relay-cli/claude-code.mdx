@@ -66,11 +66,14 @@ provider routing through the local NeMo Relay sidecar. It uses the existing
 
 The plugin starts `nemo-relay mcp`, a lightweight Rust lifecycle client that
 starts or reuses the shared gateway on `127.0.0.1:47632` immediately when the
-MCP process launches. The client verifies the gateway identity and effective
-persistent configuration, heartbeats it while MCP stdio remains open, and
-performs one coordinated restart if the gateway becomes unhealthy. The
-heartbeat defaults to 3 seconds and is shortened automatically when necessary
-to remain below the gateway idle timeout. Set
+MCP process launches. The client authenticates the gateway with the per-user
+bootstrap proof, then heartbeats it while MCP stdio remains open and performs
+one coordinated restart if the gateway becomes unhealthy. A different effective
+persistent configuration fingerprint does not by itself prevent reuse: clients
+that share the same user bootstrap state can reuse the healthy local gateway.
+The fingerprint is bound into the proof without exposing configuration secrets;
+it is not the gateway ownership boundary. The heartbeat defaults to 3 seconds
+and is shortened automatically when necessary to remain below the gateway idle timeout. Set
 `NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS` to a positive integer shorter than
 the idle timeout to override it. Claude Code and Codex MCP clients
 share a compatible gateway, and the gateway

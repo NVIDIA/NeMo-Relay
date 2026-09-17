@@ -127,6 +127,11 @@ Use the `fingerprint` to correlate an MCP session with its worker route and
 field means the route has cut over to bypass mode. Session and worker IDs are
 intended for operational correlation, but do not treat log access as
 authorization to share them outside the deployment's support boundary.
+Both `worker_launch_failed` and `worker_activation_failed` include a
+`failure_reason`. This is a short, fixed code that names the step that failed,
+such as starting the worker, sending its startup permission, or waiting for it to
+be ready. It does not include activation data or the source error text. Read
+the worker stderr output for the full error message.
 Control disconnect events include a `reason` such as `acknowledgement_timeout`,
 `pong_timeout`, or `peer_closed`. Provider failure events are rate-limited and
 report the number of intervening failures in `suppressed_since_last_emit`.
@@ -140,7 +145,7 @@ report the number of intervening failures in `suppressed_since_last_emit`.
 | `401` from a public route | Missing, unknown, or unregistered credential | Load the existing token and start MCP registration before sending requests. |
 | Registered route returns `503` | No live MCP reference or route not ready | Keep the harness MCP process alive; inspect registration and worker logs. |
 | MCP is ready but no plugin result appears | Pass-through, wrong plugin setup, or wrong harness provider | Find `worker_ready`, inspect client system configuration, and check effective harness routing. |
-| `worker_launch_failed` | Worker bind, launch, activation, or registration failed | Check assigned ports, executable permissions, stderr, and daemon-to-client reachability. |
+| `worker_launch_failed` | A worker start or activation step failed | Check `failure_reason` first. Then check assigned ports, executable permissions, worker stderr, and daemon-to-client reachability. |
 | Remote worker advertises loopback | Wrong address override or network route | Use a concrete client IPv4 address reachable from the server. |
 | First request works but large streams stall | Buffering proxy or blocked provider path | Check the full request path and streaming requirements; compare a direct private-network deployment. |
 | Startup fails after moving service accounts | Signing identity or state directory changed | Restore the original state and ownership; verify any intended identity change out of band. |
