@@ -589,14 +589,95 @@ set_node_package_versions() {
     set_npm_package_version crates/cli/assets/pi-extension/package.json package-lock.json "$version" integrations/pi
 }
 
+set_example_package_versions() {
+    local version="$1"
+    local python_executable=""
+    python_executable="$(uv_python_executable)"
+
+    "$python_executable" - "$version" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+version = sys.argv[1]
+
+def replace_one(path: str, pattern: str, replacement: str) -> None:
+    file = Path(path)
+    text = file.read_text()
+    updated, count = re.subn(pattern, replacement, text)
+    if count != 1:
+        raise SystemExit(f"Failed to update exactly one version in {path}; found {count}")
+    if updated != text:
+        file.write_text(updated)
+        print(f"{path} version updated to {version}")
+    else:
+        print(f"{path} already set to {version}")
+
+replace_one(
+    "examples/language-binding-plugin/rust/Cargo.toml",
+    r'(nemo-relay = \{ version = ")[^"]+(".*)',
+    rf'\g<1>{version}\2',
+)
+replace_one(
+    "examples/rust-grpc-worker-plugin/Cargo.toml",
+    r'(nemo-relay-worker = \{ version = ")[^"]+(".*)',
+    rf'\g<1>{version}\2',
+)
+replace_one(
+    "examples/rust-grpc-worker-plugin/Cargo.toml",
+    r'(nemo-relay = \{ version = ")[^"]+(".*)',
+    rf'\g<1>{version}\2',
+)
+replace_one(
+    "examples/rust-native-plugin/Cargo.toml",
+    r'(nemo-relay-plugin = \{ version = ")[^"]+(".*)',
+    rf'\g<1>{version}\2',
+)
+replace_one(
+    "examples/rust-native-plugin/Cargo.toml",
+    r'(nemo-relay = \{ version = ")[^"]+(".*)',
+    rf'\g<1>{version}\2',
+)
+replace_one(
+    "examples/language-binding-plugin/python/pyproject.toml",
+    r'(nemo-relay==)[^"\n]+',
+    rf'\g<1>{version}',
+)
+replace_one(
+    "examples/python-grpc-worker-plugin/pyproject.toml",
+    r'(nemo-relay-plugin>=)[^"\n]+',
+    rf'\g<1>{version}',
+)
+
+node_example = Path("examples/language-binding-plugin/node/package.json")
+manifest = json.loads(node_example.read_text())
+dependency = manifest.get("dependencies", {}).get("nemo-relay-node")
+if dependency != "file:../../../crates/node":
+    raise SystemExit(
+        "examples/language-binding-plugin/node/package.json must link the local "
+        "nemo-relay-node workspace package before the npm package is published"
+    )
+print("examples/language-binding-plugin/node/package.json links the local workspace package")
+PY
+
+    # Cargo metadata refreshes only the local path-package records in the checked example lock.
+    # Keep uv offline so an example-only version bump cannot opportunistically upgrade PyPI packages.
+    cargo metadata --manifest-path examples/language-binding-plugin/rust/Cargo.toml --format-version 1 >/dev/null
+    uv lock --directory examples/language-binding-plugin/python --offline
+    uv lock --directory examples/python-grpc-worker-plugin --offline
+}
+
 set_node_package_version() {
     set_node_package_versions "$1"
+    set_example_package_versions "$1"
 }
 
 set_project_version() {
     local version="$1"
     set_cargo_workspace_version "$version"
     set_node_package_versions "$version"
+    set_example_package_versions "$version"
     set_python_package_version "$version" false
     set_python_plugin_package_version "$version"
     set_coding_agent_plugin_versions "$version"
