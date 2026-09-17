@@ -70,6 +70,9 @@ Daemon mode supports the following shared-service features:
   and forward frames in both directions. For setup, service management,
   upgrades, and troubleshooting, refer to
   [Daemon](/daemon/about).
+- A managed gateway has up to 20 seconds after Relay starts it to resolve its
+  persistent configuration, bind its listener, and report readiness. This gives
+  slow configuration discovery time to finish.
 
 ### Coding-Agent and Framework Support
 
@@ -135,12 +138,39 @@ Trace exports and PII redaction include the following changes:
   environment variables. Use `header_env`, or `headerEnv` in Node.js. Relay reads
   the values when it creates the subscriber. Missing or invalid values prevent
   creation without exposing the secret.
+- Observability exporters can also read a header from a local file with
+  `header_file`. This supports credentials that another process rotates. Relay
+  reads the file for each HTTP delivery. An ATOF WebSocket reads it when it
+  connects or reconnects, and an NDJSON sink reads it when it starts. Relay does
+  not write the header value to diagnostics.
+- OpenTelemetry trace, log, and metric exports add their standard SDK resource
+  fields automatically. Do not set the reserved `telemetry.sdk.*` fields
+  yourself.
 - The PII `trajectory_context` preset removes unknown fields and opaque
   payloads, whose structure Relay cannot safely interpret. It keeps approved
   analytics fields and trace links. Typed metric attributes must match allowed
   string names and values. The preset drops numeric, boolean, and unlisted
-  attributes. For details, refer to
+  attributes. Python, Node.js, and Go configuration helpers expose the preset
+  and its typed settings. For details, refer to
   [PII Redaction Configuration](/configure-plugins/pii-redaction/configuration).
+
+### Operational Diagnostics
+
+The CLI and daemon now provide more privacy-safe operational logs:
+
+- Daemon logs show worker, route, MCP session, and upstream lifecycle events.
+  CLI logs also show hook delivery and upstream request events, including slow
+  or stalled streams. These records use random operation IDs and do not include
+  prompts, tool data, model names, URLs, headers, or credentials.
+- Failure records use short, fixed reason codes. These codes help operators
+  identify a failed MCP session, gateway recovery, or worker startup without
+  placing private error text in structured logs.
+- `nemo-relay doctor` now includes the redacted plugin-host preflight. It shows
+  static settings and dynamic-plugin trust or configuration problems without
+  starting plugins.
+
+For the event names, fields, and logging setup, refer to
+[Operational Logging](/reference/operational-logging).
 
 ### Support Matrix and Compatibility Updates
 
@@ -153,52 +183,110 @@ For steps to upgrade from 0.8.x to 0.9, refer to the
 
 ### Breaking Changes
 
-Review the following changes before upgrading:
+Review each of the following changes before upgrading.
 
-- Tool execution intercepts now receive `(ToolExecutionContext, next)`.
-  The context holds the tool name, arguments, and optional `tool_call_id`.
-  Update callbacks in each binding and plugin SDK you use. Native plugins use
-  ABI v5 for this callback. Native and worker plugins that register it must
-  declare a Relay version range that excludes 0.8. For details, refer to
-  [Tool Execution Context](/reference/tool-execution-intercept-outcomes#tool-execution-context).
-- Global plugin clear and report functions are removed, along with explicit
-  dynamic activation-spec APIs. Keep the activation handle, read its report,
-  and close it during shutdown. Static diagnostics are now under
-  `report.config`. Use exact validation to check settings without reading files.
-- The core host checks dynamic-plugin trust for every embedding API. Omitted
-  policy fields default to `startup = "required"` and
-  `attestation = "signature_required"`. An unsigned plugin that an embedded
-  host previously accepted can now fail at startup.
-- A higher-precedence `[[plugins.dynamic]]` record with the same manifest
-  plugin ID now replaces the complete lower-precedence record. Relay no longer
-  rejects that collision, and it does not inherit the lower record's `config`.
-  Move every setting needed by the effective plugin into the higher-precedence
-  record.
-- Python plugin initialization and activation now raise `ValueError` for
-  invalid static settings. They raise `FileNotFoundError` when a referenced
-  configuration or resource is unavailable. These errors replace
-  `RuntimeError` for those failures.
-- Default propagation can join traces that were previously separate.
-  In ATIF, `session_id` identifies a run, while `trajectory_id` identifies
-  one trajectory within that run.
-- All trace output formats require HTTPS for remote collectors, with HTTP or
-  gRPC transport. Plain HTTP is limited to localhost and loopback IP addresses.
-  OTLP/HTTP trace exporters reject redirects, including HTTPS redirects.
-  Log and metric exporters keep their existing transport rules.
-- GenAI tool content is exported by default after sanitization. Review your
-  redaction policy before sending this content to collectors.
-- The stricter `trajectory_context` preset removes opaque fields and metric
-  attributes that it previously kept. Update analytics that depend on them.
-- Rust `ResponseCacheConfig.key_strategy` now uses `ResponseCacheKeyStrategy`
-  instead of `String`. The `KEY_STRATEGY_EXACT_REQUEST` constant is removed.
+#### Tool Execution Intercepts
+
+<Warning title="Breaking Change">
+Tool execution intercepts now receive `(ToolExecutionContext, next)` because
+Relay needs to pass the provider tool-call ID with the name and arguments.
+Update every callback and plugin SDK that you use. Native plugins use ABI v5,
+and native or worker plugins that register this callback cannot support Relay
+0.8. Follow the [Migration Guides](/reference/migration-guides) before you
+upgrade.
+</Warning>
+
+#### Plugin Host Lifecycle and Trust
+
+<Warning title="Breaking Change">
+Global plugin clear and report functions and explicit dynamic activation-spec
+APIs are removed because one activation handle now owns the plugin host. Keep
+the handle, read its report, and close it during shutdown. The host also checks
+dynamic-plugin trust through every embedding API, so an unsigned plugin that
+previously started can now fail. Follow the
+[Migration Guides](/reference/migration-guides) before you upgrade.
+</Warning>
+
+#### Layered Dynamic Plugin Records
+
+<Warning title="Breaking Change">
+A higher-precedence `[[plugins.dynamic]]` record with the same manifest ID now
+replaces the full lower-precedence record. This avoids duplicate-ID failures,
+but it also means that the lower record's `config` is not kept. Copy all needed
+settings to the higher-precedence record. Follow the
+[Migration Guides](/reference/migration-guides) before you upgrade.
+</Warning>
+
+#### Python Plugin Errors
+
+<Warning title="Breaking Change">
+Python plugin initialization and activation now raise `ValueError` for invalid
+static settings and `FileNotFoundError` for unavailable files or resources.
+These errors replace `RuntimeError` for those cases, so existing exception
+handlers can miss them. Follow the [Migration Guides](/reference/migration-guides)
+before you upgrade.
+</Warning>
+
+#### Trace Boundaries
+
+<Warning title="Breaking Change">
+Default propagation can now join traces that were separate. In ATIF,
+`session_id` identifies a run and `trajectory_id` identifies one trajectory in
+that run. This preserves the parent trace across related work. Follow the
+[Migration Guides](/reference/migration-guides) before you upgrade.
+</Warning>
+
+#### GenAI Tool Content
+
+<Warning title="Breaking Change">
+GenAI exports now include sanitized tool content by default. Review redaction
+and data-access rules because your collector can receive content that it did
+not receive before. Follow the [Migration Guides](/reference/migration-guides)
+before you upgrade.
+</Warning>
+
+#### Secure Trace Transport
+
+<Warning title="Breaking Change">
+Remote trace collectors must use HTTPS. Plain HTTP is limited to localhost and
+loopback IP addresses, and OTLP/HTTP trace exporters reject redirects. This
+prevents trace data from being sent to an unexpected or insecure destination.
+Follow the [Migration Guides](/reference/migration-guides) before you upgrade.
+</Warning>
+
+#### File-Based Exporter Headers
+
+<Warning title="Breaking Change">
+Rust observability struct literals must set the new `header_file` field, and Go
+code that uses unkeyed composite literals must switch to keyed fields. Also,
+when any exporter header source is set, remote ATOF, ATIF, log, and metric
+destinations require secure HTTPS or WSS transport. These rules protect rotated
+credentials. Follow the [Migration Guides](/reference/migration-guides) before
+you upgrade.
+</Warning>
+
+#### PII Redaction
+
+<Warning title="Breaking Change">
+The stricter `trajectory_context` preset removes opaque fields and metric
+attributes that it previously kept, so analytics that use them need updates.
+Follow the [Migration Guides](/reference/migration-guides) before you upgrade.
+</Warning>
+
+#### Rust Response Cache API
+
+<Warning title="Breaking Change">
+Rust `ResponseCacheConfig.key_strategy` now uses
+`ResponseCacheKeyStrategy` instead of `String`, and
+`KEY_STRATEGY_EXACT_REQUEST` is removed. Update source code that configures a
+response cache. Follow the
+[Migration Guides](/reference/migration-guides) before you upgrade.
+</Warning>
 
 ### Fixed Known Issues in 0.9
 
-This release fixes the following issues:
+This release fixes the following issues that also affect earlier releases:
 
-- OpenTelemetry exports create valid local roots when a parent scope is not
-  exported. Relay keeps imported parent context when it queues or transforms
-  events. It no longer assigns remote parents to local scopes by mistake.
 - Coding-agent LLM events keep the provider's conversation ID when one is
   given. Otherwise, they use the coding agent's session ID to link events.
 - LangChain keeps message boundaries, tool-call IDs, and provider-specific
@@ -213,9 +301,16 @@ This release fixes the following issues:
 - Codex installation handles marketplace entries that point to missing files.
   Use `nemo-relay install codex --force` to repair stale entries owned by Relay.
 - Generated Codex and Claude Code hook commands use private files.
-- Pi tool events keep the original tool-result text.
 - PII URL masking no longer keeps credentials. Overlapping PII path selectors
   no longer remove unrelated request content.
+- Gateway streams can run for more than five minutes when data keeps arriving.
+  Relay still stops a stream that stays idle for five minutes.
+- `nemo-relay doctor` gives a slow coding-agent CLI up to 10 seconds to report
+  its version. Network health checks keep their shorter timeout.
+- `nemo-relay gateway stop` recognizes the published pinned CLI process and
+  can stop the Relay-owned gateway it started.
+- OpenTelemetry flush and shutdown drain accepted trace, log, and metric data
+  more reliably before they finish.
 
 ### Other Improvements
 
@@ -304,8 +399,8 @@ The following limitations still apply in this release:
   `scheduled_delay_millis` independently on each endpoint, or use the standard
   `OTEL_BSP_*` environment variables as process-wide fallbacks. A larger finite
   queue does not guarantee lossless telemetry.
-- Operational logging configuration and sink lifecycle are available, but broad
-  operational log coverage across commands is not yet available.
+- Operational logging covers Relay-managed hooks, gateway requests, the daemon,
+  and workers. It does not yet cover every CLI command.
 
 ## Previous Releases
 

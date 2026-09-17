@@ -210,6 +210,15 @@ restart and fails if recovery does not succeed. Relay reports a port conflict
 for a foreign process instead of accepting it merely because it returned HTTP
 200.
 
+For a cold start, the lifecycle client allows up to 20 seconds from spawning a
+sidecar until authenticated readiness. This window includes persistent
+configuration resolution, listener binding, and readiness publication. If the
+window expires, the MCP session fails and the coding agent cannot send requests
+through Relay. Restart the coding agent to make a new startup attempt. If the
+failure recurs, inspect the `gateway_acquisition_failed` event with
+`failure_kind = "gateway_readiness_timeout"` in Relay's operational log before
+collecting support diagnostics.
+
 Health and readiness responses include a per-process instance ID. A per-user
 startup lock serializes launch and recovery, while a small recovery record lets
 overlapping MCP clients share the same restart attempt. The gateway tracks its
