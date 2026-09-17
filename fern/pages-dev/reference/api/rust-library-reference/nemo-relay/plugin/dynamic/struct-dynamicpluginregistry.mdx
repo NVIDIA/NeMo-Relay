@@ -113,6 +113,14 @@ Replaces the resolved worker environment and its validation state.
 
 Replaces the current host-policy outcome without mutating desired state.
 
+#### `replace_declaration`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn replace_declaration(\n    &amp;mut self,\n    plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    replacement: <a href=\"struct-dynamicpluginrecord\">DynamicPluginRecord</a>,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Replaces declaration-owned fields while preserving lifecycle-owned state.
+
+The replacement must describe the same plugin ID. Desired state, runtime state, and durable lifecycle metadata remain attached to the existing record.
+
 ## Trait Implementations
 
 ### `impl Debug for DynamicPluginRegistry`

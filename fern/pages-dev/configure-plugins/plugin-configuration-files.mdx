@@ -357,6 +357,14 @@ by `kind` across files. A higher-precedence component with the same `kind`
 merges into the lower-precedence component. Relay adds a component with a
 different `kind` to the effective configuration.
 
+Dynamic plugin records are special as well. Relay matches `[[plugins.dynamic]]`
+records by the plugin ID declared in their manifests. A higher-precedence record
+with the same ID replaces the lower-precedence record entirely, including its
+manifest reference and optional `config`. This lets system configuration select
+the approved dynamic plugin package and configuration without inheriting values
+from the user or explicit file. Declare a plugin ID at most once in each
+individual `plugins.toml` file.
+
 A component entry that explicitly sets `enabled = false` is skipped before
 matching and merging. It does not change a lower-precedence component's enabled
 state or contribute any `config` fields or list entries. If every layer for a
