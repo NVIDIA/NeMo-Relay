@@ -239,8 +239,11 @@ symbol = "nemo_relay_fixture_native_plugin"
                 .unwrap()
         }));
     }
-    for call in calls {
-        assert!(!call.await.unwrap().contains("synthetic-caller-secret"));
+    for (caller, call) in calls.into_iter().enumerate() {
+        let body = call.await.unwrap();
+        assert!(body.contains(&format!("caller-{caller}")), "{body}");
+        assert!(!body.contains("synthetic-caller-secret"));
+        assert!(!body.contains("nemo_relay_gateway_error"), "{body}");
     }
     assert_eq!(captures.lock().unwrap().len(), 12);
     for (_, headers, body) in captures.lock().unwrap().iter() {
@@ -305,7 +308,9 @@ symbol = "nemo_relay_fixture_native_plugin"
         assert!(body.contains("[REDACTED]"));
     }
     flush_subscribers().unwrap();
+    assert!(events.lock().unwrap().len() >= 24);
     let event_json = serde_json::to_string(&*events.lock().unwrap()).unwrap();
+    assert!(event_json.contains("caller-52"));
     assert!(!event_json.contains("synthetic-caller-secret"));
     assert!(!event_json.contains("must-not-forward"));
     deregister_subscriber("private_provider_events").unwrap();
