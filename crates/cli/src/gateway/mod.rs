@@ -13,7 +13,6 @@ use routes::*;
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use async_stream::stream;
 use axum::body::{Body, Bytes};
@@ -806,7 +805,7 @@ fn sse_json_stream_with_thresholds(
     let stream = stream! {
         let mut first_event = true;
         let mut first_event_warned = false;
-        let mut last_event_at = Instant::now();
+        let mut last_event_at = tokio::time::Instant::now();
         loop {
             let threshold = if first_event {
                 first_event_threshold
@@ -818,7 +817,7 @@ fn sse_json_stream_with_thresholds(
             let chunk = if already_warned {
                 next.await
             } else {
-                let mut deadline = tokio::time::Instant::from_std(last_event_at + threshold);
+                let mut deadline = last_event_at + threshold;
                 loop {
                     let delay = tokio::time::sleep_until(deadline);
                     tokio::pin!(delay);
@@ -842,8 +841,8 @@ fn sse_json_stream_with_thresholds(
                         first_event_warned = true;
                         break next.await;
                     }
-                    last_event_at = Instant::now();
-                    deadline = tokio::time::Instant::from_std(last_event_at + threshold);
+                    last_event_at = tokio::time::Instant::now();
+                    deadline = last_event_at + threshold;
                 }
             };
             let Some(chunk) = chunk else {
@@ -858,7 +857,7 @@ fn sse_json_stream_with_thresholds(
                                     operational::upstream_first_event(&operational);
                                     first_event = false;
                                 }
-                                last_event_at = Instant::now();
+                                last_event_at = tokio::time::Instant::now();
                                 yield Ok(event.data);
                             }
                             Err(error) => {

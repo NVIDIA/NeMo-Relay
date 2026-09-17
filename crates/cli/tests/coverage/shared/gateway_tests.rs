@@ -1107,10 +1107,11 @@ async fn sse_json_stream_yields_valid_event_before_later_batch_error() {
     server.await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sse_json_stream_continues_after_a_latency_observation() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    let (release_write, wait_for_write) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut request = [0_u8; 1024];
@@ -1121,7 +1122,7 @@ async fn sse_json_stream_continues_after_a_latency_observation() {
             )
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        wait_for_write.await.unwrap();
         socket
             .write_all(b"13\r\ndata: {\"ok\":true}\n\n\r\n0\r\n\r\n")
             .await
@@ -1141,7 +1142,13 @@ async fn sse_json_stream_continues_after_a_latency_observation() {
         Duration::from_millis(1),
     );
 
-    assert_eq!(stream.next().await.unwrap().unwrap(), json!({"ok": true}));
+    let next = stream.next();
+    tokio::pin!(next);
+    assert!(futures_util::poll!(&mut next).is_pending());
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert!(futures_util::poll!(&mut next).is_pending());
+    release_write.send(()).unwrap();
+    assert_eq!(next.await.unwrap().unwrap(), json!({"ok": true}));
     assert!(stream.next().await.is_none());
     assert_eq!(
         crate::operational::test_delayed_event_count(&operational, "upstream_first_event_delayed"),
@@ -1150,10 +1157,12 @@ async fn sse_json_stream_continues_after_a_latency_observation() {
     server.await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sse_json_stream_rearms_the_stall_timer_after_each_silent_interval() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    let (ready, wait_for_write) = tokio::sync::oneshot::channel();
+    let (release_write, wait_for_release) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut request = [0_u8; 1024];
@@ -1164,12 +1173,12 @@ async fn sse_json_stream_rearms_the_stall_timer_after_each_silent_interval() {
             )
             .await
             .unwrap();
-        for step in [2, 3] {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            let frame = format!("12\r\ndata: {{\"step\":{step}}}\n\n\r\n");
-            socket.write_all(frame.as_bytes()).await.unwrap();
-        }
-        socket.write_all(b"0\r\n\r\n").await.unwrap();
+        ready.send(()).unwrap();
+        wait_for_release.await.unwrap();
+        socket
+            .write_all(b"12\r\ndata: {\"step\":2}\n\n\r\n0\r\n\r\n")
+            .await
+            .unwrap();
     });
 
     let response = test_http_client()
@@ -1185,13 +1194,26 @@ async fn sse_json_stream_rearms_the_stall_timer_after_each_silent_interval() {
         Duration::from_millis(1),
     );
 
-    for step in 1..=3 {
-        assert_eq!(stream.next().await.unwrap().unwrap(), json!({"step": step}));
-    }
-    assert!(stream.next().await.is_none());
-    assert!(
-        crate::operational::test_delayed_event_count(&operational, "upstream_stream_stalled") >= 2
+    wait_for_write.await.unwrap();
+    assert_eq!(stream.next().await.unwrap().unwrap(), json!({"step": 1}));
+    let next = stream.next();
+    tokio::pin!(next);
+    assert!(futures_util::poll!(&mut next).is_pending());
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert!(futures_util::poll!(&mut next).is_pending());
+    assert_eq!(
+        crate::operational::test_delayed_event_count(&operational, "upstream_stream_stalled"),
+        1
     );
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert!(futures_util::poll!(&mut next).is_pending());
+    assert_eq!(
+        crate::operational::test_delayed_event_count(&operational, "upstream_stream_stalled"),
+        2
+    );
+    release_write.send(()).unwrap();
+    assert_eq!(next.await.unwrap().unwrap(), json!({"step": 2}));
+    assert!(stream.next().await.is_none());
     server.await.unwrap();
 }
 
