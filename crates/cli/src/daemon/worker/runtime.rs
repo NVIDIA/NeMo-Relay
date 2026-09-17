@@ -799,6 +799,7 @@ fn inject_provider_auth(headers: &mut HeaderMap, route: ProviderRoute, config: &
     let configured = match route {
         ProviderRoute::OpenAi => config.openai_auth_header.as_deref(),
         ProviderRoute::Anthropic => config.anthropic_auth_header.as_deref(),
+        ProviderRoute::TypeSafe => config.typesafe_auth_header.as_deref(),
     };
     if let Some(configured) = configured.and_then(header_value) {
         headers.insert(AUTHORIZATION, configured);
@@ -819,6 +820,14 @@ fn inject_provider_auth(headers: &mut HeaderMap, route: ProviderRoute, config: &
             };
             if let Some(value) = header_value(&key) {
                 headers.insert(HeaderName::from_static("x-api-key"), value);
+            }
+        }
+        ProviderRoute::TypeSafe => {
+            let Some(key) = nonempty_environment("TYPESAFE_API_KEY") else {
+                return;
+            };
+            if let Some(value) = header_value(&format!("Bearer {key}")) {
+                headers.insert(AUTHORIZATION, value);
             }
         }
     }

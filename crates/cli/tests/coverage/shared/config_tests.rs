@@ -227,6 +227,8 @@ struct PluginConfigDiscoveryScope {
     previous_openai_auth_header: Option<OsString>,
     previous_anthropic_base_url: Option<OsString>,
     previous_anthropic_auth_header: Option<OsString>,
+    previous_typesafe_base_url: Option<OsString>,
+    previous_typesafe_auth_header: Option<OsString>,
     previous_bootstrap_fingerprint: Option<OsString>,
     previous_plugin_idle_timeout: Option<OsString>,
     previous_plugin_heartbeat_interval: Option<OsString>,
@@ -246,6 +248,8 @@ impl PluginConfigDiscoveryScope {
         let previous_openai_auth_header = std::env::var_os("NEMO_RELAY_OPENAI_AUTH_HEADER");
         let previous_anthropic_base_url = std::env::var_os("NEMO_RELAY_ANTHROPIC_BASE_URL");
         let previous_anthropic_auth_header = std::env::var_os("NEMO_RELAY_ANTHROPIC_AUTH_HEADER");
+        let previous_typesafe_base_url = std::env::var_os("NEMO_RELAY_TYPESAFE_BASE_URL");
+        let previous_typesafe_auth_header = std::env::var_os("NEMO_RELAY_TYPESAFE_AUTH_HEADER");
         let previous_bootstrap_fingerprint = std::env::var_os(BOOTSTRAP_FINGERPRINT_ENV);
         let previous_plugin_idle_timeout = std::env::var_os(PLUGIN_IDLE_TIMEOUT_ENV);
         let previous_plugin_heartbeat_interval = std::env::var_os(PLUGIN_HEARTBEAT_INTERVAL_ENV);
@@ -258,6 +262,8 @@ impl PluginConfigDiscoveryScope {
             std::env::remove_var("NEMO_RELAY_OPENAI_AUTH_HEADER");
             std::env::remove_var("NEMO_RELAY_ANTHROPIC_BASE_URL");
             std::env::remove_var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER");
+            std::env::remove_var("NEMO_RELAY_TYPESAFE_BASE_URL");
+            std::env::remove_var("NEMO_RELAY_TYPESAFE_AUTH_HEADER");
             std::env::remove_var(BOOTSTRAP_FINGERPRINT_ENV);
             std::env::remove_var(PLUGIN_IDLE_TIMEOUT_ENV);
             std::env::remove_var(PLUGIN_HEARTBEAT_INTERVAL_ENV);
@@ -274,6 +280,8 @@ impl PluginConfigDiscoveryScope {
             previous_openai_auth_header,
             previous_anthropic_base_url,
             previous_anthropic_auth_header,
+            previous_typesafe_base_url,
+            previous_typesafe_auth_header,
             previous_bootstrap_fingerprint,
             previous_plugin_idle_timeout,
             previous_plugin_heartbeat_interval,
@@ -301,6 +309,14 @@ impl PluginConfigDiscoveryScope {
         unsafe {
             std::env::set_var("NEMO_RELAY_OPENAI_BASE_URL", openai);
             std::env::set_var("NEMO_RELAY_ANTHROPIC_BASE_URL", anthropic);
+        }
+    }
+
+    fn set_typesafe_config(&self, base_url: &str, auth_header: &str) {
+        // SAFETY: This scope holds the process-wide environment mutex.
+        unsafe {
+            std::env::set_var("NEMO_RELAY_TYPESAFE_BASE_URL", base_url);
+            std::env::set_var("NEMO_RELAY_TYPESAFE_AUTH_HEADER", auth_header);
         }
     }
 
@@ -340,6 +356,14 @@ impl Drop for PluginConfigDiscoveryScope {
             match self.previous_anthropic_auth_header.take() {
                 Some(value) => std::env::set_var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER", value),
                 None => std::env::remove_var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER"),
+            }
+            match self.previous_typesafe_base_url.take() {
+                Some(value) => std::env::set_var("NEMO_RELAY_TYPESAFE_BASE_URL", value),
+                None => std::env::remove_var("NEMO_RELAY_TYPESAFE_BASE_URL"),
+            }
+            match self.previous_typesafe_auth_header.take() {
+                Some(value) => std::env::set_var("NEMO_RELAY_TYPESAFE_AUTH_HEADER", value),
+                None => std::env::remove_var("NEMO_RELAY_TYPESAFE_AUTH_HEADER"),
             }
             match self.previous_bootstrap_fingerprint.take() {
                 Some(value) => std::env::set_var(BOOTSTRAP_FINGERPRINT_ENV, value),
@@ -594,6 +618,9 @@ fn config() -> GatewayConfig {
         openai_auth_header: None,
         anthropic_base_url: "http://anthropic".into(),
         anthropic_auth_header: None,
+        typesafe_base_url: "https://api.typesafe.ai/v1".into(),
+        typesafe_auth_header: None,
+        typesafe_retry: crate::typesafe_retry::TypeSafeRetryPolicy::default(),
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -607,6 +634,7 @@ fn provider_auth_headers_default_to_unset() {
 
     assert!(config.openai_auth_header.is_none());
     assert!(config.anthropic_auth_header.is_none());
+    assert!(config.typesafe_auth_header.is_none());
 }
 
 fn effective_plugin_toml_sources_without_system(
@@ -931,6 +959,10 @@ openai_base_url = "http://openai"
 openai_auth_header = "Bearer openai-file"
 anthropic_base_url = "http://anthropic"
 anthropic_auth_header = "Basic anthropic-file"
+typesafe_base_url = "http://typesafe/v1"
+typesafe_auth_header = "Bearer typesafe-file"
+typesafe_max_retries = 4
+typesafe_max_retry_delay_ms = 2500
 
 [gateway]
 max_hook_payload_bytes = 12345
@@ -950,6 +982,7 @@ command = "codex --approval-mode never"
         config: Some(path),
         openai_base_url: None,
         anthropic_base_url: None,
+        typesafe_base_url: None,
         session_metadata: None,
         plugin_config_path: None,
         dry_run: false,
@@ -969,6 +1002,16 @@ command = "codex --approval-mode never"
     assert_eq!(
         resolved.gateway.anthropic_auth_header.as_deref(),
         Some("Basic anthropic-file")
+    );
+    assert_eq!(resolved.gateway.typesafe_base_url, "http://typesafe/v1");
+    assert_eq!(
+        resolved.gateway.typesafe_auth_header.as_deref(),
+        Some("Bearer typesafe-file")
+    );
+    assert_eq!(resolved.gateway.typesafe_retry.max_retries, 4);
+    assert_eq!(
+        resolved.gateway.typesafe_retry.max_server_delay,
+        std::time::Duration::from_millis(2500)
     );
     assert_eq!(resolved.gateway.max_hook_payload_bytes, 12345);
     assert_eq!(resolved.gateway.max_passthrough_body_bytes, 67890);
@@ -1026,6 +1069,43 @@ anthropic_auth_header = "Basic anthropic-file"
     assert_eq!(
         resolved.gateway.anthropic_auth_header.as_deref(),
         Some("Basic anthropic-env")
+    );
+}
+
+#[test]
+fn typesafe_environment_overrides_file_values() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let path = temp.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[upstream]
+typesafe_base_url = "https://file.example/v1"
+typesafe_auth_header = "Bearer file-secret"
+"#,
+    )
+    .unwrap();
+    scope.set_typesafe_config(
+        "https://environment.example/v1",
+        "  Bearer environment-secret  ",
+    );
+
+    let resolved = resolve_server_config(&GatewayOverrides {
+        config: Some(path),
+        ..GatewayOverrides::default()
+    })
+    .unwrap();
+
+    assert_eq!(
+        resolved.gateway.typesafe_base_url,
+        "https://environment.example/v1"
+    );
+    assert_eq!(
+        resolved.gateway.typesafe_auth_header.as_deref(),
+        Some("Bearer environment-secret")
     );
 }
 
@@ -1226,6 +1306,7 @@ fn explicit_config_must_exist() {
         config: Some(path.clone()),
         openai_base_url: None,
         anthropic_base_url: None,
+        typesafe_base_url: None,
         session_metadata: None,
         plugin_config_path: None,
         dry_run: true,
@@ -1308,6 +1389,7 @@ fn unreadable_config_errors_include_the_source_path() {
         config: Some(config_path.clone()),
         openai_base_url: None,
         anthropic_base_url: None,
+        typesafe_base_url: None,
         session_metadata: None,
         plugin_config_path: None,
         dry_run: true,
@@ -1366,6 +1448,7 @@ fn legacy_observability_config_sections_fail_clearly() {
             config: Some(path),
             openai_base_url: None,
             anthropic_base_url: None,
+            typesafe_base_url: None,
             session_metadata: None,
             plugin_config_path: None,
             dry_run: false,
@@ -1420,6 +1503,7 @@ mode = "overwrite"
         config: Some(config_path),
         openai_base_url: None,
         anthropic_base_url: None,
+        typesafe_base_url: None,
         session_metadata: None,
         plugin_config_path: None,
         dry_run: false,
@@ -2391,6 +2475,7 @@ fn plugin_config_path_overrides_sibling_plugin_file() {
         config: Some(config_path),
         openai_base_url: None,
         anthropic_base_url: None,
+        typesafe_base_url: None,
         session_metadata: None,
         plugin_config_path: Some(override_path),
         dry_run: true,
@@ -2428,6 +2513,7 @@ openai_auth_header = "Bearer file-openai"
         config: Some(path),
         openai_base_url: Some("http://cli-openai".into()),
         anthropic_base_url: None,
+        typesafe_base_url: None,
         session_metadata: Some(r#"{"team":"cli"}"#.into()),
         plugin_config_path: None,
         dry_run: false,
@@ -2466,6 +2552,7 @@ openai_auth_header = "Bearer file-openai"
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
+        typesafe_base_url: None,
         session_metadata: None,
         plugin_config_path: None,
         dry_run: false,
@@ -2502,6 +2589,7 @@ anthropic_auth_header = "Basic file-anthropic"
         bind: Some("127.0.0.1:0".parse().unwrap()),
         openai_base_url: Some("http://cli-openai".into()),
         anthropic_base_url: Some("http://cli-anthropic".into()),
+        typesafe_base_url: None,
         plugin_config_path: None,
         ready_file: None,
         max_hook_payload_bytes: Some(222),
@@ -3748,6 +3836,7 @@ fn run_resolution_applies_all_run_overrides() {
         config: Some(config_path),
         openai_base_url: Some("http://run-openai".into()),
         anthropic_base_url: Some("http://run-anthropic".into()),
+        typesafe_base_url: None,
         session_metadata: Some(r#"{"team":"run"}"#.into()),
         plugin_config_path: None,
         dry_run: false,
@@ -3790,6 +3879,7 @@ allowed = false
         config: Some(config_path),
         openai_base_url: None,
         anthropic_base_url: None,
+        typesafe_base_url: None,
         session_metadata: None,
         plugin_config_path: None,
         dry_run: false,

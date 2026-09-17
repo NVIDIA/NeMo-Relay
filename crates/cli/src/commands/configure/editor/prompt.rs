@@ -126,6 +126,14 @@ fn edit_upstream(theme: &ColorfulTheme, document: &mut ConfigDocument) -> Result
                 "Anthropic authorization header: {}",
                 document.secret_summary("anthropic_auth_header")
             ),
+            format!(
+                "TypeSafe base URL: {}",
+                document.string_summary("upstream", "typesafe_base_url")
+            ),
+            format!(
+                "TypeSafe authorization header: {}",
+                document.secret_summary("typesafe_auth_header")
+            ),
             "Back".into(),
         ];
         match select(theme, "Provider upstreams", &choices)? {
@@ -133,7 +141,9 @@ fn edit_upstream(theme: &ColorfulTheme, document: &mut ConfigDocument) -> Result
             1 => edit_secret(theme, document, "openai_auth_header")?,
             2 => edit_string(theme, document, "upstream", "anthropic_base_url")?,
             3 => edit_secret(theme, document, "anthropic_auth_header")?,
-            4 => return Ok(()),
+            4 => edit_string(theme, document, "upstream", "typesafe_base_url")?,
+            5 => edit_secret(theme, document, "typesafe_auth_header")?,
+            6 => return Ok(()),
             _ => unreachable!(),
         }
     }

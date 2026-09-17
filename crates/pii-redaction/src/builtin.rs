@@ -615,6 +615,9 @@ impl CompiledBuiltinBackend {
             LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent) => {
                 Some(ProviderSurface::GeminiGenerateContent)
             }
+            // Evaluation payloads require a dedicated state/question redaction
+            // contract; do not reinterpret them as chat trajectories.
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::TypeSafeSystemOne) => None,
             LlmCodecIdentity::Runtime(_) | LlmCodecIdentity::Opaque => None,
         }
     }

@@ -52,6 +52,7 @@ from nemo_relay._native import (
     OCIGenAIChatCodec,
     OpenAIChatCodec,
     OpenAIResponsesCodec,
+    TypeSafeSystemOneCodec,
 )
 
 if TYPE_CHECKING:
@@ -169,4 +170,5 @@ __all__ = [
     "OCIGenAIChatCodec",
     "OpenAIChatCodec",
     "OpenAIResponsesCodec",
+    "TypeSafeSystemOneCodec",
 ]

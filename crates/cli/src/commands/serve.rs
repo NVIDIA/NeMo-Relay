@@ -20,6 +20,9 @@ pub(crate) struct ServerArgs {
     /// Upstream Anthropic base URL (e.g. https://api.anthropic.com)
     #[arg(long, env = "NEMO_RELAY_ANTHROPIC_BASE_URL")]
     pub(super) anthropic_base_url: Option<String>,
+    /// Upstream TypeSafe base URL (e.g. https://api.typesafe.ai/v1)
+    #[arg(long, env = "NEMO_RELAY_TYPESAFE_BASE_URL")]
+    pub(super) typesafe_base_url: Option<String>,
     /// Internal override for the plugin configuration file.
     #[arg(long, env = "NEMO_RELAY_PLUGIN_CONFIG_PATH", hide = true)]
     pub(super) plugin_config_path: Option<PathBuf>,
@@ -41,6 +44,7 @@ impl ServerArgs {
             bind: self.bind,
             openai_base_url: self.openai_base_url.clone(),
             anthropic_base_url: self.anthropic_base_url.clone(),
+            typesafe_base_url: self.typesafe_base_url.clone(),
             plugin_config_path: self.plugin_config_path.clone(),
             ready_file: self.ready_file.clone(),
             max_hook_payload_bytes: self.max_hook_payload_bytes,

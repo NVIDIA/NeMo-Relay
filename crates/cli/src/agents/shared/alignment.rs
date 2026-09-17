@@ -51,16 +51,20 @@ pub(crate) enum GatewayRouteKind {
     OpenAiModels,
     AnthropicMessages,
     AnthropicCountTokens,
+    TypeSafeSystemOne,
+    TypeSafeModels,
 }
 
 impl GatewayRouteKind {
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 8] = [
         Self::OpenAiResponses,
         Self::OpenAiChatCompletions,
         Self::OpenAiImagesGenerations,
         Self::OpenAiModels,
         Self::AnthropicMessages,
         Self::AnthropicCountTokens,
+        Self::TypeSafeSystemOne,
+        Self::TypeSafeModels,
     ];
 
     pub(crate) const fn name(self) -> &'static str {
@@ -71,6 +75,8 @@ impl GatewayRouteKind {
             Self::OpenAiModels => "openai.models",
             Self::AnthropicMessages => "anthropic.messages",
             Self::AnthropicCountTokens => "anthropic.count_tokens",
+            Self::TypeSafeSystemOne => "typesafe.system_one",
+            Self::TypeSafeModels => "typesafe.models",
         }
     }
 
@@ -495,6 +501,8 @@ fn provider_request_extractor(route: GatewayRouteKind) -> &'static dyn ProviderR
         GatewayRouteKind::OpenAiModels => &OPENAI_MODELS_REQUEST_EXTRACTOR,
         GatewayRouteKind::AnthropicMessages => &ANTHROPIC_MESSAGES_REQUEST_EXTRACTOR,
         GatewayRouteKind::AnthropicCountTokens => &ANTHROPIC_COUNT_TOKENS_REQUEST_EXTRACTOR,
+        GatewayRouteKind::TypeSafeSystemOne => &OPENAI_MODELS_REQUEST_EXTRACTOR,
+        GatewayRouteKind::TypeSafeModels => &OPENAI_MODELS_REQUEST_EXTRACTOR,
     }
 }
 

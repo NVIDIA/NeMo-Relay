@@ -428,6 +428,9 @@ fn lossy_request_shape(surface: ProviderSurface, content: &Json) -> bool {
                     .and_then(Json::as_array)
                     .is_some_and(|items| items.iter().any(lossy_gemini_content_item))
         }
+        // The codec losslessly preserves evaluation state, questions, and
+        // provider extensions, so normalized cache keys are safe.
+        ProviderSurface::TypeSafeSystemOne => false,
     }
 }
 

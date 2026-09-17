@@ -13,6 +13,8 @@ pub(super) enum ProviderRoute {
     OpenAiModels,
     AnthropicMessages,
     AnthropicCountTokens,
+    TypeSafeSystemOne,
+    TypeSafeModels,
 }
 
 #[derive(Clone)]
@@ -21,6 +23,8 @@ pub(super) struct ProviderForwarding {
     pub(super) authorization: crate::provider_auth::ProviderRequestAuthorization,
     openai_auth_header: Option<String>,
     anthropic_auth_header: Option<String>,
+    typesafe_auth_header: Option<String>,
+    pub(super) typesafe_retry: crate::typesafe_retry::TypeSafeRetryPolicy,
 }
 
 impl ProviderForwarding {
@@ -34,6 +38,8 @@ impl ProviderForwarding {
             authorization,
             openai_auth_header: config.openai_auth_header.clone(),
             anthropic_auth_header: config.anthropic_auth_header.clone(),
+            typesafe_auth_header: config.typesafe_auth_header.clone(),
+            typesafe_retry: config.typesafe_retry,
         }
     }
 
@@ -42,6 +48,7 @@ impl ProviderForwarding {
             route,
             self.openai_auth_header.as_deref(),
             self.anthropic_auth_header.as_deref(),
+            self.typesafe_auth_header.as_deref(),
         )
     }
 }
@@ -61,6 +68,10 @@ impl ProviderRoute {
             "/v1/models" => Some(Self::OpenAiModels),
             "/v1/messages" => Some(Self::AnthropicMessages),
             "/v1/messages/count_tokens" => Some(Self::AnthropicCountTokens),
+            "/systemone" | "/v1/systemone" | "/typesafe/systemone" | "/typesafe/v1/systemone" => {
+                Some(Self::TypeSafeSystemOne)
+            }
+            "/typesafe/models" | "/typesafe/v1/models" => Some(Self::TypeSafeModels),
             _ => None,
         }
     }
@@ -86,6 +97,12 @@ impl ProviderRoute {
             "anthropic_count_tokens" | "anthropic.count_tokens" | "/v1/messages/count_tokens" => {
                 Some(Self::AnthropicCountTokens)
             }
+            "typesafe_system_one" | "typesafe.system_one" | "/v1/systemone" => {
+                Some(Self::TypeSafeSystemOne)
+            }
+            "typesafe_models" | "typesafe.models" | "/typesafe/models" | "/typesafe/v1/models" => {
+                Some(Self::TypeSafeModels)
+            }
             _ => None,
         }
     }
@@ -95,7 +112,11 @@ impl ProviderRoute {
             Self::OpenAiResponses => Some(ProviderSurface::OpenAIResponses),
             Self::OpenAiChatCompletions => Some(ProviderSurface::OpenAIChat),
             Self::AnthropicMessages => Some(ProviderSurface::AnthropicMessages),
-            Self::AnthropicCountTokens | Self::OpenAiImagesGenerations | Self::OpenAiModels => None,
+            Self::TypeSafeSystemOne => Some(ProviderSurface::TypeSafeSystemOne),
+            Self::AnthropicCountTokens
+            | Self::OpenAiImagesGenerations
+            | Self::OpenAiModels
+            | Self::TypeSafeModels => None,
         }
     }
 
@@ -122,6 +143,7 @@ impl ProviderRoute {
             Self::AnthropicMessages | Self::AnthropicCountTokens => {
                 config.anthropic_base_url.as_str()
             }
+            Self::TypeSafeSystemOne | Self::TypeSafeModels => config.typesafe_base_url.as_str(),
         };
         self.upstream_url_with_base(base, path_and_query)
     }
@@ -134,6 +156,7 @@ impl ProviderRoute {
             self,
             config.openai_auth_header.as_deref(),
             config.anthropic_auth_header.as_deref(),
+            config.typesafe_auth_header.as_deref(),
         )
     }
 
@@ -147,6 +170,11 @@ impl ProviderRoute {
     }
 
     fn canonical_path_and_query(self, path_and_query: &str) -> String {
+        if matches!(self, Self::TypeSafeSystemOne | Self::TypeSafeModels)
+            && let Some(suffix) = path_and_query.strip_prefix("/typesafe")
+        {
+            return suffix.to_string();
+        }
         if self == Self::OpenAiResponses
             && let Some(suffix) = path_and_query.strip_prefix("/backend-api/codex/responses")
         {
@@ -166,6 +194,8 @@ impl ProviderRoute {
             Self::OpenAiModels => GatewayRouteKind::OpenAiModels,
             Self::AnthropicMessages => GatewayRouteKind::AnthropicMessages,
             Self::AnthropicCountTokens => GatewayRouteKind::AnthropicCountTokens,
+            Self::TypeSafeSystemOne => GatewayRouteKind::TypeSafeSystemOne,
+            Self::TypeSafeModels => GatewayRouteKind::TypeSafeModels,
         }
     }
 }
@@ -174,6 +204,7 @@ fn configured_auth_header<'a>(
     route: ProviderRoute,
     openai_auth_header: Option<&'a str>,
     anthropic_auth_header: Option<&'a str>,
+    typesafe_auth_header: Option<&'a str>,
 ) -> Option<&'a str> {
     match route {
         ProviderRoute::OpenAiResponses
@@ -183,6 +214,7 @@ fn configured_auth_header<'a>(
         ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => {
             anthropic_auth_header
         }
+        ProviderRoute::TypeSafeSystemOne | ProviderRoute::TypeSafeModels => typesafe_auth_header,
     }
 }
 

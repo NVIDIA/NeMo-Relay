@@ -247,8 +247,9 @@ configuration.
 
 The upstream authorization-header controls show only whether a value is
 configured and never print it in menus or previews. Prefer
-`NEMO_RELAY_OPENAI_AUTH_HEADER` and `NEMO_RELAY_ANTHROPIC_AUTH_HEADER` instead
-of storing credentials in `config.toml`.
+`NEMO_RELAY_OPENAI_AUTH_HEADER`, `NEMO_RELAY_ANTHROPIC_AUTH_HEADER`, and
+`NEMO_RELAY_TYPESAFE_AUTH_HEADER` instead of storing credentials in
+`config.toml`.
 
 ### Provider Upstreams
 
@@ -259,6 +260,7 @@ compatible requests to a proxy, enterprise endpoint, or another provider host:
 [upstream]
 openai_base_url = "https://api.openai.com/v1"
 anthropic_base_url = "https://api.anthropic.com"
+typesafe_base_url = "https://api.typesafe.ai/v1"
 ```
 
 Relay normally chooses the upstream from the request path, regardless of which
@@ -271,6 +273,8 @@ follows:
 | `/chat/completions`, `/v1/chat/completions` | `openai_base_url` |
 | `/models`, `/v1/models` | `openai_base_url` |
 | `/v1/messages`, `/v1/messages/count_tokens` | `anthropic_base_url` |
+| `/systemone`, `/v1/systemone` | `typesafe_base_url` |
+| `/typesafe/v1/systemone`, `/typesafe/v1/models` | `typesafe_base_url` |
 
 For ordinary provider requests, Relay resolves credentials in this order:
 
@@ -279,10 +283,11 @@ For ordinary provider requests, Relay resolves credentials in this order:
 2. If no inbound credential is present, Relay uses the route-specific custom
    `Authorization` value from `[upstream]` or its environment override.
 3. If no custom value is configured, Relay reads `OPENAI_API_KEY` or
-   `ANTHROPIC_API_KEY` and applies the provider's standard authentication
-   scheme.
+   `ANTHROPIC_API_KEY`, or `TYPESAFE_API_KEY` and applies the provider's
+   standard authentication scheme.
 
-Set `openai_auth_header` or `anthropic_auth_header` under `[upstream]` only when
+Set `openai_auth_header`, `anthropic_auth_header`, or `typesafe_auth_header`
+under `[upstream]` only when
 an enterprise gateway, proxy, or compatible endpoint requires a complete
 `Authorization` value such as `Bearer ...` or `Basic ...`. Prefer the
 corresponding environment variables so you don't store credentials in

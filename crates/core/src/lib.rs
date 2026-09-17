@@ -23,6 +23,7 @@
 //!
 //! - [`api::scope::push_scope`] / [`api::scope::pop_scope`] create nested execution scopes.
 //! - [`api::tool::tool_call_execute`] runs a complete tool middleware pipeline.
+//! - [`api::evaluation::evaluation_execute`] runs a provider-neutral evaluator lifecycle.
 //! - [`api::llm::llm_call_execute`] and [`api::llm::llm_stream_call_execute`] run non-streaming
 //!   and streaming LLM middleware pipelines.
 //! - [`api::registry`] exposes global and scope-local middleware registration APIs.
@@ -59,6 +60,7 @@ pub mod codec;
 pub mod config_editor;
 mod context;
 pub mod error;
+pub mod evaluation;
 pub mod json;
 pub mod logging;
 pub mod observability;

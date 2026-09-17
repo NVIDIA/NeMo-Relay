@@ -10,6 +10,7 @@ pub(crate) struct GatewayOverrides {
     pub(crate) bind: Option<SocketAddr>,
     pub(crate) openai_base_url: Option<String>,
     pub(crate) anthropic_base_url: Option<String>,
+    pub(crate) typesafe_base_url: Option<String>,
     pub(crate) plugin_config_path: Option<PathBuf>,
     pub(crate) ready_file: Option<PathBuf>,
     pub(crate) max_hook_payload_bytes: Option<usize>,

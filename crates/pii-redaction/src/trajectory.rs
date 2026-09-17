@@ -1198,7 +1198,8 @@ fn provider_hint_for_surface(surface: ProviderSurface) -> Option<&'static str> {
         ProviderSurface::OCIGenAI => Some("oci.genai"),
         ProviderSurface::OpenAIChat
         | ProviderSurface::OpenAIResponses
-        | ProviderSurface::GeminiGenerateContent => None,
+        | ProviderSurface::GeminiGenerateContent
+        | ProviderSurface::TypeSafeSystemOne => None,
     }
 }
 

@@ -13,7 +13,7 @@ fn document(contents: &str) -> ConfigDocument {
 #[test]
 fn document_preserves_toml_and_redacts_standard_inline_and_dotted_auth_headers() {
     let mut standard = document(
-        "# keep this comment\n[agents.codex]\ncommand = \"codex\"\n\n[upstream]\nopenai_auth_header = \"Bearer secret\"\nanthropic_auth_header = \"Basic secret\"\n",
+        "# keep this comment\n[agents.codex]\ncommand = \"codex\"\n\n[upstream]\nopenai_auth_header = \"Bearer secret\"\nanthropic_auth_header = \"Basic secret\"\ntypesafe_auth_header = \"Bearer jev-secret\"\n",
     );
     standard
         .set_positive_integer("gateway", "max_hook_payload_bytes", 42)
@@ -25,10 +25,11 @@ fn document_preserves_toml_and_redacts_standard_inline_and_dotted_auth_headers()
     assert!(preview.contains("<redacted>"));
     assert!(!preview.contains("Bearer secret"));
     assert!(!preview.contains("Basic secret"));
+    assert!(!preview.contains("jev-secret"));
     assert!(standard.document.to_string().contains("Bearer secret"));
 
     let mut inline = document(
-        "upstream = { openai_auth_header = \"Bearer inline\", anthropic_auth_header = \"Basic inline\" }\n",
+        "upstream = { openai_auth_header = \"Bearer inline\", anthropic_auth_header = \"Basic inline\", typesafe_auth_header = \"Bearer jev-inline\" }\n",
     );
     assert_eq!(inline.secret_summary("openai_auth_header"), "configured");
     inline
@@ -42,6 +43,7 @@ fn document_preserves_toml_and_redacts_standard_inline_and_dotted_auth_headers()
     assert!(!preview.contains("Bearer inline"));
     assert!(!preview.contains("Bearer replacement"));
     assert!(!preview.contains("Basic inline"));
+    assert!(!preview.contains("jev-inline"));
 
     let dotted = document("upstream.openai_auth_header = \"Bearer dotted\"\n");
     assert_eq!(dotted.secret_summary("openai_auth_header"), "configured");
@@ -257,6 +259,7 @@ fn global_document_rejects_authorization_headers() {
         "[upstream]\nopenai_auth_header = \"Bearer secret\"\n",
         "upstream = { anthropic_auth_header = \"Bearer secret\" }\n",
         "upstream.openai_auth_header = \"Bearer secret\"\n",
+        "[upstream]\ntypesafe_auth_header = \"Bearer jev-secret\"\n",
     ]
     .into_iter()
     .enumerate()

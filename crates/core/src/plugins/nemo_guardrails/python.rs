@@ -905,13 +905,14 @@ impl LocalGuardrailsCodec {
         }
     }
 
-    fn from_provider_surface(surface: ProviderSurface) -> Self {
+    fn from_provider_surface(surface: ProviderSurface) -> Option<Self> {
         match surface {
-            ProviderSurface::OpenAIChat => Self::OpenAIChat,
-            ProviderSurface::OpenAIResponses => Self::OpenAIResponses,
-            ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
-            ProviderSurface::OCIGenAI => Self::OCIGenAI,
-            ProviderSurface::GeminiGenerateContent => Self::GeminiGenerateContent,
+            ProviderSurface::OpenAIChat => Some(Self::OpenAIChat),
+            ProviderSurface::OpenAIResponses => Some(Self::OpenAIResponses),
+            ProviderSurface::AnthropicMessages => Some(Self::AnthropicMessages),
+            ProviderSurface::OCIGenAI => Some(Self::OCIGenAI),
+            ProviderSurface::GeminiGenerateContent => Some(Self::GeminiGenerateContent),
+            ProviderSurface::TypeSafeSystemOne => None,
         }
     }
 
@@ -942,7 +943,13 @@ fn resolve_codec(config: &NeMoGuardrailsConfig) -> PluginResult<Option<LocalGuar
 
     match config.codec.as_deref() {
         Some(name) => match ProviderSurface::from_codec_name(name) {
-            Some(surface) => Ok(Some(LocalGuardrailsCodec::from_provider_surface(surface))),
+            Some(surface) => LocalGuardrailsCodec::from_provider_surface(surface)
+                .map(Some)
+                .ok_or_else(|| {
+                    PluginError::InvalidConfig(format!(
+                        "local NeMo Guardrails does not support evaluation codec '{name}'"
+                    ))
+                }),
             None => Err(PluginError::InvalidConfig(format!(
                 "unsupported local NeMo Guardrails codec '{name}'"
             ))),

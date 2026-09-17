@@ -358,11 +358,42 @@ fn selects_provider_routes() {
 }
 
 #[test]
+fn selects_typesafe_system_one_route() {
+    for path in [
+        "/systemone",
+        "/v1/systemone",
+        "/typesafe/systemone",
+        "/typesafe/v1/systemone",
+    ] {
+        assert_eq!(
+            ProviderRoute::from_path(path),
+            Some(ProviderRoute::TypeSafeSystemOne)
+        );
+    }
+    for path in ["/typesafe/models", "/typesafe/v1/models"] {
+        assert_eq!(
+            ProviderRoute::from_path(path),
+            Some(ProviderRoute::TypeSafeModels)
+        );
+    }
+    assert_eq!(
+        ProviderRoute::TypeSafeSystemOne.name(),
+        "typesafe.system_one"
+    );
+    assert_eq!(
+        ProviderRoute::TypeSafeSystemOne.alignment_route(),
+        GatewayRouteKind::TypeSafeSystemOne
+    );
+    assert_eq!(ProviderRoute::TypeSafeModels.name(), "typesafe.models");
+}
+
+#[test]
 fn generation_routes_have_request_codecs_and_passthrough_routes_do_not() {
     for route in [
         ProviderRoute::AnthropicMessages,
         ProviderRoute::OpenAiChatCompletions,
         ProviderRoute::OpenAiResponses,
+        ProviderRoute::TypeSafeSystemOne,
     ] {
         let codecs = codecs_for_route(route);
         assert!(
@@ -455,6 +486,29 @@ fn dispatch_override_routes_cover_models_and_count_tokens() {
             "alias {alias}"
         );
     }
+    for alias in [
+        "typesafe_models",
+        "typesafe.models",
+        "/typesafe/models",
+        "/typesafe/v1/models",
+    ] {
+        assert_eq!(
+            ProviderRoute::from_dispatch_override(alias),
+            Some(ProviderRoute::TypeSafeModels),
+            "alias {alias}"
+        );
+    }
+    for alias in [
+        "typesafe_system_one",
+        "typesafe.system_one",
+        "/v1/systemone",
+    ] {
+        assert_eq!(
+            ProviderRoute::from_dispatch_override(alias),
+            Some(ProviderRoute::TypeSafeSystemOne),
+            "alias {alias}"
+        );
+    }
     for alias in ["openai_models", "openai.models", "/models", "/v1/models"] {
         assert_eq!(
             ProviderRoute::from_dispatch_override(alias),
@@ -484,6 +538,7 @@ fn provider_route_names_round_trip_through_alignment_routes() {
         ProviderRoute::OpenAiModels,
         ProviderRoute::AnthropicMessages,
         ProviderRoute::AnthropicCountTokens,
+        ProviderRoute::TypeSafeSystemOne,
     ] {
         assert_eq!(
             GatewayRouteKind::from_provider_name(route.name()),
@@ -500,6 +555,9 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
         openai_auth_header: None,
         anthropic_base_url: "http://anthropic/".into(),
         anthropic_auth_header: None,
+        typesafe_base_url: "https://api.typesafe.ai/v1".into(),
+        typesafe_auth_header: None,
+        typesafe_retry: crate::typesafe_retry::TypeSafeRetryPolicy::default(),
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -531,6 +589,48 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
         ProviderRoute::AnthropicMessages.upstream_url(&config, "/v1/messages"),
         "http://anthropic/v1/messages"
     );
+    assert_eq!(
+        ProviderRoute::TypeSafeSystemOne.upstream_url(&config, "/v1/systemone"),
+        "https://api.typesafe.ai/v1/systemone"
+    );
+    assert_eq!(
+        ProviderRoute::TypeSafeSystemOne.upstream_url(&config, "/typesafe/v1/systemone?trace=true"),
+        "https://api.typesafe.ai/v1/systemone?trace=true"
+    );
+    assert_eq!(
+        ProviderRoute::TypeSafeModels.upstream_url(&config, "/typesafe/v1/models"),
+        "https://api.typesafe.ai/v1/models"
+    );
+}
+
+#[tokio::test]
+async fn system_one_rejects_stream_field_before_forwarding() {
+    for stream in [json!(true), json!(false), json!(null)] {
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/systemone")
+            .body(Body::from(
+                json!({
+                    "model": "jev-latest",
+                    "state": "candidate",
+                    "questions": {"ok": {"type": "noul", "instructions": "Is it OK?"}},
+                    "stream": stream
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let error = match prepare_gateway_request(
+            &GatewayConfig::default(),
+            request,
+            environment_authorization(),
+        )
+        .await
+        {
+            Ok(_) => panic!("streaming declaration must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("non-streaming"));
+    }
 }
 
 #[test]
@@ -549,6 +649,9 @@ fn openai_upstream_url_accepts_origin_or_v1_base() {
         openai_auth_header: None,
         anthropic_base_url: "http://anthropic".into(),
         anthropic_auth_header: None,
+        typesafe_base_url: "https://api.typesafe.ai/v1".into(),
+        typesafe_auth_header: None,
+        typesafe_retry: crate::typesafe_retry::TypeSafeRetryPolicy::default(),
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -583,6 +686,9 @@ fn anthropic_upstream_url_accepts_origin_or_v1_base() {
         openai_auth_header: None,
         anthropic_base_url: "http://anthropic".into(),
         anthropic_auth_header: None,
+        typesafe_base_url: "https://api.typesafe.ai/v1".into(),
+        typesafe_auth_header: None,
+        typesafe_retry: crate::typesafe_retry::TypeSafeRetryPolicy::default(),
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -1010,7 +1116,7 @@ fn structured_upstream_failure_classification_matches_retry_policy() {
     headers.insert("content-length", HeaderValue::from_static("12"));
     headers.insert("retry-after", HeaderValue::from_static("3"));
     headers.insert("x-request-id", HeaderValue::from_static("request-123"));
-    for status in [408, 429, 500, 502, 503, 504] {
+    for status in [408, 429, 500, 502, 503, 504, 529] {
         let failure = http_failure(
             StatusCode::from_u16(status).unwrap(),
             &headers,
@@ -1873,10 +1979,124 @@ fn injects_anthropic_x_api_key_for_anthropic_routes() {
 }
 
 #[test]
+fn injects_typesafe_bearer_and_bounds_retry_delay() {
+    let built = inject_provider_auth_with_env(
+        test_http_client().post("http://upstream/v1/systemone"),
+        ProviderRoute::TypeSafeSystemOne,
+        &HeaderMap::new(),
+        true,
+        None,
+        |key| (key == "TYPESAFE_API_KEY").then(|| "jev-secret".into()),
+    )
+    .build()
+    .unwrap();
+    assert_eq!(
+        built.headers().get(header::AUTHORIZATION).unwrap(),
+        "Bearer jev-secret"
+    );
+
+    let policy = crate::typesafe_retry::TypeSafeRetryPolicy::default();
+    assert!(policy.should_retry_status(StatusCode::TOO_MANY_REQUESTS, 0));
+    assert!(policy.should_retry_status(StatusCode::from_u16(529).unwrap(), 1));
+    assert!(!policy.should_retry_status(StatusCode::TOO_MANY_REQUESTS, 2));
+    let mut headers = HeaderMap::new();
+    headers.insert(header::RETRY_AFTER, HeaderValue::from_static("30"));
+    assert_eq!(policy.delay(Some(&headers), 0), Duration::from_secs(30));
+}
+
+#[test]
+fn typesafe_retry_policy_matches_sdk_status_and_delay_contract() {
+    let policy = crate::typesafe_retry::TypeSafeRetryPolicy::default();
+    for status in [408, 429, 500, 529, 599] {
+        assert!(policy.should_retry_status(StatusCode::from_u16(status).unwrap(), 0));
+    }
+    assert!(!policy.should_retry_status(StatusCode::BAD_REQUEST, 0));
+    assert!(!policy.should_retry_status(StatusCode::TOO_MANY_REQUESTS, 2));
+
+    let mut headers = HeaderMap::new();
+    headers.insert("retry-after-ms", HeaderValue::from_static("1250"));
+    assert_eq!(
+        policy.delay(Some(&headers), 0),
+        Duration::from_millis(1_250)
+    );
+
+    headers.clear();
+    headers.insert(header::RETRY_AFTER, HeaderValue::from_static("1.5"));
+    assert_eq!(
+        policy.delay(Some(&headers), 0),
+        Duration::from_millis(1_500)
+    );
+
+    headers.insert(header::RETRY_AFTER, HeaderValue::from_static("120"));
+    let fallback = policy.delay(Some(&headers), 0);
+    assert!((375..=500).contains(&fallback.as_millis()));
+}
+
+#[tokio::test]
+async fn system_one_retries_429_and_529_then_returns_success() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        for (index, response) in [
+            "HTTP/1.1 429 Too Many Requests\r\nretry-after: 0\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            "HTTP/1.1 529 Site Overloaded\r\nretry-after: 0\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 2048];
+            let size = socket.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..size]).to_ascii_lowercase();
+            if index == 0 {
+                assert!(!request.contains("x-typesafe-retry-count:"));
+            } else {
+                assert!(request.contains(&format!("x-typesafe-retry-count: {index}")));
+            }
+            socket.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+
+    let config = GatewayConfig::default();
+    let url = format!("http://{address}/v1/systemone");
+    let body = Bytes::from_static(br#"{"model":"jev-latest"}"#);
+    let headers = HeaderMap::new();
+    let method = Method::POST;
+    let http = test_http_client();
+    let response = forward_upstream_request(
+        &http,
+        UpstreamForwardRequest {
+            method: &method,
+            url: &url,
+            body_bytes: &body,
+            headers: &headers,
+            effective_request: None,
+            forwarding: ProviderForwarding::new(
+                ProviderRoute::TypeSafeSystemOne,
+                crate::provider_auth::ProviderRequestAuthorization {
+                    source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
+                    allow_environment_provider_auth: false,
+                },
+                &config,
+            ),
+            operational: None,
+            streaming: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    server.await.unwrap();
+}
+
+#[test]
 fn configured_auth_headers_are_provider_specific_and_precede_environment_keys() {
     let config = GatewayConfig {
         openai_auth_header: Some("Basic openai-custom".into()),
         anthropic_auth_header: Some("Bearer anthropic-custom".into()),
+        typesafe_base_url: "https://api.typesafe.ai/v1".into(),
+        typesafe_auth_header: None,
         ..GatewayConfig::default()
     };
     let forwarding = ProviderForwarding::new(
@@ -2243,6 +2463,9 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         openai_auth_header: None,
         anthropic_base_url: "http://anthropic".into(),
         anthropic_auth_header: None,
+        typesafe_base_url: "https://api.typesafe.ai/v1".into(),
+        typesafe_auth_header: None,
+        typesafe_retry: crate::typesafe_retry::TypeSafeRetryPolicy::default(),
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -2282,6 +2505,9 @@ async fn models_rejects_non_get_requests_directly() {
         openai_auth_header: None,
         anthropic_base_url: "http://anthropic".into(),
         anthropic_auth_header: None,
+        typesafe_base_url: "https://api.typesafe.ai/v1".into(),
+        typesafe_auth_header: None,
+        typesafe_retry: crate::typesafe_retry::TypeSafeRetryPolicy::default(),
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -2687,6 +2913,9 @@ async fn models_refuses_an_unusable_named_upstream() {
         openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1:1".into(),
         anthropic_auth_header: None,
+        typesafe_base_url: "https://api.typesafe.ai/v1".into(),
+        typesafe_auth_header: None,
+        typesafe_retry: crate::typesafe_retry::TypeSafeRetryPolicy::default(),
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,

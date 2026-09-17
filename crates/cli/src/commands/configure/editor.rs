@@ -105,15 +105,23 @@ impl ConfigDocument {
     }
 
     fn has_auth_headers(&self) -> bool {
-        ["openai_auth_header", "anthropic_auth_header"]
-            .into_iter()
-            .any(|key| self.has_key("upstream", key))
+        [
+            "openai_auth_header",
+            "anthropic_auth_header",
+            "typesafe_auth_header",
+        ]
+        .into_iter()
+        .any(|key| self.has_key("upstream", key))
     }
 
     fn preview(&self) -> String {
         let mut document = self.document.clone();
         if let Some(upstream) = document.get_mut("upstream") {
-            for key in ["openai_auth_header", "anthropic_auth_header"] {
+            for key in [
+                "openai_auth_header",
+                "anthropic_auth_header",
+                "typesafe_auth_header",
+            ] {
                 if let Some(table) = upstream.as_table_mut() {
                     if table.contains_key(key) {
                         table[key] = value("<redacted>");

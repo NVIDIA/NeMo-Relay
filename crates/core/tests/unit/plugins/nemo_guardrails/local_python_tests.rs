@@ -696,7 +696,9 @@ fn local_codec_and_rewrite_helpers_cover_all_provider_surfaces() {
     ] {
         assert_eq!(codec.provider_surface(), surface);
         assert_eq!(
-            LocalGuardrailsCodec::from_provider_surface(surface).provider_surface(),
+            LocalGuardrailsCodec::from_provider_surface(surface)
+                .expect("chat provider surface")
+                .provider_surface(),
             surface
         );
     }

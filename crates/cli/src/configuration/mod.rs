@@ -75,6 +75,10 @@ struct FileUpstreamConfig {
     openai_auth_header: Option<String>,
     anthropic_base_url: Option<String>,
     anthropic_auth_header: Option<String>,
+    typesafe_base_url: Option<String>,
+    typesafe_auth_header: Option<String>,
+    typesafe_max_retries: Option<u32>,
+    typesafe_max_retry_delay_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -297,6 +301,10 @@ fn persistent_bootstrap_fingerprint(
         "openai_auth_header": gateway.openai_auth_header,
         "anthropic_base_url": gateway.anthropic_base_url,
         "anthropic_auth_header": gateway.anthropic_auth_header,
+        "typesafe_base_url": gateway.typesafe_base_url,
+        "typesafe_auth_header": gateway.typesafe_auth_header,
+        "typesafe_max_retries": gateway.typesafe_retry.max_retries,
+        "typesafe_max_retry_delay_ms": gateway.typesafe_retry.max_server_delay.as_millis(),
         "metadata": gateway.metadata,
         "plugin_config": gateway.plugin_config,
         "max_hook_payload_bytes": gateway.max_hook_payload_bytes,
@@ -1101,6 +1109,13 @@ fn apply_run_url_overrides(config: &mut GatewayConfig, command: &RunOverrides) {
             value.clone(),
         );
     }
+    if let Some(value) = &command.typesafe_base_url {
+        replace_upstream_base_url(
+            &mut config.typesafe_base_url,
+            &mut config.typesafe_auth_header,
+            value.clone(),
+        );
+    }
 }
 
 // Parses JSON-bearing run overrides after simple values. Invalid metadata or plugin config fails
@@ -1135,6 +1150,13 @@ fn apply_server_overrides(
         replace_upstream_base_url(
             &mut config.anthropic_base_url,
             &mut config.anthropic_auth_header,
+            value.clone(),
+        );
+    }
+    if let Some(value) = &args.typesafe_base_url {
+        replace_upstream_base_url(
+            &mut config.typesafe_base_url,
+            &mut config.typesafe_auth_header,
             value.clone(),
         );
     }
@@ -1397,6 +1419,10 @@ fn apply_file_upstream_config(
         openai_auth_header,
         anthropic_base_url,
         anthropic_auth_header,
+        typesafe_base_url,
+        typesafe_auth_header,
+        typesafe_max_retries,
+        typesafe_max_retry_delay_ms,
     } = upstream;
     if let Some(value) = openai_base_url {
         gateway.openai_base_url = value;
@@ -1419,6 +1445,24 @@ fn apply_file_upstream_config(
             "upstream.anthropic_auth_header",
             value,
         )?);
+    }
+    if let Some(value) = typesafe_base_url {
+        gateway.typesafe_base_url = value;
+        if typesafe_auth_header.is_none() {
+            gateway.typesafe_auth_header = None;
+        }
+    }
+    if let Some(value) = typesafe_auth_header {
+        gateway.typesafe_auth_header = Some(validate_auth_header(
+            "upstream.typesafe_auth_header",
+            value,
+        )?);
+    }
+    if let Some(value) = typesafe_max_retries {
+        gateway.typesafe_retry.max_retries = value;
+    }
+    if let Some(value) = typesafe_max_retry_delay_ms {
+        gateway.typesafe_retry.max_server_delay = Duration::from_millis(value);
     }
     Ok(())
 }
@@ -1724,6 +1768,30 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
             value,
         )?);
     }
+    let typesafe_auth_header = std::env::var("NEMO_RELAY_TYPESAFE_AUTH_HEADER").ok();
+    if let Ok(value) = std::env::var("NEMO_RELAY_TYPESAFE_BASE_URL") {
+        replace_upstream_base_url(
+            &mut config.typesafe_base_url,
+            &mut config.typesafe_auth_header,
+            value,
+        );
+    }
+    if let Some(value) = typesafe_auth_header {
+        config.typesafe_auth_header = Some(validate_auth_header(
+            "NEMO_RELAY_TYPESAFE_AUTH_HEADER",
+            value,
+        )?);
+    }
+    if let Ok(value) = std::env::var("NEMO_RELAY_TYPESAFE_MAX_RETRIES") {
+        config.typesafe_retry.max_retries =
+            parse_retry_u32("NEMO_RELAY_TYPESAFE_MAX_RETRIES", &value)?;
+    }
+    if let Ok(value) = std::env::var("NEMO_RELAY_TYPESAFE_MAX_RETRY_DELAY_MS") {
+        config.typesafe_retry.max_server_delay = Duration::from_millis(parse_retry_u64(
+            "NEMO_RELAY_TYPESAFE_MAX_RETRY_DELAY_MS",
+            &value,
+        )?);
+    }
     if let Ok(value) = std::env::var("NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES") {
         config.max_hook_payload_bytes =
             parse_env_body_limit("NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES", &value)?;
@@ -1748,6 +1816,12 @@ fn apply_managed_worker_env_config(config: &mut GatewayConfig) -> Result<(), Cli
     if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER") {
         config.anthropic_auth_header = Some(validate_auth_header(
             "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+            value,
+        )?);
+    }
+    if let Ok(value) = std::env::var("NEMO_RELAY_TYPESAFE_AUTH_HEADER") {
+        config.typesafe_auth_header = Some(validate_auth_header(
+            "NEMO_RELAY_TYPESAFE_AUTH_HEADER",
             value,
         )?);
     }
@@ -1780,6 +1854,18 @@ fn parse_env_body_limit(name: &str, raw: &str) -> Result<usize, CliError> {
         CliError::Config(format!("{name} must be a positive byte count: {error}"))
     })?;
     validate_body_limit(name, value)
+}
+
+fn parse_retry_u32(name: &str, raw: &str) -> Result<u32, CliError> {
+    raw.trim()
+        .parse::<u32>()
+        .map_err(|_| CliError::Config(format!("{name} must be a non-negative integer")))
+}
+
+fn parse_retry_u64(name: &str, raw: &str) -> Result<u64, CliError> {
+    raw.trim()
+        .parse::<u64>()
+        .map_err(|_| CliError::Config(format!("{name} must be a non-negative integer")))
 }
 
 fn validate_body_limit(name: &str, value: usize) -> Result<usize, CliError> {
@@ -1824,6 +1910,7 @@ fn clear_credentials_for_replaced_upstreams(left: &mut toml::Value, right: &toml
         for (base_url, auth_header) in [
             ("openai_base_url", "openai_auth_header"),
             ("anthropic_base_url", "anthropic_auth_header"),
+            ("typesafe_base_url", "typesafe_auth_header"),
         ] {
             let endpoint_changed = override_upstream
                 .get(base_url)

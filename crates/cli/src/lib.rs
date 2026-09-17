@@ -28,6 +28,7 @@ mod process;
 mod provider_auth;
 mod server;
 mod sessions;
+mod typesafe_retry;
 
 #[cfg(test)]
 #[path = "../tests/coverage/shared/hook_assertions.rs"]

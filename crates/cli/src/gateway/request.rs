@@ -60,6 +60,15 @@ pub(super) async fn prepare_gateway_request(
     )
     .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
     .unwrap_or(Value::Null);
+    if provider == ProviderRoute::TypeSafeSystemOne
+        && request_json
+            .as_object()
+            .is_some_and(|object| object.contains_key("stream"))
+    {
+        return Err(CliError::InvalidPayload(
+            "TypeSafe System One is non-streaming; remove the stream field".into(),
+        ));
+    }
     let path_and_query = parts
         .uri
         .path_and_query()

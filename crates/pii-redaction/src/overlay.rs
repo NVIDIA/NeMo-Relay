@@ -14,6 +14,7 @@ pub(crate) enum BuiltinCodecName {
     AnthropicMessages,
     OCIGenAI,
     GeminiGenerateContent,
+    TypeSafeSystemOne,
 }
 
 impl BuiltinCodecName {
@@ -24,6 +25,7 @@ impl BuiltinCodecName {
             ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
             ProviderSurface::OCIGenAI => Self::OCIGenAI,
             ProviderSurface::GeminiGenerateContent => Self::GeminiGenerateContent,
+            ProviderSurface::TypeSafeSystemOne => Self::TypeSafeSystemOne,
         }
     }
 
@@ -38,6 +40,8 @@ impl BuiltinCodecName {
             Self::AnthropicMessages => overlay_anthropic_response(payload, annotated),
             Self::OCIGenAI => overlay_oci_genai_response(payload, annotated),
             Self::GeminiGenerateContent => overlay_gemini_response(payload, annotated),
+            // Evaluation answers have no chat response overlay contract.
+            Self::TypeSafeSystemOne => payload,
         }
     }
 }

@@ -22,6 +22,7 @@ pub(crate) enum HookRoute {
 pub(crate) enum ProviderRoute {
     OpenAi,
     Anthropic,
+    TypeSafe,
 }
 
 impl PublicRoute {
@@ -41,6 +42,12 @@ impl PublicRoute {
             "/v1/messages" | "/v1/messages/count_tokens" => {
                 Some(Self::Provider(ProviderRoute::Anthropic))
             }
+            "/systemone"
+            | "/v1/systemone"
+            | "/typesafe/systemone"
+            | "/typesafe/v1/systemone"
+            | "/typesafe/models"
+            | "/typesafe/v1/models" => Some(Self::Provider(ProviderRoute::TypeSafe)),
             _ => None,
         }
     }
@@ -60,6 +67,7 @@ impl ProviderRoute {
         match self {
             Self::OpenAi => "openai",
             Self::Anthropic => "anthropic",
+            Self::TypeSafe => "typesafe",
         }
     }
 
@@ -67,11 +75,16 @@ impl ProviderRoute {
         let base = match self {
             Self::OpenAi => config.openai_base_url.as_str(),
             Self::Anthropic => config.anthropic_base_url.as_str(),
+            Self::TypeSafe => config.typesafe_base_url.as_str(),
         }
         .trim_end_matches('/');
         let path = match self {
             Self::OpenAi => canonical_openai_path(path_and_query),
             Self::Anthropic => path_and_query.to_owned(),
+            Self::TypeSafe => path_and_query
+                .strip_prefix("/typesafe")
+                .unwrap_or(path_and_query)
+                .to_owned(),
         };
         let path = normalize_v1_path(base, &path);
         format!("{base}{path}")

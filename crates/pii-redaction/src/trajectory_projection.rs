@@ -38,7 +38,8 @@ pub(super) fn render_request(
         ProviderSurface::OCIGenAI => Some("oci.genai"),
         ProviderSurface::OpenAIChat
         | ProviderSurface::OpenAIResponses
-        | ProviderSurface::GeminiGenerateContent => None,
+        | ProviderSurface::GeminiGenerateContent
+        | ProviderSurface::TypeSafeSystemOne => None,
     };
     (detect_request_surface_with_hint(&rendered.content, provider_hint) == Some(surface))
         .then_some(())?;
@@ -61,6 +62,7 @@ pub(super) fn render_response(
         ProviderSurface::AnthropicMessages => render_anthropic_response(response),
         ProviderSurface::OCIGenAI => render_oci_response(response),
         ProviderSurface::GeminiGenerateContent => render_gemini_response(response),
+        ProviderSurface::TypeSafeSystemOne => return None,
     };
     (detect_response_surface(&rendered) == Some(surface)).then_some(())?;
     response_codec(surface).decode_response(&rendered).ok()?;
@@ -75,6 +77,7 @@ fn request_template(surface: ProviderSurface, request: &mut AnnotatedLlmRequest)
         ProviderSurface::OpenAIResponses => json!({"input": []}),
         ProviderSurface::OCIGenAI => oci_request_template(request)?,
         ProviderSurface::GeminiGenerateContent => json!({"contents": []}),
+        ProviderSurface::TypeSafeSystemOne => return None,
     })
 }
 

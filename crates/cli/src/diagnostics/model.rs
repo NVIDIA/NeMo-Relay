@@ -105,6 +105,7 @@ pub(crate) struct PluginHostValidation {
 pub(crate) struct UpstreamAuthInfo {
     pub openai: SecretPresence,
     pub anthropic: SecretPresence,
+    pub typesafe: SecretPresence,
 }
 
 impl UpstreamAuthInfo {
@@ -118,6 +119,10 @@ impl UpstreamAuthInfo {
                 gateway.anthropic_auth_header.as_deref(),
                 "ANTHROPIC_API_KEY",
             ),
+            typesafe: SecretPresence::from_effective_provider_auth(
+                gateway.typesafe_auth_header.as_deref(),
+                "TYPESAFE_API_KEY",
+            ),
         }
     }
 
@@ -125,6 +130,7 @@ impl UpstreamAuthInfo {
         Self {
             openai: SecretPresence::Unknown,
             anthropic: SecretPresence::Unknown,
+            typesafe: SecretPresence::Unknown,
         }
     }
 }

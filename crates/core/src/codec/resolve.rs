@@ -14,7 +14,10 @@ use super::request::AnnotatedLlmRequest;
 use super::response::AnnotatedLlmResponse;
 use super::streaming::StreamingCodec;
 use super::traits::{LlmCodec, LlmResponseCodec};
-use super::{anthropic, gemini_generate_content, oci_genai, openai_chat, openai_responses};
+use super::{
+    anthropic, gemini_generate_content, oci_genai, openai_chat, openai_responses,
+    typesafe_system_one,
+};
 
 /// A built-in provider request/response surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +32,8 @@ pub enum ProviderSurface {
     OCIGenAI,
     /// Gemini generateContent.
     GeminiGenerateContent,
+    /// TypeSafe System One evaluation.
+    TypeSafeSystemOne,
 }
 
 /// Request shape detector; the optional `&str` is a provider hint a codec may use
@@ -68,6 +73,7 @@ pub(crate) struct ProviderSurfaceDescriptor {
 /// surface it could shadow. Response detection requires exactly one match
 /// before decoding.
 pub(crate) static BUILTIN_PROVIDER_SURFACES: &[ProviderSurfaceDescriptor] = &[
+    typesafe_system_one::PROVIDER_SURFACE,
     openai_responses::PROVIDER_SURFACE,
     anthropic::PROVIDER_SURFACE,
     // OCI GenAI must precede OpenAI Chat: a bare OCI GENERIC chatRequest body
@@ -80,7 +86,8 @@ pub(crate) static BUILTIN_PROVIDER_SURFACES: &[ProviderSurfaceDescriptor] = &[
 
 /// Detect the request surface from a raw request body by top-level key.
 ///
-/// Priority: OpenAI Responses (`input`/`instructions`) > Anthropic Messages
+/// Priority: TypeSafe System One (`questions`/`criteria`) > OpenAI Responses
+/// (`input`/`instructions`) > Anthropic Messages
 /// (`system`) > OpenAI Chat (`messages`) > Gemini generateContent (`contents`).
 /// `None` when no key matches or `body` is not an object. This is a best-effort heuristic: an
 /// Anthropic request that omits the optional top-level `system` is
@@ -163,6 +170,7 @@ fn descriptor_for(surface: ProviderSurface) -> &'static ProviderSurfaceDescripto
         ProviderSurface::AnthropicMessages => &anthropic::PROVIDER_SURFACE,
         ProviderSurface::OCIGenAI => &oci_genai::PROVIDER_SURFACE,
         ProviderSurface::GeminiGenerateContent => &gemini_generate_content::PROVIDER_SURFACE,
+        ProviderSurface::TypeSafeSystemOne => &typesafe_system_one::PROVIDER_SURFACE,
     }
 }
 

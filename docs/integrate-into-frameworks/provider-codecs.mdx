@@ -94,6 +94,9 @@ Use the built-in provider codecs when the framework payload already matches a su
 - `OCIGenAIChatCodec`: OCI Generative AI chat-compatible requests and responses
   in the `GENERIC`, `COHERE`, and `COHEREV2` API formats.
 - `GeminiGenerateContentCodec`: Gemini `generateContent`-compatible requests and responses.
+- `TypeSafeSystemOneCodec`: TypeSafe System One evaluation requests and
+  responses. This codec exposes typed evaluation data through `api_specific`
+  and intentionally does not synthesize chat messages or generated text.
 
 ## Provider Codec Roles
 

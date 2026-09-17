@@ -23,6 +23,7 @@ fn builtin_provider_surface_registry_keeps_request_priority() {
     assert_eq!(
         surfaces,
         vec![
+            ProviderSurface::TypeSafeSystemOne,
             ProviderSurface::OpenAIResponses,
             ProviderSurface::AnthropicMessages,
             ProviderSurface::OCIGenAI,
@@ -448,7 +449,8 @@ fn hint_does_not_classify_non_object_or_keyless() {
 // Provider-codec factory (name<->surface mapping + codec construction)
 // ---------------------------------------------------------------------------
 
-const ALL_SURFACES: [ProviderSurface; 5] = [
+const ALL_SURFACES: [ProviderSurface; 6] = [
+    ProviderSurface::TypeSafeSystemOne,
     ProviderSurface::OpenAIChat,
     ProviderSurface::OpenAIResponses,
     ProviderSurface::AnthropicMessages,
@@ -469,6 +471,10 @@ fn codec_name_round_trips_for_every_surface() {
 
 #[test]
 fn codec_name_uses_canonical_spellings() {
+    assert_eq!(
+        ProviderSurface::TypeSafeSystemOne.codec_name(),
+        "typesafe_system_one"
+    );
     assert_eq!(ProviderSurface::OpenAIChat.codec_name(), "openai_chat");
     assert_eq!(
         ProviderSurface::OpenAIResponses.codec_name(),
@@ -511,6 +517,7 @@ fn supported_codec_names_track_the_builtin_registry() {
     assert_eq!(
         supported_codec_names(),
         vec![
+            "typesafe_system_one",
             "openai_responses",
             "anthropic_messages",
             "oci_genai",
@@ -654,9 +661,15 @@ fn streaming_codec_round_trips_through_its_response_codec() {
 }
 
 #[test]
-fn streaming_codec_constructs_a_usable_codec_for_every_surface() {
+fn streaming_codec_is_usable_or_explicitly_unsupported_for_every_surface() {
     for surface in ALL_SURFACES {
-        let assembled = streaming_codec(surface).finalizer()();
+        let codec = streaming_codec(surface);
+        if surface == ProviderSurface::TypeSafeSystemOne {
+            assert!(codec.collector()(json!({})).is_err());
+            assert!(codec.finalizer()().is_null());
+            continue;
+        }
+        let assembled = codec.finalizer()();
         assert!(
             assembled.is_object(),
             "{surface:?} streaming codec finalizes to a JSON object",

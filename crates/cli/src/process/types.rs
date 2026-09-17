@@ -11,6 +11,7 @@ pub(crate) struct RunOverrides {
     pub(crate) config: Option<PathBuf>,
     pub(crate) openai_base_url: Option<String>,
     pub(crate) anthropic_base_url: Option<String>,
+    pub(crate) typesafe_base_url: Option<String>,
     pub(crate) session_metadata: Option<String>,
     pub(crate) plugin_config_path: Option<PathBuf>,
     pub(crate) dry_run: bool,

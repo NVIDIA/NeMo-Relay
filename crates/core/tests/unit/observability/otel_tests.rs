@@ -2409,6 +2409,12 @@ fn gen_ai_projection_uses_standard_operation_names_and_span_kinds() {
             "retrieval",
             SpanKind::Client,
         ),
+        (
+            ScopeType::Evaluator,
+            "typesafe.system_one",
+            "evaluate",
+            SpanKind::Client,
+        ),
     ] {
         let event = make_start_event(Uuid::now_v7(), None, name, scope_type, None);
         assert_eq!(
@@ -2425,7 +2431,6 @@ fn gen_ai_projection_uses_standard_operation_names_and_span_kinds() {
         ScopeType::Function,
         ScopeType::Reranker,
         ScopeType::Guardrail,
-        ScopeType::Evaluator,
         ScopeType::Custom,
         ScopeType::Unknown,
     ] {
@@ -2440,6 +2445,76 @@ fn gen_ai_projection_uses_standard_operation_names_and_span_kinds() {
         );
         assert!(crate::observability::otel_genai::start_attributes(&event).is_empty());
     }
+}
+
+#[test]
+fn gen_ai_projection_covers_provider_neutral_evaluator_scopes() {
+    let uuid = Uuid::now_v7();
+    let start = make_start_event(
+        uuid,
+        None,
+        "typesafe.system_one",
+        ScopeType::Evaluator,
+        Some(json!({
+            "model": "jev-latest",
+            "state": {"candidate": "sensitive"},
+            "questions": {
+                "correct": {"type": "boolean", "instructions": "sensitive"},
+                "quality": {"type": "choice", "instructions": "sensitive", "criteria": {}}
+            }
+        })),
+    );
+    assert_eq!(
+        crate::observability::otel_genai::span_name(&start),
+        "evaluate jev-latest"
+    );
+    let start = attr_map(&crate::observability::otel_genai::start_attributes(&start));
+    assert_eq!(
+        start.get("gen_ai.operation.name"),
+        Some(&"evaluate".to_string())
+    );
+    assert_eq!(
+        start.get("gen_ai.provider.name"),
+        Some(&"typesafe".to_string())
+    );
+    assert_eq!(
+        start.get("gen_ai.request.model"),
+        Some(&"jev-latest".to_string())
+    );
+    assert_eq!(
+        start.get("nemo_relay.evaluation.question_count"),
+        Some(&"2".to_string())
+    );
+    assert!(start.values().all(|value| !value.contains("sensitive")));
+
+    let end = make_end_event(
+        uuid,
+        None,
+        "typesafe.system_one",
+        ScopeType::Evaluator,
+        Some(json!({
+            "model": "jev-1.13.0",
+            "answers": {
+                "correct": {"type": "boolean", "probability": 0.9},
+                "quality": {"type": "choice", "choice": "sensitive", "probabilities": {}}
+            },
+            "usage": {"billing_units": 1, "input_tokens": 12, "output_tokens": 0}
+        })),
+    );
+    let end = attr_map(&crate::observability::otel_genai::end_attributes(&end));
+    for (key, expected) in [
+        ("gen_ai.response.model", "jev-1.13.0"),
+        ("gen_ai.usage.input_tokens", "12"),
+        ("gen_ai.usage.output_tokens", "0"),
+        ("nemo_relay.evaluation.billing_units", "1"),
+        ("nemo_relay.evaluation.answer_count", "2"),
+        ("nemo_relay.evaluation.boolean_answer_count", "1"),
+        ("nemo_relay.evaluation.choice_answer_count", "1"),
+        ("nemo_relay.evaluation.score_answer_count", "0"),
+    ] {
+        assert_eq!(end.get(key), Some(&expected.to_string()), "{key}");
+    }
+    assert!(end.values().all(|value| !value.contains("sensitive")));
 }
 
 #[test]
@@ -3591,6 +3666,125 @@ fn gen_ai_projection_covers_optional_request_controls_and_finish_reasons() {
             Some(&format!("[\"{expected}\"]"))
         );
     }
+}
+
+#[test]
+fn gen_ai_projection_exposes_system_one_as_structured_evaluation() {
+    let request = make_scope_event_with_profile(
+        ScopeCategory::Start,
+        Uuid::now_v7(),
+        None,
+        "typesafe.system_one",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(Arc::new(AnnotatedLlmRequest {
+                    model: Some("jev-latest".to_string()),
+                    api_specific: Some(crate::codec::request::ApiSpecificRequest::Custom {
+                        api_name: "typesafe.system_one".to_string(),
+                        data: json!({
+                            "provider": "typesafe",
+                            "operation": "system_one",
+                            "value": {
+                                "model": "jev-latest",
+                                "state": {"candidate": "42"},
+                                "questions": {
+                                    "correct": {
+                                        "type": "boolean",
+                                        "instructions": "Is this correct?"
+                                    },
+                                    "quality": {
+                                        "type": "score",
+                                        "instructions": "Score it",
+                                        "criteria": ["bad", "good"]
+                                    }
+                                }
+                            }
+                        }),
+                    }),
+                    ..AnnotatedLlmRequest::default()
+                }))
+                .build(),
+        ),
+    );
+    let request_attributes = attr_map(&crate::observability::otel_genai::start_attributes(
+        &request,
+    ));
+    assert_eq!(
+        crate::observability::otel_genai::span_name(&request),
+        "evaluate jev-latest"
+    );
+    for (key, expected) in [
+        ("gen_ai.operation.name", "evaluate"),
+        ("gen_ai.provider.name", "typesafe"),
+        ("nemo_relay.evaluation.provider", "typesafe"),
+        ("nemo_relay.evaluation.operation", "system_one"),
+        ("nemo_relay.evaluation.question_count", "2"),
+    ] {
+        assert_eq!(request_attributes.get(key), Some(&expected.to_string()));
+    }
+    assert!(!request_attributes.contains_key("gen_ai.input.messages"));
+
+    let response = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "typesafe.system_one",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    model: Some("jev-1.13.0".to_string()),
+                    usage: Some(Usage {
+                        prompt_tokens: Some(12),
+                        completion_tokens: Some(0),
+                        total_tokens: Some(12),
+                        ..Usage::default()
+                    }),
+                    api_specific: Some(crate::codec::response::ApiSpecificResponse::Custom {
+                        api_name: "typesafe.system_one".to_string(),
+                        data: json!({
+                            "provider": "typesafe",
+                            "operation": "system_one",
+                            "value": {
+                                "model": "jev-1.13.0",
+                                "answers": {
+                                    "correct": {"type": "boolean", "probability": 0.9},
+                                    "quality": {
+                                        "type": "score",
+                                        "score": 1.8,
+                                        "legend": {"0": "bad", "1": "good"},
+                                        "probabilities": {"0": 0.1, "1": 0.9}
+                                    }
+                                },
+                                "usage": {"billing_units": 1, "input_tokens": 12}
+                            }
+                        }),
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    );
+    let response_attributes =
+        attr_map(&crate::observability::otel_genai::end_attributes(&response));
+    for (key, expected) in [
+        ("gen_ai.response.model", "jev-1.13.0"),
+        ("gen_ai.usage.input_tokens", "12"),
+        ("gen_ai.usage.output_tokens", "0"),
+        ("nemo_relay.evaluation.provider", "typesafe"),
+        ("nemo_relay.evaluation.operation", "system_one"),
+        ("nemo_relay.evaluation.answer_count", "2"),
+        ("nemo_relay.evaluation.boolean_answer_count", "1"),
+        ("nemo_relay.evaluation.choice_answer_count", "0"),
+        ("nemo_relay.evaluation.score_answer_count", "1"),
+    ] {
+        assert_eq!(response_attributes.get(key), Some(&expected.to_string()));
+    }
+    assert!(!response_attributes.contains_key("nemo_relay.evaluation.answers"));
+    assert!(!response_attributes.contains_key("gen_ai.output.messages"));
 }
 
 #[test]

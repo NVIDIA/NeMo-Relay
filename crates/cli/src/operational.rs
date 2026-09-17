@@ -377,6 +377,26 @@ pub(crate) fn upstream_status(context: &OperationalContext, status_code: u16) {
     );
 }
 
+pub(crate) fn upstream_retry_scheduled(
+    context: &OperationalContext,
+    provider: &'static str,
+    reason: &'static str,
+    retry_number: u32,
+    delay_millis: u64,
+) {
+    operational_log!(
+        log::Level::Warn,
+        "upstream_retry_scheduled",
+        context;
+        boundary = "upstream",
+        provider,
+        reason,
+        retry_number,
+        delay_millis,
+        elapsed_millis = context.elapsed_millis()
+    );
+}
+
 pub(crate) fn upstream_failed(context: &OperationalContext, error_kind: &'static str) {
     operational_log!(
         log::Level::Error,

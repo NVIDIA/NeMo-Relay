@@ -55,6 +55,8 @@ builtin_llm_codecs! {
     OCIGenAI => "oci_genai",
     /// Gemini generateContent request and response payloads.
     GeminiGenerateContent => "gemini_generate_content",
+    /// TypeSafe System One evaluation request and response payloads.
+    TypeSafeSystemOne => "typesafe_system_one",
 }
 
 /// Per-call LLM codec identity supplied to sanitizer and SDK callbacks.

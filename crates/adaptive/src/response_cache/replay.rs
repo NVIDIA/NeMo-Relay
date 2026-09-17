@@ -90,6 +90,8 @@ fn synthesize_replay_chunks(aggregate: &Json) -> Option<Vec<Json>> {
         // re-aggregates it and rejects shapes the streaming collector cannot
         // preserve exactly.
         ProviderSurface::GeminiGenerateContent => vec![aggregate.clone()],
+        // System One is explicitly non-streaming, so no replay chunks exist.
+        ProviderSurface::TypeSafeSystemOne => return None,
     })
 }
 

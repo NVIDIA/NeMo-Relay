@@ -156,9 +156,10 @@ pub(super) fn format_human_configuration(out: &mut String, report: &DoctorReport
         out.push_str(&format!("    {label:<11}{}\n", format_layer(layer)));
     }
     out.push_str(&format!(
-        "    Upstream   openai={} anthropic={}\n",
+        "    Upstream   openai={} anthropic={} typesafe={}\n",
         report.configuration.upstream_auth.openai.as_str(),
-        report.configuration.upstream_auth.anthropic.as_str()
+        report.configuration.upstream_auth.anthropic.as_str(),
+        report.configuration.upstream_auth.typesafe.as_str()
     ));
     if !matches!(report.configuration.resolution.status, Status::Pass) {
         out.push_str(&format!(

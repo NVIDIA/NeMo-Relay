@@ -343,6 +343,9 @@ fn test_config() -> GatewayConfig {
         openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
         anthropic_auth_header: None,
+        typesafe_base_url: "https://api.typesafe.ai/v1".into(),
+        typesafe_auth_header: None,
+        typesafe_retry: crate::typesafe_retry::TypeSafeRetryPolicy::default(),
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -3758,6 +3761,40 @@ async fn gateway_rejects_unsupported_paths() {
 }
 
 #[tokio::test]
+async fn system_one_routes_are_registered_and_reject_streaming_before_upstream() {
+    let app = router(test_config());
+    for path in [
+        "/systemone",
+        "/v1/systemone",
+        "/typesafe/systemone",
+        "/typesafe/v1/systemone",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "jev-latest",
+                            "state": "candidate",
+                            "questions": {"correct": {"type": "noul"}},
+                            "stream": false
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+    }
+}
+
+#[tokio::test]
 async fn gateway_upstream_transport_error_url_is_opaque_in_events() {
     const SECRET_USERNAME: &str = "secret-upstream-user";
     const MODEL: &str = "gpt-opaque-transport-error-test";
@@ -3852,8 +3889,10 @@ async fn models_route_forwards_get_requests() {
     let upstream = spawn_models_upstream().await;
     let mut config = test_config();
     config.openai_base_url = upstream.url();
+    config.typesafe_base_url = upstream.url();
     let app = router(config);
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -3870,6 +3909,23 @@ async fn models_route_forwards_get_requests() {
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["path"], json!("/v1/models?limit=1"));
     assert_eq!(body["authorization"], json!("Bearer test"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/typesafe/v1/models?limit=2")
+                .header("authorization", "Bearer jev-test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["path"], json!("/v1/models?limit=2"));
+    assert_eq!(body["authorization"], json!("Bearer jev-test"));
 }
 
 #[tokio::test]

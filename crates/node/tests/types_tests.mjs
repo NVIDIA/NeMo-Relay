@@ -27,6 +27,7 @@ describe('Type constants', () => {
     assert.equal(typeof lib.AnthropicMessagesCodec, 'function');
     assert.equal(typeof lib.OCIGenAIChatCodec, 'function');
     assert.equal(typeof lib.GeminiGenerateContentCodec, 'function');
+    assert.equal(typeof lib.TypeSafeSystemOneCodec, 'function');
   });
 
   it('scope type enum values', () => {
@@ -65,6 +66,48 @@ describe('Type constants', () => {
         cwd: fileURLToPath(new URL('..', import.meta.url)),
         stdio: 'pipe',
       },
+    );
+  });
+});
+
+describe('TypeSafeSystemOneCodec', () => {
+  const { TypeSafeSystemOneCodec } = lib;
+
+  it('round-trips non-streaming evaluations and decodes decisions', () => {
+    const codec = new TypeSafeSystemOneCodec();
+    const original = {
+      headers: {},
+      content: {
+        model: 'jev-latest',
+        state: { candidate: '42' },
+        questions: { correct: { type: 'noul', instructions: 'Correct?' } },
+        request_id: 'preserved',
+      },
+    };
+    const annotated = codec.decode(original);
+    assert.deepEqual(codec.encode(annotated, original), original);
+    const response = codec.decodeResponse({
+      model: 'jev-1.13.0',
+      answers: { correct: { type: 'noul', noul: 0.9 } },
+      usage: { input_tokens: 12, output_tokens: 0 },
+    });
+    assert.equal(response.model, 'jev-1.13.0');
+    assert.equal(response.usage.prompt_tokens, 12);
+  });
+
+  it('rejects explicit streaming', () => {
+    const codec = new TypeSafeSystemOneCodec();
+    assert.throws(
+      () => codec.decode({
+        headers: {},
+        content: {
+          model: 'jev-latest',
+          state: 'candidate',
+          questions: { correct: { type: 'noul', instructions: 'Correct?' } },
+          stream: false,
+        },
+      }),
+      /does not support streaming/,
     );
   });
 });

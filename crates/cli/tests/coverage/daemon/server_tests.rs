@@ -1018,6 +1018,10 @@ fn pass_through_auth_injection_supports_environment_and_anthropic_configuration(
             "ANTHROPIC_API_KEY",
             Some(std::ffi::OsStr::new(" anthropic-env ")),
         ),
+        (
+            "TYPESAFE_API_KEY",
+            Some(std::ffi::OsStr::new(" typesafe-env ")),
+        ),
     ]);
     let mut openai = HeaderMap::new();
     inject_provider_auth(
@@ -1035,12 +1039,22 @@ fn pass_through_auth_injection_supports_environment_and_anthropic_configuration(
     );
     assert_eq!(anthropic["x-api-key"], "anthropic-env");
 
+    let mut typesafe = HeaderMap::new();
+    inject_provider_auth(
+        &mut typesafe,
+        ProviderRoute::TypeSafe,
+        &GatewayConfig::default(),
+    );
+    assert_eq!(typesafe[AUTHORIZATION], "Bearer typesafe-env");
+
     let mut configured = HeaderMap::new();
     inject_provider_auth(
         &mut configured,
         ProviderRoute::Anthropic,
         &GatewayConfig {
             anthropic_auth_header: Some("configured".into()),
+            typesafe_base_url: "https://api.typesafe.ai/v1".into(),
+            typesafe_auth_header: None,
             ..GatewayConfig::default()
         },
     );

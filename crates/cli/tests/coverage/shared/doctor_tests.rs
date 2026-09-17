@@ -483,6 +483,7 @@ fn empty_report() -> DoctorReport {
             upstream_auth: UpstreamAuthInfo {
                 openai: SecretPresence::Unset,
                 anthropic: SecretPresence::Unset,
+                typesafe: SecretPresence::Unset,
             },
             plugin_configs: vec![],
             plugin_resolution: Check {
@@ -799,11 +800,12 @@ fn format_human_reports_effective_upstream_auth_presence() {
     report.configuration.upstream_auth = UpstreamAuthInfo {
         openai: SecretPresence::Configured,
         anthropic: SecretPresence::Unset,
+        typesafe: SecretPresence::Unset,
     };
 
     let rendered = format_human(&report);
 
-    assert!(rendered.contains("Upstream   openai=configured anthropic=unset"));
+    assert!(rendered.contains("Upstream   openai=configured anthropic=unset typesafe=unset"));
 }
 
 #[test]
@@ -1772,6 +1774,8 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
             gateway: GatewayConfig {
                 openai_auth_header: Some("Bearer openai".into()),
                 anthropic_auth_header: None,
+                typesafe_base_url: "https://api.typesafe.ai/v1".into(),
+                typesafe_auth_header: None,
                 ..GatewayConfig::default()
             },
             ..ResolvedConfig::default()

@@ -13,6 +13,8 @@ Covers:
 
 from typing import cast
 
+import pytest
+
 import nemo_relay
 from nemo_relay import (
     AnnotatedLLMRequest,
@@ -29,6 +31,7 @@ from nemo_relay.codecs import (
     OCIGenAIChatCodec,
     OpenAIChatCodec,
     OpenAIResponsesCodec,
+    TypeSafeSystemOneCodec,
 )
 
 # ---------------------------------------------------------------------------
@@ -97,6 +100,12 @@ class TestBuiltinCodecConstruction:
         assert hasattr(codec, "encode")
         assert hasattr(codec, "decode_response")
 
+    def test_typesafe_system_one_codec_constructable(self) -> None:
+        codec = TypeSafeSystemOneCodec()
+        assert hasattr(codec, "decode")
+        assert hasattr(codec, "encode")
+        assert hasattr(codec, "decode_response")
+
 
 # ---------------------------------------------------------------------------
 # 2. Built-in codec decode/encode round-trip
@@ -104,6 +113,51 @@ class TestBuiltinCodecConstruction:
 
 
 class TestBuiltinCodecDecodeEncode:
+    def test_typesafe_system_one_round_trip_and_response(self) -> None:
+        codec = TypeSafeSystemOneCodec()
+        request = LLMRequest(
+            {},
+            {
+                "model": "jev-latest",
+                "state": {"candidate": "42"},
+                "questions": {
+                    "correct": {
+                        "type": "noul",
+                        "instructions": "Is it correct?",
+                    }
+                },
+                "request_id": "preserved",
+            },
+        )
+        annotated = codec.decode(request)
+        assert annotated.messages == []
+        assert codec.encode(annotated, request).content == request.content
+
+        response = codec.decode_response(
+            {
+                "model": "jev-1.13.0",
+                "answers": {"correct": {"type": "noul", "noul": 0.9}},
+                "usage": {"input_tokens": 12, "output_tokens": 0},
+            }
+        )
+        assert response.model == "jev-1.13.0"
+        assert response.usage is not None
+        assert response.usage["prompt_tokens"] == 12
+
+    def test_typesafe_system_one_rejects_streaming(self) -> None:
+        codec = TypeSafeSystemOneCodec()
+        request = LLMRequest(
+            {},
+            {
+                "model": "jev-latest",
+                "state": "candidate",
+                "questions": {"correct": {"type": "noul", "instructions": "Correct?"}},
+                "stream": False,
+            },
+        )
+        with pytest.raises(RuntimeError, match="does not support streaming"):
+            codec.decode(request)
+
     def test_openai_chat_decode(self) -> None:
         """OpenAIChatCodec.decode() returns AnnotatedLLMRequest."""
         codec = OpenAIChatCodec()

@@ -1149,3 +1149,62 @@ impl PyGeminiGenerateContentCodec {
         "<GeminiGenerateContentCodec>"
     }
 }
+
+/// Built-in codec for TypeSafe System One evaluation requests and responses.
+///
+/// System One is non-streaming and is represented as provider-neutral
+/// evaluation data rather than chat messages.
+#[pyclass(name = "TypeSafeSystemOneCodec")]
+pub struct PyTypeSafeSystemOneCodec {
+    pub(crate) inner_codec: Arc<dyn LlmCodec>,
+    pub(crate) inner_response_codec: Arc<dyn LlmResponseCodec>,
+}
+
+#[pymethods]
+impl PyTypeSafeSystemOneCodec {
+    #[new]
+    pub(crate) fn new() -> Self {
+        Self {
+            inner_codec: Arc::new(nemo_relay::codec::typesafe_system_one::TypeSafeSystemOneCodec),
+            inner_response_codec: Arc::new(
+                nemo_relay::codec::typesafe_system_one::TypeSafeSystemOneCodec,
+            ),
+        }
+    }
+
+    /// Parse an opaque ``LLMRequest`` into a normalized evaluation request.
+    pub(crate) fn decode(&self, request: &PyLLMRequest) -> PyResult<PyAnnotatedLLMRequest> {
+        self.inner_codec
+            .decode(&request.inner)
+            .map(|r| PyAnnotatedLLMRequest { inner: r })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Merge normalized evaluation changes back into the provider request.
+    pub(crate) fn encode(
+        &self,
+        annotated: &PyAnnotatedLLMRequest,
+        original: &PyLLMRequest,
+    ) -> PyResult<PyLLMRequest> {
+        self.inner_codec
+            .encode(&annotated.inner, &original.inner)
+            .map(|r| PyLLMRequest { inner: r })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Parse a System One response into normalized evaluation data and usage.
+    pub(crate) fn decode_response(
+        &self,
+        response: &Bound<'_, PyAny>,
+    ) -> PyResult<PyAnnotatedLLMResponse> {
+        let json = py_to_json(response)?;
+        self.inner_response_codec
+            .decode_response(&json)
+            .map(|r| PyAnnotatedLLMResponse { inner: r })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    pub(crate) fn __repr__(&self) -> &'static str {
+        "<TypeSafeSystemOneCodec>"
+    }
+}

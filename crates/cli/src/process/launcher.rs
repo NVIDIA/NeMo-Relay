@@ -614,6 +614,8 @@ impl PreparedAgentLaunch {
             resolved.gateway.anthropic_base_url
         );
         println!("anthropic_auth = {}", upstream_auth.anthropic.as_str());
+        println!("typesafe_base_url = {}", resolved.gateway.typesafe_base_url);
+        println!("typesafe_auth = {}", upstream_auth.typesafe.as_str());
         println!(
             "max_hook_payload_bytes = {}",
             resolved.gateway.max_hook_payload_bytes

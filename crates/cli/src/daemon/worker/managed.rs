@@ -376,7 +376,9 @@ impl ManagedRuntime {
             return dispatch_unmanaged(upstream, request, route, &self.config).await;
         };
         let operational = OperationalContext::take_from_headers(request.headers_mut());
-        if !middleware.request_body_decode_required {
+        // TypeSafe requests are replayable JSON and its SDK contract includes retries. Buffer them
+        // even when no plugin needs request decoding so daemon and direct-gateway behavior match.
+        if !middleware.request_body_decode_required && route != ProviderRoute::TypeSafe {
             strip_worker_headers(request.headers_mut());
             strip_untrusted_dispatch_headers(request.headers_mut());
             let streaming_hint = request_streaming_hint(request.headers());
@@ -721,13 +723,65 @@ async fn dispatch_unmanaged(
         HeaderName::from_static(WORKER_TOKEN_HEADER),
         HeaderName::from_static(WORKER_ROUTE_FAILURE_HEADER),
     ];
-    let request = prepare_forward_request(request, destination, &strip)
-        .map_err(|error| CliError::InvalidPayload(error.to_string()))?
-        .map(box_body);
-    let response = tokio::time::timeout(RESPONSE_HEAD_TIMEOUT, upstream.request(request))
-        .await
-        .map_err(|_| CliError::Launch("provider response-head timeout".into()))?
-        .map_err(|error| CliError::Launch(error.to_string()))?;
+    // The only unmanaged TypeSafe route is the read-only model catalog. Rebuild its empty GET
+    // request for retries without aggregating a body in this streaming forwarding layer.
+    let response = if route == ProviderRoute::TypeSafe && request.method() == Method::GET {
+        let (parts, _body) = request.into_parts();
+        let mut retry_count = 0_u32;
+        loop {
+            let mut replay = Request::builder()
+                .method(parts.method.clone())
+                .version(parts.version)
+                .uri(destination.clone())
+                .body(Body::empty())?;
+            *replay.headers_mut() = parts.headers.clone();
+            replay.headers_mut().remove("x-typesafe-retry-count");
+            if retry_count > 0 {
+                replay.headers_mut().insert(
+                    HeaderName::from_static("x-typesafe-retry-count"),
+                    HeaderValue::from_str(&retry_count.to_string())
+                        .expect("retry count is a valid header value"),
+                );
+            }
+            let replay = prepare_forward_request(replay, destination.clone(), &strip)
+                .map_err(|error| CliError::InvalidPayload(error.to_string()))?
+                .map(box_body);
+            let attempt =
+                tokio::time::timeout(RESPONSE_HEAD_TIMEOUT, upstream.request(replay)).await;
+            let response = match attempt {
+                Ok(Ok(response)) => response,
+                Ok(Err(_)) | Err(_) if config.typesafe_retry.can_retry_transport(retry_count) => {
+                    let delay = config.typesafe_retry.delay(None, retry_count);
+                    retry_count += 1;
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                Ok(Err(error)) => return Err(CliError::Launch(error.to_string())),
+                Err(_) => return Err(CliError::Launch("provider response-head timeout".into())),
+            };
+            if config
+                .typesafe_retry
+                .should_retry_status(response.status(), retry_count)
+            {
+                let delay = config
+                    .typesafe_retry
+                    .delay(Some(response.headers()), retry_count);
+                retry_count += 1;
+                drop(response);
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            break response;
+        }
+    } else {
+        let request = prepare_forward_request(request, destination, &strip)
+            .map_err(|error| CliError::InvalidPayload(error.to_string()))?
+            .map(box_body);
+        tokio::time::timeout(RESPONSE_HEAD_TIMEOUT, upstream.request(request))
+            .await
+            .map_err(|_| CliError::Launch("provider response-head timeout".into()))?
+            .map_err(|error| CliError::Launch(error.to_string()))?
+    };
     let response = prepare_forward_response(response, &strip)
         .map_err(|error| CliError::Launch(error.to_string()))?;
     let (parts, body) = response.into_parts();
@@ -864,25 +918,83 @@ async fn dispatch_observed(
     {
         headers = aligned;
     }
-    let mut request = Request::builder()
-        .method(prepared.method.clone())
-        .version(prepared.version)
-        .uri(destination.clone())
-        .body(Body::from(body))?;
-    *request.headers_mut() = headers;
-    if !explicit_target && allow_environment_provider_auth {
-        inject_provider_auth(request.headers_mut(), route, config);
-    }
     let strip = [
         HeaderName::from_static(CLIENT_TOKEN_HEADER),
         HeaderName::from_static(WORKER_TOKEN_HEADER),
         HeaderName::from_static(WORKER_ROUTE_FAILURE_HEADER),
     ];
-    let request = prepare_forward_request(request, destination, &strip)
-        .map_err(|error| CliError::InvalidPayload(error.to_string()))?
-        .map(box_body);
-    let response =
-        request_worker_upstream(upstream, request, &operational, prepared.streaming).await?;
+    let mut retry_count = 0_u32;
+    let response = loop {
+        let mut request = Request::builder()
+            .method(prepared.method.clone())
+            .version(prepared.version)
+            .uri(destination.clone())
+            .body(Body::from(body.clone()))?;
+        *request.headers_mut() = headers.clone();
+        request.headers_mut().remove("x-typesafe-retry-count");
+        if route == ProviderRoute::TypeSafe && retry_count > 0 {
+            request.headers_mut().insert(
+                HeaderName::from_static("x-typesafe-retry-count"),
+                HeaderValue::from_str(&retry_count.to_string())
+                    .expect("retry count is a valid header value"),
+            );
+        }
+        if !explicit_target && allow_environment_provider_auth {
+            inject_provider_auth(request.headers_mut(), route, config);
+        }
+        let request = prepare_forward_request(request, destination.clone(), &strip)
+            .map_err(|error| CliError::InvalidPayload(error.to_string()))?
+            .map(box_body);
+        let attempt =
+            request_worker_upstream(upstream.clone(), request, &operational, prepared.streaming)
+                .await;
+        let response = match attempt {
+            Ok(response) => response,
+            Err(_error)
+                if route == ProviderRoute::TypeSafe
+                    && config.typesafe_retry.can_retry_transport(retry_count) =>
+            {
+                let delay = config.typesafe_retry.delay(None, retry_count);
+                retry_count += 1;
+                operational::upstream_retry_scheduled(
+                    &operational,
+                    "typesafe",
+                    "transport",
+                    retry_count,
+                    delay.as_millis().try_into().unwrap_or(u64::MAX),
+                );
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if route == ProviderRoute::TypeSafe
+            && config
+                .typesafe_retry
+                .should_retry_status(response.status(), retry_count)
+        {
+            let status = response.status();
+            let delay = config
+                .typesafe_retry
+                .delay(Some(response.headers()), retry_count);
+            retry_count += 1;
+            operational::upstream_retry_scheduled(
+                &operational,
+                "typesafe",
+                if status == StatusCode::TOO_MANY_REQUESTS {
+                    "rate_limit"
+                } else {
+                    "status"
+                },
+                retry_count,
+                delay.as_millis().try_into().unwrap_or(u64::MAX),
+            );
+            drop(response);
+            tokio::time::sleep(delay).await;
+            continue;
+        }
+        break response;
+    };
     let response = prepare_forward_response(response, &strip).map_err(|error| {
         operational::upstream_failed(&operational, "invalid_response");
         CliError::Launch(error.to_string())
@@ -1074,6 +1186,7 @@ fn inject_provider_auth(headers: &mut HeaderMap, route: ProviderRoute, config: &
     if let Some(configured) = match route {
         ProviderRoute::OpenAi => config.openai_auth_header.as_deref(),
         ProviderRoute::Anthropic => config.anthropic_auth_header.as_deref(),
+        ProviderRoute::TypeSafe => config.typesafe_auth_header.as_deref(),
     }
     .and_then(|value| HeaderValue::from_str(value).ok())
     {
@@ -1092,6 +1205,12 @@ fn inject_provider_auth(headers: &mut HeaderMap, route: ProviderRoute, config: &
                 return;
             };
             (HeaderName::from_static("x-api-key"), key)
+        }
+        ProviderRoute::TypeSafe => {
+            let Some(key) = environment_value("TYPESAFE_API_KEY") else {
+                return;
+            };
+            (AUTHORIZATION, format!("Bearer {key}"))
         }
     };
     if let Ok(value) = HeaderValue::from_str(&value) {
@@ -1143,6 +1262,9 @@ fn provider_surface(path: &str) -> Option<ProviderSurface> {
         }
         "/chat/completions" | "/v1/chat/completions" => Some(ProviderSurface::OpenAIChat),
         "/v1/messages" => Some(ProviderSurface::AnthropicMessages),
+        "/systemone" | "/v1/systemone" | "/typesafe/systemone" | "/typesafe/v1/systemone" => {
+            Some(ProviderSurface::TypeSafeSystemOne)
+        }
         _ => None,
     }
 }

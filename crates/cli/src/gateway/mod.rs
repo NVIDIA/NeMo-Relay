@@ -1081,15 +1081,113 @@ async fn forward_upstream_request(
         forwarding.source_route,
     );
     let configured_auth_header = forwarding.configured_auth_header(effective.target_route);
+    if let Some(operational) = operational {
+        operational::upstream_started(operational, streaming);
+    }
+    let is_typesafe = matches!(
+        effective.target_route,
+        ProviderRoute::TypeSafeSystemOne | ProviderRoute::TypeSafeModels
+    );
+
+    let mut retry_count = 0_u32;
+    loop {
+        let upstream = build_upstream_attempt(
+            http,
+            method,
+            &effective,
+            &forwarding,
+            configured_auth_header,
+            retry_count,
+        );
+        let response = send_upstream_attempt(upstream, operational).await;
+
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                if is_typesafe
+                    && (error.is_timeout() || error.is_connect())
+                    && forwarding.typesafe_retry.can_retry_transport(retry_count)
+                {
+                    let delay = forwarding.typesafe_retry.delay(None, retry_count);
+                    retry_count += 1;
+                    if let Some(operational) = operational {
+                        operational::upstream_retry_scheduled(
+                            operational,
+                            "typesafe",
+                            "transport",
+                            retry_count,
+                            delay.as_millis().try_into().unwrap_or(u64::MAX),
+                        );
+                    }
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                if let Some(operational) = operational {
+                    operational::upstream_failed(operational, "transport");
+                }
+                return Err(error);
+            }
+        };
+        if is_typesafe
+            && forwarding
+                .typesafe_retry
+                .should_retry_status(response.status(), retry_count)
+        {
+            let status = response.status();
+            let delay = forwarding
+                .typesafe_retry
+                .delay(Some(response.headers()), retry_count);
+            retry_count += 1;
+            if let Some(operational) = operational {
+                operational::upstream_retry_scheduled(
+                    operational,
+                    "typesafe",
+                    if status == StatusCode::TOO_MANY_REQUESTS {
+                        "rate_limit"
+                    } else {
+                        "status"
+                    },
+                    retry_count,
+                    delay.as_millis().try_into().unwrap_or(u64::MAX),
+                );
+            }
+            drop(response);
+            tokio::time::sleep(delay).await;
+            continue;
+        }
+        if let Some(operational) = operational {
+            operational::upstream_headers_received(operational, streaming);
+        }
+        return Ok(response);
+    }
+}
+
+fn build_upstream_attempt(
+    http: &reqwest::Client,
+    method: &Method,
+    effective: &EffectiveUpstreamRequest,
+    forwarding: &ProviderForwarding,
+    configured_auth_header: Option<&str>,
+    retry_count: u32,
+) -> reqwest::RequestBuilder {
     let mut upstream = http
         .request(method.clone(), &effective.url)
         .body(effective.body_bytes.clone());
     for (name, value) in &effective.headers {
-        if should_forward_request_header(name, &effective.headers) {
+        if name.as_str() != "x-typesafe-retry-count"
+            && should_forward_request_header(name, &effective.headers)
+        {
             upstream = upstream.header(name, value);
         }
     }
-    upstream = inject_provider_auth(
+    let is_typesafe = matches!(
+        effective.target_route,
+        ProviderRoute::TypeSafeSystemOne | ProviderRoute::TypeSafeModels
+    );
+    if is_typesafe && retry_count > 0 {
+        upstream = upstream.header("x-typesafe-retry-count", retry_count.to_string());
+    }
+    inject_provider_auth(
         upstream,
         effective.target_route,
         &effective.headers,
@@ -1098,30 +1196,28 @@ async fn forward_upstream_request(
             TargetCredentialPolicy::SourceOrEnvironment
         ) && forwarding.authorization.allow_environment_provider_auth,
         configured_auth_header,
-    );
-    if let Some(operational) = operational {
-        operational::upstream_started(operational, streaming);
-        let request = upstream.send();
-        tokio::pin!(request);
-        let response = tokio::select! {
-            response = &mut request => response,
-            _ = tokio::time::sleep(std::time::Duration::from_millis(UPSTREAM_RESPONSE_THRESHOLD_MILLIS)) => {
-                operational::upstream_delayed(
-                    operational,
-                    "upstream_headers_delayed",
-                    UPSTREAM_RESPONSE_THRESHOLD_MILLIS,
-                );
-                request.await
-            }
-        };
-        if response.is_ok() {
-            operational::upstream_headers_received(operational, streaming);
-        } else {
-            operational::upstream_failed(operational, "transport");
+    )
+}
+
+async fn send_upstream_attempt(
+    upstream: reqwest::RequestBuilder,
+    operational: Option<&OperationalContext>,
+) -> Result<reqwest::Response, reqwest::Error> {
+    let Some(operational) = operational else {
+        return upstream.send().await;
+    };
+    let request = upstream.send();
+    tokio::pin!(request);
+    tokio::select! {
+        response = &mut request => response,
+        _ = tokio::time::sleep(std::time::Duration::from_millis(UPSTREAM_RESPONSE_THRESHOLD_MILLIS)) => {
+            operational::upstream_delayed(
+                operational,
+                "upstream_headers_delayed",
+                UPSTREAM_RESPONSE_THRESHOLD_MILLIS,
+            );
+            request.await
         }
-        response
-    } else {
-        upstream.send().await
     }
 }
 
@@ -1384,6 +1480,9 @@ where
         ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => {
             ("ANTHROPIC_API_KEY", "x-api-key")
         }
+        ProviderRoute::TypeSafeSystemOne | ProviderRoute::TypeSafeModels => {
+            ("TYPESAFE_API_KEY", http::header::AUTHORIZATION.as_str())
+        }
     };
     let Some(value) = env_lookup(env_var) else {
         return builder;
@@ -1400,6 +1499,9 @@ where
         | ProviderRoute::OpenAiImagesGenerations
         | ProviderRoute::OpenAiModels => format!("Bearer {value}"),
         ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => value,
+        ProviderRoute::TypeSafeSystemOne | ProviderRoute::TypeSafeModels => {
+            format!("Bearer {value}")
+        }
     };
     builder.header(header_name, header_value)
 }
@@ -1566,7 +1668,7 @@ fn http_failure(status: StatusCode, headers: &HeaderMap, body: &[u8]) -> Upstrea
         || normalized.contains("model_overloaded")
     {
         UpstreamFailureClass::ModelUnavailable
-    } else if matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 504) {
+    } else if matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 504 | 529) {
         UpstreamFailureClass::RetryableStatus
     } else if status.is_client_error() {
         UpstreamFailureClass::InvalidRequest
@@ -1627,7 +1729,7 @@ fn bounded_error_body(body: &[u8]) -> String {
     String::from_utf8_lossy(&body[..body.len().min(MAX_UPSTREAM_ERROR_BODY_BYTES)]).into_owned()
 }
 
-/// Proxies OpenAI model-list requests without creating LLM runtime events.
+/// Proxies provider model-list requests without creating LLM runtime events.
 ///
 /// The route is registered as GET-only but still verifies the method so direct tests or future
 /// router changes return a 405 instead of forwarding a nonsensical request upstream.
@@ -1644,7 +1746,14 @@ pub(crate) async fn models(
             Body::empty(),
         );
     }
-    let provider = ProviderRoute::OpenAiModels;
+    let provider = ProviderRoute::from_path(parts.uri.path())
+        .filter(|provider| {
+            matches!(
+                provider,
+                ProviderRoute::OpenAiModels | ProviderRoute::TypeSafeModels
+            )
+        })
+        .ok_or_else(|| CliError::InvalidPayload("unsupported model-list route".into()))?;
     let configured_auth_header = provider.configured_auth_header(&state.config);
     let path_and_query = parts
         .uri
@@ -1694,24 +1803,61 @@ pub(crate) async fn models(
         allow_environment_provider_auth,
         configured_auth_header,
     );
-    let mut upstream = if named_by_client {
-        state.http_no_redirect.get(upstream_url)
-    } else {
-        state.http.get(upstream_url)
-    };
-    for (name, value) in &sanitized {
-        if should_forward_request_header(name, &sanitized) {
-            upstream = upstream.header(name, value);
+    let mut retry_count = 0_u32;
+    let upstream_response = loop {
+        let mut upstream = if named_by_client {
+            state.http_no_redirect.get(&upstream_url)
+        } else {
+            state.http.get(&upstream_url)
+        };
+        for (name, value) in &sanitized {
+            if name.as_str() != "x-typesafe-retry-count"
+                && should_forward_request_header(name, &sanitized)
+            {
+                upstream = upstream.header(name, value);
+            }
         }
-    }
-    upstream = inject_provider_auth(
-        upstream,
-        provider,
-        &sanitized,
-        allow_environment_provider_auth,
-        configured_auth_header,
-    );
-    let upstream_response = upstream.send().await?;
+        if provider == ProviderRoute::TypeSafeModels && retry_count > 0 {
+            upstream = upstream.header("x-typesafe-retry-count", retry_count.to_string());
+        }
+        upstream = inject_provider_auth(
+            upstream,
+            provider,
+            &sanitized,
+            allow_environment_provider_auth,
+            configured_auth_header,
+        );
+        let response = match upstream.send().await {
+            Ok(response) => response,
+            Err(error)
+                if provider == ProviderRoute::TypeSafeModels
+                    && (error.is_timeout() || error.is_connect())
+                    && state.config.typesafe_retry.can_retry_transport(retry_count) =>
+            {
+                let delay = state.config.typesafe_retry.delay(None, retry_count);
+                retry_count += 1;
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if provider == ProviderRoute::TypeSafeModels
+            && state
+                .config
+                .typesafe_retry
+                .should_retry_status(response.status(), retry_count)
+        {
+            let delay = state
+                .config
+                .typesafe_retry
+                .delay(Some(response.headers()), retry_count);
+            retry_count += 1;
+            drop(response);
+            tokio::time::sleep(delay).await;
+            continue;
+        }
+        break response;
+    };
     let status = upstream_response.status();
     let headers = response_headers(upstream_response.headers());
     let bytes = upstream_response.bytes().await?;

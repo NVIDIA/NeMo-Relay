@@ -1337,8 +1337,11 @@ async fn probe_worker(target: &Arc<WorkerTarget>) -> Result<(), CliError> {
 }
 
 async fn public_proxy(state: State<Arc<DaemonState>>, request: Request<Body>) -> Response<Body> {
-    let catalog =
-        request.method() == Method::GET && matches!(request.uri().path(), "/models" | "/v1/models");
+    let catalog = request.method() == Method::GET
+        && matches!(
+            request.uri().path(),
+            "/models" | "/v1/models" | "/typesafe/models" | "/typesafe/v1/models"
+        );
     let mut response = public_proxy_inner(state, request).await;
     if catalog {
         // Shared catalog URLs are keyed by a private credential, not by their URI. Override
@@ -1410,7 +1413,10 @@ fn responses_websocket_probe(request: &Request<Body>) -> bool {
 }
 
 fn public_method_allowed(method: &Method, path: &str) -> bool {
-    if matches!(path, "/models" | "/v1/models") {
+    if matches!(
+        path,
+        "/models" | "/v1/models" | "/typesafe/models" | "/typesafe/v1/models"
+    ) {
         method == Method::GET
     } else {
         method == Method::POST
@@ -1491,6 +1497,7 @@ fn inject_provider_auth(headers: &mut HeaderMap, route: ProviderRoute, config: &
     let configured = match route {
         ProviderRoute::OpenAi => config.openai_auth_header.as_deref(),
         ProviderRoute::Anthropic => config.anthropic_auth_header.as_deref(),
+        ProviderRoute::TypeSafe => config.typesafe_auth_header.as_deref(),
     };
     if let Some(configured) = configured.and_then(|value| HeaderValue::from_str(value).ok()) {
         headers.insert(AUTHORIZATION, configured);
@@ -1508,6 +1515,12 @@ fn inject_provider_auth(headers: &mut HeaderMap, route: ProviderRoute, config: &
                 return;
             };
             (HeaderName::from_static("x-api-key"), key)
+        }
+        ProviderRoute::TypeSafe => {
+            let Some(key) = nonempty_environment("TYPESAFE_API_KEY") else {
+                return;
+            };
+            (AUTHORIZATION, format!("Bearer {key}"))
         }
     };
     if let Ok(value) = HeaderValue::from_str(&value) {

@@ -42,6 +42,7 @@ futures-util = "0.3"
 fs2 = "0.4"
 http = "1"
 http-body-util = "0.1"
+httpdate = "1"
 hyper = { version = "1.11.1", features = ["client", "server", "http1", "http2"] }
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "server-auto", "service", "tokio"] }

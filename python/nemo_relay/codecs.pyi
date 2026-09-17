@@ -239,6 +239,20 @@ class GeminiGenerateContentCodec:
         """
         ...
 
+class TypeSafeSystemOneCodec:
+    """Built-in codec for non-streaming TypeSafe System One evaluations."""
+
+    def __init__(self) -> None: ...
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+        """Decode a System One request into normalized evaluation data."""
+        ...
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+        """Encode normalized evaluation changes into System One format."""
+        ...
+    def decode_response(self, response: Json) -> AnnotatedLLMResponse:
+        """Decode a System One response, including decisions and usage."""
+        ...
+
 __all__ = [
     "AnnotatedLLMRequest",
     "AnthropicMessagesCodec",
@@ -248,4 +262,5 @@ __all__ = [
     "OCIGenAIChatCodec",
     "OpenAIChatCodec",
     "OpenAIResponsesCodec",
+    "TypeSafeSystemOneCodec",
 ]

@@ -1459,6 +1459,22 @@ class GeminiGenerateContentCodec:
         """Decode a Gemini response into a normalized response view."""
         ...
 
+class TypeSafeSystemOneCodec:
+    """Built-in codec for non-streaming TypeSafe System One evaluations."""
+
+    def __init__(self) -> None:
+        """Create a TypeSafe System One codec."""
+        ...
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+        """Decode a System One request into normalized evaluation data."""
+        ...
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+        """Encode normalized evaluation changes into System One format."""
+        ...
+    def decode_response(self, response: _Json) -> AnnotatedLLMResponse:
+        """Decode a System One response, including decisions and usage."""
+        ...
+
 class AdaptiveRuntime:
     """Hosted adaptive runtime bridge implemented by the native extension.
 

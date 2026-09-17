@@ -3,6 +3,8 @@
 
 //! Public API for the NeMo Relay runtime.
 
+/// Provider-neutral evaluator lifecycle and managed execution entry points.
+pub mod evaluation;
 /// Lifecycle event types and builder-backed event constructors.
 pub mod event;
 /// LLM lifecycle helpers and managed execution entry points.

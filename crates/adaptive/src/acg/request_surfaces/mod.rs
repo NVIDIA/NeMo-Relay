@@ -52,6 +52,8 @@ impl RequestSurface {
             ProviderSurface::OCIGenAI => None,
             // Gemini generateContent ACG request editing is intentionally unsupported.
             ProviderSurface::GeminiGenerateContent => None,
+            // ACG prompt mutation is not defined for evaluation state/questions.
+            ProviderSurface::TypeSafeSystemOne => None,
         }
     }
 

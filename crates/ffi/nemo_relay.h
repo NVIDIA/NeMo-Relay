@@ -1218,6 +1218,18 @@ struct FfiCodecHandle *nemo_relay_anthropic_messages_codec_new(void);
 struct FfiCodecHandle *nemo_relay_gemini_generate_content_codec_new(void);
 
 /**
+ * Create a new TypeSafe System One evaluation codec handle.
+ *
+ * The returned handle implements request decode/encode and response decode.
+ * System One requests are explicitly non-streaming. Free with
+ * `nemo_relay_codec_free`.
+ *
+ * # Safety
+ * Caller must free the returned handle via `nemo_relay_codec_free`.
+ */
+struct FfiCodecHandle *nemo_relay_typesafe_system_one_codec_new(void);
+
+/**
  * Execute an LLM call end-to-end: run conditional-execution guardrails (on raw
  * request), then request intercepts, sanitize-request guardrails, execution
  * intercepts, the callback, and sanitize-response

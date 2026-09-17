@@ -14,6 +14,23 @@ fn classifies_only_supported_public_paths() {
         Some(PublicRoute::Hook(HookRoute::Codex))
     );
     assert_eq!(PublicRoute::from_path("/admin"), None);
+    assert_eq!(
+        PublicRoute::from_path("/typesafe/v1/models"),
+        Some(PublicRoute::Provider(ProviderRoute::TypeSafe))
+    );
+}
+
+#[test]
+fn composes_namespaced_typesafe_paths_for_the_sdk() {
+    let config = GatewayConfig::default();
+    assert_eq!(
+        ProviderRoute::TypeSafe.upstream_url(&config, "/typesafe/v1/systemone?x=1"),
+        "https://api.typesafe.ai/v1/systemone?x=1"
+    );
+    assert_eq!(
+        ProviderRoute::TypeSafe.upstream_url(&config, "/typesafe/v1/models"),
+        "https://api.typesafe.ai/v1/models"
+    );
 }
 
 #[test]

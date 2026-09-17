@@ -19,6 +19,7 @@ use serde_json::{Map, Value};
 
 const OPERATION_CHAT: &str = "chat";
 const OPERATION_EMBEDDINGS: &str = "embeddings";
+const OPERATION_EVALUATE: &str = "evaluate";
 const OPERATION_EXECUTE_TOOL: &str = "execute_tool";
 const OPERATION_GENERATE_CONTENT: &str = "generate_content";
 const OPERATION_INVOKE_AGENT: &str = "invoke_agent";
@@ -35,6 +36,14 @@ const GEN_AI_SYSTEM_INSTRUCTIONS: &str = "gen_ai.system_instructions";
 const GEN_AI_RETRIEVAL_TOP_K: &str = "gen_ai.retrieval.top_k";
 const GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS: &str = "gen_ai.usage.cache_creation.input_tokens";
 const GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: &str = "gen_ai.usage.cache_read.input_tokens";
+const EVALUATION_API_NAME: &str = "typesafe.system_one";
+const EVALUATION_PROVIDER: &str = "nemo_relay.evaluation.provider";
+const EVALUATION_OPERATION: &str = "nemo_relay.evaluation.operation";
+const EVALUATION_QUESTION_COUNT: &str = "nemo_relay.evaluation.question_count";
+const EVALUATION_ANSWER_COUNT: &str = "nemo_relay.evaluation.answer_count";
+const EVALUATION_BOOLEAN_ANSWER_COUNT: &str = "nemo_relay.evaluation.boolean_answer_count";
+const EVALUATION_CHOICE_ANSWER_COUNT: &str = "nemo_relay.evaluation.choice_answer_count";
+const EVALUATION_SCORE_ANSWER_COUNT: &str = "nemo_relay.evaluation.score_answer_count";
 
 fn has_gen_ai_semantics(event: &Event) -> bool {
     matches!(
@@ -45,6 +54,7 @@ fn has_gen_ai_semantics(event: &Event) -> bool {
                 | ScopeType::Tool
                 | ScopeType::Embedder
                 | ScopeType::Retriever
+                | ScopeType::Evaluator
         )
     )
 }
@@ -58,7 +68,7 @@ pub(super) fn span_name(event: &Event) -> String {
         Some(ScopeType::Agent) => Some(agent_name(event)),
         Some(ScopeType::Tool) => Some(tool_name(event)),
         Some(ScopeType::Retriever) => data_source_id(event),
-        Some(ScopeType::Llm | ScopeType::Embedder) => request_model(event),
+        Some(ScopeType::Llm | ScopeType::Embedder | ScopeType::Evaluator) => request_model(event),
         _ => None,
     };
     qualifier.filter(|value| !value.is_empty()).map_or_else(
@@ -70,7 +80,9 @@ pub(super) fn span_name(event: &Event) -> String {
 pub(super) fn span_kind(event: &Event) -> SpanKind {
     match event.scope_type() {
         Some(ScopeType::Agent | ScopeType::Tool) => SpanKind::Internal,
-        Some(ScopeType::Llm | ScopeType::Embedder | ScopeType::Retriever) => SpanKind::Client,
+        Some(
+            ScopeType::Llm | ScopeType::Embedder | ScopeType::Retriever | ScopeType::Evaluator,
+        ) => SpanKind::Client,
         _ => SpanKind::Internal,
     }
 }
@@ -108,6 +120,10 @@ pub(super) fn start_attributes(event: &Event) -> Vec<KeyValue> {
             push_provider_and_server_attributes(&mut attributes, event);
             push_model_attribute(&mut attributes, event);
         }
+        Some(ScopeType::Evaluator) => {
+            push_provider_and_server_attributes(&mut attributes, event);
+            push_evaluator_request_attributes(&mut attributes, event);
+        }
         _ => {}
     }
     attributes
@@ -127,6 +143,7 @@ pub(super) fn end_attributes(event: &Event) -> Vec<KeyValue> {
                 push_tool_content(&mut attributes, "gen_ai.tool.call.result", event.output());
             }
         }
+        Some(ScopeType::Evaluator) => push_evaluator_response_attributes(&mut attributes, event),
         _ => {}
     }
     attributes
@@ -155,12 +172,87 @@ fn operation_name(event: &Event) -> &'static str {
         Some(ScopeType::Tool) => OPERATION_EXECUTE_TOOL,
         Some(ScopeType::Embedder) => OPERATION_EMBEDDINGS,
         Some(ScopeType::Retriever) => OPERATION_RETRIEVAL,
+        Some(ScopeType::Evaluator) => OPERATION_EVALUATE,
         Some(ScopeType::Llm) => llm_operation_name(event),
         _ => OPERATION_CHAT,
     }
 }
 
+fn push_evaluator_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
+    push_model_attribute(attributes, event);
+    if let Some(count) = event
+        .input()
+        .and_then(|input| input.get("questions"))
+        .and_then(Value::as_object)
+        .and_then(|questions| i64::try_from(questions.len()).ok())
+    {
+        attributes.push(KeyValue::new(EVALUATION_QUESTION_COUNT, count));
+    }
+}
+
+fn push_evaluator_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
+    let Some(output) = event.output() else {
+        return;
+    };
+    if let Some(model) = output.get("model").and_then(Value::as_str) {
+        attributes.push(KeyValue::new("gen_ai.response.model", model.to_owned()));
+    }
+    if let Some(usage) = output.get("usage").and_then(Value::as_object) {
+        if let Some(value) = usage
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .and_then(to_i64)
+        {
+            attributes.push(KeyValue::new(semconv::GEN_AI_USAGE_INPUT_TOKENS, value));
+        }
+        if let Some(value) = usage
+            .get("output_tokens")
+            .and_then(Value::as_u64)
+            .and_then(to_i64)
+        {
+            attributes.push(KeyValue::new("gen_ai.usage.output_tokens", value));
+        }
+        if let Some(value) = usage
+            .get("billing_units")
+            .and_then(Value::as_u64)
+            .and_then(to_i64)
+        {
+            attributes.push(KeyValue::new("nemo_relay.evaluation.billing_units", value));
+        }
+    }
+    if let Some(answers) = output.get("answers").and_then(Value::as_object) {
+        push_evaluation_answer_counts(attributes, answers);
+    }
+}
+
+fn push_evaluation_answer_counts(attributes: &mut Vec<KeyValue>, answers: &Map<String, Value>) {
+    if let Ok(count) = i64::try_from(answers.len()) {
+        attributes.push(KeyValue::new(EVALUATION_ANSWER_COUNT, count));
+    }
+    for (kind, attribute) in [
+        ("boolean", EVALUATION_BOOLEAN_ANSWER_COUNT),
+        ("choice", EVALUATION_CHOICE_ANSWER_COUNT),
+        ("score", EVALUATION_SCORE_ANSWER_COUNT),
+    ] {
+        let count = answers
+            .values()
+            .filter(|answer| answer.get("type").and_then(Value::as_str) == Some(kind))
+            .count();
+        if let Ok(count) = i64::try_from(count) {
+            attributes.push(KeyValue::new(attribute, count));
+        }
+    }
+}
+
 fn llm_operation_name(event: &Event) -> &'static str {
+    if event.normalized_llm_request().is_some_and(|request| {
+        matches!(
+            request.api_specific.as_ref(),
+            Some(ApiSpecificRequest::Custom { api_name, .. }) if api_name == EVALUATION_API_NAME
+        )
+    }) {
+        return OPERATION_EVALUATE;
+    }
     let name = event.name().to_ascii_lowercase();
     if name.contains("generate_content") || name.contains("generatecontent") {
         OPERATION_GENERATE_CONTENT
@@ -292,6 +384,16 @@ fn push_api_specific_request_attributes(
                 attributes.push(KeyValue::new("gen_ai.request.seed", *value));
             }
         }
+        Some(ApiSpecificRequest::Custom { api_name, data }) if api_name == EVALUATION_API_NAME => {
+            push_evaluation_identity_attributes(attributes, data);
+            if let Some(count) = data
+                .pointer("/value/questions")
+                .and_then(Value::as_object)
+                .and_then(|questions| i64::try_from(questions.len()).ok())
+            {
+                attributes.push(KeyValue::new(EVALUATION_QUESTION_COUNT, count));
+            }
+        }
         _ => {}
     }
 }
@@ -338,6 +440,27 @@ fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
                 value,
             ));
         }
+    }
+    if let Some(crate::codec::response::ApiSpecificResponse::Custom { api_name, data }) =
+        response.api_specific.as_ref()
+        && api_name == EVALUATION_API_NAME
+    {
+        push_evaluation_identity_attributes(attributes, data);
+        if let Some(answers) = data.pointer("/value/answers").and_then(Value::as_object) {
+            // Raw evaluation answers can contain provider-generated text and caller-chosen IDs.
+            // Keep that content in Relay's normal event pipeline, where redaction plugins can
+            // inspect it, and project only content-free aggregates into OTLP attributes.
+            push_evaluation_answer_counts(attributes, answers);
+        }
+    }
+}
+
+fn push_evaluation_identity_attributes(attributes: &mut Vec<KeyValue>, data: &Json) {
+    if let Some(provider) = data.get("provider").and_then(Value::as_str) {
+        attributes.push(KeyValue::new(EVALUATION_PROVIDER, provider.to_owned()));
+    }
+    if let Some(operation) = data.get("operation").and_then(Value::as_str) {
+        attributes.push(KeyValue::new(EVALUATION_OPERATION, operation.to_owned()));
     }
 }
 
@@ -740,6 +863,7 @@ fn provider_from_event_name(event: &Event) -> Option<String> {
         ("openai", "openai"),
         ("gpt", "openai"),
         ("perplexity", "perplexity"),
+        ("typesafe", "typesafe"),
     ]
     .into_iter()
     .find_map(|(needle, provider)| name.contains(needle).then(|| provider.to_string()))
@@ -755,6 +879,9 @@ fn provider_from_normalized_request(event: &Event) -> Option<&'static str> {
         // Not an OTel well-known value yet; follows the dotted cloud-provider
         // convention (`aws.bedrock`, `gcp.gemini`).
         ApiSpecificRequest::OCIGenAI { .. } => Some("oci.genai"),
+        ApiSpecificRequest::Custom { api_name, .. } if api_name == EVALUATION_API_NAME => {
+            Some("typesafe")
+        }
         ApiSpecificRequest::Custom { .. } => None,
     }
 }

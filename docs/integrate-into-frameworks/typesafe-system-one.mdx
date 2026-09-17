@@ -1,0 +1,213 @@
+---
+title: "TypeSafe System One and Jev"
+description: "First-class TypeSafe System One evaluation support through Relay."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+This integration treats Jev as a typed evaluation model, not as a chat model.
+It supports TypeSafe's `noul`, `choice`, and `score` questions and preserves
+their probabilities, confidence, model version, usage, top-level provider
+extensions, and request-question extensions.
+
+TypeSafe describes System One as structured state in and typed probabilistic
+decisions out. The public SDK contract and current API are early access, so pin
+concrete model versions for repeatable workflows and keep conformance fixtures
+current with the [official Python SDK](https://github.com/typesafe-ai/typesafe-sdk-python)
+or [official JavaScript SDK](https://github.com/typesafe-ai/typesafe-sdk-js).
+
+## Gateway routes and official SDKs
+
+Relay accepts both `POST /systemone` and `POST /v1/systemone`. The default
+upstream is `https://api.typesafe.ai/v1`, producing the canonical upstream URL
+`https://api.typesafe.ai/v1/systemone`.
+
+For the official TypeSafe Python and JavaScript SDKs, use Relay's namespaced
+base URL. The namespace keeps TypeSafe's `GET /v1/models` separate from the
+OpenAI model catalog:
+
+```python
+from typesafe_sdk import TypeSafeClient
+
+client = TypeSafeClient(
+    api_key="relay-client-credential-or-typesafe-key",
+    base_url="http://127.0.0.1:4040/typesafe",
+)
+models = client.models.list()
+```
+
+```ts
+import { TypeSafeClient } from "@typesafe-ai/sdk";
+
+const client = new TypeSafeClient({
+  apiKey: "relay-client-credential-or-typesafe-key",
+  baseURL: "http://127.0.0.1:4040/typesafe",
+});
+const models = await client.models.list();
+```
+
+Relay maps `POST /typesafe/v1/systemone` and `GET /typesafe/v1/models` back to
+the provider's canonical `/v1` paths. The unprefixed System One routes remain
+available for curl and existing integrations.
+
+```bash
+export TYPESAFE_API_KEY="..."
+
+curl http://127.0.0.1:4040/v1/systemone \
+  -H 'content-type: application/json' \
+  -d '{
+    "model": "jev-latest",
+    "state": {"candidate": "The answer is 42."},
+    "questions": {
+      "correct": {
+        "type": "noul",
+        "instructions": "The candidate is correct."
+      },
+      "quality": {
+        "type": "choice",
+        "instructions": "Choose the quality band.",
+        "criteria": {"high": null, "low": null}
+      }
+    }
+  }'
+```
+
+`TYPESAFE_API_KEY` is sent as `Authorization: Bearer <secret>`. For an
+enterprise proxy, configure the endpoint and an already-rendered authorization
+header in `config.toml`:
+
+```toml
+[upstream]
+typesafe_base_url = "https://typesafe-proxy.example/v1"
+typesafe_auth_header = "Bearer proxy-secret"
+typesafe_max_retries = 2
+typesafe_max_retry_delay_ms = 60000
+```
+
+The equivalent environment overrides are `NEMO_RELAY_TYPESAFE_BASE_URL` and
+`NEMO_RELAY_TYPESAFE_AUTH_HEADER`. Retry overrides are
+`NEMO_RELAY_TYPESAFE_MAX_RETRIES` and
+`NEMO_RELAY_TYPESAFE_MAX_RETRY_DELAY_MS`. Relay never records authorization
+headers in request annotations or configuration previews.
+
+## Non-Streaming and Retries
+
+System One is explicitly non-streaming. A request containing a `stream` field,
+including `false` or `null`, is rejected before Relay opens an upstream
+request. This makes accidental use of `llm.stream_execute` fail closed.
+
+Direct gateways and daemon-managed workers retry TypeSafe `408`, `429`, and all
+`5xx` responses, plus connection failures and response-header timeouts, up to
+two times by default. The policy honors `retry-after-ms`, numeric
+`Retry-After`, and HTTP-date `Retry-After` values up to 60 seconds. Otherwise it
+uses exponential backoff from 500 milliseconds to 5 seconds with up to 25%
+subtractive jitter.
+Relay strips caller-provided `x-typesafe-retry-count` and sets it on its own
+retry attempts.
+
+The official SDKs also retry by default. To avoid multiplying attempts, choose
+one retry owner for production: set the SDK policy to zero retries when Relay
+owns retries, or set `typesafe_max_retries = 0` when the SDK owns them.
+
+## Evaluation Annotation
+
+`TypeSafeSystemOneCodec` leaves chat-only fields empty. Its request and response
+annotations use a custom envelope with the following stable shape:
+
+```json
+{
+  "api_name": "typesafe.system_one",
+  "data": {
+    "provider": "typesafe",
+    "operation": "system_one",
+    "value": {
+      "model": "jev-latest",
+      "state": {},
+      "questions": {}
+    }
+  }
+}
+```
+
+Response `value` contains typed `answers` and `usage`, including
+`billing_units` when TypeSafe reports it. Normalized Relay usage maps
+`input_tokens` to prompt tokens and `output_tokens` to completion tokens.
+
+The GenAI OpenTelemetry projection records standard model and token attributes,
+uses `gen_ai.operation.name=evaluate`, and adds:
+
+- `nemo_relay.evaluation.provider`
+- `nemo_relay.evaluation.operation`
+- `nemo_relay.evaluation.question_count`
+- `nemo_relay.evaluation.answer_count`
+- content-free counts for boolean, choice, and score answers
+
+Raw questions and answers remain in Relay lifecycle events, where event
+sanitizers and redaction plugins can process them. They are deliberately not
+copied into OTLP span attributes.
+
+## Pricing and Model Aliases
+
+Pricing remains catalog-driven. The following entry maps the moving
+`jev-latest` alias to a pinned model ID. Replace the example pinned ID with the
+exact model version returned by your account.
+
+```toml
+version = 1
+
+[[components]]
+kind = "pricing"
+enabled = true
+
+[[components.config.sources]]
+type = "inline"
+
+[components.config.sources.catalog]
+version = 1
+
+[[components.config.sources.catalog.entries]]
+provider = "typesafe"
+model_id = "jev-1.13.0"
+aliases = ["jev-latest"]
+currency = "USD"
+unit = "per_token"
+pricing_as_of = "2026-09-17"
+pricing_source = "https://typesafe.ai/blog/introducing-system-one-models-and-jev"
+
+[components.config.sources.catalog.entries.rates]
+input_per_million = 0.042
+output_per_million = 0.0
+
+[components.config.sources.catalog.entries.prompt_cache]
+read_accounting = "included_in_prompt_tokens"
+```
+
+TypeSafe's launch announcement lists `$0.042` per million input tokens and free
+output tokens. Keep the catalog date and source because pricing can change.
+
+## Language Bindings
+
+- Rust: `nemo_relay::codec::typesafe_system_one::TypeSafeSystemOneCodec` and
+  the provider-neutral types under `nemo_relay::evaluation`
+- Python: `nemo_relay.codecs.TypeSafeSystemOneCodec`
+- Node.js: `TypeSafeSystemOneCodec`
+- C: `nemo_relay_typesafe_system_one_codec_new()`
+
+All four bindings expose request decode, lossless encode, and response decode.
+
+## Provider-neutral evaluation lifecycle
+
+Gateway compatibility continues to use Relay's managed provider transport, but
+it does not pretend Jev produced a chat completion: messages, text output, tool
+calls, and finish reasons remain empty. Native integrations can use
+`nemo_relay::api::evaluation::evaluation_call`, `evaluation_call_end`, or
+`evaluation_execute`. These APIs emit `evaluator` scopes with provider-neutral
+`EvaluationRequest` and `EvaluationResponse` payloads, independently of the
+TypeSafe wire codec.
+
+Legacy NeMo Guardrails, adaptive prompt mutation, streaming replay, and
+chat-trajectory PII projection explicitly decline this evaluation surface.
+Evaluation-aware policy components should operate on state, questions, and
+answers through the provider-neutral schema instead.

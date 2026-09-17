@@ -32,6 +32,8 @@ pub(crate) struct RunCommand {
     #[arg(long)]
     pub(super) anthropic_base_url: Option<String>,
     #[arg(long)]
+    pub(super) typesafe_base_url: Option<String>,
+    #[arg(long)]
     pub(super) session_metadata: Option<String>,
     #[arg(long, env = "NEMO_RELAY_PLUGIN_CONFIG_PATH", hide = true)]
     pub(super) plugin_config_path: Option<PathBuf>,
@@ -50,6 +52,7 @@ impl RunCommand {
             config: self.config,
             openai_base_url: self.openai_base_url,
             anthropic_base_url: self.anthropic_base_url,
+            typesafe_base_url: self.typesafe_base_url,
             session_metadata: self.session_metadata,
             plugin_config_path: self.plugin_config_path,
             dry_run: self.dry_run,
@@ -106,6 +109,7 @@ pub(super) async fn easy_path(
         config: explicit_config.map(PathBuf::from),
         openai_base_url: None,
         anthropic_base_url: None,
+        typesafe_base_url: None,
         session_metadata: None,
         plugin_config_path: None,
         dry_run: command.dry_run,

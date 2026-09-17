@@ -726,6 +726,64 @@ impl GeminiGenerateContentCodec {
     }
 }
 
+/// Built-in codec for the non-streaming TypeSafe System One evaluation API.
+#[napi(js_name = "TypeSafeSystemOneCodec")]
+pub struct TypeSafeSystemOneCodec {
+    pub(crate) inner_codec: std::sync::Arc<dyn LlmCodec>,
+    pub(crate) inner_response_codec: std::sync::Arc<dyn LlmResponseCodec>,
+}
+
+#[napi]
+impl TypeSafeSystemOneCodec {
+    #[napi(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner_codec: std::sync::Arc::new(
+                nemo_relay::codec::typesafe_system_one::TypeSafeSystemOneCodec,
+            ),
+            inner_response_codec: std::sync::Arc::new(
+                nemo_relay::codec::typesafe_system_one::TypeSafeSystemOneCodec,
+            ),
+        }
+    }
+
+    /// Decode an opaque System One request into normalized evaluation data.
+    #[napi]
+    pub fn decode(&self, request: Json) -> napi::Result<Json> {
+        let llm_req: CoreLlmRequest = serde_json::from_value(request)
+            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
+        let annotated = self
+            .inner_codec
+            .decode(&llm_req)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Encode normalized evaluation changes back into a System One request.
+    #[napi]
+    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
+        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
+            .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
+        let orig: CoreLlmRequest = serde_json::from_value(original)
+            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
+        let result = self
+            .inner_codec
+            .encode(&ann, &orig)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Decode a System One response into normalized evaluation data and usage.
+    #[napi(js_name = "decodeResponse")]
+    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
+        let annotated = self
+            .inner_response_codec
+            .decode_response(&response)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+}
+
 /// Built-in codec for the Anthropic Messages API.
 ///
 /// Implements both request codec (decode/encode) and response codec

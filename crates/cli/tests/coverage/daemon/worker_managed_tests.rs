@@ -891,6 +891,139 @@ async fn prepared_requests_and_both_dispatch_paths_preserve_provider_contracts()
 }
 
 #[tokio::test]
+async fn daemon_observed_typesafe_dispatch_retries_with_sdk_semantics() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let retry_headers = Arc::new(std::sync::Mutex::new(Vec::<Option<String>>::new()));
+    let app = Router::new().route(
+        "/v1/systemone",
+        post({
+            let attempts = Arc::clone(&attempts);
+            let retry_headers = Arc::clone(&retry_headers);
+            move |headers: HeaderMap| {
+                let attempts = Arc::clone(&attempts);
+                let retry_headers = Arc::clone(&retry_headers);
+                async move {
+                    retry_headers.lock().unwrap().push(
+                        headers
+                            .get("x-typesafe-retry-count")
+                            .and_then(|value| value.to_str().ok())
+                            .map(ToOwned::to_owned),
+                    );
+                    let attempt = attempts.fetch_add(1, AtomicOrdering::SeqCst);
+                    if attempt < 2 {
+                        Response::builder()
+                            .status(if attempt == 0 { 429 } else { 529 })
+                            .header(http::header::RETRY_AFTER, "0")
+                            .body(Body::empty())
+                            .unwrap()
+                    } else {
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header(CONTENT_TYPE, "application/json")
+                            .body(Body::from(
+                                r#"{"model":"jev-1.13.0","answers":{"q":{"type":"noul","noul":0.9}},"usage":{"input_tokens":3,"output_tokens":0}}"#,
+                            ))
+                            .unwrap()
+                    }
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let config = GatewayConfig {
+        typesafe_base_url: format!("http://{address}/v1"),
+        ..GatewayConfig::default()
+    };
+    let request = Request::post("/typesafe/v1/systemone")
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            r#"{"model":"jev-latest","state":"candidate","questions":{"q":{"type":"noul"}}}"#,
+        ))
+        .unwrap();
+    let prepared = PreparedProviderRequest::read(request, &config)
+        .await
+        .unwrap();
+    let (response, observation) = dispatch_observed(
+        pooled_client().unwrap(),
+        prepared,
+        ProviderRoute::TypeSafe,
+        None,
+        &config,
+        DEFAULT_OBSERVATION_CAPTURE_BYTES,
+        OperationalContext::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["model"],
+        "jev-1.13.0"
+    );
+    let observed = observation
+        .finish(ProviderSurface::TypeSafeSystemOne, false)
+        .await;
+    assert_eq!(observed.value.unwrap()["answers"]["q"]["noul"], 0.9);
+    assert_eq!(attempts.load(AtomicOrdering::SeqCst), 3);
+    assert_eq!(
+        *retry_headers.lock().unwrap(),
+        vec![None, Some("1".into()), Some("2".into())]
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn daemon_unmanaged_typesafe_model_catalog_retries_and_strips_namespace() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let app = Router::new().route(
+        "/v1/models",
+        axum::routing::get({
+            let attempts = Arc::clone(&attempts);
+            move || {
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    if attempts.fetch_add(1, AtomicOrdering::SeqCst) == 0 {
+                        Response::builder()
+                            .status(StatusCode::TOO_MANY_REQUESTS)
+                            .header(http::header::RETRY_AFTER, "0")
+                            .body(Body::empty())
+                            .unwrap()
+                    } else {
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header(CONTENT_TYPE, "application/json")
+                            .body(Body::from(r#"{"models":[{"name":"jev-latest"}]}"#))
+                            .unwrap()
+                    }
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let config = GatewayConfig {
+        typesafe_base_url: format!("http://{address}/v1"),
+        ..GatewayConfig::default()
+    };
+    let response = dispatch_unmanaged(
+        pooled_client().unwrap(),
+        Request::get("/typesafe/v1/models")
+            .body(Body::empty())
+            .unwrap(),
+        ProviderRoute::TypeSafe,
+        &config,
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(attempts.load(AtomicOrdering::SeqCst), 2);
+    server.abort();
+}
+
+#[tokio::test]
 async fn prepared_request_enforces_body_limit_and_normalizes_non_json_payloads() {
     let limited = GatewayConfig {
         max_passthrough_body_bytes: 2,

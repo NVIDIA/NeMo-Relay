@@ -26,6 +26,7 @@ pub mod resolve;
 pub mod response;
 pub mod streaming;
 pub mod traits;
+pub mod typesafe_system_one;
 
 use nemo_relay_types::Json;
 
