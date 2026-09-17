@@ -50,7 +50,10 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
             operational::hook_completed(&operational, "daemon_hook_forward", "completed");
             Ok(())
         }
-        Err(error) if error.guardrail_rejection_reason().is_some() => Err(error),
+        Err(error) if error.guardrail_rejection_reason().is_some() => {
+            operational::hook_completed(&operational, "daemon_hook_forward", "rejected");
+            Err(error)
+        }
         Err(error) => {
             operational::hook_failed(
                 &operational,

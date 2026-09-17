@@ -9,7 +9,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::Json;
 use axum::body::{Body, Bytes};
@@ -209,8 +209,10 @@ impl ManagedRuntime {
                 }
                 error
             })?;
-        let payload = serde_json::from_slice::<Value>(&bytes)
-            .map_err(|error| CliError::InvalidPayload(error.to_string()))?;
+        let payload = serde_json::from_slice::<Value>(&bytes).map_err(|error| {
+            operational::hook_failed(&operational, "managed_worker_hook", "invalid_payload", true);
+            CliError::InvalidPayload(error.to_string())
+        })?;
         match route {
             HookRoute::Codex => {
                 let outcome = codex::adapt(payload, &parts.headers);
@@ -382,10 +384,10 @@ impl ManagedRuntime {
         route: ProviderRoute,
         middleware: ProviderMiddlewareRequirements,
     ) -> Result<Response<RelayBody>, CliError> {
-        let operational = OperationalContext::new();
         let Some(surface) = provider_surface(request.uri().path()) else {
             return dispatch_unmanaged(upstream, request, route, &self.config).await;
         };
+        let operational = OperationalContext::take_from_headers(request.headers_mut());
         if !middleware.request_body_decode_required {
             strip_worker_headers(request.headers_mut());
             strip_untrusted_dispatch_headers(request.headers_mut());
@@ -1521,7 +1523,7 @@ impl ObservationReceiver {
         let mut valid = true;
         let mut first_event = true;
         let mut first_event_warned = false;
-        let mut last_event_at = Instant::now();
+        let mut last_event_at = tokio::time::Instant::now();
         loop {
             let chunk = self
                 .next_stream_chunk(first_event, &mut first_event_warned, &mut last_event_at)
@@ -1539,7 +1541,7 @@ impl ObservationReceiver {
                             operational::upstream_first_event(&self.operational);
                             first_event = false;
                         }
-                        last_event_at = Instant::now();
+                        last_event_at = tokio::time::Instant::now();
                         if collector(event.data).is_ok() {
                             continue;
                         }
@@ -1574,7 +1576,7 @@ impl ObservationReceiver {
         &mut self,
         first_event: bool,
         first_event_warned: &mut bool,
-        last_event_at: &mut Instant,
+        last_event_at: &mut tokio::time::Instant,
     ) -> Option<Bytes> {
         let threshold = if first_event {
             Duration::from_millis(crate::operational::UPSTREAM_RESPONSE_THRESHOLD_MILLIS)
@@ -1585,7 +1587,7 @@ impl ObservationReceiver {
         if first_event && *first_event_warned {
             return next.await;
         }
-        let deadline = tokio::time::Instant::from_std(*last_event_at + threshold);
+        let deadline = *last_event_at + threshold;
         let delay = tokio::time::sleep_until(deadline);
         tokio::pin!(delay);
         tokio::select! {
@@ -1603,7 +1605,7 @@ impl ObservationReceiver {
                 if first_event {
                     *first_event_warned = true;
                 } else {
-                    *last_event_at = Instant::now();
+                    *last_event_at = tokio::time::Instant::now();
                 }
                 next.await
             }

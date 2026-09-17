@@ -5,6 +5,9 @@
 
 use std::time::Instant;
 
+#[cfg(test)]
+use std::sync::{LazyLock, Mutex};
+
 use axum::http::{HeaderMap, HeaderValue};
 use uuid::Uuid;
 
@@ -15,6 +18,10 @@ pub(crate) const OPERATION_ID_HEADER: &str = "x-nemo-relay-operation-id";
 
 pub(crate) const UPSTREAM_RESPONSE_THRESHOLD_MILLIS: u64 = 10_000;
 pub(crate) const UPSTREAM_STREAM_STALL_THRESHOLD_MILLIS: u64 = 60_000;
+
+#[cfg(test)]
+static TEST_DELAYED_EVENTS: LazyLock<Mutex<Vec<(String, &'static str)>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
 
 #[derive(Clone, Debug)]
 pub(crate) struct OperationalContext {
@@ -253,6 +260,11 @@ pub(crate) fn upstream_delayed(
     event: &'static str,
     threshold_millis: u64,
 ) {
+    #[cfg(test)]
+    TEST_DELAYED_EVENTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((context.operation_id.clone(), event));
     match event {
         "upstream_headers_delayed" => operational_log!(
             log::Level::Warn,
@@ -283,6 +295,18 @@ pub(crate) fn upstream_delayed(
         ),
         _ => unreachable!("operational delay records use a fixed phase"),
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_delayed_event_count(context: &OperationalContext, event: &'static str) -> usize {
+    TEST_DELAYED_EVENTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .filter(|(operation_id, recorded_event)| {
+            operation_id == context.operation_id() && *recorded_event == event
+        })
+        .count()
 }
 
 pub(crate) fn upstream_status(context: &OperationalContext, status_code: u16) {

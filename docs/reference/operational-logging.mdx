@@ -53,7 +53,7 @@ Warnings show slow or failed external work. They do not change request behavior:
   Network heartbeats do not reset these timers.
 - `upstream_non_success` when the upstream HTTP status is not a success.
 - `upstream_stream_read_failed` when Relay can recover from a stream read failure.
-- `hook_failed` when a hook is allowed to fail open.
+- `hook_failed` for a hook that is allowed to fail open.
 
 These timing records only report what happened. They do not cancel a request or a
 stream. Local gateway calls still use their 30-second connect limit and 300-second

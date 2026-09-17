@@ -159,6 +159,43 @@ async fn observation_body_deadline_terminates_a_stalled_observer() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn stream_observation_rearms_stall_warning_after_each_silent_interval() {
+    let (sender, receiver) = tokio::sync::mpsc::channel(2);
+    let operational = OperationalContext::new();
+    let mut observation = ObservationReceiver {
+        receiver,
+        signal: Arc::new(ObservationSignal::new()),
+        status: StatusCode::OK,
+        operational: operational.clone(),
+    };
+    let mut first_event_warned = false;
+    let mut last_event_at = tokio::time::Instant::now();
+    let threshold =
+        Duration::from_millis(crate::operational::UPSTREAM_STREAM_STALL_THRESHOLD_MILLIS);
+
+    for expected in ["first", "second"] {
+        let delayed_sender = sender.clone();
+        let expected_chunk = Bytes::from(expected);
+        let send = tokio::spawn(async move {
+            tokio::time::sleep(threshold + Duration::from_millis(1)).await;
+            delayed_sender.send(expected_chunk).await.unwrap();
+        });
+        assert_eq!(
+            observation
+                .next_stream_chunk(false, &mut first_event_warned, &mut last_event_at)
+                .await,
+            Some(Bytes::from(expected))
+        );
+        send.await.unwrap();
+    }
+
+    assert_eq!(
+        crate::operational::test_delayed_event_count(&operational, "upstream_stream_stalled"),
+        2
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn successful_stream_observation_can_outlive_the_response_head_deadline() {
     let (sender, receiver) = tokio::sync::mpsc::channel(4);
     let signal = Arc::new(ObservationSignal::new());

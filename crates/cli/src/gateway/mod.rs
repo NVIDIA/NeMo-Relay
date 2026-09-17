@@ -214,7 +214,7 @@ pub(crate) async fn images_generations(
             return Err(error);
         }
     };
-    run_unmanaged_gateway(state, prepared, None).await
+    run_unmanaged_gateway(state, prepared, Some(operational)).await
 }
 
 /// Exact failure material from one ordinary upstream attempt.
@@ -887,6 +887,7 @@ fn sse_json_stream_with_thresholds(
             Err(error) => {
                 operational::upstream_stream_read_failed(&operational);
                 yield Err(error);
+                return;
             }
         }
         operational::upstream_completed(&operational, true);

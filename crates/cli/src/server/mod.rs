@@ -1295,10 +1295,10 @@ fn hook_payload_rejection(
         );
     }
     if rejection.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
-        CliError::PayloadTooLarge(rejection.to_string())
-    } else {
-        CliError::InvalidPayload(rejection.to_string())
+        return CliError::PayloadTooLarge(rejection.to_string());
     }
+    operational::hook_failed(operational, "hook_server", "invalid_payload", true);
+    CliError::InvalidPayload(rejection.to_string())
 }
 
 #[cfg(test)]
