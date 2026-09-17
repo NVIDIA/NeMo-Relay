@@ -624,6 +624,47 @@ async fn codex_hook_keeps_codex_response_shape() {
 }
 
 #[tokio::test]
+async fn codex_permission_request_without_tool_call_id_allows_one_matching_active_tool() {
+    let app = router(test_config());
+    for payload in [
+        json!({
+            "session_id": "codex-permission",
+            "hook_event_name": "SessionStart"
+        }),
+        json!({
+            "session_id": "codex-permission",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "shell",
+            "tool_input": {"cmd": "pwd"}
+        }),
+        json!({
+            "session_id": "codex-permission",
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "shell",
+            "tool_input": {"cmd": "pwd"}
+        }),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/hooks/codex")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(body, json!({}));
+    }
+}
+
+#[tokio::test]
 async fn hook_operational_records_derive_session_tags_from_payloads_and_headers() {
     let app = router(test_config());
     let operation_id = "018f0f3f-3f7a-7b72-9d0d-e0d8ced91d8b";
