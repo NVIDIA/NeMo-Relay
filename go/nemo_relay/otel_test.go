@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -418,5 +419,74 @@ func TestObservabilityOpenTelemetryFileSinkConfigSerializes(t *testing.T) {
 		if _, present := sink[absent]; present {
 			t.Errorf("unexpected %q in a file sink section", absent)
 		}
+	}
+}
+
+// TestOpenTelemetryFileSinkSubscriberWritesTraceFile exercises the file-sink FFI
+// entry point: a subscriber built from a file-sink config opens its output file,
+// and the endpoint-only parameters are absent from the config entirely.
+func TestOpenTelemetryFileSinkSubscriberWritesTraceFile(t *testing.T) {
+	dir := t.TempDir()
+	subscriber, err := NewOpenTelemetryFileSinkSubscriber(OpenTelemetryFileSinkConfig{
+		Type:            OpenTelemetryTypeFull,
+		OutputDirectory: dir,
+		Filename:        "go-trace.jsonl",
+		ServiceName:     "go-file-sink",
+	})
+	if err != nil {
+		t.Fatalf("create file sink subscriber: %v", err)
+	}
+	defer func() {
+		if err := subscriber.Shutdown(); err != nil {
+			t.Errorf("shutdown: %v", err)
+		}
+	}()
+
+	if _, err := os.Stat(filepath.Join(dir, "go-trace.jsonl")); err != nil {
+		t.Fatalf("expected the trace file to exist: %v", err)
+	}
+}
+
+// TestOpenTelemetryFileSinkSubscriberDefaultsFilenameToFormat checks that an
+// omitted filename is derived from the chosen format.
+func TestOpenTelemetryFileSinkSubscriberDefaultsFilenameToFormat(t *testing.T) {
+	dir := t.TempDir()
+	subscriber, err := NewOpenTelemetryFileSinkSubscriber(OpenTelemetryFileSinkConfig{
+		OutputDirectory: dir,
+		Format:          OpenTelemetryFileSinkFormatProto,
+		Mode:            OpenTelemetryFileSinkModeAppend,
+	})
+	if err != nil {
+		t.Fatalf("create file sink subscriber: %v", err)
+	}
+	defer subscriber.Shutdown() //nolint:errcheck // shutdown result is asserted elsewhere
+
+	if _, err := os.Stat(filepath.Join(dir, "nemo-relay-otlp.otlp.pb")); err != nil {
+		t.Fatalf("expected the default proto filename: %v", err)
+	}
+}
+
+// TestOpenTelemetryFileSinkSubscriberRejectsInvalidConfig covers the rejection
+// paths: each is refused rather than silently defaulted.
+func TestOpenTelemetryFileSinkSubscriberRejectsInvalidConfig(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name   string
+		config OpenTelemetryFileSinkConfig
+	}{
+		{"blank output directory", OpenTelemetryFileSinkConfig{OutputDirectory: ""}},
+		{"unknown format", OpenTelemetryFileSinkConfig{OutputDirectory: dir, Format: "yaml"}},
+		{"unknown mode", OpenTelemetryFileSinkConfig{OutputDirectory: dir, Mode: "truncate"}},
+		{"filename escapes directory", OpenTelemetryFileSinkConfig{OutputDirectory: dir, Filename: "../escape.jsonl"}},
+		{"unknown type", OpenTelemetryFileSinkConfig{OutputDirectory: dir, Type: "unsupported"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			subscriber, err := NewOpenTelemetryFileSinkSubscriber(tc.config)
+			if err == nil {
+				subscriber.Shutdown() //nolint:errcheck // cleanup for an unexpected success
+				t.Fatalf("expected %s to be rejected", tc.name)
+			}
+		})
 	}
 }

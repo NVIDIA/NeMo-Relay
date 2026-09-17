@@ -554,3 +554,59 @@ fn a_file_sink_with_no_endpoint_options_still_builds() {
     assert!(directory.path().join("trace.jsonl").is_file());
     subscriber.shutdown().unwrap();
 }
+
+#[test]
+fn a_directory_that_cannot_be_created_reports_the_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    // A file where a parent directory is expected: `create_dir_all` fails
+    // before the output file is ever opened.
+    let blocker = directory.path().join("not-a-directory");
+    fs::write(&blocker, b"").unwrap();
+
+    let error = OtlpFileSpanExporter::new(
+        directory.path(),
+        &blocker.join("trace.jsonl"),
+        OtlpFileFormat::JsonLines,
+        false,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(error, OtlpFileExporterError::CreateDirectory { .. }),
+        "expected a directory-creation error, got {error}"
+    );
+    assert!(error.to_string().contains("not-a-directory"));
+}
+
+#[tokio::test]
+async fn a_poisoned_writer_lock_is_reported_by_every_entry_point() {
+    let directory = tempfile::tempdir().unwrap();
+    let exporter = std::sync::Arc::new(exporter_at(
+        directory.path(),
+        "trace.jsonl",
+        OtlpFileFormat::JsonLines,
+        false,
+    ));
+
+    let poisoner = std::sync::Arc::clone(&exporter);
+    let _ = std::thread::spawn(move || {
+        let _guard = poisoner.writer.lock().unwrap();
+        panic!("poison the writer lock");
+    })
+    .join();
+
+    // Every path that takes the lock reports the poisoning rather than
+    // unwrapping into a second panic.
+    for message in [
+        exporter.export(sample_spans(&["late"])).await.unwrap_err(),
+        exporter
+            .shutdown_with_timeout(Duration::from_secs(1))
+            .unwrap_err(),
+        exporter.force_flush().unwrap_err(),
+    ] {
+        assert!(
+            message.to_string().contains("poisoned"),
+            "unexpected error: {message}"
+        );
+    }
+}
