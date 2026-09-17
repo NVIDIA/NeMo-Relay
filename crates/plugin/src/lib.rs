@@ -50,10 +50,12 @@ use serde_json::Map;
 
 /// Native plugin ABI version supported by this crate.
 ///
-/// Version 5 adds a context-aware raw tool execution intercept registration.
-/// Hosts retain frozen version-4, version-3, and version-2 tables for
+/// Version 6 adds an explicit asynchronous stream-open acknowledgment.
+/// Hosts retain frozen version-5, version-4, version-3, and version-2 tables for
 /// already-built plugins that target those layouts.
-pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 5;
+pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 6;
+/// ABI version that separates stream opening from stream items.
+pub const NEMO_RELAY_NATIVE_ABI_VERSION_STREAM_OPEN: u32 = 6;
 /// ABI version that introduced context-aware raw tool execution intercepts.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT: u32 = 5;
 /// ABI version that introduced runtime diagnostics and dynamic gate control.
@@ -1341,6 +1343,24 @@ pub struct NemoRelayNativeHostApiV5 {
     )
         -> NemoRelayStatus,
 }
+
+/// ABI-v6 host extension for asynchronous stream establishment.
+///
+/// The complete ABI-v5 table remains the frozen compatibility prefix.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NemoRelayNativeHostApiV6 {
+    /// Frozen ABI-v5 compatibility prefix.
+    pub v5: NemoRelayNativeHostApiV5,
+    /// Acknowledges that the stream callback future succeeded, before polling items.
+    /// Call once after opening; reject opening errors through `async_stream_reject`.
+    pub async_stream_opened:
+        unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> NemoRelayStatus,
+}
+
+// SAFETY: immutable table with thread-safe function pointers and a frozen prefix.
+unsafe impl Send for NemoRelayNativeHostApiV6 {}
+unsafe impl Sync for NemoRelayNativeHostApiV6 {}
 
 unsafe impl Send for NemoRelayNativeHostApiV3 {}
 unsafe impl Sync for NemoRelayNativeHostApiV3 {}
@@ -3107,11 +3127,16 @@ enum OwnedHostApi {
     V3(NemoRelayNativeHostApiV3),
     V4(NemoRelayNativeHostApiV4),
     V5(NemoRelayNativeHostApiV5),
+    V6(NemoRelayNativeHostApiV6),
 }
 
 impl OwnedHostApi {
     unsafe fn copy_from(host: &NemoRelayNativeHostApiV1) -> Self {
-        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT
+        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_STREAM_OPEN
+            && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV6>()
+        {
+            Self::V6(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV6) })
+        } else if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT
             && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV5>()
         {
             Self::V5(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV5) })
@@ -3134,6 +3159,7 @@ impl OwnedHostApi {
             Self::V3(host) => &host.v1,
             Self::V4(host) => &host.v3.v1,
             Self::V5(host) => &host.v4.v3.v1,
+            Self::V6(host) => &host.v5.v4.v3.v1,
         }
     }
 }

@@ -32,7 +32,7 @@ the dynamic-library boundary on the stable C-compatible ABI.
 | `PluginContext` | Installs component-owned subscribers, guardrails, intercepts, continuations, and streams. |
 | `PluginRuntime` | Emits marks and manages Relay-owned scopes and scope stacks through typed host helpers. |
 | `nemo_relay_plugin!` | Exports the one versioned native entry point used by the loader. |
-| Native ABI v5 | Keeps C-compatible host and plugin tables behind the safe Rust interface while the host retains frozen v4, v3, and v2 tables for previously compiled plugins. |
+| Native ABI v6 | Keeps C-compatible host and plugin tables behind the safe Rust interface while the host retains frozen v5, v4, v3, and v2 tables for previously compiled plugins. |
 | Typed async middleware | Drives guardrails, sanitizers, and intercepts on a per-component SDK-owned Tokio executor. Subscribers and raw ABI registrations remain synchronous. |
 | Async continuations and streams | `ToolNext`, `LlmNext`, and `LlmStreamNext` support repeated or concurrent downstream calls. Streaming LLM continuations use a pull-based host handle. |
 | Tool results | `ToolNext` returns `ToolExecutionResult`, which keeps an application result and optional annotation together. |
@@ -102,6 +102,15 @@ context-aware tool execution intercept must rebuild and set
 `compat.relay = ">=0.9.0,<1.0"`; the required registration is unavailable in the v4 host
 table. Typed async plugins that do not use this registration may retain
 `compat.relay = ">=0.8.0,<1.0"`.
+
+The stream-opening and continuation-error corrections targeted for Relay 0.9.1
+add ABI v6. Its frozen v5 prefix preserves existing field offsets. The typed SDK
+acknowledges successful stream opening before polling the first item. The host
+also preserves unchanged downstream errors from older SDKs and waits for their
+first item or clean completion before returning a stream. Return `next.call`
+errors unchanged so their original type, upstream status, and details survive.
+See the [native ABI reference](../../docs/build-plugins/native/native-abi-reference.mdx)
+for startup, cancellation, and compatibility behavior.
 
 Set a plugin-wide default in Rust, then let the component's TOML configuration
 override it:

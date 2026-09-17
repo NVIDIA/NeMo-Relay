@@ -23,7 +23,8 @@ extern "C" fn nemo_relay_register_plugin(
 ) -> NemoRelayStatus
 ```
 
-The current host negotiates ABI v5, then the frozen v4, v3, and legacy v2 tables.
+The current host negotiates ABI v6, then the frozen v5, v4, v3, and legacy v2 tables.
+ABI v6 adds an explicit acknowledgment that an asynchronous stream has opened.
 ABI v4 extends the complete v3 prefix with completion-scoped
 [codecs](/about-nemo-relay/concepts/codecs) and
 pull-based downstream LLM streams, plus an activation-owned runtime capability for
@@ -40,7 +41,8 @@ function signatures and field order are defined by the public
 | Frozen v1/v2 prefix | Version and struct-size negotiation; host version; string allocation, access, and release; thread-local error reporting; callback-scoped LLM request decode and encode plus response decode; subscriber, five tool, six LLM, and three event-sanitizer registrations; current scope, scope push and pop, mark emission, isolated stack creation and release, thread-stack set, capture, and restore, captured-binding release, active-stack inspection, and scoped binding. |
 | Frozen v3 extension | Completion resolve, reject, cancellation inspection, and release; one-shot completion-coupled continuation invocation; continuation release; generic async middleware registration; bounded output-stream push, finish, reject, cancellation inspection, and release; downstream stream invocation; stream-middleware registration; and repeated or concurrent unary continuation invocation with independent result callbacks. |
 | Frozen v4 extension | Completion-scoped LLM request decode and encode plus response decode; pull-based downstream LLM stream open, pull, cancel, and release; completion retain for typed codec facades; output-stream backpressure inspection; extended mark emission; runtime diagnostics; activation-owned runtime capability creation, retain, and release; global runtime-registration discovery; owned conditional middleware guardrail registration and deregistration; and activation-owned and runtime-discovered callback gate registration. The callback registration slots are appended after the original constant-reason slots. |
-| Current v5 extension | Context-carrying tool execution intercept registration. The callback receives one JSON object containing `tool_name`, `args`, and `tool_call_id`. |
+| Frozen v5 extension | Context-carrying tool execution intercept registration. The callback receives one JSON object containing `tool_name`, `args`, and `tool_call_id`. |
+| Current v6 extension | Explicit asynchronous stream-open acknowledgment, preserving the complete frozen v5 prefix. |
 
 The prefix and descriptor layout are explicit. A plugin fills the descriptor with its
 stable kind, component multiplicity, opaque state, callbacks, and destructor. The host
@@ -221,3 +223,29 @@ waits for completion and stream references to be released, deregisters component
 surfaces, runs component cleanup, and only then unloads the shared library. A plugin that
 retains a completion, continuation, stream, codec, or runtime handle indefinitely can
 therefore delay safe unload.
+
+## Continuation Errors and Stream Opening
+
+A native interceptor that delegates with `next.call(request).await` must return
+an unhandled downstream error unchanged. The host keeps the original error for
+that invocation and passes a unique reference through the SDK's string error
+channel. Returning the reference restores the original error type and data.
+References from another invocation, edited messages, and already-used references
+are ordinary plugin errors. Do not parse or construct these references.
+
+The host does not report a stream as established merely because its output
+channel exists. ABI v6 adds `async_stream_opened`: the typed SDK calls it once
+when the stream callback future returns successfully, before polling stream
+items. A callback that fails while opening uses `async_stream_reject` instead.
+Errors after acknowledgment remain stream-item errors.
+
+Older SDKs need no rebuild to preserve delegated errors on a fixed host. Without
+an opening acknowledgment, the host waits for the first item or clean completion
+and preserves that first item exactly once. This compatibility path can delay
+HTTP headers until the first event. Cancelling during opening cancels the native
+output and its downstream continuations.
+
+These corrections are targeted for Relay 0.9.1. Relay 0.8.x and 0.9.0 can convert
+an upstream denial into a generic payload error or send HTTP 200 before a stream
+opening failure is known. Use a build containing the correction until that
+release is available. Authored `compat.native_api = "1"` remains unchanged.

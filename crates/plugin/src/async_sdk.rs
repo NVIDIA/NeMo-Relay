@@ -148,7 +148,10 @@ impl Drop for NativeExecutor {
 }
 
 #[derive(Clone, Copy)]
-struct HostV4(NemoRelayNativeHostApiV4);
+struct HostV4(
+    NemoRelayNativeHostApiV4,
+    Option<unsafe extern "C" fn(*const NemoRelayNativeAsyncStream) -> NemoRelayStatus>,
+);
 
 unsafe impl Send for HostV4 {}
 unsafe impl Sync for HostV4 {}
@@ -995,6 +998,18 @@ unsafe extern "C" fn stream_trampoline(
                 return;
             }
         };
+        if let Some(opened) = output.host.1 {
+            // Establishment is complete even if the first token is not ready yet.
+            let status = unsafe { opened(output.raw) };
+            if status != NemoRelayStatus::Ok {
+                if !output.cancelled() {
+                    output
+                        .reject("native stream opening acknowledgment failed")
+                        .await;
+                }
+                return;
+            }
+        }
         loop {
             let item = tokio::select! {
                 result = AssertUnwindSafe(futures::StreamExt::next(&mut stream)).catch_unwind() => {
@@ -1081,9 +1096,15 @@ impl PluginContext<'_> {
         {
             return Err("typed async native middleware requires Relay ABI v4".into());
         }
-        Ok(HostV4(unsafe {
-            *(self.host as *const _ as *const NemoRelayNativeHostApiV4)
-        }))
+        let opened = (self.host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_STREAM_OPEN
+            && self.host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV6>())
+        .then(|| unsafe {
+            (*(self.host as *const _ as *const NemoRelayNativeHostApiV6)).async_stream_opened
+        });
+        Ok(HostV4(
+            unsafe { *(self.host as *const _ as *const NemoRelayNativeHostApiV4) },
+            opened,
+        ))
     }
 
     fn register_unary_adapter(
