@@ -66,9 +66,9 @@ impl ProviderTransport {
             ));
         }
         let credential_names: &[&str] = if openai {
-            &["authorization", "api-key"]
+            &["authorization", "api-key", "x-api-key"]
         } else {
-            &["authorization", "x-api-key", "anthropic-api-key"]
+            &["authorization", "x-api-key", "anthropic-api-key", "api-key"]
         };
         let mut headers = HeaderMap::new();
         for name in credential_names {

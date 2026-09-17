@@ -191,6 +191,8 @@ kind = "rust_dynamic"
 [compat]
 relay = ">=0.8.0,<1.0"
 native_api = "1"
+[defaults]
+enabled = false
 [capabilities]
 items = ["plugin_native"]
 [source]
@@ -280,6 +282,11 @@ symbol = "nemo_relay_fixture_native_plugin"
             .iter()
             .any(|(path, _, _)| path == "/stolen")
     );
+    let error = gateway_call(state.clone(), "/v1/chat/completions", "fail", false, 50)
+        .await
+        .unwrap_err();
+    assert!(error.contains("503"));
+    assert!(!error.contains("synthetic-caller-secret"));
     // A routing-model call, a repeated attempt, and a fallback all keep the same credential.
     let payload = json!({"model":"caller-51","messages":[{"role":"user","content":"hello"}],"stream":true,"fixture_provider_probe":"chat","fixture_provider_targets":["fail","fail","responses"]});
     gateway_payload(state.clone(), "/v1/responses", payload, 51)
@@ -326,14 +333,14 @@ async fn provider_dispatch_never_uses_invocation_or_deployment_credentials() {
     cfg.openai_auth_header = Some("Bearer deployment-secret".into());
     let state = AppState::new(cfg);
     let token = crate::provider_auth::TransparentProxyCredential::from_static("invocation-secret");
-    for provider_present in [false, true] {
+    for provider_header in [None, Some("api-key"), Some("x-api-key")] {
         let mut headers = HeaderMap::new();
         headers.insert(
             "authorization",
             HeaderValue::from_static("Bearer invocation-secret"),
         );
-        if provider_present {
-            headers.insert("api-key", HeaderValue::from_static("provider-secret"));
+        if let Some(name) = provider_header {
+            headers.insert(name, HeaderValue::from_static("provider-secret"));
         }
         let source = token.consume(&mut headers).unwrap();
         let transport = ProviderTransport {
@@ -350,11 +357,13 @@ async fn provider_dispatch_never_uses_invocation_or_deployment_credentials() {
                 content: json!({"model":"test"}),
             })
             .await;
-        assert_eq!(result.is_ok(), provider_present);
+        assert_eq!(result.is_ok(), provider_header.is_some());
     }
     let captures = captures.lock().unwrap();
-    assert_eq!(captures.len(), 1);
+    assert_eq!(captures.len(), 2);
     assert!(!captures[0].1.contains_key("authorization"));
     assert_eq!(captures[0].1["api-key"], "provider-secret");
+    assert!(!captures[1].1.contains_key("authorization"));
+    assert_eq!(captures[1].1["x-api-key"], "provider-secret");
     server.abort();
 }

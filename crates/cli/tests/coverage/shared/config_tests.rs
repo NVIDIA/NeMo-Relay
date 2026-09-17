@@ -4719,3 +4719,37 @@ format = "openai_responses"
     apply_file_upstream_config(&mut gateway, Some(empty)).unwrap();
     assert!(gateway.caller_credential_targets.is_empty());
 }
+
+#[test]
+fn caller_credential_target_policy_changes_persistent_gateway_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let mut resolved = ResolvedConfig::default();
+    let original = persistent_bootstrap_fingerprint(&resolved, &[]).unwrap();
+    resolved.gateway.caller_credential_targets.insert(
+        "answer".into(),
+        CallerCredentialTarget {
+            url: "https://example.com/v1/responses".into(),
+            format: nemo_relay::api::runtime::provider::LlmProviderFormat::OpenaiResponses,
+        },
+    );
+    let authorized = persistent_bootstrap_fingerprint(&resolved, &[]).unwrap();
+    assert_ne!(original, authorized);
+    resolved
+        .gateway
+        .caller_credential_targets
+        .get_mut("answer")
+        .unwrap()
+        .url = "https://other.example.com/v1/responses".into();
+    assert_ne!(
+        authorized,
+        persistent_bootstrap_fingerprint(&resolved, &[]).unwrap()
+    );
+    resolved.gateway.caller_credential_targets.clear();
+    assert_eq!(
+        original,
+        persistent_bootstrap_fingerprint(&resolved, &[]).unwrap()
+    );
+}

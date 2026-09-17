@@ -7347,3 +7347,118 @@ fn private_provider_calls_are_cancelled_and_cannot_be_reused_after_completion() 
         native_async_next_release(next_ref);
     }
 }
+
+#[test]
+fn private_provider_stream_cancels_pending_pull_and_rejects_late_reads() {
+    struct DropProbe(Arc<AtomicBool>);
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let completion = Arc::new(NativeAsyncCompletion {
+        sender: Mutex::new(Some(sender)),
+        cancelled: AtomicBool::new(false),
+        next_invoked: AtomicBool::new(false),
+        next_abort: Mutex::new(None),
+        continuation_aborts: Mutex::new(HashMap::new()),
+        codec: None,
+        before_settlement_lock: None,
+        _callback_user_data: None,
+    });
+    let wait = NativeAsyncWait {
+        completion: completion.clone(),
+        receiver,
+        completed: false,
+    };
+    let started = Arc::new(AtomicBool::new(false));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let dispatcher =
+        LlmProviderDispatcher::new(Arc::new(|_| Box::pin(async { unreachable!() })), {
+            let started = started.clone();
+            let dropped = dropped.clone();
+            Arc::new(move |_| {
+                let started = started.clone();
+                let probe = DropProbe(dropped.clone());
+                Box::pin(async move {
+                    Ok(LlmJsonStream::new(futures_util::stream::unfold(
+                        probe,
+                        move |probe| {
+                            let started = started.clone();
+                            async move {
+                                started.store(true, Ordering::Release);
+                                std::future::pending::<()>().await;
+                                Some((Ok(Json::Null), probe))
+                            }
+                        },
+                    )))
+                })
+            })
+        });
+    let mut next = NativeAsyncNext::with_completion_owner(
+        NativeAsyncNextInner::Llm(Arc::new(|_| Box::pin(async { unreachable!() }))),
+        runtime.handle().clone(),
+        None,
+        &completion,
+    );
+    next.provider_dispatcher = Some(dispatcher);
+    let next_ref = Arc::into_raw(Arc::new(next)) as *const NemoRelayNativeAsyncNext;
+    let request = native_string_from_json(&json!({"target":"answer","content":{}})).unwrap();
+    let (open_tx, open_rx) = tokio::sync::oneshot::channel::<PullOpenResult>();
+    assert_eq!(
+        unsafe {
+            native_async_next_stream_provider(
+                next_ref,
+                request,
+                complete_pull_stream_open,
+                Box::into_raw(Box::new(open_tx)).cast(),
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    let stream =
+        runtime.block_on(open_rx).unwrap().unwrap() as *const NemoRelayNativeLlmAsyncStream;
+    let (pull_tx, pull_rx) = tokio::sync::oneshot::channel::<PullItemResult>();
+    assert_eq!(
+        unsafe {
+            native_async_llm_stream_pull(
+                stream,
+                complete_pull_stream_item,
+                Box::into_raw(Box::new(pull_tx)).cast(),
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    });
+    drop(wait);
+    assert!(
+        runtime
+            .block_on(pull_rx)
+            .unwrap()
+            .unwrap_err()
+            .contains("cancelled")
+    );
+    assert_eq!(
+        unsafe { native_async_llm_stream_pull(stream, complete_pull_stream_item, ptr::null_mut()) },
+        NemoRelayStatus::InvalidArg
+    );
+    assert!(dropped.load(Ordering::Acquire));
+    unsafe {
+        native_async_llm_stream_release(stream);
+        native_string_free(request);
+        native_async_next_release(next_ref);
+    }
+}
