@@ -1060,6 +1060,18 @@ async fn permission_requests_require_an_exact_recorded_tool_call() {
             .is_err()
     );
 
+    let mut without_id = request.clone();
+    without_id.agent_kind = AgentKind::Codex;
+    without_id.tool_call_id.clear();
+    for owner in ["client-a", "client-b"] {
+        assert!(
+            manager
+                .authorize_tool_permission(&without_id, owner)
+                .await
+                .is_err()
+        );
+    }
+
     let mut changed = request.clone();
     changed.arguments = json!({"path": "secrets.txt"});
     assert!(

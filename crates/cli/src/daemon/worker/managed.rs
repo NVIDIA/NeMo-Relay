@@ -240,8 +240,13 @@ impl ManagedRuntime {
                 {
                     operational::hook_completed(&operational, "managed_worker_hook", "denied");
                     return Ok(json!({
-                        "decision": "deny",
-                        "reason": permission_denial_reason(error),
+                        "hookSpecificOutput": {
+                            "hookEventName": "PermissionRequest",
+                            "decision": {
+                                "behavior": "deny",
+                                "message": permission_denial_reason(error),
+                            }
+                        }
                     }));
                 }
                 operational::hook_completed(&operational, "managed_worker_hook", "completed");

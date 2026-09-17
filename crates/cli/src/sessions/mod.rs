@@ -1531,7 +1531,18 @@ impl Session {
     }
 
     fn permission_request_matches(&self, event: &ToolEvent) -> bool {
-        let arguments = normalize_tool_arguments(event.arguments.clone());
+        let mut arguments = normalize_tool_arguments(event.arguments.clone());
+        // Codex adds approval context to Bash input after PreToolUse. Keep it for guardrails,
+        // but do not treat it as a changed command when binding the permission request.
+        if event.agent_kind == AgentKind::Codex
+            && event.tool_name == "Bash"
+            && let Some(input) = arguments.as_object_mut()
+            && input
+                .get("description")
+                .is_some_and(|value| value.is_string() || value.is_null())
+        {
+            input.remove("description");
+        }
         if event.tool_call_id.is_empty() {
             return self
                 .tools

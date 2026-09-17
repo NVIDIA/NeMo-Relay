@@ -1846,6 +1846,43 @@ async fn observation_handles_empty_invalid_and_unsuccessful_provider_responses()
 }
 
 #[tokio::test]
+async fn managed_codex_permission_request_preserves_host_approval() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let runtime =
+        ManagedRuntime::initialize(GatewayConfig::default(), Vec::new(), "machine-owner".into())
+            .await
+            .unwrap();
+    let mut payload = json!({
+        "session_id": "codex-managed-permission",
+        "hook_event_name": "PreToolUse",
+        "tool_use_id": "call-1",
+        "tool_name": "Bash",
+        "tool_input": {"command": "pwd"}
+    });
+    for event in ["PreToolUse", "PermissionRequest"] {
+        payload["hook_event_name"] = json!(event);
+        if event == "PermissionRequest" {
+            payload.as_object_mut().unwrap().remove("tool_use_id");
+            payload["tool_input"]["description"] = json!("Run outside the sandbox");
+        }
+        let response = runtime
+            .handle_hook(
+                HookRoute::Codex,
+                Request::post("/hook")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(body, json!({}));
+    }
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn malformed_permission_hooks_fail_closed_in_each_native_response_shape() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let runtime =
@@ -1872,9 +1909,15 @@ async fn malformed_permission_hooks_fail_closed_in_each_native_response_shape() 
     assert_eq!(codex.status(), StatusCode::OK);
     let codex: Value =
         serde_json::from_slice(&codex.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    assert_eq!(codex["decision"], "deny");
+    assert_eq!(
+        codex["hookSpecificOutput"]["hookEventName"],
+        "PermissionRequest"
+    );
+    assert_eq!(codex["hookSpecificOutput"]["decision"]["behavior"], "deny");
+    assert!(codex.get("decision").is_none());
+    assert!(codex.get("reason").is_none());
     assert!(
-        codex["reason"]
+        codex["hookSpecificOutput"]["decision"]["message"]
             .as_str()
             .is_some_and(|reason| !reason.is_empty())
     );

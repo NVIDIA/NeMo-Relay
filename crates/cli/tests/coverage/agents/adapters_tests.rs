@@ -634,7 +634,35 @@ fn permission_requests_keep_hook_marks_and_require_exact_tool_identity() {
         }),
         &HeaderMap::new(),
     );
-    assert!(missing_id.permission.unwrap().is_err());
+    assert_eq!(missing_id.permission.unwrap().unwrap().tool_call_id, "");
+
+    let mcp_argument_id = codex::adapt(
+        json!({
+            "session_id": "codex-session",
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "mcp__fs__read",
+            "tool_input": {"id": "document-1"}
+        }),
+        &HeaderMap::new(),
+    );
+    assert_eq!(
+        mcp_argument_id.permission.unwrap().unwrap().tool_call_id,
+        ""
+    );
+
+    for invalid_id in [json!(" "), json!(""), json!(1), Value::Null] {
+        let invalid = codex::adapt(
+            json!({
+                "session_id": "codex-session",
+                "hook_event_name": "PermissionRequest",
+                "tool_use_id": invalid_id,
+                "tool_name": "Bash",
+                "tool_input": {"command": "pwd"}
+            }),
+            &HeaderMap::new(),
+        );
+        assert!(invalid.permission.unwrap().is_err());
+    }
 }
 
 #[test]

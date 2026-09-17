@@ -2712,6 +2712,203 @@ async fn claude_code_hook_returns_continue_shape() {
     assert_eq!(body["continue"], json!(true));
 }
 
+async fn codex_permission_hook_response(app: &Router, payload: Value) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/codex")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn codex_permission_request_defers_exact_active_tools_to_host_approval() {
+    for (tool_name, tool_input) in [
+        ("Bash", json!({"command": "pwd"})),
+        (
+            "apply_patch",
+            json!({"command": "*** Begin Patch\n*** End Patch"}),
+        ),
+        (
+            "mcp__fs__read",
+            json!({"id": "README.md", "description": "tool argument"}),
+        ),
+    ] {
+        let app = router(test_config());
+        let mut payload = json!({
+            "session_id": "codex-permission",
+            "turn_id": "turn-1",
+            "cwd": "/workspace",
+            "transcript_path": null,
+            "model": "test-model",
+            "permission_mode": "default",
+            "hook_event_name": "PreToolUse",
+            "tool_use_id": "call-1",
+            "tool_name": tool_name,
+            "tool_input": tool_input
+        });
+        assert_eq!(
+            codex_permission_hook_response(&app, payload.clone()).await,
+            json!({})
+        );
+        payload["hook_event_name"] = json!("PermissionRequest");
+        assert_eq!(
+            codex_permission_hook_response(&app, payload.clone()).await,
+            json!({})
+        );
+        payload.as_object_mut().unwrap().remove("tool_use_id");
+        assert_eq!(
+            codex_permission_hook_response(&app, payload.clone()).await,
+            json!({})
+        );
+        if tool_name == "mcp__fs__read" {
+            for field in ["id", "description"] {
+                let mut changed = payload.clone();
+                changed["tool_input"][field] = json!("changed");
+                let body = codex_permission_hook_response(&app, changed).await;
+                assert_eq!(body["hookSpecificOutput"]["decision"]["behavior"], "deny");
+            }
+        }
+        if tool_name == "Bash" {
+            for description in [json!("Run outside the sandbox"), Value::Null] {
+                payload["tool_input"]["description"] = description;
+                assert_eq!(
+                    codex_permission_hook_response(&app, payload.clone()).await,
+                    json!({})
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn codex_permission_request_denies_unmatched_and_ambiguous_tools() {
+    let app = router(test_config());
+    let pre_tool = json!({
+        "session_id": "codex-permission-denied",
+        "hook_event_name": "PreToolUse",
+        "tool_use_id": "call-1",
+        "tool_name": "Bash",
+        "tool_input": {"command": "pwd"}
+    });
+    assert_eq!(
+        codex_permission_hook_response(&app, pre_tool.clone()).await,
+        json!({})
+    );
+    let mut permission = pre_tool.clone();
+    permission["hook_event_name"] = json!("PermissionRequest");
+    permission.as_object_mut().unwrap().remove("tool_use_id");
+    for (field, value) in [
+        ("session_id", json!("unknown-session")),
+        ("tool_use_id", json!("unknown-call")),
+        ("tool_name", json!("apply_patch")),
+        ("tool_input", json!({"command": "cat secrets.txt"})),
+        ("tool_input", json!({"command": "pwd", "unexpected": true})),
+        (
+            "tool_input",
+            json!({"command": "pwd", "description": {"command": "other"}}),
+        ),
+    ] {
+        let mut changed = permission.clone();
+        changed[field] = value;
+        let body = codex_permission_hook_response(&app, changed).await;
+        assert_eq!(
+            body,
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "deny",
+                        "message": format!("invalid hook payload: permission request does not match the recorded tool call '{}'", if field == "tool_use_id" { "unknown-call" } else { "" })
+                    }
+                }
+            })
+        );
+    }
+    let mut missing_name = permission.clone();
+    missing_name.as_object_mut().unwrap().remove("tool_name");
+    assert_eq!(
+        codex_permission_hook_response(&app, missing_name).await,
+        json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {"behavior": "deny", "message": "invalid hook payload: permission request is missing a tool name"}
+            }
+        })
+    );
+    let mut second = pre_tool;
+    second["tool_use_id"] = json!("call-2");
+    assert_eq!(
+        codex_permission_hook_response(&app, second).await,
+        json!({})
+    );
+    let body = codex_permission_hook_response(&app, permission).await;
+    assert_eq!(
+        body["hookSpecificOutput"]["decision"]["behavior"],
+        json!("deny")
+    );
+    assert!(
+        body["hookSpecificOutput"]["decision"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not match")
+    );
+}
+
+#[tokio::test]
+async fn codex_permission_request_returns_guardrail_denial_in_host_contract() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-codex-permission-blocker";
+    const TOOL: &str = "Bash";
+    let app = router(test_config());
+    let mut payload = json!({
+        "session_id": "codex-permission-guardrail",
+        "hook_event_name": "PreToolUse",
+        "tool_use_id": "call-1",
+        "tool_name": TOOL,
+        "tool_input": {"command": "printf relay-permission-fixture"}
+    });
+    assert_eq!(
+        codex_permission_hook_response(&app, payload.clone()).await,
+        json!({})
+    );
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(|name, arguments| {
+            Box::pin(async move {
+                Ok(
+                    (name == TOOL && arguments["description"] == "permission-policy-fixture")
+                        .then(|| "blocked by permission policy".to_string()),
+                )
+            })
+        }),
+    )
+    .unwrap();
+    let _cleanup = ToolGuardrailCleanup(GUARDRAIL);
+    payload["hook_event_name"] = json!("PermissionRequest");
+    payload["tool_input"]["description"] = json!("permission-policy-fixture");
+    payload.as_object_mut().unwrap().remove("tool_use_id");
+    assert_eq!(
+        codex_permission_hook_response(&app, payload).await,
+        json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {"behavior": "deny", "message": "blocked by permission policy"}
+            }
+        })
+    );
+}
+
 #[tokio::test]
 async fn claude_permission_request_allows_an_exact_active_tool() {
     let app = router(test_config());

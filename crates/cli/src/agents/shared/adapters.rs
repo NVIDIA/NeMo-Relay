@@ -329,9 +329,31 @@ pub(super) fn permission_request(
         }
     };
     let tool = extractor.tool_call(payload, headers, &event_name);
-    let tool_call_id = match tool.tool_call_id {
+    // Codex permission hooks omit the call ID; an MCP argument named `id` is not one.
+    let tool_call_id = if kind == AgentKind::Codex {
+        match first_value_at(
+            payload,
+            &[
+                &["tool_use_id"],
+                &["tool_call_id"],
+                &["toolCallId"],
+                &["call_id"],
+            ],
+        ) {
+            Some(Value::String(value)) => Some(value),
+            None => None,
+            Some(_) => {
+                return Some(Err(
+                    "permission request has an invalid tool-call identifier".into(),
+                ));
+            }
+        }
+    } else {
+        tool.tool_call_id
+    };
+    let tool_call_id = match tool_call_id {
         Some(value) if !value.trim().is_empty() => value,
-        None if kind == AgentKind::ClaudeCode => String::new(),
+        None if matches!(kind, AgentKind::ClaudeCode | AgentKind::Codex) => String::new(),
         _ => {
             return Some(Err(
                 "permission request is missing a tool-call identifier".into()

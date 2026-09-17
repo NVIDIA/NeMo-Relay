@@ -33,6 +33,20 @@ hooks can still require review. This behavior is tracked upstream as
 
 </Warning>
 
+## Permission Requests
+
+Relay validates `PermissionRequest` hooks against the authenticated session's
+recorded tool call and runs the tool conditional-execution guardrails again.
+Codex omits the tool-call ID from these hooks, so a request must match exactly
+one active tool by name and input. For Bash, the approval-only `description`
+field is excluded from matching but remains available to guardrails. MCP tool
+arguments, including fields named `id` or `description`, remain tool input.
+
+Unmatched, ambiguous, or guardrail-rejected requests return Codex's nested
+`hookSpecificOutput.decision` denial. A successful check returns `{}`, not an
+`allow` decision: Codex's normal approval flow still decides whether to run the
+tool. Relay does not bypass host approval.
+
 ## Multi-Agent Delegation Traces
 
 In Codex multi-agent v2, the Responses service encrypts the `message` argument

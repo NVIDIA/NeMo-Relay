@@ -11,9 +11,10 @@ use crate::events::AgentKind;
 
 /// Normalizes Codex hook payloads while leaving Codex hook control flow untouched.
 ///
-/// Codex receives an empty response body from this adapter because the gateway currently records
-/// hooks instead of making allow/deny decisions. Event spelling is accepted in both camelCase and
-/// snake_case forms so installed hooks and inline `run` hook configuration share one path.
+/// Successful requests return an empty object, leaving approval to Codex. The server serializes
+/// permission validation failures and guardrail denials in Codex's event-specific output format.
+/// Event spelling is accepted in both camelCase and snake_case forms so installed hooks and
+/// inline `run` hook configuration share one path.
 pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     let events = classify(
         &payload,
