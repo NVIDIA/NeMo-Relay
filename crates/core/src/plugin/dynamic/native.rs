@@ -65,19 +65,27 @@ use nemo_relay_plugin::{
     NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeConditionalMiddlewareCb,
     NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
     NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4,
-    NemoRelayNativeHostApiV5, NemoRelayNativeLlmAsyncStream, NemoRelayNativeLlmCodecKind,
-    NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCodec,
-    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
-    NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeRequestContext,
-    NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmSanitizeResponseContext,
-    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
-    NemoRelayNativePluginEntry, NemoRelayNativePluginRuntime, NemoRelayNativePluginV1,
-    NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
-    NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
-    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolExecutionContextCb,
-    NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
+    NemoRelayNativeHostApiV5, NemoRelayNativeHostApiV6, NemoRelayNativeLlmAsyncStream,
+    NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
+    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestInterceptCb,
+    NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
+    NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
+    NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
+    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginEntry,
+    NemoRelayNativePluginRuntime, NemoRelayNativePluginV1, NemoRelayNativeScopeHandle,
+    NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType,
+    NemoRelayNativeString, NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb,
+    NemoRelayNativeToolExecutionContextCb, NemoRelayNativeToolJsonCb,
+    NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
 };
 use serde_json::{Map, Value as Json};
+
+mod provider;
+use crate::api::runtime::provider::{LlmProviderDispatcher, current_provider_dispatcher};
+use provider::{
+    native_async_next_call_provider, native_async_next_has_provider,
+    native_async_next_stream_provider,
+};
 use sha2::{Digest, Sha256};
 use tokio::runtime::Runtime;
 use tokio_stream::{Stream, StreamExt};
@@ -409,9 +417,13 @@ fn load_one_native_plugin(
                 ))
             })?;
         let mut status = entry(native_host_api(), &mut plugin);
-        // Older SDKs reject newer tables. Negotiate from the current v5 table
-        // through separately frozen v4, v3, and v2 tables so their struct sizes and
+        // Older SDKs reject newer tables. Negotiate from the current v6 table
+        // through separately frozen v5, v4, v3, and v2 tables so their struct sizes and
         // function pointers do not change as the current ABI grows.
+        if status == NemoRelayStatus::InvalidArg {
+            drop_native_plugin_descriptor(&mut plugin);
+            status = entry(native_host_api_v5(), &mut plugin);
+        }
         if status == NemoRelayStatus::InvalidArg {
             drop_native_plugin_descriptor(&mut plugin);
             status = entry(native_host_api_v4(), &mut plugin);
@@ -866,6 +878,11 @@ unsafe extern "C" fn native_llm_response_codec_decode(
 }
 
 fn native_host_api() -> *const NemoRelayNativeHostApiV1 {
+    static HOST_API: OnceLock<NemoRelayNativeHostApiV6> = OnceLock::new();
+    &HOST_API.get_or_init(build_native_host_api_v6).v5.v4.v3.v1 as *const NemoRelayNativeHostApiV1
+}
+
+fn native_host_api_v5() -> *const NemoRelayNativeHostApiV1 {
     static HOST_API: OnceLock<NemoRelayNativeHostApiV5> = OnceLock::new();
     &HOST_API.get_or_init(build_native_host_api_v5).v4.v3.v1 as *const NemoRelayNativeHostApiV1
 }
@@ -1007,12 +1024,24 @@ fn build_native_host_api_v4() -> NemoRelayNativeHostApiV4 {
 
 fn build_native_host_api_v5() -> NemoRelayNativeHostApiV5 {
     let mut v4 = build_native_host_api_v4();
-    v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
+    v4.v3.v1.abi_version = nemo_relay_plugin::NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT;
     v4.v3.v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV5>();
     NemoRelayNativeHostApiV5 {
         v4,
         plugin_context_register_tool_execution_intercept:
             native_plugin_context_register_tool_execution_intercept_v5,
+    }
+}
+
+fn build_native_host_api_v6() -> NemoRelayNativeHostApiV6 {
+    let mut v5 = build_native_host_api_v5();
+    v5.v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
+    v5.v4.v3.v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV6>();
+    NemoRelayNativeHostApiV6 {
+        v5,
+        async_next_has_provider: native_async_next_has_provider,
+        async_next_call_provider: native_async_next_call_provider,
+        async_next_stream_provider: native_async_next_stream_provider,
     }
 }
 
@@ -1698,6 +1727,7 @@ struct NativeAsyncNext {
     inner: NativeAsyncNextInner,
     runtime: tokio::runtime::Handle,
     context: MiddlewareContinuationContext,
+    provider_dispatcher: Option<LlmProviderDispatcher>,
     owner: Option<NativeAsyncNextOwner>,
     // The native callback owns this handle independently of its completion.
     // Retaining the library here prevents an unload while it still uses `next`.
@@ -1720,6 +1750,7 @@ impl NativeAsyncNext {
             inner,
             runtime,
             context: MiddlewareContinuationContext::capture(),
+            provider_dispatcher: current_provider_dispatcher(),
             owner: None,
             _callback_user_data: callback_user_data,
         }
@@ -2818,6 +2849,15 @@ unsafe extern "C" fn native_async_next_invoke_result(
             return NemoRelayStatus::InvalidArg;
         }
     };
+    spawn_native_unary(next, future, cb, user_data)
+}
+
+fn spawn_native_unary(
+    next: &NativeAsyncNext,
+    future: Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>>,
+    cb: NemoRelayNativeAsyncNextResultCb,
+    user_data: *mut c_void,
+) -> NemoRelayStatus {
     let continuation_context = match next.context.isolated_for_current_invocation() {
         Ok(context) => context,
         Err(error) => return status_from_flow_error(error),
@@ -2959,6 +2999,7 @@ struct NativePullLlmStream {
     runtime: tokio::runtime::Handle,
     context: MiddlewareContinuationContext,
     state: Mutex<NativePullStreamState>,
+    provider_owner: Option<NativeAsyncNextOwner>,
     _library_guard: Option<Arc<NativeCallbackUserData>>,
 }
 
@@ -2993,6 +3034,12 @@ impl Drop for NativePullOpenCallbackGuard {
 }
 
 impl NativeCallbackGuard for NativePullOpenCallbackGuard {
+    fn suppress(&mut self) {
+        self.active = false;
+    }
+}
+
+impl NativeCallbackGuard for NativePullCallbackGuard {
     fn suppress(&mut self) {
         self.active = false;
     }
@@ -3038,11 +3085,27 @@ unsafe extern "C" fn native_async_next_open_llm_stream(
         Ok(request) => request,
         Err(status) => return status,
     };
+    let next_fn = next_fn.clone();
+    spawn_native_stream(
+        next,
+        Box::pin(async move { next_fn(request).await }),
+        cb,
+        user_data,
+        false,
+    )
+}
+
+fn spawn_native_stream(
+    next: &NativeAsyncNext,
+    future: Pin<Box<dyn Future<Output = FlowResult<LlmJsonStream>> + Send>>,
+    cb: NemoRelayNativeAsyncLlmStreamOpenCb,
+    user_data: *mut c_void,
+    provider_call: bool,
+) -> NemoRelayStatus {
     let context = match next.context.isolated_for_current_invocation() {
         Ok(context) => context,
         Err(error) => return status_from_flow_error(error),
     };
-    let next_fn = next_fn.clone();
     let runtime = next.runtime.clone();
     let stream_runtime = runtime.clone();
     let stream_context = context.clone();
@@ -3050,6 +3113,7 @@ unsafe extern "C" fn native_async_next_open_llm_stream(
     let callback_user_data = next._callback_user_data.clone();
     let user_data = user_data as usize;
     let cleanup_owner = owner.clone();
+    let provider_owner = provider_call.then(|| owner.clone()).flatten();
     let (start_tx, start_rx) = tokio::sync::oneshot::channel();
     let (callback_registration, callback_task) =
         NativeCallbackRegistration::new(NativePullOpenCallbackGuard {
@@ -3063,9 +3127,7 @@ unsafe extern "C" fn native_async_next_open_llm_stream(
             return;
         }
         let mut callback_guard = callback_task.claim();
-        let result = AssertUnwindSafe(context.run(next_fn(request)))
-            .catch_unwind()
-            .await;
+        let result = AssertUnwindSafe(context.run(future)).catch_unwind().await;
         remove_native_next_operation(&cleanup_owner, tokio::task::id());
         match result {
             Ok(Ok(stream)) => {
@@ -3074,6 +3136,7 @@ unsafe extern "C" fn native_async_next_open_llm_stream(
                     runtime: stream_runtime,
                     context: stream_context,
                     state: Mutex::new(NativePullStreamState::Idle),
+                    provider_owner,
                     _library_guard: callback_guard.library_guard.take(),
                 });
                 unsafe {
@@ -3126,6 +3189,18 @@ unsafe extern "C" fn native_async_llm_stream_pull(
     let Some(stream) = (unsafe { (stream as *const NativePullLlmStream).as_ref() }) else {
         return NemoRelayStatus::NullPointer;
     };
+    if stream.provider_owner.is_some() && !provider::owner_is_active(&stream.provider_owner) {
+        unsafe {
+            native_async_llm_stream_cancel(
+                stream as *const _ as *const NemoRelayNativeLlmAsyncStream,
+            )
+        };
+        if let Ok(mut guard) = stream.stream.try_lock() {
+            guard.take();
+        }
+        set_native_last_error("provider stream belongs to a settled execution");
+        return NemoRelayStatus::InvalidArg;
+    }
     let mut state = stream
         .state
         .lock()
@@ -3144,12 +3219,15 @@ unsafe extern "C" fn native_async_llm_stream_pull(
         user_data,
         active: true,
     };
+    let owner = stream.provider_owner.clone();
+    let cleanup_owner = owner.clone();
+    let (callback_registration, callback_task) = NativeCallbackRegistration::new(callback_guard);
     let (start_tx, start_rx) = tokio::sync::oneshot::channel();
     let task = stream.runtime.spawn(async move {
-        let mut callback_guard = callback_guard;
         if start_rx.await.is_err() {
             return;
         }
+        let mut callback_guard = callback_task.claim();
         let result = AssertUnwindSafe(context.run(async {
             let mut guard = task_stream.stream.lock().await;
             match guard.as_mut() {
@@ -3175,6 +3253,7 @@ unsafe extern "C" fn native_async_llm_stream_pull(
                 panic_payload_message(payload.as_ref())
             )))
         });
+        remove_native_next_operation(&cleanup_owner, tokio::task::id());
         let cancelled = {
             let mut state = task_stream
                 .state
@@ -3199,7 +3278,14 @@ unsafe extern "C" fn native_async_llm_stream_pull(
             )));
         }
     });
-    *state = NativePullStreamState::Pulling(task.abort_handle());
+    let abort = task.abort_handle();
+    if !register_native_next_operation(&owner, task.id(), abort.clone()) {
+        callback_registration.reject();
+        abort.abort();
+        return NemoRelayStatus::InvalidArg;
+    }
+    callback_registration.accept();
+    *state = NativePullStreamState::Pulling(abort);
     drop(state);
     let _ = start_tx.send(());
     NemoRelayStatus::Ok

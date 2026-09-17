@@ -589,6 +589,7 @@ manifest = "plugins/acme/relay-plugin.toml"
 
 fn config() -> GatewayConfig {
     GatewayConfig {
+        caller_credential_targets: Default::default(),
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
         openai_auth_header: None,
@@ -4685,4 +4686,36 @@ fn dynamic_plugin_identity_allows_worker_without_manifest() {
     assert_eq!(identity["plugin_id"], "acme.manual-worker");
     assert_eq!(identity["manifest"], Value::Null);
     assert_eq!(identity["lifecycle_generation"], 7);
+}
+
+#[test]
+fn caller_credential_target_policy_is_explicit_validated_and_replaced() {
+    let mut gateway = GatewayConfig::default();
+    assert!(gateway.caller_credential_targets.is_empty());
+    let upstream: FileUpstreamConfig = toml::from_str(
+        r#"
+[caller_credential_targets.answer]
+url = "https://example.com/v1/responses?api-version=test"
+format = "openai_responses"
+"#,
+    )
+    .unwrap();
+    apply_file_upstream_config(&mut gateway, Some(upstream)).unwrap();
+    assert_eq!(gateway.caller_credential_targets.len(), 1);
+    for url in [
+        "/relative",
+        "ftp://example.com",
+        "https://secret@example.com",
+        "https://example.com/#fragment",
+    ] {
+        let raw = format!(
+            "[caller_credential_targets.invalid]\nurl = {url:?}\nformat = \"openai_chat\"\n"
+        );
+        let config: FileUpstreamConfig = toml::from_str(&raw).unwrap();
+        assert!(apply_file_upstream_config(&mut gateway, Some(config)).is_err());
+        assert_eq!(gateway.caller_credential_targets.len(), 1);
+    }
+    let empty: FileUpstreamConfig = toml::from_str("caller_credential_targets = {}\n").unwrap();
+    apply_file_upstream_config(&mut gateway, Some(empty)).unwrap();
+    assert!(gateway.caller_credential_targets.is_empty());
 }

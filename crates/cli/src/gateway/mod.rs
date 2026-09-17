@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub(crate) mod client;
+mod provider;
 mod request;
 mod response;
 mod routes;
@@ -408,6 +409,7 @@ async fn run_managed_buffered(
     codecs: RouteCodecs,
     operational: OperationalContext,
 ) -> Result<Response<Body>, CliError> {
+    let dispatcher = provider::dispatcher(&state, &prepared);
     let upstream_failures = Arc::new(CapturedUpstreamFailures::default());
     let func = build_buffered_func(
         state.clone(),
@@ -441,7 +443,13 @@ async fn run_managed_buffered(
         .response_codec_opt(codecs.response)
         .build();
     let result = TASK_SCOPE_STACK
-        .scope(scope_stack, async move { llm_call_execute(params).await })
+        .scope(
+            scope_stack,
+            nemo_relay::api::runtime::provider::with_llm_provider_dispatcher(
+                dispatcher,
+                async move { llm_call_execute(params).await },
+            ),
+        )
         .await;
     match result {
         Ok(response_json) => {
@@ -590,6 +598,7 @@ async fn run_managed_streaming(
     codecs: RouteCodecs,
     operational: OperationalContext,
 ) -> Result<Response<Body>, CliError> {
+    let dispatcher = provider::dispatcher(&state, &prepared);
     let upstream_failures = Arc::new(CapturedUpstreamFailures::default());
     let func = build_streaming_func(
         state.clone(),
@@ -651,7 +660,10 @@ async fn run_managed_streaming(
     let json_stream_result = TASK_SCOPE_STACK
         .scope(
             scope_stack,
-            async move { llm_stream_call_execute(params).await },
+            nemo_relay::api::runtime::provider::with_llm_provider_dispatcher(
+                dispatcher,
+                async move { llm_stream_call_execute(params).await },
+            ),
         )
         .await;
     let json_stream = match json_stream_result {

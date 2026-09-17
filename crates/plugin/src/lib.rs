@@ -11,7 +11,9 @@
 
 mod async_sdk;
 
-pub use async_sdk::{LlmJsonAsyncStream, LlmNext, LlmStreamNext, NativeExecutorConfig, ToolNext};
+pub use async_sdk::{
+    LlmJsonAsyncStream, LlmNext, LlmProvider, LlmStreamNext, NativeExecutorConfig, ToolNext,
+};
 
 use std::ffi::{c_char, c_void};
 use std::marker::{PhantomData, PhantomPinned};
@@ -26,6 +28,7 @@ pub use nemo_relay_types::api::event::{
     MetricMeasurement, MetricValueType, PendingMarkSpec, ScopeCategory,
 };
 pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
+pub use nemo_relay_types::api::provider::{LlmProviderFormat, LlmProviderRequest};
 pub use nemo_relay_types::api::registry::{
     RuntimeRegistrationIdentity, RuntimeRegistrationKind, RuntimeRegistrationOwner,
     RuntimeRegistrationOwnerKind,
@@ -50,10 +53,12 @@ use serde_json::Map;
 
 /// Native plugin ABI version supported by this crate.
 ///
-/// Version 5 adds a context-aware raw tool execution intercept registration.
-/// Hosts retain frozen version-4, version-3, and version-2 tables for
+/// Version 6 adds request-scoped, host-owned provider calls.
+/// Hosts retain frozen version-5, version-4, version-3, and version-2 tables for
 /// already-built plugins that target those layouts.
-pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 5;
+pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 6;
+/// ABI version that introduced private host-owned provider execution.
+pub const NEMO_RELAY_NATIVE_ABI_VERSION_PROVIDER_DISPATCH: u32 = 6;
 /// ABI version that introduced context-aware raw tool execution intercepts.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT: u32 = 5;
 /// ABI version that introduced runtime diagnostics and dynamic gate control.
@@ -1342,6 +1347,34 @@ pub struct NemoRelayNativeHostApiV5 {
         -> NemoRelayStatus,
 }
 
+/// ABI-v6 host extension for request-scoped provider calls.
+///
+/// All older tables remain frozen prefixes. Callbacks and stream handles use
+/// the same ownership and cancellation contract as execution continuations.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NemoRelayNativeHostApiV6 {
+    /// Frozen ABI-v5 compatibility prefix.
+    pub v5: NemoRelayNativeHostApiV5,
+    /// Whether this live LLM continuation has a host provider dispatcher.
+    pub async_next_has_provider:
+        unsafe extern "C" fn(next: *const NemoRelayNativeAsyncNext) -> bool,
+    /// Execute a buffered [`LlmProviderRequest`] using private host credentials.
+    pub async_next_call_provider: unsafe extern "C" fn(
+        next: *const NemoRelayNativeAsyncNext,
+        request_json: *const NemoRelayNativeString,
+        cb: NemoRelayNativeAsyncNextResultCb,
+        user_data: *mut c_void,
+    ) -> NemoRelayStatus,
+    /// Open a provider stream from [`LlmProviderRequest`] JSON.
+    pub async_next_stream_provider: unsafe extern "C" fn(
+        next: *const NemoRelayNativeAsyncNext,
+        request_json: *const NemoRelayNativeString,
+        cb: NemoRelayNativeAsyncLlmStreamOpenCb,
+        user_data: *mut c_void,
+    ) -> NemoRelayStatus,
+}
+
 unsafe impl Send for NemoRelayNativeHostApiV3 {}
 unsafe impl Sync for NemoRelayNativeHostApiV3 {}
 // SAFETY: the v4 host table is immutable after construction. Its function
@@ -1352,6 +1385,9 @@ unsafe impl Sync for NemoRelayNativeHostApiV4 {}
 // same thread-safe host function table.
 unsafe impl Send for NemoRelayNativeHostApiV5 {}
 unsafe impl Sync for NemoRelayNativeHostApiV5 {}
+// SAFETY: v6 extends the immutable thread-safe host function table.
+unsafe impl Send for NemoRelayNativeHostApiV6 {}
+unsafe impl Sync for NemoRelayNativeHostApiV6 {}
 
 // The host API table is immutable after construction. Function pointers and
 // the null-terminated version string pointer are safe to share across threads.
@@ -3107,11 +3143,16 @@ enum OwnedHostApi {
     V3(NemoRelayNativeHostApiV3),
     V4(NemoRelayNativeHostApiV4),
     V5(NemoRelayNativeHostApiV5),
+    V6(NemoRelayNativeHostApiV6),
 }
 
 impl OwnedHostApi {
     unsafe fn copy_from(host: &NemoRelayNativeHostApiV1) -> Self {
-        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT
+        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_PROVIDER_DISPATCH
+            && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV6>()
+        {
+            Self::V6(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV6) })
+        } else if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT
             && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV5>()
         {
             Self::V5(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV5) })
@@ -3134,6 +3175,7 @@ impl OwnedHostApi {
             Self::V3(host) => &host.v1,
             Self::V4(host) => &host.v3.v1,
             Self::V5(host) => &host.v4.v3.v1,
+            Self::V6(host) => &host.v5.v4.v3.v1,
         }
     }
 }

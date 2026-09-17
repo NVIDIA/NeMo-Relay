@@ -3,12 +3,14 @@
 
 //! Resolved runtime configuration model.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use axum::http::HeaderMap;
+use nemo_relay::api::runtime::provider::LlmProviderFormat;
 use nemo_relay::logging::LoggingConfig;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use strum::{Display, IntoStaticStr};
 
@@ -18,6 +20,13 @@ use super::{
     DEFAULT_MAX_HOOK_PAYLOAD_BYTES, DEFAULT_MAX_PASSTHROUGH_BODY_BYTES, header_json, header_string,
 };
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CallerCredentialTarget {
+    pub(crate) url: String,
+    pub(crate) format: LlmProviderFormat,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct GatewayConfig {
     pub(crate) bind: SocketAddr,
@@ -25,6 +34,7 @@ pub(crate) struct GatewayConfig {
     pub(crate) openai_auth_header: Option<String>,
     pub(crate) anthropic_base_url: String,
     pub(crate) anthropic_auth_header: Option<String>,
+    pub(crate) caller_credential_targets: BTreeMap<String, CallerCredentialTarget>,
     pub(crate) metadata: Option<Value>,
     pub(crate) plugin_config: Option<Value>,
     pub(crate) max_hook_payload_bytes: usize,
@@ -115,6 +125,7 @@ impl Default for GatewayConfig {
             openai_auth_header: None,
             anthropic_base_url: "https://api.anthropic.com".into(),
             anthropic_auth_header: None,
+            caller_credential_targets: BTreeMap::new(),
             metadata: None,
             plugin_config: None,
             max_hook_payload_bytes: DEFAULT_MAX_HOOK_PAYLOAD_BYTES,

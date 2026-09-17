@@ -64,6 +64,9 @@ impl NativePlugin for FixtureNativePlugin {
         plugin_config: &Map<String, Json>,
         ctx: &mut PluginContext<'_>,
     ) -> nemo_relay_plugin::Result<()> {
+        if plugin_config.get("private_provider").and_then(Json::as_bool).unwrap_or(false) {
+            return register_private_provider_fixture(ctx);
+        }
         let event_metadata_injector_error = plugin_config
             .get("event_metadata_injector_error")
             .and_then(Json::as_bool)
@@ -528,7 +531,7 @@ pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v2(
     }
 }
 
-/// Raw ABI-v5 entry used to verify the current table.
+/// Raw ABI-v5 entry used to verify host fallback.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v5(
     host: *const NemoRelayNativeHostApiV1,
@@ -538,7 +541,7 @@ pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v5(
         fixture_compat_entry(
             host,
             out,
-            NEMO_RELAY_NATIVE_ABI_VERSION,
+            5,
             std::mem::size_of::<NemoRelayNativeHostApiV5>(),
             b"fixture_native_v5",
         )
@@ -1618,4 +1621,40 @@ unsafe fn raw_host_string_value(
         unsafe { std::slice::from_raw_parts(data, len) }
     };
     std::str::from_utf8(bytes).ok().map(str::to_owned)
+}
+
+fn provider_targets(request: &mut LlmRequest) -> Vec<String> {
+    request.content.as_object_mut().unwrap().remove("fixture_provider_targets")
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_else(|| vec!["answer".into()])
+}
+
+fn register_private_provider_fixture(ctx: &mut PluginContext<'_>) -> nemo_relay_plugin::Result<()> {
+    if !ctx.supports_provider_dispatch() { return Err("host does not support private provider dispatch".into()); }
+    ctx.register_llm_execution_intercept("private_provider", 0, |_name, mut request, next| async move {
+        assert!(!request.headers.contains_key("authorization"));
+        assert!(!request.headers.contains_key("x-api-key"));
+        let provider = next.provider()?;
+        let targets = provider_targets(&mut request);
+        let mut last = Err("no provider targets".to_owned());
+        for target in targets {
+            last = provider.call(nemo_relay_plugin::LlmProviderRequest { target, content: request.content.clone() }).await;
+            if last.is_ok() { break; }
+        }
+        last
+    })?;
+    ctx.register_llm_stream_execution_intercept("private_provider_stream", 0, |_name, mut request, next| async move {
+        assert!(!request.headers.contains_key("authorization"));
+        let provider = next.provider()?;
+        if let Some(probe) = request.content.as_object_mut().unwrap().remove("fixture_provider_probe") {
+            provider.call(nemo_relay_plugin::LlmProviderRequest { target: probe.as_str().unwrap().into(), content: request.content.clone() }).await?;
+        }
+        let targets = provider_targets(&mut request);
+        let mut last = Err("no provider targets".to_owned());
+        for target in targets {
+            last = provider.stream(nemo_relay_plugin::LlmProviderRequest { target, content: request.content.clone() }).await;
+            if last.is_ok() { break; }
+        }
+        last
+    })
 }

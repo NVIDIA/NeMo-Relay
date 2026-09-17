@@ -7,6 +7,8 @@
 pub mod event;
 /// LLM DTOs and attributes.
 pub mod llm;
+/// Host-owned provider execution DTOs.
+pub mod provider;
 /// Runtime-registration discovery DTOs.
 pub mod registry;
 /// Scope DTOs and attributes.

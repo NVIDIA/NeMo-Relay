@@ -338,6 +338,7 @@ impl Drop for TestServer {
 fn test_config() -> GatewayConfig {
     crate::test_support::enable_operational_logs();
     GatewayConfig {
+        caller_credential_targets: Default::default(),
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,

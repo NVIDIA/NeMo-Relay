@@ -155,3 +155,83 @@ behavior:
 Success means unary and stream continuations preserve scope, errors, and cancellation,
 while Relay-owned tool marks and LLM request accounting remain separate from
 application results.
+
+## Private Caller-Credential Provider Calls
+
+The gateway keeps provider credentials out of `LlmRequest.headers` and events. A
+native execution plugin that performs its own provider calls can use
+`next.provider()` on a host implementing native ABI v6. This returns a
+request-scoped `LlmProvider` with buffered `call` and streaming `stream` methods.
+Both methods are available in unary and streaming execution intercepts, allowing a
+buffered routing-model call before a streamed answer. They call the provider directly;
+they do not re-enter execution middleware or automatically emit a separate LLM event.
+
+Check `context.supports_provider_dispatch()` during registration when your configuration
+requires this capability. Then use `next.provider()?` for each execution. Registration
+support does not imply that a request has credentials or permission for a target.
+Hosts with native ABI v2–v5 do not provide this capability; ordinary `next.call()`
+continues to work. Plugins using these methods must rebuild against an SDK exposing
+`LlmProviderRequest` and declare a Relay compatibility range covering hosts they test.
+The ABI v6 requirement is independent of the manifest's unchanged `native_api = "1"`.
+
+```rust
+use nemo_relay_plugin::LlmProviderRequest;
+
+if !context.supports_provider_dispatch() {
+    return Err("this configuration requires native ABI v6 provider dispatch".into());
+}
+context.register_llm_execution_intercept(
+    "answer", 0,
+    |_name, request, next| async move {
+        next.provider()?.call(LlmProviderRequest {
+            target: "answer".into(),
+            content: request.content,
+        }).await
+    },
+)?;
+```
+
+The CLI gateway authorizes target names in its `config.toml`:
+
+```toml
+[upstream.caller_credential_targets.answer]
+url = "https://api.openai.com/v1/responses"
+format = "openai_responses"
+
+[upstream.caller_credential_targets.router]
+url = "https://api.openai.com/v1/chat/completions"
+format = "openai_chat"
+```
+
+The URL is the complete endpoint. Supported formats are `openai_chat`,
+`openai_responses`, and `anthropic_messages`. Targets default to an empty map.
+A higher-precedence map replaces the entire lower-precedence map, including an
+explicit empty map that revokes all destinations. URLs must be absolute HTTP(S)
+URLs without userinfo or fragments. Only authorize endpoints you trust to receive
+callers' provider credentials. HTTP is useful for local tests; use HTTPS for remote
+providers. OpenAI Chat and Responses share a credential family; Anthropic is separate.
+A target's format declares its credential family; the plugin supplies provider-specific
+JSON and must adapt any routing-model or fallback request and response shapes itself.
+
+Each call checks the name and source family. The host sets the `stream` flag from the
+chosen method and forwards only the caller's provider credential plus recognized
+companion headers: OpenAI account/FedRAMP headers or Anthropic version/beta headers.
+Gateway invocation tokens are consumed before this capability is created. Missing caller
+credentials do not fall back to environment or deployment-owned credentials. Plugins
+cannot override URLs or headers, and redirects are rejected, including same-origin ones.
+
+Retries and fallbacks must name authorized targets on every attempt and remain within
+the request's provider family. Plugins own their retry limits and response selection.
+HTTP failures expose status and a generic failure message, not upstream bodies or
+redirect locations. Successful JSON and SSE values redact literal credential echoes;
+configured endpoints are still trusted, and this does not prevent an endpoint from
+encoding a secret in a response. Native plugins are in-process, unsandboxed extensions.
+
+The capability expires when its execution completes or is cancelled. Retaining its
+handle does not authorize later calls. Pending calls and active stream pulls are aborted
+with their owning execution; plugins must drop streams and handles they no longer need.
+The ordinary continuation, deployment-owned authentication, and keyless targets retain
+their existing behavior. Rust embedders can install equivalent request-specific host
+callbacks with `with_llm_provider_dispatcher`; they own target policy, credential
+provenance, transport cancellation, and response/error sanitization. Worker plugins and
+Python, Node.js, Go, and raw application FFI bindings do not expose this capability.
