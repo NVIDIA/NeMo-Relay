@@ -3,17 +3,10 @@
 
 //! OTLP file export for NeMo Relay Core.
 //!
-//! [`OtlpFileSpanExporter`] is a [`SpanExporter`] that writes the same
-//! `ExportTraceServiceRequest` the OTLP network exporters put on the wire to a
-//! local file instead. It exists for consumers that treat a trajectory as an
-//! artifact rather than as telemetry -- evaluation harnesses, offline replay,
-//! and any environment with no collector to export to.
-//!
-//! The default [`OtlpFileFormat::JsonLines`] follows the OpenTelemetry Protocol
-//! File Exporter specification: one OTLP/JSON-encoded request per line.
-//! [`OtlpFileFormat::Proto`] writes each request length-delimited, matching the
-//! OpenTelemetry Collector file exporter's `format: proto` layout, for
-//! consumers that would rather not pay JSON's size and parse cost.
+//! [`OtlpFileSpanExporter`] writes the same `ExportTraceServiceRequest` the
+//! network exporters put on the wire to a local file. [`OtlpFileFormat`]
+//! selects between the OpenTelemetry file-exporter specification's JSON lines
+//! and the Collector's length-delimited protobuf.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -61,10 +54,9 @@ pub enum OtlpFileExporterError {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum OtlpFileFormat {
-    /// One OTLP/JSON-encoded `ExportTraceServiceRequest` per line.
-    ///
-    /// This is the serialization described by the OpenTelemetry Protocol File
-    /// Exporter specification, and the default for that reason.
+    /// One OTLP/JSON-encoded `ExportTraceServiceRequest` per line: the
+    /// serialization the OpenTelemetry file-exporter specification describes,
+    /// and the default for that reason.
     #[default]
     JsonLines,
     /// Length-delimited OTLP protobuf: a big-endian `u32` byte count followed
@@ -84,10 +76,9 @@ impl OtlpFileFormat {
 
 /// Writes exported spans to a local file as OTLP.
 ///
-/// The exporter owns its writer and closes it on shutdown. Every export is
-/// flushed before it returns: a batch that the SDK reports as delivered is
-/// durable on disk, so a run that dies between batches still leaves a readable
-/// prefix rather than an empty file.
+/// Every export is flushed before it returns, so a batch the SDK reports as
+/// delivered is durable and a run that dies mid-stream leaves a readable
+/// prefix.
 #[derive(Debug)]
 pub struct OtlpFileSpanExporter {
     path: PathBuf,
@@ -99,9 +90,8 @@ pub struct OtlpFileSpanExporter {
 impl OtlpFileSpanExporter {
     /// Creates an exporter writing `path` in `format`.
     ///
-    /// `root` confines the output the same way the ATOF and ATIF file sinks are
-    /// confined, and the file is created with owner-only permissions because a
-    /// trajectory carries prompt and response content.
+    /// `root` confines the output and the file is owner-only, as for the ATOF
+    /// and ATIF sinks: a trajectory carries prompt and response content.
     pub fn new(root: &Path, path: &Path, format: OtlpFileFormat, append: bool) -> Result<Self> {
         if let Some(parent) = path.parent() {
             create_private_dir_all(parent).map_err(|source| {
@@ -131,14 +121,13 @@ impl OtlpFileSpanExporter {
 
     /// Encodes one export request in the configured format.
     ///
-    /// Kept separate from the write so the framing is testable without a file,
-    /// and so a serialization failure never leaves a partial record behind: the
-    /// record is fully encoded before any of it reaches the writer.
+    /// Fully encoded before anything reaches the writer, so a serialization
+    /// failure cannot leave a partial record behind.
     fn encode(&self, request: &ExportTraceServiceRequest) -> std::result::Result<Vec<u8>, String> {
         match self.format {
             OtlpFileFormat::JsonLines => {
-                // Compact, never pretty: the specification's file layout is one
-                // record per line, so an embedded newline would split a record.
+                // Compact, never pretty: one record per line, so an embedded
+                // newline would split a record.
                 let mut line = serde_json::to_vec(request)
                     .map_err(|error| format!("failed to serialize OTLP/JSON: {error}"))?;
                 line.push(b'\n');
@@ -163,8 +152,7 @@ impl OtlpFileSpanExporter {
 
 impl SpanExporter for OtlpFileSpanExporter {
     async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
-        // An empty batch would otherwise encode to a record with no spans,
-        // which a reader cannot distinguish from a lost one.
+        // An empty record is indistinguishable from a lost one.
         if batch.is_empty() {
             return Ok(());
         }
@@ -210,8 +198,7 @@ impl SpanExporter for OtlpFileSpanExporter {
             .writer
             .lock()
             .map_err(|_| OTelSdkError::InternalFailure(lock_poisoned(&self.path)))?;
-        // A flush after shutdown is not an error: every record the exporter
-        // accepted is already durable, so there is nothing left to fail on.
+        // Every accepted record is already durable, so there is nothing to fail on.
         let Some(writer) = guard.as_mut() else {
             return Ok(());
         };
