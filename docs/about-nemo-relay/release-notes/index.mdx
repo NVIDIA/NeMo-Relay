@@ -70,6 +70,9 @@ Daemon mode supports the following shared-service features:
   and forward frames in both directions. For setup, service management,
   upgrades, and troubleshooting, refer to
   [Daemon](/daemon/about).
+- A managed gateway has up to 20 seconds after Relay starts it to resolve its
+  persistent configuration, bind its listener, and report readiness. This gives
+  slow configuration discovery time to finish.
 
 ### Coding-Agent and Framework Support
 
