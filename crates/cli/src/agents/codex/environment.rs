@@ -99,7 +99,8 @@ pub(super) fn install(config: &Path, token: &str) -> Result<(), String> {
     let mut raw = read(&path)?;
     let existed = if let Some(block) = block(&raw)? {
         let existed = block.existed;
-        remove_block(&mut raw, block.range);
+        let range = block.range;
+        remove_block(&mut raw, range);
         existed
     } else {
         path.exists()
@@ -127,7 +128,8 @@ pub(super) fn uninstall(config: &Path) -> Result<(), String> {
         return Ok(());
     };
     let existed = block.existed;
-    remove_block(&mut raw, block.range);
+    let range = block.range;
+    remove_block(&mut raw, range);
     if raw.is_empty() && !existed {
         remove_file_preserving_symlink(&path)
     } else {
