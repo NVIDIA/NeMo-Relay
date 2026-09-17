@@ -427,10 +427,11 @@ invalid catalog, and it reports passing sources as `Model pricing source`.
 
 For dynamic plugins, doctor also includes the full redacted core plugin-host
 preflight in JSON output under `configuration.plugin_host_validation`. This is
-the same non-activating validation exposed by the Rust and Python
-`plugin.validate` APIs: it reports per-plugin policy, integrity, authenticity,
-and configuration-schema failures. A dynamic validation failure makes doctor
-fail; live exporter and backend health checks remain separate doctor probes.
+the same non-activating validation exposed by
+`nemo_relay::plugin::dynamic::validate` in Rust and `nemo_relay.plugin.validate`
+in Python: it reports per-plugin policy, integrity, authenticity, and
+configuration-schema failures. A dynamic validation failure makes doctor fail;
+live exporter and backend health checks remain separate doctor probes.
 
 Relay does not ship a canonical price catalog. Unknown models and missing token
 fields leave cost absent instead of defaulting to zero. For the catalog schema,

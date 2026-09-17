@@ -255,7 +255,12 @@ fn collect_plugin_host_validation(
     );
     match validate_plugin_host(PluginConfig::default(), explicit_plugin_config) {
         Ok(report) => {
-            let static_errors = report.config.has_errors();
+            let static_failures = report
+                .config
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
+                .count();
             let static_warnings = report.config.diagnostics.iter().any(|diagnostic| {
                 diagnostic.level == DiagnosticLevel::Warning
                     && diagnostic.code.as_str() != INHERITED_PLUGIN_CONFIGURATION_DIAGNOSTIC
@@ -265,7 +270,7 @@ fn collect_plugin_host_validation(
                 .iter()
                 .filter(|plugin| plugin.failure.is_some())
                 .count();
-            let status = if static_errors || dynamic_failures > 0 {
+            let status = if static_failures > 0 || dynamic_failures > 0 {
                 Status::Fail
             } else if static_warnings {
                 Status::Warn
@@ -279,7 +284,8 @@ fn collect_plugin_host_validation(
                 ),
                 Status::Warn => "core plugin-host validation completed with warnings".into(),
                 Status::Fail => format!(
-                    "core plugin-host validation found {dynamic_failures} dynamic plugin failure(s)"
+                    "core plugin-host validation found {static_failures} static configuration error(s) \
+                     and {dynamic_failures} dynamic plugin failure(s)"
                 ),
                 Status::Info => unreachable!("configured plugin validation always has a result"),
             };

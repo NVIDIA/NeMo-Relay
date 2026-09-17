@@ -209,6 +209,23 @@ pub(super) fn format_human_plugin_configuration(out: &mut String, report: &Docto
         report.configuration.plugin_host_validation.details
     ));
     if let Some(validation) = &report.configuration.plugin_host_validation.report {
+        for diagnostic in &validation.config.diagnostics {
+            let status = match diagnostic.level {
+                nemo_relay::plugin::DiagnosticLevel::Error => Status::Fail,
+                nemo_relay::plugin::DiagnosticLevel::Warning
+                    if diagnostic.code == super::INHERITED_PLUGIN_CONFIGURATION_DIAGNOSTIC =>
+                {
+                    Status::Info
+                }
+                nemo_relay::plugin::DiagnosticLevel::Warning => Status::Warn,
+            };
+            out.push_str(&format!(
+                "    Static     {} {}: {}\n",
+                format_status(status),
+                diagnostic.code,
+                diagnostic.message
+            ));
+        }
         for plugin in &validation.dynamic_plugins {
             let (status, details) = match &plugin.failure {
                 Some(failure) => (

@@ -1084,7 +1084,10 @@ entrypoint = "fixture-worker"
         &plugins_toml,
         r#"
 version = 1
-components = []
+components = [{ kind = "doctor.invalid" }]
+
+[policy]
+unknown_component = "error"
 
 [plugins.policy.defaults]
 startup = "optional"
@@ -1107,6 +1110,11 @@ manifest = "relay-plugin.toml"
     );
 
     assert_eq!(validation.status, Status::Fail);
+    assert!(
+        validation
+            .details
+            .contains("1 static configuration error(s) and 1 dynamic plugin failure(s)")
+    );
     let host_report = validation.report.expect("core validation report");
     assert_eq!(host_report.dynamic_plugins.len(), 1);
     let dynamic = &host_report.dynamic_plugins[0];
@@ -1122,11 +1130,12 @@ manifest = "relay-plugin.toml"
     let mut doctor = empty_report();
     doctor.configuration.plugin_host_validation = PluginHostValidation {
         status: Status::Fail,
-        details: "core plugin-host validation found 1 dynamic plugin failure(s)".into(),
+        details: validation.details,
         report: Some(host_report),
     };
     assert_eq!(exit_code(&doctor), 1);
     let rendered = format_human(&doctor);
+    assert!(rendered.contains("plugin.unknown_component"), "{rendered}");
     assert!(rendered.contains("fixture.doctor-trust"), "{rendered}");
     assert!(rendered.contains("integrity_failed"), "{rendered}");
     let json = serde_json::from_str::<serde_json::Value>(&format_json(&doctor).unwrap()).unwrap();
@@ -1153,6 +1162,7 @@ async fn doctor_ignores_inherited_plugin_configuration_warning() {
         ("XDG_CONFIG_HOME", Some(config_home.as_os_str())),
         ("HOME", None),
         ("USERPROFILE", None),
+        ("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", None),
     ]);
 
     let mut resolved = ResolvedConfig::default();
