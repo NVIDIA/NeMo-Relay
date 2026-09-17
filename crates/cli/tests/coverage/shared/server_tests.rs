@@ -992,6 +992,90 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
 }
 
 #[tokio::test]
+async fn managed_sidecar_consumes_codex_project_proof_and_preserves_provider_metadata() {
+    use crate::provider_auth::{CODEX_CLIENT_PROOF_HEADER, CODEX_CLIENT_PROOF_PREFIX};
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let state =
+        AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), true, None, None);
+    let proof = format!("{CODEX_CLIENT_PROOF_PREFIX}{};", key.client_token());
+    for (value, expected, authenticated) in [
+        (
+            "project-original".to_string(),
+            Some("project-original"),
+            false,
+        ),
+        (proof.clone(), None, true),
+        (
+            format!("{proof}project-original"),
+            Some("project-original"),
+            true,
+        ),
+        (
+            format!("{proof}{proof}project-original"),
+            Some("project-original"),
+            true,
+        ),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(CODEX_CLIENT_PROOF_HEADER, value.parse().unwrap());
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer nvapi-caller".parse().unwrap(),
+        );
+        headers.insert("openai-organization", "org-user".parse().unwrap());
+        let (authorization, path) = state
+            .authorize_provider_request(&mut headers, "/v1/responses")
+            .unwrap();
+        assert_eq!(authorization.allow_environment_provider_auth, authenticated);
+        assert_eq!(path, "/v1/responses");
+        assert_eq!(
+            headers
+                .get(CODEX_CLIENT_PROOF_HEADER)
+                .map(|value| value.to_str().unwrap()),
+            expected
+        );
+        assert_eq!(headers[header::AUTHORIZATION], "Bearer nvapi-caller");
+        assert_eq!(headers["openai-organization"], "org-user");
+    }
+    for value in [
+        format!("{CODEX_CLIENT_PROOF_PREFIX}bad;project"),
+        format!("{proof}{CODEX_CLIENT_PROOF_PREFIX}bad;project"),
+        CODEX_CLIENT_PROOF_PREFIX.to_string(),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(CODEX_CLIENT_PROOF_HEADER, value.parse().unwrap());
+        let error = state
+            .authorize_provider_request(&mut headers, "/v1/responses")
+            .unwrap_err();
+        assert!(!error.to_string().contains(&key.client_token()));
+    }
+    let mut duplicates = HeaderMap::new();
+    duplicates.append(CODEX_CLIENT_PROOF_HEADER, proof.parse().unwrap());
+    duplicates.append(
+        CODEX_CLIENT_PROOF_HEADER,
+        "ordinary-project".parse().unwrap(),
+    );
+    assert!(
+        state
+            .authorize_provider_request(&mut duplicates, "/v1/responses")
+            .is_err()
+    );
+    let mut browser = HeaderMap::new();
+    browser.insert(
+        CODEX_CLIENT_PROOF_HEADER,
+        format!("{CODEX_CLIENT_PROOF_PREFIX}{};", key.client_token())
+            .parse()
+            .unwrap(),
+    );
+    browser.insert(header::ORIGIN, "https://example.com".parse().unwrap());
+    assert!(
+        state
+            .authorize_provider_request(&mut browser, "/v1/responses")
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn managed_sidecar_accepts_capability_urls_without_forwarding_the_capability() {
     let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
     let state = AppState::new_with_bootstrap(

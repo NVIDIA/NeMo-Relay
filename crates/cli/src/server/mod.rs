@@ -560,6 +560,10 @@ impl AppState {
             ));
         }
         let (path, capability_authenticated) = self.authorize_provider_path(path)?;
+        let codex_authenticated = crate::provider_auth::consume_codex_client_proof(
+            headers,
+            self.bootstrap_challenge_key.as_ref(),
+        )?;
         if let Some(proxy) = &self.transparent_proxy_credential {
             let source_credential = proxy.consume(headers).inspect_err(|error| {
                 log::warn!(
@@ -582,6 +586,7 @@ impl AppState {
             true
         } else {
             capability_authenticated
+                || codex_authenticated
                 || self
                     .bootstrap_challenge_key
                     .as_ref()

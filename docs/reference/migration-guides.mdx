@@ -21,7 +21,10 @@ nemo-relay integrations refresh
 
 To refresh only Codex, use `nemo-relay install codex --force`. Refreshing Codex
 switches persistent routing to the built-in OpenAI provider, preserving session
-identity and routing image generation through Relay.
+identity and routing image generation through Relay. It replaces credential-bearing
+URLs with a plain gateway URL and a managed authentication assignment in
+`$CODEX_HOME/.env`. Quit and restart Codex after refreshing so the header is loaded.
+The gateway continues accepting legacy capability URLs for older clients.
 
 ## Related Release Information
 

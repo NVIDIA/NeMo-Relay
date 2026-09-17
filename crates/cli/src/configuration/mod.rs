@@ -530,10 +530,8 @@ pub(crate) const BOOTSTRAP_CLIENT_TOKEN_HEADER: &str = "x-nemo-relay-client-toke
 pub(crate) const HOOK_CLIENT_TOKEN_HEADER: &str = "x-nemo-relay-hook-client";
 pub(crate) const PROVIDER_CAPABILITY_PATH_SEGMENT: &str = "nemo-relay";
 
-/// Returns the built-in OpenAI provider endpoint used by a persistent Codex installation.
-///
-/// Codex only exposes a base-URL override for its built-in OpenAI provider. The capability keeps
-/// Relay's existing per-user authorization boundary without changing Codex's provider identity.
+/// Returns the legacy capability endpoint accepted for existing persistent Codex installations.
+/// New installs use a plain URL and deliver the proof through Codex's startup .env header.
 pub(crate) fn persistent_openai_base_url(gateway_url: &str, client_token: &str) -> String {
     format!(
         "{}/v1/{PROVIDER_CAPABILITY_PATH_SEGMENT}/{client_token}",

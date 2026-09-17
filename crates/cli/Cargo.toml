@@ -46,6 +46,7 @@ hyper = { version = "1.11.1", features = ["client", "server", "http1", "http2"] 
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "server-auto", "service", "tokio"] }
 dialoguer = { version = "0.12", default-features = false, features = ["password"] }
+dotenvy = "0.15.7"
 jsonschema = { version = "0.46.6", default-features = false }
 listeners = "0.4"
 log = { version = "0.4", features = ["kv"] }

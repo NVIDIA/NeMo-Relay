@@ -138,13 +138,23 @@ nemo-relay install codex
 
 The installer creates a local marketplace, installs
 `nemo-relay-plugin@nemo-relay-local`, enables Codex hooks, and routes Codex's
-built-in `openai` provider through a per-user capability URL on the managed
-loopback gateway. This preserves `openai` as the provider identity recorded in
+built-in `openai` provider through a plain URL on the managed loopback gateway.
+It appends a managed authentication assignment to `$CODEX_HOME/.env` (normally
+`~/.codex/.env`), which Codex reads at startup. The `OpenAI-Project` header carries
+a namespaced Relay proof; Relay validates and removes the proof before request
+observability or upstream forwarding. Existing project metadata is preserved.
+Credentials are not embedded in the generated URL. This preserves `openai` as the provider identity recorded in
 new Codex sessions, so sessions created before and after installing Relay stay
 in the same provider history. The installer retains the `nemo-relay-openai`
 alias only to resume sessions created by earlier Relay versions. It then uses
 the existing `nemo-relay` binary on `PATH`; it does not install a plugin-local
 Relay binary.
+
+Quit and restart Codex after installation, refresh, or removal so it reloads both
+configuration and startup environment. No special launcher or shell export is
+required. Existing `.env` settings are preserved; uninstall removes Relay's
+managed assignment. Do not edit that assignment directly. Legacy capability URLs
+and dedicated Relay authentication headers remain accepted for older clients.
 
 If your config explicitly selects another provider, installation switches it to
 the built-in `openai` provider while Relay is installed and restores your
