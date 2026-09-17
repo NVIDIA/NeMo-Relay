@@ -490,6 +490,11 @@ fn empty_report() -> DoctorReport {
                 status: Status::Info,
                 details: "plugins.toml not configured".into(),
             },
+            plugin_host_validation: PluginHostValidation {
+                status: Status::Info,
+                details: "plugins.toml not configured".into(),
+                report: None,
+            },
             resolution: Check {
                 name: "Resolution",
                 status: Status::Pass,
@@ -1034,6 +1039,137 @@ async fn collect_report_preserves_configuration_and_plugin_resolution_failures()
     .await
     .expect("plugin diagnostic report");
     assert_eq!(report.configuration.plugin_resolution.status, Status::Fail);
+}
+
+#[tokio::test]
+async fn doctor_surfaces_core_dynamic_plugin_validation_failures() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let directory = tempfile::tempdir().unwrap();
+    let artifact = directory.path().join("artifact.bin");
+    std::fs::write(&artifact, b"doctor dynamic plugin fixture").unwrap();
+    let manifest = directory.path().join("relay-plugin.toml");
+    std::fs::write(
+        &manifest,
+        r#"
+manifest_version = 1
+
+[plugin]
+id = "fixture.doctor-trust"
+kind = "worker"
+
+[compat]
+relay = ">=0.8.0,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[source]
+artifact = "artifact.bin"
+
+[integrity]
+sha256 = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[load]
+runtime = "command"
+entrypoint = "fixture-worker"
+"#,
+    )
+    .unwrap();
+    let plugins_toml = directory.path().join("plugins.toml");
+    std::fs::write(
+        &plugins_toml,
+        r#"
+version = 1
+components = []
+
+[plugins.policy.defaults]
+startup = "optional"
+attestation = "integrity_only"
+
+[[plugins.dynamic]]
+manifest = "relay-plugin.toml"
+"#,
+    )
+    .unwrap();
+
+    let mut resolved = ResolvedConfig::default();
+    resolved.gateway.plugin_config = Some(json!({"version": 1, "components": []}));
+    let validation = collect_plugin_host_validation(
+        &resolved,
+        &GatewayOverrides {
+            plugin_config_path: Some(plugins_toml),
+            ..GatewayOverrides::default()
+        },
+    );
+
+    assert_eq!(validation.status, Status::Fail);
+    let host_report = validation.report.expect("core validation report");
+    assert_eq!(host_report.dynamic_plugins.len(), 1);
+    let dynamic = &host_report.dynamic_plugins[0];
+    assert_eq!(dynamic.plugin_id, "fixture.doctor-trust");
+    assert_eq!(
+        dynamic
+            .failure
+            .as_ref()
+            .map(|failure| failure.code.as_str()),
+        Some("integrity_failed")
+    );
+
+    let mut doctor = empty_report();
+    doctor.configuration.plugin_host_validation = PluginHostValidation {
+        status: Status::Fail,
+        details: "core plugin-host validation found 1 dynamic plugin failure(s)".into(),
+        report: Some(host_report),
+    };
+    assert_eq!(exit_code(&doctor), 1);
+    let rendered = format_human(&doctor);
+    assert!(rendered.contains("fixture.doctor-trust"), "{rendered}");
+    assert!(rendered.contains("integrity_failed"), "{rendered}");
+    let json = serde_json::from_str::<serde_json::Value>(&format_json(&doctor).unwrap()).unwrap();
+    assert_eq!(
+        json["configuration"]["plugin_host_validation"]["report"]["dynamic_plugins"][0]["failure"]
+            ["code"],
+        "integrity_failed"
+    );
+}
+
+#[tokio::test]
+async fn doctor_ignores_inherited_plugin_configuration_warning() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let directory = tempfile::tempdir().unwrap();
+    let config_home = directory.path().join("config");
+    let plugin_dir = config_home.join("nemo-relay");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::write(
+        plugin_dir.join("plugins.toml"),
+        "version = 1\ncomponents = []\n",
+    )
+    .unwrap();
+    let _environment = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(config_home.as_os_str())),
+        ("HOME", None),
+        ("USERPROFILE", None),
+    ]);
+
+    let mut resolved = ResolvedConfig::default();
+    resolved.gateway.plugin_config = Some(json!({"version": 1, "components": []}));
+    let validation = collect_plugin_host_validation(&resolved, &GatewayOverrides::default());
+
+    assert_eq!(validation.status, Status::Pass);
+    assert!(
+        validation
+            .report
+            .as_ref()
+            .expect("core validation report")
+            .config
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "plugin.configuration_inherited")
+    );
 }
 
 #[tokio::test]
