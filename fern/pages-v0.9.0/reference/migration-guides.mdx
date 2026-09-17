@@ -7,7 +7,7 @@ position: 6
 SPDX-License-Identifier: Apache-2.0 */}
 
 Use this page to upgrade from NeMo Relay 0.8.x to 0.9. Each section covers
-one part of the upgrade. This guide reflects the current `main` branch.
+one part of the upgrade. This guide reflects the current 0.9 release branch.
 
 If you skip releases, read each release's migration guide and release notes
 in order.
@@ -34,6 +34,12 @@ replace the binary at the same path. Keep the saved identity state and
 existing bundle files.
 
 ### Pass Tool Execution Context to Intercepts
+
+<Warning title="Breaking Change">
+Tool callbacks use a context object because Relay now provides the optional
+provider tool-call ID with the tool name and arguments. Existing callbacks no
+longer match the public API and must be updated.
+</Warning>
 
 Tool execution intercepts now receive `ToolExecutionContext` and a
 continuation. The context holds the tool name, arguments, and optional
@@ -140,11 +146,13 @@ not check dynamic plugins.
 
 ### Review Layered Dynamic Plugin Declarations
 
-<Warning title="Behavior Change">
-When user or explicit and system `plugins.toml` files declare dynamic records
-with the same manifest plugin ID, the higher-precedence record now replaces the
-lower-precedence record. Relay no longer fails with a duplicate-ID error, and
-it does not merge the lower record's `config` into the effective plugin.
+<Warning title="Breaking Change">
+When the explicit-or-user and system `plugins.toml` files declare dynamic
+records with the same manifest plugin ID, the higher-precedence record now
+replaces the lower-precedence record. Relay no longer fails with a duplicate-ID
+error, and it does not merge the lower record's `config` into the effective
+plugin. This allows layered configuration, but a needed lower-precedence
+setting can no longer take effect by itself.
 </Warning>
 
 If a system deployment repeats a user's dynamic-plugin ID, copy every setting
@@ -154,6 +162,12 @@ wrapper, persistent gateway, daemon broker, and every binding that uses the
 normal `initialize(config, path)` API.
 
 #### Python-Specific Errors
+
+<Warning title="Breaking Change">
+Python plugin APIs use more specific error types so applications can tell an
+invalid setting from a missing file. Code that only catches `RuntimeError` can
+miss these failures after the upgrade.
+</Warning>
 
 `nemo_relay.plugin.initialize()` and `nemo_relay.plugin.activate()` now raise
 `ValueError` for invalid static settings. They raise `FileNotFoundError` when
@@ -165,6 +179,12 @@ for failures to acquire the plugin host or register a plugin. To inspect
 static settings without starting plugins, use `validate` or `validate_exact`.
 
 ### Verify Dynamic-Plugin Trust
+
+<Warning title="Breaking Change">
+Dynamic plugins now go through trust checks in every embedding API. By default,
+Relay requires a signature, so an unsigned plugin that started on 0.8 can fail
+to start on 0.9. Choose and validate a trust policy before deployment.
+</Warning>
 
 The core host now checks dynamic-plugin attestation through every embedding
 API. Attestation checks the plugin artifact against the configured trust
@@ -185,19 +205,24 @@ Choose a trust policy before you deploy:
 Use `nemo-relay plugins validate <plugin-id>` and your embedding's `validate`
 API to check the chosen policy and artifact before deployment.
 
-Embedding `validate` calls return trust failures in the matching
-`dynamic_plugins` entry rather than raising them. Check that entry's
-`status.integrity`, `status.authenticity`, and `failure` before deployment.
-The entry has `selected = false` when Relay cannot activate it. With optional
-startup, an enabled plugin remains selected despite a failed trust check, so
-the failure stays visible without blocking its activation. Required startup
-remains fail-closed and rejects the same failed trust check before plugin code
-loads.
+Embedding `validate` calls return a report for every lifecycle-selected plugin,
+including a plugin with a trust failure. They do not raise for that failure.
+Check the matching `dynamic_plugins` entry's `status.integrity`,
+`status.authenticity`, and `failure` before deployment. A failed trust report
+has `selected = false` because Relay does not activate that plugin. With
+`startup = "required"`, `initialize` rejects the same failure before it loads
+plugin code.
 
 `integrity_only` skips signature checks. It still requires a valid
 `source.artifact` and a matching `integrity.sha256` digest.
 
 ### Choose Trace Boundaries Explicitly
+
+<Warning title="Breaking Change">
+Propagation now keeps the Relay root by default so related work stays in one
+trace. This changes which events share a trace and changes the meaning of the
+exported ATIF `session_id`.
+</Warning>
 
 Default propagation capture and scope-stack forks now keep the Relay root
 when one is available. This root identifies the trace shared by related work.
@@ -238,7 +263,8 @@ also uses that UUID. For details, refer to
 All `full`, `gen_ai`, and `openinference` trace endpoints require HTTPS for
 remote collectors, with either HTTP or gRPC transport. Plain HTTP works only
 with localhost and loopback IP addresses. OTLP/HTTP trace exporters no longer
-follow redirects, even between HTTPS endpoints.
+follow redirects, even between HTTPS endpoints. This keeps trace data from
+being sent to an insecure or unexpected destination.
 </Warning>
 
 Replace remote `http://` trace endpoints with the collector's final `https://`
@@ -248,6 +274,13 @@ subscribers, even when you redact the data.
 
 Log and metric exporters keep their existing transport rules. The redirect
 change does not apply to gRPC.
+
+<Warning title="Breaking Change">
+The `gen_ai` output now includes sanitized tool arguments, successful tool
+results, and tool definitions. This gives collectors more useful trace data,
+but it can also send tool content that they did not receive before. Review
+collector access and redaction settings before you upgrade.
+</Warning>
 
 The `gen_ai` output format adds the following fields after sanitization:
 
@@ -273,7 +306,42 @@ Do not define the same header in both `headers` and `header_env`. Relay ignores
 ASCII case when it compares header names. For details, refer to
 [Direct Subscribers](/configure-plugins/observability/opentelemetry#direct-subscribers).
 
+### Configure Rotating Exporter Headers
+
+<Warning title="Breaking Change">
+Rust observability configuration structs now include `header_file`. Rust code
+that uses a struct literal must set this field, usually to an empty map. Go code
+that uses an unkeyed composite literal must use keyed fields instead. Also,
+remote exporters with any header source must use HTTPS or WSS, except on
+localhost or a loopback IP address. These changes keep rotated credentials from
+being sent to an insecure or redirected destination.
+</Warning>
+
+Use `header_file` when a separate process writes a complete credential to a
+file, such as a projected token file. Relay reads it for every HTTP delivery.
+For ATOF, HTTP POST reads it for each event, WebSocket reads it when it connects
+or reconnects, and NDJSON reads it when the sink starts. Use it for ATOF
+streams, ATIF HTTP storage, and OpenTelemetry trace, log, and metric exporters.
+
+For Rust struct literals, add an empty `HashMap` when you do not use file-based
+headers. For Go, change an unkeyed literal to a keyed literal and omit
+`HeaderFile` unless you need it. Keep each header name in only one of
+`headers`, `header_env`, and `header_file`.
+
+For a remote endpoint with configured headers, replace `http://` with the
+collector's final `https://` URL. Use `wss://` for a remote ATOF WebSocket
+destination. Relay does not follow redirects when headers are set. For details,
+refer to [OpenTelemetry Exporter Headers](/configure-plugins/observability/opentelemetry#trace-endpoint-fields),
+[ATIF HTTP Storage](/configure-plugins/observability/atif#http-endpoint-storage), and
+[ATOF Streaming](/configure-plugins/observability/atof#stream-sinks).
+
 ### Review Trajectory Redaction and Metric Dimensions
+
+<Warning title="Breaking Change">
+The `trajectory_context` preset now removes more opaque data and metric
+attributes to limit data exposure. Dashboards or data jobs that use those
+fields need to change.
+</Warning>
 
 The PII `trajectory_context` preset now removes opaque payloads and unknown
 fields. It builds minimal provider payloads from recognized, sanitized
@@ -301,6 +369,12 @@ these fields by default. For details,
 refer to [Trajectory Context Preset](/configure-plugins/pii-redaction/configuration#trajectory-context-preset).
 
 ### Update Rust Cache Configuration
+
+<Warning title="Breaking Change">
+The Rust response-cache API now uses an enum instead of a string so cache key
+choices are checked at compile time. Existing Rust source that assigns a string
+or uses the removed constant no longer builds.
+</Warning>
 
 `ResponseCacheConfig.key_strategy` is now a `ResponseCacheKeyStrategy` enum.
 Replace string assignments and the removed `KEY_STRATEGY_EXACT_REQUEST`
