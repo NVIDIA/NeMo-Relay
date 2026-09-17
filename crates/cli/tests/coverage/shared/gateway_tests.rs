@@ -13,6 +13,7 @@ use axum::response::IntoResponse;
 use http_body_util::BodyExt;
 use reqwest::Client;
 use serde_json::{Map, json};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn test_http_client() -> Client {
@@ -49,6 +50,14 @@ fn removes_hop_by_hop_headers() {
     ));
     assert!(!should_forward_request_header(
         &HeaderName::from_static(crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER),
+        &headers
+    ));
+    assert!(!should_forward_request_header(
+        &HeaderName::from_static(crate::operational::OPERATION_ID_HEADER),
+        &headers
+    ));
+    assert!(!should_record_header(
+        &HeaderName::from_static(crate::operational::OPERATION_ID_HEADER),
         &headers
     ));
     assert!(should_forward_request_header(
@@ -1084,7 +1093,7 @@ async fn sse_json_stream_yields_valid_event_before_later_batch_error() {
         .send()
         .await
         .unwrap();
-    let mut stream = sse_json_stream(response);
+    let mut stream = sse_json_stream(response, crate::operational::OperationalContext::new());
 
     assert_eq!(
         stream.next().await.unwrap().unwrap(),
@@ -1095,6 +1104,85 @@ async fn sse_json_stream_yields_valid_event_before_later_batch_error() {
     assert!(error.contains("not valid json"), "{error}");
     assert!(stream.next().await.is_none());
 
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn sse_json_stream_continues_after_a_latency_observation() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = socket.read(&mut request).await.unwrap();
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        socket
+            .write_all(b"13\r\ndata: {\"ok\":true}\n\n\r\n0\r\n\r\n")
+            .await
+            .unwrap();
+    });
+
+    let response = test_http_client()
+        .get(format!("http://{address}"))
+        .send()
+        .await
+        .unwrap();
+    let mut stream = sse_json_stream_with_thresholds(
+        response,
+        crate::operational::OperationalContext::new(),
+        Duration::from_millis(1),
+        Duration::from_millis(1),
+    );
+
+    assert_eq!(stream.next().await.unwrap().unwrap(), json!({"ok": true}));
+    assert!(stream.next().await.is_none());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn sse_json_stream_rearms_the_stall_timer_after_each_silent_interval() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = socket.read(&mut request).await.unwrap();
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n12\r\ndata: {\"step\":1}\n\n\r\n",
+            )
+            .await
+            .unwrap();
+        for step in [2, 3] {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let frame = format!("12\r\ndata: {{\"step\":{step}}}\n\n\r\n");
+            socket.write_all(frame.as_bytes()).await.unwrap();
+        }
+        socket.write_all(b"0\r\n\r\n").await.unwrap();
+    });
+
+    let response = test_http_client()
+        .get(format!("http://{address}"))
+        .send()
+        .await
+        .unwrap();
+    let mut stream = sse_json_stream_with_thresholds(
+        response,
+        crate::operational::OperationalContext::new(),
+        Duration::from_millis(1),
+        Duration::from_millis(1),
+    );
+
+    for step in 1..=3 {
+        assert_eq!(stream.next().await.unwrap().unwrap(), json!({"step": step}));
+    }
+    assert!(stream.next().await.is_none());
     server.await.unwrap();
 }
 
@@ -1143,6 +1231,7 @@ async fn streaming_provider_error_does_not_poison_the_next_request() {
         state,
         &prepared,
         Arc::new(CapturedUpstreamFailures::default()),
+        crate::operational::OperationalContext::new(),
     );
     let mut request_headers = Map::new();
     request_headers.insert(INTERNAL_RETRY_AWARE_HEADER.to_string(), json!("true"));
@@ -1213,6 +1302,7 @@ async fn buffered_body_read_failure_stays_structured() {
         state,
         &prepared,
         Arc::new(CapturedUpstreamFailures::default()),
+        crate::operational::OperationalContext::new(),
     );
     let mut request_headers = Map::new();
     request_headers.insert(INTERNAL_RETRY_AWARE_HEADER.to_string(), json!("true"));
@@ -1266,6 +1356,7 @@ async fn buffered_invalid_json_becomes_safe_upstream_failure() {
         state,
         &prepared,
         Arc::new(CapturedUpstreamFailures::default()),
+        crate::operational::OperationalContext::new(),
     );
     let mut request_headers = Map::new();
     request_headers.insert(INTERNAL_RETRY_AWARE_HEADER.to_string(), json!("true"));
@@ -2244,11 +2335,14 @@ async fn streaming_gateway_call_guard_finishes_when_body_is_dropped() {
     let body = client_sse_body(
         stream,
         ProviderRoute::OpenAiResponses,
-        manager.clone(),
-        prep.session_id,
-        prep.owner_subagent_id,
-        Arc::new(Mutex::new(None)),
-        prep.session_finish,
+        GatewayCallGuard::new(
+            manager.clone(),
+            prep.session_id,
+            prep.owner_subagent_id,
+            Arc::new(Mutex::new(None)),
+            prep.session_finish,
+            crate::operational::OperationalContext::new(),
+        ),
     );
 
     drop(body);
@@ -2324,11 +2418,14 @@ fn streaming_gateway_call_guard_finishes_without_a_current_runtime() {
     let body = client_sse_body(
         stream,
         ProviderRoute::OpenAiResponses,
-        manager.clone(),
-        prep.session_id,
-        prep.owner_subagent_id,
-        Arc::new(Mutex::new(Some(final_response.clone()))),
-        prep.session_finish,
+        GatewayCallGuard::new(
+            manager.clone(),
+            prep.session_id,
+            prep.owner_subagent_id,
+            Arc::new(Mutex::new(Some(final_response.clone()))),
+            prep.session_finish,
+            crate::operational::OperationalContext::new(),
+        ),
     );
 
     drop(body);
@@ -2402,11 +2499,14 @@ async fn streaming_body_records_final_response_for_turn_output() {
     let body = client_sse_body(
         stream,
         ProviderRoute::OpenAiResponses,
-        manager.clone(),
-        session_id,
-        owner_subagent_id,
-        Arc::new(Mutex::new(Some(final_response.clone()))),
-        prep.session_finish,
+        GatewayCallGuard::new(
+            manager.clone(),
+            session_id,
+            owner_subagent_id,
+            Arc::new(Mutex::new(Some(final_response.clone()))),
+            prep.session_finish,
+            crate::operational::OperationalContext::new(),
+        ),
     );
     let _ = body.collect().await.unwrap();
 

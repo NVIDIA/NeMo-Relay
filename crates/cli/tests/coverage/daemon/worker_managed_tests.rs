@@ -28,8 +28,12 @@ type ProviderRequests = Arc<std::sync::Mutex<Vec<(HeaderMap, Bytes)>>>;
 #[tokio::test]
 async fn observation_preserves_delivery_while_capturing_json() {
     let expected = Bytes::from_static(br#"{"ok":true}"#);
-    let (body, observation) =
-        observe_body(Full::new(expected.clone()), StatusCode::OK, expected.len());
+    let (body, observation) = observe_body(
+        Full::new(expected.clone()),
+        StatusCode::OK,
+        expected.len(),
+        OperationalContext::new(),
+    );
     let delivered = body.collect().await.expect("delivered body").to_bytes();
     let observed = observation
         .finish(ProviderSurface::OpenAIResponses, false)
@@ -43,7 +47,12 @@ async fn observation_preserves_delivery_while_capturing_json() {
 #[tokio::test]
 async fn capture_limit_truncates_observation_without_truncating_delivery() {
     let expected = Bytes::from_static(br#"{"too":"large"}"#);
-    let (body, observation) = observe_body(Full::new(expected.clone()), StatusCode::OK, 3);
+    let (body, observation) = observe_body(
+        Full::new(expected.clone()),
+        StatusCode::OK,
+        3,
+        OperationalContext::new(),
+    );
     let delivered = body.collect().await.expect("delivered body").to_bytes();
     let observed = observation
         .finish(ProviderSurface::OpenAIResponses, false)
@@ -67,6 +76,7 @@ async fn saturated_observation_queue_never_blocks_or_truncates_delivery() {
         StreamBody::new(futures_util::stream::iter(frames)),
         StatusCode::OK,
         usize::MAX,
+        OperationalContext::new(),
     );
 
     let mut delivered = Vec::new();
@@ -99,6 +109,7 @@ async fn dropping_delivery_marks_observation_cancelled_and_terminates_it() {
         StreamBody::new(futures_util::stream::iter(frames)),
         StatusCode::OK,
         usize::MAX,
+        OperationalContext::new(),
     );
     let first = body
         .frame()
@@ -133,6 +144,7 @@ async fn observation_body_deadline_terminates_a_stalled_observer() {
         receiver,
         signal: Arc::new(ObservationSignal::new()),
         status: StatusCode::OK,
+        operational: OperationalContext::new(),
     };
     let observed = observation
         .finish(ProviderSurface::OpenAIResponses, false)
@@ -154,6 +166,7 @@ async fn successful_stream_observation_can_outlive_the_response_head_deadline() 
         receiver,
         signal: Arc::clone(&signal),
         status: StatusCode::OK,
+        operational: OperationalContext::new(),
     };
     let task = tokio::spawn(observation.finish(ProviderSurface::OpenAIChat, true));
     tokio::task::yield_now().await;
@@ -371,6 +384,7 @@ async fn unbuffered_dispatch_returns_response_head_without_collecting_request_bo
             ProviderRoute::OpenAi,
             &config,
             DEFAULT_OBSERVATION_CAPTURE_BYTES,
+            OperationalContext::new(),
         ),
     )
     .await
@@ -724,6 +738,7 @@ async fn prepared_requests_and_both_dispatch_paths_preserve_provider_contracts()
         None,
         &config,
         DEFAULT_OBSERVATION_CAPTURE_BYTES,
+        OperationalContext::new(),
     )
     .await
     .expect("observed provider dispatch");
@@ -907,6 +922,7 @@ async fn observation_reports_provider_body_errors_and_metadata() {
         StreamBody::new(frames),
         StatusCode::BAD_GATEWAY,
         DEFAULT_OBSERVATION_CAPTURE_BYTES,
+        OperationalContext::new(),
     );
     assert!(body.frame().await.expect("body frame").is_err());
     let observed = observation
@@ -1710,6 +1726,7 @@ async fn observation_handles_empty_invalid_and_unsuccessful_provider_responses()
         http_body_util::Empty::<Bytes>::new(),
         StatusCode::BAD_REQUEST,
         DEFAULT_OBSERVATION_CAPTURE_BYTES,
+        OperationalContext::new(),
     );
     assert!(body.is_end_stream());
     let observed = observation
@@ -1724,6 +1741,7 @@ async fn observation_handles_empty_invalid_and_unsuccessful_provider_responses()
         Full::new(malformed.clone()),
         StatusCode::OK,
         DEFAULT_OBSERVATION_CAPTURE_BYTES,
+        OperationalContext::new(),
     );
     assert_eq!(body.collect().await.unwrap().to_bytes(), malformed);
     let observed = observation

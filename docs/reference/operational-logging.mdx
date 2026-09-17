@@ -32,6 +32,42 @@ code shows whether Relay could not find or start the worker, send its activation
 permission, or wait for it to become ready. It never includes activation data or the
 source error text.
 
+## CLI Hook and Upstream Records
+
+At `debug` level, the CLI writes lifecycle records for hooks and for gateway calls
+to an upstream LLM. This includes local hooks, persistent hooks, daemon hooks, and
+managed-worker hooks. A hook forwarder and the Relay handler use the same random
+`operation_id`. Each gateway call gets a new ID. If Relay selects a session, the
+record also includes `session_id`.
+
+Normal lifecycle records are `hook_started`, `hook_completed`,
+`upstream_started`, `upstream_headers_received`, `upstream_first_event`,
+`upstream_completed`, and `upstream_cancelled`. They carry only `operation_id`,
+optional `session_id`, `boundary`, `outcome`, and `elapsed_millis`.
+
+Warnings show slow or failed external work. They do not change request behavior:
+
+- `upstream_headers_delayed` after 10 seconds without upstream response headers.
+- `upstream_first_event_delayed` after 10 seconds without a decoded stream event.
+- `upstream_stream_stalled` every 60 seconds while no decoded stream event arrives.
+  Network heartbeats do not reset these timers.
+- `upstream_non_success` when the upstream HTTP status is not a success.
+- `upstream_stream_read_failed` when Relay can recover from a stream read failure.
+- `hook_failed` when a hook is allowed to fail open.
+
+These timing records only report what happened. They do not cancel a request or a
+stream. Local gateway calls still use their 30-second connect limit and 300-second
+idle-read limit. `error` records cover rejected payload and hook-response limits, hooks that
+must fail closed, upstream transport failures, and Relay adapter, session, or
+runtime failures. These records use safe fields such as `error_kind`, `status_code`,
+`threshold_millis`, and `elapsed_millis`. A `limit_exceeded` record also includes
+`limit_name` and the configured `limit_bytes`.
+
+These records never include tool names or call IDs, hook event names, arguments,
+results, prompts, model names, provider names, route names, upstream URLs, headers,
+bodies, body sizes, or credentials. Relay removes its internal correlation header
+when it receives the request and never sends it upstream.
+
 ## Defaults
 
 Without configuration, Relay uses:

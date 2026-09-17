@@ -431,6 +431,7 @@ const OPERATIONAL_LOG_TARGETS: &[&str] = &[
     "nemo_relay.daemon",
     "nemo_relay.daemon.mcp",
     "nemo_relay.daemon.worker",
+    "nemo_relay.operational",
 ];
 
 #[derive(Default)]

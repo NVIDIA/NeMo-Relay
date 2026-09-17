@@ -18,6 +18,11 @@ mod hooks;
 mod installation;
 mod mcp;
 mod mcp_environment;
+mod operational;
+
+#[cfg(test)]
+#[path = "../tests/coverage/shared/operational_tests.rs"]
+mod operational_tests;
 mod plugins;
 mod process;
 mod provider_auth;
