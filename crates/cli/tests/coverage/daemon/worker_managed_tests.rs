@@ -173,21 +173,21 @@ async fn stream_observation_rearms_stall_warning_after_each_silent_interval() {
     let threshold =
         Duration::from_millis(crate::operational::UPSTREAM_STREAM_STALL_THRESHOLD_MILLIS);
 
-    for expected in ["first", "second"] {
-        let delayed_sender = sender.clone();
-        let expected_chunk = Bytes::from(expected);
-        let send = tokio::spawn(async move {
-            tokio::time::sleep(threshold + Duration::from_millis(1)).await;
-            delayed_sender.send(expected_chunk).await.unwrap();
-        });
-        assert_eq!(
-            observation
-                .next_stream_chunk(false, &mut first_event_warned, &mut last_event_at)
-                .await,
-            Some(Bytes::from(expected))
-        );
-        send.await.unwrap();
-    }
+    let delayed_sender = sender.clone();
+    let send = tokio::spawn(async move {
+        tokio::time::sleep(threshold.saturating_mul(2) + Duration::from_millis(1)).await;
+        delayed_sender
+            .send(Bytes::from_static(b"after-stall"))
+            .await
+            .unwrap();
+    });
+    assert_eq!(
+        observation
+            .next_stream_chunk(false, &mut first_event_warned, &mut last_event_at)
+            .await,
+        Some(Bytes::from_static(b"after-stall"))
+    );
+    send.await.unwrap();
 
     assert_eq!(
         crate::operational::test_delayed_event_count(&operational, "upstream_stream_stalled"),
@@ -440,6 +440,62 @@ async fn unbuffered_dispatch_returns_response_head_without_collecting_request_bo
     assert_eq!(delivered, "data: [DONE]\n\n");
     let observed = observation
         .finish(ProviderSurface::OpenAIResponses, true)
+        .await;
+    assert_eq!(observed.terminal, OBSERVATION_COMPLETE);
+    server.abort();
+}
+
+#[tokio::test]
+async fn unbuffered_dispatch_uses_request_streaming_hint_for_upstream_telemetry() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind provider");
+    let address = listener.local_addr().expect("provider address");
+    let app = Router::new().route(
+        "/v1/responses",
+        post(|| async {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .expect("provider response")
+        }),
+    );
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve provider");
+    });
+    let request = Request::post("/v1/responses")
+        .body(Body::empty())
+        .expect("buffered request");
+    let config = GatewayConfig {
+        openai_base_url: format!("http://{address}"),
+        ..GatewayConfig::default()
+    };
+    let operational = OperationalContext::new();
+
+    let (response, observation, streaming) = dispatch_unbuffered_observed(
+        crate::daemon::common::transport::pooled_client().expect("provider client"),
+        request,
+        ProviderRoute::OpenAi,
+        &config,
+        DEFAULT_OBSERVATION_CAPTURE_BYTES,
+        operational.clone(),
+    )
+    .await
+    .expect("provider response");
+
+    assert!(!streaming);
+    assert_eq!(
+        crate::operational::test_upstream_started_outcomes(&operational),
+        ["buffered"]
+    );
+    let _ = response
+        .into_body()
+        .collect()
+        .await
+        .expect("delivered response");
+    let observed = observation
+        .finish(ProviderSurface::OpenAIResponses, false)
         .await;
     assert_eq!(observed.terminal, OBSERVATION_COMPLETE);
     server.abort();

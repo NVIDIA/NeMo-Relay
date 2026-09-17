@@ -783,12 +783,15 @@ async fn dispatch_unbuffered_observed(
         HeaderName::from_static(WORKER_TOKEN_HEADER),
         HeaderName::from_static(WORKER_ROUTE_FAILURE_HEADER),
     ];
+    let streaming = request_streaming_hint(request.headers());
     let request = prepare_forward_request(request, destination, &strip)
         .map_err(|error| CliError::InvalidPayload(error.to_string()))?
         .map(box_body);
-    let response = request_worker_upstream(upstream, request, &operational, true).await?;
-    let response = prepare_forward_response(response, &strip)
-        .map_err(|error| CliError::Launch(error.to_string()))?;
+    let response = request_worker_upstream(upstream, request, &operational, streaming).await?;
+    let response = prepare_forward_response(response, &strip).map_err(|error| {
+        operational::upstream_failed(&operational, "invalid_response");
+        CliError::Launch(error.to_string())
+    })?;
     let status = response.status();
     let streaming = response_streaming(response.headers());
     let (parts, body) = response.into_parts();
@@ -892,8 +895,10 @@ async fn dispatch_observed(
         .map(box_body);
     let response =
         request_worker_upstream(upstream, request, &operational, prepared.streaming).await?;
-    let response = prepare_forward_response(response, &strip)
-        .map_err(|error| CliError::Launch(error.to_string()))?;
+    let response = prepare_forward_response(response, &strip).map_err(|error| {
+        operational::upstream_failed(&operational, "invalid_response");
+        CliError::Launch(error.to_string())
+    })?;
     let status = response.status();
     let (parts, body) = response.into_parts();
     let (body, observation) = observe_body(body, status, capture_limit, operational);
@@ -1587,28 +1592,32 @@ impl ObservationReceiver {
         if first_event && *first_event_warned {
             return next.await;
         }
-        let deadline = *last_event_at + threshold;
-        let delay = tokio::time::sleep_until(deadline);
-        tokio::pin!(delay);
-        tokio::select! {
-            chunk = &mut next => chunk,
-            _ = &mut delay => {
-                operational::upstream_delayed(
-                    &self.operational,
-                    if first_event {
-                        "upstream_first_event_delayed"
-                    } else {
-                        "upstream_stream_stalled"
-                    },
-                    threshold.as_millis() as u64,
-                );
-                if first_event {
-                    *first_event_warned = true;
-                } else {
-                    *last_event_at = tokio::time::Instant::now();
-                }
-                next.await
+        let mut deadline = *last_event_at + threshold;
+        loop {
+            let delay = tokio::time::sleep_until(deadline);
+            tokio::pin!(delay);
+            let chunk = tokio::select! {
+                chunk = &mut next => Some(chunk),
+                _ = &mut delay => None,
+            };
+            if let Some(chunk) = chunk {
+                break chunk;
             }
+            operational::upstream_delayed(
+                &self.operational,
+                if first_event {
+                    "upstream_first_event_delayed"
+                } else {
+                    "upstream_stream_stalled"
+                },
+                threshold.as_millis() as u64,
+            );
+            if first_event {
+                *first_event_warned = true;
+                break next.await;
+            }
+            *last_event_at = tokio::time::Instant::now();
+            deadline = *last_event_at + threshold;
         }
     }
 }

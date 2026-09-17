@@ -818,32 +818,32 @@ fn sse_json_stream_with_thresholds(
             let chunk = if already_warned {
                 next.await
             } else {
-                let deadline = tokio::time::Instant::from_std(
-                    last_event_at + threshold,
-                );
-                let delay = tokio::time::sleep_until(deadline);
-                tokio::pin!(delay);
-                tokio::select! {
-                    chunk = &mut next => chunk,
-                    _ = &mut delay => {
-                        operational::upstream_delayed(
-                            &operational,
-                            if first_event {
-                                "upstream_first_event_delayed"
-                            } else {
-                                "upstream_stream_stalled"
-                            },
-                            threshold.as_millis() as u64,
-                        );
-                        if first_event {
-                            first_event_warned = true;
-                        } else {
-                            // Start the next 60-second silent interval without cancelling the
-                            // in-flight read. A continuing stall therefore emits once per interval.
-                            last_event_at = Instant::now();
-                        }
-                        next.await
+                let mut deadline = tokio::time::Instant::from_std(last_event_at + threshold);
+                loop {
+                    let delay = tokio::time::sleep_until(deadline);
+                    tokio::pin!(delay);
+                    let chunk = tokio::select! {
+                        chunk = &mut next => Some(chunk),
+                        _ = &mut delay => None,
+                    };
+                    if let Some(chunk) = chunk {
+                        break chunk;
                     }
+                    operational::upstream_delayed(
+                        &operational,
+                        if first_event {
+                            "upstream_first_event_delayed"
+                        } else {
+                            "upstream_stream_stalled"
+                        },
+                        threshold.as_millis() as u64,
+                    );
+                    if first_event {
+                        first_event_warned = true;
+                        break next.await;
+                    }
+                    last_event_at = Instant::now();
+                    deadline = tokio::time::Instant::from_std(last_event_at + threshold);
                 }
             };
             let Some(chunk) = chunk else {

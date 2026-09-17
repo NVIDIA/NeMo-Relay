@@ -23,6 +23,10 @@ pub(crate) const UPSTREAM_STREAM_STALL_THRESHOLD_MILLIS: u64 = 60_000;
 static TEST_DELAYED_EVENTS: LazyLock<Mutex<Vec<(String, &'static str)>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 
+#[cfg(test)]
+static TEST_UPSTREAM_STARTED: LazyLock<Mutex<Vec<(String, &'static str)>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+
 #[derive(Clone, Debug)]
 pub(crate) struct OperationalContext {
     operation_id: String,
@@ -201,6 +205,14 @@ pub(crate) fn limit_exceeded(
 }
 
 pub(crate) fn upstream_started(context: &OperationalContext, streaming: bool) {
+    #[cfg(test)]
+    TEST_UPSTREAM_STARTED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((
+            context.operation_id.clone(),
+            if streaming { "streaming" } else { "buffered" },
+        ));
     operational_log!(
         log::Level::Debug,
         "upstream_started",
@@ -209,6 +221,18 @@ pub(crate) fn upstream_started(context: &OperationalContext, streaming: bool) {
         outcome = if streaming { "streaming" } else { "buffered" },
         elapsed_millis = context.elapsed_millis()
     );
+}
+
+#[cfg(test)]
+pub(crate) fn test_upstream_started_outcomes(context: &OperationalContext) -> Vec<&'static str> {
+    TEST_UPSTREAM_STARTED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .filter_map(|(operation_id, outcome)| {
+            (operation_id == context.operation_id()).then_some(*outcome)
+        })
+        .collect()
 }
 
 pub(crate) fn upstream_headers_received(context: &OperationalContext, streaming: bool) {

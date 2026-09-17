@@ -1132,7 +1132,11 @@ async fn codex_hook(
     if let Some(permission) = outcome.permission
         && let Err(error) = authorize_hook_permission(&state, permission, &owner).await
     {
-        operational::hook_completed(&operational, "hook_server", "denied");
+        if error.guardrail_rejection_reason().is_some() {
+            operational::hook_completed(&operational, "hook_server", "denied");
+        } else {
+            operational::hook_failed(&operational, "hook_server", error.log_kind(), true);
+        }
         return Ok(Json(serde_json::json!({
             "decision": "deny",
             "reason": permission_denial_reason(error),
@@ -1176,15 +1180,15 @@ async fn claude_code_hook(
     }
     if let Some(permission) = outcome.permission {
         let result = authorize_hook_permission(&state, permission, &owner).await;
-        operational::hook_completed(
-            &operational,
-            "hook_server",
-            if result.is_ok() {
-                "completed"
-            } else {
-                "denied"
-            },
-        );
+        match &result {
+            Ok(()) => operational::hook_completed(&operational, "hook_server", "completed"),
+            Err(error) if error.guardrail_rejection_reason().is_some() => {
+                operational::hook_completed(&operational, "hook_server", "denied");
+            }
+            Err(error) => {
+                operational::hook_failed(&operational, "hook_server", error.log_kind(), true);
+            }
+        }
         return Ok(Json(match result {
             Ok(()) => serde_json::json!({
                 "continue": true,

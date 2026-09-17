@@ -1133,15 +1133,20 @@ async fn sse_json_stream_continues_after_a_latency_observation() {
         .send()
         .await
         .unwrap();
+    let operational = crate::operational::OperationalContext::new();
     let mut stream = sse_json_stream_with_thresholds(
         response,
-        crate::operational::OperationalContext::new(),
+        operational.clone(),
         Duration::from_millis(1),
         Duration::from_millis(1),
     );
 
     assert_eq!(stream.next().await.unwrap().unwrap(), json!({"ok": true}));
     assert!(stream.next().await.is_none());
+    assert_eq!(
+        crate::operational::test_delayed_event_count(&operational, "upstream_first_event_delayed"),
+        1
+    );
     server.await.unwrap();
 }
 
@@ -1172,9 +1177,10 @@ async fn sse_json_stream_rearms_the_stall_timer_after_each_silent_interval() {
         .send()
         .await
         .unwrap();
+    let operational = crate::operational::OperationalContext::new();
     let mut stream = sse_json_stream_with_thresholds(
         response,
-        crate::operational::OperationalContext::new(),
+        operational.clone(),
         Duration::from_millis(1),
         Duration::from_millis(1),
     );
@@ -1183,6 +1189,9 @@ async fn sse_json_stream_rearms_the_stall_timer_after_each_silent_interval() {
         assert_eq!(stream.next().await.unwrap().unwrap(), json!({"step": step}));
     }
     assert!(stream.next().await.is_none());
+    assert!(
+        crate::operational::test_delayed_event_count(&operational, "upstream_stream_stalled") >= 2
+    );
     server.await.unwrap();
 }
 
