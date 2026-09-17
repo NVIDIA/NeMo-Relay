@@ -134,6 +134,7 @@ async fn hook_forward_uses_the_exact_agent_path_and_one_route_header() {
         &options,
         b"{\"hook_event_name\":\"Stop\"}".to_vec(),
         route_token(&valid_token()).unwrap(),
+        &crate::operational::OperationalContext::new(),
     )
     .await
     .unwrap();
@@ -181,6 +182,7 @@ async fn guardrail_rejections_are_never_failed_open() {
         &options,
         b"{}".to_vec(),
         route_token(&valid_token()).unwrap(),
+        &crate::operational::OperationalContext::new(),
     )
     .await
     .unwrap_err();
@@ -252,6 +254,7 @@ async fn non_guardrail_http_failures_and_oversized_responses_are_rejected() {
         },
         b"{}".to_vec(),
         route_token(&valid_token()).unwrap(),
+        &crate::operational::OperationalContext::new(),
     )
     .await
     .unwrap_err();
@@ -274,6 +277,7 @@ async fn non_guardrail_http_failures_and_oversized_responses_are_rejected() {
         },
         b"{}".to_vec(),
         route_token(&valid_token()).unwrap(),
+        &crate::operational::OperationalContext::new(),
     )
     .await
     .unwrap_err();

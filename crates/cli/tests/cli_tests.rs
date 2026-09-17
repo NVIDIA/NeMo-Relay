@@ -80,18 +80,29 @@ fn toml_basic_string(value: &str) -> String {
 }
 
 fn write_jsonl_logging_config(temp: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    write_jsonl_logging_config_at_level(temp, "info")
+}
+
+fn write_debug_jsonl_logging_config(temp: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    write_jsonl_logging_config_at_level(temp, "debug")
+}
+
+fn write_jsonl_logging_config_at_level(
+    temp: &Path,
+    level: &str,
+) -> (std::path::PathBuf, std::path::PathBuf) {
     let config_path = temp.join("logging.toml");
     let log_path = temp.join("operational.jsonl");
     std::fs::write(
         &config_path,
         format!(
             r#"[logging]
-level = "info"
+level = "{level}"
 stderr_format = "jsonl"
 
 [[logging.sinks]]
 path = {}
-level = "info"
+level = "{level}"
 format = "jsonl"
 queue_capacity = 64
 "#,
@@ -5046,6 +5057,84 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
     assert!(request.contains("x-nemo-relay-config-profile: coverage"));
     assert!(request.contains("x-nemo-relay-gateway-mode: passthrough"));
     assert!(request.contains(r#"{"hook_event_name":"sessionStart"}"#));
+}
+
+#[test]
+fn cli_hook_forward_debug_records_are_safe_and_do_not_include_hook_details() {
+    let temp = tempfile::tempdir().unwrap();
+    let (config_path, log_path) = write_debug_jsonl_logging_config(temp.path());
+    let (server_url, received) = spawn_single_request_server(200, r#"{"continue":true}"#);
+    let sentinels = [
+        "NEMO_RELAY_TOOL_SENTINEL",
+        "NEMO_RELAY_ARGUMENT_SENTINEL",
+        "NEMO_RELAY_RESULT_SENTINEL",
+        "NEMO_RELAY_PROMPT_SENTINEL",
+        "NEMO_RELAY_PROVIDER_SENTINEL",
+        "NEMO_RELAY_MODEL_SENTINEL",
+        "NEMO_RELAY_HEADER_SENTINEL",
+        "NEMO_RELAY_URL_SENTINEL",
+        "NEMO_RELAY_CREDENTIAL_SENTINEL",
+    ];
+    let payload = r#"{
+        "hook_event_name":"NEMO_RELAY_EVENT_SENTINEL",
+        "tool_name":"NEMO_RELAY_TOOL_SENTINEL",
+        "tool_input":{"argument":"NEMO_RELAY_ARGUMENT_SENTINEL"},
+        "tool_result":"NEMO_RELAY_RESULT_SENTINEL",
+        "prompt":"NEMO_RELAY_PROMPT_SENTINEL"
+    }"#;
+    let metadata = r#"{"provider":"NEMO_RELAY_PROVIDER_SENTINEL","model":"NEMO_RELAY_MODEL_SENTINEL","headers":"NEMO_RELAY_HEADER_SENTINEL","url":"NEMO_RELAY_URL_SENTINEL","credential":"NEMO_RELAY_CREDENTIAL_SENTINEL"}"#;
+    let mut child = Command::new(gateway_bin())
+        .args(["--log-config-path"])
+        .arg(&config_path)
+        .args([
+            "hook-forward",
+            "codex",
+            "--profile",
+            "coverage",
+            "--session-metadata",
+            metadata,
+            "--gateway-mode",
+            "passthrough",
+            "--fail-closed",
+        ])
+        .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(request.contains("NEMO_RELAY_TOOL_SENTINEL"));
+    let contents = std::fs::read_to_string(&log_path).unwrap();
+    for sentinel in sentinels {
+        assert!(
+            !contents.contains(sentinel),
+            "operational log exposed sensitive input: {sentinel}"
+        );
+    }
+    assert!(!contents.contains("NEMO_RELAY_EVENT_SENTINEL"));
+    let records = read_jsonl_records(&log_path);
+    for event in ["hook_started", "hook_completed"] {
+        assert!(
+            records
+                .iter()
+                .any(|record| record["event"] == event && record["level"] == "debug"),
+            "missing debug {event} record: {records:?}"
+        );
+    }
 }
 
 #[test]

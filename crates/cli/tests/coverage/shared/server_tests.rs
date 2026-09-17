@@ -624,6 +624,47 @@ async fn codex_hook_keeps_codex_response_shape() {
 }
 
 #[tokio::test]
+async fn hook_operational_records_derive_session_tags_from_payloads_and_headers() {
+    let app = router(test_config());
+    let operation_id = "018f0f3f-3f7a-7b72-9d0d-e0d8ced91d8b";
+    let payload_session = "private-payload-session-sentinel";
+    let header_session = "private-header-session-sentinel";
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/codex")
+                .header("content-type", "application/json")
+                .header(crate::operational::OPERATION_ID_HEADER, operation_id)
+                .header("x-nemo-relay-session-id", header_session)
+                .body(Body::from(
+                    json!({
+                        "session_id": payload_session,
+                        "hook_event_name": "sessionStart"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let tags = crate::operational::test_hook_session_tags(operation_id);
+    assert_eq!(tags.len(), 1);
+    let tag = tags[0].as_deref().unwrap();
+    assert!(!tag.contains(payload_session));
+    assert!(!tag.contains(header_session));
+    assert_eq!(
+        tag,
+        OperationalContext::new()
+            .with_session(header_session)
+            .test_session_tag()
+            .unwrap()
+    );
+}
+
+#[tokio::test]
 async fn hook_payload_above_axum_default_succeeds_with_relay_default_limit() {
     let app = router(test_config());
     let response = app

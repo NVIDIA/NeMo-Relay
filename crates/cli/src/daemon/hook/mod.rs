@@ -14,6 +14,7 @@ use crate::agents::CodingAgent;
 use crate::daemon::common::state::{ROUTE_TOKEN_ENV, RouteCredential};
 use crate::error::CliError;
 use crate::hooks::HookFailurePolicy;
+use crate::operational::{self, OperationalContext};
 
 pub(crate) const CLIENT_TOKEN_ENV: &str = ROUTE_TOKEN_ENV;
 const CLIENT_TOKEN_HEADER: &str = crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER;
@@ -29,12 +30,14 @@ pub(crate) struct Options {
 
 /// Reads one native hook payload, sends it to the daemon, and relays the response to stdout.
 pub(crate) async fn run(options: Options) -> Result<(), CliError> {
-    let payload = read_hook_payload(std::io::stdin());
+    let operational = OperationalContext::new();
+    operational::hook_started(&operational, "daemon_hook_forward");
+    let payload = read_hook_payload_with_context(std::io::stdin(), &operational);
     let fail_closed = effective_fail_closed(options.failure_policy, payload.as_deref().ok());
     let result: Result<(), CliError> = async {
         let token = route_token_from_environment()?;
         let payload = payload?;
-        let body = forward(&options, payload, token).await?;
+        let body = forward(&options, payload, token, &operational).await?;
         if !body.is_empty() {
             std::io::stdout().write_all(&body)?;
         }
@@ -43,9 +46,23 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
     .await;
 
     match result {
-        Ok(()) => Ok(()),
-        Err(error) if error.guardrail_rejection_reason().is_some() => Err(error),
-        Err(error) => handle_delivery_failure(error, fail_closed),
+        Ok(()) => {
+            operational::hook_completed(&operational, "daemon_hook_forward", "completed");
+            Ok(())
+        }
+        Err(error) if error.guardrail_rejection_reason().is_some() => {
+            operational::hook_completed(&operational, "daemon_hook_forward", "rejected");
+            Err(error)
+        }
+        Err(error) => {
+            operational::hook_failed(
+                &operational,
+                "daemon_hook_forward",
+                error.log_kind(),
+                fail_closed,
+            );
+            handle_delivery_failure(error, fail_closed)
+        }
     }
 }
 
@@ -70,7 +87,15 @@ fn effective_fail_closed(policy: HookFailurePolicy, payload: Option<&[u8]>) -> b
     }
 }
 
-fn read_hook_payload(mut reader: impl Read) -> Result<Vec<u8>, CliError> {
+#[cfg(test)]
+fn read_hook_payload(reader: impl Read) -> Result<Vec<u8>, CliError> {
+    read_hook_payload_with_context(reader, &OperationalContext::new())
+}
+
+fn read_hook_payload_with_context(
+    mut reader: impl Read,
+    operational: &OperationalContext,
+) -> Result<Vec<u8>, CliError> {
     let limit = crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES;
     let mut payload = Vec::new();
     reader
@@ -78,6 +103,12 @@ fn read_hook_payload(mut reader: impl Read) -> Result<Vec<u8>, CliError> {
         .take(limit.saturating_add(1) as u64)
         .read_to_end(&mut payload)?;
     if payload.len() > limit {
+        operational::limit_exceeded(
+            operational,
+            "daemon_hook_forward",
+            "max_hook_payload_bytes",
+            limit,
+        );
         return Err(CliError::PayloadTooLarge(format!(
             "hook payload exceeds the {limit}-byte limit"
         )));
@@ -108,6 +139,7 @@ async fn forward(
     options: &Options,
     payload: Vec<u8>,
     token: HeaderValue,
+    operational: &OperationalContext,
 ) -> Result<Vec<u8>, CliError> {
     let endpoint = hook_endpoint(&options.daemon_address, options.agent)?;
     let response = reqwest::Client::builder()
@@ -117,11 +149,15 @@ async fn forward(
         .post(endpoint)
         .header(CONTENT_TYPE, "application/json")
         .header(CLIENT_TOKEN_HEADER, token)
+        .header(
+            crate::operational::OPERATION_ID_HEADER,
+            operational.operation_id(),
+        )
         .body(payload)
         .send()
         .await?;
     let status = response.status();
-    let body = read_response(response).await?;
+    let body = read_response(response, operational).await?;
     if status.is_success() {
         return Ok(body);
     }
@@ -139,12 +175,21 @@ fn hook_endpoint(daemon_address: &str, agent: CodingAgent) -> Result<reqwest::Ur
     Ok(url)
 }
 
-async fn read_response(response: reqwest::Response) -> Result<Vec<u8>, CliError> {
+async fn read_response(
+    response: reqwest::Response,
+    operational: &OperationalContext,
+) -> Result<Vec<u8>, CliError> {
     let mut stream = response.bytes_stream();
     let mut body = Vec::new();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
         if body.len().saturating_add(chunk.len()) > MAX_HOOK_RESPONSE_BYTES {
+            operational::limit_exceeded(
+                operational,
+                "daemon_hook_forward",
+                "max_hook_response_bytes",
+                MAX_HOOK_RESPONSE_BYTES,
+            );
             return Err(CliError::PayloadTooLarge(format!(
                 "daemon hook response exceeds the {MAX_HOOK_RESPONSE_BYTES}-byte limit"
             )));
