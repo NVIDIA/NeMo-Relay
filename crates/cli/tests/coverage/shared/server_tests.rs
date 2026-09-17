@@ -430,6 +430,7 @@ async fn responses_websocket_upgrades_request_http_fallback() {
         "/responses",
         "/v1/responses",
         "/backend-api/codex/responses",
+        "/v1/nemo-relay/test-capability/responses",
     ] {
         let response = app
             .clone()
@@ -456,6 +457,7 @@ async fn responses_plain_get_remains_method_not_allowed() {
         "/responses",
         "/v1/responses",
         "/backend-api/codex/responses",
+        "/v1/nemo-relay/test-capability/responses",
     ] {
         let response = app
             .clone()

@@ -713,9 +713,10 @@ fn router_with_state(state: AppState) -> Router {
             "/v1/nemo-relay/{capability}/images/generations",
             post(gateway::images_generations),
         )
+        .route("/v1/nemo-relay/{capability}/models", get(gateway::models))
         .route(
             "/v1/nemo-relay/{capability}/{*provider_path}",
-            post(gateway::passthrough).get(gateway::models),
+            post(gateway::passthrough),
         )
         .layer(middleware::from_fn(responses_websocket_fallback))
         .layer(DefaultBodyLimit::max(max_hook_payload_bytes))
@@ -725,10 +726,14 @@ fn router_with_state(state: AppState) -> Router {
 // Codex treats 426 from its Responses WebSocket probe as a signal to use HTTP/SSE. Keep ordinary
 // GETs at 405 so this compatibility response does not broaden the public Responses API surface.
 async fn responses_websocket_fallback(request: Request<Body>, next: Next) -> Response {
+    let path = request.uri().path();
     let is_responses_path = matches!(
-        request.uri().path(),
+        path,
         "/responses" | "/v1/responses" | "/backend-api/codex/responses"
-    );
+    ) || path
+        .strip_prefix("/v1/nemo-relay/")
+        .and_then(|path| path.split_once('/'))
+        .is_some_and(|(_, provider_path)| provider_path == "responses");
     let is_websocket_upgrade = request
         .headers()
         .get(header::UPGRADE)
