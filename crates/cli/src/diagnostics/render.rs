@@ -24,6 +24,10 @@ pub(crate) fn exit_code(report: &DoctorReport) -> u8 {
         || matches!(report.configuration.global.status, Status::Fail)
         || matches!(report.configuration.system.status, Status::Fail)
         || matches!(report.configuration.plugin_resolution.status, Status::Fail)
+        || matches!(
+            report.configuration.plugin_host_validation.status,
+            Status::Fail
+        )
         || matches!(report.configuration.resolution.status, Status::Fail);
     u8::from(any_fail)
 }
@@ -55,6 +59,10 @@ pub(super) fn report_has_warn(report: &DoctorReport) -> bool {
         || matches!(report.configuration.global.status, Status::Warn)
         || matches!(report.configuration.system.status, Status::Warn)
         || matches!(report.configuration.plugin_resolution.status, Status::Warn)
+        || matches!(
+            report.configuration.plugin_host_validation.status,
+            Status::Warn
+        )
         || matches!(report.configuration.resolution.status, Status::Warn)
 }
 
@@ -195,6 +203,52 @@ pub(super) fn format_human_plugin_configuration(out: &mut String, report: &Docto
         format_status(report.configuration.plugin_resolution.status),
         report.configuration.plugin_resolution.details
     ));
+    out.push_str(&format!(
+        "    Validate   {} {}\n",
+        format_status(report.configuration.plugin_host_validation.status),
+        report.configuration.plugin_host_validation.details
+    ));
+    if let Some(validation) = &report.configuration.plugin_host_validation.report {
+        for diagnostic in &validation.config.diagnostics {
+            let status = match diagnostic.level {
+                nemo_relay::plugin::DiagnosticLevel::Error => Status::Fail,
+                nemo_relay::plugin::DiagnosticLevel::Warning
+                    if diagnostic.code == super::INHERITED_PLUGIN_CONFIGURATION_DIAGNOSTIC =>
+                {
+                    Status::Info
+                }
+                nemo_relay::plugin::DiagnosticLevel::Warning => Status::Warn,
+            };
+            out.push_str(&format!(
+                "    Static     {} {}: {}\n",
+                format_status(status),
+                diagnostic.code,
+                diagnostic.message
+            ));
+        }
+        for plugin in &validation.dynamic_plugins {
+            let (status, details) = match &plugin.failure {
+                Some(failure) => (
+                    Status::Fail,
+                    format!("{}: {}", failure.code, failure.message),
+                ),
+                None => (
+                    Status::Pass,
+                    plugin
+                        .status
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| "validated by core".into()),
+                ),
+            };
+            out.push_str(&format!(
+                "    Dynamic    {} {} {}\n",
+                format_status(status),
+                plugin.plugin_id,
+                details
+            ));
+        }
+    }
     for plugin in &report.configuration.dynamic_plugins {
         for check in [
             dynamic_plugin_reference_check(plugin),
