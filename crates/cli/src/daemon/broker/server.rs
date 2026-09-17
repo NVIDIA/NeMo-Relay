@@ -1419,6 +1419,14 @@ fn public_method_allowed(method: &Method, path: &str) -> bool {
 
 fn strip_public_relay_headers(headers: &mut HeaderMap, route: PublicRoute) {
     let keep_named_upstream = matches!(route, PublicRoute::Provider(_));
+    // This runs only after the public client credential has been authenticated. Preserve a valid
+    // forwarder-generated operation ID for hook requests so the worker shares that boundary's
+    // record. Provider requests always drop it before dispatch.
+    let keep_hook_operation_id = matches!(route, PublicRoute::Hook(_))
+        && headers
+            .get(crate::operational::OPERATION_ID_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| uuid::Uuid::parse_str(value).is_ok());
     let private_names = headers
         .keys()
         .filter(|name| {
@@ -1426,6 +1434,8 @@ fn strip_public_relay_headers(headers: &mut HeaderMap, route: PublicRoute) {
                 && name.as_str() != CLIENT_TOKEN_HEADER
                 && !(keep_named_upstream
                     && name.as_str() == crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER)
+                && !(keep_hook_operation_id
+                    && name.as_str() == crate::operational::OPERATION_ID_HEADER)
         })
         .cloned()
         .collect::<Vec<_>>();

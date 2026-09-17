@@ -41,6 +41,10 @@ use serde_json::Value;
 use crate::agents::shared::alignment::{self, GatewayRouteKind};
 use crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER;
 use crate::error::CliError;
+use crate::operational::{
+    self, OperationalContext, UPSTREAM_RESPONSE_THRESHOLD_MILLIS,
+    UPSTREAM_STREAM_STALL_THRESHOLD_MILLIS,
+};
 use crate::server::AppState;
 use crate::sessions::{GatewayCallPrep, GatewaySessionFinish, SessionManager};
 
@@ -160,14 +164,28 @@ pub(crate) async fn passthrough(
     mut request: Request<Body>,
 ) -> Result<Response<Body>, CliError> {
     state.touch();
+    let operational = OperationalContext::new_gateway(request.headers_mut());
     let authorization = state.authorize_provider_request(request.headers_mut())?;
-    let mut prepared = prepare_gateway_request(&state.config, request, authorization).await?;
+    let mut prepared = match prepare_gateway_request(&state.config, request, authorization).await {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            if matches!(error, CliError::PayloadTooLarge(_)) {
+                operational::limit_exceeded(
+                    &operational,
+                    "gateway",
+                    "max_passthrough_body_bytes",
+                    state.config.max_passthrough_body_bytes,
+                );
+            }
+            return Err(error);
+        }
+    };
     let start = take_llm_gateway_start(&mut prepared);
     let prep = state
         .sessions
         .prepare_gateway_call(&prepared.headers, start)
         .await?;
-    run_managed_gateway(state, prepared, prep).await
+    run_managed_gateway(state, prepared, prep, operational).await
 }
 
 /// Transparently proxies OpenAI image-generation requests without emitting LLM events.
@@ -179,9 +197,23 @@ pub(crate) async fn images_generations(
     mut request: Request<Body>,
 ) -> Result<Response<Body>, CliError> {
     state.touch();
+    let operational = OperationalContext::new_gateway(request.headers_mut());
     let authorization = state.authorize_provider_request(request.headers_mut())?;
-    let prepared = prepare_gateway_request(&state.config, request, authorization).await?;
-    run_unmanaged_gateway(state, prepared).await
+    let prepared = match prepare_gateway_request(&state.config, request, authorization).await {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            if matches!(error, CliError::PayloadTooLarge(_)) {
+                operational::limit_exceeded(
+                    &operational,
+                    "gateway",
+                    "max_passthrough_body_bytes",
+                    state.config.max_passthrough_body_bytes,
+                );
+            }
+            return Err(error);
+        }
+    };
+    run_unmanaged_gateway(state, prepared, Some(operational)).await
 }
 
 /// Exact failure material from one ordinary upstream attempt.
@@ -236,17 +268,17 @@ async fn run_managed_gateway(
     state: AppState,
     prepared: PreparedGatewayRequest,
     prep: GatewayCallPrep,
+    operational: OperationalContext,
 ) -> Result<Response<Body>, CliError> {
+    let operational = operational.with_session(prep.session_id.clone());
     if prep.bypass_managed_pipeline {
         let session_id = prep.session_id.clone();
         let session_finish = prep.session_finish;
-        let model = prep.model_name.as_deref().unwrap_or("<unknown>");
         log::debug!(
             target: "nemo_relay.gateway",
             event = "observability_bypassed",
+            operation_id = operational.operation_id(),
             session_id = session_id.as_str(),
-            provider = prep.provider_name.as_str(),
-            model = model,
             reason = "startup_probe";
             "Managed observability was bypassed for a startup probe"
         );
@@ -254,36 +286,61 @@ async fn run_managed_gateway(
             .sessions
             .finish_gateway_call(&session_id, session_finish)
             .await;
-        return run_unmanaged_gateway(state, prepared).await;
+        return run_unmanaged_gateway(state, prepared, Some(operational)).await;
     }
     let codecs = codecs_for_route(prepared.provider);
     if prepared.streaming {
-        run_managed_streaming(state, prepared, prep, codecs).await
+        run_managed_streaming(state, prepared, prep, codecs, operational).await
     } else {
-        run_managed_buffered(state, prepared, prep, codecs).await
+        run_managed_buffered(state, prepared, prep, codecs, operational).await
     }
 }
 
 async fn run_unmanaged_gateway(
     state: AppState,
     prepared: PreparedGatewayRequest,
+    operational: Option<OperationalContext>,
 ) -> Result<Response<Body>, CliError> {
     if prepared.streaming {
-        return passthrough_streaming(state, prepared).await;
+        return passthrough_streaming(state, prepared, operational).await;
     }
     let response = forward_upstream_request(
         upstream_client(&state, prepared.client_named_upstream),
-        &prepared.method,
-        &prepared.upstream_url,
-        &prepared.body_bytes,
-        &prepared.headers,
-        None,
-        ProviderForwarding::new(prepared.provider, prepared.authorization, &state.config),
+        UpstreamForwardRequest {
+            method: &prepared.method,
+            url: &prepared.upstream_url,
+            body_bytes: &prepared.body_bytes,
+            headers: &prepared.headers,
+            effective_request: None,
+            forwarding: ProviderForwarding::new(
+                prepared.provider,
+                prepared.authorization,
+                &state.config,
+            ),
+            operational: operational.as_ref(),
+            streaming: false,
+        },
     )
     .await?;
     let status = response.status();
     let headers = response_headers(response.headers());
-    let bytes = response.bytes().await?;
+    if !status.is_success()
+        && let Some(operational) = operational.as_ref()
+    {
+        operational::upstream_status(operational, status.as_u16());
+    }
+    let bytes = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            if let Some(operational) = operational.as_ref() {
+                operational::upstream_failed(operational, "response_read");
+            }
+            return Err(CliError::Upstream(error));
+        }
+    };
+    if let Some(operational) = operational.as_ref() {
+        operational::upstream_completed(operational, false);
+    }
     build_response(status, headers, Body::from(bytes))
 }
 
@@ -349,9 +406,15 @@ async fn run_managed_buffered(
     prepared: PreparedGatewayRequest,
     prep: GatewayCallPrep,
     codecs: RouteCodecs,
+    operational: OperationalContext,
 ) -> Result<Response<Body>, CliError> {
     let upstream_failures = Arc::new(CapturedUpstreamFailures::default());
-    let func = build_buffered_func(state.clone(), &prepared, upstream_failures.clone());
+    let func = build_buffered_func(
+        state.clone(),
+        &prepared,
+        upstream_failures.clone(),
+        operational.clone(),
+    );
     let GatewayCallPrep {
         scope_stack,
         session_id,
@@ -382,6 +445,7 @@ async fn run_managed_buffered(
         .await;
     match result {
         Ok(response_json) => {
+            operational::upstream_completed(&operational, false);
             let mut headers = HeaderMap::new();
             headers.insert(
                 http::header::CONTENT_TYPE,
@@ -406,6 +470,7 @@ async fn run_managed_buffered(
             if let Some(failure) = upstream_failures.take(&error) {
                 return selected_upstream_failure(failure);
             }
+            operational::upstream_failed(&operational, "runtime");
             Err(translate_runtime_error(error))
         }
     }
@@ -418,6 +483,7 @@ fn build_buffered_func(
     state: AppState,
     prepared: &PreparedGatewayRequest,
     upstream_failures: CapturedUpstreamFailuresRef,
+    operational: OperationalContext,
 ) -> LlmExecutionNextFn {
     let http = upstream_client(&state, prepared.client_named_upstream).clone();
     let method = prepared.method.clone();
@@ -434,16 +500,21 @@ fn build_buffered_func(
         let body_bytes = body_bytes.clone();
         let headers = headers.clone();
         let upstream_failures = upstream_failures.clone();
+        let operational = operational.clone();
         Box::pin(async move {
             let retry_aware = retry_aware_dispatch(&request);
             let response = match forward_upstream_request(
                 &http,
-                &method,
-                &url,
-                &body_bytes,
-                &headers,
-                Some(&request),
-                forwarding,
+                UpstreamForwardRequest {
+                    method: &method,
+                    url: &url,
+                    body_bytes: &body_bytes,
+                    headers: &headers,
+                    effective_request: Some(&request),
+                    forwarding,
+                    operational: Some(&operational),
+                    streaming: false,
+                },
             )
             .await
             {
@@ -458,13 +529,18 @@ fn build_buffered_func(
                 }
             };
             let status = response.status();
+            if !status.is_success() {
+                operational::upstream_status(&operational, status.as_u16());
+            }
             let response_headers = response_headers(response.headers());
             let bytes = match response.bytes().await {
                 Ok(bytes) => bytes,
                 Err(error) if retry_aware => {
+                    operational::upstream_failed(&operational, "response_read");
                     return Err(FlowError::Upstream(transport_failure(&error)));
                 }
                 Err(error) => {
+                    operational::upstream_failed(&operational, "response_read");
                     return Err(
                         upstream_failures.capture(CapturedUpstreamFailure::Transport(error))
                     );
@@ -512,9 +588,15 @@ async fn run_managed_streaming(
     prepared: PreparedGatewayRequest,
     prep: GatewayCallPrep,
     codecs: RouteCodecs,
+    operational: OperationalContext,
 ) -> Result<Response<Body>, CliError> {
     let upstream_failures = Arc::new(CapturedUpstreamFailures::default());
-    let func = build_streaming_func(state.clone(), &prepared, upstream_failures.clone());
+    let func = build_streaming_func(
+        state.clone(),
+        &prepared,
+        upstream_failures.clone(),
+        operational.clone(),
+    );
     let provider_route = prepared.provider;
 
     // Streaming routes that lack a codec fall back to byte passthrough. The runtime requires a
@@ -526,7 +608,7 @@ async fn run_managed_streaming(
             .sessions
             .finish_gateway_call(&prep.session_id, session_finish)
             .await;
-        return passthrough_streaming(state, prepared).await;
+        return passthrough_streaming(state, prepared, Some(operational)).await;
     };
     let collector = streaming_codec.collector();
     let final_response = Arc::new(Mutex::new(None));
@@ -582,6 +664,7 @@ async fn run_managed_streaming(
             if let Some(failure) = upstream_failures.take(&error) {
                 return selected_upstream_failure(failure);
             }
+            operational::upstream_failed(&operational, "runtime");
             return Err(translate_runtime_error(error));
         }
     };
@@ -590,15 +673,15 @@ async fn run_managed_streaming(
         http::header::CONTENT_TYPE,
         HeaderValue::from_static("text/event-stream"),
     );
-    let body = client_sse_body(
-        json_stream,
-        provider_route,
+    let guard = GatewayCallGuard::new(
         state.sessions.clone(),
         session_id.clone(),
         owner_subagent_id,
         final_response,
         session_finish,
+        operational,
     );
+    let body = client_sse_body(json_stream, provider_route, guard);
 
     // Streamed responses are finalized inside the runtime stream wrapper. The small finalizer tap
     // above copies only the aggregate JSON payload so the session can update turn output and tool
@@ -612,6 +695,7 @@ fn build_streaming_func(
     state: AppState,
     prepared: &PreparedGatewayRequest,
     upstream_failures: CapturedUpstreamFailuresRef,
+    operational: OperationalContext,
 ) -> LlmStreamExecutionNextFn {
     let http = upstream_client(&state, prepared.client_named_upstream).clone();
     let method = prepared.method.clone();
@@ -628,16 +712,21 @@ fn build_streaming_func(
         let body_bytes = body_bytes.clone();
         let headers = headers.clone();
         let upstream_failures = upstream_failures.clone();
+        let operational = operational.clone();
         Box::pin(async move {
             let retry_aware = retry_aware_dispatch(&request);
             let response = match forward_upstream_request(
                 &http,
-                &method,
-                &url,
-                &body_bytes,
-                &headers,
-                Some(&request),
-                forwarding,
+                UpstreamForwardRequest {
+                    method: &method,
+                    url: &url,
+                    body_bytes: &body_bytes,
+                    headers: &headers,
+                    effective_request: Some(&request),
+                    forwarding,
+                    operational: Some(&operational),
+                    streaming: true,
+                },
             )
             .await
             {
@@ -652,14 +741,19 @@ fn build_streaming_func(
                 }
             };
             let status = response.status();
+            if !status.is_success() {
+                operational::upstream_status(&operational, status.as_u16());
+            }
             let response_headers = response_headers(response.headers());
             if !status.is_success() {
                 let bytes = match response.bytes().await {
                     Ok(bytes) => bytes,
                     Err(error) if retry_aware => {
+                        operational::upstream_failed(&operational, "response_read");
                         return Err(FlowError::Upstream(transport_failure(&error)));
                     }
                     Err(error) => {
+                        operational::upstream_failed(&operational, "response_read");
                         return Err(
                             upstream_failures.capture(CapturedUpstreamFailure::Transport(error))
                         );
@@ -680,7 +774,7 @@ fn build_streaming_func(
                     }),
                 );
             }
-            let json_stream = sse_json_stream(response);
+            let json_stream = sse_json_stream(response, operational);
             Ok(json_stream)
         })
     })
@@ -690,18 +784,84 @@ fn build_streaming_func(
 // `data:` line (heartbeats), comments, and the `data: [DONE]` sentinel are filtered out by the
 // shared `SseEventDecoder`. Trailing partial frames are surfaced to the runtime so the collector
 // observes whatever the upstream sent before disconnect.
-fn sse_json_stream(response: reqwest::Response) -> LlmJsonStream {
+fn sse_json_stream(response: reqwest::Response, operational: OperationalContext) -> LlmJsonStream {
+    sse_json_stream_with_thresholds(
+        response,
+        operational,
+        std::time::Duration::from_millis(UPSTREAM_RESPONSE_THRESHOLD_MILLIS),
+        std::time::Duration::from_millis(UPSTREAM_STREAM_STALL_THRESHOLD_MILLIS),
+    )
+}
+
+fn sse_json_stream_with_thresholds(
+    response: reqwest::Response,
+    operational: OperationalContext,
+    first_event_threshold: std::time::Duration,
+    stall_threshold: std::time::Duration,
+) -> LlmJsonStream {
     use nemo_relay::codec::streaming::SseEventDecoder;
     let mut decoder = SseEventDecoder::new();
     let mut bytes = response.bytes_stream();
     let stream = stream! {
-        while let Some(chunk) = bytes.next().await {
+        let mut first_event = true;
+        let mut first_event_warned = false;
+        let mut last_event_at = tokio::time::Instant::now();
+        loop {
+            let threshold = if first_event {
+                first_event_threshold
+            } else {
+                stall_threshold
+            };
+            let already_warned = first_event && first_event_warned;
+            let mut next = Box::pin(bytes.next());
+            let chunk = if already_warned {
+                next.await
+            } else {
+                let mut deadline = last_event_at + threshold;
+                loop {
+                    let delay = tokio::time::sleep_until(deadline);
+                    tokio::pin!(delay);
+                    let chunk = tokio::select! {
+                        chunk = &mut next => Some(chunk),
+                        _ = &mut delay => None,
+                    };
+                    if let Some(chunk) = chunk {
+                        break chunk;
+                    }
+                    operational::upstream_delayed(
+                        &operational,
+                        if first_event {
+                            "upstream_first_event_delayed"
+                        } else {
+                            "upstream_stream_stalled"
+                        },
+                        threshold.as_millis() as u64,
+                    );
+                    if first_event {
+                        first_event_warned = true;
+                        break next.await;
+                    }
+                    last_event_at = tokio::time::Instant::now();
+                    deadline = last_event_at + threshold;
+                }
+            };
+            let Some(chunk) = chunk else {
+                break;
+            };
             match chunk {
                 Ok(buffer) => {
                     for result in decoder.push_bytes_results(&buffer) {
                         match result {
-                            Ok(event) => yield Ok(event.data),
+                            Ok(event) => {
+                                if first_event {
+                                    operational::upstream_first_event(&operational);
+                                    first_event = false;
+                                }
+                                last_event_at = tokio::time::Instant::now();
+                                yield Ok(event.data);
+                            }
                             Err(error) => {
+                                operational::upstream_stream_read_failed(&operational);
                                 yield Err(error);
                                 return;
                             }
@@ -709,16 +869,27 @@ fn sse_json_stream(response: reqwest::Response) -> LlmJsonStream {
                     }
                 }
                 Err(error) => {
+                    operational::upstream_stream_read_failed(&operational);
                     yield Err(FlowError::Internal(error.to_string()));
                     return;
                 }
             }
         }
         match decoder.finish() {
-            Ok(Some(event)) => yield Ok(event.data),
+            Ok(Some(event)) => {
+                if first_event {
+                    operational::upstream_first_event(&operational);
+                }
+                yield Ok(event.data);
+            }
             Ok(None) => {}
-            Err(error) => yield Err(error),
+            Err(error) => {
+                operational::upstream_stream_read_failed(&operational);
+                yield Err(error);
+                return;
+            }
         }
+        operational::upstream_completed(&operational, true);
     };
     LlmJsonStream::new(stream)
 }
@@ -730,20 +901,9 @@ fn sse_json_stream(response: reqwest::Response) -> LlmJsonStream {
 fn client_sse_body(
     json_stream: LlmJsonStream,
     route: ProviderRoute,
-    sessions: SessionManager,
-    session_id: String,
-    owner_subagent_id: Option<String>,
-    final_response: Arc<Mutex<Option<Value>>>,
-    session_finish: GatewaySessionFinish,
+    mut guard: GatewayCallGuard,
 ) -> Body {
     let mut json_stream = json_stream;
-    let mut guard = GatewayCallGuard::new(
-        sessions,
-        session_id,
-        owner_subagent_id,
-        final_response,
-        session_finish,
-    );
     let stream = stream! {
         while let Some(item) = json_stream.next().await {
             match item {
@@ -774,6 +934,7 @@ struct GatewayCallGuard {
     owner_subagent_id: Option<String>,
     final_response: Arc<Mutex<Option<Value>>>,
     session_finish: GatewaySessionFinish,
+    operational: OperationalContext,
 }
 
 impl GatewayCallGuard {
@@ -783,6 +944,7 @@ impl GatewayCallGuard {
         owner_subagent_id: Option<String>,
         final_response: Arc<Mutex<Option<Value>>>,
         session_finish: GatewaySessionFinish,
+        operational: OperationalContext,
     ) -> Self {
         Self {
             sessions: Some(sessions),
@@ -790,6 +952,7 @@ impl GatewayCallGuard {
             owner_subagent_id,
             final_response,
             session_finish,
+            operational,
         }
     }
 
@@ -834,6 +997,7 @@ impl Drop for GatewayCallGuard {
         let Some(sessions) = self.sessions.take() else {
             return;
         };
+        operational::upstream_cancelled(&self.operational);
         let session_id = self.session_id.clone();
         let owner_subagent_id = self.owner_subagent_id.clone();
         let session_finish = self.session_finish;
@@ -890,13 +1054,18 @@ fn encode_sse_frame(event_json: &Value, route: ProviderRoute) -> Bytes {
 // Source authentication is normalized at ingress, before interceptors can select a target.
 async fn forward_upstream_request(
     http: &reqwest::Client,
-    method: &Method,
-    url: &str,
-    body_bytes: &Bytes,
-    headers: &HeaderMap,
-    effective_request: Option<&LlmRequest>,
-    forwarding: ProviderForwarding,
+    request: UpstreamForwardRequest<'_>,
 ) -> Result<reqwest::Response, reqwest::Error> {
+    let UpstreamForwardRequest {
+        method,
+        url,
+        body_bytes,
+        headers,
+        effective_request,
+        forwarding,
+        operational,
+        streaming,
+    } = request;
     debug_assert_eq!(
         forwarding
             .authorization
@@ -930,7 +1099,41 @@ async fn forward_upstream_request(
         ) && forwarding.authorization.allow_environment_provider_auth,
         configured_auth_header,
     );
-    upstream.send().await
+    if let Some(operational) = operational {
+        operational::upstream_started(operational, streaming);
+        let request = upstream.send();
+        tokio::pin!(request);
+        let response = tokio::select! {
+            response = &mut request => response,
+            _ = tokio::time::sleep(std::time::Duration::from_millis(UPSTREAM_RESPONSE_THRESHOLD_MILLIS)) => {
+                operational::upstream_delayed(
+                    operational,
+                    "upstream_headers_delayed",
+                    UPSTREAM_RESPONSE_THRESHOLD_MILLIS,
+                );
+                request.await
+            }
+        };
+        if response.is_ok() {
+            operational::upstream_headers_received(operational, streaming);
+        } else {
+            operational::upstream_failed(operational, "transport");
+        }
+        response
+    } else {
+        upstream.send().await
+    }
+}
+
+struct UpstreamForwardRequest<'a> {
+    method: &'a Method,
+    url: &'a str,
+    body_bytes: &'a Bytes,
+    headers: &'a HeaderMap,
+    effective_request: Option<&'a LlmRequest>,
+    forwarding: ProviderForwarding,
+    operational: Option<&'a OperationalContext>,
+    streaming: bool,
 }
 
 #[derive(Clone)]
@@ -1207,26 +1410,88 @@ where
 async fn passthrough_streaming(
     state: AppState,
     prepared: PreparedGatewayRequest,
+    operational: Option<OperationalContext>,
 ) -> Result<Response<Body>, CliError> {
     let response = forward_upstream_request(
         upstream_client(&state, prepared.client_named_upstream),
-        &prepared.method,
-        &prepared.upstream_url,
-        &prepared.body_bytes,
-        &prepared.headers,
-        None,
-        ProviderForwarding::new(prepared.provider, prepared.authorization, &state.config),
+        UpstreamForwardRequest {
+            method: &prepared.method,
+            url: &prepared.upstream_url,
+            body_bytes: &prepared.body_bytes,
+            headers: &prepared.headers,
+            effective_request: None,
+            forwarding: ProviderForwarding::new(
+                prepared.provider,
+                prepared.authorization,
+                &state.config,
+            ),
+            operational: operational.as_ref(),
+            streaming: true,
+        },
     )
     .await?;
     let status = response.status();
     let headers = response_headers(response.headers());
+    if !status.is_success()
+        && let Some(operational) = operational.as_ref()
+    {
+        operational::upstream_status(operational, status.as_u16());
+    }
     let mut bytes = response.bytes_stream();
+    let operational_for_stream = operational;
     let body = Body::from_stream(stream! {
+        let mut guard = UpstreamStreamGuard::new(operational_for_stream);
         while let Some(chunk) = bytes.next().await {
+            if chunk.is_err() {
+                if let Some(operational) = guard.context.as_ref() {
+                    operational::upstream_stream_read_failed(operational);
+                }
+                guard.stop();
+                yield chunk;
+                return;
+            }
             yield chunk;
         }
+        guard.complete();
     });
     build_response(status, headers, body)
+}
+
+/// Logs a downstream stream cancellation when a raw passthrough body is dropped before its
+/// upstream bytes are exhausted. Managed streams use [`GatewayCallGuard`] for the same purpose.
+struct UpstreamStreamGuard {
+    context: Option<OperationalContext>,
+    completed: bool,
+}
+
+impl UpstreamStreamGuard {
+    fn new(context: Option<OperationalContext>) -> Self {
+        Self {
+            context,
+            completed: false,
+        }
+    }
+
+    fn complete(&mut self) {
+        self.completed = true;
+        if let Some(context) = self.context.as_ref() {
+            operational::upstream_completed(context, true);
+        }
+    }
+
+    fn stop(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for UpstreamStreamGuard {
+    fn drop(&mut self) {
+        if !self.completed
+            && let Some(context) = self.context.as_ref()
+        {
+            operational::upstream_cancelled(context);
+        }
+    }
 }
 
 // Translates a runtime [`FlowError`] from managed execution into a gateway HTTP error. Provider

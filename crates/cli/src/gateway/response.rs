@@ -62,6 +62,7 @@ pub(super) fn should_forward_request_header(name: &HeaderName, headers: &HeaderM
         && name != http::header::HOST
         && name != http::header::CONTENT_LENGTH
         && name.as_str() != BOOTSTRAP_CLIENT_TOKEN_HEADER
+        && name.as_str() != crate::operational::OPERATION_ID_HEADER
         && name.as_str() != crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER
         // A routing directive addressed to this gateway, not to the provider. Forwarding it would
         // tell the upstream which endpoint we were steered to, which is infrastructure detail it
