@@ -288,7 +288,7 @@ symbol = "nemo_relay_fixture_native_plugin"
     assert!(error.contains("503"));
     assert!(!error.contains("synthetic-caller-secret"));
     // A routing-model call, a repeated attempt, and a fallback all keep the same credential.
-    let payload = json!({"model":"caller-51","messages":[{"role":"user","content":"hello"}],"stream":true,"fixture_provider_probe":"chat","fixture_provider_targets":["fail","fail","responses"]});
+    let payload = json!({"model":"caller-51","input":"hello","messages":[{"role":"user","content":"hello"}],"stream":true,"fixture_provider_probe":"chat","fixture_provider_targets":["fail","fail","responses"]});
     gateway_payload(state.clone(), "/v1/responses", payload, 51)
         .await
         .unwrap();
