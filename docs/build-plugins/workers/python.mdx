@@ -6,7 +6,7 @@ position: 31
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-The `examples/python-grpc-worker-plugin` package uses the 0.9.0
+The `examples/python-grpc-worker-plugin` package uses the 0.10.0
 `nemo-relay-plugin` SDK and the shared documentation configuration. Its worker registers
 all 16 [surfaces](/build-plugins/workers/middleware-and-continuations), accepts
 synchronous and asynchronous callback forms where the
@@ -35,7 +35,7 @@ Run the package's atomic tests before creating a managed environment:
 Relay creates the managed environment from the package root named by the
 [manifest](/build-plugins/package-discoverable-plugins). A
 minimal `pyproject.toml` therefore needs a standard build backend, a package, and the
-0.9 worker SDK dependency:
+0.10 worker SDK dependency:
 
 ```toml
 [build-system]
@@ -46,7 +46,7 @@ build-backend = "setuptools.build_meta"
 name = "nemo-relay-python-grpc-worker-example"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["nemo-relay-plugin>=0.9.0"]
+dependencies = ["nemo-relay-plugin>=0.10.0"]
 
 [dependency-groups]
 test = ["pytest>=8", "pytest-asyncio>=0.26"]
