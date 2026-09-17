@@ -1183,6 +1183,33 @@ async fn doctor_ignores_inherited_plugin_configuration_warning() {
 }
 
 #[tokio::test]
+async fn doctor_warns_when_an_explicit_plugin_config_is_missing() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let directory = tempfile::tempdir().unwrap();
+    let missing_plugin_config = directory.path().join("missing-plugins.toml");
+
+    let validation = collect_plugin_host_validation(
+        &ResolvedConfig::default(),
+        &GatewayOverrides {
+            plugin_config_path: Some(missing_plugin_config),
+            ..GatewayOverrides::default()
+        },
+    );
+
+    assert_eq!(validation.status, Status::Warn);
+    assert!(
+        validation
+            .report
+            .as_ref()
+            .expect("core validation report")
+            .config
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "plugin.configuration_file_missing")
+    );
+}
+
+#[tokio::test]
 async fn component_diagnostics_cover_disabled_malformed_and_explicit_sink_configuration() {
     let disabled_cache: PluginConfig = serde_json::from_value(json!({
         "version": 1,

@@ -241,7 +241,14 @@ fn collect_plugin_host_validation(
     resolved: &ResolvedConfig,
     gateway_overrides: &GatewayOverrides,
 ) -> PluginHostValidation {
-    if resolved.gateway.plugin_config.is_none() && resolved.dynamic_plugins.is_empty() {
+    let explicit_plugin_config = crate::configuration::explicit_plugin_config_path(
+        gateway_overrides.config.as_ref(),
+        gateway_overrides.plugin_config_path.as_ref(),
+    );
+    if resolved.gateway.plugin_config.is_none()
+        && resolved.dynamic_plugins.is_empty()
+        && explicit_plugin_config.is_none()
+    {
         return PluginHostValidation {
             status: Status::Info,
             details: "plugins.toml not configured".into(),
@@ -249,10 +256,6 @@ fn collect_plugin_host_validation(
         };
     }
 
-    let explicit_plugin_config = crate::configuration::explicit_plugin_config_path(
-        gateway_overrides.config.as_ref(),
-        gateway_overrides.plugin_config_path.as_ref(),
-    );
     match validate_plugin_host(PluginConfig::default(), explicit_plugin_config) {
         Ok(report) => {
             let static_failures = report
