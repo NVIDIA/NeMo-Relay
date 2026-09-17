@@ -41,7 +41,10 @@ pub(crate) const HEALTHZ_TIMEOUT: Duration = Duration::from_millis(500);
 pub(crate) const BOOTSTRAP_PROTOCOL_VERSION: u64 = 3;
 
 pub(super) const BOOTSTRAP_LOCK_TIMEOUT: Duration = Duration::from_secs(20);
-const BOOTSTRAP_START_TIMEOUT: Duration = Duration::from_secs(10);
+// A managed gateway resolves its complete persistent configuration after it is
+// spawned. Keep this budget aligned with the managed-host startup timeout so
+// slow configuration discovery still leaves time to bind and publish readiness.
+const BOOTSTRAP_START_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GatewayEndpoint {
