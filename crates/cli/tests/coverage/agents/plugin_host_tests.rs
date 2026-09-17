@@ -1430,6 +1430,35 @@ fn codex_install_switches_custom_provider_to_openai_and_restores_it() {
 }
 
 #[test]
+fn codex_uninstall_preserves_a_user_url_with_matching_unverified_capability() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "model_provider = \"openai\"\n").unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let mut doc = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    let user_token = "hmac-sha256:unverified-user-value";
+    let user_url = crate::configuration::persistent_openai_base_url(DEFAULT_URL, user_token);
+    doc["openai_base_url"] = toml_edit::value(&user_url);
+    doc["model_providers"]["nemo-relay-openai"]["http_headers"][BOOTSTRAP_CLIENT_TOKEN_HEADER] =
+        toml_edit::value(user_token);
+    fs::write(&path, doc.to_string()).unwrap();
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    let restored = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(
+        restored["openai_base_url"].as_str(),
+        Some(user_url.as_str())
+    );
+}
+
+#[test]
 fn codex_uninstall_restores_a_user_openai_base_url() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());

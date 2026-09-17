@@ -1444,7 +1444,9 @@ fn restore_managed_openai_base_url(
     gateway_url: &str,
     challenge: Option<&BootstrapChallengeKey>,
 ) {
-    if codex_openai_base_url_is_managed(doc, gateway_url)
+    if (codex_openai_base_url_is_managed(doc, gateway_url)
+        && codex_provider_client_token(doc)
+            .is_some_and(|token| challenge.is_some_and(|key| key.verify_client_token(token))))
         || codex_openai_base_url_has_verified_capability(doc, gateway_url, challenge)
     {
         restore_top_level_item(doc, backup, "openai_base_url");
@@ -1456,7 +1458,9 @@ fn remove_managed_openai_base_url(
     gateway_url: &str,
     challenge: Option<&BootstrapChallengeKey>,
 ) {
-    if codex_openai_base_url_is_managed(doc, gateway_url)
+    if (codex_openai_base_url_is_managed(doc, gateway_url)
+        && codex_provider_client_token(doc)
+            .is_some_and(|token| challenge.is_some_and(|key| key.verify_client_token(token))))
         || codex_openai_base_url_has_verified_capability(doc, gateway_url, challenge)
     {
         doc.as_table_mut().remove("openai_base_url");
