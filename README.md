@@ -224,7 +224,7 @@ uv add nemo-relay
 
 # Node.js
 # Requires Node.js 24 or newer.
-npm install nemo-relay-node@0.10.0
+npm install nemo-relay-node@0.9.0
 
 # Rust
 cargo add nemo-relay
