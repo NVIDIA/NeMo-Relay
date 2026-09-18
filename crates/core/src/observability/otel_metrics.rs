@@ -9,13 +9,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use crate::api::event::{
-    AttributeValue, Event, MetricAttributes, MetricKind, MetricValue, MetricValueType,
-    ValidatedMetricMeasurement,
-};
 #[cfg(test)]
-use crate::api::event::{MetricEnvelope, MetricMeasurement};
+use crate::api::event::MetricEnvelope;
+use crate::api::event::{
+    AttributeValue, Event, MetricAttributes, MetricKind, MetricMeasurement, MetricValue,
+    MetricValueType, ValidatedMetricMeasurement,
+};
 use crate::api::runtime::EventSubscriberFn;
+use crate::api::scope::ScopeType;
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use opentelemetry::metrics::{Counter, Gauge, Histogram, Meter, MeterProvider as _, UpDownCounter};
 use opentelemetry::{Array, InstrumentationScope, KeyValue, Value};
@@ -30,8 +31,7 @@ use opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicRead
 use opentelemetry_sdk::metrics::{SdkMeterProvider, Stream, Temporality};
 use opentelemetry_sdk::runtime;
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
-use serde_json::Value as Json;
+use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use super::OpenTelemetryRuntimeDiagnostics;
@@ -691,8 +691,10 @@ impl MetricEventProcessor {
         }
     }
 
-    #[cfg(test)]
     fn process(&mut self, event: &Event) {
+        if let Some(measurement) = gen_ai_stream_time_to_first_chunk_measurement(event) {
+            self.process_validated(event, &[measurement]);
+        }
         self.process_classification(event, classify_metric_mark(event));
     }
 
@@ -824,14 +826,38 @@ impl MetricEventProcessor {
     }
 }
 
+fn gen_ai_stream_time_to_first_chunk_measurement(
+    event: &Event,
+) -> Option<ValidatedMetricMeasurement> {
+    if event.scope_category() != Some(crate::api::event::ScopeCategory::End)
+        || event.scope_type() != Some(ScopeType::Llm)
+    {
+        return None;
+    }
+    let value = event
+        .time_to_first_chunk()
+        .filter(|value| value.is_finite())?;
+    let attributes = super::otel_genai::client_metric_attributes(event)?;
+    let measurement = MetricMeasurement {
+        name: "gen_ai.client.operation.time_to_first_chunk".to_string(),
+        kind: MetricKind::Histogram,
+        value_type: MetricValueType::F64,
+        value: json!(value),
+        unit: Some("s".to_string()),
+        description: None,
+        attributes: Some(attributes),
+        boundaries: None,
+    };
+    ValidatedMetricMeasurement::try_from(&measurement).ok()
+}
+
 fn process_metric_event(
     processor: &Mutex<MetricEventProcessor>,
     recovery_warned: &AtomicBool,
     event: &Event,
 ) {
-    let classification = classify_metric_mark(event);
     let mut processor = lock_metric_processor(processor, recovery_warned);
-    processor.process_classification(event, classification);
+    processor.process(event);
 }
 
 fn process_validated_metric_measurements(

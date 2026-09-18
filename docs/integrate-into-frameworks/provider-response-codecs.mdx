@@ -417,7 +417,7 @@ canonical fields above.
 | Prompt tokens | full `usage` preserved | `prompt_tokens` / `total_prompt_tokens` | `llm.token_count.prompt` | not emitted | `gen_ai.usage.input_tokens` |
 | Completion tokens | preserved | `completion_tokens` / `total_completion_tokens` | `llm.token_count.completion` | not emitted | `gen_ai.usage.output_tokens` |
 | Total tokens | preserved | no first-class field | `llm.token_count.total` | not emitted | not emitted |
-| Cache read / write | preserved | summed into `cached_tokens` / `total_cached_tokens` | `llm.token_count.prompt_details.cache_read` / `…cache_write` | not emitted | `gen_ai.usage.cache_read.input_tokens` / `gen_ai.usage.cache_creation.input_tokens` |
+| Cache read / write | preserved | summed into `cached_tokens` / `total_cached_tokens` | `llm.token_count.prompt_details.cache_read` / `…cache_write` | not emitted | `gen_ai.usage.cache_read.input_tokens` / `gen_ai.usage.cache_write.input_tokens` |
 | Cost | full `cost` preserved | `cost_usd` / `total_cost_usd` (USD only) | `llm.cost.total` (USD only) | `nemo_relay.llm.cost.total` + `nemo_relay.llm.cost.currency` (any currency) | not emitted |
 
 The `full` OpenTelemetry projection carries cost in any currency, while ATIF

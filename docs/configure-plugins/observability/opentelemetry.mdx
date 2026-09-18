@@ -713,6 +713,16 @@ content with an LLM or event sanitizer. Tool content is exported by default;
 retrieval payloads are not exported. Set top-level `enable_full_payloads = true` to retain complete
 sanitized LLM request history on every start span.
 
+For managed streaming LLM calls, the end span also includes
+`gen_ai.response.time_to_first_chunk` in seconds. Relay measures from the
+start of managed stream execution until the first provider protocol chunk is
+received; this is not a first-text-token measurement. The attribute is omitted
+for non-streaming calls and streams that never yield a chunk.
+
+The metric endpoint records the same sample as the standard
+`gen_ai.client.operation.time_to_first_chunk` `f64` histogram with unit `s`
+when Relay can determine the provider dimension.
+
 The `gen_ai` projection includes sanitized `gen_ai.tool.call.arguments` at tool
 start, `gen_ai.tool.call.result` on successful completion, and
 `gen_ai.tool.definitions` on inference spans by default. These attributes can

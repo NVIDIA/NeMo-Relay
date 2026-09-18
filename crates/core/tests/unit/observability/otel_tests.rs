@@ -2443,6 +2443,248 @@ fn gen_ai_projection_uses_standard_operation_names_and_span_kinds() {
 }
 
 #[test]
+fn gen_ai_projection_classifies_marked_turn_roots_as_internal_agent_invocations() {
+    let mut turn = make_start_event(
+        Uuid::now_v7(),
+        None,
+        "claude-code-turn",
+        ScopeType::Custom,
+        None,
+    );
+    if let Event::Scope(scope) = &mut turn {
+        scope.base.metadata = Some(json!({
+            "nemo_relay_scope_role": "turn",
+            "conversation_id": "conversation-1"
+        }));
+    }
+
+    assert_eq!(
+        crate::observability::otel_genai::span_name(&turn),
+        "invoke_agent"
+    );
+    assert_eq!(
+        crate::observability::otel_genai::span_kind(&turn),
+        SpanKind::Internal
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(&turn));
+    assert_eq!(attributes["gen_ai.operation.name"], "invoke_agent");
+    assert_eq!(attributes["gen_ai.conversation.id"], "conversation-1");
+    assert!(!attributes.contains_key("gen_ai.agent.name"));
+
+    let mut named_turn = make_start_event(
+        Uuid::now_v7(),
+        None,
+        "claude-code-turn",
+        ScopeType::Custom,
+        None,
+    );
+    if let Event::Scope(scope) = &mut named_turn {
+        scope.base.metadata = Some(json!({
+            "nemo_relay_scope_role": "turn",
+            "gen_ai.agent.name": "Claude Code",
+            "gen_ai.agent.description": "Coding agent"
+        }));
+    }
+    assert_eq!(
+        crate::observability::otel_genai::span_name(&named_turn),
+        "invoke_agent Claude Code"
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(
+        &named_turn,
+    ));
+    assert_eq!(attributes["gen_ai.agent.name"], "Claude Code");
+    assert_eq!(attributes["gen_ai.agent.description"], "Coding agent");
+}
+
+#[test]
+fn gen_ai_projection_emits_source_backed_registry_attributes() {
+    for (metadata, expected) in [
+        (json!({"model": "ambiguous-model"}), None),
+        (
+            json!({"gen_ai.request.model": "single-configured-model"}),
+            Some("single-configured-model"),
+        ),
+    ] {
+        let mut agent = make_start_event(Uuid::now_v7(), None, "planner", ScopeType::Agent, None);
+        if let Event::Scope(scope) = &mut agent {
+            scope.base.metadata = Some(metadata);
+        }
+        let attributes = attr_map(&crate::observability::otel_genai::start_attributes(&agent));
+        assert_eq!(
+            attributes.get("gen_ai.request.model").map(String::as_str),
+            expected
+        );
+    }
+
+    let mut embedder = make_start_event(Uuid::now_v7(), None, "embed", ScopeType::Embedder, None);
+    if let Event::Scope(scope) = &mut embedder {
+        scope.base.metadata = Some(json!({
+            "dimensions": 1024,
+            "encoding_format": "base64"
+        }));
+    }
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(
+        &embedder,
+    ));
+    assert_eq!(attributes["gen_ai.embeddings.dimension.count"], "1024");
+    assert_eq!(
+        attributes["gen_ai.request.encoding_formats"],
+        "[\"base64\"]"
+    );
+
+    let chat_request: AnnotatedLlmRequest = serde_json::from_value(json!({
+        "model": "gpt-5",
+        "stream": false,
+        "api_specific": {
+            "api": "openai_chat",
+            "modalities": ["audio"],
+            "reasoning_effort": "high"
+        }
+    }))
+    .unwrap();
+    let chat = make_scope_event_with_profile(
+        ScopeCategory::Start,
+        Uuid::now_v7(),
+        None,
+        "openai.chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(Arc::new(chat_request))
+                .build(),
+        ),
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(&chat));
+    assert_eq!(attributes["gen_ai.output.type"], "speech");
+    assert_eq!(attributes["gen_ai.request.reasoning.level"], "high");
+    assert!(!attributes.contains_key("gen_ai.request.stream"));
+
+    let responses_request: AnnotatedLlmRequest = serde_json::from_value(json!({
+        "previous_response_id": "resp-previous",
+        "reasoning": {"effort": "medium"},
+        "api_specific": {"api": "openai_responses"}
+    }))
+    .unwrap();
+    let responses = make_scope_event_with_profile(
+        ScopeCategory::Start,
+        Uuid::now_v7(),
+        None,
+        "openai.responses",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(Arc::new(responses_request))
+                .build(),
+        ),
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(
+        &responses,
+    ));
+    assert_eq!(
+        attributes["gen_ai.request.previous_response.id"],
+        "resp-previous"
+    );
+    assert_eq!(attributes["gen_ai.request.reasoning.level"], "medium");
+}
+
+#[test]
+fn gen_ai_output_type_requires_an_explicit_source_backed_request() {
+    for (api_specific, expected) in [
+        (
+            json!({"api": "openai_chat", "modalities": ["audio"]}),
+            Some("speech"),
+        ),
+        (
+            json!({"api": "openai_chat", "modalities": ["text"]}),
+            Some("text"),
+        ),
+        (
+            json!({"api": "openai_chat", "response_format": {"type": "json_object"}}),
+            Some("json"),
+        ),
+        (
+            json!({"api": "openai_responses", "text": {"format": {"type": "json_schema"}}}),
+            Some("json"),
+        ),
+        (json!({"api": "openai_chat", "modalities": ["image"]}), None),
+        (
+            json!({"api": "openai_chat", "modalities": ["text", "audio"]}),
+            None,
+        ),
+        (
+            json!({"api": "openai_responses", "text": {"verbosity": "low"}}),
+            None,
+        ),
+    ] {
+        let request: AnnotatedLlmRequest = serde_json::from_value(json!({
+            "model": "test-model",
+            "api_specific": api_specific,
+        }))
+        .unwrap();
+        let event = make_scope_event_with_profile(
+            ScopeCategory::Start,
+            Uuid::now_v7(),
+            None,
+            "test.request",
+            ScopeType::Llm,
+            None,
+            Some(
+                CategoryProfile::builder()
+                    .annotated_request(Arc::new(request))
+                    .build(),
+            ),
+        );
+        let attributes = attr_map(&crate::observability::otel_genai::start_attributes(&event));
+        assert_eq!(
+            attributes.get("gen_ai.output.type").map(String::as_str),
+            expected
+        );
+    }
+}
+
+#[test]
+fn gen_ai_projection_emits_provider_reasoning_token_usage() {
+    for (api_specific, expected) in [
+        (
+            json!({
+                "api": "openai_responses",
+                "output_tokens_details": {"reasoning_tokens": 17}
+            }),
+            "17",
+        ),
+        (
+            json!({
+                "api": "gemini_generate_content",
+                "thoughts_tokens": 23
+            }),
+            "23",
+        ),
+    ] {
+        let response: AnnotatedLlmResponse = serde_json::from_value(json!({
+            "api_specific": api_specific
+        }))
+        .unwrap();
+        let event = make_scope_event_with_profile(
+            ScopeCategory::End,
+            Uuid::now_v7(),
+            None,
+            "chat",
+            ScopeType::Llm,
+            None,
+            Some(
+                CategoryProfile::builder()
+                    .annotated_response(Arc::new(response))
+                    .build(),
+            ),
+        );
+        let attributes = attr_map(&crate::observability::otel_genai::end_attributes(&event));
+        assert_eq!(attributes["gen_ai.usage.reasoning.output_tokens"], expected);
+    }
+}
+
+#[test]
 fn gen_ai_projection_emits_only_span_specific_attributes() {
     let common = json!({
         "provider": "openai",
@@ -2466,7 +2708,6 @@ fn gen_ai_projection_emits_only_span_specific_attributes() {
                 "gen_ai.agent.name",
                 "gen_ai.conversation.id",
                 "gen_ai.operation.name",
-                "gen_ai.request.model",
             ]
             .as_slice(),
         ),
@@ -2963,7 +3204,7 @@ fn gen_ai_projection_emits_normalized_response_attributes() {
         Some(&"5".to_string())
     );
     assert_eq!(
-        attributes.get("gen_ai.usage.cache_creation.input_tokens"),
+        attributes.get("gen_ai.usage.cache_write.input_tokens"),
         Some(&"3".to_string())
     );
 }
@@ -3001,7 +3242,7 @@ fn gen_ai_projection_includes_anthropic_cache_tokens_in_input_total() {
         Some(&"17980".to_string())
     );
     assert_eq!(
-        attributes.get("gen_ai.usage.cache_creation.input_tokens"),
+        attributes.get("gen_ai.usage.cache_write.input_tokens"),
         Some(&"9421".to_string())
     );
 }
@@ -3596,6 +3837,29 @@ fn gen_ai_projection_covers_optional_request_controls_and_finish_reasons() {
             Some(&format!("[\"{expected}\"]"))
         );
     }
+}
+
+#[test]
+fn gen_ai_projection_exports_stream_time_to_first_chunk_without_response_decoding() {
+    let event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "openai.chat.completions",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .time_to_first_chunk(0.125)
+                .build(),
+        ),
+    );
+
+    let attributes = attr_map(&crate::observability::otel_genai::end_attributes(&event));
+    assert_eq!(
+        attributes.get("gen_ai.response.time_to_first_chunk"),
+        Some(&"0.125".to_string())
+    );
 }
 
 #[test]
