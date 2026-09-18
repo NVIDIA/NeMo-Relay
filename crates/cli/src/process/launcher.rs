@@ -18,7 +18,9 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::agents::CodingAgent;
-use crate::configuration::{AgentConfigs, GatewayConfig, ResolvedConfig, resolve_run_config};
+use crate::configuration::{
+    AgentConfigs, GatewayConfig, LaunchedAgent, ResolvedConfig, resolve_run_config,
+};
 use crate::diagnostics::UpstreamAuthInfo;
 use crate::error::CliError;
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
@@ -90,7 +92,11 @@ impl TransparentRun {
                 agent,
                 &invocation.argv[..=invocation.host_index],
             );
-            validate_agent_version(agent, &probe).await?;
+            let version = validate_agent_version(agent, &probe).await?;
+            resolved.gateway.launched_agent = Some(LaunchedAgent {
+                kind: agent.event_kind(),
+                version: version.to_string(),
+            });
         }
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
@@ -296,7 +302,10 @@ const fn default_command_for(agent: CodingAgent) -> &'static str {
 
 /// Builds a version probe that preserves wrappers such as `npx codex` or `mise exec -- codex`.
 /// Opaque wrappers remain supported when their `--version` output identifies the selected host.
-async fn validate_agent_version(agent: CodingAgent, probe: &[String]) -> Result<(), CliError> {
+async fn validate_agent_version(
+    agent: CodingAgent,
+    probe: &[String],
+) -> Result<semver::Version, CliError> {
     let mut command = crate::process::tokio_command(probe);
     command
         .stdin(std::process::Stdio::null())
@@ -330,8 +339,7 @@ async fn validate_agent_version(agent: CodingAgent, probe: &[String]) -> Result<
     let version = agent
         .validate_version_output(&stdout)
         .map_err(CliError::Launch)?;
-    // Logged rather than returned: this is not a reason to refuse the launch, and there is no
-    // note channel here -- `PreparedAgentLaunch` is already built by the time the probe runs.
+    // An unverified version is diagnostic only; retain the validated version for telemetry.
     if let Some(unverified) = agent.unverified_version(&version) {
         log::warn!(
             target: "nemo_relay.cli",
@@ -341,7 +349,7 @@ async fn validate_agent_version(agent: CodingAgent, probe: &[String]) -> Result<
             "{unverified}"
         );
     }
-    Ok(())
+    Ok(version)
 }
 
 // Splits a configured command string into argv words for run mode. This intentionally uses simple

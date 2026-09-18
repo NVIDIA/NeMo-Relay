@@ -154,6 +154,15 @@ not stop application work or delivery to the other exporters.
 
 ## Event Metadata Promotion
 
+Wrapped CLI launches (`nemo-relay claude` and `nemo-relay codex`) retain the
+harness executable version from Relay's existing compatibility probe. Relay
+adds `agent_version` alongside `agent_kind` in session scope and LLM metadata,
+and on tool identity metadata. This is the harness version, not Relay's version
+or the model version. It is omitted for unwrapped sessions and dry runs; hook
+or request metadata cannot override the detected value. Metadata remains
+subject to the configured sanitizers. To export this generic field as a span
+attribute, include `"agent_version"` in `promote_metadata_prefixes`.
+
 Set `promote_metadata_prefixes` on a trace endpoint to copy selected keys from
 the final sanitized Event metadata into that endpoint's OpenTelemetry output.
 The setting defaults to an empty list, so Relay does not promote metadata unless

@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::configuration::{AgentCommandConfig, GatewayConfig};
+use crate::events::AgentKind;
 use crate::hooks::generated_hooks;
 use std::ffi::OsString;
 use std::sync::Mutex;
@@ -1014,9 +1015,72 @@ async fn wrapped_agent_version_probe_runs_through_the_wrapper() {
         &[wrapper.display().to_string(), "codex".into(), "exec".into()],
     );
 
-    validate_agent_version(CodingAgent::Codex, &probe)
+    assert_eq!(
+        validate_agent_version(CodingAgent::Codex, &probe)
+            .await
+            .unwrap(),
+        semver::Version::new(0, 143, 0)
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn transparent_launch_retains_agent_version_for_claude_and_codex() {
+    let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _cwd = crate::test_support::CwdTestScope::locked();
+    let _env = EnvScope::without_managed_bootstrap();
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(&config, "[upstream]\n").unwrap();
+    for (name, output, kind, version) in [
+        (
+            "claude",
+            "2.1.121 (Claude Code)",
+            AgentKind::ClaudeCode,
+            "2.1.121",
+        ),
+        ("codex", "codex-cli 0.143.0", AgentKind::Codex, "0.143.0"),
+    ] {
+        let executable = temp.path().join(name);
+        std::fs::write(
+            &executable,
+            format!("#!/bin/sh\n[ \"$1\" = --version ] || exit 9\nprintf '%s\\n' '{output}'\n"),
+        )
+        .unwrap();
+        make_executable(&executable);
+        let command = RunOverrides {
+            agent: None,
+            config: Some(config.clone()),
+            openai_base_url: None,
+            anthropic_base_url: None,
+            session_metadata: Some(r#"{"team":"test","agent_version":"untrusted"}"#.into()),
+            plugin_config_path: None,
+            dry_run: false,
+            print: false,
+            command: vec![executable.display().to_string()],
+        };
+        let run = TransparentRun::new(command.clone(), None).await.unwrap();
+        let detected = run.resolved.gateway.launched_agent.as_ref().unwrap();
+        assert_eq!(detected.kind, kind);
+        assert_eq!(detected.version, version);
+        assert_eq!(
+            run.resolved.gateway.metadata.as_ref().unwrap()["team"],
+            "test"
+        );
+        run.prepared.restore().unwrap();
+
+        let dry_run = TransparentRun::new(
+            RunOverrides {
+                dry_run: true,
+                ..command
+            },
+            None,
+        )
         .await
         .unwrap();
+        assert!(dry_run.resolved.gateway.launched_agent.is_none());
+    }
 }
 
 #[test]

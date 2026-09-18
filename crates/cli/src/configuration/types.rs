@@ -12,11 +12,18 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use strum::{Display, IntoStaticStr};
 
+use crate::events::AgentKind;
 use crate::plugins::policy::DynamicPluginHostPolicy;
 
 use super::{
     DEFAULT_MAX_HOOK_PAYLOAD_BYTES, DEFAULT_MAX_PASSTHROUGH_BODY_BYTES, header_json, header_string,
 };
+
+#[derive(Debug, Clone)]
+pub(crate) struct LaunchedAgent {
+    pub(crate) kind: AgentKind,
+    pub(crate) version: String,
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct GatewayConfig {
@@ -26,6 +33,8 @@ pub(crate) struct GatewayConfig {
     pub(crate) anthropic_base_url: String,
     pub(crate) anthropic_auth_header: Option<String>,
     pub(crate) metadata: Option<Value>,
+    /// Runtime-only identity from the launched executable's version probe.
+    pub(crate) launched_agent: Option<LaunchedAgent>,
     pub(crate) plugin_config: Option<Value>,
     pub(crate) max_hook_payload_bytes: usize,
     pub(crate) max_passthrough_body_bytes: usize,
@@ -34,6 +43,7 @@ pub(crate) struct GatewayConfig {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SessionConfig {
     pub(crate) metadata: Option<Value>,
+    pub(crate) launched_agent: Option<LaunchedAgent>,
     pub(crate) plugin_config: Option<Value>,
     pub(crate) profile: Option<String>,
     pub(crate) gateway_mode: Option<String>,
@@ -49,6 +59,7 @@ impl GatewayConfig {
         let gateway_mode = header_string(headers, "x-nemo-relay-gateway-mode");
         SessionConfig {
             metadata,
+            launched_agent: self.launched_agent.clone(),
             plugin_config,
             profile,
             gateway_mode,
@@ -116,6 +127,7 @@ impl Default for GatewayConfig {
             anthropic_base_url: "https://api.anthropic.com".into(),
             anthropic_auth_header: None,
             metadata: None,
+            launched_agent: None,
             plugin_config: None,
             max_hook_payload_bytes: DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
             max_passthrough_body_bytes: DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,

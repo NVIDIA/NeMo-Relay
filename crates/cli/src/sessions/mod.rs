@@ -1391,7 +1391,7 @@ impl Session {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .root_uuid()
             .to_string();
-        merge_metadata(
+        let mut metadata = merge_metadata(
             merge_metadata(
                 merge_metadata(
                     self.config.metadata.clone().unwrap_or(Value::Null),
@@ -1407,14 +1407,29 @@ impl Session {
                 "plugin_config": self.config.plugin_config,
                 "gateway_mode": self.config.gateway_mode,
             }),
-        )
+        );
+        self.insert_agent_version(&mut metadata);
+        metadata
+    }
+
+    // Version belongs to the executable Relay launched, not to arbitrary hook/request metadata.
+    // A shared gateway or a different harness must not inherit another executable's version.
+    fn insert_agent_version(&self, metadata: &mut Value) {
+        if let Value::Object(metadata) = metadata {
+            metadata.remove("agent_version");
+            if let Some(agent) = &self.config.launched_agent
+                && agent.kind == self.agent_kind
+            {
+                metadata.insert("agent_version".into(), json!(agent.version));
+            }
+        }
     }
 
     // Tool hook payloads do not consistently repeat the harness session id.
     // Mirror the stable managed identity onto each tool event so external
     // consumers can correlate it without reconstructing the parent scope tree.
     fn event_identity_metadata(&self, event_metadata: Value) -> Value {
-        merge_metadata(
+        let mut metadata = merge_metadata(
             event_metadata,
             json!({
                 "session_id": self.session_id,
@@ -1423,7 +1438,9 @@ impl Session {
                 "source": "hook",
                 "identity_quality": "native",
             }),
-        )
+        );
+        self.insert_agent_version(&mut metadata);
+        metadata
     }
 
     // LLM requests do not consistently repeat hook metadata, so replace reserved identity
@@ -1445,7 +1462,9 @@ impl Session {
             ("agent_kind".to_string(), json!(self.agent_kind.as_str())),
         ]);
         insert_optional(&mut identity, "conversation_id", conversation_id);
-        merge_metadata(metadata, Value::Object(identity))
+        let mut metadata = merge_metadata(metadata, Value::Object(identity));
+        self.insert_agent_version(&mut metadata);
+        metadata
     }
 
     async fn end_turn(

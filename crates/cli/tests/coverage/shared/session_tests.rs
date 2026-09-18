@@ -850,6 +850,62 @@ fn scope_metadata_recovers_poisoned_scope_stack_for_instance_id() {
     );
 }
 
+#[test]
+fn agent_version_follows_launched_harness_across_session_metadata_paths() {
+    for (kind, version) in [
+        (AgentKind::ClaudeCode, "2.1.121"),
+        (AgentKind::Codex, "0.143.0"),
+    ] {
+        let config = GatewayConfig {
+            launched_agent: Some(crate::configuration::LaunchedAgent {
+                kind,
+                version: version.into(),
+            }),
+            ..GatewayConfig::default()
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-nemo-relay-session-metadata",
+            axum::http::HeaderValue::from_static(
+                r#"{"team":"test","agent_version":"header-value"}"#,
+            ),
+        );
+        let session = Session::new(
+            "session".into(),
+            kind,
+            config.session_config_from_headers(&headers),
+        );
+        let metadata = json!({"agent_version": "event-value", "custom": "kept"});
+        for result in [
+            session.scope_metadata(metadata.clone()),
+            session.event_identity_metadata(metadata.clone()),
+            session.merge_llm_identity_metadata(metadata.clone(), Some("conversation")),
+        ] {
+            assert_eq!(result["agent_version"], version);
+            assert_eq!(result["custom"], "kept");
+        }
+        assert_eq!(session.scope_metadata(Value::Null)["team"], "test");
+
+        // Neither an unrelated harness nor an unwrapped session inherits this version.
+        for (other_kind, session_config) in [
+            (
+                AgentKind::Gateway,
+                config.session_config_from_headers(&headers),
+            ),
+            (kind, SessionConfig::default()),
+        ] {
+            let other = Session::new("other".into(), other_kind, session_config);
+            for result in [
+                other.scope_metadata(metadata.clone()),
+                other.event_identity_metadata(metadata.clone()),
+                other.merge_llm_identity_metadata(metadata.clone(), None),
+            ] {
+                assert!(result.get("agent_version").is_none());
+            }
+        }
+    }
+}
+
 async fn apply_codex_payload(manager: &SessionManager, headers: &HeaderMap, payload: Value) {
     let outcome = crate::agents::shared::adapters::codex::adapt(payload, headers);
     manager.apply_events(headers, outcome.events).await.unwrap();
@@ -1006,6 +1062,7 @@ async fn nests_agent_subagent_and_tool_lifecycle() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -2223,6 +2280,7 @@ async fn writes_atif_on_session_end_from_plugin_config() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -2832,6 +2890,7 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -3020,6 +3079,7 @@ async fn handles_out_of_order_subagent_and_tool_end_events() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -3098,6 +3158,7 @@ async fn out_of_order_started_subagent_end_does_not_leak_scope() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -3172,6 +3233,7 @@ async fn agent_end_closes_nested_active_subagents_lifo() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -3230,6 +3292,7 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -3715,6 +3778,7 @@ async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() 
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -3844,6 +3908,7 @@ async fn single_pending_llm_hint_claims_next_gateway_llm() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -3943,6 +4008,7 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -4060,6 +4126,7 @@ async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -4155,6 +4222,7 @@ async fn no_active_hint_reuses_last_llm_owner() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -5988,6 +6056,7 @@ fn session_test_config() -> GatewayConfig {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     }
 }
@@ -6004,6 +6073,7 @@ async fn turn_ended_is_noop_without_active_turn_scope() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
