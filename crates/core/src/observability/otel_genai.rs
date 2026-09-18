@@ -97,6 +97,7 @@ pub(super) fn start_attributes(event: &Event) -> Vec<KeyValue> {
             push_tool_definitions(&mut attributes, event);
         }
         Some(ScopeType::Tool) => {
+            push_conversation_attribute(&mut attributes, event);
             push_tool_attributes(&mut attributes, event);
             push_tool_content(&mut attributes, "gen_ai.tool.call.arguments", event.input());
         }
@@ -653,9 +654,10 @@ fn push_tool_content(attributes: &mut Vec<KeyValue>, key: &'static str, value: O
         .as_str()
         .and_then(|text| serde_json::from_str::<Json>(text).ok());
     let value = parsed.as_ref().unwrap_or(value);
-    // The GenAI schemas require objects. Omit unstructured values rather than
-    // inventing a wrapper that changes the tool's arguments or result.
-    if value.is_object() {
+    // Span attributes cannot carry structured JSON directly, so preserve every
+    // non-null sanitized payload as canonical JSON text without inventing a
+    // wrapper that changes the tool's arguments or result.
+    if !value.is_null() {
         attributes.push(KeyValue::new(key, value.to_string()));
     }
 }
