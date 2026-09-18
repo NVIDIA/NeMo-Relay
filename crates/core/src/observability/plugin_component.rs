@@ -212,6 +212,9 @@ pub struct OpenTelemetrySignalEndpointConfig {
     /// Extra resource attributes.
     #[serde(default)]
     pub resource_attributes: HashMap<String, String>,
+    /// Literal root-scope Event metadata prefixes copied to OTLP resource attributes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub promote_resource_metadata_prefixes: Vec<String>,
     /// `service.name` resource attribute.
     #[serde(default = "default_otel_service_name")]
     pub service_name: String,
@@ -861,6 +864,12 @@ impl EditorConfig for OpenTelemetrySignalEndpointConfig {
                     EditorFieldKind::StringMap,
                     &[],
                     false,
+                ),
+                otel_editor_field(
+                    "promote_resource_metadata_prefixes",
+                    EditorFieldKind::List,
+                    &[],
+                    true,
                 ),
             ],
         };
@@ -1653,6 +1662,20 @@ fn register_opentelemetry_resources(
             },
         })
         .collect::<Vec<_>>();
+    let metric_observers = metric_subscribers
+        .iter()
+        .map(|subscriber| IndexedOpenTelemetryResource {
+            index: subscriber.index,
+            value: match &subscriber.value {
+                OpenTelemetryResource::Active(value) => {
+                    OpenTelemetryResource::Active(value.subscriber())
+                }
+                OpenTelemetryResource::Skipped(message) => {
+                    OpenTelemetryResource::Skipped(message.clone())
+                }
+            },
+        })
+        .collect::<Vec<_>>();
     let metric_diagnostic_field = (!metric_callbacks.is_empty()).then_some("opentelemetry.metrics");
     // Retain the subscribers as long as the registered fan-out callback exists.
     // Their providers and exporter runtimes must outlive event delivery.
@@ -1690,6 +1713,7 @@ fn register_opentelemetry_resources(
             deliver_opentelemetry_event(
                 &trace_callbacks,
                 &log_callbacks,
+                &metric_observers,
                 &metric_callbacks,
                 &rejected_metric_marks,
                 metric_diagnostic_field,
@@ -1911,6 +1935,7 @@ fn shutdown_all_opentelemetry_subscribers(
 fn deliver_opentelemetry_event(
     trace_callbacks: &[IndexedOpenTelemetryResource<EventSubscriberFn>],
     log_callbacks: &[IndexedOpenTelemetryResource<EventSubscriberFn>],
+    metric_observers: &[IndexedOpenTelemetryResource<EventSubscriberFn>],
     metric_callbacks: &[IndexedOpenTelemetryResource<MetricEventCallback>],
     rejected_metric_marks: &AtomicU64,
     metric_diagnostic_field: Option<&str>,
@@ -1920,6 +1945,7 @@ fn deliver_opentelemetry_event(
         MetricMarkClassification::NotMetric => {
             deliver_opentelemetry_callbacks(trace_callbacks, event);
             deliver_opentelemetry_callbacks(log_callbacks, event);
+            deliver_opentelemetry_callbacks(metric_observers, event);
         }
         MetricMarkClassification::Valid(measurements) => {
             deliver_opentelemetry_metric_callbacks(metric_callbacks, event, &measurements);
@@ -2155,6 +2181,7 @@ fn derive_signal_endpoint(
         header_env: trace.header_env.clone(),
         header_file: trace.header_file.clone(),
         resource_attributes: trace.resource_attributes.clone(),
+        promote_resource_metadata_prefixes: trace.promote_resource_metadata_prefixes.clone(),
         service_name: trace.service_name.clone(),
         service_namespace: trace.service_namespace.clone(),
         service_version: trace.service_version.clone(),
@@ -2371,7 +2398,10 @@ fn build_log_config(
         .with_scheduled_delay(Duration::from_millis(section.scheduled_delay_millis))
         .with_completed_span_context_ttl(Duration::from_millis(
             section.completed_span_context_ttl_millis,
-        ));
+        ))
+        .with_promote_resource_metadata_prefixes(
+            endpoint.promote_resource_metadata_prefixes.clone(),
+        );
     if endpoint.service_name != default_otel_service_name() {
         config = config.with_service_name(endpoint.service_name.clone());
     }
@@ -2394,7 +2424,10 @@ fn build_metric_config(
         .with_export_interval(Duration::from_millis(section.export_interval_millis))
         .with_temporality(temporality)
         .with_max_instruments(section.max_instruments)
-        .with_cardinality_limit(section.cardinality_limit);
+        .with_cardinality_limit(section.cardinality_limit)
+        .with_promote_resource_metadata_prefixes(
+            endpoint.promote_resource_metadata_prefixes.clone(),
+        );
     if endpoint.service_name != default_otel_service_name() {
         config = config.with_service_name(endpoint.service_name);
     }
@@ -4329,6 +4362,17 @@ fn validate_opentelemetry_signal_endpoint_values(
             signal,
             &format!("endpoints[{index}].transport"),
             "must be 'http_binary' or 'grpc'",
+        );
+    }
+    if let Err(error) =
+        validate_metadata_promotion_prefixes(&endpoint.promote_resource_metadata_prefixes)
+    {
+        push_otel_signal_diagnostic(
+            diagnostics,
+            policy,
+            signal,
+            &format!("endpoints[{index}].promote_resource_metadata_prefixes"),
+            &error,
         );
     }
     validate_case_insensitive_signal_header_duplicates(

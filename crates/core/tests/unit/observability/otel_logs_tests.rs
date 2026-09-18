@@ -267,6 +267,8 @@ fn log_config_validates_batch_limits_and_retains_resource_identity() {
             .with_max_export_batch_size(2),
         OpenTelemetryLogConfig::new("https://collector.example/v1/logs")
             .with_scheduled_delay(Duration::ZERO),
+        OpenTelemetryLogConfig::new("https://collector.example/v1/logs")
+            .with_promote_resource_metadata_prefixes(["nv.*"]),
     ] {
         assert!(config.validate().is_err());
     }
@@ -274,12 +276,17 @@ fn log_config_validates_batch_limits_and_retains_resource_identity() {
     let config = OpenTelemetryLogConfig::new("https://collector.example/v1/logs")
         .with_service_namespace("relay")
         .with_service_version("0.8.0")
+        .with_promote_resource_metadata_prefixes(["nv.client.", "nv.env."])
         .with_resource_attribute("deployment.environment", "test");
     assert_eq!(config.service_namespace.as_deref(), Some("relay"));
     assert_eq!(config.service_version.as_deref(), Some("0.8.0"));
     assert_eq!(
         config.resource_attributes.get("deployment.environment"),
         Some(&"test".to_string())
+    );
+    assert_eq!(
+        config.promote_resource_metadata_prefixes,
+        ["nv.client.", "nv.env."]
     );
 }
 
