@@ -14,7 +14,6 @@ use opentelemetry::KeyValue;
 use opentelemetry_sdk::{
     Resource,
     error::{OTelSdkError, OTelSdkResult},
-    resource::TelemetryResourceDetector,
 };
 use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
 
@@ -48,12 +47,10 @@ pub(super) fn validate_telemetry_sdk_resource_attributes(
     Ok(())
 }
 
-/// Build Relay's OTLP resource with only SDK-provided telemetry identity.
+/// Build Relay's OTLP resource, including the SDK's standard environment
+/// detectors before applying Relay-owned attributes.
 pub(super) fn telemetry_resource(attributes: impl IntoIterator<Item = KeyValue>) -> Resource {
-    Resource::builder_empty()
-        .with_detector(Box::new(TelemetryResourceDetector))
-        .with_attributes(attributes)
-        .build()
+    Resource::builder().with_attributes(attributes).build()
 }
 
 /// A bounded aggregate describing an OpenTelemetry runtime problem.
@@ -460,6 +457,16 @@ pub(super) fn reject_signal_header_environment(signal_variable: &'static str) ->
     Ok(())
 }
 
+/// Whether an automatic exporter should preserve Relay's HTTP/protobuf default.
+///
+/// A nonblank protocol setting is left entirely to the OTLP builder, including
+/// its signal-specific precedence and invalid-value handling.
+pub(super) fn automatic_protocol_is_unset(signal_variable: &str) -> bool {
+    [signal_variable, "OTEL_EXPORTER_OTLP_PROTOCOL"]
+        .into_iter()
+        .all(|variable| std::env::var(variable).map_or(true, |value| value.trim().is_empty()))
+}
+
 pub(super) fn resolve_http_signal_endpoint<'a>(endpoint: &'a str, signal: &str) -> Cow<'a, str> {
     let Ok(mut parsed) = reqwest::Url::parse(endpoint) else {
         return Cow::Borrowed(endpoint);
@@ -519,12 +526,15 @@ pub(super) fn record_signal_runtime_diagnostic(
 }
 
 pub(super) fn signal_resource(
-    service_name: &str,
+    service_name: Option<&str>,
     service_namespace: Option<&str>,
     service_version: Option<&str>,
     resource_attributes: &HashMap<String, String>,
 ) -> Resource {
-    let mut attributes = vec![KeyValue::new("service.name", service_name.to_string())];
+    let mut attributes = Vec::new();
+    if let Some(service_name) = service_name {
+        attributes.push(KeyValue::new("service.name", service_name.to_string()));
+    }
     if let Some(namespace) = service_namespace {
         attributes.push(KeyValue::new("service.namespace", namespace.to_string()));
     }

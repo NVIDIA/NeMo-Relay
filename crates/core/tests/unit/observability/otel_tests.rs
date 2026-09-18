@@ -91,6 +91,26 @@ fn provider_errors_identify_their_telemetry_signal() {
 }
 
 #[test]
+fn default_trace_config_leaves_service_name_to_sdk_resource_detection() {
+    let config = OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4318");
+    assert!(
+        configured_resource_attributes(&config)
+            .iter()
+            .all(|attribute| attribute.key.as_str() != "service.name")
+    );
+
+    let configured = config.with_service_name("relay-configured-service");
+    assert!(
+        configured_resource_attributes(&configured)
+            .iter()
+            .any(|attribute| {
+                attribute.key.as_str() == "service.name"
+                    && attribute.value.as_str() == "relay-configured-service"
+            })
+    );
+}
+
+#[test]
 fn shutdown_is_idempotent_for_all_otlp_subscribers() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
 
@@ -1486,7 +1506,7 @@ fn assert_config_builder_overrides(config: &OpenTelemetryConfig) {
         config.resource_attributes.get("deployment.environment"),
         Some(&"test".into())
     );
-    assert_eq!(config.service_name, "demo-agent");
+    assert_eq!(config.service_name.as_deref(), Some("demo-agent"));
     assert_eq!(config.service_namespace.as_deref(), Some("agents"));
     assert_eq!(config.service_version.as_deref(), Some("1.2.3"));
     assert_eq!(config.instrumentation_scope, "demo-scope");
@@ -1498,7 +1518,7 @@ fn assert_config_builder_overrides(config: &OpenTelemetryConfig) {
 
 fn assert_config_defaults(defaults: &OpenTelemetryConfig) {
     assert_eq!(defaults.transport, OtlpTransport::HttpBinary);
-    assert_eq!(defaults.service_name, "unknown_service");
+    assert_eq!(defaults.service_name, None);
     assert_eq!(defaults.instrumentation_scope, "opentelemetry");
     assert_eq!(defaults.mark_projection, MarkProjection::Inherit);
     assert_eq!(defaults.mark_exclude_names, vec!["llm.chunk"]);

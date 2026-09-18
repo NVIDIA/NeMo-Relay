@@ -74,6 +74,275 @@ fn temp_dir(prefix: &str) -> PathBuf {
     path.canonicalize().unwrap()
 }
 
+#[test]
+fn automatic_otel_requires_an_endpoint_and_limits_signals_to_endpoint_scope() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
+    let trace_endpoint = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT";
+    let log_endpoint = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT";
+    let metric_endpoint = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT";
+    let header = "OTEL_EXPORTER_OTLP_HEADERS";
+    let traces = "OTEL_TRACES_EXPORTER";
+    let disabled = "OTEL_SDK_DISABLED";
+    let previous_endpoint = std::env::var_os(endpoint);
+    let previous_trace_endpoint = std::env::var_os(trace_endpoint);
+    let previous_log_endpoint = std::env::var_os(log_endpoint);
+    let previous_metric_endpoint = std::env::var_os(metric_endpoint);
+    let previous_header = std::env::var_os(header);
+    let previous_traces = std::env::var_os(traces);
+    let previous_disabled = std::env::var_os(disabled);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::remove_var(endpoint);
+        std::env::remove_var(trace_endpoint);
+        std::env::remove_var(log_endpoint);
+        std::env::remove_var(metric_endpoint);
+        std::env::remove_var(disabled);
+        std::env::set_var(header, "authorization=token");
+    }
+    assert_eq!(automatic_otlp_signals(), None);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::set_var(trace_endpoint, "http://127.0.0.1:4318/v1/traces") };
+    assert_eq!(
+        automatic_otlp_signals(),
+        Some(AutomaticOtlpSignals {
+            traces: true,
+            logs: false,
+            metrics: false,
+        })
+    );
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::remove_var(trace_endpoint);
+        std::env::set_var(endpoint, "http://127.0.0.1:4318");
+        std::env::set_var(traces, "none");
+    }
+    assert_eq!(
+        automatic_otlp_signals(),
+        Some(AutomaticOtlpSignals {
+            traces: true,
+            logs: true,
+            metrics: true,
+        })
+    );
+    assert!(!environment_signal_enabled(traces));
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::set_var(traces, "console") };
+    assert!(!environment_signal_enabled(traces));
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::set_var(disabled, "TRUE") };
+    assert_eq!(automatic_otlp_signals(), None);
+
+    // SAFETY: restore the process environment after this test.
+    unsafe {
+        match previous_endpoint {
+            Some(value) => std::env::set_var(endpoint, value),
+            None => std::env::remove_var(endpoint),
+        }
+        match previous_trace_endpoint {
+            Some(value) => std::env::set_var(trace_endpoint, value),
+            None => std::env::remove_var(trace_endpoint),
+        }
+        match previous_log_endpoint {
+            Some(value) => std::env::set_var(log_endpoint, value),
+            None => std::env::remove_var(log_endpoint),
+        }
+        match previous_metric_endpoint {
+            Some(value) => std::env::set_var(metric_endpoint, value),
+            None => std::env::remove_var(metric_endpoint),
+        }
+        match previous_header {
+            Some(value) => std::env::set_var(header, value),
+            None => std::env::remove_var(header),
+        }
+        match previous_traces {
+            Some(value) => std::env::set_var(traces, value),
+            None => std::env::remove_var(traces),
+        }
+        match previous_disabled {
+            Some(value) => std::env::set_var(disabled, value),
+            None => std::env::remove_var(disabled),
+        }
+    }
+}
+
+#[test]
+fn automatic_otel_defaults_to_http_protobuf_without_protocol_configuration() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let generic = "OTEL_EXPORTER_OTLP_PROTOCOL";
+    let traces = "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL";
+    let previous_generic = std::env::var_os(generic);
+    let previous_traces = std::env::var_os(traces);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::remove_var(generic);
+        std::env::remove_var(traces);
+    }
+    assert!(crate::observability::otel_signal::automatic_protocol_is_unset(traces));
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::set_var(generic, "grpc") };
+    assert!(!crate::observability::otel_signal::automatic_protocol_is_unset(traces));
+
+    // SAFETY: restore the process environment after this test.
+    unsafe {
+        match previous_generic {
+            Some(value) => std::env::set_var(generic, value),
+            None => std::env::remove_var(generic),
+        }
+        match previous_traces {
+            Some(value) => std::env::set_var(traces, value),
+            None => std::env::remove_var(traces),
+        }
+    }
+}
+
+#[test]
+fn automatic_otel_subscribers_accept_global_otlp_headers() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
+    let headers = "OTEL_EXPORTER_OTLP_HEADERS";
+    let previous_endpoint = std::env::var_os(endpoint);
+    let previous_headers = std::env::var_os(headers);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var(endpoint, "http://127.0.0.1:4318");
+        std::env::set_var(headers, "authorization=Bearer%20environment-token");
+    }
+
+    let traces = OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin()
+        .expect("automatic trace exporter should accept global headers");
+    let logs = OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin()
+        .expect("automatic log exporter should accept global headers");
+    let metrics = OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin()
+        .expect("automatic metric exporter should accept global headers");
+    drop((traces, logs, metrics));
+
+    // SAFETY: restore the process environment after this test.
+    unsafe {
+        match previous_endpoint {
+            Some(value) => std::env::set_var(endpoint, value),
+            None => std::env::remove_var(endpoint),
+        }
+        match previous_headers {
+            Some(value) => std::env::set_var(headers, value),
+            None => std::env::remove_var(headers),
+        }
+    }
+}
+
+#[test]
+fn automatic_otel_exporter_is_added_to_configured_relay_endpoints() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
+    let previous_endpoint = std::env::var_os(endpoint);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::set_var(endpoint, "http://127.0.0.1:4318") };
+
+    let config = plugin_config(json!({
+        "version": 3,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{
+                "type": "full",
+                "endpoint": "http://127.0.0.1:4319"
+            }]
+        }
+    }));
+    futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+
+    let state = global_context();
+    let state = state.read().unwrap();
+    assert_eq!(state.event_subscribers.len(), 2);
+    drop(state);
+    crate::plugin::test_close_plugin_host().unwrap();
+
+    // SAFETY: restore the process environment after this test.
+    unsafe {
+        match previous_endpoint {
+            Some(value) => std::env::set_var(endpoint, value),
+            None => std::env::remove_var(endpoint),
+        }
+    }
+}
+
+#[test]
+fn disabled_opentelemetry_section_suppresses_automatic_exporters() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
+    let previous_endpoint = std::env::var_os(endpoint);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::set_var(endpoint, "http://127.0.0.1:4318") };
+
+    let config = plugin_config(json!({
+        "version": 3,
+        "opentelemetry": {"enabled": false}
+    }));
+    futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+
+    let state = global_context();
+    assert!(state.read().unwrap().event_subscribers.is_empty());
+    crate::plugin::test_close_plugin_host().unwrap();
+
+    // SAFETY: restore the process environment after this test.
+    unsafe {
+        match previous_endpoint {
+            Some(value) => std::env::set_var(endpoint, value),
+            None => std::env::remove_var(endpoint),
+        }
+    }
+}
+
+#[test]
+fn enabled_empty_opentelemetry_section_allows_automatic_exporters() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
+    let disabled = "OTEL_SDK_DISABLED";
+    let previous_endpoint = std::env::var_os(endpoint);
+    let previous_disabled = std::env::var_os(disabled);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var(endpoint, "http://127.0.0.1:4318");
+        std::env::remove_var(disabled);
+    }
+    assert!(automatic_otlp_signals().is_some());
+
+    let config = plugin_config(json!({
+        "version": 3,
+        "opentelemetry": {"enabled": true}
+    }));
+    futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+
+    let state = global_context();
+    assert_eq!(state.read().unwrap().event_subscribers.len(), 1);
+    crate::plugin::test_close_plugin_host().unwrap();
+
+    // SAFETY: restore the process environment after this test.
+    unsafe {
+        match previous_endpoint {
+            Some(value) => std::env::set_var(endpoint, value),
+            None => std::env::remove_var(endpoint),
+        }
+        match previous_disabled {
+            Some(value) => std::env::set_var(disabled, value),
+            None => std::env::remove_var(disabled),
+        }
+    }
+}
+
 #[cfg(feature = "atof-streaming")]
 #[derive(Clone, Debug)]
 struct HttpCapture {
