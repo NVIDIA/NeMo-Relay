@@ -633,10 +633,12 @@ fn assert_native_digest_edges() {
 
 fn assert_native_host_api_versions() {
     let current = native_host_api();
+    let frozen_v5 = native_host_api_v5();
     let frozen_v4 = native_host_api_v4();
     let frozen_v3 = native_host_api_v3();
     let legacy = native_host_api_v2();
     assert!(!current.is_null());
+    assert!(!frozen_v5.is_null());
     assert!(!frozen_v4.is_null());
     assert!(!frozen_v3.is_null());
     assert!(!legacy.is_null());
@@ -645,6 +647,10 @@ fn assert_native_host_api_versions() {
         NEMO_RELAY_NATIVE_ABI_VERSION
     );
     assert_eq!(unsafe { (*frozen_v3).abi_version }, 3);
+    assert_eq!(
+        unsafe { (*frozen_v5).abi_version },
+        NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT
+    );
     assert_eq!(
         unsafe { (*frozen_v4).abi_version },
         NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL
@@ -656,6 +662,10 @@ fn assert_native_host_api_versions() {
     assert_eq!(
         unsafe { (*current).struct_size },
         std::mem::size_of::<NemoRelayNativeHostApiV6>()
+    );
+    assert_eq!(
+        unsafe { (*frozen_v5).struct_size },
+        std::mem::size_of::<NemoRelayNativeHostApiV5>()
     );
     assert_eq!(
         unsafe { (*frozen_v4).struct_size },

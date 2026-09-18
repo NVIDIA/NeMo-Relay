@@ -57,7 +57,8 @@ use chrono::{DateTime, Utc};
 use libloading::{Library, Symbol};
 use nemo_relay_plugin::{
     NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
-    NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL, NemoRelayNativeAsyncCallbackState,
+    NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL,
+    NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT, NemoRelayNativeAsyncCallbackState,
     NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncLlmStreamOpenCb,
     NemoRelayNativeAsyncLlmStreamPullCb, NemoRelayNativeAsyncMiddlewareCb,
     NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncNextResultCb,
@@ -410,9 +411,13 @@ fn load_one_native_plugin(
                 ))
             })?;
         let mut status = entry(native_host_api(), &mut plugin);
-        // Older SDKs reject newer tables. Negotiate from the current v5 table
-        // through separately frozen v4, v3, and v2 tables so their struct sizes and
+        // Older SDKs reject newer tables. Negotiate from the current v6 table
+        // through separately frozen v5, v4, v3, and v2 tables so their struct sizes and
         // function pointers do not change as the current ABI grows.
+        if status == NemoRelayStatus::InvalidArg {
+            drop_native_plugin_descriptor(&mut plugin);
+            status = entry(native_host_api_v5(), &mut plugin);
+        }
         if status == NemoRelayStatus::InvalidArg {
             drop_native_plugin_descriptor(&mut plugin);
             status = entry(native_host_api_v4(), &mut plugin);
@@ -871,6 +876,11 @@ fn native_host_api() -> *const NemoRelayNativeHostApiV1 {
     &HOST_API.get_or_init(build_native_host_api_v6).v5.v4.v3.v1 as *const NemoRelayNativeHostApiV1
 }
 
+fn native_host_api_v5() -> *const NemoRelayNativeHostApiV1 {
+    static HOST_API: OnceLock<NemoRelayNativeHostApiV5> = OnceLock::new();
+    &HOST_API.get_or_init(build_native_host_api_v5).v4.v3.v1 as *const NemoRelayNativeHostApiV1
+}
+
 fn native_host_api_v4() -> *const NemoRelayNativeHostApiV1 {
     static HOST_API: OnceLock<NemoRelayNativeHostApiV4> = OnceLock::new();
     &HOST_API.get_or_init(build_native_host_api_v4).v3.v1 as *const NemoRelayNativeHostApiV1
@@ -1008,7 +1018,7 @@ fn build_native_host_api_v4() -> NemoRelayNativeHostApiV4 {
 
 fn build_native_host_api_v5() -> NemoRelayNativeHostApiV5 {
     let mut v4 = build_native_host_api_v4();
-    v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
+    v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT;
     v4.v3.v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV5>();
     NemoRelayNativeHostApiV5 {
         v4,
