@@ -803,6 +803,73 @@ class TestOpenTelemetryTypes:
         assert config.promote_resource_metadata_prefixes == ["deployment."]
         assert "OpenTelemetryConfig" in repr(config)
 
+    def test_file_sink_config_writes_a_trace_file(self, tmp_path) -> None:
+        config = OpenTelemetryConfig.file_sink("full", str(tmp_path), "py-trace.jsonl")
+
+        # A file sink has no endpoint, so endpoint validation does not apply.
+        assert config.endpoint == ""
+
+        subscriber = OpenTelemetrySubscriber(config)
+        try:
+            assert (tmp_path / "py-trace.jsonl").is_file()
+        finally:
+            subscriber.shutdown()
+
+    def test_file_sink_defaults_name_the_file_after_the_format(self, tmp_path) -> None:
+        subscriber = OpenTelemetrySubscriber(OpenTelemetryConfig.file_sink("full", str(tmp_path), format="proto"))
+        try:
+            assert (tmp_path / "nemo-relay-otlp.otlp.pb").is_file()
+        finally:
+            subscriber.shutdown()
+
+    @pytest.mark.parametrize(
+        ("kwargs", "expected"),
+        [
+            ({"format": "yaml"}, "format must be"),
+            ({"mode": "truncate"}, "mode must be"),
+            ({"filename": "../escape.jsonl"}, "single path component"),
+        ],
+    )
+    def test_file_sink_rejects_invalid_inputs(self, tmp_path, kwargs, expected) -> None:
+        config = OpenTelemetryConfig.file_sink("full", str(tmp_path), **kwargs)
+
+        with pytest.raises(ValueError, match=expected):
+            OpenTelemetrySubscriber(config)
+
+    @pytest.mark.parametrize(
+        ("attribute", "value"),
+        [
+            ("endpoint", "https://collector.example/v1/traces"),
+            ("transport", "grpc"),
+            ("timeout_millis", 1250),
+        ],
+    )
+    def test_file_sink_rejects_endpoint_only_attributes(self, tmp_path, attribute, value) -> None:
+        config = OpenTelemetryConfig.file_sink("full", str(tmp_path))
+
+        # Assignment fails rather than being dropped: a config that looks like
+        # it exports to a collector but writes a file is worse than an error.
+        with pytest.raises(ValueError, match=f"{attribute} does not apply to a file sink"):
+            setattr(config, attribute, value)
+
+    def test_endpoint_config_still_accepts_those_attributes(self) -> None:
+        config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
+
+        config.endpoint = "http://localhost:4319/v1/traces"
+        config.transport = "grpc"
+        config.timeout_millis = 1250
+
+        assert config.endpoint == "http://localhost:4319/v1/traces"
+        assert config.transport == "grpc"
+        assert config.timeout_millis == 1250
+
+    def test_file_sink_rejects_headers(self, tmp_path) -> None:
+        config = OpenTelemetryConfig.file_sink("full", str(tmp_path))
+        config.set_header("authorization", "Bearer token")
+
+        with pytest.raises(ValueError, match="do not apply to a file sink"):
+            OpenTelemetrySubscriber(config)
+
     def test_config_rejects_invalid_map_values(self) -> None:
         config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
 

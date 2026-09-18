@@ -18,6 +18,7 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -28,6 +29,7 @@ use super::header_file::{
     HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
     validate_header_files,
 };
+use super::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
 use super::otel_signal::{
     MetricMarkClassification, SignalRuntimeDiagnostics, TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS,
     classify_metric_mark, resolve_header_env, retry_batch_processor_channel_full,
@@ -188,6 +190,104 @@ pub enum OtlpTransport {
     Grpc,
 }
 
+/// The network settings of an OTLP endpoint destination.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OtlpEndpointSettings {
+    /// OTLP endpoint URL.
+    pub endpoint: String,
+    /// Transport used to reach it.
+    pub transport: OtlpTransport,
+    /// Exporter headers or gRPC metadata.
+    pub headers: HashMap<String, String>,
+    /// Header names mapped to the environment variables supplying their values.
+    pub header_env: HashMap<String, String>,
+    /// Header names mapped to the files supplying their values.
+    pub header_file: HeaderFiles,
+    /// Per-request timeout.
+    pub timeout: Duration,
+}
+
+impl Default for OtlpEndpointSettings {
+    fn default() -> Self {
+        Self {
+            endpoint: String::new(),
+            transport: OtlpTransport::default(),
+            headers: HashMap::new(),
+            header_env: HashMap::new(),
+            header_file: HashMap::new(),
+            timeout: Duration::from_secs(3),
+        }
+    }
+}
+
+/// Where a trace exporter sends its spans.
+///
+/// An enum because `nemo-relay plugins edit` can build a configuration
+/// programmatically, and neither destination's options mean anything to the
+/// other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TraceDestination {
+    /// An OTLP collector reached over the network.
+    Otlp(OtlpEndpointSettings),
+    /// A local file.
+    File(OtlpFileSinkSettings),
+}
+
+impl Default for TraceDestination {
+    fn default() -> Self {
+        Self::Otlp(OtlpEndpointSettings::default())
+    }
+}
+
+impl TraceDestination {
+    /// Returns the endpoint settings, or `None` for a file destination.
+    pub fn endpoint_settings(&self) -> Option<&OtlpEndpointSettings> {
+        match self {
+            Self::Otlp(settings) => Some(settings),
+            Self::File(_) => None,
+        }
+    }
+
+    /// Returns the file sink settings, or `None` for an endpoint destination.
+    pub fn file_sink(&self) -> Option<&OtlpFileSinkSettings> {
+        match self {
+            Self::File(settings) => Some(settings),
+            Self::Otlp(_) => None,
+        }
+    }
+
+    /// The export retry budget. A file sink has no request timeout, so it
+    /// reuses the endpoint default; the processor still needs a bound.
+    fn retry_timeout(&self) -> Duration {
+        match self {
+            Self::Otlp(settings) => settings.timeout,
+            Self::File(_) => OtlpEndpointSettings::default().timeout,
+        }
+    }
+
+    /// The name used in diagnostics and delivery errors. Never a URL's
+    /// credentials or query: see [`trace_endpoint_log_identity`].
+    fn label(&self) -> String {
+        match self {
+            Self::Otlp(settings) => settings.endpoint.clone(),
+            Self::File(settings) => settings.path.display().to_string(),
+        }
+    }
+}
+
+/// A local file destination for exported spans.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OtlpFileSinkSettings {
+    /// Directory the output is confined to.
+    pub output_directory: PathBuf,
+    /// Full path of the output file, which must live under `output_directory`.
+    pub path: PathBuf,
+    /// On-disk encoding.
+    pub format: OtlpFileFormat,
+    /// Whether an existing file is appended to rather than truncated.
+    pub append: bool,
+}
+
 /// Completes a bare OTLP/HTTP base URL with the standard trace signal path.
 #[doc(hidden)]
 pub fn resolve_http_trace_endpoint(endpoint: &str) -> Cow<'_, str> {
@@ -263,10 +363,11 @@ pub(super) fn validate_trace_endpoint(endpoint: &str) -> Result<()> {
 #[derive(Debug, Clone)]
 pub struct OpenTelemetryConfig {
     otel_type: OpenTelemetryType,
-    endpoint: String,
-    headers: HashMap<String, String>,
-    header_env: HashMap<String, String>,
-    header_file: HeaderFiles,
+    destination: TraceDestination,
+    /// Builder options that do not apply to the configured destination,
+    /// recorded so construction can refuse them by name instead of dropping
+    /// them silently.
+    inapplicable_options: Vec<&'static str>,
     resource_attributes: HashMap<String, String>,
     service_name: String,
     service_namespace: Option<String>,
@@ -277,8 +378,6 @@ pub struct OpenTelemetryConfig {
     attribute_mappings: Vec<OtlpAttributeMapping>,
     promote_metadata_prefixes: Vec<String>,
     promote_resource_metadata_prefixes: Vec<String>,
-    timeout: Duration,
-    transport: OtlpTransport,
     max_queue_size: Option<usize>,
     max_export_batch_size: Option<usize>,
     scheduled_delay: Option<Duration>,
@@ -289,10 +388,8 @@ impl OpenTelemetryConfig {
     fn default_values() -> Self {
         Self {
             otel_type: OpenTelemetryType::Full,
-            endpoint: String::new(),
-            headers: HashMap::new(),
-            header_env: HashMap::new(),
-            header_file: HashMap::new(),
+            destination: TraceDestination::default(),
+            inapplicable_options: Vec::new(),
             resource_attributes: HashMap::new(),
             service_name: "unknown_service".to_string(),
             service_namespace: None,
@@ -303,8 +400,6 @@ impl OpenTelemetryConfig {
             attribute_mappings: Vec::new(),
             promote_metadata_prefixes: Vec::new(),
             promote_resource_metadata_prefixes: Vec::new(),
-            timeout: Duration::from_secs(3),
-            transport: OtlpTransport::HttpBinary,
             max_queue_size: None,
             max_export_batch_size: None,
             scheduled_delay: None,
@@ -316,9 +411,34 @@ impl OpenTelemetryConfig {
     pub fn new(otel_type: OpenTelemetryType, endpoint: impl Into<String>) -> Self {
         Self {
             otel_type,
-            endpoint: endpoint.into(),
+            destination: TraceDestination::Otlp(OtlpEndpointSettings {
+                endpoint: endpoint.into(),
+                ..OtlpEndpointSettings::default()
+            }),
             ..Self::default_values()
         }
+    }
+
+    /// Creates a typed OpenTelemetry exporter writing OTLP to a local file.
+    ///
+    /// Unlike [`OpenTelemetryConfig::new`] this carries no endpoint: the spans
+    /// never cross a network, so endpoint validation does not apply to it.
+    pub fn new_file_sink(otel_type: OpenTelemetryType, file_sink: OtlpFileSinkSettings) -> Self {
+        Self {
+            otel_type,
+            destination: TraceDestination::File(file_sink),
+            ..Self::default_values()
+        }
+    }
+
+    /// Returns this config's destination.
+    pub fn destination(&self) -> &TraceDestination {
+        &self.destination
+    }
+
+    /// Returns the file sink this config writes to, if it has one.
+    pub fn file_sink(&self) -> Option<&OtlpFileSinkSettings> {
+        self.destination.file_sink()
     }
 
     /// Creates an HTTP OTLP config for the given service name.
@@ -326,7 +446,10 @@ impl OpenTelemetryConfig {
     pub(crate) fn http_binary(service_name: impl Into<String>) -> Self {
         Self {
             service_name: service_name.into(),
-            transport: OtlpTransport::HttpBinary,
+            destination: TraceDestination::Otlp(OtlpEndpointSettings {
+                transport: OtlpTransport::HttpBinary,
+                ..OtlpEndpointSettings::default()
+            }),
             ..Self::default_values()
         }
     }
@@ -336,20 +459,33 @@ impl OpenTelemetryConfig {
     pub(crate) fn grpc(service_name: impl Into<String>) -> Self {
         Self {
             service_name: service_name.into(),
-            transport: OtlpTransport::Grpc,
+            destination: TraceDestination::Otlp(OtlpEndpointSettings {
+                transport: OtlpTransport::Grpc,
+                ..OtlpEndpointSettings::default()
+            }),
             ..Self::default_values()
         }
     }
 
     /// Overrides the OTLP endpoint. If unset, exporter defaults and OTEL_* env vars apply.
+    ///
+    /// Rejected at construction when the destination is a file sink.
     pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
-        self.endpoint = endpoint.into();
+        match &mut self.destination {
+            TraceDestination::Otlp(settings) => settings.endpoint = endpoint.into(),
+            TraceDestination::File(_) => self.inapplicable_options.push("endpoint"),
+        }
         self
     }
 
     /// Selects the OTLP transport.
+    ///
+    /// Rejected at construction when the destination is a file sink.
     pub fn with_transport(mut self, transport: OtlpTransport) -> Self {
-        self.transport = transport;
+        match &mut self.destination {
+            TraceDestination::Otlp(settings) => settings.transport = transport,
+            TraceDestination::File(_) => self.inapplicable_options.push("transport"),
+        }
         self
     }
 
@@ -360,14 +496,28 @@ impl OpenTelemetryConfig {
     }
 
     /// Adds a header/metadata entry for the exporter.
+    ///
+    /// Rejected at construction when the destination is a file sink.
     pub fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.headers.insert(key.into(), value.into());
+        match &mut self.destination {
+            TraceDestination::Otlp(settings) => {
+                settings.headers.insert(key.into(), value.into());
+            }
+            TraceDestination::File(_) => self.inapplicable_options.push("headers"),
+        }
         self
     }
 
     /// Maps an exporter header name to the environment variable supplying its value.
+    ///
+    /// Rejected at construction when the destination is a file sink.
     pub fn with_header_env(mut self, key: impl Into<String>, variable: impl Into<String>) -> Self {
-        self.header_env.insert(key.into(), variable.into());
+        match &mut self.destination {
+            TraceDestination::Otlp(settings) => {
+                settings.header_env.insert(key.into(), variable.into());
+            }
+            TraceDestination::File(_) => self.inapplicable_options.push("header_env"),
+        }
         self
     }
 
@@ -376,13 +526,21 @@ impl OpenTelemetryConfig {
         key: impl Into<String>,
         path: impl Into<String>,
     ) -> Self {
-        self.header_file.insert(key.into(), path.into());
+        match &mut self.destination {
+            TraceDestination::Otlp(settings) => {
+                settings.header_file.insert(key.into(), path.into());
+            }
+            TraceDestination::File(_) => self.inapplicable_options.push("header_file"),
+        }
         self
     }
 
     #[cfg(test)]
     pub(crate) fn header(&self, key: &str) -> Option<&str> {
-        self.headers.get(key).map(String::as_str)
+        self.destination
+            .endpoint_settings()
+            .and_then(|settings| settings.headers.get(key))
+            .map(String::as_str)
     }
 
     /// Adds a resource attribute as a string key/value pair.
@@ -396,8 +554,13 @@ impl OpenTelemetryConfig {
     }
 
     /// Sets the OTLP request timeout.
+    ///
+    /// Rejected at construction when the destination is a file sink.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        match &mut self.destination {
+            TraceDestination::Otlp(settings) => settings.timeout = timeout,
+            TraceDestination::File(_) => self.inapplicable_options.push("timeout"),
+        }
         self
     }
 
@@ -622,16 +785,36 @@ impl OpenTelemetrySubscriber {
         )
     }
 
+    /// Creates a plugin-managed subscriber for a configured file sink.
+    pub(crate) fn new_for_plugin_file_sink(
+        config: OpenTelemetryConfig,
+        file_sink_index: usize,
+    ) -> Result<Self> {
+        Self::new_with_runtime_diagnostics(
+            config,
+            Some(format!(
+                "opentelemetry.file_sinks[{file_sink_index}].output_directory"
+            )),
+        )
+    }
+
     fn new_with_runtime_diagnostics(
         mut config: OpenTelemetryConfig,
         diagnostic_field: Option<String>,
     ) -> Result<Self> {
-        if config.endpoint.trim().is_empty() {
-            return Err(OpenTelemetryError::ExporterBuild(
-                "endpoint must be a nonblank string".to_string(),
-            ));
+        // An option that does not apply to the configured destination is a
+        // configuration error, not something to drop on the floor: `nemo-relay
+        // plugins edit` can set one, and a silently ignored endpoint looks
+        // exactly like a working one.
+        if !config.inapplicable_options.is_empty() {
+            let mut options = config.inapplicable_options.clone();
+            options.sort_unstable();
+            options.dedup();
+            return Err(OpenTelemetryError::ExporterBuild(format!(
+                "{} do not apply to a file sink destination",
+                options.join(", ")
+            )));
         }
-        validate_trace_endpoint(&config.endpoint)?;
         if config.completed_span_context_ttl.is_zero() {
             return Err(OpenTelemetryError::ExporterBuild(
                 "completed_span_context_ttl must be greater than 0".to_string(),
@@ -645,11 +828,23 @@ impl OpenTelemetrySubscriber {
             .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
         validate_telemetry_sdk_resource_attributes(&config.resource_attributes)?;
         reject_global_header_environment()?;
-        validate_headers(&config.headers)?;
-        validate_header_files(&config.headers, &config.header_env, &config.header_file)
+        if let TraceDestination::Otlp(settings) = &mut config.destination {
+            if settings.endpoint.trim().is_empty() {
+                return Err(OpenTelemetryError::ExporterBuild(
+                    "endpoint must be a nonblank string".to_string(),
+                ));
+            }
+            validate_trace_endpoint(&settings.endpoint)?;
+            validate_headers(&settings.headers)?;
+            validate_header_files(
+                &settings.headers,
+                &settings.header_env,
+                &settings.header_file,
+            )
             .map_err(OpenTelemetryError::ExporterBuild)?;
-        config.headers = resolve_header_env(&config.headers, &config.header_env)?;
-        validate_headers(&config.headers)?;
+            settings.headers = resolve_header_env(&settings.headers, &settings.header_env)?;
+            validate_headers(&settings.headers)?;
+        }
         let runtime_diagnostics = SignalRuntimeDiagnostics::new(diagnostic_field);
         let (provider, runtime) =
             build_owned_tracer_provider(config.clone(), runtime_diagnostics.clone())?;
@@ -1083,54 +1278,89 @@ fn build_tracer_provider_with_resource(
     runtime_diagnostics: SignalRuntimeDiagnostics,
     resource_attributes: Vec<KeyValue>,
 ) -> Result<SdkTracerProvider> {
-    let exporter = match config.transport {
+    // `SpanExporter::export` returns `impl Future`, so the trait is not
+    // dyn-compatible and the two exporters cannot share a boxed type. Each arm
+    // instead hands its concrete exporter to the generic builder below.
+    match &config.destination {
+        TraceDestination::File(file_sink) => provider_with_exporter(
+            OtlpFileSpanExporter::new(
+                &file_sink.output_directory,
+                &file_sink.path,
+                file_sink.format,
+                file_sink.append,
+            )
+            .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?,
+            config,
+            runtime_diagnostics,
+            resource_attributes,
+        ),
+        TraceDestination::Otlp(settings) => provider_with_exporter(
+            otlp_span_exporter(settings)?,
+            config,
+            runtime_diagnostics,
+            resource_attributes,
+        ),
+    }
+}
+
+/// Builds the OTLP network exporter for an endpoint destination.
+fn otlp_span_exporter(settings: &OtlpEndpointSettings) -> Result<OtlpSpanExporter> {
+    match settings.transport {
         OtlpTransport::HttpBinary => {
             let client = reqwest::Client::builder()
-                .timeout(config.timeout)
+                .timeout(settings.timeout)
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
             let mut builder = OtlpSpanExporter::builder()
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
-                .with_timeout(config.timeout);
-            if !config.header_file.is_empty() {
+                .with_timeout(settings.timeout);
+            if !settings.header_file.is_empty() {
                 builder = builder.with_http_client(HeaderFileHttpClient::new(
                     client,
-                    HeaderFileResolver::new(config.header_file.clone()),
+                    HeaderFileResolver::new(settings.header_file.clone()),
                 ));
             } else {
                 builder = builder.with_http_client(client);
             }
             builder =
-                builder.with_endpoint(resolve_http_trace_endpoint(&config.endpoint).into_owned());
-            if !config.headers.is_empty() {
-                builder = builder.with_headers(config.headers.clone());
+                builder.with_endpoint(resolve_http_trace_endpoint(&settings.endpoint).into_owned());
+            if !settings.headers.is_empty() {
+                builder = builder.with_headers(settings.headers.clone());
             }
             builder
                 .build()
-                .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()))?
+                .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()))
         }
         OtlpTransport::Grpc => {
             let mut builder = OtlpSpanExporter::builder()
                 .with_tonic()
                 .with_protocol(Protocol::Grpc)
-                .with_timeout(config.timeout);
-            builder = builder.with_endpoint(config.endpoint.clone());
-            if !config.headers.is_empty() {
-                builder = builder.with_metadata(build_grpc_metadata(&config.headers)?);
+                .with_timeout(settings.timeout);
+            builder = builder.with_endpoint(settings.endpoint.clone());
+            if !settings.headers.is_empty() {
+                builder = builder.with_metadata(build_grpc_metadata(&settings.headers)?);
             }
-            if !config.header_file.is_empty() {
+            if !settings.header_file.is_empty() {
                 builder = builder.with_interceptor(HeaderFileInterceptor::new(
-                    HeaderFileResolver::new(config.header_file.clone()),
+                    HeaderFileResolver::new(settings.header_file.clone()),
                 ));
             }
             builder
                 .build()
-                .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()))?
+                .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()))
         }
-    };
+    }
+}
 
+/// Wraps any span exporter in the shared provider, batching, and diagnostics.
+fn provider_with_exporter<E: SpanExporter + 'static>(
+    exporter: E,
+    config: &OpenTelemetryConfig,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+    resource_attributes: Vec<KeyValue>,
+) -> Result<SdkTracerProvider> {
     // Disable per-span attribute caps. Consumers may emit large attribute
     // sets on long-running spans; the OTel SDK default (128) silently drops
     // attributes added last in the span's lifecycle.
@@ -1152,10 +1382,10 @@ fn build_tracer_provider_with_resource(
     }
     let processor = DiagnosticBatchSpanProcessor::new_with_batch_config_and_retry_timeout(
         exporter,
-        config.endpoint.clone(),
+        config.destination.label(),
         runtime_diagnostics,
         batch_config.build(),
-        config.timeout,
+        config.destination.retry_timeout(),
     );
     Ok(builder.with_span_processor(processor).build())
 }

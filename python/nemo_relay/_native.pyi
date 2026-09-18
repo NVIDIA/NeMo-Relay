@@ -1178,6 +1178,24 @@ class OpenTelemetryConfig:
     ) -> None:
         """Create a typed OpenTelemetry config for the required endpoint."""
         ...
+    # `endpoint`, `transport`, and `timeout_millis` raise ValueError when
+    # assigned on a config created by `file_sink`: the destinations are
+    # mutually exclusive.
+    @staticmethod
+    def file_sink(
+        otel_type: Literal["full", "gen_ai", "openinference"],
+        output_directory: str,
+        filename: Optional[str] = None,
+        format: Literal["json_lines", "proto"] = "json_lines",
+        mode: Literal["append", "overwrite"] = "overwrite",
+    ) -> "OpenTelemetryConfig":
+        """Create a config that writes OTLP to a local file.
+
+        ``json_lines`` is the OpenTelemetry file-exporter specification's
+        serialization: one OTLP/JSON record per line. ``proto`` writes each
+        record length-delimited.
+        """
+        ...
     @property
     def headers(self) -> dict[str, str]:
         """Return additional exporter headers."""

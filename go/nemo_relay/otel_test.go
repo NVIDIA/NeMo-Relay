@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -373,5 +374,119 @@ func TestOpenTelemetrySubscriberExportsGenAIAgentProjection(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for OTLP request")
+	}
+}
+
+// TestObservabilityOpenTelemetryFileSinkConfigSerializes checks the file-sink section
+// marshals to the keys the Rust plugin config deserializes, and that optional fields
+// stay absent so core defaults apply.
+func TestObservabilityOpenTelemetryFileSinkConfigSerializes(t *testing.T) {
+	config := ObservabilityOpenTelemetryConfig{
+		Enabled: true,
+		FileSinks: []ObservabilityOpenTelemetryFileSinkConfig{{
+			Type:            OpenTelemetryTypeFull,
+			OutputDirectory: "/var/log/nemo-relay",
+			Format:          "proto",
+		}},
+	}
+
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal file sink config: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal file sink config: %v", err)
+	}
+	sinks, ok := decoded["file_sinks"].([]any)
+	if !ok || len(sinks) != 1 {
+		t.Fatalf("expected one file_sinks entry, got %v", decoded["file_sinks"])
+	}
+	sink, ok := sinks[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected a file sink object, got %T", sinks[0])
+	}
+	if sink["output_directory"] != "/var/log/nemo-relay" {
+		t.Errorf("unexpected output_directory %v", sink["output_directory"])
+	}
+	if sink["format"] != "proto" {
+		t.Errorf("unexpected format %v", sink["format"])
+	}
+	// A file sink has no endpoint, and unset optionals must not be emitted:
+	// an empty mode would otherwise override the core default.
+	for _, absent := range []string{"endpoint", "transport", "filename", "mode"} {
+		if _, present := sink[absent]; present {
+			t.Errorf("unexpected %q in a file sink section", absent)
+		}
+	}
+}
+
+// TestOpenTelemetryFileSinkSubscriberWritesTraceFile exercises the file-sink FFI
+// entry point: a subscriber built from a file-sink config opens its output file,
+// and the endpoint-only parameters are absent from the config entirely.
+func TestOpenTelemetryFileSinkSubscriberWritesTraceFile(t *testing.T) {
+	dir := t.TempDir()
+	subscriber, err := NewOpenTelemetryFileSinkSubscriber(OpenTelemetryFileSinkConfig{
+		Type:            OpenTelemetryTypeFull,
+		OutputDirectory: dir,
+		Filename:        "go-trace.jsonl",
+		ServiceName:     "go-file-sink",
+	})
+	if err != nil {
+		t.Fatalf("create file sink subscriber: %v", err)
+	}
+	defer func() {
+		if err := subscriber.Shutdown(); err != nil {
+			t.Errorf("shutdown: %v", err)
+		}
+	}()
+
+	if _, err := os.Stat(filepath.Join(dir, "go-trace.jsonl")); err != nil {
+		t.Fatalf("expected the trace file to exist: %v", err)
+	}
+}
+
+// TestOpenTelemetryFileSinkSubscriberDefaultsFilenameToFormat checks that an
+// omitted filename is derived from the chosen format.
+func TestOpenTelemetryFileSinkSubscriberDefaultsFilenameToFormat(t *testing.T) {
+	dir := t.TempDir()
+	subscriber, err := NewOpenTelemetryFileSinkSubscriber(OpenTelemetryFileSinkConfig{
+		OutputDirectory: dir,
+		Format:          OpenTelemetryFileSinkFormatProto,
+		Mode:            OpenTelemetryFileSinkModeAppend,
+	})
+	if err != nil {
+		t.Fatalf("create file sink subscriber: %v", err)
+	}
+	defer subscriber.Shutdown() //nolint:errcheck // shutdown result is asserted elsewhere
+
+	if _, err := os.Stat(filepath.Join(dir, "nemo-relay-otlp.otlp.pb")); err != nil {
+		t.Fatalf("expected the default proto filename: %v", err)
+	}
+}
+
+// TestOpenTelemetryFileSinkSubscriberRejectsInvalidConfig covers the rejection
+// paths: each is refused rather than silently defaulted.
+func TestOpenTelemetryFileSinkSubscriberRejectsInvalidConfig(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name   string
+		config OpenTelemetryFileSinkConfig
+	}{
+		{"blank output directory", OpenTelemetryFileSinkConfig{OutputDirectory: ""}},
+		{"unknown format", OpenTelemetryFileSinkConfig{OutputDirectory: dir, Format: "yaml"}},
+		{"unknown mode", OpenTelemetryFileSinkConfig{OutputDirectory: dir, Mode: "truncate"}},
+		{"filename escapes directory", OpenTelemetryFileSinkConfig{OutputDirectory: dir, Filename: "../escape.jsonl"}},
+		{"unknown type", OpenTelemetryFileSinkConfig{OutputDirectory: dir, Type: "unsupported"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			subscriber, err := NewOpenTelemetryFileSinkSubscriber(tc.config)
+			if err == nil {
+				subscriber.Shutdown() //nolint:errcheck // cleanup for an unexpected success
+				t.Fatalf("expected %s to be rejected", tc.name)
+			}
+		})
 	}
 }
