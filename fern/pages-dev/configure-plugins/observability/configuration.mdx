@@ -15,8 +15,7 @@ can install ATOF, ATIF, and OpenTelemetry exporters.
 | `atif` | Writes completed ATIF agent trajectories. |
 | `opentelemetry` | Configures typed OTLP traces and optional log and metric pipelines. |
 
-Generated and programmatic observability configuration uses `version = 4`.
-Relay continues to accept version 3 for trace-only configuration.
+Observability configuration requires `version = 4`.
 
 ## Complete Example
 
@@ -224,36 +223,3 @@ const component = observability.ComponentSpec({
 Validate programmatic configuration before initialization. Close the activation
 with `activation.close()` during graceful shutdown so every exporter gets a
 teardown attempt.
-
-## Migrating from Version 3 to Version 4
-
-Version 4 adds independent OTLP log and metric sections while preserving the
-version-3 trace endpoint list. Change `version = 3` to `version = 4`, then add
-`opentelemetry.logs` or `opentelemetry.metrics` only when needed. A version-4
-config without those sections remains trace-only. Version 3 continues to work
-for trace-only configurations and rejects either new signal section.
-
-## Migrating from Version 2
-
-Version 2 used independent `opentelemetry` and `openinference` sections.
-Version 3 replaces them with typed endpoints:
-
-- Convert the old `opentelemetry` section to a `full` endpoint.
-- Convert the old `openinference` section to an `openinference` endpoint.
-- Add a `gen_ai` endpoint for the standardized GenAI projection.
-
-Move `mark_projection`, `mark_exclude_names`, and `attribute_mappings` into
-each `full` or `openinference` endpoint; their legacy behavior is preserved.
-The `gen_ai` projection ignores those controls. `semantic_selector` and
-`capture_content` are unsupported. Version-2 OTLP shapes are rejected under
-version 3.
-
-The version change also makes `type` and `endpoint` required for every
-OpenTelemetry endpoint. The default `service_name` changes from `nemo-relay`
-to `unknown_service`, and the default instrumentation scope becomes
-`opentelemetry`. Move each old section's `headers` and `resource_attributes`
-maps into its new endpoint. Use `header_env` when a header value comes from an
-environment variable.
-
-For before-and-after TOML and Rust, Python, Node.js, and C API changes,
-refer to the [OpenTelemetry version-2-to-version-3 migration](/configure-plugins/observability/opentelemetry#version-2-to-version-3).
