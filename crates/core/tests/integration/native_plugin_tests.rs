@@ -2582,3 +2582,97 @@ fn fixture_library_name() -> &'static str {
         "libnemo_relay_plugin_fixture.so"
     }
 }
+
+/// Exercise the typed SDK across an actual shared-library boundary, including stream opening.
+#[tokio::test]
+async fn sdk_cdylib_preserves_downstream_failures_and_acknowledges_opening() {
+    use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
+    use std::collections::BTreeMap;
+    use std::time::Duration;
+
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest = write_manifest(&fixture);
+    let _activation = load_native_plugins([load_spec("fixture_native", &manifest)]).unwrap();
+    let mut cleanup = NativePluginTestCleanup::new();
+    let mut config = PluginConfig::default();
+    config.components.push(PluginComponentSpec {
+        kind: "fixture_native".into(),
+        enabled: true,
+        config: Map::new(),
+    });
+    test_initialize_plugin_host_exact(config).await.unwrap();
+    cleanup.mark_plugin_configuration_active();
+    let failure = || {
+        FlowError::Upstream(UpstreamFailure {
+            status: Some(403),
+            body: "original denial".into(),
+            headers: BTreeMap::from([("x-request-id".into(), "original-request".into())]),
+            class: UpstreamFailureClass::Authentication,
+        })
+    };
+    let assert_failure = |error| {
+        let FlowError::Upstream(error) = error else {
+            panic!("lost provider error identity: {error:?}");
+        };
+        assert_eq!(error.status, Some(403));
+        assert_eq!(error.body, "original denial");
+        assert_eq!(error.headers["x-request-id"], "original-request");
+        assert_eq!(error.class, UpstreamFailureClass::Authentication);
+    };
+    let request = || LlmRequest {
+        headers: Map::new(),
+        content: json!({"model": "unmanaged"}),
+    };
+    let result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("native-error-buffered")
+            .request(request())
+            .func(Arc::new(move |_| Box::pin(async move { Err(failure()) })))
+            .build(),
+    )
+    .await;
+    assert_failure(result.unwrap_err());
+
+    let result = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("native-error-opening")
+            .request(request())
+            .func(Arc::new(move |_| Box::pin(async move { Err(failure()) })))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| Json::Null))
+            .build(),
+    )
+    .await;
+    match result {
+        Err(error) => assert_failure(error),
+        Ok(_) => panic!("opening denial returned a stream"),
+    }
+
+    let (send_item, receive_item) = tokio::sync::oneshot::channel::<()>();
+    let receive_item = Arc::new(Mutex::new(Some(receive_item)));
+    let opening = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("native-open-before-token")
+            .request(request())
+            .func(Arc::new(move |_| {
+                let receive_item = receive_item.lock().unwrap().take().unwrap();
+                Box::pin(async move {
+                    Ok(LlmJsonStream::new(futures_util::stream::once(async move {
+                        receive_item.await.unwrap();
+                        Err(failure())
+                    })))
+                })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| Json::Null))
+            .build(),
+    );
+    let mut stream = tokio::time::timeout(Duration::from_secs(2), opening)
+        .await
+        .expect("SDK must acknowledge opening before a token is ready")
+        .unwrap();
+    send_item.send(()).unwrap();
+    assert_failure(stream.next().await.unwrap().unwrap_err());
+    assert!(stream.next().await.is_none());
+}

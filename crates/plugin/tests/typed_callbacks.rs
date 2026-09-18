@@ -465,7 +465,7 @@ static UNAVAILABLE_CONTEXT_GATE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn native_abi_struct_sizes_are_self_describing() {
-    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 5);
+    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 6);
     assert_eq!(
         size_of::<NemoRelayNativeHostApiV1>(),
         test_host().struct_size

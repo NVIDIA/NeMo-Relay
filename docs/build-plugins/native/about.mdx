@@ -26,7 +26,7 @@ Three version values answer different questions:
 |---|---|---|
 | Package manifest | `manifest_version = 1` | Shape of the authored `relay-plugin.toml` file. |
 | Manifest native API | `compat.native_api = "1"` | Native plugin package contract accepted by discovery and trust validation. |
-| C host-table ABI | v5 | Function table negotiated by the current `nemo-relay-plugin` SDK. The host also exposes frozen v4, v3, and v2 tables for compatible older binaries. |
+| C host-table ABI | v6 | Function table negotiated by the current `nemo-relay-plugin` SDK. The host also exposes frozen v5, v4, v3, and v2 tables for compatible older binaries. |
 
 The checked example registers a tool execution intercept, so it declares
 `compat.relay = ">=0.9.0,<1.0"`. A manifest that admits Relay 0.8 cannot register
