@@ -42,7 +42,7 @@ For a new deployment, create `config.toml` with these contents:
 openai_base_url = "https://api.openai.com/v1"
 anthropic_base_url = "https://api.anthropic.com"
 
-[logging]
+[daemon.logging]
 level = "info"
 stderr_enabled = true
 stderr_format = "jsonl"
@@ -50,7 +50,9 @@ stderr_format = "jsonl"
 
 Confirm provider URL fields against [Provider Routing](/nemo-relay-cli/basic-usage).
 Use your approved provider URLs when they differ from these defaults. Set the same
-routing on the daemon and clients for consistent pass-through behavior. Do not
+routing on the daemon and clients for consistent pass-through behavior. The
+primary `nemo-relay daemon` process reads only `[daemon.logging]`; `[logging]`
+continues to configure user-space Relay processes such as agent launches. Do not
 store users' provider credentials in this shared file. Info-level logs expose
 readiness events used by the runbooks; Relay's default log level is `error`.
 

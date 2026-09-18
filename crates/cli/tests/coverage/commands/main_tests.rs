@@ -843,6 +843,55 @@ stderr_format = "jsonl"
 }
 
 #[test]
+fn daemon_logging_uses_its_own_config_section_but_keeps_explicit_overrides() {
+    let _environment = crate::test_support::EnvScope::set(&[
+        ("NEMO_RELAY_LOG", None),
+        ("NEMO_RELAY_LOG_STDERR", None),
+        ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
+        ("NEMO_RELAY_LOG_CONFIG_PATH", None),
+    ]);
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        "[logging]\nlevel = \"trace\"\n\n[daemon.logging]\nlevel = \"warn\"\n",
+    )
+    .unwrap();
+    let cli = Cli::try_parse_from(vec![
+        OsString::from("nemo-relay"),
+        OsString::from("--config"),
+        config_path.clone().into_os_string(),
+        OsString::from("daemon"),
+    ])
+    .unwrap();
+    assert_eq!(
+        resolve_command_logging_config(&cli).unwrap().0.level,
+        nemo_relay::logging::LogLevel::Warn
+    );
+
+    // SAFETY: `EnvScope` holds the process-wide environment lock for this test.
+    unsafe { std::env::set_var("NEMO_RELAY_LOG", "info") };
+    assert_eq!(
+        resolve_command_logging_config(&cli).unwrap().0.level,
+        nemo_relay::logging::LogLevel::Info
+    );
+
+    let cli = Cli::try_parse_from(vec![
+        OsString::from("nemo-relay"),
+        OsString::from("--config"),
+        config_path.into_os_string(),
+        OsString::from("--log-level"),
+        OsString::from("debug"),
+        OsString::from("daemon"),
+    ])
+    .unwrap();
+    assert_eq!(
+        resolve_command_logging_config(&cli).unwrap().0.level,
+        nemo_relay::logging::LogLevel::Debug
+    );
+}
+
+#[test]
 fn cli_rejects_mixed_direct_and_file_logging_options() {
     let config_path = std::env::current_dir().unwrap().join("logging.toml");
     let error = Cli::try_parse_from(vec![
