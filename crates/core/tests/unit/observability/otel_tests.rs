@@ -2487,6 +2487,7 @@ fn gen_ai_projection_emits_only_span_specific_attributes() {
             ScopeType::Tool,
             "search",
             [
+                "gen_ai.conversation.id",
                 "gen_ai.operation.name",
                 "gen_ai.tool.call.arguments",
                 "gen_ai.tool.call.id",
@@ -2537,7 +2538,10 @@ fn gen_ai_projection_emits_only_span_specific_attributes() {
         assert_eq!(actual, expected.iter().copied().collect());
         assert!(attributes.iter().all(|attribute| {
             attribute.key.as_str() != "gen_ai.conversation.id"
-                || matches!(scope_type, ScopeType::Agent | ScopeType::Llm)
+                || matches!(
+                    scope_type,
+                    ScopeType::Agent | ScopeType::Llm | ScopeType::Tool
+                )
         }));
         if scope_type == ScopeType::Retriever {
             let top_k = attributes
@@ -2604,7 +2608,7 @@ fn all_trace_projections_require_protected_remote_transport() {
 }
 
 #[test]
-fn gen_ai_tool_content_is_captured_by_default_and_object_shaped() {
+fn gen_ai_tool_content_is_captured_by_default_and_preserves_json() {
     use crate::observability::otel_genai::{end_attributes, start_attributes};
     for (payload, expected) in [
         (
@@ -2615,13 +2619,14 @@ fn gen_ai_tool_content_is_captured_by_default_and_object_shaped() {
             json!("{\"query\":\"sanitized\"}"),
             Some(json!({"query": "sanitized"})),
         ),
+        (json!("\"serialized text\""), Some(json!("serialized text"))),
         (json!({}), Some(json!({}))),
-        (json!("plain text"), None),
-        (json!("[1,2]"), None),
-        (json!([1, 2]), None),
+        (json!("plain text"), Some(json!("plain text"))),
+        (json!("[1,2]"), Some(json!([1, 2]))),
+        (json!([1, 2]), Some(json!([1, 2]))),
         (json!(null), None),
-        (json!(false), None),
-        (json!(42), None),
+        (json!(false), Some(json!(false))),
+        (json!(42), Some(json!(42))),
     ] {
         let start = make_start_event(
             Uuid::now_v7(),

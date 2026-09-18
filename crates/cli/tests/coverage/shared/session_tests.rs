@@ -3904,6 +3904,41 @@ async fn coding_agent_gen_ai_llm_spans_carry_conversation_identity() {
         .await
         .unwrap();
 
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "codex-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "tool-call-1".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: None,
+                    arguments: json!({"file_path": "README.md"}),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolEnded(ToolEvent {
+                    session_id: "codex-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PostToolUse".into(),
+                    tool_call_id: "tool-call-1".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: None,
+                    arguments: Value::Null,
+                    result: json!("README contents"),
+                    status: Some("success".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
     manager.close_all("test_shutdown").await.unwrap();
     flush_subscribers().unwrap();
     subscriber.force_flush().unwrap();
@@ -3923,6 +3958,17 @@ async fn coding_agent_gen_ai_llm_spans_carry_conversation_identity() {
     );
     assert_eq!(
         attributes_by_model["gpt-test"]
+            .get("gen_ai.conversation.id")
+            .map(String::as_str),
+        Some("codex-session")
+    );
+    let tool_attributes = spans
+        .iter()
+        .find(|span| span.name == "execute_tool Read")
+        .map(|span| attr_map(&span.attributes))
+        .expect("expected Codex tool span");
+    assert_eq!(
+        tool_attributes
             .get("gen_ai.conversation.id")
             .map(String::as_str),
         Some("codex-session")
