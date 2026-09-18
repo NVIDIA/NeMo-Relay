@@ -80,6 +80,26 @@ fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
         });
     }
 
+    let (config, fallback_error) = resolve_command_logging_config(cli)?;
+    let runtime = nemo_relay::logging::LoggingRuntime::configure(config)?;
+    if let Some(error) = fallback_error.as_ref() {
+        log::warn!(
+            target: "nemo_relay.cli",
+            event = "doctor_logging_fallback",
+            error_kind = error.log_kind();
+            "Doctor fell back to default logging after resolution failure"
+        );
+    }
+    Ok(LoggingSetup {
+        _runtime: Some(runtime),
+        fallback_error,
+    })
+}
+
+/// Resolves command-specific logging before the process-wide logger is installed.
+fn resolve_command_logging_config(
+    cli: &Cli,
+) -> Result<(nemo_relay::logging::LoggingConfig, Option<error::CliError>), error::CliError> {
     let mut fallback_error = None;
     let config = match cli.command.as_ref() {
         // Persistent integration maintenance uses saved integration state, not Relay runtime
@@ -116,19 +136,7 @@ fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
         }
         Err(error) => return Err(error),
     };
-    let runtime = nemo_relay::logging::LoggingRuntime::configure(config)?;
-    if let Some(error) = fallback_error.as_ref() {
-        log::warn!(
-            target: "nemo_relay.cli",
-            event = "doctor_logging_fallback",
-            error_kind = error.log_kind();
-            "Doctor fell back to default logging after resolution failure"
-        );
-    }
-    Ok(LoggingSetup {
-        _runtime: Some(runtime),
-        fallback_error,
-    })
+    Ok((config, fallback_error))
 }
 
 async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, error::CliError> {

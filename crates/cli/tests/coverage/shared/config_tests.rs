@@ -1627,6 +1627,15 @@ stderr_format = "jsonl"
         resolve_daemon_logging_config(Some(&explicit_config)).unwrap(),
         LoggingConfig::default()
     );
+
+    std::fs::write(&explicit_config, "[daemon.logging]\nlevel = \"verbose\"\n").unwrap();
+    let error = resolve_daemon_logging_config(Some(&explicit_config)).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("invalid logging level 'verbose'"),
+        "{error}"
+    );
 }
 
 #[test]

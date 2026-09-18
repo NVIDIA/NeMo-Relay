@@ -865,11 +865,15 @@ fn daemon_logging_uses_its_own_config_section_but_keeps_explicit_overrides() {
     ])
     .unwrap();
     assert_eq!(
-        cli.logging
-            .resolve_daemon(cli.server.config.as_deref())
-            .unwrap()
-            .level,
+        resolve_command_logging_config(&cli).unwrap().0.level,
         nemo_relay::logging::LogLevel::Warn
+    );
+
+    // SAFETY: `EnvScope` holds the process-wide environment lock for this test.
+    unsafe { std::env::set_var("NEMO_RELAY_LOG", "info") };
+    assert_eq!(
+        resolve_command_logging_config(&cli).unwrap().0.level,
+        nemo_relay::logging::LogLevel::Info
     );
 
     let cli = Cli::try_parse_from(vec![
@@ -882,10 +886,7 @@ fn daemon_logging_uses_its_own_config_section_but_keeps_explicit_overrides() {
     ])
     .unwrap();
     assert_eq!(
-        cli.logging
-            .resolve_daemon(cli.server.config.as_deref())
-            .unwrap()
-            .level,
+        resolve_command_logging_config(&cli).unwrap().0.level,
         nemo_relay::logging::LogLevel::Debug
     );
 }
