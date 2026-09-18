@@ -9,8 +9,8 @@ license: Apache-2.0
 Require the release tag as input. Do not infer it from the current checkout,
 Git history, or package metadata.
 
-The checker requires Bash, `curl`, `gh`, and `jq`; it does not run on Windows.
-From the repository root, run:
+The checker requires Bash, `curl`, `gh`, `jq`, `just`, and `uv`; it does not run
+on Windows. From the repository root, run:
 
 ```bash
 bash .agents/skills/check-release-deployments/scripts/check_release_deployments.sh <tag>

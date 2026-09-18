@@ -1673,6 +1673,20 @@ test-pi:
 # --set [output_dir=<path>] [ci=true|false]
 test-all: test-rust test-python test-python-langchain test-go test-node test-openclaw test-pi
 
+# Print a SemVer version in the PEP 440 form used for Python packages.
+semver-to-pep440 version:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    semver_to_pep440 {{ quote(version) }}
+
+# Print the crates published to crates.io, one per line.
+published-cargo-packages:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    published_cargo_packages
+
 # [version] or --set ref_name=<version>
 set-version version="":
     #!/usr/bin/env bash

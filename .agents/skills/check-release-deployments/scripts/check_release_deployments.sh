@@ -17,13 +17,6 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 github_repository='NVIDIA/NeMo-Relay'
 
-pep440_version() {
-    local version="$1"
-    version="${version/-alpha./a}"
-    version="${version/-beta./b}"
-    version="${version/-rc./rc}"
-    printf '%s\n' "$version"
-}
 deployment_status() { case "$1" in 200) printf '☑' ;; 404) printf '○' ;; *) printf '%s' "$1" ;; esac; }
 request_status() {
     local status=''
@@ -57,12 +50,12 @@ print_pipeline() {
 }
 print_result() { local status; status="$(request_status "$4")"; printf '| %s | `%s` | `%s` | %s |\n' "$1" "$2" "$3" "$(deployment_status "$status")"; }
 
-python_version="$(pep440_version "$tag")"
-cargo_packages=(nemo-relay-types nemo-relay-plugin nemo-relay-worker-proto nemo-relay-worker nemo-relay nemo-relay-adaptive nemo-relay-pii-redaction nemo-relay-ffi nemo-relay-cli)
+python_version="$(just --quiet semver-to-pep440 "$tag")"
+cargo_packages="$(just --quiet published-cargo-packages)"
 python_packages=(nemo-relay nemo-relay-plugin nemo-relay-cli-bin)
 node_packages=(nemo-relay-node nemo-relay-node-linux-x64-gnu nemo-relay-node-linux-arm64-gnu nemo-relay-node-linux-x64-musl nemo-relay-node-linux-arm64-musl nemo-relay-node-darwin-arm64 nemo-relay-node-win32-x64-msvc nemo-relay-node-win32-arm64-msvc nemo-relay-openclaw)
 print_pipeline
 printf '\n## Package Deployments\n\n| Ecosystem | Package | Version | Status |\n| --- | --- | --- | --- |\n'
-if "$check_cargo"; then for package in "${cargo_packages[@]}"; do print_result Cargo "$package" "$tag" "https://crates.io/api/v1/crates/${package}/${tag}"; done; else printf '| Cargo | — | — | skipped: publication workflow failed |\n'; fi
+if "$check_cargo"; then while IFS= read -r package; do print_result Cargo "$package" "$tag" "https://crates.io/api/v1/crates/${package}/${tag}"; done <<<"$cargo_packages"; else printf '| Cargo | — | — | skipped: publication workflow failed |\n'; fi
 if "$check_python"; then for package in "${python_packages[@]}"; do printf '| Python | `%s` | `%s` | %s |\n' "$package" "$python_version" "$(deployment_status "$(pypi_status "$package" "$python_version")")"; done; else printf '| Python | — | — | skipped: publication workflow failed |\n'; fi
 if "$check_node"; then for package in "${node_packages[@]}"; do print_result 'Node.js' "$package" "$tag" "https://registry.npmjs.org/${package}/${tag}"; done; else printf '| Node.js | — | — | skipped: publication workflow failed |\n'; fi
