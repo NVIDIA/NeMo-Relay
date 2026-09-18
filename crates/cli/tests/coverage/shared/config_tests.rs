@@ -1602,6 +1602,80 @@ fn operational_logging_uses_explicit_config_and_ignores_project_layer() {
 }
 
 #[test]
+fn daemon_logging_uses_only_daemon_section() {
+    let temp = tempfile::tempdir().unwrap();
+    let explicit_config = temp.path().join("config.toml");
+    std::fs::write(
+        &explicit_config,
+        r#"
+[logging]
+level = "trace"
+
+[daemon.logging]
+level = "info"
+stderr_format = "jsonl"
+"#,
+    )
+    .unwrap();
+
+    let logging = resolve_daemon_logging_config(Some(&explicit_config)).unwrap();
+    assert_eq!(logging.level, LogLevel::Info);
+    assert_eq!(logging.stderr_format, LogFormat::Jsonl);
+
+    std::fs::write(&explicit_config, "[logging]\nlevel = \"trace\"\n").unwrap();
+    assert_eq!(
+        resolve_daemon_logging_config(Some(&explicit_config)).unwrap(),
+        LoggingConfig::default()
+    );
+}
+
+#[test]
+fn daemon_logging_sinks_merge_by_path_with_higher_layer_precedence() {
+    let temp = tempfile::tempdir().unwrap();
+    let sink = temp.path().join("daemon.jsonl");
+    let mut user: toml::Value = toml::from_str(&format!(
+        r#"
+[daemon.logging]
+level = "debug"
+
+[[daemon.logging.sinks]]
+path = {}
+level = "info"
+queue_capacity = 64
+"#,
+        toml_basic_string(sink.to_string_lossy().as_ref())
+    ))
+    .unwrap();
+    let system: toml::Value = toml::from_str(&format!(
+        r#"
+[daemon.logging]
+level = "warn"
+
+[[daemon.logging.sinks]]
+path = {}
+format = "jsonl"
+"#,
+        toml_basic_string(sink.to_string_lossy().as_ref())
+    ))
+    .unwrap();
+
+    merge_gateway_config_toml(&mut user, system);
+    let logging = toml_value_at_path(&user, &["daemon", "logging"])
+        .cloned()
+        .unwrap();
+    let document = toml::Value::Table(toml::Table::from_iter([("logging".into(), logging)]));
+    let resolved = LoggingConfig::from_toml_document(&toml::to_string(&document).unwrap()).unwrap();
+
+    assert_eq!(resolved.level, LogLevel::Warn);
+    let [LogSinkConfig::File(sink)] = resolved.sinks.as_slice() else {
+        panic!("expected one daemon file sink");
+    };
+    assert_eq!(sink.level, LogLevel::Info);
+    assert_eq!(sink.format, LogFormat::Jsonl);
+    assert_eq!(sink.queue_capacity, 64);
+}
+
+#[test]
 fn discovered_plugins_toml_upserts_components_by_kind() {
     let temp = tempfile::tempdir().unwrap();
     let project_plugin = temp.path().join("project-plugins.toml");
@@ -4666,7 +4740,7 @@ fn logging_path_and_sink_helpers_cover_lexical_fallbacks() {
 
     let mut invalid_higher: toml::Value = toml::from_str("[logging]\nsinks = 'invalid'").unwrap();
     let lower = toml::Value::Table(toml::Table::new());
-    merge_logging_sinks_by_path(&lower, &mut invalid_higher);
+    merge_logging_sinks_by_path(&lower, &mut invalid_higher, &["logging"]);
     assert_eq!(invalid_higher["logging"]["sinks"].as_str(), Some("invalid"));
 }
 

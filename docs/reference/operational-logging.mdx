@@ -86,6 +86,7 @@ Use the source that matches how Relay is launched:
 | Run the Relay CLI with temporary settings | `--log-*` options |
 | Configure a language binding or CLI process | `NEMO_RELAY_LOG*` environment variables |
 | Reuse logging settings across runs | `[logging]` in TOML |
+| Configure the primary daemon service | `[daemon.logging]` in TOML |
 | Embed Relay in a Rust application | `LoggingConfig` and `LoggingRuntime` |
 
 For CLI processes, Relay selects one source in this order:
@@ -94,6 +95,10 @@ For CLI processes, Relay selects one source in this order:
 2. `NEMO_RELAY_LOG*` environment variables
 3. `[logging]` in the resolved Relay `config.toml`
 4. Built-in defaults
+
+For the primary `nemo-relay daemon` service, step 3 instead reads
+`[daemon.logging]`. It does not inherit `[logging]`; explicit CLI and
+environment sources retain the same precedence.
 
 Sources are selected rather than merged. Python, Node.js, and Go install a
 process-lifetime `LoggingRuntime` when the binding loads, using environment
@@ -196,6 +201,20 @@ order: system, then explicit-or-user. For matching paths, higher-layer
 fields recursively overlay lower-layer fields, producing one effective sink.
 Path aliases such as `relay.log` and `./relay.log` resolve to one sink, using
 the higher-layer spelling and settings.
+
+The primary daemon uses the identical schema under `[daemon.logging]`. Its
+configuration follows the normal explicit-or-user then system layering, with
+the system layer taking precedence:
+
+```toml
+[daemon.logging]
+level = "info"
+stderr_format = "jsonl"
+
+[[daemon.logging.sinks]]
+path = "/var/log/nemo-relay/daemon.jsonl"
+format = "jsonl"
+```
 
 ## Rust Library API
 

@@ -100,6 +100,9 @@ fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
         {
             cli.logging.resolve_without_ambient_config()
         }
+        Some(Command::Daemon(command)) if command.command.is_none() => {
+            cli.logging.resolve_daemon(cli.server.config.as_deref())
+        }
         Some(Command::Run(command)) => cli
             .logging
             .resolve(command.config.as_deref().or(cli.server.config.as_deref())),
