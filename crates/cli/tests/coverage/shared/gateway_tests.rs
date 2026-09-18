@@ -495,6 +495,7 @@ fn provider_route_names_round_trip_through_alignment_routes() {
 #[test]
 fn provider_routes_preserve_path_query_and_choose_upstream() {
     let config = GatewayConfig {
+        caller_credential_targets: Default::default(),
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai/v1/".into(),
         openai_auth_header: None,
@@ -544,6 +545,7 @@ fn chatgpt_shaped_responses_path_is_a_responses_route() {
 #[test]
 fn openai_upstream_url_accepts_origin_or_v1_base() {
     let mut config = GatewayConfig {
+        caller_credential_targets: Default::default(),
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
         openai_auth_header: None,
@@ -578,6 +580,7 @@ fn openai_upstream_url_accepts_origin_or_v1_base() {
 #[test]
 fn anthropic_upstream_url_accepts_origin_or_v1_base() {
     let mut config = GatewayConfig {
+        caller_credential_targets: Default::default(),
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
         openai_auth_header: None,
@@ -2238,6 +2241,7 @@ fn chatgpt_backend_url_omits_v1_prefix() {
 #[tokio::test]
 async fn passthrough_rejects_unsupported_provider_path_directly() {
     let config = GatewayConfig {
+        caller_credential_targets: Default::default(),
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
         openai_auth_header: None,
@@ -2277,6 +2281,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
 #[tokio::test]
 async fn models_rejects_non_get_requests_directly() {
     let config = GatewayConfig {
+        caller_credential_targets: Default::default(),
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
         openai_auth_header: None,
@@ -2680,6 +2685,7 @@ fn a_refused_named_upstream_is_rejected_rather_than_rerouted() {
 #[tokio::test]
 async fn models_refuses_an_unusable_named_upstream() {
     let config = GatewayConfig {
+        caller_credential_targets: Default::default(),
         bind: "127.0.0.1:0".parse().unwrap(),
         // Nothing must reach this. If the refusal fell back to configured routing, the request
         // would be sent here instead of failing.

@@ -633,6 +633,12 @@ fn assert_native_digest_edges() {
 
 fn assert_native_host_api_versions() {
     let current = native_host_api();
+    let frozen_v5 = native_host_api_v5();
+    assert_eq!(unsafe { (*frozen_v5).abi_version }, 5);
+    assert_eq!(
+        unsafe { (*frozen_v5).struct_size },
+        std::mem::size_of::<NemoRelayNativeHostApiV5>()
+    );
     let frozen_v4 = native_host_api_v4();
     let frozen_v3 = native_host_api_v3();
     let legacy = native_host_api_v2();
@@ -655,7 +661,7 @@ fn assert_native_host_api_versions() {
     );
     assert_eq!(
         unsafe { (*current).struct_size },
-        std::mem::size_of::<NemoRelayNativeHostApiV5>()
+        std::mem::size_of::<NemoRelayNativeHostApiV6>()
     );
     assert_eq!(
         unsafe { (*frozen_v4).struct_size },
@@ -1779,7 +1785,7 @@ fn assert_native_json_output_and_host_api() {
     assert_eq!(host_api.abi_version, NEMO_RELAY_NATIVE_ABI_VERSION);
     assert_eq!(
         host_api.struct_size,
-        std::mem::size_of::<NemoRelayNativeHostApiV5>()
+        std::mem::size_of::<NemoRelayNativeHostApiV6>()
     );
 }
 
@@ -7236,4 +7242,223 @@ fn native_stream_continuation_covers_success_and_error() {
         unsafe { native_llm_stream_next(ptr::null(), ptr::null_mut(), ptr::null_mut()) },
         NemoRelayStatus::NullPointer
     );
+}
+
+#[test]
+fn private_provider_calls_are_cancelled_and_cannot_be_reused_after_completion() {
+    struct DropProbe(Arc<AtomicBool>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+    let completion = Arc::new(NativeAsyncCompletion {
+        sender: Mutex::new(Some(completion_tx)),
+        cancelled: AtomicBool::new(false),
+        next_invoked: AtomicBool::new(false),
+        next_abort: Mutex::new(None),
+        continuation_aborts: Mutex::new(HashMap::new()),
+        codec: None,
+        before_settlement_lock: None,
+        _callback_user_data: None,
+    });
+    let wait = NativeAsyncWait {
+        completion: Arc::clone(&completion),
+        receiver: completion_rx,
+        completed: false,
+    };
+    let started = Arc::new(AtomicBool::new(false));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let dispatcher = LlmProviderDispatcher::new(
+        {
+            let started = Arc::clone(&started);
+            let dropped = Arc::clone(&dropped);
+            Arc::new(move |_value| {
+                let started = Arc::clone(&started);
+                let probe = DropProbe(Arc::clone(&dropped));
+                Box::pin(async move {
+                    started.store(true, Ordering::Release);
+                    let _probe = probe;
+                    std::future::pending::<FlowResult<Json>>().await
+                })
+            })
+        },
+        Arc::new(|_| Box::pin(async { unreachable!() })),
+    );
+    let mut next = NativeAsyncNext::with_completion_owner(
+        NativeAsyncNextInner::Llm(Arc::new(|_| Box::pin(async { unreachable!() }))),
+        runtime.handle().clone(),
+        None,
+        &completion,
+    );
+    next.provider_dispatcher = Some(dispatcher);
+    let next = Arc::new(next);
+    let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
+    let invocation = native_string_from_json(&json!({"target":"pending","content":{}})).unwrap();
+    let (result_tx, result_rx) =
+        tokio::sync::oneshot::channel::<std::result::Result<Json, String>>();
+    assert_eq!(
+        unsafe {
+            native_async_next_call_provider(
+                next_ref,
+                invocation,
+                complete_native_next_result,
+                Box::into_raw(Box::new(result_tx)).cast(),
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    runtime.block_on(async {
+        while !started.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    });
+    assert!(unsafe { native_async_next_has_provider(next_ref) });
+    drop(wait);
+    let result = runtime
+        .block_on(result_rx)
+        .unwrap()
+        .expect_err("cancelled continuation should reject its result callback");
+    assert!(result.contains("cancelled"), "{result}");
+    assert!(dropped.load(Ordering::Acquire));
+    assert!(completion.cancelled.load(Ordering::Acquire));
+    assert!(!unsafe { native_async_next_has_provider(next_ref) });
+    assert_eq!(
+        unsafe {
+            native_async_next_call_provider(
+                next_ref,
+                invocation,
+                complete_native_next_result,
+                ptr::null_mut(),
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+
+    unsafe {
+        native_string_free(invocation);
+        native_async_next_release(next_ref);
+    }
+}
+
+#[test]
+fn private_provider_stream_cancels_pending_pull_and_rejects_late_reads() {
+    struct DropProbe(Arc<AtomicBool>);
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let completion = Arc::new(NativeAsyncCompletion {
+        sender: Mutex::new(Some(sender)),
+        cancelled: AtomicBool::new(false),
+        next_invoked: AtomicBool::new(false),
+        next_abort: Mutex::new(None),
+        continuation_aborts: Mutex::new(HashMap::new()),
+        codec: None,
+        before_settlement_lock: None,
+        _callback_user_data: None,
+    });
+    let wait = NativeAsyncWait {
+        completion: completion.clone(),
+        receiver,
+        completed: false,
+    };
+    let started = Arc::new(AtomicBool::new(false));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let dispatcher =
+        LlmProviderDispatcher::new(Arc::new(|_| Box::pin(async { unreachable!() })), {
+            let started = started.clone();
+            let dropped = dropped.clone();
+            Arc::new(move |_| {
+                let started = started.clone();
+                let probe = DropProbe(dropped.clone());
+                Box::pin(async move {
+                    Ok(LlmJsonStream::new(futures_util::stream::unfold(
+                        probe,
+                        move |probe| {
+                            let started = started.clone();
+                            async move {
+                                started.store(true, Ordering::Release);
+                                std::future::pending::<()>().await;
+                                Some((Ok(Json::Null), probe))
+                            }
+                        },
+                    )))
+                })
+            })
+        });
+    let mut next = NativeAsyncNext::with_completion_owner(
+        NativeAsyncNextInner::Llm(Arc::new(|_| Box::pin(async { unreachable!() }))),
+        runtime.handle().clone(),
+        None,
+        &completion,
+    );
+    next.provider_dispatcher = Some(dispatcher);
+    let next_ref = Arc::into_raw(Arc::new(next)) as *const NemoRelayNativeAsyncNext;
+    let request = native_string_from_json(&json!({"target":"answer","content":{}})).unwrap();
+    let (open_tx, open_rx) = tokio::sync::oneshot::channel::<PullOpenResult>();
+    assert_eq!(
+        unsafe {
+            native_async_next_stream_provider(
+                next_ref,
+                request,
+                complete_pull_stream_open,
+                Box::into_raw(Box::new(open_tx)).cast(),
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    let stream =
+        runtime.block_on(open_rx).unwrap().unwrap() as *const NemoRelayNativeLlmAsyncStream;
+    let (pull_tx, pull_rx) = tokio::sync::oneshot::channel::<PullItemResult>();
+    assert_eq!(
+        unsafe {
+            native_async_llm_stream_pull(
+                stream,
+                complete_pull_stream_item,
+                Box::into_raw(Box::new(pull_tx)).cast(),
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    });
+    drop(wait);
+    assert!(
+        runtime
+            .block_on(pull_rx)
+            .unwrap()
+            .unwrap_err()
+            .contains("cancelled")
+    );
+    assert_eq!(
+        unsafe { native_async_llm_stream_pull(stream, complete_pull_stream_item, ptr::null_mut()) },
+        NemoRelayStatus::InvalidArg
+    );
+    assert!(dropped.load(Ordering::Acquire));
+    unsafe {
+        native_async_llm_stream_release(stream);
+        native_string_free(request);
+        native_async_next_release(next_ref);
+    }
 }

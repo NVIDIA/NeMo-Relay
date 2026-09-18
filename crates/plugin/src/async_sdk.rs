@@ -148,7 +148,44 @@ impl Drop for NativeExecutor {
 }
 
 #[derive(Clone, Copy)]
-struct HostV4(NemoRelayNativeHostApiV4);
+struct HostV4(NemoRelayNativeHostApiV4, Option<ProviderApi>);
+
+type NativeUnaryCall = unsafe extern "C" fn(
+    *const NemoRelayNativeAsyncNext,
+    *const NemoRelayNativeString,
+    NemoRelayNativeAsyncNextResultCb,
+    *mut c_void,
+) -> NemoRelayStatus;
+type NativeStreamCall = unsafe extern "C" fn(
+    *const NemoRelayNativeAsyncNext,
+    *const NemoRelayNativeString,
+    NemoRelayNativeAsyncLlmStreamOpenCb,
+    *mut c_void,
+) -> NemoRelayStatus;
+
+#[derive(Clone, Copy)]
+struct ProviderApi {
+    available: unsafe extern "C" fn(*const NemoRelayNativeAsyncNext) -> bool,
+    call: NativeUnaryCall,
+    stream: NativeStreamCall,
+}
+
+impl ProviderApi {
+    fn from_host(host: &NemoRelayNativeHostApiV1) -> Option<Self> {
+        if host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_PROVIDER_DISPATCH
+            || host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV6>()
+        {
+            return None;
+        }
+        // SAFETY: the ABI and advertised table size cover the complete v6 tail.
+        let host = unsafe { &*(host as *const _ as *const NemoRelayNativeHostApiV6) };
+        Some(Self {
+            available: host.async_next_has_provider,
+            call: host.async_next_call_provider,
+            stream: host.async_next_stream_provider,
+        })
+    }
+}
 
 unsafe impl Send for HostV4 {}
 unsafe impl Sync for HostV4 {}
@@ -269,6 +306,13 @@ impl ToolNext {
 pub struct LlmNext(Arc<NextInner>);
 
 impl LlmNext {
+    /// Resolve private provider execution for this live request.
+    ///
+    /// Returns an error on older hosts or calls without a provider dispatcher.
+    pub fn provider(&self) -> Result<LlmProvider> {
+        LlmProvider::new(Arc::clone(&self.0))
+    }
+
     /// Continues the LLM chain with a replacement request.
     pub async fn call(&self, request: LlmRequest) -> Result<Json> {
         invoke_unary_next(&self.0, &request).await
@@ -283,42 +327,99 @@ pub type LlmJsonAsyncStream = Pin<Box<dyn Stream<Item = Result<Json>> + Send>>;
 pub struct LlmStreamNext(Arc<NextInner>);
 
 impl LlmStreamNext {
+    /// Resolve buffered and streamed provider execution for this live request.
+    pub fn provider(&self) -> Result<LlmProvider> {
+        LlmProvider::new(Arc::clone(&self.0))
+    }
+
     /// Opens an independent pull-based downstream stream.
     pub async fn call(&self, request: LlmRequest) -> Result<LlmJsonAsyncStream> {
-        let request = HostString::from_json(&self.0.host.0.v3.v1, &request)
-            .ok_or_else(|| "failed to serialize LLM stream request".to_string())?;
-        let (sender, receiver) = futures::channel::oneshot::channel();
-        let callback_state = Box::into_raw(Box::new(OpenState {
-            sender,
-            host: self.0.host,
-        }));
-        let status = unsafe {
-            (self.0.host.0.async_next_open_llm_stream)(
-                self.0.raw,
-                request.as_ptr(),
-                open_stream_callback,
-                callback_state.cast(),
-            )
-        };
-        if status != NemoRelayStatus::Ok {
-            drop(unsafe { Box::from_raw(callback_state) });
-            return Err(status_message(
-                &self.0.host.0.v3.v1,
-                status,
-                "open LLM stream",
-            ));
-        }
-        let mut opened = receiver
-            .await
-            .map_err(|_| "LLM stream open callback was dropped".to_string())??;
-        let raw = opened.take();
-        Ok(Box::pin(PullStream {
-            host: self.0.host,
-            raw,
-            pending: None,
-            finished: false,
-        }))
+        open_next_stream(&self.0, &request, self.0.host.0.async_next_open_llm_stream).await
     }
+}
+
+/// Request-scoped capability for calls to host-authorized provider targets.
+///
+/// The host owns credentials and destination policy. Both methods may be used
+/// repeatedly or concurrently for routing, answers, retries, and fallbacks.
+/// The capability expires when its execution interceptor or output stream
+/// settles; cloning it does not extend that lifetime. Calls bypass the normal
+/// continuation chain and do not re-enter plugin routing.
+#[derive(Clone)]
+pub struct LlmProvider(Arc<NextInner>);
+
+impl LlmProvider {
+    fn new(next: Arc<NextInner>) -> Result<Self> {
+        if next
+            .host
+            .1
+            .is_some_and(|api| unsafe { (api.available)(next.raw) })
+        {
+            Ok(Self(next))
+        } else {
+            Err("private provider dispatch is unavailable for this request (requires a supporting host and native ABI v6)".into())
+        }
+    }
+
+    /// Execute one buffered request using the caller credential held by the host.
+    pub async fn call(&self, request: LlmProviderRequest) -> Result<Json> {
+        let api = self
+            .0
+            .host
+            .1
+            .ok_or("private provider dispatch is unavailable")?;
+        invoke_unary(&self.0, &request, api.call).await
+    }
+
+    /// Open an independent provider stream; dropping it cancels the host stream.
+    pub async fn stream(&self, request: LlmProviderRequest) -> Result<LlmJsonAsyncStream> {
+        let api = self
+            .0
+            .host
+            .1
+            .ok_or("private provider dispatch is unavailable")?;
+        open_next_stream(&self.0, &request, api.stream).await
+    }
+}
+
+async fn open_next_stream<T: Serialize>(
+    next: &NextInner,
+    request: &T,
+    open: NativeStreamCall,
+) -> Result<LlmJsonAsyncStream> {
+    let request = HostString::from_json(&next.host.0.v3.v1, request)
+        .ok_or_else(|| "failed to serialize LLM stream request".to_string())?;
+    let (sender, receiver) = futures::channel::oneshot::channel();
+    let callback_state = Box::into_raw(Box::new(OpenState {
+        sender,
+        host: next.host,
+    }));
+    let status = unsafe {
+        open(
+            next.raw,
+            request.as_ptr(),
+            open_stream_callback,
+            callback_state.cast(),
+        )
+    };
+    if status != NemoRelayStatus::Ok {
+        drop(unsafe { Box::from_raw(callback_state) });
+        return Err(status_message(
+            &next.host.0.v3.v1,
+            status,
+            "open LLM stream",
+        ));
+    }
+    let mut opened = receiver
+        .await
+        .map_err(|_| "LLM stream open callback was dropped".to_string())??;
+    let raw = opened.take();
+    Ok(Box::pin(PullStream {
+        host: next.host,
+        raw,
+        pending: None,
+        finished: false,
+    }))
 }
 
 struct OpenedStream {
@@ -475,6 +576,14 @@ unsafe extern "C" fn pull_stream_callback(
 }
 
 async fn invoke_unary_next<T: Serialize>(next: &NextInner, value: &T) -> Result<Json> {
+    invoke_unary(next, value, next.host.0.v3.async_next_invoke_result).await
+}
+
+async fn invoke_unary<T: Serialize>(
+    next: &NextInner,
+    value: &T,
+    invoke: NativeUnaryCall,
+) -> Result<Json> {
     let value = HostString::from_json(&next.host.0.v3.v1, value)
         .ok_or_else(|| "failed to serialize native continuation input".to_string())?;
     let (sender, receiver) = futures::channel::oneshot::channel();
@@ -483,7 +592,7 @@ async fn invoke_unary_next<T: Serialize>(next: &NextInner, value: &T) -> Result<
         host: next.host,
     }));
     let status = unsafe {
-        (next.host.0.v3.async_next_invoke_result)(
+        invoke(
             next.raw,
             value.as_ptr(),
             unary_next_callback,
@@ -1075,15 +1184,24 @@ impl CodecIdentityInvocation {
 }
 
 impl PluginContext<'_> {
+    /// Whether this host exposes native provider dispatch (ABI v6).
+    ///
+    /// A particular invocation also requires a host dispatcher and an
+    /// authorized target. Use `next.provider()` to check request availability.
+    pub fn supports_provider_dispatch(&self) -> bool {
+        ProviderApi::from_host(self.host).is_some()
+    }
+
     fn host_v4(&self) -> Result<HostV4> {
         if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL
             || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV4>()
         {
             return Err("typed async native middleware requires Relay ABI v4".into());
         }
-        Ok(HostV4(unsafe {
-            *(self.host as *const _ as *const NemoRelayNativeHostApiV4)
-        }))
+        Ok(HostV4(
+            unsafe { *(self.host as *const _ as *const NemoRelayNativeHostApiV4) },
+            ProviderApi::from_host(self.host),
+        ))
     }
 
     fn register_unary_adapter(

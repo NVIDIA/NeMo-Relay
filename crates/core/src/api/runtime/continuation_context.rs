@@ -5,6 +5,10 @@
 
 use std::future::Future;
 
+use super::provider::{
+    LlmProviderDispatcher, current_provider_dispatcher, scope_provider_dispatcher,
+};
+
 use crate::api::optimization::{
     LlmOptimizationRecorder, current_llm_optimization_recorder, scope_llm_optimization_recorder,
 };
@@ -31,6 +35,7 @@ pub struct MiddlewareContinuationContext {
     publication_context: Option<PublicationContext>,
     publication_buffer: Option<PublicationBuffer>,
     optimization_recorder: Option<LlmOptimizationRecorder>,
+    provider_dispatcher: Option<LlmProviderDispatcher>,
 }
 
 impl MiddlewareContinuationContext {
@@ -44,6 +49,7 @@ impl MiddlewareContinuationContext {
             publication_context: capture_publication_context(),
             publication_buffer: capture_nested_publication_buffer(),
             optimization_recorder: current_llm_optimization_recorder(),
+            provider_dispatcher: current_provider_dispatcher(),
         }
     }
 
@@ -69,6 +75,7 @@ impl MiddlewareContinuationContext {
             publication_context: self.publication_context.clone(),
             publication_buffer: self.publication_buffer.clone(),
             optimization_recorder: self.optimization_recorder.clone(),
+            provider_dispatcher: self.provider_dispatcher.clone(),
         })
     }
 
@@ -87,6 +94,7 @@ impl MiddlewareContinuationContext {
     /// Poll `future` with the captured Relay task context restored.
     #[doc(hidden)]
     pub async fn run<F: Future>(&self, future: F) -> F::Output {
+        let future = scope_provider_dispatcher(self.provider_dispatcher.clone(), future);
         let scoped = TASK_SCOPE_STACK.scope(self.scope_stack.clone(), future);
         let published = with_task_publication_context(self.publication_context.clone(), scoped);
         let published =

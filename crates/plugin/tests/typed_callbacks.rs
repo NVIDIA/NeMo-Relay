@@ -465,7 +465,7 @@ static UNAVAILABLE_CONTEXT_GATE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn native_abi_struct_sizes_are_self_describing() {
-    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 5);
+    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 6);
     assert_eq!(
         size_of::<NemoRelayNativeHostApiV1>(),
         test_host().struct_size
@@ -6309,4 +6309,51 @@ fn plugin_validate_and_register_panics_replace_last_error() {
         (host.string_free)(config);
         drop_exported_plugin(&host, register_plugin);
     }
+}
+
+#[test]
+fn native_abi_v6_keeps_the_v5_prefix_frozen() {
+    use nemo_relay_plugin::NemoRelayNativeHostApiV6;
+    assert_eq!(offset_of!(NemoRelayNativeHostApiV6, v5), 0);
+    assert_eq!(
+        offset_of!(NemoRelayNativeHostApiV6, async_next_has_provider),
+        size_of::<NemoRelayNativeHostApiV5>()
+    );
+    assert_eq!(
+        size_of::<NemoRelayNativeHostApiV6>(),
+        size_of::<NemoRelayNativeHostApiV5>() + 3 * size_of::<usize>()
+    );
+}
+
+#[test]
+fn provider_request_rejects_credentials_and_destination_overrides() {
+    use nemo_relay_plugin::LlmProviderRequest;
+    for extra in ["url", "headers", "authorization"] {
+        let mut value = json!({"target": "answer", "content": {"model": "test"}});
+        value[extra] = json!("injected");
+        assert!(serde_json::from_value::<LlmProviderRequest>(value).is_err());
+    }
+}
+
+#[test]
+fn provider_capability_discovery_requires_the_entire_v6_table() {
+    use nemo_relay_plugin::NemoRelayNativeHostApiV6;
+    let v4 = test_host_v4();
+    assert!(!test_context(&v4.v3.v1).supports_provider_dispatch());
+    let v5 = test_host_v5();
+    assert!(!test_context(&v5.v4.v3.v1).supports_provider_dispatch());
+    unsafe extern "C" fn available(_: *const NemoRelayNativeAsyncNext) -> bool {
+        true
+    }
+    let mut v6 = NemoRelayNativeHostApiV6 {
+        v5,
+        async_next_has_provider: available,
+        async_next_call_provider: v4.v3.async_next_invoke_result,
+        async_next_stream_provider: v4.async_next_open_llm_stream,
+    };
+    v6.v5.v4.v3.v1.abi_version = 6;
+    v6.v5.v4.v3.v1.struct_size = size_of::<NemoRelayNativeHostApiV6>();
+    assert!(test_context(&v6.v5.v4.v3.v1).supports_provider_dispatch());
+    v6.v5.v4.v3.v1.struct_size -= 1;
+    assert!(!test_context(&v6.v5.v4.v3.v1).supports_provider_dispatch());
 }

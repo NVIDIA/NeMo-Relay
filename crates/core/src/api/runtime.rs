@@ -6,6 +6,7 @@
 pub mod callbacks;
 mod continuation_context;
 pub mod global;
+pub mod provider;
 pub mod scope_stack;
 pub mod state;
 pub mod subscriber_dispatcher;

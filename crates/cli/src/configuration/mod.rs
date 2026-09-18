@@ -75,6 +75,7 @@ struct FileUpstreamConfig {
     openai_auth_header: Option<String>,
     anthropic_base_url: Option<String>,
     anthropic_auth_header: Option<String>,
+    caller_credential_targets: Option<std::collections::BTreeMap<String, CallerCredentialTarget>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -297,6 +298,7 @@ fn persistent_bootstrap_fingerprint(
         "openai_auth_header": gateway.openai_auth_header,
         "anthropic_base_url": gateway.anthropic_base_url,
         "anthropic_auth_header": gateway.anthropic_auth_header,
+        "caller_credential_targets": gateway.caller_credential_targets,
         "metadata": gateway.metadata,
         "plugin_config": gateway.plugin_config,
         "max_hook_payload_bytes": gateway.max_hook_payload_bytes,
@@ -1397,7 +1399,24 @@ fn apply_file_upstream_config(
         openai_auth_header,
         anthropic_base_url,
         anthropic_auth_header,
+        caller_credential_targets,
     } = upstream;
+    if let Some(targets) = caller_credential_targets {
+        for (name, target) in &targets {
+            let valid_url = reqwest::Url::parse(&target.url).ok().is_some_and(|url| {
+                matches!(url.scheme(), "http" | "https")
+                    && url.host_str().is_some()
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.fragment().is_none()
+            });
+            if name.trim().is_empty() || !valid_url {
+                return Err(CliError::Config("caller_credential_targets requires nonempty names and absolute HTTP(S) endpoint URLs without userinfo or fragments".into()));
+            }
+        }
+        // Replace as a policy unit: layering must not retain permissions removed by an override.
+        gateway.caller_credential_targets = targets;
+    }
     if let Some(value) = openai_base_url {
         gateway.openai_base_url = value;
         if openai_auth_header.is_none() {
