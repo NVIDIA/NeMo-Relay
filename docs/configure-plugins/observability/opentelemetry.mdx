@@ -712,9 +712,9 @@ preset to remove opaque payloads while retaining analytical structure and trace
 parentage. Credential removal and event sanitizers run before projection.
 `enable_full_payloads` controls LLM request-history retention independently.
 
-Arguments and results must be JSON objects under the OpenTelemetry schemas.
-Relay parses serialized JSON objects before projecting them as JSON strings;
-plain text, arrays, scalars, null, and missing values are omitted. Failed tool
+Arguments and results are emitted as canonical JSON strings. Relay parses
+serialized JSON before projection, then preserves every non-null sanitized JSON
+value, including objects, arrays, strings, booleans, and numbers. Failed tool
 calls do not emit a result attribute. Result annotations remain separate and
 are never included in this projection. Tool definitions include only required
 `type` and `name` properties. Known OpenAI Responses built-ins use their native
