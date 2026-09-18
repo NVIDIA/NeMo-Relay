@@ -6,7 +6,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -489,6 +489,42 @@ pub(super) fn automatic_protocol_is_unset(signal_variable: &str) -> bool {
         .all(|variable| std::env::var(variable).map_or(true, |value| value.trim().is_empty()))
 }
 
+/// Return whether the upstream protocol resolution will select gRPC.
+///
+/// The OTLP builder does not expose its resolved transport. Relay needs this
+/// narrow check solely to attach its no-redirect HTTP client when HTTP is
+/// selected. Invalid values deliberately fall through so the builder keeps
+/// its documented fallback behavior.
+pub(super) fn automatic_protocol_is_grpc(signal_variable: &str) -> bool {
+    [signal_variable, "OTEL_EXPORTER_OTLP_PROTOCOL"]
+        .into_iter()
+        .find_map(|variable| match std::env::var(variable).ok().as_deref() {
+            Some("grpc") => Some(true),
+            Some("http/protobuf" | "http/json") => Some(false),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+/// Build the shared HTTP client used by automatically configured exporters.
+///
+/// Its redirect policy is Relay-owned transport safety. Deliberately leave
+/// its timeout unset so the OTLP builder remains authoritative for the
+/// `OTEL_EXPORTER_OTLP*_TIMEOUT` environment variables.
+pub(super) fn automatic_otlp_http_client() -> Result<reqwest::Client> {
+    static CLIENT: OnceLock<std::result::Result<reqwest::Client, String>> = OnceLock::new();
+
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|error| error.to_string())
+        })
+        .clone()
+        .map_err(OpenTelemetryError::ExporterBuild)
+}
+
 pub(super) fn resolve_http_signal_endpoint<'a>(endpoint: &'a str, signal: &str) -> Cow<'a, str> {
     let Ok(mut parsed) = reqwest::Url::parse(endpoint) else {
         return Cow::Borrowed(endpoint);
@@ -569,4 +605,45 @@ pub(super) fn signal_resource(
             .map(|(key, value)| KeyValue::new(key.clone(), value.clone())),
     );
     telemetry_resource(attributes)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    use super::automatic_otlp_http_client;
+
+    #[test]
+    fn automatic_http_client_does_not_follow_redirects() {
+        let _guard = crate::observability::test_mutex().lock().unwrap();
+        let destination = TcpListener::bind("127.0.0.1:0").unwrap();
+        destination.set_nonblocking(true).unwrap();
+        let location = format!("http://{}/leak", destination.local_addr().unwrap());
+        let redirector = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", redirector.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut stream, _) = redirector.accept().unwrap();
+            let mut buffer = [0; 4_096];
+            assert!(stream.read(&mut buffer).unwrap() > 0);
+            write!(
+                stream,
+                "HTTP/1.1 307 Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+        });
+
+        let client = automatic_otlp_http_client().unwrap();
+        let response = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(client.get(endpoint).send())
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+        server.join().unwrap();
+        assert!(
+            matches!(destination.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "redirect destination must not receive a connection"
+        );
+    }
 }

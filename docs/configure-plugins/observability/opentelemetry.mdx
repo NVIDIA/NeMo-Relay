@@ -123,6 +123,10 @@ only for localhost or a loopback IP address. Automatic log and metric headers
 have the same transport requirement, preventing credentials from being sent to
 remote plaintext endpoints.
 
+Automatic OTLP/HTTP exporters never follow redirects. This applies to traces,
+logs, and metrics, including when no headers are configured, so an endpoint
+cannot redirect telemetry or credentials to another destination.
+
 When independently configured Relay endpoints are active, do not set global
 OTLP header variables. The upstream OTLP builders read those process-global
 headers while each exporter is built, so Relay rejects that combination rather
@@ -254,11 +258,11 @@ for `localhost` and loopback IP addresses such as `127.0.0.1` and `[::1]`.
 Redaction does not disable this requirement. Existing remote plaintext trace
 endpoints must migrate to HTTPS or use a loopback collector.
 
-OTLP/HTTP trace exporters do not follow redirects, even to another HTTPS
-endpoint. This keeps an export from bypassing transport checks or sending its
-payload and credentials to another destination. Use the final collector URL.
-Log and metric HTTP exporters do the same when any header source is configured.
-gRPC does not use HTTP redirects.
+Relay-configured OTLP/HTTP exporters do not follow redirects, even to another
+HTTPS endpoint. This keeps an export from bypassing transport checks or sending
+its payload and credentials to another destination. Use the final collector
+URL. This applies to trace, log, and metric exporters whether or not headers
+are configured. gRPC does not use HTTP redirects.
 
 | Field | Default | Notes |
 |---|---|---|
@@ -539,7 +543,7 @@ This applies to trace, log, and metric endpoints.
 Remote trace endpoints must use HTTPS. When you set any header source
 (`headers`, `header_env`, or `header_file`), remote log and metric endpoints
 must also use HTTPS. HTTP is allowed only for localhost and loopback IP
-addresses. OTLP/HTTP exporters do not follow redirects when headers are set.
+addresses. OTLP/HTTP exporters never follow redirects.
 For example, an OIDC token-file writer must write the complete value `Bearer
 eyJ...` to the file. Relay does not add the authentication
 scheme for you.

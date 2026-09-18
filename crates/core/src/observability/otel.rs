@@ -30,9 +30,10 @@ use super::header_file::{
 };
 use super::otel_signal::{
     MetricMarkClassification, SignalRuntimeDiagnostics, TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS,
-    automatic_protocol_is_unset, automatic_signal_endpoint, classify_metric_mark,
-    resolve_header_env, retry_batch_processor_channel_full, should_relog_runtime_diagnostic,
-    telemetry_resource, validate_telemetry_sdk_resource_attributes,
+    automatic_otlp_http_client, automatic_protocol_is_grpc, automatic_protocol_is_unset,
+    automatic_signal_endpoint, classify_metric_mark, resolve_header_env,
+    retry_batch_processor_channel_full, should_relog_runtime_diagnostic, telemetry_resource,
+    validate_telemetry_sdk_resource_attributes,
 };
 use super::{
     MarkProjection, OpenTelemetryRuntimeDiagnostics, OpenTelemetryType, OtlpAttributeMapping,
@@ -1125,10 +1126,18 @@ fn build_tracer_provider_with_resource(
             builder
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
+                .with_http_client(automatic_otlp_http_client()?)
+                .build()
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
+        } else if automatic_protocol_is_grpc("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") {
+            builder
+                .with_tonic()
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
         } else {
             builder
+                .with_http()
+                .with_http_client(automatic_otlp_http_client()?)
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
         }

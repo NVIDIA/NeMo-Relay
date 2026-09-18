@@ -42,11 +42,11 @@ use super::header_file::{
 use super::otel::{OpenTelemetryError, OtlpTransport, Result, normalize_shutdown_result};
 use super::otel_signal::{
     MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics,
-    automatic_protocol_is_unset, automatic_signal_endpoint, automatic_signal_headers_configured,
-    build_grpc_metadata, build_in_owned_runtime, classify_metric_mark,
-    reject_signal_header_environment, resolve_header_env, resolve_http_signal_endpoint,
-    should_relog_runtime_diagnostic, signal_resource, validate_signal_headers,
-    validate_telemetry_sdk_resource_attributes,
+    automatic_otlp_http_client, automatic_protocol_is_grpc, automatic_protocol_is_unset,
+    automatic_signal_endpoint, automatic_signal_headers_configured, build_grpc_metadata,
+    build_in_owned_runtime, classify_metric_mark, reject_signal_header_environment,
+    resolve_header_env, resolve_http_signal_endpoint, should_relog_runtime_diagnostic,
+    signal_resource, validate_signal_headers, validate_telemetry_sdk_resource_attributes,
 };
 
 const DEFAULT_EXPORT_INTERVAL: Duration = Duration::from_secs(60);
@@ -482,10 +482,18 @@ fn build_metric_provider(
             builder
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
+                .with_http_client(automatic_otlp_http_client()?)
+                .build()
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
+        } else if automatic_protocol_is_grpc("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL") {
+            builder
+                .with_tonic()
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
         } else {
             builder
+                .with_http()
+                .with_http_client(automatic_otlp_http_client()?)
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
         }

@@ -191,6 +191,16 @@ fn automatic_otel_defaults_to_http_protobuf_without_protocol_configuration() {
     // SAFETY: the observability mutex serializes test-only environment changes.
     unsafe { std::env::set_var(generic, "grpc") };
     assert!(!crate::observability::otel_signal::automatic_protocol_is_unset(traces));
+    assert!(crate::observability::otel_signal::automatic_protocol_is_grpc(traces));
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::set_var(traces, "http/json") };
+    assert!(!crate::observability::otel_signal::automatic_protocol_is_grpc(traces));
+
+    // An unrecognized signal setting falls through to the generic upstream setting.
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::set_var(traces, "invalid") };
+    assert!(crate::observability::otel_signal::automatic_protocol_is_grpc(traces));
 }
 
 #[test]
