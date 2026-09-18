@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::configuration::{AgentCommandConfig, GatewayConfig};
+#[cfg(unix)]
 use crate::events::AgentKind;
 use crate::hooks::generated_hooks;
 use std::ffi::OsString;
