@@ -6,25 +6,27 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::{
     Resource,
     error::{OTelSdkError, OTelSdkResult},
-    resource::TelemetryResourceDetector,
 };
 use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
+use uuid::Uuid;
 
 use crate::api::event::{
-    Event, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope,
+    Event, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope, ScopeCategory,
     ValidatedMetricMeasurement,
 };
 use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 
 use super::otel::{OpenTelemetryError, Result};
+use super::{MetadataPromotionIssue, promote_event_metadata_attributes};
 
 const MAX_RUNTIME_DIAGNOSTICS: usize = 32;
 const MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS: usize = 1_024;
@@ -48,12 +50,10 @@ pub(super) fn validate_telemetry_sdk_resource_attributes(
     Ok(())
 }
 
-/// Build Relay's OTLP resource with only SDK-provided telemetry identity.
+/// Build Relay's OTLP resource, including the SDK's standard environment
+/// detectors before applying Relay-owned attributes.
 pub(super) fn telemetry_resource(attributes: impl IntoIterator<Item = KeyValue>) -> Resource {
-    Resource::builder_empty()
-        .with_detector(Box::new(TelemetryResourceDetector))
-        .with_attributes(attributes)
-        .build()
+    Resource::builder().with_attributes(attributes).build()
 }
 
 /// A bounded aggregate describing an OpenTelemetry runtime problem.
@@ -460,6 +460,74 @@ pub(super) fn reject_signal_header_environment(signal_variable: &'static str) ->
     Ok(())
 }
 
+/// Return the nonblank endpoint that the OTLP builder selects for one signal.
+///
+/// Signal-specific settings take precedence over the generic endpoint, matching
+/// the upstream OTLP exporter's environment resolution. Relay only uses this
+/// value for transport safety checks; the builder still owns URL derivation.
+pub(super) fn automatic_signal_endpoint(signal_variable: &str) -> Option<String> {
+    [signal_variable, "OTEL_EXPORTER_OTLP_ENDPOINT"]
+        .into_iter()
+        .find_map(|variable| {
+            std::env::var(variable)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+}
+
+/// Return whether an automatic OTLP exporter will attach environment headers.
+pub(super) fn automatic_signal_headers_configured(signal_variable: &str) -> bool {
+    [signal_variable, "OTEL_EXPORTER_OTLP_HEADERS"]
+        .into_iter()
+        .any(|variable| std::env::var(variable).is_ok_and(|value| !value.trim().is_empty()))
+}
+
+/// Whether an automatic exporter should preserve Relay's HTTP/protobuf default.
+///
+/// A nonblank protocol setting is left entirely to the OTLP builder, including
+/// its signal-specific precedence and invalid-value handling.
+pub(super) fn automatic_protocol_is_unset(signal_variable: &str) -> bool {
+    [signal_variable, "OTEL_EXPORTER_OTLP_PROTOCOL"]
+        .into_iter()
+        .all(|variable| std::env::var(variable).map_or(true, |value| value.trim().is_empty()))
+}
+
+/// Return whether the upstream protocol resolution will select gRPC.
+///
+/// The OTLP builder does not expose its resolved transport. Relay needs this
+/// narrow check solely to attach its no-redirect HTTP client when HTTP is
+/// selected. Invalid values deliberately fall through so the builder keeps
+/// its documented fallback behavior.
+pub(super) fn automatic_protocol_is_grpc(signal_variable: &str) -> bool {
+    [signal_variable, "OTEL_EXPORTER_OTLP_PROTOCOL"]
+        .into_iter()
+        .find_map(|variable| match std::env::var(variable).ok().as_deref() {
+            Some("grpc") => Some(true),
+            Some("http/protobuf" | "http/json") => Some(false),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+/// Build the shared HTTP client used by automatically configured exporters.
+///
+/// Its redirect policy is Relay-owned transport safety. Deliberately leave
+/// its timeout unset so the OTLP builder remains authoritative for the
+/// `OTEL_EXPORTER_OTLP*_TIMEOUT` environment variables.
+pub(super) fn automatic_otlp_http_client() -> Result<reqwest::Client> {
+    static CLIENT: OnceLock<std::result::Result<reqwest::Client, String>> = OnceLock::new();
+
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|error| error.to_string())
+        })
+        .clone()
+        .map_err(OpenTelemetryError::ExporterBuild)
+}
+
 pub(super) fn resolve_http_signal_endpoint<'a>(endpoint: &'a str, signal: &str) -> Cow<'a, str> {
     let Ok(mut parsed) = reqwest::Url::parse(endpoint) else {
         return Cow::Borrowed(endpoint);
@@ -519,12 +587,29 @@ pub(super) fn record_signal_runtime_diagnostic(
 }
 
 pub(super) fn signal_resource(
-    service_name: &str,
+    service_name: Option<&str>,
     service_namespace: Option<&str>,
     service_version: Option<&str>,
     resource_attributes: &HashMap<String, String>,
 ) -> Resource {
-    let mut attributes = vec![KeyValue::new("service.name", service_name.to_string())];
+    telemetry_resource(signal_resource_attributes(
+        service_name,
+        service_namespace,
+        service_version,
+        resource_attributes,
+    ))
+}
+
+pub(super) fn signal_resource_attributes(
+    service_name: Option<&str>,
+    service_namespace: Option<&str>,
+    service_version: Option<&str>,
+    resource_attributes: &HashMap<String, String>,
+) -> Vec<KeyValue> {
+    let mut attributes = Vec::new();
+    if let Some(service_name) = service_name {
+        attributes.push(KeyValue::new("service.name", service_name.to_string()));
+    }
     if let Some(namespace) = service_namespace {
         attributes.push(KeyValue::new("service.namespace", namespace.to_string()));
     }
@@ -536,5 +621,239 @@ pub(super) fn signal_resource(
             .iter()
             .map(|(key, value)| KeyValue::new(key.clone(), value.clone())),
     );
-    telemetry_resource(attributes)
+    attributes
+}
+
+pub(super) fn canonical_resource_key(attributes: &[KeyValue]) -> String {
+    let mut entries = attributes
+        .iter()
+        .map(|attribute| format!("{}={:?}", attribute.key.as_str(), attribute.value))
+        .collect::<Vec<_>>();
+    entries.sort();
+    entries.join("\u{1f}")
+}
+
+pub(super) fn promoted_signal_resource_attributes(
+    event: &Event,
+    prefixes: &[String],
+    service_name: Option<&str>,
+    service_namespace: Option<&str>,
+    service_version: Option<&str>,
+    resource_attributes: &HashMap<String, String>,
+    runtime_diagnostics: &SignalRuntimeDiagnostics,
+) -> Option<(String, Vec<KeyValue>)> {
+    if prefixes.is_empty()
+        || event.scope_category() != Some(ScopeCategory::Start)
+        || (event.parent_uuid().is_some() && event.propagation_parent_uuid() == event.parent_uuid())
+    {
+        return None;
+    }
+    let mut attributes = signal_resource_attributes(
+        service_name,
+        service_namespace,
+        service_version,
+        resource_attributes,
+    );
+    let mut protected_keys = attributes
+        .iter()
+        .map(|attribute| attribute.key.as_str().to_string())
+        .collect::<HashSet<_>>();
+    protected_keys.extend(
+        TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS
+            .iter()
+            .map(|key| (*key).to_string()),
+    );
+    let promotion =
+        promote_event_metadata_attributes(&mut attributes, event, prefixes, &protected_keys);
+    record_metadata_promotion_issues(runtime_diagnostics, promotion.issues, "resource_metadata");
+    let key = canonical_resource_key(&attributes);
+    let base_key = canonical_resource_key(&signal_resource_attributes(
+        service_name,
+        service_namespace,
+        service_version,
+        resource_attributes,
+    ));
+    (key != base_key).then_some((key, attributes))
+}
+
+fn record_metadata_promotion_issues(
+    runtime_diagnostics: &SignalRuntimeDiagnostics,
+    mut issues: Vec<MetadataPromotionIssue>,
+    kind: &str,
+) {
+    issues.sort_by(|left, right| left.key.cmp(&right.key));
+    for issue in issues {
+        let diagnostic_code = format!("otel.{kind}_promotion_value_unsupported.{}", issue.key);
+        let diagnostic_count = runtime_diagnostics.record(
+            diagnostic_code,
+            format!(
+                "OpenTelemetry {kind} attribute {:?} was not promoted: {}",
+                issue.key, issue.reason
+            ),
+            1,
+        );
+        if should_relog_runtime_diagnostic(diagnostic_count) {
+            log::warn!(
+                target: "nemo_relay.observability",
+                event = "otel_metadata_promotion_value_unsupported",
+                metadata_key = issue.key.as_str();
+                "OpenTelemetry {kind} attribute was not promoted: {}",
+                issue.reason
+            );
+        }
+    }
+}
+
+struct CompletedResourceRoute<T> {
+    closed_at: DateTime<Utc>,
+    route: T,
+}
+
+/// Tracks the resource selected by a root scope so child scopes and late marks
+/// use the same signal provider.
+pub(super) struct SignalResourceLineage<T> {
+    active: HashMap<Uuid, T>,
+    completed: HashMap<Uuid, CompletedResourceRoute<T>>,
+    completed_expiry_index: BTreeMap<DateTime<Utc>, HashSet<Uuid>>,
+}
+
+impl<T: Clone> SignalResourceLineage<T> {
+    pub(super) fn new() -> Self {
+        Self {
+            active: HashMap::new(),
+            completed: HashMap::new(),
+            completed_expiry_index: BTreeMap::new(),
+        }
+    }
+
+    pub(super) fn process(
+        &mut self,
+        event: &Event,
+        root_route: Option<T>,
+        completed_context_ttl: Duration,
+    ) -> Option<T> {
+        self.expire_completed(*event.timestamp(), completed_context_ttl);
+        match event.scope_category() {
+            Some(ScopeCategory::Start) => {
+                self.remove_completed(event.uuid());
+                let route = self.parent_route(event).or(root_route);
+                if let Some(route) = route.clone() {
+                    self.active.insert(event.uuid(), route);
+                }
+                route
+            }
+            Some(ScopeCategory::End) => {
+                let route = self.active.remove(&event.uuid());
+                if let Some(route) = route.clone() {
+                    self.record_completed(event.uuid(), *event.timestamp(), route);
+                }
+                route
+            }
+            None => self.parent_route(event).or(root_route),
+        }
+    }
+
+    pub(super) fn existing_route(&self, event: &Event) -> Option<T> {
+        if event.scope_category() == Some(ScopeCategory::End)
+            && let Some(route) = self.active.get(&event.uuid())
+        {
+            return Some(route.clone());
+        }
+        self.parent_route(event)
+    }
+
+    fn parent_route(&self, event: &Event) -> Option<T> {
+        let parent_uuid = event.parent_uuid()?;
+        self.active.get(&parent_uuid).cloned().or_else(|| {
+            self.completed
+                .get(&parent_uuid)
+                .map(|context| context.route.clone())
+        })
+    }
+
+    fn remove_completed(&mut self, uuid: Uuid) {
+        if let Some(context) = self.completed.remove(&uuid) {
+            let remove_bucket = self
+                .completed_expiry_index
+                .get_mut(&context.closed_at)
+                .is_some_and(|uuids| {
+                    uuids.remove(&uuid);
+                    uuids.is_empty()
+                });
+            if remove_bucket {
+                self.completed_expiry_index.remove(&context.closed_at);
+            }
+        }
+    }
+
+    fn record_completed(&mut self, uuid: Uuid, closed_at: DateTime<Utc>, route: T) {
+        self.remove_completed(uuid);
+        self.completed
+            .insert(uuid, CompletedResourceRoute { closed_at, route });
+        self.completed_expiry_index
+            .entry(closed_at)
+            .or_default()
+            .insert(uuid);
+    }
+
+    fn expire_completed(&mut self, timestamp: DateTime<Utc>, ttl: Duration) {
+        while let Some((closed_at, _)) = self.completed_expiry_index.first_key_value() {
+            let closed_at = *closed_at;
+            if !timestamp
+                .signed_duration_since(closed_at)
+                .to_std()
+                .is_ok_and(|age| age > ttl)
+            {
+                break;
+            }
+            let uuids = self
+                .completed_expiry_index
+                .remove(&closed_at)
+                .expect("completed resource-route expiry bucket exists");
+            for uuid in uuids {
+                self.completed.remove(&uuid);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    use super::automatic_otlp_http_client;
+
+    #[test]
+    fn automatic_http_client_does_not_follow_redirects() {
+        let _guard = crate::observability::test_mutex().lock().unwrap();
+        let destination = TcpListener::bind("127.0.0.1:0").unwrap();
+        destination.set_nonblocking(true).unwrap();
+        let location = format!("http://{}/leak", destination.local_addr().unwrap());
+        let redirector = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", redirector.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut stream, _) = redirector.accept().unwrap();
+            let mut buffer = [0; 4_096];
+            assert!(stream.read(&mut buffer).unwrap() > 0);
+            write!(
+                stream,
+                "HTTP/1.1 307 Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+        });
+
+        let client = automatic_otlp_http_client().unwrap();
+        let response = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(client.get(endpoint).send())
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+        server.join().unwrap();
+        assert!(
+            matches!(destination.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "redirect destination must not receive a connection"
+        );
+    }
 }

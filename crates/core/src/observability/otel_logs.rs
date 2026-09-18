@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime};
 use chrono::{DateTime, Utc};
 use opentelemetry::logs::{AnyValue, LogRecord as _, Logger as _, LoggerProvider as _, Severity};
 use opentelemetry::trace::{SpanContext, TraceFlags, TraceState};
-use opentelemetry::{InstrumentationScope, Key};
+use opentelemetry::{InstrumentationScope, Key, KeyValue};
 use opentelemetry_otlp::{
     LogExporter as OtlpLogExporter, Protocol, WithExportConfig, WithHttpConfig, WithTonicConfig,
 };
@@ -31,7 +31,6 @@ use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_
 use crate::observability::{relay_span_id, relay_trace_id};
 use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
 
-use super::OpenTelemetryRuntimeDiagnostics;
 use super::header_file::{
     HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
     has_configured_headers, validate_header_files, validate_header_http_endpoint,
@@ -41,12 +40,16 @@ use super::otel::{
     normalize_shutdown_result,
 };
 use super::otel_signal::{
-    MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics, build_grpc_metadata,
-    build_in_owned_runtime, classify_metric_mark, reject_signal_header_environment,
-    resolve_header_env, resolve_http_signal_endpoint, retry_batch_processor_channel_full,
-    should_relog_runtime_diagnostic, signal_resource, validate_signal_headers,
+    MetricMarkClassification, SignalExporterRuntime, SignalResourceLineage,
+    SignalRuntimeDiagnostics, automatic_otlp_http_client, automatic_protocol_is_grpc,
+    automatic_protocol_is_unset, automatic_signal_endpoint, automatic_signal_headers_configured,
+    build_grpc_metadata, build_in_owned_runtime, classify_metric_mark,
+    promoted_signal_resource_attributes, reject_signal_header_environment, resolve_header_env,
+    resolve_http_signal_endpoint, retry_batch_processor_channel_full,
+    should_relog_runtime_diagnostic, signal_resource, telemetry_resource, validate_signal_headers,
     validate_telemetry_sdk_resource_attributes,
 };
+use super::{OpenTelemetryRuntimeDiagnostics, validate_metadata_promotion_prefixes};
 
 const DEFAULT_MAX_QUEUE_SIZE: usize = 2_048;
 const DEFAULT_MAX_EXPORT_BATCH_SIZE: usize = 512;
@@ -60,7 +63,8 @@ pub struct OpenTelemetryLogConfig {
     header_env: HashMap<String, String>,
     header_file: HeaderFiles,
     resource_attributes: HashMap<String, String>,
-    service_name: String,
+    promote_resource_metadata_prefixes: Vec<String>,
+    service_name: Option<String>,
     service_namespace: Option<String>,
     service_version: Option<String>,
     instrumentation_scope: String,
@@ -72,6 +76,7 @@ pub struct OpenTelemetryLogConfig {
     scheduled_delay: Duration,
     completed_span_context_ttl: Duration,
     diagnostic_field: Option<String>,
+    automatic: bool,
 }
 
 impl OpenTelemetryLogConfig {
@@ -83,7 +88,8 @@ impl OpenTelemetryLogConfig {
             header_env: HashMap::new(),
             header_file: HashMap::new(),
             resource_attributes: HashMap::new(),
-            service_name: "unknown_service".to_string(),
+            promote_resource_metadata_prefixes: Vec::new(),
+            service_name: None,
             service_namespace: None,
             service_version: None,
             instrumentation_scope: "opentelemetry".to_string(),
@@ -95,6 +101,15 @@ impl OpenTelemetryLogConfig {
             scheduled_delay: DEFAULT_SCHEDULED_DELAY,
             completed_span_context_ttl: DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
             diagnostic_field: None,
+            automatic: false,
+        }
+    }
+
+    pub(crate) fn from_automatic_configuration() -> Self {
+        Self {
+            endpoint: "<environment>".to_string(),
+            automatic: true,
+            ..Self::new("")
         }
     }
 
@@ -135,9 +150,19 @@ impl OpenTelemetryLogConfig {
         self
     }
 
+    /// Promote matching root-scope Event metadata to OTLP resource attributes.
+    pub fn with_promote_resource_metadata_prefixes<I, S>(mut self, prefixes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.promote_resource_metadata_prefixes = prefixes.into_iter().map(Into::into).collect();
+        self
+    }
+
     /// Set the `service.name` resource attribute.
     pub fn with_service_name(mut self, service_name: impl Into<String>) -> Self {
-        self.service_name = service_name.into();
+        self.service_name = Some(service_name.into());
         self
     }
 
@@ -230,12 +255,27 @@ impl OpenTelemetryLogConfig {
                 "completed_span_context_ttl must be greater than 0".to_string(),
             ));
         }
-        validate_telemetry_sdk_resource_attributes(&self.resource_attributes)?;
-        reject_signal_header_environment("OTEL_EXPORTER_OTLP_LOGS_HEADERS")?;
-        validate_signal_headers(&self.headers)?;
-        if has_configured_headers(&self.headers, &self.header_env, &self.header_file) {
-            validate_header_http_endpoint(&self.endpoint)
-                .map_err(OpenTelemetryError::ExporterBuild)?;
+        validate_metadata_promotion_prefixes(&self.promote_resource_metadata_prefixes)
+            .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
+        if self.automatic {
+            if automatic_signal_headers_configured("OTEL_EXPORTER_OTLP_LOGS_HEADERS") {
+                let endpoint = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
+                    .ok_or_else(|| {
+                        OpenTelemetryError::ExporterBuild(
+                            "automatic log exporter requires a nonblank OTLP endpoint".to_string(),
+                        )
+                    })?;
+                validate_header_http_endpoint(&endpoint)
+                    .map_err(OpenTelemetryError::ExporterBuild)?;
+            }
+        } else {
+            validate_telemetry_sdk_resource_attributes(&self.resource_attributes)?;
+            reject_signal_header_environment("OTEL_EXPORTER_OTLP_LOGS_HEADERS")?;
+            validate_signal_headers(&self.headers)?;
+            if has_configured_headers(&self.headers, &self.header_env, &self.header_file) {
+                validate_header_http_endpoint(&self.endpoint)
+                    .map_err(OpenTelemetryError::ExporterBuild)?;
+            }
         }
         Ok(())
     }
@@ -256,6 +296,7 @@ struct LogSubscriberInner {
     // Drop the processor and logger before the provider, then stop its runtime.
     _processor: Arc<Mutex<LogEventProcessor>>,
     provider: SdkLoggerProvider,
+    dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicLogPipeline>>>,
     delivery_diagnostics: Arc<LogDeliveryDiagnostics>,
     runtime_diagnostics: SignalRuntimeDiagnostics,
     subscriber: EventSubscriberFn,
@@ -266,8 +307,17 @@ impl Drop for LogSubscriberInner {
     fn drop(&mut self) {
         // Drain Relay delivery before the provider drains accepted log records and its runtime drops.
         let _ = flush_subscribers();
-        let _ = normalize_shutdown_result(self.provider.shutdown());
+        let _ = shutdown_log_providers(
+            self.provider.clone(),
+            dynamic_log_providers(&self.dynamic_pipelines),
+        );
     }
+}
+
+struct DynamicLogPipeline {
+    provider: SdkLoggerProvider,
+    logger: SdkLogger,
+    _runtime: SignalExporterRuntime,
 }
 
 impl OpenTelemetryLogSubscriber {
@@ -286,12 +336,20 @@ impl OpenTelemetryLogSubscriber {
         Self::new_with_runtime_diagnostics(config)
     }
 
+    pub(crate) fn new_from_automatic_configuration_for_plugin() -> Result<Self> {
+        let mut config = OpenTelemetryLogConfig::from_automatic_configuration();
+        config.diagnostic_field = Some("opentelemetry.automatic.logs".to_string());
+        Self::new_with_runtime_diagnostics(config)
+    }
+
     fn new_with_runtime_diagnostics(mut config: OpenTelemetryLogConfig) -> Result<Self> {
         config.validate()?;
-        validate_header_files(&config.headers, &config.header_env, &config.header_file)
-            .map_err(OpenTelemetryError::ExporterBuild)?;
-        config.headers = resolve_header_env(&config.headers, &config.header_env)?;
-        validate_signal_headers(&config.headers)?;
+        if !config.automatic {
+            validate_header_files(&config.headers, &config.header_env, &config.header_file)
+                .map_err(OpenTelemetryError::ExporterBuild)?;
+            config.headers = resolve_header_env(&config.headers, &config.header_env)?;
+            validate_signal_headers(&config.headers)?;
+        }
         let minimum_severity = config.minimum_severity;
         let completed_span_context_ttl = config.completed_span_context_ttl;
         let instrumentation_scope = config.instrumentation_scope.clone();
@@ -301,10 +359,11 @@ impl OpenTelemetryLogSubscriber {
             runtime_diagnostics.clone(),
         ));
         let provider_diagnostics = Arc::clone(&delivery_diagnostics);
+        let provider_config = config.clone();
         let (provider, runtime) = build_in_owned_runtime("nemo-relay-otlp-logs", move || {
-            build_log_provider(&config, provider_diagnostics)
+            build_log_provider(&provider_config, provider_diagnostics, None)
         })?;
-        let logger = provider.logger(instrumentation_scope);
+        let logger = provider.logger(instrumentation_scope.clone());
         let processor = Arc::new(Mutex::new(LogEventProcessor::new_with_runtime_diagnostics(
             logger,
             minimum_severity,
@@ -314,7 +373,69 @@ impl OpenTelemetryLogSubscriber {
         let callback_processor = Arc::clone(&processor);
         let callback_recovery_warned = Arc::new(AtomicBool::new(false));
         let callback_recovery_warned_for_callback = Arc::clone(&callback_recovery_warned);
+        let dynamic_pipelines = Arc::new(Mutex::new(HashMap::new()));
+        let callback_dynamic_pipelines = Arc::clone(&dynamic_pipelines);
+        let resource_lineage = Arc::new(Mutex::new(SignalResourceLineage::new()));
+        let callback_resource_lineage = Arc::clone(&resource_lineage);
+        let callback_config = config.clone();
+        let callback_delivery_diagnostics = Arc::clone(&delivery_diagnostics);
+        let callback_runtime_diagnostics = runtime_diagnostics.clone();
         let subscriber: EventSubscriberFn = Arc::new(move |event| {
+            let inherited_route = callback_resource_lineage
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .existing_route(event);
+            let root_route = inherited_route.or_else(|| {
+                promoted_signal_resource_attributes(
+                    event,
+                    &callback_config.promote_resource_metadata_prefixes,
+                    callback_config.service_name.as_deref(),
+                    callback_config.service_namespace.as_deref(),
+                    callback_config.service_version.as_deref(),
+                    &callback_config.resource_attributes,
+                    &callback_runtime_diagnostics,
+                )
+                .and_then(|(key, attributes)| {
+                    match ensure_dynamic_log_pipeline(
+                        &callback_dynamic_pipelines,
+                        &callback_config,
+                        &instrumentation_scope,
+                        attributes,
+                        Arc::clone(&callback_delivery_diagnostics),
+                        &key,
+                    ) {
+                        Ok(()) => Some(key),
+                        Err(error) => {
+                            let count = callback_runtime_diagnostics.record(
+                                "otel.resource_metadata_pipeline_build_failed",
+                                format!(
+                                    "OpenTelemetry log resource pipeline was not created: {error}"
+                                ),
+                                1,
+                            );
+                            if should_relog_runtime_diagnostic(count) {
+                                log::warn!(
+                                    target: "nemo_relay.observability",
+                                    event = "otel_resource_metadata_pipeline_build_failed";
+                                    "OpenTelemetry log resource metadata pipeline was not created: {error}"
+                                );
+                            }
+                            None
+                        }
+                    }
+                })
+            });
+            let route = callback_resource_lineage
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .process(event, root_route, completed_span_context_ttl);
+            let routed_logger = route.and_then(|key| {
+                callback_dynamic_pipelines
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .get(&key)
+                    .map(|pipeline| pipeline.logger.clone())
+            });
             let mut processor = match callback_processor.lock() {
                 Ok(processor) => processor,
                 Err(poisoned) => {
@@ -328,12 +449,13 @@ impl OpenTelemetryLogSubscriber {
                     poisoned.into_inner()
                 }
             };
-            processor.process(event);
+            processor.process_with_logger(event, routed_logger.as_ref());
         });
         Ok(Self {
             inner: Arc::new(LogSubscriberInner {
                 _processor: processor,
                 provider,
+                dynamic_pipelines,
                 delivery_diagnostics,
                 runtime_diagnostics,
                 subscriber,
@@ -369,10 +491,11 @@ impl OpenTelemetryLogSubscriber {
     /// This is a synchronous completion barrier; call it from a blocking task in async code.
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
-        self.inner
-            .provider
-            .force_flush()
-            .map_err(|error| OpenTelemetryError::LogProvider(error.to_string()))
+        flush_log_providers(
+            self.inner.provider.clone(),
+            dynamic_log_providers(&self.inner.dynamic_pipelines),
+        )
+        .map_err(|error| OpenTelemetryError::LogProvider(error.to_string()))
     }
 
     /// Shut down the OTLP logger provider.
@@ -386,8 +509,11 @@ impl OpenTelemetryLogSubscriber {
     }
 
     pub(crate) fn shutdown_provider(&self) -> Result<()> {
-        normalize_shutdown_result(self.inner.provider.shutdown())
-            .map_err(|error| OpenTelemetryError::LogProvider(error.to_string()))
+        shutdown_log_providers(
+            self.inner.provider.clone(),
+            dynamic_log_providers(&self.inner.dynamic_pipelines),
+        )
+        .map_err(OpenTelemetryError::LogProvider)
     }
 
     pub(crate) fn delivery_failure_summary(&self) -> Option<String> {
@@ -395,62 +521,130 @@ impl OpenTelemetryLogSubscriber {
     }
 }
 
+fn dynamic_log_providers(
+    pipelines: &Mutex<HashMap<String, DynamicLogPipeline>>,
+) -> Vec<SdkLoggerProvider> {
+    pipelines
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .values()
+        .map(|pipeline| pipeline.provider.clone())
+        .collect()
+}
+
+fn flush_log_providers(
+    provider: SdkLoggerProvider,
+    dynamic_providers: Vec<SdkLoggerProvider>,
+) -> std::result::Result<(), String> {
+    let mut errors = Vec::new();
+    if let Err(error) = provider.force_flush() {
+        errors.push(error.to_string());
+    }
+    for provider in dynamic_providers {
+        if let Err(error) = provider.force_flush() {
+            errors.push(error.to_string());
+        }
+    }
+    errors.into_iter().next().map_or(Ok(()), Err)
+}
+
+fn shutdown_log_providers(
+    provider: SdkLoggerProvider,
+    dynamic_providers: Vec<SdkLoggerProvider>,
+) -> std::result::Result<(), String> {
+    let mut dynamic_errors = Vec::new();
+    for provider in dynamic_providers {
+        if let Err(error) = normalize_shutdown_result(provider.shutdown()) {
+            dynamic_errors.push(error.to_string());
+        }
+    }
+    normalize_shutdown_result(provider.shutdown()).map_err(|error| error.to_string())?;
+    dynamic_errors.into_iter().next().map_or(Ok(()), Err)
+}
+
 fn build_log_provider(
     config: &OpenTelemetryLogConfig,
     diagnostics: Arc<LogDeliveryDiagnostics>,
+    resource_attributes: Option<Vec<KeyValue>>,
 ) -> Result<SdkLoggerProvider> {
-    let exporter = match config.transport {
-        OtlpTransport::HttpBinary => {
-            let mut builder = OtlpLogExporter::builder()
+    let exporter = if config.automatic {
+        let builder = OtlpLogExporter::builder();
+        if automatic_protocol_is_unset("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL") {
+            builder
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
-                .with_timeout(config.timeout)
-                .with_endpoint(resolve_http_log_endpoint(&config.endpoint).into_owned());
-            let client = reqwest::Client::builder()
-                .timeout(config.timeout)
-                .redirect(reqwest::redirect::Policy::none())
+                .with_http_client(automatic_otlp_http_client()?)
                 .build()
-                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
-            builder = if config.header_file.is_empty() {
-                builder.with_http_client(client)
-            } else {
-                builder.with_http_client(HeaderFileHttpClient::new(
-                    client,
-                    HeaderFileResolver::new(config.header_file.clone()),
-                ))
-            };
-            if !config.headers.is_empty() {
-                builder = builder.with_headers(config.headers.clone());
-            }
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
+        } else if automatic_protocol_is_grpc("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL") {
             builder
+                .with_tonic()
+                .build()
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
+        } else {
+            builder
+                .with_http()
+                .with_http_client(automatic_otlp_http_client()?)
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
         }
-        OtlpTransport::Grpc => {
-            let mut builder = OtlpLogExporter::builder()
-                .with_tonic()
-                .with_protocol(Protocol::Grpc)
-                .with_timeout(config.timeout)
-                .with_endpoint(config.endpoint.clone());
-            if !config.headers.is_empty() {
-                builder = builder.with_metadata(build_grpc_metadata(&config.headers)?);
+    } else {
+        match config.transport {
+            OtlpTransport::HttpBinary => {
+                let mut builder = OtlpLogExporter::builder()
+                    .with_http()
+                    .with_protocol(Protocol::HttpBinary)
+                    .with_timeout(config.timeout)
+                    .with_endpoint(resolve_http_log_endpoint(&config.endpoint).into_owned());
+                let client = reqwest::Client::builder()
+                    .timeout(config.timeout)
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
+                builder = if config.header_file.is_empty() {
+                    builder.with_http_client(client)
+                } else {
+                    builder.with_http_client(HeaderFileHttpClient::new(
+                        client,
+                        HeaderFileResolver::new(config.header_file.clone()),
+                    ))
+                };
+                if !config.headers.is_empty() {
+                    builder = builder.with_headers(config.headers.clone());
+                }
+                builder
+                    .build()
+                    .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
             }
-            if !config.header_file.is_empty() {
-                builder = builder.with_interceptor(HeaderFileInterceptor::new(
-                    HeaderFileResolver::new(config.header_file.clone()),
-                ));
+            OtlpTransport::Grpc => {
+                let mut builder = OtlpLogExporter::builder()
+                    .with_tonic()
+                    .with_protocol(Protocol::Grpc)
+                    .with_timeout(config.timeout)
+                    .with_endpoint(config.endpoint.clone());
+                if !config.headers.is_empty() {
+                    builder = builder.with_metadata(build_grpc_metadata(&config.headers)?);
+                }
+                if !config.header_file.is_empty() {
+                    builder = builder.with_interceptor(HeaderFileInterceptor::new(
+                        HeaderFileResolver::new(config.header_file.clone()),
+                    ));
+                }
+                builder
+                    .build()
+                    .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
             }
-            builder
-                .build()
-                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
         }
     };
 
-    let batch_config = BatchConfigBuilder::default()
-        .with_max_queue_size(config.max_queue_size)
-        .with_max_export_batch_size(config.max_export_batch_size)
-        .with_scheduled_delay(config.scheduled_delay)
-        .build();
+    let mut batch_config = BatchConfigBuilder::default();
+    if !config.automatic {
+        batch_config = batch_config
+            .with_max_queue_size(config.max_queue_size)
+            .with_max_export_batch_size(config.max_export_batch_size)
+            .with_scheduled_delay(config.scheduled_delay);
+    }
+    let batch_config = batch_config.build();
     let exporter = DiagnosticLogExporter {
         inner: exporter,
         diagnostics: Arc::clone(&diagnostics),
@@ -464,14 +658,50 @@ fn build_log_provider(
         retry_timeout: config.timeout,
     };
     Ok(SdkLoggerProvider::builder()
-        .with_resource(signal_resource(
-            &config.service_name,
-            config.service_namespace.as_deref(),
-            config.service_version.as_deref(),
-            &config.resource_attributes,
-        ))
+        .with_resource(if let Some(attributes) = resource_attributes {
+            telemetry_resource(attributes)
+        } else if config.automatic {
+            Resource::builder().build()
+        } else {
+            signal_resource(
+                config.service_name.as_deref(),
+                config.service_namespace.as_deref(),
+                config.service_version.as_deref(),
+                &config.resource_attributes,
+            )
+        })
         .with_log_processor(processor)
         .build())
+}
+
+fn ensure_dynamic_log_pipeline(
+    pipelines: &Mutex<HashMap<String, DynamicLogPipeline>>,
+    config: &OpenTelemetryLogConfig,
+    instrumentation_scope: &str,
+    attributes: Vec<KeyValue>,
+    diagnostics: Arc<LogDeliveryDiagnostics>,
+    key: &str,
+) -> Result<()> {
+    let mut pipelines = pipelines
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if pipelines.contains_key(key) {
+        return Ok(());
+    }
+    let config = config.clone();
+    let (provider, runtime) = build_in_owned_runtime("nemo-relay-otlp-logs-resource", move || {
+        build_log_provider(&config, diagnostics, Some(attributes))
+    })?;
+    let logger = provider.logger(instrumentation_scope.to_string());
+    pipelines.insert(
+        key.to_string(),
+        DynamicLogPipeline {
+            provider,
+            logger,
+            _runtime: runtime,
+        },
+    );
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -805,7 +1035,12 @@ impl LogEventProcessor {
         }
     }
 
+    #[cfg(test)]
     fn process(&mut self, event: &Event) {
+        self.process_with_logger(event, None);
+    }
+
+    fn process_with_logger(&mut self, event: &Event, logger: Option<&SdkLogger>) {
         let expired_count = self
             .lineage
             .expire_completed(*event.timestamp(), self.completed_span_context_ttl);
@@ -829,11 +1064,11 @@ impl LogEventProcessor {
                 self.lineage.process_start(event);
             }
             Some(crate::api::event::ScopeCategory::End) => self.lineage.process_end(event),
-            None => self.process_mark(event),
+            None => self.process_mark(event, logger),
         }
     }
 
-    fn process_mark(&mut self, event: &Event) {
+    fn process_mark(&mut self, event: &Event, logger: Option<&SdkLogger>) {
         match classify_metric_mark(event) {
             MetricMarkClassification::NotMetric => {}
             MetricMarkClassification::Valid(_) => return,
@@ -885,7 +1120,8 @@ impl LogEventProcessor {
             return;
         }
 
-        let mut record = self.logger.create_log_record();
+        let logger = logger.unwrap_or(&self.logger);
+        let mut record = logger.create_log_record();
         record.set_timestamp(super::otel::to_system_time(*event.timestamp()));
         record.set_observed_timestamp(SystemTime::now());
         let (otel_severity, severity_text) = otel_severity(severity);
@@ -902,7 +1138,7 @@ impl LogEventProcessor {
                 Some(context.trace_flags()),
             );
         }
-        self.logger.emit(record);
+        logger.emit(record);
     }
 }
 

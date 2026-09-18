@@ -213,7 +213,7 @@ fn test_ffi_observability_plugin_file_sinks() {
                     "kind": "observability",
                     "enabled": true,
                     "config": {
-                        "version": 3,
+                        "version": 4,
                         "atof": {
                             "enabled": true,
                             "sinks": [{
@@ -341,7 +341,7 @@ fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
                     "kind": "observability",
                     "enabled": true,
                     "config": {
-                        "version": 3,
+                        "version": 4,
                         "atif": {
                             "enabled": true,
                             "output_directory": dir_text,

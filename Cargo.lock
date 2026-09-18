@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "adler2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -520,6 +526,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "const-hex"
+version = "1.19.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e59eef12462b0f9b0a3620219be5d639afd79fe39dff0a42c3997061f9298b4"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "proptest",
+ "serde_core",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -576,6 +594,15 @@ checksum = "e75b2483e97a5a7da73ac68a05b629f9c53cff58d8ed1c77866079e18b00dba5"
 dependencies = [
  "digest 0.10.7",
  "spin",
+]
+
+[[package]]
+name = "crc32fast"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8498c871161e1742aaa9d52551b2d6ebdd4c3d45a3be423e3728f33b955be550"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]
@@ -845,6 +872,17 @@ name = "fixedbitset"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
+
+[[package]]
+name = "flate2"
+version = "1.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
+dependencies = [
+ "crc32fast",
+ "miniz_oxide",
+ "zlib-rs",
+]
 
 [[package]]
 name = "fluent-uri"
@@ -1632,6 +1670,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
+name = "miniz_oxide"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
+dependencies = [
+ "adler2",
+ "simd-adler32",
+]
+
+[[package]]
 name = "mio"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1710,7 +1758,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -1762,7 +1810,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-adaptive"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "chrono",
  "log",
@@ -1783,7 +1831,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-cli"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "async-stream",
  "axum",
@@ -1840,7 +1888,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-ffi"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "cbindgen",
  "chrono",
@@ -1859,7 +1907,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-node"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "chrono",
  "napi",
@@ -1877,7 +1925,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-pii-redaction"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "futures",
  "log",
@@ -1896,7 +1944,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-plugin"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "futures",
  "nemo-relay-types",
@@ -1908,7 +1956,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-python"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "chrono",
  "nemo-relay",
@@ -1926,7 +1974,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-types"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bitflags",
  "chrono",
@@ -1939,7 +1987,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-worker"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "futures-util",
  "hyper-util",
@@ -1956,7 +2004,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-worker-proto"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "prost",
  "prost-build",
@@ -2180,6 +2228,7 @@ version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9966929966d17620d7c316c643ba62631826e10021409357772d5eea84f62c35"
 dependencies = [
+ "flate2",
  "http",
  "opentelemetry",
  "opentelemetry-http",
@@ -2187,10 +2236,12 @@ dependencies = [
  "opentelemetry_sdk",
  "prost",
  "reqwest",
+ "serde_json",
  "thiserror",
  "tokio",
  "tonic",
  "tonic-types",
+ "zstd",
 ]
 
 [[package]]
@@ -2199,9 +2250,12 @@ version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56d658ba1faf63f7b9c492cfbe6e0ec365440a16132d3270c1065f7b33f1b638"
 dependencies = [
+ "base64",
+ "const-hex",
  "opentelemetry",
  "opentelemetry_sdk",
  "prost",
+ "serde",
  "tonic",
  "tonic-prost",
 ]
@@ -2381,6 +2435,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "proptest"
+version = "1.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b45fcc2344c680f5025fe57779faef368840d0bd1f42f216291f0dc4ace4744"
+dependencies = [
+ "bitflags",
+ "num-traits",
+ "rand 0.9.3",
+ "rand_chacha",
+ "rand_xorshift",
+ "regex-syntax",
+ "unarray",
 ]
 
 [[package]]
@@ -2733,6 +2802,15 @@ name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+
+[[package]]
+name = "rand_xorshift"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
+dependencies = [
+ "rand_core 0.9.5",
+]
 
 [[package]]
 name = "rcgen"
@@ -3286,6 +3364,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "simd-adler32"
+version = "0.3.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
+
+[[package]]
 name = "simd_cesu8"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3770,6 +3854,7 @@ dependencies = [
  "axum",
  "base64",
  "bytes",
+ "flate2",
  "h2",
  "http",
  "http-body",
@@ -3789,6 +3874,7 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+ "zstd",
 ]
 
 [[package]]
@@ -3977,6 +4063,12 @@ name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
+
+[[package]]
+name = "unarray"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
 
 [[package]]
 name = "unicase"
@@ -4753,6 +4845,12 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34b31d188d9d685a4f9c7b46d6e36631b07058d2cfe190267adce54dc230bf12"
 
 [[package]]
 name = "zmij"

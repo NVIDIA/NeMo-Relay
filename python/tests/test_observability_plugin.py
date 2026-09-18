@@ -247,7 +247,7 @@ class TestObservabilityConfigHelpers:
                 components=[
                     ComponentSpec(
                         {
-                            "version": 3,
+                            "version": 4,
                             "atof": {"sinks": [{"type": "file", "mode": "bad"}]},
                             "atif": {"filename_template": "missing-placeholder"},
                         }

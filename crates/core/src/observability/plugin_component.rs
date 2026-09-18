@@ -212,6 +212,9 @@ pub struct OpenTelemetrySignalEndpointConfig {
     /// Extra resource attributes.
     #[serde(default)]
     pub resource_attributes: HashMap<String, String>,
+    /// Literal root-scope Event metadata prefixes copied to OTLP resource attributes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub promote_resource_metadata_prefixes: Vec<String>,
     /// `service.name` resource attribute.
     #[serde(default = "default_otel_service_name")]
     pub service_name: String,
@@ -862,6 +865,12 @@ impl EditorConfig for OpenTelemetrySignalEndpointConfig {
                     &[],
                     false,
                 ),
+                otel_editor_field(
+                    "promote_resource_metadata_prefixes",
+                    EditorFieldKind::List,
+                    &[],
+                    true,
+                ),
             ],
         };
         &SCHEMA
@@ -1196,22 +1205,11 @@ fn register_observability(
     config: ObservabilityConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
-    if !matches!(config.version, 3 | 4) {
+    if config.version != 4 {
         return Err(PluginError::InvalidConfig(format!(
-            "observability config version {} is unsupported",
+            "observability config version {} is unsupported; use version 4",
             config.version
         )));
-    }
-    if config.version == 3
-        && config
-            .opentelemetry
-            .as_ref()
-            .is_some_and(|section| section.logs.is_some() || section.metrics.is_some())
-    {
-        return Err(PluginError::InvalidConfig(
-            "observability config version 3 is trace-only; use version 4 for OpenTelemetry logs or metrics"
-                .to_string(),
-        ));
     }
     register_full_payload_policy(config.enable_full_payloads, ctx)?;
     if let Some(atof) = config.atof.filter(|section| section.enabled) {
@@ -1220,10 +1218,36 @@ fn register_observability(
     if let Some(atif) = config.atif.filter(|section| section.enabled) {
         register_atif_dispatcher(atif, ctx)?;
     }
-    if let Some(otel) = config.opentelemetry.filter(|section| section.enabled) {
-        register_opentelemetry(otel, ctx)?;
+    if otel_sdk_disabled() {
+        return Ok(());
+    }
+    let automatic_signals = automatic_otlp_signals();
+    match config.opentelemetry {
+        Some(otel) if otel.enabled => {
+            if !opentelemetry_section_is_empty(&otel) || automatic_signals.is_none() {
+                register_opentelemetry(otel, ctx)?;
+            }
+            if let Some(signals) = automatic_signals {
+                register_automatic_opentelemetry(signals, ctx)?;
+            }
+        }
+        Some(_) => {}
+        None => {
+            if let Some(signals) = automatic_signals {
+                register_automatic_opentelemetry(signals, ctx)?;
+            }
+        }
     }
     Ok(())
+}
+
+fn opentelemetry_section_is_empty(section: &OpenTelemetrySectionConfig) -> bool {
+    section.endpoints.is_empty()
+        && !section.logs.as_ref().is_some_and(|logs| logs.enabled)
+        && !section
+            .metrics
+            .as_ref()
+            .is_some_and(|metrics| metrics.enabled)
 }
 
 fn register_full_payload_policy(
@@ -1572,6 +1596,22 @@ fn register_opentelemetry(
                 .to_string(),
         ));
     }
+    register_opentelemetry_resources(
+        "opentelemetry",
+        trace_subscribers,
+        log_subscribers,
+        metric_subscribers,
+        ctx,
+    )
+}
+
+fn register_opentelemetry_resources(
+    subscriber_name: &'static str,
+    trace_subscribers: Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetrySubscriber>>>,
+    log_subscribers: Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetryLogSubscriber>>>,
+    metric_subscribers: Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetryMetricSubscriber>>>,
+    ctx: &mut PluginRegistrationContext,
+) -> PluginResult<()> {
     log_opentelemetry_resource_access("traces", &trace_subscribers);
     log_opentelemetry_resource_access("logs", &log_subscribers);
     log_opentelemetry_resource_access("metrics", &metric_subscribers);
@@ -1622,6 +1662,20 @@ fn register_opentelemetry(
             },
         })
         .collect::<Vec<_>>();
+    let metric_observers = metric_subscribers
+        .iter()
+        .map(|subscriber| IndexedOpenTelemetryResource {
+            index: subscriber.index,
+            value: match &subscriber.value {
+                OpenTelemetryResource::Active(value) => {
+                    OpenTelemetryResource::Active(value.subscriber())
+                }
+                OpenTelemetryResource::Skipped(message) => {
+                    OpenTelemetryResource::Skipped(message.clone())
+                }
+            },
+        })
+        .collect::<Vec<_>>();
     let metric_diagnostic_field = (!metric_callbacks.is_empty()).then_some("opentelemetry.metrics");
     // Retain the subscribers as long as the registered fan-out callback exists.
     // Their providers and exporter runtimes must outlive event delivery.
@@ -1631,7 +1685,7 @@ fn register_opentelemetry(
     let rejected_metric_marks = AtomicU64::new(0);
     ctx.add_registration(PluginRegistration::new_with_outcome(
         "observability",
-        ctx.qualify_name("opentelemetry.shutdown"),
+        ctx.qualify_name(&format!("{subscriber_name}.shutdown")),
         Box::new(move || {
             match shutdown_all_opentelemetry_subscribers(
                 &trace_subscribers,
@@ -1649,7 +1703,7 @@ fn register_opentelemetry(
         }),
     ));
     ctx.register_subscriber(
-        "opentelemetry",
+        subscriber_name,
         Arc::new(move |event| {
             let _keep_exporters_alive = (
                 &delivery_trace_subscribers,
@@ -1659,6 +1713,7 @@ fn register_opentelemetry(
             deliver_opentelemetry_event(
                 &trace_callbacks,
                 &log_callbacks,
+                &metric_observers,
                 &metric_callbacks,
                 &rejected_metric_marks,
                 metric_diagnostic_field,
@@ -1667,6 +1722,111 @@ fn register_opentelemetry(
         }),
     )?;
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AutomaticOtlpSignals {
+    traces: bool,
+    logs: bool,
+    metrics: bool,
+}
+
+fn otel_sdk_disabled() -> bool {
+    std::env::var("OTEL_SDK_DISABLED").is_ok_and(|value| value.eq_ignore_ascii_case("true"))
+}
+
+fn environment_has_nonblank_value(variable: &str) -> bool {
+    std::env::var(variable).is_ok_and(|value| !value.trim().is_empty())
+}
+
+fn automatic_otlp_signals() -> Option<AutomaticOtlpSignals> {
+    if otel_sdk_disabled() {
+        return None;
+    }
+    let generic_endpoint = environment_has_nonblank_value("OTEL_EXPORTER_OTLP_ENDPOINT");
+    let signals = AutomaticOtlpSignals {
+        traces: generic_endpoint
+            || environment_has_nonblank_value("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"),
+        logs: generic_endpoint
+            || environment_has_nonblank_value("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"),
+        metrics: generic_endpoint
+            || environment_has_nonblank_value("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"),
+    };
+    (signals.traces || signals.logs || signals.metrics).then_some(signals)
+}
+
+fn environment_signal_enabled(variable: &'static str) -> bool {
+    match std::env::var(variable) {
+        Ok(value) if value.eq_ignore_ascii_case("none") => false,
+        Ok(value) if value.eq_ignore_ascii_case("otlp") || value.trim().is_empty() => true,
+        Ok(value) => {
+            log::warn!(
+                target: "nemo_relay.observability",
+                event = "unsupported_otel_exporter";
+                "OpenTelemetry environment variable {variable} requests unsupported exporter {value:?}; skipping that signal"
+            );
+            false
+        }
+        Err(_) => true,
+    }
+}
+
+fn register_automatic_opentelemetry(
+    signals: AutomaticOtlpSignals,
+    ctx: &mut PluginRegistrationContext,
+) -> PluginResult<()> {
+    let trace_subscribers = automatic_subscriber(
+        signals.traces && environment_signal_enabled("OTEL_TRACES_EXPORTER"),
+        "traces",
+        OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin,
+    );
+    let log_subscribers = automatic_subscriber(
+        signals.logs && environment_signal_enabled("OTEL_LOGS_EXPORTER"),
+        "logs",
+        OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin,
+    );
+    let metric_subscribers = automatic_subscriber(
+        signals.metrics && environment_signal_enabled("OTEL_METRICS_EXPORTER"),
+        "metrics",
+        OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin,
+    );
+    if trace_subscribers.is_empty() && log_subscribers.is_empty() && metric_subscribers.is_empty() {
+        return Ok(());
+    }
+    register_opentelemetry_resources(
+        "opentelemetry.automatic",
+        trace_subscribers,
+        log_subscribers,
+        metric_subscribers,
+        ctx,
+    )
+}
+
+/// Build one automatic subscriber without preventing healthy signals from activating.
+fn automatic_subscriber<T>(
+    enabled: bool,
+    signal: &'static str,
+    build: impl FnOnce() -> crate::observability::otel::Result<T>,
+) -> Vec<IndexedOpenTelemetryResource<Arc<T>>> {
+    if !enabled {
+        return Vec::new();
+    }
+    match build() {
+        Ok(subscriber) => vec![IndexedOpenTelemetryResource {
+            index: 0,
+            value: OpenTelemetryResource::Active(Arc::new(subscriber)),
+        }],
+        Err(error) => {
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "automatic_opentelemetry_signal_skipped",
+                plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+                signal;
+                "Automatic OpenTelemetry {signal} exporter was skipped during activation; delivery continues to valid signals: {error}"
+            );
+            Vec::new()
+        }
+    }
 }
 
 struct OpenTelemetrySignalSubscribers {
@@ -1775,6 +1935,7 @@ fn shutdown_all_opentelemetry_subscribers(
 fn deliver_opentelemetry_event(
     trace_callbacks: &[IndexedOpenTelemetryResource<EventSubscriberFn>],
     log_callbacks: &[IndexedOpenTelemetryResource<EventSubscriberFn>],
+    metric_observers: &[IndexedOpenTelemetryResource<EventSubscriberFn>],
     metric_callbacks: &[IndexedOpenTelemetryResource<MetricEventCallback>],
     rejected_metric_marks: &AtomicU64,
     metric_diagnostic_field: Option<&str>,
@@ -1784,6 +1945,7 @@ fn deliver_opentelemetry_event(
         MetricMarkClassification::NotMetric => {
             deliver_opentelemetry_callbacks(trace_callbacks, event);
             deliver_opentelemetry_callbacks(log_callbacks, event);
+            deliver_opentelemetry_callbacks(metric_observers, event);
         }
         MetricMarkClassification::Valid(measurements) => {
             deliver_opentelemetry_metric_callbacks(metric_callbacks, event, &measurements);
@@ -2019,6 +2181,7 @@ fn derive_signal_endpoint(
         header_env: trace.header_env.clone(),
         header_file: trace.header_file.clone(),
         resource_attributes: trace.resource_attributes.clone(),
+        promote_resource_metadata_prefixes: trace.promote_resource_metadata_prefixes.clone(),
         service_name: trace.service_name.clone(),
         service_namespace: trace.service_namespace.clone(),
         service_version: trace.service_version.clone(),
@@ -2227,7 +2390,6 @@ fn build_log_config(
     let (headers, header_file) = resolve_signal_headers("logs", index, &endpoint)?;
     let mut config = CoreOpenTelemetryLogConfig::new(endpoint.endpoint.clone())
         .with_transport(transport)
-        .with_service_name(endpoint.service_name.clone())
         .with_instrumentation_scope(endpoint.instrumentation_scope.clone())
         .with_timeout(Duration::from_millis(endpoint.timeout_millis))
         .with_minimum_severity(minimum_severity)
@@ -2236,7 +2398,13 @@ fn build_log_config(
         .with_scheduled_delay(Duration::from_millis(section.scheduled_delay_millis))
         .with_completed_span_context_ttl(Duration::from_millis(
             section.completed_span_context_ttl_millis,
-        ));
+        ))
+        .with_promote_resource_metadata_prefixes(
+            endpoint.promote_resource_metadata_prefixes.clone(),
+        );
+    if endpoint.service_name != default_otel_service_name() {
+        config = config.with_service_name(endpoint.service_name.clone());
+    }
     config = apply_signal_common(config, &endpoint, headers, header_file);
     Ok(config)
 }
@@ -2251,13 +2419,18 @@ fn build_metric_config(
     let (headers, header_file) = resolve_signal_headers("metrics", index, &endpoint)?;
     let mut config = CoreOpenTelemetryMetricConfig::new(endpoint.endpoint)
         .with_transport(transport)
-        .with_service_name(endpoint.service_name)
         .with_instrumentation_scope(endpoint.instrumentation_scope)
         .with_timeout(Duration::from_millis(endpoint.timeout_millis))
         .with_export_interval(Duration::from_millis(section.export_interval_millis))
         .with_temporality(temporality)
         .with_max_instruments(section.max_instruments)
-        .with_cardinality_limit(section.cardinality_limit);
+        .with_cardinality_limit(section.cardinality_limit)
+        .with_promote_resource_metadata_prefixes(
+            endpoint.promote_resource_metadata_prefixes.clone(),
+        );
+    if endpoint.service_name != default_otel_service_name() {
+        config = config.with_service_name(endpoint.service_name);
+    }
     if let Some(namespace) = endpoint.service_namespace {
         config = config.with_service_namespace(namespace);
     }
@@ -3369,7 +3542,6 @@ fn build_otel_config(
     validate_otel_batch_config(index, &section)?;
     let mut config = CoreOpenTelemetryConfig::new(section.otel_type, section.endpoint)
         .with_transport(transport)
-        .with_service_name(section.service_name)
         .with_timeout(Duration::from_millis(section.timeout_millis))
         .with_instrumentation_scope(section.instrumentation_scope)
         .with_mark_projection(section.mark_projection)
@@ -3377,6 +3549,9 @@ fn build_otel_config(
         .with_attribute_mappings(section.attribute_mappings)
         .with_promote_metadata_prefixes(section.promote_metadata_prefixes)
         .with_promote_resource_metadata_prefixes(section.promote_resource_metadata_prefixes);
+    if section.service_name != default_otel_service_name() {
+        config = config.with_service_name(section.service_name);
+    }
     if let Some(max_queue_size) = section.max_queue_size {
         config = config.with_max_queue_size(max_queue_size);
     }
@@ -3827,26 +4002,6 @@ fn validate_observability_section_values(
     }
     if let Some(section) = &config.opentelemetry {
         validate_opentelemetry_section(diagnostics, &config.policy, section);
-        let signal_field = if section.logs.is_some() {
-            Some("logs")
-        } else if section.metrics.is_some() {
-            Some("metrics")
-        } else {
-            None
-        };
-        if config.version == 3
-            && let Some(signal_field) = signal_field
-        {
-            push_policy_diag(
-                diagnostics,
-                UnsupportedBehavior::Error,
-                "observability.unsupported_value",
-                Some("opentelemetry".to_string()),
-                Some(signal_field.to_string()),
-                "observability config version 3 is trace-only; use version 4 for OpenTelemetry logs or metrics"
-                    .to_string(),
-            );
-        }
     }
 }
 
@@ -3943,7 +4098,11 @@ fn validate_opentelemetry_section(
             .metrics
             .as_ref()
             .is_some_and(|signal| signal.enabled);
-    if section.enabled && section.endpoints.is_empty() && !has_enabled_signal {
+    if section.enabled
+        && section.endpoints.is_empty()
+        && !has_enabled_signal
+        && automatic_otlp_signals().is_none()
+    {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
@@ -4203,6 +4362,17 @@ fn validate_opentelemetry_signal_endpoint_values(
             signal,
             &format!("endpoints[{index}].transport"),
             "must be 'http_binary' or 'grpc'",
+        );
+    }
+    if let Err(error) =
+        validate_metadata_promotion_prefixes(&endpoint.promote_resource_metadata_prefixes)
+    {
+        push_otel_signal_diagnostic(
+            diagnostics,
+            policy,
+            signal,
+            &format!("endpoints[{index}].promote_resource_metadata_prefixes"),
+            &error,
         );
     }
     validate_case_insensitive_signal_header_duplicates(
@@ -4653,16 +4823,14 @@ fn validate_opentelemetry_feature_support(
 }
 
 fn validate_version(diagnostics: &mut Vec<ConfigDiagnostic>, policy: &ConfigPolicy, version: u32) {
-    if !matches!(version, 3 | 4) {
+    if version != 4 {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
             "observability.unsupported_config_version",
             Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
             Some("version".to_string()),
-            format!(
-                "observability config version {version} is unsupported; use version 4 (or version 3 for trace-only compatibility)"
-            ),
+            format!("observability config version {version} is unsupported; use version 4"),
         );
     }
 }

@@ -1,6 +1,6 @@
 {
   "name": "nemo-relay-openclaw",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "NeMo Relay-authored observability plugin for OpenClaw.",
   "type": "module",
   "repository": {
@@ -68,7 +68,7 @@
     }
   },
   "dependencies": {
-    "nemo-relay-node": "0.9.0"
+    "nemo-relay-node": "0.10.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
