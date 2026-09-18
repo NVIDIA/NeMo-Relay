@@ -50,10 +50,12 @@ use serde_json::Map;
 
 /// Native plugin ABI version supported by this crate.
 ///
-/// Version 5 adds a context-aware raw tool execution intercept registration.
+/// Version 6 adds host-routed operational logging for native plugins.
 /// Hosts retain frozen version-4, version-3, and version-2 tables for
 /// already-built plugins that target those layouts.
-pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 5;
+pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 6;
+/// ABI version that introduced host-routed operational logging.
+pub const NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING: u32 = 6;
 /// ABI version that introduced context-aware raw tool execution intercepts.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT: u32 = 5;
 /// ABI version that introduced runtime diagnostics and dynamic gate control.
@@ -1179,6 +1181,22 @@ pub type NemoRelayNativeEmitMarkV2Fn = unsafe extern "C" fn(
     timestamp_unix_micros: *const i64,
 ) -> NemoRelayStatus;
 
+/// Operational log severity accepted by the native host logging extension.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NemoRelayNativeLogLevel {
+    /// Error-level record.
+    Error = 1,
+    /// Warn-level record.
+    Warn = 2,
+    /// Info-level record.
+    Info = 3,
+    /// Debug-level record.
+    Debug = 4,
+    /// Trace-level record.
+    Trace = 5,
+}
+
 /// Reads the active host runtime-diagnostics snapshot as canonical JSON.
 pub type NemoRelayNativeGetRuntimeDiagnosticsFn =
     unsafe extern "C" fn(out_json: *mut *mut NemoRelayNativeString) -> NemoRelayStatus;
@@ -1342,6 +1360,23 @@ pub struct NemoRelayNativeHostApiV5 {
         -> NemoRelayStatus,
 }
 
+/// ABI-v6 host extension for operational logging.
+///
+/// The complete ABI-v5 table is the prefix, preserving layout compatibility.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NemoRelayNativeHostApiV6 {
+    /// Frozen ABI-v5 compatibility prefix.
+    pub v5: NemoRelayNativeHostApiV5,
+    /// Emits a record through the Relay host's configured operational logger.
+    pub log: unsafe extern "C" fn(
+        level: NemoRelayNativeLogLevel,
+        target: *const NemoRelayNativeString,
+        message: *const NemoRelayNativeString,
+        fields_json: *const NemoRelayNativeString,
+    ) -> NemoRelayStatus,
+}
+
 unsafe impl Send for NemoRelayNativeHostApiV3 {}
 unsafe impl Sync for NemoRelayNativeHostApiV3 {}
 // SAFETY: the v4 host table is immutable after construction. Its function
@@ -1352,6 +1387,9 @@ unsafe impl Sync for NemoRelayNativeHostApiV4 {}
 // same thread-safe host function table.
 unsafe impl Send for NemoRelayNativeHostApiV5 {}
 unsafe impl Sync for NemoRelayNativeHostApiV5 {}
+// SAFETY: the v6 host table is immutable and its log function is thread-safe.
+unsafe impl Send for NemoRelayNativeHostApiV6 {}
+unsafe impl Sync for NemoRelayNativeHostApiV6 {}
 
 // The host API table is immutable after construction. Function pointers and
 // the null-terminated version string pointer are safe to share across threads.
@@ -1444,8 +1482,48 @@ pub struct PluginRuntime {
     emit_mark_v2: Option<NemoRelayNativeEmitMarkV2Fn>,
     get_runtime_diagnostics: Option<NemoRelayNativeGetRuntimeDiagnosticsFn>,
     v4: Option<NemoRelayNativeHostApiV4>,
+    log: Option<
+        unsafe extern "C" fn(
+            NemoRelayNativeLogLevel,
+            *const NemoRelayNativeString,
+            *const NemoRelayNativeString,
+            *const NemoRelayNativeString,
+        ) -> NemoRelayStatus,
+    >,
     capability: *const NemoRelayNativePluginRuntime,
 }
+
+/// Emit a formatted native-plugin log record through the Relay host.
+#[macro_export]
+macro_rules! relay_info {
+    ($runtime:expr, target: $target:expr, fields: $fields:expr, $($arg:tt)+) => {{
+        $runtime.log($crate::NemoRelayNativeLogLevel::Info, $target, &format!($($arg)+), Some(&$fields))
+    }};
+    ($runtime:expr, target: $target:expr, $($arg:tt)+) => {{
+        $runtime.log($crate::NemoRelayNativeLogLevel::Info, $target, &format!($($arg)+), None)
+    }};
+}
+
+#[macro_export]
+/// Emit a formatted warn-level native-plugin record through the Relay host.
+macro_rules! relay_warn {
+    ($runtime:expr, target: $target:expr, fields: $fields:expr, $($arg:tt)+) => {{ $runtime.log($crate::NemoRelayNativeLogLevel::Warn, $target, &format!($($arg)+), Some(&$fields)) }};
+    ($runtime:expr, target: $target:expr, $($arg:tt)+) => {{ $runtime.log($crate::NemoRelayNativeLogLevel::Warn, $target, &format!($($arg)+), None) }};
+}
+
+#[macro_export]
+/// Emit a formatted error-level native-plugin record through the Relay host.
+macro_rules! relay_error {
+    ($runtime:expr, target: $target:expr, fields: $fields:expr, $($arg:tt)+) => {{ $runtime.log($crate::NemoRelayNativeLogLevel::Error, $target, &format!($($arg)+), Some(&$fields)) }};
+    ($runtime:expr, target: $target:expr, $($arg:tt)+) => {{ $runtime.log($crate::NemoRelayNativeLogLevel::Error, $target, &format!($($arg)+), None) }};
+}
+
+#[macro_export]
+/// Emit a formatted debug-level native-plugin record through the Relay host.
+macro_rules! relay_debug { ($runtime:expr, target: $target:expr, fields: $fields:expr, $($arg:tt)+) => {{ $runtime.log($crate::NemoRelayNativeLogLevel::Debug, $target, &format!($($arg)+), Some(&$fields)) }}; ($runtime:expr, target: $target:expr, $($arg:tt)+) => {{ $runtime.log($crate::NemoRelayNativeLogLevel::Debug, $target, &format!($($arg)+), None) }}; }
+#[macro_export]
+/// Emit a formatted trace-level native-plugin record through the Relay host.
+macro_rules! relay_trace { ($runtime:expr, target: $target:expr, fields: $fields:expr, $($arg:tt)+) => {{ $runtime.log($crate::NemoRelayNativeLogLevel::Trace, $target, &format!($($arg)+), Some(&$fields)) }}; ($runtime:expr, target: $target:expr, $($arg:tt)+) => {{ $runtime.log($crate::NemoRelayNativeLogLevel::Trace, $target, &format!($($arg)+), None) }}; }
 
 // SAFETY: PluginRuntime holds an immutable host table and a retained,
 // thread-safe host capability. Clone and Drop use the host's atomic reference
@@ -1466,6 +1544,7 @@ impl Clone for PluginRuntime {
             emit_mark_v2: self.emit_mark_v2,
             get_runtime_diagnostics: self.get_runtime_diagnostics,
             v4: self.v4,
+            log: self.log,
             capability,
         }
     }
@@ -1485,11 +1564,15 @@ impl PluginRuntime {
         let v4 = (host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL
             && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV4>())
         .then(|| unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV4) });
+        let log = (host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING
+            && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV6>())
+        .then(|| unsafe { (*(host as *const _ as *const NemoRelayNativeHostApiV6)).log });
         Self {
             host: *host,
             emit_mark_v2: v4.map(|host| host.emit_mark_v2),
             get_runtime_diagnostics: v4.map(|host| host.get_runtime_diagnostics),
             v4,
+            log,
             capability: ptr::null(),
         }
     }
@@ -1614,6 +1697,54 @@ impl PluginRuntime {
     /// Returns the underlying host ABI table.
     pub fn host_api(&self) -> &NemoRelayNativeHostApiV1 {
         &self.host
+    }
+
+    /// Emits one operational log record through the Relay host's configured sinks.
+    pub fn log(
+        &self,
+        level: NemoRelayNativeLogLevel,
+        target: &str,
+        message: &str,
+        fields: Option<&Json>,
+    ) -> Result<()> {
+        let log = self
+            .log
+            .ok_or_else(|| "plugin logging requires native host ABI v6".to_string())?;
+        let target = HostString::new(&self.host, target)
+            .ok_or_else(|| "failed to allocate plugin log target".to_string())?;
+        let message = HostString::new(&self.host, message)
+            .ok_or_else(|| "failed to allocate plugin log message".to_string())?;
+        let fields = OptionalHostJson::new(&self.host, fields)?;
+        status_result(
+            &self.host,
+            unsafe { log(level, target.as_ptr(), message.as_ptr(), fields.as_ptr()) },
+            "log",
+        )
+    }
+
+    /// Emits a trace-level operational log record through the Relay host.
+    pub fn trace(&self, target: &str, message: &str, fields: Option<&Json>) -> Result<()> {
+        self.log(NemoRelayNativeLogLevel::Trace, target, message, fields)
+    }
+
+    /// Emits a debug-level operational log record through the Relay host.
+    pub fn debug(&self, target: &str, message: &str, fields: Option<&Json>) -> Result<()> {
+        self.log(NemoRelayNativeLogLevel::Debug, target, message, fields)
+    }
+
+    /// Emits an info-level operational log record through the Relay host.
+    pub fn info(&self, target: &str, message: &str, fields: Option<&Json>) -> Result<()> {
+        self.log(NemoRelayNativeLogLevel::Info, target, message, fields)
+    }
+
+    /// Emits a warn-level operational log record through the Relay host.
+    pub fn warn(&self, target: &str, message: &str, fields: Option<&Json>) -> Result<()> {
+        self.log(NemoRelayNativeLogLevel::Warn, target, message, fields)
+    }
+
+    /// Emits an error-level operational log record through the Relay host.
+    pub fn error(&self, target: &str, message: &str, fields: Option<&Json>) -> Result<()> {
+        self.log(NemoRelayNativeLogLevel::Error, target, message, fields)
     }
 
     /// Retrieves the current scope handle.

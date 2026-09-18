@@ -24,12 +24,12 @@ use nemo_relay_worker_proto::v1::{
     DeregisterConditionalMiddlewareGuardrailResponse, DropScopeStackRequest, EmitMarkRequest,
     GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, GuardrailResult, HandshakeRequest,
     HandshakeResponse, HealthRequest, HostAck, InvokeRequest, InvokeResponse, JsonEnvelope,
-    JsonResult, ListRuntimeRegistrationsRequest, ListRuntimeRegistrationsResponse,
+    JsonResult, JsonValue, ListRuntimeRegistrationsRequest, ListRuntimeRegistrationsResponse,
     LlmCodecDecodeRequest, LlmCodecDecodeResponse, LlmCodecEncodeRequest,
     LlmCodecIdentity as ProtoLlmCodecIdentity, LlmCodecKind, LlmInvocation, LlmNextRequest,
     LlmSanitizeRequestContext as ProtoLlmSanitizeRequestContext,
-    LlmSanitizeResponseContext as ProtoLlmSanitizeResponseContext, LlmStreamNextRequest,
-    PopScopeRequest, PushScopeRequest, PushScopeResponse,
+    LlmSanitizeResponseContext as ProtoLlmSanitizeResponseContext, LlmStreamNextRequest, LogLevel,
+    LogRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse,
     RegisterConditionalMiddlewareGuardrailRequest, RegisterConditionalMiddlewareGuardrailResponse,
     RegisterRequest, RegisterResponse, Registration, RegistrationSurface,
     RuntimeDiagnostic as ProtoRuntimeDiagnostic,
@@ -2937,6 +2937,33 @@ fn registration_surface_from_kind(kind: RuntimeRegistrationKind) -> Registration
 
 #[tonic::async_trait]
 impl RelayHostRuntime for WorkerHostRuntimeService {
+    async fn log(&self, request: Request<LogRequest>) -> Result<Response<HostAck>, Status> {
+        let request = request.into_inner();
+        self.state
+            .authorize(&request.activation_id, &request.auth_token)?;
+        let level = match LogLevel::try_from(request.level) {
+            Ok(LogLevel::Error) => log::Level::Error,
+            Ok(LogLevel::Warn) => log::Level::Warn,
+            Ok(LogLevel::Info) => log::Level::Info,
+            Ok(LogLevel::Debug) => log::Level::Debug,
+            Ok(LogLevel::Trace) => log::Level::Trace,
+            Ok(LogLevel::Unspecified) | Err(_) => {
+                return Err(Status::invalid_argument("log level must be specified"));
+            }
+        };
+        let target = worker_log_target(&request.target)?;
+        let fields = worker_log_fields(request.fields)?;
+        let args = format_args!("{}", request.message);
+        let record = log::Record::builder()
+            .args(args)
+            .level(level)
+            .target(&target)
+            .key_values(&fields)
+            .build();
+        log::logger().log(&record);
+        Ok(Response::new(host_ack(Ok(()))))
+    }
+
     async fn list_runtime_registrations(
         &self,
         request: Request<ListRuntimeRegistrationsRequest>,
@@ -3446,6 +3473,49 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                 serde_json::to_value(value).map_err(|err| FlowError::Internal(err.to_string()))
             }),
         )))
+    }
+}
+
+fn worker_log_target(target: &str) -> Result<String, Status> {
+    if target.is_empty() {
+        return Ok("nemo_relay.plugin.worker".into());
+    }
+    if target.len() > 256
+        || target
+            .bytes()
+            .any(|byte| byte == 0 || byte.is_ascii_control())
+    {
+        return Err(Status::invalid_argument("invalid plugin log target"));
+    }
+    Ok(format!("nemo_relay.plugin.worker.{target}"))
+}
+
+struct WorkerLogFields(Map<String, Json>);
+
+impl log::kv::Source for WorkerLogFields {
+    fn visit<'kvs>(
+        &'kvs self,
+        visitor: &mut dyn log::kv::VisitSource<'kvs>,
+    ) -> Result<(), log::kv::Error> {
+        for (key, value) in &self.0 {
+            visitor.visit_pair(
+                log::kv::Key::from_str(key),
+                log::kv::Value::from_serde(value),
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn worker_log_fields(fields: Option<JsonValue>) -> Result<WorkerLogFields, Status> {
+    let Some(fields) = fields else {
+        return Ok(WorkerLogFields(Map::new()));
+    };
+    match decode_json_value(&fields).map_err(|error| Status::invalid_argument(error.to_string()))? {
+        Json::Object(fields) => Ok(WorkerLogFields(fields)),
+        _ => Err(Status::invalid_argument(
+            "plugin log fields must be a JSON object",
+        )),
     }
 }
 

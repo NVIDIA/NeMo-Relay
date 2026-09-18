@@ -53,6 +53,7 @@ extern int32_t nemo_relay_list_runtime_registrations(const char* kinds_json, cha
 // Core API
 extern int32_t nemo_relay_initialize_default_logging(void);
 extern int32_t nemo_relay_shutdown_default_logging(void);
+extern int32_t nemo_relay_log(const char*, const char*, const char*, const char*);
 extern int32_t nemo_relay_get_handle(FfiScopeHandle** out);
 extern int32_t nemo_relay_push_scope(const char* name, int32_t scope_type, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* input_json, const int64_t* timestamp_unix_micros, FfiScopeHandle** out);
 extern int32_t nemo_relay_pop_scope(const FfiScopeHandle* handle, const char* output_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
@@ -355,6 +356,43 @@ func init() {
 // Callers that configure file sinks should defer ShutdownLogging from main.
 func ShutdownLogging() error {
 	return checkStatus(C.nemo_relay_shutdown_default_logging())
+}
+
+// Log emits a structured operational record through Relay's configured sinks.
+func Log(level, target, message string, fields map[string]any) error {
+	if fields == nil {
+		levelC, targetC, messageC := C.CString(level), C.CString(target), C.CString(message)
+		defer C.free(unsafe.Pointer(levelC))
+		defer C.free(unsafe.Pointer(targetC))
+		defer C.free(unsafe.Pointer(messageC))
+		return checkStatus(C.nemo_relay_log(levelC, targetC, messageC, nil))
+	}
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	levelC, targetC, messageC, fieldsC := C.CString(level), C.CString(target), C.CString(message), C.CString(string(encoded))
+	defer C.free(unsafe.Pointer(levelC))
+	defer C.free(unsafe.Pointer(targetC))
+	defer C.free(unsafe.Pointer(messageC))
+	defer C.free(unsafe.Pointer(fieldsC))
+	return checkStatus(C.nemo_relay_log(levelC, targetC, messageC, fieldsC))
+}
+
+func Trace(target, message string, fields map[string]any) error {
+	return Log("trace", target, message, fields)
+}
+func Debug(target, message string, fields map[string]any) error {
+	return Log("debug", target, message, fields)
+}
+func Info(target, message string, fields map[string]any) error {
+	return Log("info", target, message, fields)
+}
+func Warn(target, message string, fields map[string]any) error {
+	return Log("warn", target, message, fields)
+}
+func Error(target, message string, fields map[string]any) error {
+	return Log("error", target, message, fields)
 }
 
 func checkedValue[T any](status int32, value T) (T, error) {

@@ -149,12 +149,41 @@ from nemo_relay._native import create_scope_stack as _create_scope_stack
 from nemo_relay._native import (
     create_scope_stack_from_propagation as _create_scope_stack_from_propagation,
 )
+from nemo_relay._native import (
+    log as _log,
+)
 from nemo_relay._native import restore_thread_scope_stack as _restore_thread_scope_stack
 from nemo_relay._native import scope_stack_active as _native_scope_stack_active
 from nemo_relay._native import set_thread_scope_stack as _set_thread_scope_stack
 from nemo_relay._native import sync_thread_scope_stack as _sync_thread_scope_stack
 
 atexit.register(_shutdown_default_logging)
+
+
+def log(level: str, message: str, *, target: str = "", fields: "JsonObject | None" = None) -> None:
+    """Emit a structured operational record through Relay."""
+    return _log(level, message, target, fields)
+
+
+def trace(message: str, *, target: str = "", fields: "JsonObject | None" = None) -> None:
+    return log("trace", message, target=target, fields=fields)
+
+
+def debug(message: str, *, target: str = "", fields: "JsonObject | None" = None) -> None:
+    return log("debug", message, target=target, fields=fields)
+
+
+def info(message: str, *, target: str = "", fields: "JsonObject | None" = None) -> None:
+    return log("info", message, target=target, fields=fields)
+
+
+def warn(message: str, *, target: str = "", fields: "JsonObject | None" = None) -> None:
+    return log("warn", message, target=target, fields=fields)
+
+
+def error(message: str, *, target: str = "", fields: "JsonObject | None" = None) -> None:
+    return log("error", message, target=target, fields=fields)
+
 
 #: Scalar JSON leaf values accepted in NeMo Relay payloads. This alias has no
 #: runtime behavior; it exists to document and type JSON-compatible public API

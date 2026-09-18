@@ -52,12 +52,22 @@ fn collect_fields(record: &Record<'_>) -> CollectedFields {
         let name = key.as_str();
         let rendered = format!("{value}");
         match name {
-            "event" => collected.event_name = Some(rendered),
+            "event" => {
+                collected.event_name = Some(
+                    serde_json::from_str::<Value>(&rendered)
+                        .ok()
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                        .unwrap_or(rendered),
+                )
+            }
             "message" => {
                 // Message already lives in record.payload(); ignore KV duplicates.
             }
             _ => {
-                collected.fields.insert(name.to_owned(), json!(rendered));
+                collected.fields.insert(
+                    name.to_owned(),
+                    serde_json::from_str(&rendered).unwrap_or(Value::String(rendered)),
+                );
             }
         }
     }

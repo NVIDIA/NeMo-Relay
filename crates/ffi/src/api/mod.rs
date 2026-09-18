@@ -153,6 +153,58 @@ pub extern "C" fn nemo_relay_shutdown_default_logging() -> NemoRelayStatus {
     }
 }
 
+/// Emits a structured operational log record for language bindings.
+///
+/// # Safety
+///
+/// `level`, `target`, and `message` must be non-null pointers to valid,
+/// NUL-terminated UTF-8 strings. When non-null, `fields_json` must meet the
+/// same requirements and contain a JSON object.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_log(
+    level: *const c_char,
+    target: *const c_char,
+    message: *const c_char,
+    fields_json: *const c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if level.is_null() || target.is_null() || message.is_null() {
+        set_last_error("log level, target, and message must not be null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let parse = || -> FlowResult<()> {
+        let level = unsafe { CStr::from_ptr(level) }
+            .to_str()
+            .map_err(|e| FlowError::InvalidArgument(e.to_string()))?;
+        let target = unsafe { CStr::from_ptr(target) }
+            .to_str()
+            .map_err(|e| FlowError::InvalidArgument(e.to_string()))?;
+        let message = unsafe { CStr::from_ptr(message) }
+            .to_str()
+            .map_err(|e| FlowError::InvalidArgument(e.to_string()))?;
+        let fields: serde_json::Map<String, serde_json::Value> = if fields_json.is_null() {
+            serde_json::Map::new()
+        } else {
+            serde_json::from_str(
+                unsafe { CStr::from_ptr(fields_json) }
+                    .to_str()
+                    .map_err(|e| FlowError::InvalidArgument(e.to_string()))?,
+            )
+            .map_err(|e| FlowError::InvalidArgument(e.to_string()))?
+        };
+        let target = if target.is_empty() {
+            "nemo_relay.go".into()
+        } else {
+            format!("nemo_relay.go.{target}")
+        };
+        nemo_relay::logging::emit_str(level, &target, message, fields)
+    };
+    match parse() {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_error(&error),
+    }
+}
+
 fn block_on_sync_ffi<T, F>(future: F) -> FlowResult<T>
 where
     T: Send,
