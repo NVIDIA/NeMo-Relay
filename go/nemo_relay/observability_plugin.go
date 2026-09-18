@@ -33,6 +33,7 @@ type ObservabilityOpenTelemetrySignalEndpointConfig struct {
 	Transport            string            `json:"transport,omitempty"`
 	Headers              map[string]string `json:"headers,omitempty"`
 	HeaderEnv            map[string]string `json:"header_env,omitempty"`
+	HeaderFile           map[string]string `json:"header_file,omitempty"`
 	ResourceAttributes   map[string]string `json:"resource_attributes,omitempty"`
 	ServiceName          string            `json:"service_name,omitempty"`
 	ServiceNamespace     string            `json:"service_namespace,omitempty"`
@@ -75,6 +76,7 @@ type ObservabilityOpenTelemetryEndpointConfig struct {
 	Transport                     string                 `json:"transport,omitempty"`
 	Headers                       map[string]string      `json:"headers,omitempty"`
 	HeaderEnv                     map[string]string      `json:"header_env,omitempty"`
+	HeaderFile                    map[string]string      `json:"header_file,omitempty"`
 	ResourceAttributes            map[string]string      `json:"resource_attributes,omitempty"`
 	ServiceName                   string                 `json:"service_name,omitempty"`
 	ServiceNamespace              string                 `json:"service_namespace,omitempty"`
@@ -124,6 +126,7 @@ type ObservabilityAtofStreamSinkConfig struct {
 	Transport       string            `json:"transport,omitempty"`
 	Headers         map[string]string `json:"headers,omitempty"`
 	HeaderEnv       map[string]string `json:"header_env,omitempty"`
+	HeaderFile      map[string]string `json:"header_file,omitempty"`
 	TimeoutMillis   uint64            `json:"timeout_millis,omitempty"`
 	FieldNamePolicy string            `json:"field_name_policy,omitempty"`
 	Name            string            `json:"name,omitempty"`
@@ -211,6 +214,7 @@ type ObservabilityHttpStorageConfig struct {
 	Endpoint      string            `json:"endpoint"`
 	Headers       map[string]string `json:"headers,omitempty"`
 	HeaderEnv     map[string]string `json:"header_env,omitempty"`
+	HeaderFile    map[string]string `json:"header_file,omitempty"`
 	TimeoutMillis uint64            `json:"timeout_millis,omitempty"`
 }
 
@@ -225,6 +229,7 @@ func (config ObservabilityHttpStorageConfig) MarshalJSON() ([]byte, error) {
 		Endpoint      string            `json:"endpoint"`
 		Headers       map[string]string `json:"headers,omitempty"`
 		HeaderEnv     map[string]string `json:"header_env,omitempty"`
+		HeaderFile    map[string]string `json:"header_file,omitempty"`
 		TimeoutMillis uint64            `json:"timeout_millis,omitempty"`
 	}
 	return json.Marshal(httpStorageJSON{
@@ -232,6 +237,7 @@ func (config ObservabilityHttpStorageConfig) MarshalJSON() ([]byte, error) {
 		Endpoint:      config.Endpoint,
 		Headers:       config.Headers,
 		HeaderEnv:     config.HeaderEnv,
+		HeaderFile:    config.HeaderFile,
 		TimeoutMillis: config.TimeoutMillis,
 	})
 }
@@ -293,6 +299,7 @@ func NewObservabilityOpenTelemetrySignalEndpointConfig(endpoint string) Observab
 		Transport:            "http_binary",
 		Headers:              map[string]string{},
 		HeaderEnv:            map[string]string{},
+		HeaderFile:           map[string]string{},
 		ResourceAttributes:   map[string]string{},
 		ServiceName:          "unknown_service",
 		InstrumentationScope: "opentelemetry",
@@ -341,6 +348,7 @@ func NewObservabilityOpenTelemetryEndpointConfig(otelType OpenTelemetryType, end
 		PromoteMetadataPrefixes: []string{},
 		Headers:                 map[string]string{},
 		HeaderEnv:               map[string]string{},
+		HeaderFile:              map[string]string{},
 		ResourceAttributes:      map[string]string{},
 		ServiceName:             "unknown_service",
 		InstrumentationScope:    "opentelemetry",

@@ -452,8 +452,8 @@ def register_tool_execution(scope_handle: ScopeHandle, name: str, priority: int,
             this scope is popped.
         name: Unique intercept name within the owning scope.
         priority: Execution order for the intercept. Lower values run first.
-        fn: Callable invoked as ``fn(tool_name, args, next_call)``. It may call
-            ``next_call(args)`` to continue execution, modify the result, or
+        fn: Callable invoked as ``fn(context, next_call)``. It may call
+            ``next_call(context.args)`` to continue execution, modify the result, or
             short-circuit the tool call entirely. It must return
             ``ToolExecutionInterceptOutcome``.
 
@@ -467,6 +467,7 @@ def register_tool_execution(scope_handle: ScopeHandle, name: str, priority: int,
         while ``fn`` is running. Each call gets an isolated snapshot of the
         scope stack visible when it begins. Unfinished or new calls are rejected
         after ``fn`` returns or raises.
+
     """
     return _register_tool_execution(scope_handle.uuid, name, priority, fn)
 

@@ -471,8 +471,8 @@ func assertStreamExporterPath(t *testing.T) {
 func assertCallbackSerializationFailures(t *testing.T) {
 	t.Helper()
 	const toolName = "coverage_tool_intercept_serialize_failure"
-	if err := RegisterToolExecutionIntercept(toolName, 1, func(args json.RawMessage, _ func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
-		return ToolExecutionInterceptOutcome{Result: args}, nil
+	if err := RegisterToolExecutionIntercept(toolName, 1, func(context ToolExecutionContext, _ func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
+		return ToolExecutionInterceptOutcome{Result: context.Args}, nil
 	}); err != nil {
 		t.Fatalf("RegisterToolExecutionIntercept failed: %v", err)
 	}

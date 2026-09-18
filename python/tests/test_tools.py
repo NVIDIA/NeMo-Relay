@@ -10,13 +10,14 @@ import warnings
 from collections import UserDict, UserList
 from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import cast
+from typing import Never, cast
 
 import pytest
 from async_helpers import resolve_async_result
 
 from nemo_relay import (
     Event,
+    Json,
     MarkEvent,
     PendingMarkSpec,
     ScopeEvent,
@@ -35,7 +36,7 @@ from nemo_relay import (
 )
 
 
-def raise_runtime_error(message: str):
+def raise_runtime_error(message: str) -> Never:
     raise RuntimeError(message)
 
 
@@ -51,13 +52,13 @@ def _tool_event(events, name: str, scope_category: str) -> ScopeEvent:
 
 
 class TestTools:
-    def test_call_and_call_end(self):
+    def test_call_and_call_end(self) -> None:
         handle = tools.call("my_tool", {"input": "data"})
         assert isinstance(handle, ToolHandle)
         assert handle.name == "my_tool"
         tools.call_end(handle, ToolExecutionResult({"output": "result"}))
 
-    def test_call_end_preserves_result_annotation(self, subscribed_events: list[Event]):
+    def test_call_end_preserves_result_annotation(self, subscribed_events: list[Event]) -> None:
         handle = tools.call("manual_annotated_tool", {"input": "data"})
         tools.call_end(
             handle,
@@ -74,13 +75,13 @@ class TestTools:
             "tool_result_annotation": {"provider": "manual"},
         }
 
-    def test_call_with_attributes(self):
+    def test_call_with_attributes(self) -> None:
         attrs = ToolAttributes(ToolAttributes.REMOTE)
         handle = tools.call("local_tool", {"x": 1}, attributes=attrs)
         assert handle.name == "local_tool"
         tools.call_end(handle, ToolExecutionResult({"y": 2}))
 
-    def test_call_with_data_metadata(self):
+    def test_call_with_data_metadata(self) -> None:
         handle = tools.call(
             "tool_dm",
             {"arg": 1},
@@ -89,14 +90,14 @@ class TestTools:
         )
         tools.call_end(handle, ToolExecutionResult("ok"), data={"end_data": True}, metadata={"end_meta": True})
 
-    def test_call_with_parent_handle(self):
+    def test_call_with_parent_handle(self) -> None:
         parent = scope.push("tool_parent", ScopeType.Agent)
         handle = tools.call("child_tool", {}, handle=parent)
         assert handle.parent_uuid == parent.uuid
         tools.call_end(handle, ToolExecutionResult({}))
         scope.pop(parent)
 
-    def test_complete_skill_read_emits_minimal_eager_mark(self, subscribed_events: list[Event]):
+    def test_complete_skill_read_emits_minimal_eager_mark(self, subscribed_events: list[Event]) -> None:
         handle = tools.call("read_file", {"path": "/skills/review/SKILL.md"})
         tools.call_end(handle, ToolExecutionResult({"ok": True}))
         subscribers.flush()
@@ -111,26 +112,26 @@ class TestTools:
 
 
 class TestToolsAsync:
-    async def test_execute_basic(self):
+    async def test_execute_basic(self) -> None:
         # tools.execute wraps a Python callable; use sync func
-        def my_func(args):
+        def my_func(args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult({"result": args["x"] * 2})
 
         result = await tools.execute("double", {"x": 5}, my_func)
         assert result.result == {"result": 10}
 
-    async def test_execute_rejects_legacy_raw_result(self):
+    async def test_execute_rejects_legacy_raw_result(self) -> None:
         with pytest.raises(RuntimeError, match="must return ToolExecutionResult") as error:
             await tools.execute(
                 "legacy_raw_result",
                 {},
-                lambda _args: {"legacy": True},  # ty: ignore[invalid-argument-type]
+                lambda _args: {"legacy": True},
             )
         assert "ToolExecutionResult(payload), not a raw dict" in str(error.value)
         assert "internal error" not in str(error.value)
 
-    async def test_execute_rejects_cyclic_results_and_remains_usable(self):
-        def cyclic_result(_args):
+    async def test_execute_rejects_cyclic_results_and_remains_usable(self) -> None:
+        def cyclic_result(_args: Json) -> ToolExecutionResult[Json]:
             result = {}
             result["self"] = result
             return ToolExecutionResult(result)
@@ -138,7 +139,7 @@ class TestToolsAsync:
         with pytest.raises(RuntimeError, match="circular reference detected"):
             await tools.execute("cyclic_result", {}, cyclic_result)
 
-        async def async_cyclic_result(_args):
+        async def async_cyclic_result(_args: Json) -> ToolExecutionResult[Json]:
             return cyclic_result(_args)
 
         with pytest.raises(RuntimeError, match="circular reference detected"):
@@ -170,7 +171,7 @@ class TestToolsAsync:
         )
         assert result.result == {"status": "ok"}
 
-    async def test_execute_allows_shared_non_cyclic_results(self):
+    async def test_execute_allows_shared_non_cyclic_results(self) -> None:
         shared = {"value": True}
 
         result = await tools.execute(
@@ -184,15 +185,15 @@ class TestToolsAsync:
             "second": {"value": True},
         }
 
-    async def test_execute_returns_string(self):
-        def func(args):
+    async def test_execute_returns_string(self) -> None:
+        def func(_args: Json) -> ToolExecutionResult[str]:
             return ToolExecutionResult("hello")
 
         result = await tools.execute("str_tool", {}, func)
         assert result.result == "hello"
 
-    async def test_execute_with_attributes(self):
-        def func(args):
+    async def test_execute_with_attributes(self) -> None:
+        def func(args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult(args)
 
         attrs = ToolAttributes(ToolAttributes.REMOTE)
@@ -204,24 +205,24 @@ class TestToolsAsync:
         )
         assert result.result["test"] is True
 
-    async def test_execute_async_func(self):
+    async def test_execute_async_func(self) -> None:
         """tools.execute should accept async functions."""
 
-        async def my_async_func(args):
+        async def my_async_func(args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult({"result": args["x"] + 1})
 
         result = await tools.execute("async_tool", {"x": 10}, my_async_func)
         assert result.result == {"result": 11}
 
-    async def test_execute_async_func_returns_string(self):
-        async def func(args):
+    async def test_execute_async_func_returns_string(self) -> None:
+        async def func(_args: Json) -> ToolExecutionResult[str]:
             return ToolExecutionResult("async_hello")
 
         result = await tools.execute("async_str_tool", {}, func)
         assert result.result == "async_hello"
 
-    async def test_execute_async_func_with_attributes(self):
-        async def func(args):
+    async def test_execute_async_func_with_attributes(self) -> None:
+        async def func(args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult(args)
 
         attrs = ToolAttributes(ToolAttributes.REMOTE)
@@ -233,7 +234,7 @@ class TestToolsAsync:
         )
         assert result.result["key"] == "value"
 
-    async def test_execute_propagates_tool_call_id_to_lifecycle(self, subscribed_events: list[Event]):
+    async def test_execute_propagates_tool_call_id_to_lifecycle(self, subscribed_events: list[Event]) -> None:
         result = await tools.execute(
             "managed_tool_call_id",
             {"value": 1},
@@ -254,11 +255,11 @@ class TestToolsAsync:
             for event in lifecycle
         )
 
-    async def test_execute_failure_emits_end_event(self):
+    async def test_execute_failure_emits_end_event(self) -> None:
         events = []
         subscribers.register("py_tool_exec_failure_sub", lambda e: events.append(e))
 
-        def failing(args):
+        def failing(_args: Json) -> Never:
             raise ValueError("boom")
 
         with pytest.raises(RuntimeError, match="boom"):
@@ -289,8 +290,9 @@ class TestToolsAsync:
 
 
 class TestToolGuardrails:
-    def test_sanitize_request_guardrail(self):
-        def sanitizer(name, args):
+    def test_sanitize_request_guardrail(self) -> None:
+        def sanitizer(_name: str, args: Json) -> Json:
+            assert isinstance(args, dict)
             args["sanitized"] = True
             return args
 
@@ -307,8 +309,9 @@ class TestToolGuardrails:
         start_events = [e for e in events if isinstance(e, ScopeEvent) and e.category == "tool"]
         assert len(start_events) >= 1
 
-    def test_sanitize_response_guardrail(self):
-        def resp_sanitizer(name, result):
+    def test_sanitize_response_guardrail(self) -> None:
+        def resp_sanitizer(_name: str, result: Json) -> Json:
+            assert isinstance(result, dict)
             result["cleaned"] = True
             return result
 
@@ -317,8 +320,9 @@ class TestToolGuardrails:
         tools.call_end(handle, ToolExecutionResult({"output": "raw"}))
         guardrails.deregister_tool_sanitize_response("py_san_resp")
 
-    def test_conditional_execution_guardrail(self):
-        def blocker(name, args):
+    def test_conditional_execution_guardrail(self) -> None:
+        def blocker(_name: str, args: Json) -> str | None:
+            assert isinstance(args, dict)
             if args.get("blocked"):
                 return "execution blocked"
             return None
@@ -326,19 +330,19 @@ class TestToolGuardrails:
         guardrails.register_tool_conditional_execution("py_cond", 1, blocker)
         guardrails.deregister_tool_conditional_execution("py_cond")
 
-    def test_conditional_execution_direct(self):
+    def test_conditional_execution_direct(self) -> None:
         guardrails.register_tool_conditional_execution("py_cond_direct", 1, lambda name, args: "blocked directly")
         with pytest.raises(RuntimeError, match="guardrail rejected"):
             tools.conditional_execution("direct_tool", {})
         guardrails.deregister_tool_conditional_execution("py_cond_direct")
 
-    def test_duplicate_guardrail_raises(self):
+    def test_duplicate_guardrail_raises(self) -> None:
         guardrails.register_tool_sanitize_request("py_dup_guard", 1, lambda n, a: a)
         with pytest.raises(RuntimeError):
             guardrails.register_tool_sanitize_request("py_dup_guard", 1, lambda n, a: a)
         guardrails.deregister_tool_sanitize_request("py_dup_guard")
 
-    def test_sanitize_request_failure_omits_observability_input(self):
+    def test_sanitize_request_failure_omits_observability_input(self) -> None:
         events = []
         subscribers.register("py_tool_sanitize_req_sub", lambda event: events.append(event))
         guardrails.register_tool_sanitize_request(
@@ -357,7 +361,7 @@ class TestToolGuardrails:
         start = _tool_event(events, "tool_sanitize_req_fail", "start")
         assert start.data is None
 
-    def test_sanitize_response_invalid_return_omits_observability_output(self):
+    def test_sanitize_response_invalid_return_omits_observability_output(self) -> None:
         events = []
         subscribers.register("py_tool_sanitize_resp_sub", lambda event: events.append(event))
         guardrails.register_tool_sanitize_response(
@@ -376,17 +380,17 @@ class TestToolGuardrails:
         end = _tool_event(events, "tool_sanitize_resp_bad", "end")
         assert end.data is None
 
-    def test_deregister_nonexistent(self):
+    def test_deregister_nonexistent(self) -> None:
         assert not guardrails.deregister_tool_sanitize_request("nonexistent")
         assert not guardrails.deregister_tool_sanitize_response("nonexistent")
         assert not guardrails.deregister_tool_conditional_execution("nonexistent")
 
 
 class TestToolGuardrailsAsync:
-    async def test_async_conditional_runs_on_originating_loop(self):
+    async def test_async_conditional_runs_on_originating_loop(self) -> None:
         originating_loop = asyncio.get_running_loop()
 
-        async def allow(_name, _args):
+        async def allow(_name, _args) -> None:
             await asyncio.sleep(0)
             assert asyncio.get_running_loop() is originating_loop
             return None
@@ -399,7 +403,7 @@ class TestToolGuardrailsAsync:
 
         assert result.result == {}
 
-    async def test_manual_async_sanitizers_publish_transformed_payloads_and_can_flush(self):
+    async def test_manual_async_sanitizers_publish_transformed_payloads_and_can_flush(self) -> None:
         events = []
         request_flushed = False
         response_flushed = False
@@ -441,7 +445,7 @@ class TestToolGuardrailsAsync:
             "response_sanitized": True,
         }
 
-    async def test_conditional_blocks_execution(self):
+    async def test_conditional_blocks_execution(self) -> None:
         guardrails.register_tool_conditional_execution("py_async_blocker", 1, lambda name, args: "blocked by policy")
 
         def func(args):
@@ -454,12 +458,12 @@ class TestToolGuardrailsAsync:
 
 
 class TestToolIntercepts:
-    def test_request_intercept_register_deregister(self):
+    def test_request_intercept_register_deregister(self) -> None:
         intercepts.register_tool_request("py_req_int", 1, False, lambda n, a: a)
         assert intercepts.deregister_tool_request("py_req_int")
         assert not intercepts.deregister_tool_request("py_req_int")
 
-    def test_request_intercepts_direct(self):
+    def test_request_intercepts_direct(self) -> None:
         def intercept_fn(name, args):
             args["direct"] = True
             return args
@@ -471,21 +475,63 @@ class TestToolIntercepts:
         assert not isinstance(transformed, Awaitable)
         assert transformed == {"input": True, "direct": True}
 
-    def test_execution_intercept_register_deregister(self):
+    def test_execution_intercept_register_deregister(self) -> None:
         intercepts.register_tool_execution(
             "py_exec_int",
             1,
-            lambda name, args, next: ToolExecutionInterceptOutcome({"intercepted": True}),
+            lambda context, next_call: ToolExecutionInterceptOutcome({"intercepted": True}),
         )
         assert intercepts.deregister_tool_execution("py_exec_int")
 
-    def test_duplicate_intercept_raises(self):
+    async def test_execution_intercept_receives_tool_call_id(self) -> None:
+        seen = {}
+
+        async def context_intercept(context, next_call):
+            seen["tool_name"] = context.tool_name
+            seen["tool_call_id"] = context.tool_call_id
+            seen["arguments"] = context.args
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        intercepts.register_tool_execution("py_exec_ctx", 1, context_intercept)
+        try:
+            result = await tools.execute(
+                "ctx_tool",
+                {"value": 42},
+                lambda args: ToolExecutionResult(args),
+                tool_call_id="call-abc123",
+            )
+        finally:
+            assert intercepts.deregister_tool_execution("py_exec_ctx")
+
+        assert result.result == {"value": 42}
+        assert seen["tool_name"] == "ctx_tool"
+        assert seen["tool_call_id"] == "call-abc123"
+        assert seen["arguments"] == {"value": 42}
+
+    async def test_execution_intercept_tool_call_id_is_none_when_absent(self) -> None:
+        seen = {}
+
+        async def context_intercept(context, next_call):
+            seen["tool_call_id"] = context.tool_call_id
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        intercepts.register_tool_execution("py_exec_ctx_none", 1, context_intercept)
+        try:
+            await tools.execute("plain_tool", {}, lambda args: ToolExecutionResult(args))
+        finally:
+            assert intercepts.deregister_tool_execution("py_exec_ctx_none")
+
+        assert seen["tool_call_id"] is None
+
+    def test_duplicate_intercept_raises(self) -> None:
         intercepts.register_tool_request("py_dup_int", 1, False, lambda n, a: a)
         with pytest.raises(RuntimeError):
             intercepts.register_tool_request("py_dup_int", 1, False, lambda n, a: a)
         intercepts.deregister_tool_request("py_dup_int")
 
-    def test_request_intercept_raises_on_exception(self):
+    def test_request_intercept_raises_on_exception(self) -> None:
         intercepts.register_tool_request("py_req_raise", 1, False, lambda n, a: raise_runtime_error("boom"))
         try:
             with pytest.raises(RuntimeError, match="RuntimeError: boom"):
@@ -493,7 +539,7 @@ class TestToolIntercepts:
         finally:
             intercepts.deregister_tool_request("py_req_raise")
 
-    def test_request_intercept_raises_on_unserializable_return(self):
+    def test_request_intercept_raises_on_unserializable_return(self) -> None:
         intercepts.register_tool_request(
             "py_req_bad_return",
             1,
@@ -508,12 +554,12 @@ class TestToolIntercepts:
 
 
 class TestToolInterceptsAsync:
-    def test_loop_shutdown_cancels_pending_middleware_without_unraisable_errors(self, capsys):
+    def test_loop_shutdown_cancels_pending_middleware_without_unraisable_errors(self, capsys) -> None:
         async def request_intercept(_name, args):
             await asyncio.Event().wait()
             return args
 
-        async def scenario():
+        async def scenario() -> None:
             execution = asyncio.ensure_future(
                 tools.execute("shutdown_tool", {}, lambda args: ToolExecutionResult(args))
             )
@@ -534,12 +580,12 @@ class TestToolInterceptsAsync:
         assert "Task was destroyed but it is pending" not in diagnostics
         assert "was never awaited" not in diagnostics
 
-    async def test_cancelling_conditional_guardrail_closes_guardrail_scope(self):
+    async def test_cancelling_conditional_guardrail_closes_guardrail_scope(self) -> None:
         started = asyncio.Event()
         cancelled = asyncio.Event()
         events: list[Event] = []
 
-        async def conditional(_name, _args):
+        async def conditional(_name, _args) -> None:
             started.set()
             try:
                 await asyncio.Event().wait()
@@ -570,7 +616,7 @@ class TestToolInterceptsAsync:
         ]
         assert guardrail_lifecycle == ["start", "end"]
 
-    async def test_cancelling_execute_cancels_pending_request_intercept(self):
+    async def test_cancelling_execute_cancels_pending_request_intercept(self) -> None:
         started = asyncio.Event()
         cancelled = asyncio.Event()
         provider_calls: list[dict] = []
@@ -601,18 +647,18 @@ class TestToolInterceptsAsync:
 
         assert provider_calls == []
 
-    async def test_cancelling_execute_cancels_pending_execution_intercept(self):
+    async def test_cancelling_execute_cancels_pending_execution_intercept(self) -> None:
         started = asyncio.Event()
         release = asyncio.Event()
         cancelled = asyncio.Event()
         provider_calls: list[dict] = []
         events: list[Event] = []
 
-        async def middleware(_name, args, next):
+        async def middleware(context, next_call):
             started.set()
             try:
                 await release.wait()
-                downstream = await next(args)
+                downstream = await next_call(context.args)
                 return ToolExecutionInterceptOutcome(
                     downstream.result,
                     annotation=downstream.annotation,
@@ -655,11 +701,11 @@ class TestToolInterceptsAsync:
             for event in lifecycle
         )
 
-    async def test_sync_middleware_preserves_async_caller_context(self):
+    async def test_sync_middleware_preserves_async_caller_context(self) -> None:
         request_id = contextvars.ContextVar("tool_middleware_request_id", default="registration")
         observed: list[tuple[str, str]] = []
 
-        def conditional(_name, _args):
+        def conditional(_name, _args) -> None:
             observed.append(("conditional", request_id.get()))
             return None
 
@@ -667,9 +713,9 @@ class TestToolInterceptsAsync:
             observed.append(("request", request_id.get()))
             return args
 
-        def execution_intercept(_name, args, _next):
+        def execution_intercept(context, _next_call):
             observed.append(("execution", request_id.get()))
-            return ToolExecutionInterceptOutcome(args)
+            return ToolExecutionInterceptOutcome(context.args)
 
         guardrails.register_tool_conditional_execution("py_tool_context_conditional", 1, conditional)
         intercepts.register_tool_request("py_tool_context_request", 1, False, request_intercept)
@@ -696,7 +742,7 @@ class TestToolInterceptsAsync:
             ("request", "emitter"),
         ]
 
-    async def test_async_request_intercept_runs_on_originating_loop(self):
+    async def test_async_request_intercept_runs_on_originating_loop(self) -> None:
         originating_loop = asyncio.get_running_loop()
 
         async def intercept_fn(_name, args):
@@ -712,7 +758,7 @@ class TestToolInterceptsAsync:
 
         assert result.result == {"intercepted": True}
 
-    async def test_request_intercept_modifies_args(self):
+    async def test_request_intercept_modifies_args(self) -> None:
         def intercept_fn(name, args):
             args["intercepted"] = True
             return args
@@ -728,11 +774,11 @@ class TestToolInterceptsAsync:
 
         intercepts.deregister_tool_request("py_req_mod")
 
-    async def test_execution_intercept_replaces_func(self):
+    async def test_execution_intercept_replaces_func(self) -> None:
         intercepts.register_tool_execution(
             "py_exec_replace",
             1,
-            lambda name, args, next: ToolExecutionInterceptOutcome({"from_intercept": True}),
+            lambda context, next_call: ToolExecutionInterceptOutcome({"from_intercept": True}),
         )
 
         def original_func(args):
@@ -744,11 +790,11 @@ class TestToolInterceptsAsync:
 
         intercepts.deregister_tool_execution("py_exec_replace")
 
-    async def test_execution_intercept_can_await_next(self):
+    async def test_execution_intercept_can_await_next(self) -> None:
         events = []
 
-        async def middleware(name, args, next):
-            downstream = await next({"value": args["value"] + 1})
+        async def middleware(context, next_call):
+            downstream = await next_call({"value": context.args["value"] + 1})
             result = dict(downstream.result)
             result["from_intercept"] = True
             return ToolExecutionInterceptOutcome(
@@ -782,17 +828,17 @@ class TestToolInterceptsAsync:
             intercepts.deregister_tool_execution("py_exec_next")
             subscribers.deregister("py_exec_mark_sub")
 
-    async def test_execution_intercept_rejects_detached_next_after_settlement(self):
+    async def test_execution_intercept_rejects_detached_next_after_settlement(self) -> None:
         release_late_next = asyncio.Event()
         late_task: asyncio.Task[dict] | None = None
         provider_calls: list[dict] = []
 
-        async def middleware(_name, args, next):
+        async def middleware(context, next_call):
             nonlocal late_task
 
             async def invoke_late():
                 await release_late_next.wait()
-                return await next(args)
+                return await next_call(context.args)
 
             late_task = asyncio.create_task(invoke_late())
             return ToolExecutionInterceptOutcome({"source": "intercept"})
@@ -817,14 +863,14 @@ class TestToolInterceptsAsync:
 
         assert provider_calls == []
 
-    async def test_execution_intercept_isolates_concurrent_next_scope_branches(self):
+    async def test_execution_intercept_isolates_concurrent_next_scope_branches(self) -> None:
         both_pushed = asyncio.Event()
         pushed = 0
 
-        async def middleware(_name, _args, next):
+        async def middleware(_context, next_call):
             first, second = await asyncio.gather(
-                next({"branch": "first"}),
-                next({"branch": "second"}),
+                next_call({"branch": "first"}),
+                next_call({"branch": "second"}),
             )
             return ToolExecutionInterceptOutcome([first.result, second.result])
 
@@ -850,7 +896,7 @@ class TestToolInterceptsAsync:
         finally:
             intercepts.deregister_tool_execution("py_exec_concurrent_next_scopes")
 
-    async def test_execution_next_honors_concurrent_scope_stack_replacements(self):
+    async def test_execution_next_honors_concurrent_scope_stack_replacements(self) -> None:
         first_stack = create_scope_stack()
         second_stack = create_scope_stack()
         both_entered = asyncio.Event()
@@ -860,7 +906,7 @@ class TestToolInterceptsAsync:
         with use_scope_stack(second_stack):
             second_scope = scope.get_handle().uuid
 
-        async def middleware(_name, _args, next):
+        async def middleware(_context, next_call):
             async def invoke(stack, branch):
                 nonlocal entered
                 with use_scope_stack(stack):
@@ -869,7 +915,7 @@ class TestToolInterceptsAsync:
                         both_entered.set()
                     await both_entered.wait()
                     await asyncio.sleep(0)
-                    return await next({"branch": branch})
+                    return await next_call({"branch": branch})
 
             first, second = await asyncio.gather(
                 invoke(first_stack, "first"),
@@ -891,20 +937,20 @@ class TestToolInterceptsAsync:
         finally:
             intercepts.deregister_tool_execution("py_exec_replaced_next_scopes")
 
-    async def test_plain_next_uses_each_concurrent_middleware_invocation_scope(self):
+    async def test_plain_next_uses_each_concurrent_middleware_invocation_scope(self) -> None:
         first_stack = create_scope_stack()
         second_stack = create_scope_stack()
         both_entered = asyncio.Event()
         entered = 0
 
-        async def middleware(_name, args, next):
+        async def middleware(context, next_call):
             nonlocal entered
             entered += 1
             if entered == 2:
                 both_entered.set()
             await both_entered.wait()
             await asyncio.sleep(0)
-            downstream = await next(args)
+            downstream = await next_call(context.args)
             return ToolExecutionInterceptOutcome(
                 downstream.result,
                 annotation=downstream.annotation,
@@ -935,11 +981,11 @@ class TestToolInterceptsAsync:
         finally:
             intercepts.deregister_tool_execution("py_exec_plain_next_scopes")
 
-    async def test_execution_intercept_rejects_legacy_raw_result(self):
+    async def test_execution_intercept_rejects_legacy_raw_result(self) -> None:
         intercepts.register_tool_execution(
             "py_exec_legacy",
             1,
-            lambda name, args, next: {"legacy_result": True},  # type: ignore[arg-type] # ty: ignore[invalid-argument-type]
+            lambda context, next_call: {"legacy_result": True},  # type: ignore[arg-type]
         )
         try:
             with pytest.raises(RuntimeError, match="must return ToolExecutionInterceptOutcome") as error:
@@ -949,9 +995,9 @@ class TestToolInterceptsAsync:
         finally:
             intercepts.deregister_tool_execution("py_exec_legacy")
 
-    async def test_execution_intercept_rejects_downstream_result_without_unwrapping(self):
-        async def leftover(_name, args, next):
-            downstream = await next(args)
+    async def test_execution_intercept_rejects_downstream_result_without_unwrapping(self) -> None:
+        async def leftover(context, next_call):
+            downstream = await next_call(context.args)
             return ToolExecutionInterceptOutcome(downstream)  # type: ignore[arg-type]
 
         intercepts.register_tool_execution("py_exec_leftover", 1, leftover)
@@ -963,9 +1009,9 @@ class TestToolInterceptsAsync:
         finally:
             intercepts.deregister_tool_execution("py_exec_leftover")
 
-    async def test_execution_intercept_rejects_downstream_result_as_its_outcome(self):
-        async def leftover_return(_name, args, next):
-            return await next(args)  # type: ignore[return-value]
+    async def test_execution_intercept_rejects_downstream_result_as_its_outcome(self) -> None:
+        async def leftover_return(context, next_call):
+            return await next_call(context.args)  # type: ignore[return-value]
 
         intercepts.register_tool_execution("py_exec_leftover_return", 1, leftover_return)
         try:
@@ -976,7 +1022,7 @@ class TestToolInterceptsAsync:
         finally:
             intercepts.deregister_tool_execution("py_exec_leftover_return")
 
-    async def test_request_intercept_break_chain(self):
+    async def test_request_intercept_break_chain(self) -> None:
         def first_fn(name, args):
             args["from_first"] = True
             return args
@@ -1000,7 +1046,7 @@ class TestToolInterceptsAsync:
 
 
 class TestToolGuardrailsEdgeCases:
-    def test_conditional_execution_invalid_return_type_raises(self):
+    def test_conditional_execution_invalid_return_type_raises(self) -> None:
         guardrails.register_tool_conditional_execution(
             "py_cond_bad_type",
             1,
@@ -1012,7 +1058,7 @@ class TestToolGuardrailsEdgeCases:
         finally:
             guardrails.deregister_tool_conditional_execution("py_cond_bad_type")
 
-    def test_conditional_execution_callable_error_raises(self):
+    def test_conditional_execution_callable_error_raises(self) -> None:
         guardrails.register_tool_conditional_execution(
             "py_cond_error",
             1,

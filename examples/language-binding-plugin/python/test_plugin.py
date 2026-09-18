@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import pytest_asyncio
@@ -30,7 +30,7 @@ class RecordingContext:
     def __init__(self) -> None:
         self.registrations: list[str] = []
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> Any:
         if not name.startswith("register_"):
             raise AttributeError(name)
 
@@ -47,7 +47,7 @@ async def active_plugin(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Async
     implementation = DocumentationPlugin()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    plugin.register("documentation-plugin", implementation)
+    plugin.register("documentation-plugin", cast(plugin.Plugin, implementation))
     activation = None
     try:
         activation = await plugin.initialize(component("enforce"))
@@ -63,9 +63,9 @@ def test_validation_accepts_supported_mode() -> None:
 
 
 def test_default_registration_control_is_disabled_and_valid() -> None:
-    configuration = component("enforce").components[0].config
+    configuration = cast(plugin.ComponentSpec, component("enforce").components[0]).config
 
-    assert configuration["registration_control"]["enabled"] is False
+    assert cast(nemo_relay.JsonObject, configuration["registration_control"])["enabled"] is False
     assert DocumentationPlugin().validate(configuration) == []
 
 
@@ -82,10 +82,10 @@ def test_validation_rejects_wrong_type() -> None:
 
 
 def test_registration_rejects_a_duplicate_kind_and_missing_deregistration_is_false() -> None:
-    plugin.register("documentation-plugin", DocumentationPlugin())
+    plugin.register("documentation-plugin", cast(plugin.Plugin, DocumentationPlugin()))
     try:
         with pytest.raises(RuntimeError):
-            plugin.register("documentation-plugin", DocumentationPlugin())
+            plugin.register("documentation-plugin", cast(plugin.Plugin, DocumentationPlugin()))
         assert plugin.deregister("missing-documentation-plugin") is False
     finally:
         plugin.deregister("documentation-plugin")
@@ -123,10 +123,10 @@ def test_validation_warns_about_unknown_field() -> None:
     assert diagnostics[0]["field"] == "unexpected"
 
 
-def test_disabled_component_configuration_is_still_validated(tmp_path: Any, monkeypatch: pytest.MonkeyPatch):
+def test_disabled_component_configuration_is_still_validated(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    plugin.register("documentation-plugin", DocumentationPlugin())
+    plugin.register("documentation-plugin", cast(plugin.Plugin, DocumentationPlugin()))
     try:
         report = plugin.validate(component("invalid", enabled=False))
         assert report["config"]["diagnostics"][0]["code"] == "documentation-plugin.unsupported_mode"
@@ -137,7 +137,10 @@ def test_disabled_component_configuration_is_still_validated(tmp_path: Any, monk
 def test_registers_each_safe_plugin_surface() -> None:
     context = RecordingContext()
 
-    DocumentationPlugin().register(component("enforce").components[0].config, context)  # type: ignore[arg-type]
+    DocumentationPlugin().register(
+        cast(plugin.ComponentSpec, component("enforce").components[0]).config,
+        cast(plugin.PluginContext, context),
+    )
 
     assert set(context.registrations) == {
         "register_subscriber",
@@ -157,10 +160,10 @@ def test_registers_each_safe_plugin_surface() -> None:
         "register_llm_stream_execution_intercept",
     }
 
-    configuration = component("enforce").components[0].config
-    configuration["registration_control"]["enabled"] = True
+    configuration = cast(plugin.ComponentSpec, component("enforce").components[0]).config
+    cast(nemo_relay.JsonObject, configuration["registration_control"])["enabled"] = True
     context = RecordingContext()
-    DocumentationPlugin().register(configuration, context)  # type: ignore[arg-type]
+    DocumentationPlugin().register(configuration, cast(plugin.PluginContext, context))
     assert "register_conditional_middleware_guardrail" in context.registrations
 
 
@@ -171,8 +174,9 @@ async def test_registration_control_is_owned_by_activation(tmp_path: Any, monkey
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     subscribers.register(target, lambda event: observed.append(event.name))
     configuration = component("enforce")
-    configuration.components[0].config["registration_control"]["enabled"] = True
-    plugin.register("documentation-plugin", DocumentationPlugin())
+    component_spec = cast(plugin.ComponentSpec, configuration.components[0])
+    cast(nemo_relay.JsonObject, component_spec.config["registration_control"])["enabled"] = True
+    plugin.register("documentation-plugin", cast(plugin.Plugin, DocumentationPlugin()))
     activation = None
     try:
         before = runtime_registrations.list_runtime_registrations({RuntimeRegistrationKind.SUBSCRIBER})
@@ -194,7 +198,7 @@ async def test_registration_control_is_owned_by_activation(tmp_path: Any, monkey
         subscribers.deregister(target)
 
 
-async def test_activation_reports_no_diagnostics(active_plugin: ActivatedExample):
+async def test_activation_reports_no_diagnostics(active_plugin: ActivatedExample) -> None:
     assert active_plugin.report["config"]["diagnostics"] == []
 
 
@@ -217,9 +221,12 @@ async def test_tool_policy_blocks_configured_tool(active_plugin: ActivatedExampl
 async def test_llm_request_is_rewritten(active_plugin: ActivatedExample) -> None:
     request = nemo_relay.LLMRequest({}, {"model": "allowed-model"})
 
-    result = await llm.execute("allowed-model", request, lambda rewritten: {"headers": rewritten.headers})
+    result = cast(
+        nemo_relay.JsonObject,
+        await llm.execute("allowed-model", request, lambda rewritten: {"headers": rewritten.headers}),
+    )
 
-    assert result["headers"]["x-nemo-relay-plugin"] == "documentation"
+    assert cast(nemo_relay.JsonObject, result["headers"])["x-nemo-relay-plugin"] == "documentation"
 
 
 async def test_llm_policy_blocks_configured_model(active_plugin: ActivatedExample) -> None:
@@ -259,8 +266,9 @@ async def test_runtime_events_do_not_depend_on_request_rewriting(
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     implementation = DocumentationPlugin()
     configuration = component("enforce")
-    configuration.components[0].config["requests"]["enabled"] = False
-    plugin.register("documentation-plugin", implementation)
+    component_spec = cast(plugin.ComponentSpec, configuration.components[0])
+    cast(nemo_relay.JsonObject, component_spec.config["requests"])["enabled"] = False
+    plugin.register("documentation-plugin", cast(plugin.Plugin, implementation))
     activation = None
     try:
         activation = await plugin.initialize(configuration)
@@ -274,10 +282,10 @@ async def test_runtime_events_do_not_depend_on_request_rewriting(
         plugin.deregister("documentation-plugin")
 
 
-async def test_teardown_removes_plugin_kind(tmp_path: Any, monkeypatch: pytest.MonkeyPatch):
+async def test_teardown_removes_plugin_kind(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    plugin.register("documentation-plugin", DocumentationPlugin())
+    plugin.register("documentation-plugin", cast(plugin.Plugin, DocumentationPlugin()))
     activation = None
     try:
         activation = await plugin.initialize(component("enforce"))

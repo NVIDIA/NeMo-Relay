@@ -50,12 +50,14 @@ use serde_json::Map;
 
 /// Native plugin ABI version supported by this crate.
 ///
-/// Version 4 adds completion-scoped codecs, pull-based LLM streams, extended
-/// mark emission, runtime diagnostics, and activation-owned runtime-registration
-/// discovery and dynamic conditional middleware guardrail control. Hosts retain
-/// frozen version-3 and version-2 tables for already-built plugins that target
-/// those layouts.
-pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 4;
+/// Version 5 adds a context-aware raw tool execution intercept registration.
+/// Hosts retain frozen version-4, version-3, and version-2 tables for
+/// already-built plugins that target those layouts.
+pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 5;
+/// ABI version that introduced context-aware raw tool execution intercepts.
+pub const NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT: u32 = 5;
+/// ABI version that introduced runtime diagnostics and dynamic gate control.
+pub const NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL: u32 = 4;
 /// ABI version that introduced completion-based asynchronous middleware.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE: u32 = 3;
 
@@ -478,6 +480,19 @@ pub type NemoRelayNativeToolExecutionCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     name: *const NemoRelayNativeString,
     args_json: *const NemoRelayNativeString,
+    next_fn: NemoRelayNativeToolNextFn,
+    next_ctx: *mut c_void,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus;
+
+/// Native tool execution intercept callback receiving canonical context JSON.
+///
+/// `context_json` contains `tool_name`, `args`, and nullable
+/// `tool_call_id` fields. A successful callback must set `out_outcome_json` to
+/// canonical [`ToolExecutionInterceptOutcome`] JSON allocated through the host.
+pub type NemoRelayNativeToolExecutionContextCb = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    context_json: *const NemoRelayNativeString,
     next_fn: NemoRelayNativeToolNextFn,
     next_ctx: *mut c_void,
     out_outcome_json: *mut *mut NemoRelayNativeString,
@@ -1307,12 +1322,36 @@ pub struct NemoRelayNativeHostApiV4 {
         ) -> NemoRelayStatus,
 }
 
+/// ABI-v5 host extension for context-aware raw tool execution intercepts.
+///
+/// The complete ABI-v4 table is the prefix, preserving layout compatibility.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NemoRelayNativeHostApiV5 {
+    /// Frozen ABI-v4 compatibility prefix.
+    pub v4: NemoRelayNativeHostApiV4,
+    /// Registers a context-aware raw tool execution intercept.
+    pub plugin_context_register_tool_execution_intercept: unsafe extern "C" fn(
+        ctx: *mut NemoRelayNativePluginContext,
+        name: *const NemoRelayNativeString,
+        priority: i32,
+        cb: NemoRelayNativeToolExecutionContextCb,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    )
+        -> NemoRelayStatus,
+}
+
 unsafe impl Send for NemoRelayNativeHostApiV3 {}
 unsafe impl Sync for NemoRelayNativeHostApiV3 {}
 // SAFETY: the v4 host table is immutable after construction. Its function
 // pointers and inherited host metadata may be invoked from any plugin thread.
 unsafe impl Send for NemoRelayNativeHostApiV4 {}
 unsafe impl Sync for NemoRelayNativeHostApiV4 {}
+// SAFETY: the v5 host table is immutable after construction and extends the
+// same thread-safe host function table.
+unsafe impl Send for NemoRelayNativeHostApiV5 {}
+unsafe impl Sync for NemoRelayNativeHostApiV5 {}
 
 // The host API table is immutable after construction. Function pointers and
 // the null-terminated version string pointer are safe to share across threads.
@@ -1443,7 +1482,7 @@ impl Drop for PluginRuntime {
 impl PluginRuntime {
     /// Creates a runtime handle from the host ABI table.
     pub fn new(host: &NemoRelayNativeHostApiV1) -> Self {
-        let v4 = (host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION
+        let v4 = (host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL
             && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV4>())
         .then(|| unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV4) });
         Self {
@@ -2363,7 +2402,7 @@ impl<'a> PluginContext<'a> {
             + Sync
             + 'static,
     {
-        if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION
+        if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL
             || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV4>()
         {
             return Err("host does not support conditional middleware guardrails".into());
@@ -2594,12 +2633,25 @@ impl<'a> PluginContext<'a> {
         &mut self,
         name: &str,
         priority: i32,
-        cb: NemoRelayNativeToolExecutionCb,
+        cb: NemoRelayNativeToolExecutionContextCb,
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
-            (host.plugin_context_register_tool_execution_intercept)(
+        if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT
+            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV5>()
+        {
+            set_last_error(
+                self.host,
+                "context-aware tool execution intercepts require Relay native ABI v5",
+            );
+            if let Some(free_fn) = free_fn {
+                unsafe { free_fn(user_data) };
+            }
+            return NemoRelayStatus::InvalidArg;
+        }
+        let host_v5 = unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV5) };
+        self.with_name_and_callback(name, user_data, free_fn, |_host, name| unsafe {
+            (host_v5.plugin_context_register_tool_execution_intercept)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
         })
@@ -3054,11 +3106,16 @@ enum OwnedHostApi {
     V1(NemoRelayNativeHostApiV1),
     V3(NemoRelayNativeHostApiV3),
     V4(NemoRelayNativeHostApiV4),
+    V5(NemoRelayNativeHostApiV5),
 }
 
 impl OwnedHostApi {
     unsafe fn copy_from(host: &NemoRelayNativeHostApiV1) -> Self {
-        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION
+        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT
+            && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV5>()
+        {
+            Self::V5(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV5) })
+        } else if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL
             && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV4>()
         {
             Self::V4(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV4) })
@@ -3076,6 +3133,7 @@ impl OwnedHostApi {
             Self::V1(host) => host,
             Self::V3(host) => &host.v1,
             Self::V4(host) => &host.v3.v1,
+            Self::V5(host) => &host.v4.v3.v1,
         }
     }
 }

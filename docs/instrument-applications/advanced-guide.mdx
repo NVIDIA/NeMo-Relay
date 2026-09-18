@@ -74,31 +74,35 @@ This example adds three behaviors around a `search` tool:
 <Tab title="Python" language="python">
 ```python
 import time
+from collections.abc import Awaitable, Callable
 
 import nemo_relay
 
-def redact_api_key(tool_name, args):
+def redact_api_key(_tool_name: str, args: nemo_relay.Json) -> nemo_relay.Json:
     safe_args = dict(args)
     if "api_key" in safe_args:
         safe_args["api_key"] = "<redacted>"
     return safe_args
 
-def require_query(tool_name, args):
+def require_query(_tool_name: str, args: nemo_relay.Json) -> str | None:
     if not args.get("query"):
         return "search.query is required"
     return None
 
-async def measure_tool(tool_name, args, next_call):
+async def measure_tool(
+    context: nemo_relay.ToolExecutionContext,
+    next_call: Callable[[nemo_relay.Json], Awaitable[nemo_relay.ToolExecutionResult[nemo_relay.Json]]],
+) -> nemo_relay.ToolExecutionInterceptOutcome:
     started = time.perf_counter()
     try:
-        execution_result = await next_call(args)
+        execution_result = await next_call(context.args)
         return nemo_relay.ToolExecutionInterceptOutcome(
             execution_result.result,
             annotation=execution_result.annotation,
         )
     finally:
         elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
-        print(f"{tool_name} completed in {elapsed_ms} ms")
+        print(f"{context.tool_name} completed in {elapsed_ms} ms")
 
 nemo_relay.guardrails.register_tool_sanitize_request("search.redact_api_key", 10, redact_api_key)
 nemo_relay.guardrails.register_tool_conditional_execution("search.require_query", 20, require_query)
@@ -125,10 +129,10 @@ registerToolConditionalExecutionGuardrail("search.require_query", 20, (_toolName
   args.query ? null : "search.query is required"
 ));
 
-registerToolExecutionIntercept("search.measure", 30, async (args, next) => {
+registerToolExecutionIntercept("search.measure", 30, async (context, next) => {
   const started = performance.now();
   try {
-    const executionResult = await next(args);
+    const executionResult = await next(context.args);
     return {
       result: executionResult.result,
       annotation: executionResult.annotation,
@@ -183,11 +187,11 @@ register_tool_conditional_execution_guardrail(
 register_tool_execution_intercept(
     "search.measure",
     30,
-    Arc::new(|name, args, next| {
-        let name = name.to_owned();
+    Arc::new(|context, next| {
+        let name = context.tool_name().to_owned();
         Box::pin(async move {
             let started = Instant::now();
-            let result = next(args).await;
+            let result = next(context.into_args()).await;
             println!("{name} completed in {:?}", started.elapsed());
             Ok(ToolExecutionInterceptOutcome::from(result?))
         })
@@ -234,6 +238,13 @@ scope-end event sanitizer can separately sanitize the projected tool result
 annotation. Request intercepts affect the real request that reaches the tool or
 provider. Execution intercepts wrap the callback itself and are only available
 when the invocation uses managed execution.
+
+A tool execution intercept receives a `ToolExecutionContext` carrying the tool
+name, the arguments, and the managed `tool_call_id`. Use it when an intercept
+short-circuits execution and must still correlate its result with the
+originating tool call. See
+[Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
+for the per-binding contract.
 
 ### Node.js Callback Failures
 

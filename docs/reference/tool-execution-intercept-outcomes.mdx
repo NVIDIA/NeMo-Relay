@@ -89,6 +89,72 @@ are never included in the application-visible tool result or passed to tool
 sanitize-response guardrails. They pass through the mark sanitizer registry
 when materialized.
 
+## Tool Execution Context
+
+Beginning with Relay 0.9, every tool execution intercept receives the tool
+call's context instead of separate tool-name and argument parameters. The
+context carries three fields:
+
+| Field | Description |
+| --- | --- |
+| `tool_name` | Name of the tool being executed. |
+| `args` | JSON argument payload entering this intercept. |
+| `tool_call_id` | Provider-issued correlation identifier recorded on the managed tool call, or absent when the call did not record one. |
+
+`tool_call_id` is the same identifier that Relay records on tool lifecycle
+events. An intercept that completes execution itself, without invoking the
+remaining chain, uses it to associate its result with the originating tool
+call.
+
+The existing registration names now use the context callback. Scope-local and
+plugin-context registrations follow the same naming.
+
+| Surface | Registration |
+| --- | --- |
+| Python | `register_tool_execution(name, priority, fn)` |
+| Rust | `register_tool_execution_intercept` |
+| Go | `RegisterToolExecutionIntercept` |
+| Node.js | `registerToolExecutionIntercept` |
+| Public C | `nemo_relay_register_tool_execution_intercept` |
+| `grpc-v1` worker SDKs | `register_tool_execution_intercept` |
+
+The callback takes two parameters because the tool name and arguments move
+onto the context:
+
+```python
+from collections.abc import Awaitable, Callable
+
+import nemo_relay
+from nemo_relay import Json, ToolExecutionContext, ToolExecutionInterceptOutcome, ToolExecutionResult
+
+async def measure(
+    context: ToolExecutionContext,
+    next_call: Callable[[Json], Awaitable[ToolExecutionResult[Json]]],
+) -> ToolExecutionInterceptOutcome:
+    downstream = await next_call(context.args)
+    record(context.tool_call_id, context.tool_name, downstream.result)
+    return ToolExecutionInterceptOutcome(result=downstream.result)
+
+nemo_relay.intercepts.register_tool_execution("measure", 10, measure)
+```
+
+```javascript
+registerToolExecutionIntercept('measure', 10, async (context, next) => {
+  const downstream = await next(context.args);
+  record(context.toolCallId, context.toolName, downstream.result);
+  return { result: downstream.result };
+});
+```
+
+This is a breaking callback change: migrate Rust, Python, and Go callbacks from
+`(tool_name, arguments, next)` to `(context, next)`, and migrate Node.js and C
+callbacks from their argument-only shape to the context shape. In Node.js the
+context object uses `toolName`, `args`, and `toolCallId`, where
+`toolCallId` is `string | null`. The public C callback receives a single
+`context_json` string carrying `tool_name`, `args`, and `tool_call_id`;
+callbacks must ignore unknown fields. The `grpc-v1` `ToolInvocation` message
+and its optional `tool_call_id` field are unchanged.
+
 ## Binding Contract
 
 Managed callbacks, continuations, and execute helpers use the same logical
@@ -120,11 +186,17 @@ Relay 0.8 establishes this canonical result as the native API 1 and `grpc-v1`
 baseline. Rebuild every dynamic plugin and declare a `compat.relay` range that
 excludes Relay versions before 0.8. The recommended range is
 `>=0.8.0,<1.0`; open-ended ranges such as `>=0.8.0` are valid. The native ABI
-remains v4. Workers retain the `grpc-v1` identifier and
+for that result-shape change is v4. Workers retain the `grpc-v1` identifier and
 `nemo.relay.worker.v1` package, but Relay 0.8 changes the `ToolNext` response
 type and tool-execution outcome field type. Regenerate worker protobuf bindings
 as part of the required rebuild. Future incompatible contract changes must
 increment the corresponding native API or worker protocol version.
+
+Relay 0.9 replaces the tool execution callback shape without changing the
+`grpc-v1` package or result messages. Worker plugins that register this surface
+must declare `compat.relay = ">=0.9,<1.0"` or another range that excludes Relay
+0.8. Native plugins use ABI v5 for the context-carrying callback slot; Relay
+rejects the registration when the plugin admits an incompatible Relay version.
 
 ## Migration
 

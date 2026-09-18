@@ -29,6 +29,7 @@ pub(crate) fn prepare(
             |value| replace_custom_header(&value, &proxy_header),
         );
     launch.set_secret_env("ANTHROPIC_CUSTOM_HEADERS", custom_headers);
+    let hook_integrity_risk = HookIntegrityRisk::detect(&launch.argv, launch.host_index);
     if dry_run {
         insert_after_host(
             &mut launch.argv,
@@ -49,6 +50,7 @@ pub(crate) fn prepare(
         launch
             .notes
             .push("would generate a temporary Claude Code plugin directory".into());
+        record_hook_integrity_risk(launch, hook_integrity_risk);
         return Ok(());
     }
 
@@ -98,7 +100,106 @@ pub(crate) fn prepare(
         .env
         .push(("ANTHROPIC_BASE_URL".into(), gateway_url.to_string()));
     launch.temp_dirs.push(root);
+    record_hook_integrity_risk(launch, hook_integrity_risk);
     Ok(())
+}
+
+#[derive(Default)]
+struct HookIntegrityRisk {
+    safe_mode: bool,
+    bare_mode: bool,
+}
+
+impl HookIntegrityRisk {
+    // Claude leaves ANTHROPIC_BASE_URL active in these modes while suppressing plugin hooks.
+    // Match launcher-visible inputs only; user/managed settings and pre-host wrapper env are opaque.
+    fn detect(argv: &[String], host_index: usize) -> Self {
+        let arguments = claude_arguments(argv, host_index);
+        // Claude itself scans raw argv for these modes, independent of option-value parsing.
+        let informational_only = arguments.iter().any(|argument| {
+            matches!(
+                argument.as_str(),
+                "-h" | "--help" | "-v" | "-V" | "--version"
+            )
+        }) && arguments.iter().all(|argument| {
+            matches!(
+                argument.as_str(),
+                "--safe-mode" | "--bare" | "-h" | "--help" | "-v" | "-V" | "--version"
+            )
+        });
+        if informational_only {
+            return Self::default();
+        }
+
+        Self {
+            safe_mode: arguments.iter().any(|argument| argument == "--safe-mode")
+                || inherited_env_flag_enabled("CLAUDE_CODE_SAFE_MODE"),
+            bare_mode: arguments.iter().any(|argument| argument == "--bare")
+                || inherited_env_flag_enabled("CLAUDE_CODE_SIMPLE"),
+        }
+    }
+
+    const fn detected(&self) -> bool {
+        self.safe_mode || self.bare_mode
+    }
+
+    const fn sources(&self) -> &'static str {
+        match (self.safe_mode, self.bare_mode) {
+            (true, true) => "Claude safe and bare modes",
+            (true, false) => "Claude safe mode",
+            (false, true) => "Claude bare mode",
+            (false, false) => "",
+        }
+    }
+}
+
+fn inherited_env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .as_deref()
+        .is_some_and(claude_env_flag_enabled)
+}
+
+fn claude_env_flag_enabled(value: &str) -> bool {
+    let value = value.trim();
+    value == "1"
+        || value.eq_ignore_ascii_case("true")
+        || value.eq_ignore_ascii_case("yes")
+        || value.eq_ignore_ascii_case("on")
+}
+
+fn record_hook_integrity_risk(launch: &mut PreparedAgentLaunch, risk: HookIntegrityRisk) {
+    if !risk.detected() {
+        return;
+    }
+    let note = format!(
+        "Claude hooks at risk ({}): Relay routing stays configured, but hook observability and enforcement are not guaranteed",
+        risk.sources(),
+    );
+    log::warn!(
+        target: "nemo_relay.cli",
+        event = "agent_invocation_warning",
+        diagnostic_code = "claude_relay_hook_integrity_at_risk",
+        agent = "claude",
+        safe_mode_signal = risk.safe_mode,
+        bare_mode_signal = risk.bare_mode,
+        model_routing = "configured",
+        hook_integrity = "at_risk",
+        action = "remove_hook_disabling_claude_mode_if_hook_integrity_is_required",
+        command_modified = false,
+        arguments_redacted = true;
+        "{note}"
+    );
+    launch.non_tty_warnings.push(note);
+}
+
+fn claude_arguments(argv: &[String], host_index: usize) -> &[String] {
+    let arguments = argv.get(host_index + 1..).unwrap_or_default();
+    let boundary = arguments
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(arguments.len());
+    &arguments[..boundary]
 }
 
 fn insert_before_argument_boundary(

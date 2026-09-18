@@ -12,6 +12,9 @@ pub(crate) struct PreparedAgentLaunch {
     pub(crate) env: Vec<(String, String)>,
     pub(crate) temp_dirs: Vec<PathBuf>,
     pub(crate) notes: Vec<String>,
+    /// Fixed, sanitized warnings that may be emitted on non-TTY stderr.
+    /// Callers must not include user input, paths, or secret-derived values.
+    pub(crate) non_tty_warnings: Vec<String>,
     pub(crate) proxy_credential: TransparentProxyCredential,
     pub(crate) secret_env_names: Vec<String>,
 }

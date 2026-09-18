@@ -125,8 +125,9 @@ def register_tool_execution(name: str, priority: int, fn: ToolExecutionIntercept
     Args:
         name: Unique intercept name used for later replacement or removal.
         priority: Execution order for the intercept. Lower values run first.
-        fn: Callable invoked as ``fn(tool_name, args, next_call)``. The
-            callback may await or call ``next_call(args)`` to continue the
+        fn: Callable invoked as ``fn(context, next_call)``. The context exposes
+            ``tool_name``, ``args``, and ``tool_call_id``. The callback may
+            await or call ``next_call(context.args)`` to continue the
             chain, modify the result, or bypass downstream execution entirely.
             It must return ``ToolExecutionInterceptOutcome``.
 
@@ -139,6 +140,11 @@ def register_tool_execution(name: str, priority: int, fn: ToolExecutionIntercept
         ``next_call`` may be awaited repeatedly or concurrently while ``fn``
         is running. Each call gets an isolated scope-stack branch. Unfinished
         or new calls are rejected after ``fn`` returns or raises.
+
+        ``tool_call_id`` is the provider-issued identifier recorded on the
+        managed tool call, letting an intercept that completes execution
+        itself associate its result with the originating call. It is ``None``
+        when the tool call did not record one.
     """
     return _native_register_tool_execution(name, priority, fn)
 

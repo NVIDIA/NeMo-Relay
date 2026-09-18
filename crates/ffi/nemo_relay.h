@@ -453,9 +453,18 @@ typedef char *(*NemoRelayToolExecNextFn)(const char *args_json, void *next_ctx);
  * or an equivalent allocation compatible with `nemo_relay_string_free`.
  * Ownership transfers to Relay when the callback returns; the callback must
  * not free or reuse the string afterward, and Relay frees it exactly once.
+ * Tool execution intercept callback receiving the full call context.
+ *
+ * `context_json` is a JSON object with `tool_name`, `args`, and
+ * `tool_call_id` fields. `tool_call_id` is `null` when the managed tool call
+ * did not record one. New context fields may be added to this object without
+ * another ABI change, so callbacks must ignore unknown fields.
+ *
+ * The returned JSON must contain a `result` field and may contain `annotation`
+ * and `pending_marks`; ownership transfers to Relay on return.
  */
 typedef char *(*NemoRelayToolExecInterceptCb)(void *user_data,
-                                              const char *args_json,
+                                              const char *context_json,
                                               NemoRelayToolExecNextFn next_fn,
                                               void *next_ctx);
 
@@ -2092,6 +2101,9 @@ NemoRelayStatus nemo_relay_otel_metric_subscriber_shutdown(const struct FfiOpenT
  *
  * `additional_plugins_toml` may be null. When supplied it replaces user-file
  * discovery. Relay merges it with the system file, then applies `config_json`.
+ * A supplied path that does not exist adds a
+ * `plugin.configuration_file_missing` warning to `out_report_json` rather than
+ * causing initialization to fail.
  * The returned handle owns all activated plugin registrations and runtimes.
  *
  * # Safety
@@ -2130,7 +2142,9 @@ NemoRelayStatus nemo_relay_plugin_host_activation_is_active(struct FfiPluginHost
  * Validate dynamic plugins without loading plugin code or acquiring the host lease.
  *
  * `additional_plugins_toml` may be null. The inputs use the same configuration
- * layering contract as [`nemo_relay_plugin_initialize`].
+ * layering contract as [`nemo_relay_plugin_initialize`]. A supplied path that
+ * does not exist adds a `plugin.configuration_file_missing` warning to
+ * `out_report_json` rather than causing validation to fail.
  *
  * # Safety
  * `config_json` must be a valid C string, `additional_plugins_toml` must be a
@@ -2681,7 +2695,7 @@ NemoRelayStatus nemo_relay_scope_deregister_tool_conditional_execution_guardrail
  * - `scope_uuid`: UUID of the target scope (null-terminated C string).
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving args and a next function.
+ * - `exec_cb`: Middleware callback receiving context and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *
@@ -3261,14 +3275,13 @@ NemoRelayStatus nemo_relay_deregister_tool_conditional_execution_guardrail(const
 
 /**
  * Register a tool execution intercept following the middleware chain pattern.
- * The callback receives `(args, next_fn, next_ctx)` — call
- * `next_fn(args, next_ctx)` to invoke the next intercept or the original
- * tool function, or skip calling it to short-circuit.
+ * The callback receives `(context_json, next_fn, next_ctx)`, where
+ * `context_json` contains `tool_name`, `args`, and `tool_call_id`.
  *
  * # Parameters
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving args and a next function.
+ * - `exec_cb`: Middleware callback receiving context and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *

@@ -10,7 +10,7 @@ import sys
 import textwrap
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from typing import cast
+from typing import Never, cast
 
 import pytest
 
@@ -27,7 +27,7 @@ def capture_events_fixture() -> Iterator[tuple[str, list[nemo_relay.Event]]]:
     subscribers.deregister(name)
 
 
-def test_plugin_host_close_is_asyncio_safe_with_pending_sanitizer(tmp_path):
+def test_plugin_host_close_is_asyncio_safe_with_pending_sanitizer(tmp_path) -> None:
     script = textwrap.dedent(
         """
         import asyncio
@@ -106,7 +106,7 @@ def test_plugin_host_close_is_asyncio_safe_with_pending_sanitizer(tmp_path):
     assert completed.returncode == 0, completed.stderr
 
 
-def test_global_mark_sanitizers_order_convert_fields_and_remove_values(capture_events):
+def test_global_mark_sanitizers_order_convert_fields_and_remove_values(capture_events) -> None:
     _capture_name, events = capture_events
     calls: list[tuple[str, object]] = []
 
@@ -141,7 +141,7 @@ def test_global_mark_sanitizers_order_convert_fields_and_remove_values(capture_e
     assert calls == [("checkpoint", {"secret": "raw"}), ("mark", {"stage": "first"})]
 
 
-def test_mark_sanitizer_exception_clears_observability_fields(capture_events, capfd):
+def test_mark_sanitizer_exception_clears_observability_fields(capture_events, capfd) -> None:
     _capture_name, events = capture_events
 
     def seed_category_profile(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
@@ -170,7 +170,7 @@ def test_mark_sanitizer_exception_clears_observability_fields(capture_events, ca
     assert "Python event sanitizer callable failed" in capfd.readouterr().err
 
 
-async def test_async_mark_sanitizer_runs_on_originating_loop(capture_events):
+async def test_async_mark_sanitizer_runs_on_originating_loop(capture_events) -> None:
     _capture_name, events = capture_events
     originating_loop = asyncio.get_running_loop()
 
@@ -193,7 +193,7 @@ async def test_async_mark_sanitizer_runs_on_originating_loop(capture_events):
     assert events[-1].data == {"async": True}
 
 
-async def test_nested_async_sanitizer_event_precedes_already_queued_event(capture_events):
+async def test_nested_async_sanitizer_event_precedes_already_queued_event(capture_events) -> None:
     _capture_name, events = capture_events
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -223,7 +223,7 @@ async def test_nested_async_sanitizer_event_precedes_already_queued_event(captur
     ]
 
 
-async def test_scope_start_sanitizer_uses_started_scope_context(capture_events):
+async def test_scope_start_sanitizer_uses_started_scope_context(capture_events) -> None:
     _capture_name, events = capture_events
     observed_scope_uuids: list[str] = []
 
@@ -248,7 +248,7 @@ async def test_scope_start_sanitizer_uses_started_scope_context(capture_events):
     assert nested.parent_uuid == handle.uuid
 
 
-async def test_async_mark_sanitizer_uses_each_emitter_context(capture_events):
+async def test_async_mark_sanitizer_uses_each_emitter_context(capture_events) -> None:
     request_id = contextvars.ContextVar("request_id", default="registration")
     observed: dict[str, str] = {}
 
@@ -274,7 +274,7 @@ async def test_async_mark_sanitizer_uses_each_emitter_context(capture_events):
     assert observed == {"request-a": "request-a", "request-b": "request-b"}
 
 
-async def test_async_mark_sanitizer_uses_cross_thread_emitter_context(capture_events):
+async def test_async_mark_sanitizer_uses_cross_thread_emitter_context(capture_events) -> None:
     request_id = contextvars.ContextVar("cross_thread_request_id", default="registration")
     observed: list[str] = []
 
@@ -296,7 +296,7 @@ async def test_async_mark_sanitizer_uses_cross_thread_emitter_context(capture_ev
     assert observed == ["emission", "emission"]
 
 
-def test_sync_mark_sanitizer_uses_emitter_context(capture_events):
+def test_sync_mark_sanitizer_uses_emitter_context(capture_events) -> None:
     request_id = contextvars.ContextVar("request_id", default="registration")
     observed: list[str] = []
 
@@ -318,7 +318,7 @@ def test_sync_mark_sanitizer_uses_emitter_context(capture_events):
     assert observed == ["emission"]
 
 
-async def test_async_flush_keeps_originating_sanitizer_loop_running(capture_events):
+async def test_async_flush_keeps_originating_sanitizer_loop_running(capture_events) -> None:
     _capture_name, events = capture_events
 
     async def sanitize(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
@@ -341,7 +341,7 @@ async def test_async_flush_keeps_originating_sanitizer_loop_running(capture_even
     assert events[-1].data == {"async_flush": True}
 
 
-async def test_queued_sanitizer_keeps_emission_scope_after_pop(capture_events):
+async def test_queued_sanitizer_keeps_emission_scope_after_pop(capture_events) -> None:
     _capture_name, events = capture_events
     handle = scope.push("python-emission-scope", nemo_relay.ScopeType.Agent)
     entered = asyncio.Event()
@@ -374,7 +374,7 @@ async def test_queued_sanitizer_keeps_emission_scope_after_pop(capture_events):
     assert nested.parent_uuid == handle.uuid
 
 
-async def test_async_flush_does_not_consume_default_executor(capture_events):
+async def test_async_flush_does_not_consume_default_executor(capture_events) -> None:
     _capture_name, events = capture_events
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
 
@@ -396,7 +396,7 @@ async def test_async_flush_does_not_consume_default_executor(capture_events):
     assert events[-1].data == {"default_executor": True}
 
 
-def test_async_sanitizer_registered_on_closed_loop_uses_fallback(capture_events):
+def test_async_sanitizer_registered_on_closed_loop_uses_fallback(capture_events) -> None:
     _capture_name, events = capture_events
     request_id = contextvars.ContextVar("fallback_request_id", default="registration")
     observed: list[str] = []
@@ -427,7 +427,7 @@ def test_async_sanitizer_registered_on_closed_loop_uses_fallback(capture_events)
     assert observed == ["emission", "emission"]
 
 
-def test_scope_start_and_end_sanitizers_cover_category_profile(capture_events):
+def test_scope_start_and_end_sanitizers_cover_category_profile(capture_events) -> None:
     _capture_name, events = capture_events
 
     def sanitize(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
@@ -458,7 +458,7 @@ def test_scope_start_and_end_sanitizers_cover_category_profile(capture_events):
     assert all(event.category_profile["subtype"] == "sanitized" for event in lifecycle)
 
 
-def test_scope_local_event_sanitizers_are_inherited_and_cleaned_up(capture_events):
+def test_scope_local_event_sanitizers_are_inherited_and_cleaned_up(capture_events) -> None:
     _capture_name, events = capture_events
 
     def sanitize(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
@@ -488,12 +488,12 @@ def test_scope_local_event_sanitizers_are_inherited_and_cleaned_up(capture_event
     assert marks["outside"].data == {"raw": True}
 
 
-async def test_in_process_plugin_event_sanitizers_are_removed_on_clear(capture_events):
+async def test_in_process_plugin_event_sanitizers_are_removed_on_clear(capture_events) -> None:
     class EventPlugin:
-        def validate(self, _config):
+        def validate(self, _config) -> None:
             return None
 
-        def register(self, _config, context):
+        def register(self, _config, context) -> None:
             def sanitize(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
                 return {
                     "data": {"plugin": True},
@@ -524,12 +524,12 @@ async def test_in_process_plugin_event_sanitizers_are_removed_on_clear(capture_e
     assert marks["cleared"].data == {"raw": True}
 
 
-async def test_in_process_plugin_rolls_back_event_sanitizer_when_registration_fails(capture_events):
+async def test_in_process_plugin_rolls_back_event_sanitizer_when_registration_fails(capture_events) -> None:
     class FailingPlugin:
-        def validate(self, _config):
+        def validate(self, _config) -> None:
             return None
 
-        def register(self, _config, context):
+        def register(self, _config, context) -> Never:
             def sanitize(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
                 return {
                     "data": {"leaked": True},

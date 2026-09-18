@@ -171,6 +171,14 @@ Hook events are only available when Claude Code loads this plugin. A standalone
 gateway observes Anthropic LLM traffic, but it cannot recover missing prompt,
 tool, compaction, notification, or subagent hooks.
 
+Claude Code safe and bare modes can suppress the Relay-injected hooks while
+model traffic remains routed through `ANTHROPIC_BASE_URL`. Transparent Relay
+launches warn about mode flags and inherited environment inputs they can see.
+The warning is not an attestation because explicit settings such as
+`disableAllHooks` and environment changes inside a wrapper remain opaque;
+remove hook-disabling inputs when Relay hook observability or policy enforcement
+is required.
+
 ## Standalone Plugin Installation
 
 Preferred release install:

@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::{LlmAttributes, LlmHandle};
+use nemo_relay::api::runtime::ToolExecutionContext;
 use nemo_relay::api::tool::ToolExecutionResult;
 use serde_json::json;
 use tokio_stream::StreamExt;
@@ -95,11 +96,18 @@ unsafe extern "C" fn legacy_tool_exec_cb(
 
 unsafe extern "C" fn tool_exec_intercept_cb(
     _user_data: *mut libc::c_void,
-    args_json: *const c_char,
+    context_json: *const c_char,
     next_fn: NemoRelayToolExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char {
-    let result_ptr = unsafe { next_fn(args_json, next_ctx) };
+    let context: Json = serde_json::from_str(
+        unsafe { CStr::from_ptr(context_json) }
+            .to_str()
+            .unwrap_or("null"),
+    )
+    .unwrap();
+    let arguments = CString::new(context["args"].to_string()).unwrap();
+    let result_ptr = unsafe { next_fn(arguments.as_ptr(), next_ctx) };
     if result_ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -107,6 +115,8 @@ unsafe extern "C" fn tool_exec_intercept_cb(
         serde_json::from_str(unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap()).unwrap();
     unsafe { nemo_relay_string_free_internal(result_ptr) };
     execution_result["result"]["intercepted"] = json!(true);
+    execution_result["result"]["tool_name"] = context["tool_name"].clone();
+    execution_result["result"]["tool_call_id"] = context["tool_call_id"].clone();
     CString::new(
         json!({
             "result": execution_result["result"],
@@ -395,10 +405,16 @@ fn test_wrap_tool_exec_and_intercept_callbacks() {
         })
     });
     let intercepted = runtime
-        .block_on(intercept("tool", json!({"v": 1}), next))
+        .block_on(intercept(
+            ToolExecutionContext::new("tool", json!({"v": 1}))
+                .with_tool_call_id(Some("call-123".into())),
+            next,
+        ))
         .unwrap();
     assert_eq!(intercepted.result["intercepted"], json!(true));
     assert_eq!(intercepted.result["from_next"]["v"], json!(1));
+    assert_eq!(intercepted.result["tool_name"], json!("tool"));
+    assert_eq!(intercepted.result["tool_call_id"], json!("call-123"));
     assert_eq!(intercepted.annotation, Some(json!({ "from": "next" })));
     assert_eq!(intercepted.pending_marks.len(), 1);
     let mark = &intercepted.pending_marks[0];
@@ -421,7 +437,10 @@ fn test_wrap_tool_exec_and_intercept_callbacks() {
     let next: ToolExecutionNextFn =
         Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) }));
     let err = runtime
-        .block_on(legacy_intercept("tool", json!({}), next))
+        .block_on(legacy_intercept(
+            ToolExecutionContext::new("tool", json!({})),
+            next,
+        ))
         .unwrap_err();
     assert!(
         err.to_string()
@@ -433,7 +452,10 @@ fn test_wrap_tool_exec_and_intercept_callbacks() {
     let failing_next: ToolExecutionNextFn =
         Arc::new(|_| Box::pin(async { Err(FlowError::Internal("next failed".into())) }));
     let err = runtime
-        .block_on(failing_intercept("tool", json!({"v": 2}), failing_next))
+        .block_on(failing_intercept(
+            ToolExecutionContext::new("tool", json!({"v": 2})),
+            failing_next,
+        ))
         .unwrap_err();
     assert!(err.to_string().contains("next failed"));
 }

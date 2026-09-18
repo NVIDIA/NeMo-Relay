@@ -1557,8 +1557,8 @@ py_intercept_tool_api!(
 
 /// Register a tool execution intercept that can replace the tool function.
 ///
-/// ``callable``: ``async (args: Any, next) -> Any`` — middleware intercept function.
-/// Call ``await next(args)`` to invoke the next intercept or original
+/// ``callable``: ``async (context: ToolExecutionContext, next) -> Any``.
+/// Call ``await next(context.args)`` to invoke the next intercept or original
 /// implementation; skip calling ``next`` to short-circuit.
 #[pyfunction]
 fn register_tool_execution_intercept(

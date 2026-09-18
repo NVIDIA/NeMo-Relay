@@ -31,8 +31,8 @@ context.register_tool_execution_intercept(
     config.execution.priority,
     {
         let emit_pending_marks = config.execution.emit_pending_marks;
-        move |_name, request, next| async move {
-            let result = next.call(request).await?;
+        move |context, next| async move {
+            let result = next.call(context.into_args()).await?;
             let mut outcome = ToolExecutionInterceptOutcome::from(result);
             if emit_pending_marks {
                 outcome = outcome.with_pending_mark(

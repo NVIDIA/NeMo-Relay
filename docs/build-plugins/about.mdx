@@ -56,7 +56,7 @@ artifact solves a concrete operational problem.
 Native Rust plugins suit reusable middleware whose callback latency or throughput is
 important enough to justify platform-specific binaries and full in-process trust. A
 native plugin uses manifest compatibility `compat.native_api = "1"`; the current SDK
-negotiates C host-table ABI v4 and retains frozen v3 and v2 host-table compatibility.
+negotiates C host-table ABI v5 and retains frozen v4, v3, and v2 host-table compatibility.
 Those are different version axes, as the [Native ABI Reference](/build-plugins/native/native-abi-reference)
 explains.
 

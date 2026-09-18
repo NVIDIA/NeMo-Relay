@@ -54,13 +54,17 @@ The examples below wrap a `search` callback and print emitted events.
 <Tab title="Python" language="python">
 ```python
 import asyncio
+from typing import TypedDict
 
 import nemo_relay
 
-def log_event(event) -> None:
+class SearchArgs(TypedDict):
+    query: str
+
+def log_event(event: nemo_relay.Event) -> None:
     print(f"{event.kind} {event.name}")
 
-async def search(args):
+async def search(args: SearchArgs) -> nemo_relay.ToolExecutionResult[dict[str, object]]:
     return nemo_relay.ToolExecutionResult(
         {
             "query": args["query"],

@@ -652,7 +652,7 @@ function createSharedLease(config: DeploymentConfig, credential: string, removeF
     credential,
     ensureReady(): Promise<void> {
       if (released) return Promise.reject(new Error('managed Pi MCP lease was released'));
-      if (initialized && child && child.exitCode === null && child.signalCode === null) {
+      if (initialized && child?.exitCode === null && child.signalCode === null) {
         return Promise.resolve();
       }
       if (starting) return starting;
@@ -1052,8 +1052,9 @@ export function summarizeManagedToolResult(result: unknown, isError: boolean): R
   if (isRecord(result)) {
     const content = result.content ?? result.output ?? result.text;
     const text = toolResultText(content);
+    const status = isError ? 'failed' : 'completed';
     return {
-      content: text === null ? `Tool ${isError ? 'failed' : 'completed'}.` : text,
+      content: text ?? `Tool ${status}.`,
       result_keys: Object.keys(result).slice(0, 20),
     };
   }

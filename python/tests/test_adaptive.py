@@ -3,6 +3,7 @@
 
 """Tests for the adaptive plugin component API."""
 
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import cast
@@ -14,6 +15,7 @@ from plugin_host_test_helper import activated_plugin_host, validate_plugin_confi
 
 from nemo_relay import (
     AnnotatedLLMRequest,
+    Json,
     JsonObject,
     LLMRequest,
     LLMRequestInterceptOutcome,
@@ -42,21 +44,21 @@ from nemo_relay.runtime_registrations import RuntimeRegistrationKind
 
 
 class TestAdaptiveConfigHelpers:
-    def test_file_covers_native_cache_request_facts_regression(self):
+    def test_file_covers_native_cache_request_facts_regression(self) -> None:
         source = Path(__file__).read_text()
         runtime_call = "runtime" + ".build_cache_request_facts("
         annotated_request = "AnnotatedLLMRequest" + "("
         assert runtime_call in source
         assert annotated_request in source
 
-    def test_backend_helpers(self):
+    def test_backend_helpers(self) -> None:
         assert BackendSpec.in_memory().to_dict() == {"kind": "in_memory", "config": {}}
         assert BackendSpec.redis("redis://127.0.0.1:6379").to_dict() == {
             "kind": "redis",
             "config": {"url": "redis://127.0.0.1:6379", "key_prefix": "nemo_relay:"},
         }
 
-    def test_backend_helper_normalizes_nested_dataclass_config(self):
+    def test_backend_helper_normalizes_nested_dataclass_config(self) -> None:
         @dataclass
         class NestedHint:
             path: str
@@ -72,22 +74,22 @@ class TestAdaptiveConfigHelpers:
             "config": {"hints": [{"path": "nvext.agent_hints", "enabled": True}]},
         }
 
-    def test_section_helpers(self):
+    def test_section_helpers(self) -> None:
         assert TelemetryConfig(learners=["latency_sensitivity"]).to_dict() == {"learners": ["latency_sensitivity"]}
         assert AdaptiveHintsConfig().to_dict()["priority"] == 100
         assert ToolParallelismConfig().to_dict()["mode"] == "observe_only"
 
-    def test_adaptive_component_wraps_as_plugin_component(self):
+    def test_adaptive_component_wraps_as_plugin_component(self) -> None:
         wrapped = ComponentSpec(AdaptiveConfig()).to_dict()
         assert wrapped["kind"] == ADAPTIVE_PLUGIN_KIND
 
-    def test_validate_adaptive_plugin_component_warns_missing_state(self):
+    def test_validate_adaptive_plugin_component_warns_missing_state(self) -> None:
         report = validate_plugin_config(
             plugin.PluginConfig(components=[ComponentSpec(AdaptiveConfig(telemetry=TelemetryConfig()))])
         )
         assert any(diag["code"] == "adaptive.section_disabled_missing_state" for diag in report["diagnostics"])
 
-    def test_plugin_component_spec_normalizes_lists_of_dataclasses(self):
+    def test_plugin_component_spec_normalizes_lists_of_dataclasses(self) -> None:
         @dataclass
         class ExampleConfig:
             name: str
@@ -102,10 +104,10 @@ class TestAdaptiveConfigHelpers:
             "rules": [{"name": "alpha", "weights": [1, 2, 3]}],
         }
 
-    def test_set_latency_sensitivity_accepts_positive_integer(self):
+    def test_set_latency_sensitivity_accepts_positive_integer(self) -> None:
         adaptive_module.set_latency_sensitivity(1)
 
-    def test_acg_config_exposes_canonical_threshold_shape(self):
+    def test_acg_config_exposes_canonical_threshold_shape(self) -> None:
         assert [field.name for field in fields(AcgConfig)] == [
             "provider",
             "observation_window",
@@ -130,7 +132,7 @@ class TestAdaptiveConfigHelpers:
 
 
 class TestAdaptivePluginConfiguration:
-    async def test_adaptive_runtime_build_cache_request_facts_uses_native_bridge(self):
+    async def test_adaptive_runtime_build_cache_request_facts_uses_native_bridge(self) -> None:
         runtime = adaptive_module.AdaptiveRuntime(
             AdaptiveConfig(
                 agent_id="test-adaptive-request-facts",
@@ -162,7 +164,7 @@ class TestAdaptivePluginConfiguration:
             runtime.deregister()
             await runtime.shutdown()
 
-    async def test_adaptive_runtime_build_cache_request_facts_supports_openai_provider(self):
+    async def test_adaptive_runtime_build_cache_request_facts_supports_openai_provider(self) -> None:
         runtime = adaptive_module.AdaptiveRuntime(
             AdaptiveConfig(
                 agent_id="test-adaptive-openai-request-facts",
@@ -194,7 +196,7 @@ class TestAdaptivePluginConfiguration:
             runtime.deregister()
             await runtime.shutdown()
 
-    def test_adaptive_runtime_bind_scope_requires_registration(self):
+    def test_adaptive_runtime_bind_scope_requires_registration(self) -> None:
         runtime = adaptive_module.AdaptiveRuntime(
             AdaptiveConfig(
                 agent_id="test-adaptive-translate-registration",
@@ -207,7 +209,7 @@ class TestAdaptivePluginConfiguration:
             with pytest.raises(RuntimeError, match="must be registered"):
                 runtime.bind_scope(handle)
 
-    async def test_adaptive_runtime_bind_scope_passes_through_without_state(self):
+    async def test_adaptive_runtime_bind_scope_passes_through_without_state(self) -> None:
         runtime = adaptive_module.AdaptiveRuntime(
             AdaptiveConfig(
                 agent_id="test-adaptive-translate-runtime",
@@ -238,7 +240,7 @@ class TestAdaptivePluginConfiguration:
             runtime.deregister()
             await runtime.shutdown()
 
-    async def test_configure_report_and_clear(self):
+    async def test_configure_report_and_clear(self) -> None:
         activation = await plugin.initialize(
             plugin.PluginConfig(
                 components=[
@@ -262,7 +264,7 @@ class TestAdaptivePluginConfiguration:
             await activation.close()
         assert not activation.is_active
 
-    async def test_configure_allows_normal_llm_call(self):
+    async def test_configure_allows_normal_llm_call(self) -> None:
         async with activated_plugin_host(
             plugin.PluginConfig(
                 components=[
@@ -278,16 +280,16 @@ class TestAdaptivePluginConfiguration:
             )
         ):
 
-            def my_llm(_request: LLMRequest):
+            def my_llm(_request: LLMRequest) -> Json:
                 return {"response": "ok"}
 
             request = LLMRequest({}, {"messages": []})
             result = await llm.execute("test-model", request, my_llm)
             assert result["response"] == "ok"
 
-    async def test_python_plugin_is_called_from_core_plugin_system(self):
+    async def test_python_plugin_is_called_from_core_plugin_system(self) -> None:
         class HeaderPlugin:
-            def validate(self, plugin_config):
+            def validate(self, plugin_config: dict[str, Json]) -> list[dict[str, str]]:
                 return [
                     {
                         "level": "warning",
@@ -297,30 +299,39 @@ class TestAdaptivePluginConfiguration:
                     }
                 ]
 
-            def register(self, plugin_config, context):
+            def register(self, plugin_config: dict[str, Json], context: plugin.PluginContext) -> None:
                 priority = plugin_config.get("priority", 33)
 
-                def intercept(_name, request, annotated):
+                def intercept(
+                    _name: str, request: LLMRequest, annotated: AnnotatedLLMRequest | None
+                ) -> LLMRequestInterceptOutcome:
                     headers = dict(request.headers)
                     headers["x-python-plugin"] = f"priority:{priority}"
                     return LLMRequestInterceptOutcome(LLMRequest(headers, request.content), annotated)
 
-                async def llm_exec_intercept(_name, request, next_call):
+                async def llm_exec_intercept(
+                    _name: str, request: LLMRequest, next_call: Callable[[LLMRequest], Awaitable[Json]]
+                ) -> Json:
                     response = await next_call(request)
+                    assert isinstance(response, dict)
                     response["x-python-llm-exec"] = f"priority:{priority}"
                     return response
 
-                async def llm_stream_exec_intercept(request, next_call):
+                async def llm_stream_exec_intercept(
+                    request: LLMRequest,
+                    next_call: Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]],
+                ) -> AsyncIterator[Json]:
                     stream = await next_call(request)
 
-                    async def gen():
+                    async def gen() -> AsyncIterator[Json]:
                         async for chunk in stream:
+                            assert isinstance(chunk, dict)
                             chunk["x-python-llm-stream-exec"] = f"priority:{priority}"
                             yield chunk
 
                     return gen()
 
-                def tool_request_intercept(_name, args):
+                def tool_request_intercept(_name: str, args: Json) -> Json:
                     return {**args, "x-python-tool-plugin": f"priority:{priority}"}
 
                 context.register_llm_request_intercept(
@@ -362,7 +373,7 @@ class TestAdaptivePluginConfiguration:
 
             async with activated_plugin_host(wrapped_config):
 
-                def my_llm(request: LLMRequest):
+                def my_llm(request: LLMRequest) -> Json:
                     return {
                         "seen_header": request.headers["x-python-plugin"],
                         "seen_exec": request.headers.get("x-missing", "base"),
@@ -373,24 +384,24 @@ class TestAdaptivePluginConfiguration:
                 assert result["seen_header"] == "priority:17"
                 assert result["x-python-llm-exec"] == "priority:17"
 
-                def my_tool(args):
+                def my_tool(args: Json) -> ToolExecutionResult[Json]:
                     return ToolExecutionResult(args)
 
                 tool_result = await tools.execute("search", {"query": "test"}, my_tool)
                 assert tool_result.result["x-python-tool-plugin"] == "priority:17"
 
-                def my_stream_llm(_request: LLMRequest):
-                    async def gen():
+                def my_stream_llm(_request: LLMRequest) -> AsyncIterator[Json]:
+                    async def gen() -> AsyncIterator[Json]:
                         yield {"token": "hello"}
 
                     return gen()
 
                 collected: list[JsonObject] = []
 
-                def collector(chunk):
+                def collector(chunk: Json) -> None:
                     collected.append(cast(JsonObject, chunk))
 
-                def finalizer():
+                def finalizer() -> Json:
                     return {"count": len(collected)}
 
                 stream = await llm.stream_execute(
@@ -407,12 +418,12 @@ class TestAdaptivePluginConfiguration:
         finally:
             plugin.deregister("python.test_plugin")
 
-    def test_list_kinds_includes_registered_plugin(self):
+    def test_list_kinds_includes_registered_plugin(self) -> None:
         class MarkerPlugin(plugin.Plugin):
-            def validate(self, plugin_config):
+            def validate(self, plugin_config: dict[str, Json]) -> None:
                 return None
 
-            def register(self, plugin_config, context):
+            def register(self, plugin_config: dict[str, Json], context: plugin.PluginContext) -> None:
                 return None
 
         plugin.register("python.list_kinds_plugin", MarkerPlugin())
@@ -422,7 +433,7 @@ class TestAdaptivePluginConfiguration:
             plugin.deregister("python.list_kinds_plugin")
 
 
-async def test_plugin_context_conditional_gate_fails_open_and_clears():
+async def test_plugin_context_conditional_gate_fails_open_and_clears() -> None:
     suffix = uuid4().hex
     kind = f"python.context_gate.{suffix}"
     target = f"python-context-gate-target-{suffix}"
@@ -466,7 +477,7 @@ async def test_plugin_context_conditional_gate_fails_open_and_clears():
         subscribers.deregister(target)
 
 
-async def test_failed_plugin_activation_rolls_back_conditional_gate():
+async def test_failed_plugin_activation_rolls_back_conditional_gate() -> None:
     suffix = uuid4().hex
     kind = f"python.context_gate_rollback.{suffix}"
     target = f"python-context-gate-rollback-target-{suffix}"

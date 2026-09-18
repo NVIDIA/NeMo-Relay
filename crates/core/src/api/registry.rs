@@ -815,7 +815,8 @@ global_intercept_registry_api!(
     ToolInterceptFn
 );
 global_execution_registry_api!(
-    /// Register a global tool execution intercept.
+    /// Register a global tool execution intercept that receives the full
+    /// [`ToolExecutionContext`], including the managed `tool_call_id`.
     /// Execution intercepts can wrap or replace the tool callback. Each
     /// callback returns a canonical tool execution outcome, while its
     /// continuation resolves to the downstream
@@ -983,7 +984,8 @@ scope_intercept_registry_api!(
     ToolInterceptFn
 );
 scope_execution_registry_api!(
-    /// Register a scope-local tool execution intercept.
+    /// Register a scope-local tool execution intercept that receives the full
+    /// [`ToolExecutionContext`], including the managed `tool_call_id`.
     /// Execution intercepts can wrap or replace the tool callback inside the
     /// owning scope. Each callback returns a canonical tool execution outcome,
     /// while its continuation resolves to the downstream

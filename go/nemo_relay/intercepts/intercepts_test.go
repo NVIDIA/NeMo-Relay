@@ -47,8 +47,8 @@ func runGlobalToolInterceptShorthandChecks(t *testing.T) {
 	}
 
 	if err := intercepts.RegisterToolExecution("intercepts_tool_exec", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (nemo_relay.ToolExecutionResult, error)) (nemo_relay.ToolExecutionInterceptOutcome, error) {
-			result, err := next(args)
+		func(context nemo_relay.ToolExecutionContext, next func(json.RawMessage) (nemo_relay.ToolExecutionResult, error)) (nemo_relay.ToolExecutionInterceptOutcome, error) {
+			result, err := next(context.Args)
 			if err != nil {
 				return nemo_relay.ToolExecutionInterceptOutcome{}, err
 			}
@@ -174,8 +174,8 @@ func runScopeLocalToolInterceptShorthandChecks(t *testing.T, scopeUUID string) {
 		t.Fatalf("ScopeRegisterToolRequest failed: %v", err)
 	}
 	if err := intercepts.ScopeRegisterToolExecution(scopeUUID, "intercepts_scope_tool_exec", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (nemo_relay.ToolExecutionResult, error)) (nemo_relay.ToolExecutionInterceptOutcome, error) {
-			result, err := next(args)
+		func(context nemo_relay.ToolExecutionContext, next func(json.RawMessage) (nemo_relay.ToolExecutionResult, error)) (nemo_relay.ToolExecutionInterceptOutcome, error) {
+			result, err := next(context.Args)
 			return nemo_relay.ToolExecutionInterceptOutcome{Result: result.Result, Annotation: result.Annotation}, err
 		},
 	); err != nil {

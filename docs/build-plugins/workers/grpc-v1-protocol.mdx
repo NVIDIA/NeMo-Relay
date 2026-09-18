@@ -175,6 +175,7 @@ message LlmInvocation {
 message ToolInvocation {
   string tool_name = 1;
   JsonEnvelope value = 2;
+  optional string tool_call_id = 3;
 }
 
 message LlmCodecIdentity {
@@ -207,6 +208,14 @@ message InvokeResponse {
 Tool values remain JSON, but the result boundary is structural so Relay can keep an
 opaque annotation beside the application value without treating either field as a
 schema-tagged envelope.
+
+`ToolInvocation.tool_call_id` is set only for tool execution intercepts, and only
+when the managed tool call recorded a provider-issued identifier. The field is
+unchanged, so the `grpc-v1` identifier and `nemo.relay.worker.v1` protobuf
+package do not change. Beginning with Relay 0.9, worker SDKs surface it through
+the existing `register_tool_execution_intercept` callback. A worker plugin that
+registers this surface must declare a `compat.relay` range that excludes Relay
+0.8, such as `>=0.9,<1.0`.
 
 ```proto
 message JsonValue {

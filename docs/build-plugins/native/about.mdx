@@ -26,18 +26,18 @@ Three version values answer different questions:
 |---|---|---|
 | Package manifest | `manifest_version = 1` | Shape of the authored `relay-plugin.toml` file. |
 | Manifest native API | `compat.native_api = "1"` | Native plugin package contract accepted by discovery and trust validation. |
-| C host-table ABI | v4 | Function table negotiated by the current `nemo-relay-plugin` SDK. The host also exposes frozen v3 and v2 tables for compatible older binaries. |
+| C host-table ABI | v5 | Function table negotiated by the current `nemo-relay-plugin` SDK. The host also exposes frozen v4, v3, and v2 tables for compatible older binaries. |
 
-Typed async middleware and SDK executor configuration require the 0.8 contract, so the
-checked example declares `compat.relay = ">=0.8.0,<1.0"` and depends on
-`nemo-relay-plugin` 0.8.0. A manifest that admits an older host cannot promise those
-surfaces.
+The checked example registers a tool execution intercept, so it declares
+`compat.relay = ">=0.9.0,<1.0"`. A manifest that admits Relay 0.8 cannot register
+the context-carrying callback introduced in Relay 0.9.
 
-Relay 0.8 changes the native API 1 tool-result JSON contract without changing the v4
-host-table layout. A tool callback and `ToolNext` continuation now return
+Relay 0.8 changed the native API 1 tool-result JSON contract without changing the v4
+host-table layout. A tool callback and `ToolNext` continuation return
 `ToolExecutionResult`, which carries `result` and optional opaque `annotation`; an
 execution intercept returns that pair plus pending marks. Rebuild native plugins for
-this contract even though the negotiated host-table ABI remains v4.
+that contract even though its negotiated host-table ABI remains v4. Relay 0.9
+adds the context-carrying tool execution callback as the v5 host-table extension.
 
 The v4 SDK also lets a plugin add a data schema and log severity to a mark, or emit
 validated metric measurements. `PluginRuntime::runtime_diagnostics()` returns the

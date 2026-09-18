@@ -213,6 +213,30 @@ pub(super) fn find_record_by_id(
     Ok(tombstoned.into_iter().next())
 }
 
+pub(super) fn find_record_in_source(
+    scopes: &[ScopedRegistry],
+    source: &Path,
+    plugin_id: &str,
+) -> Option<ScopedDynamicPluginRecord> {
+    scopes
+        .iter()
+        .enumerate()
+        .find(|(_, scope)| scope.plugins_toml_path == source)
+        .and_then(|(scope_index, scope)| {
+            scope
+                .registry
+                .get(plugin_id)
+                .cloned()
+                .map(|record| ScopedDynamicPluginRecord {
+                    scope_index,
+                    scope: scope.scope,
+                    plugins_toml_path: scope.plugins_toml_path.clone(),
+                    state_path: scope.state_path.clone(),
+                    record,
+                })
+        })
+}
+
 fn scoped_registry_layouts(
     explicit_plugin_config: Option<&PathBuf>,
 ) -> Vec<(RegistryScope, PathBuf, PathBuf)> {

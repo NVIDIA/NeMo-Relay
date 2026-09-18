@@ -70,6 +70,57 @@ fn py_mark_event(event: Event) -> PyMarkEvent {
 }
 
 #[test]
+fn test_tool_execution_context_repr_excludes_arguments() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        let context = nemo_relay::api::runtime::ToolExecutionContext::new(
+            "lookup",
+            json!({"secret": "private"}),
+        )
+        .with_tool_call_id(Some("call-python-1".into()));
+        let context = Py::new(
+            py,
+            PyToolExecutionContext::from_inner(py, &context).unwrap(),
+        )
+        .unwrap();
+        let context = context.bind(py);
+
+        assert_eq!(
+            context
+                .getattr("tool_name")
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            "lookup"
+        );
+        assert_eq!(
+            context
+                .getattr("tool_call_id")
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            "call-python-1"
+        );
+        assert_eq!(
+            context
+                .getattr("args")
+                .unwrap()
+                .get_item("secret")
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            "private"
+        );
+        let representation = context.repr().unwrap().to_str().unwrap().to_owned();
+        assert_eq!(
+            representation,
+            "ToolExecutionContext(tool_name=\"lookup\", tool_call_id=Some(\"call-python-1\"))"
+        );
+        assert!(!representation.contains("private"));
+    });
+}
+
+#[test]
 fn test_register_exposes_all_type_bindings() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {

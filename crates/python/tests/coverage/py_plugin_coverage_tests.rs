@@ -383,8 +383,8 @@ async def llm_stream_execution_intercept(request, next):
 def tool_request_intercept(name, value):
     return value
 
-async def tool_execution_intercept(name, value, next):
-    downstream = await next(value)
+async def tool_execution_intercept(context, next):
+    downstream = await next(context.args)
     return ToolOutcome(downstream.result, annotation=downstream.annotation)
 "#,
         );
@@ -580,8 +580,8 @@ async def llm_stream_execution_intercept(request, next):
 def tool_request_intercept(name, value):
     return value
 
-async def tool_execution_intercept(name, value, next):
-    downstream = await next(value)
+async def tool_execution_intercept(context, next):
+    downstream = await next(context.args)
     return ToolOutcome(downstream.result, annotation=downstream.annotation)
 "#,
         );
@@ -785,8 +785,8 @@ async def llm_stream_execution_intercept(request, next):
 def tool_request_intercept(name, value):
     return value
 
-async def tool_execution_intercept(name, value, next):
-    downstream = await next(value)
+async def tool_execution_intercept(context, next):
+    downstream = await next(context.args)
     return ToolOutcome(downstream.result, annotation=downstream.annotation)
 "#,
         );

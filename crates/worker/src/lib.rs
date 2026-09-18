@@ -202,7 +202,9 @@ type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> BoxFutureResult<Json> + Send + S
 type ToolConditionalFn = Arc<dyn Fn(String, Json) -> BoxFutureResult<Option<String>> + Send + Sync>;
 type ToolRequestFn = Arc<dyn Fn(String, Json) -> BoxFutureResult<Json> + Send + Sync>;
 type ToolExecutionFn = Arc<
-    dyn Fn(&str, Json, ToolNext) -> BoxFutureResult<ToolExecutionInterceptOutcome> + Send + Sync,
+    dyn Fn(ToolExecutionContext, ToolNext) -> BoxFutureResult<ToolExecutionInterceptOutcome>
+        + Send
+        + Sync,
 >;
 type LlmSanitizeRequestFn = Arc<
     dyn Fn(LlmRequest, LlmSanitizeRequestContext) -> BoxFutureResult<Option<LlmRequest>>
@@ -211,6 +213,43 @@ type LlmSanitizeRequestFn = Arc<
 >;
 type LlmSanitizeResponseFn =
     Arc<dyn Fn(Json, LlmSanitizeResponseContext) -> BoxFutureResult<Option<Json>> + Send + Sync>;
+
+/// Per-call context supplied to a tool execution intercept.
+///
+/// `tool_call_id` is the provider-issued correlation identifier recorded on the
+/// managed tool call, and is `None` when the call did not record one.
+#[derive(Debug, Clone)]
+pub struct ToolExecutionContext {
+    tool_name: String,
+    args: Json,
+    tool_call_id: Option<String>,
+}
+
+impl ToolExecutionContext {
+    /// Returns the tool name associated with the execution.
+    #[must_use]
+    pub fn tool_name(&self) -> &str {
+        &self.tool_name
+    }
+
+    /// Returns the JSON argument payload entering this intercept.
+    #[must_use]
+    pub fn args(&self) -> &Json {
+        &self.args
+    }
+
+    /// Consumes the context and returns its JSON argument payload.
+    #[must_use]
+    pub fn into_args(self) -> Json {
+        self.args
+    }
+
+    /// Returns the provider-issued tool-call correlation identifier.
+    #[must_use]
+    pub fn tool_call_id(&self) -> Option<&str> {
+        self.tool_call_id.as_deref()
+    }
+}
 
 /// Active codec context supplied to an LLM request sanitizer.
 #[derive(Clone)]
@@ -621,7 +660,7 @@ impl PluginContext {
         priority: i32,
         callback: F,
     ) where
-        F: Fn(&str, Json, ToolNext) -> Fut + Send + Sync + 'static,
+        F: Fn(ToolExecutionContext, ToolNext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<ToolExecutionInterceptOutcome>> + Send + 'static,
     {
         self.push_registration(
@@ -632,7 +671,7 @@ impl PluginContext {
         );
         self.handlers.tool_executions.insert(
             name.into(),
-            Arc::new(move |tool, value, next| Box::pin(callback(tool, value, next))),
+            Arc::new(move |context, next| Box::pin(callback(context, next))),
         );
     }
 
@@ -2368,12 +2407,17 @@ impl WorkerService {
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = tool_payload(request.payload)?;
-        let handler = self.tool_execution(&request.registration_name)?;
         let next = ToolNext {
             runtime: self.runtime.clone(),
             continuation_id: request.continuation_id,
         };
-        let future = with_thread_scope(scope, || handler(&payload.tool_name, payload.value, next));
+        let handler = self.tool_execution(&request.registration_name)?;
+        let context = ToolExecutionContext {
+            tool_name: payload.tool_name,
+            args: payload.value,
+            tool_call_id: payload.tool_call_id,
+        };
+        let future = with_thread_scope(scope, || handler(context, next));
         tool_execution_response(future.await?)
     }
 
@@ -2666,6 +2710,7 @@ impl WorkerService {
 struct ToolPayload {
     tool_name: String,
     value: Json,
+    tool_call_id: Option<String>,
 }
 
 struct LlmPayload {
@@ -2752,6 +2797,7 @@ fn tool_payload(
             Ok(ToolPayload {
                 tool_name: value.tool_name,
                 value: json,
+                tool_call_id: value.tool_call_id,
             })
         }
         _ => Err(WorkerSdkError::InvalidInput("expected tool payload".into())),

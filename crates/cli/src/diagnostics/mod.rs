@@ -27,6 +27,7 @@ use nemo_relay::api::event::{BaseEvent, Event, MarkEvent};
 use nemo_relay::codec::model_pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
 use nemo_relay::observability::otel::resolve_http_trace_endpoint;
 use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
+use nemo_relay::plugin::dynamic::validate as validate_plugin_host;
 use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_static_plugin_config};
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 use nemo_relay_adaptive::{ResponseCacheConfig, response_cache};
@@ -44,7 +45,10 @@ use crate::error::CliError;
 use crate::server::{GatewayOverrides, register_and_validate_plugin_components};
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(2);
+// Agent CLIs can take longer to initialize on a cold start than a live network health probe.
+const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const PRICING_PLUGIN_KIND: &str = "pricing";
+const INHERITED_PLUGIN_CONFIGURATION_DIAGNOSTIC: &str = "plugin.configuration_inherited";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DoctorProbeMode {
@@ -131,6 +135,10 @@ pub(crate) async fn collect_report(
         error: plugin_error,
         resolution: plugin_resolution,
     };
+    // Component registration is shared with server activation. Run it before the core preflight
+    // so its static diagnostics recognize CLI-provided built-ins such as adaptive and PII
+    // redaction. The preflight itself remains non-activating.
+    let observability = collect_observability(&resolved.gateway, probe_mode).await;
 
     Ok(DoctorReport {
         schema_version: 2,
@@ -148,7 +156,7 @@ pub(crate) async fn collect_report(
         ),
         agents: collect_agents(target_agent, probe_mode, &resolved).await,
         host_plugins: crate::agents::collect_default_integration_readiness(),
-        observability: collect_observability(&resolved.gateway, probe_mode).await,
+        observability,
         completions: collect_completions(home.as_deref()),
     })
 }
@@ -162,6 +170,7 @@ fn collect_configuration(
     configured_agents: Vec<String>,
     plugin_diagnostics: &PluginConfigurationDiagnostics,
 ) -> ConfigurationInfo {
+    let plugin_host_validation = collect_plugin_host_validation(resolved, gateway_overrides);
     let explicit_config = gateway_overrides.config.is_some();
     // Use the same XDG-aware resolver the config loader uses, so doctor reports the path the
     // runtime would actually read instead of a hard-coded `$HOME/.config/nemo-relay`.
@@ -203,6 +212,7 @@ fn collect_configuration(
         })
         .collect(),
         plugin_resolution: plugin_diagnostics.resolution.clone(),
+        plugin_host_validation,
         resolution,
         // `default_agent` is reserved in the design for Phase 2 dispatch; not currently parsed
         // out of FileConfig. Doctor reports `None` until that lands.
@@ -218,6 +228,81 @@ fn collect_configuration(
                 host_config_status: plugin.host_config_status(),
             })
             .collect(),
+    }
+}
+
+/// Run the public core plugin-host preflight and retain its complete redacted report in doctor.
+///
+/// The CLI has its own lifecycle reconciliation for launch, but `validate` is the authoritative
+/// non-activating check for dynamic-manifest policy, trust, and JSON-schema results. Keeping the
+/// report here prevents doctor from claiming a dynamic plugin merely "resolved" when the binding
+/// API would report an integrity or schema failure.
+fn collect_plugin_host_validation(
+    resolved: &ResolvedConfig,
+    gateway_overrides: &GatewayOverrides,
+) -> PluginHostValidation {
+    let explicit_plugin_config = crate::configuration::explicit_plugin_config_path(
+        gateway_overrides.config.as_ref(),
+        gateway_overrides.plugin_config_path.as_ref(),
+    );
+    if resolved.gateway.plugin_config.is_none()
+        && resolved.dynamic_plugins.is_empty()
+        && explicit_plugin_config.is_none()
+    {
+        return PluginHostValidation {
+            status: Status::Info,
+            details: "plugins.toml not configured".into(),
+            report: None,
+        };
+    }
+
+    match validate_plugin_host(PluginConfig::default(), explicit_plugin_config) {
+        Ok(report) => {
+            let static_failures = report
+                .config
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
+                .count();
+            let static_warnings = report.config.diagnostics.iter().any(|diagnostic| {
+                diagnostic.level == DiagnosticLevel::Warning
+                    && diagnostic.code.as_str() != INHERITED_PLUGIN_CONFIGURATION_DIAGNOSTIC
+            });
+            let dynamic_failures = report
+                .dynamic_plugins
+                .iter()
+                .filter(|plugin| plugin.failure.is_some())
+                .count();
+            let status = if static_failures > 0 || dynamic_failures > 0 {
+                Status::Fail
+            } else if static_warnings {
+                Status::Warn
+            } else {
+                Status::Pass
+            };
+            let details = match status {
+                Status::Pass => format!(
+                    "core plugin-host validation passed for {} dynamic plugin(s)",
+                    report.dynamic_plugins.len()
+                ),
+                Status::Warn => "core plugin-host validation completed with warnings".into(),
+                Status::Fail => format!(
+                    "core plugin-host validation found {static_failures} static configuration error(s) \
+                     and {dynamic_failures} dynamic plugin failure(s)"
+                ),
+                Status::Info => unreachable!("configured plugin validation always has a result"),
+            };
+            PluginHostValidation {
+                status,
+                details,
+                report: Some(report),
+            }
+        }
+        Err(error) => PluginHostValidation {
+            status: Status::Fail,
+            details: format!("core plugin-host validation failed: {error}"),
+            report: None,
+        },
     }
 }
 
@@ -907,18 +992,18 @@ fn hook_status(agent: CodingAgent, agents: &AgentConfigs) -> (Status, String) {
 }
 
 async fn probe_version(argv: &[String]) -> Option<String> {
-    // Run the shared wrapper-preserving probe and read the first line of stdout. Bounded by the network
-    // timeout (re-used as a generic short timeout) so a misbehaving binary doesn't hang doctor.
+    // Run the shared wrapper-preserving probe and read the first line of stdout. Keep this separate
+    // from the short network timeout: an agent CLI can need a few seconds for a cold start.
     let mut cmd = crate::process::tokio_command(argv);
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .stdin(std::process::Stdio::null())
         // Ensure the child gets killed if our future is dropped on timeout. Without this a
-        // misbehaving agent binary that exceeds NETWORK_TIMEOUT would leak as an orphan
+        // misbehaving agent binary that exceeds VERSION_PROBE_TIMEOUT would leak as an orphan
         // process for the lifetime of the doctor invocation (and beyond).
         .kill_on_drop(true);
     let child = cmd.spawn().ok()?;
-    let output = timeout(NETWORK_TIMEOUT, child.wait_with_output())
+    let output = timeout(VERSION_PROBE_TIMEOUT, child.wait_with_output())
         .await
         .ok()?
         .ok()?;

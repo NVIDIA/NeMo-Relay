@@ -477,10 +477,51 @@ impl<T: Serialize> SessionRequest<T> {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct EmptyPayload {}
 
+/// An allowlisted reason for a broker-assigned worker activation failure.
+///
+/// This crosses the MCP-to-daemon control boundary and is written to operational logs, so it
+/// must never contain source error text, endpoint values, or activation data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WorkerActivationFailureReason {
+    WorkerExecutableResolutionFailed,
+    WorkerProcessSpawnFailed,
+    WorkerActivationPipeUnavailable,
+    WorkerActivationGrantSerializationFailed,
+    WorkerActivationGrantWriteFailed,
+    WorkerActivationPipeCloseFailed,
+    WorkerActivationCleanupFailed,
+    WorkerExitedBeforeReady,
+    WorkerReadinessTimeout,
+    #[serde(other)]
+    UnknownWorkerActivationFailure,
+}
+
+impl WorkerActivationFailureReason {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::WorkerExecutableResolutionFailed => "worker_executable_resolution_failed",
+            Self::WorkerProcessSpawnFailed => "worker_process_spawn_failed",
+            Self::WorkerActivationPipeUnavailable => "worker_activation_pipe_unavailable",
+            Self::WorkerActivationGrantSerializationFailed => {
+                "worker_activation_grant_serialization_failed"
+            }
+            Self::WorkerActivationGrantWriteFailed => "worker_activation_grant_write_failed",
+            Self::WorkerActivationPipeCloseFailed => "worker_activation_pipe_close_failed",
+            Self::WorkerActivationCleanupFailed => "worker_activation_cleanup_failed",
+            Self::WorkerExitedBeforeReady => "worker_exited_before_ready",
+            Self::WorkerReadinessTimeout => "worker_readiness_timeout",
+            Self::UnknownWorkerActivationFailure => "unknown_worker_activation_failure",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ActivationFailedPayload {
     pub(crate) activation_id: String,
-    pub(crate) reason: String,
+    /// Kept as `reason` on the wire for control-plane compatibility.
+    #[serde(rename = "reason")]
+    pub(crate) failure_reason: WorkerActivationFailureReason,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -7,14 +7,17 @@ import base64
 import dataclasses
 import os
 import pickle
-from typing import cast
+from collections.abc import Awaitable, Callable
+from typing import Any, Never, SupportsIndex, cast
 
 import pytest
 
 from nemo_relay import (
+    Json,
     JsonObject,
     LLMRequest,
     ScopeEvent,
+    ToolExecutionContext,
     ToolExecutionInterceptOutcome,
     ToolExecutionResult,
     intercepts,
@@ -74,20 +77,20 @@ passthrough = JsonPassthrough()
 class PrefixCodec(Codec[str]):
     """Custom codec that wraps a plain string in an envelope dict."""
 
-    def to_json(self, value):
+    def to_json(self, value: str) -> Json:
         return {"text": f"pfx:{value}"}
 
-    def from_json(self, data):
+    def from_json(self, data: Json) -> str:
         return data["text"].removeprefix("pfx:")
 
 
 class SumCodec(Codec[int]):
     """Custom codec that stores an int under a 'total' key."""
 
-    def to_json(self, value):
+    def to_json(self, value: int) -> Json:
         return {"total": value}
 
-    def from_json(self, data):
+    def from_json(self, data: Json) -> int:
         return data["total"]
 
 
@@ -97,28 +100,28 @@ sum_codec = SumCodec()
 
 class BrokenValidatedModel:
     @classmethod
-    def model_validate(cls, data):
+    def model_validate(cls, data: Json) -> Never:
         raise ValueError("broken validation")
 
 
 class FaultyDumpValue:
-    def model_dump(self, mode=None):
+    def model_dump(self, mode: str | None = None) -> Never:
         raise RuntimeError("broken dump")
 
 
 class UnpickleableValue:
-    def __reduce_ex__(self, protocol):
+    def __reduce_ex__(self, protocol: SupportsIndex) -> str | tuple[Any, ...]:
         raise TypeError("cannot pickle")
 
-    def __str__(self):
+    def __str__(self) -> str:
         return "unpickleable"
 
 
 class PickleRceValue:
-    def __init__(self, command: str):
+    def __init__(self, command: str) -> None:
         self.command = command
 
-    def __reduce__(self):
+    def __reduce__(self) -> tuple[object, tuple[str]]:
         return (os.system, (self.command,))
 
 
@@ -128,52 +131,52 @@ class PickleRceValue:
 
 
 class TestJsonPassthrough:
-    def test_to_json_identity(self):
+    def test_to_json_identity(self) -> None:
         p = JsonPassthrough()
         obj = {"a": 1}
         assert p.to_json(obj) is obj
 
-    def test_from_json_identity(self):
+    def test_from_json_identity(self) -> None:
         p = JsonPassthrough()
         obj = {"b": 2}
         assert p.from_json(obj) is obj
 
-    def test_primitive_passthrough(self):
+    def test_primitive_passthrough(self) -> None:
         p = JsonPassthrough()
         assert p.to_json(42) == 42
         assert p.from_json("hello") == "hello"
 
 
 class TestDataclassCodec:
-    def test_to_json(self):
+    def test_to_json(self) -> None:
         result = dc_args_codec.to_json(DcArgs(x=1, y=2))
         assert result == {"x": 1, "y": 2}
 
-    def test_from_json(self):
+    def test_from_json(self) -> None:
         obj = dc_args_codec.from_json({"x": 1, "y": 2})
         assert isinstance(obj, DcArgs)
         assert obj.x == 1
 
-    def test_roundtrip(self):
+    def test_roundtrip(self) -> None:
         original = DcResult(value=42)
         restored = dc_result_codec.from_json(dc_result_codec.to_json(original))
         assert restored == original
 
 
 class TestCustomCodec:
-    def test_custom_codec(self):
+    def test_custom_codec(self) -> None:
         class EnvelopeCodec(Codec[int]):
-            def to_json(self, value):
+            def to_json(self, value: int) -> Json:
                 return {"value": value}
 
-            def from_json(self, data):
+            def from_json(self, data: Json) -> int:
                 return data["value"]
 
         codec = EnvelopeCodec()
         assert codec.to_json(42) == {"value": 42}
         assert codec.from_json({"value": 99}) == 99
 
-    def test_base_codec_methods_raise(self):
+    def test_base_codec_methods_raise(self) -> None:
         codec = Codec()
         with pytest.raises(NotImplementedError):
             codec.to_json("value")
@@ -182,7 +185,7 @@ class TestCustomCodec:
 
 
 class TestPydanticCodec:
-    def test_direct_roundtrip(self):
+    def test_direct_roundtrip(self) -> None:
         import pydantic
 
         class Point(pydantic.BaseModel):
@@ -198,7 +201,7 @@ class TestPydanticCodec:
 
 
 class TestTypedHelpers:
-    def test_serialize_value_normalizes_nested_collections(self):
+    def test_serialize_value_normalizes_nested_collections(self) -> None:
         serialized = typed._serialize_value(
             {"items": [DcArgs(x=3, y=4)], "labels": ["alpha", "beta"]},
         )
@@ -208,23 +211,23 @@ class TestTypedHelpers:
             "labels": ["alpha", "beta"],
         }
 
-    def test_register_and_resolve_runtime_type(self):
+    def test_register_and_resolve_runtime_type(self) -> None:
         token = typed._register_runtime_type(SearchArgs)
         assert typed._resolve_runtime_type(token) is SearchArgs
 
-    def test_resolve_runtime_type_non_string(self):
+    def test_resolve_runtime_type_non_string(self) -> None:
         assert typed._resolve_runtime_type(123) is None
 
-    def test_resolve_importable_type_success(self):
+    def test_resolve_importable_type_success(self) -> None:
         path = f"{SearchArgs.__module__}.{SearchArgs.__qualname__}"
         assert typed._resolve_importable_type(path) is SearchArgs
 
-    def test_resolve_importable_type_invalid_inputs(self):
+    def test_resolve_importable_type_invalid_inputs(self) -> None:
         assert typed._resolve_importable_type("") is None
         assert typed._resolve_importable_type(123) is None
         assert typed._resolve_importable_type("does.not.exist.Type") is None
 
-    def test_resolve_importable_type_skips_local_classes(self):
+    def test_resolve_importable_type_skips_local_classes(self) -> None:
         class LocalType:
             pass
 
@@ -238,7 +241,7 @@ class TestTypedHelpers:
 
 
 class TestTypedToolExecute:
-    async def test_dataclass_roundtrip(self):
+    async def test_dataclass_roundtrip(self) -> None:
         async def search(args: SearchArgs) -> ToolExecutionResult[SearchResult]:
             return ToolExecutionResult(SearchResult(items=[args.query], total=1), {"provider": "typed"})
 
@@ -254,11 +257,14 @@ class TestTypedToolExecute:
         assert result.result.total == 1
         assert result.annotation == {"provider": "typed"}
 
-    async def test_annotation_passes_through_json_intercepts_unchanged(self):
+    async def test_annotation_passes_through_json_intercepts_unchanged(self) -> None:
         seen_annotations = []
 
-        async def intercept(_name, args, next):
-            downstream = await next(args)
+        async def intercept(
+            context: ToolExecutionContext,
+            next_call: Callable[[Json], Awaitable[ToolExecutionResult[Json]]],
+        ) -> ToolExecutionInterceptOutcome:
+            downstream = await next_call(context.args)
             seen_annotations.append(downstream.annotation)
             return ToolExecutionInterceptOutcome(
                 downstream.result,
@@ -287,11 +293,11 @@ class TestTypedToolExecute:
         assert result.annotation == {"provider": "typed-intercept"}
         assert seen_annotations == [{"provider": "typed-intercept"}]
 
-    async def test_rejects_legacy_raw_results(self):
-        def sync_legacy(_args):
+    async def test_rejects_legacy_raw_results(self) -> None:
+        def sync_legacy(_args: SearchArgs) -> SearchResult:
             return SearchResult(items=[], total=0)
 
-        async def async_legacy(_args):
+        async def async_legacy(_args: SearchArgs) -> SearchResult:
             return SearchResult(items=[], total=0)
 
         for producer in (sync_legacy, async_legacy):
@@ -299,12 +305,12 @@ class TestTypedToolExecute:
                 await typed.tool_execute(
                     "typed_legacy_result",
                     SearchArgs(query="hello"),
-                    producer,  # type: ignore[arg-type]
+                    cast(Callable[[SearchArgs], ToolExecutionResult[SearchResult]], producer),
                     search_args_codec,
                     search_result_codec,
                 )
 
-    async def test_tool_call_id_reaches_managed_lifecycle(self, subscribed_events):
+    async def test_tool_call_id_reaches_managed_lifecycle(self, subscribed_events) -> None:
         result = await typed.tool_execute(
             "typed_tool_call_id",
             SearchArgs(query="hello"),
@@ -325,7 +331,7 @@ class TestTypedToolExecute:
             for event in lifecycle
         )
 
-    async def test_dataclass_add(self):
+    async def test_dataclass_add(self) -> None:
         async def add(args: DcArgs) -> ToolExecutionResult[DcResult]:
             return ToolExecutionResult(DcResult(value=args.x + args.y))
 
@@ -339,10 +345,10 @@ class TestTypedToolExecute:
         assert isinstance(result.result, DcResult)
         assert result.result.value == 10
 
-    async def test_passthrough(self):
+    async def test_passthrough(self) -> None:
         """With JsonPassthrough codecs, dicts pass through unchanged."""
 
-        async def echo(args):
+        async def echo(args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult({"echoed": args})
 
         result = await typed.tool_execute(
@@ -354,7 +360,7 @@ class TestTypedToolExecute:
         )
         assert result.result == {"echoed": {"key": "value"}}
 
-    async def test_sync_func(self):
+    async def test_sync_func(self) -> None:
         def double(args: SearchArgs) -> ToolExecutionResult[SearchResult]:
             return ToolExecutionResult(SearchResult(items=[args.query, args.query], total=2))
 
@@ -368,11 +374,12 @@ class TestTypedToolExecute:
         assert isinstance(result.result, SearchResult)
         assert result.result.total == 2
 
-    async def test_intercepts_see_json(self):
+    async def test_intercepts_see_json(self) -> None:
         """Request intercepts operate on JSON dicts, not typed objects."""
         seen_args = []
 
-        def intercept_fn(name, args):
+        def intercept_fn(_name: str, args: Json) -> Json:
+            assert isinstance(args, dict)
             seen_args.append(args)
             args["limit"] = 99
             return args
@@ -396,7 +403,7 @@ class TestTypedToolExecute:
 
         intercepts.deregister_tool_request("typed_req_int")
 
-    async def test_mixed_codecs(self):
+    async def test_mixed_codecs(self) -> None:
         """Use different codec types for args and result."""
 
         async def convert(args: SearchArgs) -> ToolExecutionResult[DcResult]:
@@ -438,7 +445,7 @@ def make_request():
 
 
 class TestTypedLlmExecute:
-    async def test_dataclass_response(self):
+    async def test_dataclass_response(self) -> None:
         async def call_llm(request) -> LLMResponse:
             return LLMResponse(text="hello", tokens=5)
 
@@ -452,7 +459,7 @@ class TestTypedLlmExecute:
         assert result.text == "hello"
         assert result.tokens == 5
 
-    async def test_alternate_dataclass_response(self):
+    async def test_alternate_dataclass_response(self) -> None:
         async def call_llm(request) -> DcLLMResponse:
             return DcLLMResponse(content="world")
 
@@ -465,7 +472,7 @@ class TestTypedLlmExecute:
         assert isinstance(result, DcLLMResponse)
         assert result.content == "world"
 
-    async def test_passthrough(self):
+    async def test_passthrough(self) -> None:
         """With JsonPassthrough codec, dicts pass through."""
 
         async def call_llm(request) -> dict:
@@ -479,7 +486,7 @@ class TestTypedLlmExecute:
         )
         assert result == {"response": "ok"}
 
-    async def test_sync_func(self):
+    async def test_sync_func(self) -> None:
         def call_llm(request) -> LLMResponse:
             return LLMResponse(text="sync", tokens=1)
 
@@ -492,7 +499,7 @@ class TestTypedLlmExecute:
         assert isinstance(result, LLMResponse)
         assert result.text == "sync"
 
-    async def test_with_model_name(self):
+    async def test_with_model_name(self) -> None:
         async def call_llm(request) -> LLMResponse:
             return LLMResponse(text="named", tokens=2)
 
@@ -512,7 +519,7 @@ class TestTypedLlmExecute:
 
 
 class TestTypedLlmStreamExecute:
-    async def test_stream_passthrough(self):
+    async def test_stream_passthrough(self) -> None:
         def stream_func(request):
             async def gen():
                 yield {"token": "hello"}
@@ -522,7 +529,7 @@ class TestTypedLlmStreamExecute:
 
         collected = []
 
-        def collector(chunk):
+        def collector(chunk) -> None:
             collected.append(chunk)
 
         def finalizer():
@@ -545,7 +552,7 @@ class TestTypedLlmStreamExecute:
         assert len(chunks) >= 2
         assert len(collected) == len(chunks)
 
-    async def test_stream_dataclass_codec(self):
+    async def test_stream_dataclass_codec(self) -> None:
         """Streaming with DataclassCodec produces typed dataclass instances."""
 
         def stream_func(request):
@@ -557,7 +564,7 @@ class TestTypedLlmStreamExecute:
 
         collected: list[StreamChunk] = []
 
-        def collector(chunk):
+        def collector(chunk) -> None:
             collected.append(chunk)
 
         def finalizer():
@@ -586,7 +593,7 @@ class TestTypedLlmStreamExecute:
         assert collected[0].token == "hello"
         assert collected[1].token == "world"
 
-    async def test_stream_custom_codec(self):
+    async def test_stream_custom_codec(self) -> None:
         """Streaming with a custom Codec subclass encodes/decodes correctly."""
 
         def stream_func(request):
@@ -598,7 +605,7 @@ class TestTypedLlmStreamExecute:
 
         collected: list[str] = []
 
-        def collector(chunk):
+        def collector(chunk) -> None:
             collected.append(chunk)
 
         def finalizer():
@@ -624,7 +631,7 @@ class TestTypedLlmStreamExecute:
         assert collected[0] == "alpha"
         assert collected[1] == "beta"
 
-    async def test_stream_wrapper_closures_are_executed(self, monkeypatch):
+    async def test_stream_wrapper_closures_are_executed(self, monkeypatch) -> None:
         collected: list[StreamChunk] = []
 
         async def fake_stream_execute(name, request, func, collector, finalizer, **kwargs):
@@ -638,7 +645,7 @@ class TestTypedLlmStreamExecute:
             yield StreamChunk(token="hello")
             yield StreamChunk(token="world")
 
-        def collector(chunk):
+        def collector(chunk) -> None:
             collected.append(chunk)
 
         def finalizer():
@@ -670,7 +677,7 @@ class TestTypedLlmStreamExecute:
 
 
 class TestTypedToolExecuteCustomCodec:
-    async def test_sync_func_custom_codec(self):
+    async def test_sync_func_custom_codec(self) -> None:
         """Sync tool function with a fully custom Codec subclass."""
 
         def repeat(value: str) -> ToolExecutionResult[int]:
@@ -688,7 +695,7 @@ class TestTypedToolExecuteCustomCodec:
 
 
 class TestTypedLlmExecuteCustomCodec:
-    async def test_sync_func_custom_codec(self):
+    async def test_sync_func_custom_codec(self) -> None:
         """Sync LLM function with a fully custom Codec subclass."""
 
         def call_llm(request) -> int:
@@ -718,58 +725,58 @@ class BEPoint:
 class TestBestEffortAnyCodec:
     """Tests for BestEffortAnyCodec round-trip and from_json edge cases."""
 
-    def setup_method(self):
+    def setup_method(self) -> None:
         self.codec = BestEffortAnyCodec()
 
     # -- Round-trip: JSON-native types --
 
-    def test_roundtrip_int(self):
+    def test_roundtrip_int(self) -> None:
         assert self.codec.from_json(self.codec.to_json(42)) == 42
 
-    def test_roundtrip_zero(self):
+    def test_roundtrip_zero(self) -> None:
         assert self.codec.from_json(self.codec.to_json(0)) == 0
 
-    def test_roundtrip_float(self):
+    def test_roundtrip_float(self) -> None:
         assert self.codec.from_json(self.codec.to_json(3.14)) == 3.14
 
-    def test_roundtrip_string(self):
+    def test_roundtrip_string(self) -> None:
         assert self.codec.from_json(self.codec.to_json("hello")) == "hello"
 
-    def test_roundtrip_empty_string(self):
+    def test_roundtrip_empty_string(self) -> None:
         assert self.codec.from_json(self.codec.to_json("")) == ""
 
-    def test_roundtrip_string_containing_data(self):
+    def test_roundtrip_string_containing_data(self) -> None:
         """String containing 'data' should not trigger tag dispatch."""
         assert self.codec.from_json(self.codec.to_json("some data here")) == "some data here"
 
-    def test_roundtrip_bool_true(self):
+    def test_roundtrip_bool_true(self) -> None:
         assert self.codec.from_json(self.codec.to_json(True)) is True
 
-    def test_roundtrip_bool_false(self):
+    def test_roundtrip_bool_false(self) -> None:
         assert self.codec.from_json(self.codec.to_json(False)) is False
 
-    def test_roundtrip_none(self):
+    def test_roundtrip_none(self) -> None:
         assert self.codec.from_json(self.codec.to_json(None)) is None
 
-    def test_roundtrip_list(self):
+    def test_roundtrip_list(self) -> None:
         assert self.codec.from_json(self.codec.to_json([1, 2, 3])) == [1, 2, 3]
 
-    def test_roundtrip_empty_list(self):
+    def test_roundtrip_empty_list(self) -> None:
         assert self.codec.from_json(self.codec.to_json([])) == []
 
-    def test_roundtrip_dict(self):
+    def test_roundtrip_dict(self) -> None:
         assert self.codec.from_json(self.codec.to_json({"a": 1})) == {"a": 1}
 
-    def test_roundtrip_empty_dict(self):
+    def test_roundtrip_empty_dict(self) -> None:
         assert self.codec.from_json(self.codec.to_json({})) == {}
 
-    def test_roundtrip_nested(self):
+    def test_roundtrip_nested(self) -> None:
         val = {"items": [1, "two", None, {"nested": True}]}
         assert self.codec.from_json(self.codec.to_json(val)) == val
 
     # -- Round-trip: dataclass --
 
-    def test_roundtrip_dataclass(self):
+    def test_roundtrip_dataclass(self) -> None:
         pt = BEPoint(x=1, y=2)
         encoded = self.codec.to_json(pt)
         assert isinstance(encoded, dict)
@@ -778,7 +785,7 @@ class TestBestEffortAnyCodec:
         assert isinstance(restored, BEPoint)
         assert restored == pt
 
-    def test_roundtrip_function_local_dataclass(self):
+    def test_roundtrip_function_local_dataclass(self) -> None:
         @dataclasses.dataclass
         class LocalPoint:
             x: int
@@ -794,7 +801,7 @@ class TestBestEffortAnyCodec:
 
     # -- Round-trip: pydantic (if available) --
 
-    def test_roundtrip_pydantic(self):
+    def test_roundtrip_pydantic(self) -> None:
         import pydantic
 
         class PydPoint(pydantic.BaseModel):
@@ -815,7 +822,7 @@ class TestBestEffortAnyCodec:
     #    internally for non-JSON-serializable types; this tests that
     #    existing code path) --
 
-    def test_roundtrip_frozenset(self):
+    def test_roundtrip_frozenset(self) -> None:
         """Non-JSON-serializable objects use the pickle fallback path."""
         val = frozenset([1, 2, 3])
         encoded = self.codec.to_json(val)
@@ -824,11 +831,11 @@ class TestBestEffortAnyCodec:
         restored = self.codec.from_json(encoded)
         assert restored == val
 
-    def test_faulty_model_dump_falls_back_to_pickle(self):
+    def test_faulty_model_dump_falls_back_to_pickle(self) -> None:
         encoded = self.codec.to_json(FaultyDumpValue())
         assert "__nv_pickle__" in cast(JsonObject, encoded)
 
-    def test_unpickleable_value_falls_back_to_string(self):
+    def test_unpickleable_value_falls_back_to_string(self) -> None:
         encoded = cast(JsonObject, self.codec.to_json(UnpickleableValue()))
         assert cast(str, encoded["__nv_fallback_str__"]).endswith(".UnpickleableValue")
         assert cast(str, encoded["data"]) == "unpickleable"
@@ -851,54 +858,54 @@ class TestBestEffortAnyCodec:
             "list_with_data",
         ],
     )
-    def test_from_json_non_dict_passthrough(self, value):
+    def test_from_json_non_dict_passthrough(self, value) -> None:
         """from_json must return non-dict values unchanged without raising."""
         assert self.codec.from_json(value) == value
 
     @pytest.mark.parametrize("value", [None, True, False])
-    def test_from_json_singleton_passthrough(self, value):
+    def test_from_json_singleton_passthrough(self, value) -> None:
         """from_json must return singletons by identity."""
         assert self.codec.from_json(value) is value
 
     # -- from_json: untagged dicts pass through --
 
-    def test_from_json_untagged_dict(self):
+    def test_from_json_untagged_dict(self) -> None:
         val = {"key": "value", "data": 123}
         assert self.codec.from_json(val) == val
 
-    def test_from_json_empty_dict(self):
+    def test_from_json_empty_dict(self) -> None:
         assert self.codec.from_json({}) == {}
 
-    def test_from_json_pydantic_validation_failure_returns_raw_dict(self):
+    def test_from_json_pydantic_validation_failure_returns_raw_dict(self) -> None:
         data = {
             "__nv_pydantic__": f"{BrokenValidatedModel.__module__}.{BrokenValidatedModel.__qualname__}",
             "data": {"x": 1},
         }
         assert self.codec.from_json(data) == data
 
-    def test_from_json_dataclass_reconstruction_failure_returns_raw_dict(self):
+    def test_from_json_dataclass_reconstruction_failure_returns_raw_dict(self) -> None:
         data = {
             "__nv_dataclass__": f"{BEPoint.__module__}.{BEPoint.__qualname__}",
             "data": {"x": 1},
         }
         assert self.codec.from_json(data) == data
 
-    def test_from_json_dataclass_with_non_mapping_payload_returns_raw_dict(self):
+    def test_from_json_dataclass_with_non_mapping_payload_returns_raw_dict(self) -> None:
         data = {
             "__nv_dataclass__": f"{BEPoint.__module__}.{BEPoint.__qualname__}",
             "data": "not-a-mapping",
         }
         assert self.codec.from_json(data) == data
 
-    def test_from_json_invalid_pickle_returns_raw_dict(self):
+    def test_from_json_invalid_pickle_returns_raw_dict(self) -> None:
         data = {"__nv_pickle__": "broken.Type", "data": "not-base64"}
         assert self.codec.from_json(data) == data
 
-    def test_from_json_pickle_with_non_string_payload_returns_raw_dict(self):
+    def test_from_json_pickle_with_non_string_payload_returns_raw_dict(self) -> None:
         data = {"__nv_pickle__": "broken.Type", "data": {"not": "a-string"}}
         assert self.codec.from_json(data) == data
 
-    def test_from_json_pickle_rejects_callable_globals(self, tmp_path):
+    def test_from_json_pickle_rejects_callable_globals(self, tmp_path) -> None:
         marker = tmp_path / "pickle-rce-marker"
         payload = base64.b64encode(pickle.dumps(PickleRceValue(f"touch {marker}"))).decode("ascii")
         data = {"__nv_pickle__": "posix.system", "data": payload}
@@ -906,18 +913,18 @@ class TestBestEffortAnyCodec:
         assert self.codec.from_json(data) == data
         assert not marker.exists()
 
-    def test_from_json_fallback_string_returns_string(self):
+    def test_from_json_fallback_string_returns_string(self) -> None:
         data = {"__nv_fallback_str__": "broken.Type", "data": "fallback-value"}
         assert self.codec.from_json(data) == "fallback-value"
 
     # -- to_json: tagging --
 
-    def test_to_json_dataclass_tagged(self):
+    def test_to_json_dataclass_tagged(self) -> None:
         encoded = cast(JsonObject, self.codec.to_json(BEPoint(x=0, y=0)))
         assert "__nv_dataclass__" in encoded
         assert cast(JsonObject, encoded["data"]) == {"x": 0, "y": 0}
 
-    def test_to_json_native_types_untagged(self):
+    def test_to_json_native_types_untagged(self) -> None:
         """JSON-native types should pass through without tags."""
         for val in [42, "text", 3.14, True, None, [1], {"k": "v"}]:
             encoded = self.codec.to_json(val)

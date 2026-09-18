@@ -1474,6 +1474,65 @@ fn anthropic_streaming_codec_preserves_usage_across_partial_updates() {
 }
 
 #[test]
+fn anthropic_streaming_codec_accumulates_live_compaction_shape() {
+    for (delta, expected) in [
+        // A live Anthropic response omitted encrypted_content entirely.
+        (
+            json!({"type": "compaction_delta", "content": "<summary>state</summary>"}),
+            json!({"type": "compaction", "content": "<summary>state</summary>"}),
+        ),
+        (
+            json!({
+                "type": "compaction_delta", "content": "<summary>state</summary>",
+                "encrypted_content": "opaque"
+            }),
+            json!({
+                "type": "compaction", "content": "<summary>state</summary>",
+                "encrypted_content": "opaque"
+            }),
+        ),
+        (
+            json!({
+                "type": "compaction_delta", "content": "<summary>state</summary>",
+                "encrypted_content": null
+            }),
+            json!({
+                "type": "compaction", "content": "<summary>state</summary>",
+                "encrypted_content": null
+            }),
+        ),
+    ] {
+        let codec = AnthropicMessagesStreamingCodec::new();
+        let mut collector = codec.collector();
+        let finalizer = codec.finalizer();
+        for event in [
+            json!({
+                "type": "message_start", "message": {
+                    "id": "msg_compact", "type": "message", "role": "assistant",
+                    "model": "claude-sonnet-4-6", "content": [],
+                    "usage": {"input_tokens": 0, "output_tokens": 0}
+                }
+            }),
+            json!({
+                "type": "content_block_start", "index": 0,
+                "content_block": {"type": "compaction", "content": null}
+            }),
+            json!({"type": "content_block_delta", "index": 0, "delta": delta}),
+            json!({"type": "content_block_stop", "index": 0}),
+            json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "compaction", "stop_sequence": null},
+                "usage": {"input_tokens": 0, "output_tokens": 0}
+            }),
+            json!({"type": "message_stop"}),
+        ] {
+            collector(event).unwrap();
+        }
+        assert_eq!(finalizer()["content"][0], expected);
+    }
+}
+
+#[test]
 fn anthropic_streaming_codec_assembles_tool_use_input_from_partial_json() {
     let codec = AnthropicMessagesStreamingCodec::new();
     let mut collector = codec.collector();

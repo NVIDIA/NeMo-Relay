@@ -237,14 +237,13 @@ ffi_intercept_tool_api!(
 );
 
 /// Register a tool execution intercept following the middleware chain pattern.
-/// The callback receives `(args, next_fn, next_ctx)` — call
-/// `next_fn(args, next_ctx)` to invoke the next intercept or the original
-/// tool function, or skip calling it to short-circuit.
+/// The callback receives `(context_json, next_fn, next_ctx)`, where
+/// `context_json` contains `tool_name`, `args`, and `tool_call_id`.
 ///
 /// # Parameters
 /// - `name`: Unique intercept name.
 /// - `priority`: Execution priority (lower runs first).
-/// - `exec_cb`: Middleware callback receiving args and a next function.
+/// - `exec_cb`: Middleware callback receiving context and a next function.
 /// - `exec_user_data`: Opaque pointer for the execution callback.
 /// - `exec_free`: Optional destructor for `exec_user_data`.
 ///

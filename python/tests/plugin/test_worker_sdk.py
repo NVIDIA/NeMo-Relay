@@ -44,6 +44,7 @@ from nemo_relay_plugin import (  # noqa: E402
     RuntimeRegistrationKind,
     RuntimeRegistrationOwnerKind,
     ScopeType,
+    ToolExecutionContext,
     ToolExecutionInterceptOutcome,
     ToolExecutionResult,
     ToolNext,
@@ -93,7 +94,7 @@ def optimization_contribution_fixture_fixture() -> Json:
     return json.loads(fixture_path.read_text(encoding="utf-8"))
 
 
-def test_tool_execution_result_and_outcome_preserve_optional_annotation():
+def test_tool_execution_result_and_outcome_preserve_optional_annotation() -> None:
     result = ToolExecutionResult(result={"ok": True}, annotation={"source": "worker"})
     assert result.to_json() == {
         "result": {"ok": True},
@@ -128,13 +129,13 @@ def test_tool_execution_result_and_outcome_preserve_optional_annotation():
         {"content": [{"type": "text", "text": "ok"}], "structuredContent": {"count": 2}},
     ],
 )
-def test_tool_execution_result_proto_preserves_arbitrary_json(value: Json):
+def test_tool_execution_result_proto_preserves_arbitrary_json(value: Json) -> None:
     decoded = _tool_execution_result_from_proto(pb.ToolExecutionResult(result=_json_value(value)))
 
     assert decoded == ToolExecutionResult(result=value)
 
 
-def test_tool_execution_result_proto_normalizes_null_annotation():
+def test_tool_execution_result_proto_normalizes_null_annotation() -> None:
     decoded = _tool_execution_result_from_proto(
         pb.ToolExecutionResult(
             result=_json_value({"ok": True}),
@@ -160,12 +161,12 @@ def test_tool_execution_result_proto_normalizes_null_annotation():
         ),
     ],
 )
-def test_tool_execution_result_proto_rejects_missing_or_malformed_fields(message: Any, expected_message: str):
+def test_tool_execution_result_proto_rejects_missing_or_malformed_fields(message: Any, expected_message: str) -> None:
     with pytest.raises(WorkerSdkError, match=expected_message):
         _tool_execution_result_from_proto(message)
 
 
-def test_tool_execution_outcome_proto_preserves_annotation_and_pending_marks():
+def test_tool_execution_outcome_proto_preserves_annotation_and_pending_marks() -> None:
     message = _tool_execution_intercept_outcome_to_proto(
         ToolExecutionInterceptOutcome(
             result=[{"text": "ok"}, None],
@@ -197,7 +198,7 @@ def test_tool_execution_outcome_proto_preserves_annotation_and_pending_marks():
     ]
 
 
-def test_tool_execution_outcome_proto_omits_null_annotation_and_optional_mark_fields():
+def test_tool_execution_outcome_proto_omits_null_annotation_and_optional_mark_fields() -> None:
     message = _tool_execution_intercept_outcome_to_proto(
         ToolExecutionInterceptOutcome(result=None, pending_marks=[PendingMarkSpec("worker.mark")], annotation=None)
     )
@@ -242,12 +243,12 @@ def test_tool_execution_outcome_proto_omits_null_annotation_and_optional_mark_fi
 def test_tool_execution_outcome_proto_rejects_malformed_pending_marks(
     outcome: ToolExecutionInterceptOutcome,
     expected_message: str,
-):
+) -> None:
     with pytest.raises(WorkerSdkError, match=expected_message):
         _tool_execution_intercept_outcome_to_proto(outcome)
 
 
-def test_optimization_contribution_fixture_round_trips_losslessly(optimization_contribution_fixture: Json):
+def test_optimization_contribution_fixture_round_trips_losslessly(optimization_contribution_fixture: Json) -> None:
     fixture = optimization_contribution_fixture
     contribution = LlmOptimizationContribution.from_json(fixture)
 
@@ -268,7 +269,7 @@ def test_optimization_contribution_fixture_round_trips_losslessly(optimization_c
     )
 
 
-def test_optimization_contribution_requires_schema_for_payload():
+def test_optimization_contribution_requires_schema_for_payload() -> None:
     with pytest.raises(WorkerSdkError, match="payload_schema"):
         LlmOptimizationContribution.from_json(
             {"producer": "test", "kind": "custom", "applied": True, "payload": {"value": 1}}
@@ -277,7 +278,7 @@ def test_optimization_contribution_requires_schema_for_payload():
         LlmOptimizationContribution.from_json({"producer": 1, "kind": "custom"})
 
 
-def test_optimization_contribution_omitted_applied_defaults_consistently():
+def test_optimization_contribution_omitted_applied_defaults_consistently() -> None:
     direct = LlmOptimizationContribution(producer="test", kind="custom")
     decoded = LlmOptimizationContribution.from_json({"producer": "test", "kind": "custom"})
 
@@ -287,7 +288,7 @@ def test_optimization_contribution_omitted_applied_defaults_consistently():
     assert decoded.to_json()["applied"] is False
 
 
-def test_pending_mark_spec_serializes_telemetry_fields():
+def test_pending_mark_spec_serializes_telemetry_fields() -> None:
     mark = PendingMarkSpec(
         "worker.telemetry",
         data={"measurements": []},
@@ -312,7 +313,7 @@ def test_pending_mark_spec_serializes_telemetry_fields():
         PendingMarkSpec("worker.invalid", severity="fatal").to_json()
 
 
-def test_optimization_contribution_preserves_future_quality_strings():
+def test_optimization_contribution_preserves_future_quality_strings() -> None:
     fixture = {
         "producer": "test",
         "kind": "custom",
@@ -326,7 +327,7 @@ def test_optimization_contribution_preserves_future_quality_strings():
     assert contribution.to_json() == {**fixture, "applied": False}
 
 
-def test_optimization_contribution_drops_known_fields_from_extra():
+def test_optimization_contribution_drops_known_fields_from_extra() -> None:
     contribution = LlmOptimizationContribution(
         producer="test",
         kind="custom",
@@ -604,8 +605,8 @@ class AllSurfacesPlugin(WorkerPlugin):
         async def tool_request(name: str, value: Json) -> Json:
             return _tag(value, f"request_{name}")
 
-        async def tool_execution(name: str, value: Json, next_call: ToolNext) -> ToolExecutionInterceptOutcome:
-            result = await next_call.call(_tag(value, f"execute_{name}"))
+        async def tool_execution(context: ToolExecutionContext, next_call: ToolNext) -> ToolExecutionInterceptOutcome:
+            result = await next_call.call(_tag(context.args, f"execute_{context.tool_name}"))
             return ToolExecutionInterceptOutcome(
                 result=_tag(result.result, "tool_execution"),
                 annotation=result.annotation,
@@ -680,7 +681,7 @@ def service_fixture(host_stub: RecordingHostStub) -> _WorkerService:
     return _service(AllSurfacesPlugin(), host_stub)
 
 
-async def test_register_returns_initial_conditional_middleware_guardrail(service: _WorkerService):
+async def test_register_returns_initial_conditional_middleware_guardrail(service: _WorkerService) -> None:
     response = await _register(service)
     assert len(response.conditional_middleware_guardrails) == 1
     gate = response.conditional_middleware_guardrails[0]
@@ -690,7 +691,7 @@ async def test_register_returns_initial_conditional_middleware_guardrail(service
     assert gate.callback
 
 
-async def test_register_rejects_initial_callback_name_owned_by_runtime(service: _WorkerService):
+async def test_register_rejects_initial_callback_name_owned_by_runtime(service: _WorkerService) -> None:
     service._runtime._conditional_middleware_callbacks["initial_gate"] = lambda _kinds, _name: "existing runtime gate"
 
     response = await service.Register(
@@ -717,7 +718,7 @@ async def test_register_rejects_initial_callback_name_owned_by_runtime(service: 
     assert decision.guardrail.block_reason == "existing runtime gate"
 
 
-def test_generated_proto_matches_worker_contract():
+def test_generated_proto_matches_worker_contract() -> None:
     assert WORKER_PROTOCOL == "grpc-v1"
     methods = {method.name for method in pb.DESCRIPTOR.services_by_name["PluginWorker"].methods}
     assert methods == {
@@ -764,7 +765,7 @@ def test_generated_proto_matches_worker_contract():
     assert outcome.message_type.full_name == "nemo.relay.worker.v1.ToolExecutionInterceptOutcome"
 
 
-async def test_health_handshake_validate_register_and_all_surfaces(service: _WorkerService):
+async def test_health_handshake_validate_register_and_all_surfaces(service: _WorkerService) -> None:
     health = await service.Health(pb.HealthRequest(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN), AbortContext())
     assert health.ok
     assert health.plugin_id == "tests.python_worker"
@@ -820,7 +821,7 @@ async def test_health_handshake_validate_register_and_all_surfaces(service: _Wor
 def test_sdk_version_uses_package_metadata_and_source_tree_fallback(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
-):
+) -> None:
     monkeypatch.setattr(plugin_api.metadata, "version", lambda package: "1.2.3")
     assert plugin_api._sdk_version() == "1.2.3"
 
@@ -846,7 +847,7 @@ def test_sdk_version_uses_package_metadata_and_source_tree_fallback(
         {"nested": [float("nan")]},
     ],
 )
-def test_json_envelope_rejects_non_finite_numbers(value: Json):
+def test_json_envelope_rejects_non_finite_numbers(value: Json) -> None:
     with pytest.raises(ValueError, match="Out of range float values"):
         _json_envelope(JSON_SCHEMA, value)
 
@@ -858,12 +859,12 @@ def test_json_envelope_rejects_non_finite_numbers(value: Json):
         {"nested": [{2: True}]},
     ],
 )
-def test_json_envelope_rejects_non_string_object_keys(value: Json):
+def test_json_envelope_rejects_non_string_object_keys(value: Json) -> None:
     with pytest.raises(WorkerSdkError, match="JSON object keys must be strings"):
         _json_envelope(JSON_SCHEMA, value)
 
 
-def test_json_envelope_rejects_cycles_and_allows_shared_subobjects():
+def test_json_envelope_rejects_cycles_and_allows_shared_subobjects() -> None:
     dict_cycle: Json = {}
     dict_cycle["self"] = dict_cycle
     list_cycle: Json = []
@@ -882,14 +883,14 @@ def test_json_envelope_rejects_cycles_and_allows_shared_subobjects():
 
 
 @pytest.mark.parametrize("payload", [b"NaN", b"Infinity", b"-Infinity", b'{"nested":NaN}'])
-def test_json_envelope_decode_rejects_non_standard_constants(payload: bytes):
+def test_json_envelope_decode_rejects_non_standard_constants(payload: bytes) -> None:
     envelope = pb.JsonEnvelope(schema=JSON_SCHEMA, json=payload)
     with pytest.raises(WorkerSdkError, match="non-standard JSON constant"):
         _decode_required_envelope(envelope, "json value")
 
 
 @pytest.mark.parametrize("payload", [b"{", b"\xff"])
-def test_json_envelope_decode_normalizes_malformed_payload_errors(payload: bytes):
+def test_json_envelope_decode_normalizes_malformed_payload_errors(payload: bytes) -> None:
     envelope = pb.JsonEnvelope(schema=JSON_SCHEMA, json=payload)
     with pytest.raises(WorkerSdkError, match="json value contains invalid JSON"):
         _decode_required_envelope(envelope, "json value")
@@ -900,7 +901,7 @@ def test_json_envelope_decode_normalizes_malformed_payload_errors(payload: bytes
     [EVENT_SCHEMA, LLM_REQUEST_SCHEMA, ANNOTATED_LLM_REQUEST_SCHEMA],
 )
 @pytest.mark.parametrize("value", [None, [], "scalar", 42])
-def test_object_schema_envelopes_reject_non_objects(schema: str, value: Json):
+def test_object_schema_envelopes_reject_non_objects(schema: str, value: Json) -> None:
     with pytest.raises(WorkerSdkError, match="must be a JSON object"):
         _json_envelope(schema, value)
 
@@ -968,7 +969,7 @@ async def test_auth_and_activation_failures_for_every_rpc(
     rpc_name: str,
     request_factory: Any,
     streaming: bool,
-):
+) -> None:
     for field in ("activation_id", "auth_token"):
         request = request_factory()
         setattr(request, field, "wrong")
@@ -983,7 +984,7 @@ async def test_auth_and_activation_failures_for_every_rpc(
         assert field.split("_")[0] in exc_info.value.details
 
 
-async def test_validate_and_register_decode_errors_are_grpc_protocol_errors(service: _WorkerService):
+async def test_validate_and_register_decode_errors_are_grpc_protocol_errors(service: _WorkerService) -> None:
     bad_config = _json_envelope(JSON_SCHEMA, {})
     bad_config.json = b"{"
 
@@ -1026,7 +1027,7 @@ async def test_validate_and_register_decode_errors_are_grpc_protocol_errors(serv
     assert "expected 'nemo.relay.Json@1'" in schema_error.value.details
 
 
-async def test_base_plugin_defaults_context_errors_and_plugin_id_validation():
+async def test_base_plugin_defaults_context_errors_and_plugin_id_validation() -> None:
     base = WorkerPlugin()
     assert base.validate({"unused": True}) == []
     with pytest.raises(NotImplementedError):
@@ -1064,7 +1065,7 @@ async def test_base_plugin_defaults_context_errors_and_plugin_id_validation():
         )
 
 
-def test_plugin_context_rejects_duplicate_names_on_the_same_surface():
+def test_plugin_context_rejects_duplicate_names_on_the_same_surface() -> None:
     context = PluginContext()
 
     def callback(tool_name: str, value: Json) -> Json:
@@ -1085,7 +1086,7 @@ def test_plugin_context_rejects_duplicate_names_on_the_same_surface():
     assert ("shared", pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL) in registrations
 
 
-def test_plugin_context_registers_llm_sanitizers_under_standard_names():
+def test_plugin_context_registers_llm_sanitizers_under_standard_names() -> None:
     context = PluginContext()
 
     context.register_llm_sanitize_request_guardrail(
@@ -1103,7 +1104,7 @@ def test_plugin_context_registers_llm_sanitizers_under_standard_names():
     ]
 
 
-async def test_llm_sanitizers_receive_codec_context_and_can_omit_payloads():
+async def test_llm_sanitizers_receive_codec_context_and_can_omit_payloads() -> None:
     seen: list[tuple[str, LlmSanitizeRequestContext | LlmSanitizeResponseContext]] = []
 
     class ContextualSanitizerPlugin(WorkerPlugin):
@@ -1191,7 +1192,7 @@ async def test_llm_sanitizers_receive_codec_context_and_can_omit_payloads():
     ]
 
 
-async def test_llm_sanitizers_resolve_directional_codec_proxies():
+async def test_llm_sanitizers_resolve_directional_codec_proxies() -> None:
     calls: list[tuple[str, Json]] = []
 
     class CodecSanitizerPlugin(WorkerPlugin):
@@ -1290,7 +1291,7 @@ async def test_llm_sanitizer_codec_rpc_failures_return_invocation_errors(
     failure: str,
     surface: int,
     registration_name: str,
-):
+) -> None:
     class CodecFailurePlugin(WorkerPlugin):
         plugin_id = "tests.llm_codec_failure"
 
@@ -1394,7 +1395,7 @@ async def test_event_sanitizer_surfaces_receive_context_and_return_all_fields(
     }
 
 
-async def test_validate_accepts_missing_config_and_dict_diagnostics():
+async def test_validate_accepts_missing_config_and_dict_diagnostics() -> None:
     class DictDiagnosticPlugin(WorkerPlugin):
         plugin_id = "tests.dict_diagnostic"
 
@@ -1419,7 +1420,7 @@ async def test_validate_accepts_missing_config_and_dict_diagnostics():
     ]
 
 
-def test_config_diagnostic_normalizes_string_level_and_optional_fields():
+def test_config_diagnostic_normalizes_string_level_and_optional_fields() -> None:
     diagnostic = ConfigDiagnostic(
         level="warning",
         code="tests.warning",
@@ -1447,7 +1448,7 @@ def test_config_diagnostic_normalizes_string_level_and_optional_fields():
         (ConfigDiagnostic(level="info", code="tests.info", message="info"), "diagnostic level"),
     ],
 )
-async def test_validate_rejects_malformed_diagnostics(diagnostic: Any, message: str):
+async def test_validate_rejects_malformed_diagnostics(diagnostic: Any, message: str) -> None:
     class MalformedDiagnosticPlugin(WorkerPlugin):
         plugin_id = "tests.malformed_diagnostic"
 
@@ -1468,7 +1469,7 @@ async def test_validate_rejects_malformed_diagnostics(diagnostic: Any, message: 
     assert message in response.error.message
 
 
-async def test_async_validate_and_register_hooks_are_awaited():
+async def test_async_validate_and_register_hooks_are_awaited() -> None:
     lifecycle: list[str] = []
 
     class AsyncLifecyclePlugin(WorkerPlugin):
@@ -1521,7 +1522,7 @@ async def test_async_validate_and_register_hooks_are_awaited():
     assert lifecycle == ["validate", "register"]
 
 
-async def test_validate_register_and_invoke_callback_errors_are_structured():
+async def test_validate_register_and_invoke_callback_errors_are_structured() -> None:
     class FailingValidatePlugin(WorkerPlugin):
         plugin_id = "tests.failing_validate"
 
@@ -1618,7 +1619,7 @@ async def test_validate_register_and_invoke_callback_errors_are_structured():
     assert "event metadata boom" in event_response.error.message
 
 
-async def test_register_is_idempotent_and_rejects_changed_component_config():
+async def test_register_is_idempotent_and_rejects_changed_component_config() -> None:
     class ConfigPlugin(WorkerPlugin):
         plugin_id = "tests.register_config"
         allows_multiple_components = True
@@ -1667,7 +1668,7 @@ async def test_register_is_idempotent_and_rejects_changed_component_config():
     assert _envelope_value(result.json.value) == {"query": "relay", "tag": "first"}
 
 
-async def test_concurrent_register_calls_install_handlers_once():
+async def test_concurrent_register_calls_install_handlers_once() -> None:
     class CountingPlugin(WorkerPlugin):
         plugin_id = "tests.concurrent_register"
 
@@ -1703,7 +1704,7 @@ async def test_concurrent_register_calls_install_handlers_once():
     assert list(responses[1].registrations) == list(responses[0].registrations)
 
 
-async def test_concurrent_register_calls_reject_a_different_config():
+async def test_concurrent_register_calls_reject_a_different_config() -> None:
     plugin = AllSurfacesPlugin()
     service = _service(plugin, RecordingHostStub())
     registration_lock = _ContendedAsyncLock(expected_waiters=2)
@@ -1727,7 +1728,7 @@ async def test_concurrent_register_calls_reject_a_different_config():
     assert "different component config" in error.message
 
 
-async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: RecordingHostStub):
+async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: RecordingHostStub) -> None:
     await _register(service)
 
     subscriber = await service.Invoke(
@@ -1882,7 +1883,7 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     assert llm_execution["next_llm"]["content"]["llm_execute_gpt-test"]
 
 
-async def test_unary_invoke_failure_paths(service: _WorkerService):
+async def test_unary_invoke_failure_paths(service: _WorkerService) -> None:
     await _register(service)
 
     invalid = _tool_request("tool_request", pb.TOOL_REQUEST_INTERCEPT, {})
@@ -1932,7 +1933,7 @@ async def test_unary_invoke_failure_paths(service: _WorkerService):
 
 
 @pytest.mark.parametrize("invalid_part", ["request", "annotated_request"])
-async def test_llm_request_intercept_rejects_non_object_typed_results(invalid_part: str):
+async def test_llm_request_intercept_rejects_non_object_typed_results(invalid_part: str) -> None:
     class InvalidTypedResultPlugin(WorkerPlugin):
         plugin_id = "tests.invalid_typed_result"
 
@@ -1965,18 +1966,18 @@ async def test_llm_request_intercept_rejects_non_object_typed_results(invalid_pa
     assert "must be a JSON object" in response.error.message
 
 
-async def test_tool_execution_intercept_rejects_legacy_raw_result():
+async def test_tool_execution_intercept_rejects_raw_result() -> None:
     class LegacyResultPlugin(WorkerPlugin):
         plugin_id = "tests.legacy_tool_execution_result"
 
         def register(self, ctx: PluginContext, config: Json) -> None:
             del config
 
-            def legacy_result(name: str, value: Json, next_call: ToolNext) -> Any:
-                del name, value, next_call
+            def raw_result(context: ToolExecutionContext, next_call: ToolNext) -> Any:
+                del context, next_call
                 return {"legacy_result": True}
 
-            ctx.register_tool_execution_intercept("legacy", legacy_result)
+            ctx.register_tool_execution_intercept("legacy", raw_result)
 
     service = _service(LegacyResultPlugin(), RecordingHostStub())
     await _register(service)
@@ -2042,7 +2043,7 @@ async def test_invoke_rejects_mismatched_envelope_schemas(
     service: _WorkerService,
     request_factory: Any,
     expected_message: str,
-):
+) -> None:
     await _register(service)
     request = request_factory()
     if request.surface == pb.TOOL_REQUEST_INTERCEPT:
@@ -2061,7 +2062,7 @@ async def test_invoke_rejects_mismatched_envelope_schemas(
     assert expected_message in response.error.message
 
 
-async def test_invoke_stream_rejects_mismatched_llm_request_schema(service: _WorkerService):
+async def test_invoke_stream_rejects_mismatched_llm_request_schema(service: _WorkerService) -> None:
     await _register(service)
     request = _invoke_request(
         "llm_stream_execution",
@@ -2075,7 +2076,7 @@ async def test_invoke_stream_rejects_mismatched_llm_request_schema(service: _Wor
     assert "expected 'nemo.relay.LlmRequest@1'" in chunks[0].error.message
 
 
-async def test_llm_request_intercept_can_return_request_without_annotation():
+async def test_llm_request_intercept_can_return_request_without_annotation() -> None:
     class RequestOnlyPlugin(WorkerPlugin):
         plugin_id = "tests.request_only"
 
@@ -2106,7 +2107,7 @@ async def test_llm_request_intercept_can_return_request_without_annotation():
 
 async def test_llm_request_intercept_preserves_optimization_contribution_worker_envelope(
     optimization_contribution_fixture: Json,
-):
+) -> None:
     fixture = optimization_contribution_fixture
 
     class OptimizationPlugin(WorkerPlugin):
@@ -2143,7 +2144,7 @@ async def test_llm_request_intercept_preserves_optimization_contribution_worker_
     assert outcome["optimization_contributions"][0]["future_top_level_field"] == {"preserved": True}
 
 
-async def test_stream_invoke_success_and_failures(service: _WorkerService, host_stub: RecordingHostStub):
+async def test_stream_invoke_success_and_failures(service: _WorkerService, host_stub: RecordingHostStub) -> None:
     await _register(service)
 
     chunks = [
@@ -2220,7 +2221,7 @@ async def test_stream_invoke_success_and_failures(service: _WorkerService, host_
     assert "stream chunk is empty" in empty_chunk[0].error.message
 
 
-async def test_stream_callback_exception_is_structured():
+async def test_stream_callback_exception_is_structured() -> None:
     class FailingStreamPlugin(WorkerPlugin):
         plugin_id = "tests.stream_fail"
 
@@ -2250,7 +2251,7 @@ async def test_stream_callback_exception_is_structured():
     assert "stream boom" in chunks[0].error.message
 
 
-async def test_stream_callback_can_return_sync_iterable():
+async def test_stream_callback_can_return_sync_iterable() -> None:
     class SyncStreamPlugin(WorkerPlugin):
         plugin_id = "tests.sync_stream"
 
@@ -2280,7 +2281,7 @@ async def test_stream_callback_can_return_sync_iterable():
 
 
 @pytest.mark.parametrize("invalid_stream", [{"chunk": True}, "chunk", b"chunk", 42])
-async def test_stream_callback_rejects_scalar_and_mapping_results(invalid_stream: Any):
+async def test_stream_callback_rejects_scalar_and_mapping_results(invalid_stream: Any) -> None:
     class InvalidStreamPlugin(WorkerPlugin):
         plugin_id = "tests.invalid_stream"
 
@@ -2310,7 +2311,7 @@ async def test_stream_callback_rejects_scalar_and_mapping_results(invalid_stream
     assert "stream callback must return" in chunks[0].error.message
 
 
-async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub):
+async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub) -> None:
     runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host_stub)
     assert runtime.current_scope_stack_id() is None
     assert runtime.current_parent_scope_id() is None
@@ -2479,7 +2480,7 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
 )
 async def test_runtime_registration_discovery_rejects_host_and_malformed_responses(
     host_stub: RecordingHostStub, failure: str, message: str
-):
+) -> None:
     host_stub.failures["ListRuntimeRegistrations"] = failure
     runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host_stub)
 
@@ -2505,11 +2506,11 @@ async def test_runtime_gate_operations_propagate_host_errors(host_stub: Recordin
         )
     with pytest.raises(TypeError, match="ConditionalMiddlewareGuardrailHandle"):
         await runtime.deregister_conditional_middleware_guardrail(
-            "gate-1"  # type: ignore[arg-type] # ty: ignore[invalid-argument-type]
+            "gate-1"  # type: ignore[arg-type]
         )
 
 
-async def test_invocation_scope_context_is_isolated_across_concurrent_requests(host_stub: RecordingHostStub):
+async def test_invocation_scope_context_is_isolated_across_concurrent_requests(host_stub: RecordingHostStub) -> None:
     started = 0
     both_started = asyncio.Event()
     release = asyncio.Event()
@@ -2574,7 +2575,7 @@ async def test_invocation_scope_context_is_isolated_across_concurrent_requests(h
     ]
 
 
-async def test_runtime_host_call_error_paths(host_stub: RecordingHostStub):
+async def test_runtime_host_call_error_paths(host_stub: RecordingHostStub) -> None:
     runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host_stub)
 
     host_stub.failures["EmitMark"] = "error"
@@ -2651,7 +2652,7 @@ async def test_runtime_host_call_error_paths(host_stub: RecordingHostStub):
             pass
 
 
-async def test_lifecycle_acks(service: _WorkerService):
+async def test_lifecycle_acks(service: _WorkerService) -> None:
     cancel = await service.CancelInvocation(
         pb.CancelInvocationRequest(
             activation_id=ACTIVATION_ID,
@@ -2672,7 +2673,7 @@ async def test_lifecycle_acks(service: _WorkerService):
     assert "shutdown accepted" in shutdown.message
 
 
-async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent():
+async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent() -> None:
     started = asyncio.Event()
     cancelled = asyncio.Event()
     release = asyncio.Event()
@@ -2683,8 +2684,10 @@ async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent()
         def register(self, ctx: PluginContext, config: Json) -> None:
             del config
 
-            async def tool_execution(tool_name: str, value: Json, next_call: ToolNext) -> ToolExecutionInterceptOutcome:
-                del tool_name, value, next_call
+            async def tool_execution(
+                context: ToolExecutionContext, next_call: ToolNext
+            ) -> ToolExecutionInterceptOutcome:
+                del context, next_call
                 started.set()
                 try:
                     await asyncio.Event().wait()
@@ -2739,7 +2742,7 @@ async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent()
     assert cancelled.is_set()
 
 
-async def test_cancel_invocation_stops_active_async_stream():
+async def test_cancel_invocation_stops_active_async_stream() -> None:
     started = asyncio.Event()
     cancelled = asyncio.Event()
 
@@ -2794,7 +2797,7 @@ async def test_cancel_invocation_stops_active_async_stream():
     assert cancelled.is_set()
 
 
-async def test_cancel_invocation_discards_buffered_chunks_after_stream_callback_finishes():
+async def test_cancel_invocation_discards_buffered_chunks_after_stream_callback_finishes() -> None:
     finished = asyncio.Event()
 
     class BufferedStreamPlugin(WorkerPlugin):
@@ -2848,7 +2851,7 @@ async def test_cancel_invocation_discards_buffered_chunks_after_stream_callback_
     assert "buffered-stream" not in service._active_invocations
 
 
-async def test_stream_callback_cancellation_without_host_reason_is_terminal_error():
+async def test_stream_callback_cancellation_without_host_reason_is_terminal_error() -> None:
     class CancelledStreamPlugin(WorkerPlugin):
         plugin_id = "tests.cancelled_stream"
 
@@ -2882,13 +2885,13 @@ async def test_stream_callback_cancellation_without_host_reason_is_terminal_erro
     assert "stream callback cancelled without a host request" in chunks[0].error.message
 
 
-def test_required_environment_reports_missing_value(monkeypatch: pytest.MonkeyPatch):
+def test_required_environment_reports_missing_value(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NEMO_RELAY_WORKER_SOCKET", raising=False)
     with pytest.raises(WorkerSdkError, match="NEMO_RELAY_WORKER_SOCKET"):
         _required_env("NEMO_RELAY_WORKER_SOCKET")
 
 
-def test_unix_host_channel_uses_valid_authority(monkeypatch: pytest.MonkeyPatch):
+def test_unix_host_channel_uses_valid_authority(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, tuple[tuple[str, str], ...]]] = []
 
     def insecure_channel(
@@ -2910,7 +2913,7 @@ def test_unix_host_channel_uses_valid_authority(monkeypatch: pytest.MonkeyPatch)
     ]
 
 
-async def test_endpoint_helpers_normalize_and_refuse_non_socket_unix_targets(tmp_path: Any):
+async def test_endpoint_helpers_normalize_and_refuse_non_socket_unix_targets(tmp_path: Any) -> None:
     assert _grpc_target("tcp://127.0.0.1:50051") == "127.0.0.1:50051"
     assert _grpc_target("http://127.0.0.1:50051") == "127.0.0.1:50051"
     assert _grpc_target("tcp://localhost:50051") == "localhost:50051"
@@ -2943,7 +2946,7 @@ async def test_endpoint_helpers_normalize_and_refuse_non_socket_unix_targets(tmp
         "unix://",
     ],
 )
-def test_grpc_target_rejects_non_loopback_and_malformed_endpoints(endpoint: str):
+def test_grpc_target_rejects_non_loopback_and_malformed_endpoints(endpoint: str) -> None:
     with pytest.raises(WorkerSdkError):
         _grpc_target(endpoint)
 
@@ -2959,7 +2962,7 @@ async def test_serve_plugin_validates_endpoints_before_opening_channel(
     worker_endpoint: str,
     host_endpoint: str,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     channel_opened = False
 
     def insecure_channel(target: str) -> Any:
@@ -2978,7 +2981,7 @@ async def test_serve_plugin_validates_endpoints_before_opening_channel(
     assert not channel_opened
 
 
-async def test_serve_plugin_validates_plugin_id_before_resources(monkeypatch: pytest.MonkeyPatch):
+async def test_serve_plugin_validates_plugin_id_before_resources(monkeypatch: pytest.MonkeyPatch) -> None:
     class InvalidPlugin(WorkerPlugin):
         def register(self, ctx: PluginContext, config: Json) -> None:
             del ctx, config
@@ -2998,7 +3001,7 @@ async def test_serve_plugin_validates_plugin_id_before_resources(monkeypatch: py
     assert not channel_opened
 
 
-def test_endpoint_file_is_published_atomically(tmp_path: Any, monkeypatch: pytest.MonkeyPatch):
+def test_endpoint_file_is_published_atomically(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     endpoint_file = tmp_path / "endpoint.txt"
     endpoint_file.write_text("old", encoding="utf-8")
     original_replace = plugin_api.os.replace
@@ -3024,7 +3027,7 @@ def test_endpoint_file_is_published_atomically(tmp_path: Any, monkeypatch: pytes
 def test_endpoint_file_cleans_up_temporary_file_on_replace_failure(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     endpoint_file = tmp_path / "endpoint.txt"
 
     def replace(source: str | os.PathLike[str], destination: str | os.PathLike[str]) -> None:
@@ -3040,7 +3043,7 @@ def test_endpoint_file_cleans_up_temporary_file_on_replace_failure(
 
 
 @pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="Unix sockets are unavailable")
-async def test_unlink_unix_socket_removes_an_existing_socket():
+async def test_unlink_unix_socket_removes_an_existing_socket() -> None:
     with tempfile.TemporaryDirectory(prefix="nr-plugin-") as directory:
         socket_path = Path(directory) / "worker.sock"
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as unix_socket:
@@ -3051,7 +3054,7 @@ async def test_unlink_unix_socket_removes_an_existing_socket():
 
 
 @pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="Unix sockets are unavailable")
-async def test_unlink_unix_socket_refuses_an_active_socket():
+async def test_unlink_unix_socket_refuses_an_active_socket() -> None:
     with tempfile.TemporaryDirectory(prefix="nr-plugin-", dir="/tmp") as directory:
         socket_path = Path(directory) / "active.sock"
         server = await asyncio.start_unix_server(lambda _reader, writer: writer.close(), path=socket_path)
@@ -3068,7 +3071,7 @@ async def test_unlink_unix_socket_refuses_an_active_socket():
 @pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="Unix sockets are unavailable")
 async def test_unlink_unix_socket_still_refuses_active_socket_when_close_wait_times_out(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     with tempfile.TemporaryDirectory(prefix="nr-plugin-", dir="/tmp") as directory:
         socket_path = Path(directory) / "active.sock"
         writer = mock.AsyncMock(spec=asyncio.StreamWriter)
@@ -3091,7 +3094,7 @@ async def test_unlink_unix_socket_still_refuses_active_socket_when_close_wait_ti
 async def test_serve_plugin_announces_endpoint_only_after_server_start(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     endpoint_file = tmp_path / "endpoint.txt"
     start_entered = asyncio.Event()
     allow_start = asyncio.Event()
@@ -3139,7 +3142,7 @@ async def test_serve_plugin_announces_endpoint_only_after_server_start(
             await task
 
 
-async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch: pytest.MonkeyPatch):
+async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeChannel:
         closed = False
 
@@ -3178,7 +3181,7 @@ async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch
     assert fake_channel.closed
 
 
-async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatch: pytest.MonkeyPatch):
+async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeChannel:
         closed = False
 
@@ -3217,7 +3220,7 @@ async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatc
 async def test_serve_plugin_announces_tcp_endpoint_and_accepts_health_shutdown(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     endpoint_file = tmp_path / "endpoint.txt"
     monkeypatch.setenv("NEMO_RELAY_WORKER_SOCKET", "tcp://127.0.0.1:0")
     monkeypatch.setenv("NEMO_RELAY_HOST_SOCKET", "http://127.0.0.1:9")
@@ -3454,3 +3457,69 @@ def _all_expected_surfaces() -> list[int]:
         pb.LLM_STREAM_EXECUTION_INTERCEPT,
         pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL,
     ]
+
+
+async def test_tool_execution_intercept_receives_tool_call_id() -> None:
+    seen: dict[str, Json] = {}
+
+    class ContextPlugin(WorkerPlugin):
+        plugin_id = "tests.context"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            async def tool_execution(context: ToolExecutionContext, next_call: ToolNext):
+                seen["tool_name"] = context.tool_name
+                seen["arguments"] = context.args
+                seen["tool_call_id"] = context.tool_call_id
+                downstream = await next_call.call(context.args)
+                return ToolExecutionInterceptOutcome(result=downstream.result)
+
+            ctx.register_tool_execution_intercept("context", tool_execution)
+
+    service = _service(ContextPlugin(), RecordingHostStub())
+    await _register(service)
+    response = await service.Invoke(
+        _invoke_request(
+            "context",
+            pb.TOOL_EXECUTION_INTERCEPT,
+            continuation_id="continuation-1",
+            tool=pb.ToolInvocation(
+                tool_name="lookup",
+                value=_json_envelope(JSON_SCHEMA, {"query": "relay"}),
+                tool_call_id="worker-call-9",
+            ),
+        ),
+        AbortContext(),
+    )
+
+    assert response.WhichOneof("result") == "tool_execution", response
+    assert seen["tool_name"] == "lookup"
+    assert seen["arguments"] == {"query": "relay"}
+    assert seen["tool_call_id"] == "worker-call-9"
+
+
+async def test_tool_execution_intercept_tool_call_id_is_none_when_absent() -> None:
+    seen: dict[str, Json] = {}
+
+    class ContextPlugin(WorkerPlugin):
+        plugin_id = "tests.context_none"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            async def tool_execution(context: ToolExecutionContext, next_call: ToolNext):
+                seen["tool_call_id"] = context.tool_call_id
+                downstream = await next_call.call(context.args)
+                return ToolExecutionInterceptOutcome(result=downstream.result)
+
+            ctx.register_tool_execution_intercept("context_none", tool_execution)
+
+    service = _service(ContextPlugin(), RecordingHostStub())
+    await _register(service)
+    await service.Invoke(
+        _tool_request("context_none", pb.TOOL_EXECUTION_INTERCEPT, {"query": "relay"}),
+        AbortContext(),
+    )
+
+    assert seen["tool_call_id"] is None

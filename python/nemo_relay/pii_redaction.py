@@ -76,6 +76,7 @@ class ConfigPolicy:
 class BuiltinConfig:
     """Deterministic built-in redaction backend settings."""
 
+    preset: Literal["trajectory_context"] | None = None
     action: Literal["remove", "redact", "regex_replace", "hash", "mask"] = "remove"
     target_paths: list[str] = field(default_factory=list)
     target_path_globs: list[str] = field(default_factory=list)
@@ -85,22 +86,33 @@ class BuiltinConfig:
     mask_char: str | None = None
     unmasked_prefix: int | None = None
     unmasked_suffix: int | None = None
+    custom_mark_payload_policy: Literal["preserve", "redact_all_leaves"] | None = None
+    metric_string_attribute_allowlist: dict[str, list[str]] | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this built-in backend config to the canonical JSON object shape."""
-        return _normalize_object(
-            {
-                "action": self.action,
-                "target_paths": self.target_paths,
-                "target_path_globs": self.target_path_globs,
-                "pattern": self.pattern,
-                "detector": self.detector,
-                "replacement": self.replacement,
-                "mask_char": self.mask_char,
-                "unmasked_prefix": self.unmasked_prefix,
-                "unmasked_suffix": self.unmasked_suffix,
-            }
-        )
+        config = {
+            "preset": self.preset,
+            "action": self.action,
+            "target_paths": self.target_paths,
+            "target_path_globs": self.target_path_globs,
+            "pattern": self.pattern,
+            "detector": self.detector,
+            "replacement": self.replacement,
+            "mask_char": self.mask_char,
+            "unmasked_prefix": self.unmasked_prefix,
+            "unmasked_suffix": self.unmasked_suffix,
+            "custom_mark_payload_policy": self.custom_mark_payload_policy,
+            "metric_string_attribute_allowlist": self.metric_string_attribute_allowlist,
+        }
+        if self.preset == "trajectory_context":
+            if self.action == "remove":
+                config["action"] = None
+            if not self.target_paths:
+                config["target_paths"] = None
+            if not self.target_path_globs:
+                config["target_path_globs"] = None
+        return _normalize_object(config)
 
 
 @dataclass(slots=True)
@@ -198,7 +210,7 @@ def validate_config(config: PiiRedactionConfig | JsonObject) -> ConfigReport:
     """
     report = plugin_module.validate_exact(
         plugin_module.PluginConfig(
-            components=[ComponentSpec(config)],
+            components=[cast("plugin_module.PluginComponentSpec", ComponentSpec(config))],
         )
     )
     return cast(ConfigReport, report["config"])

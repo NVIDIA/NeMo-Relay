@@ -957,7 +957,9 @@ impl PluginRegistrationContext {
         Ok(())
     }
 
-    /// Registers a tool execution intercept and records its rollback closure.
+    /// Registers a tool execution intercept that receives the full
+    /// [`ToolExecutionContext`](crate::api::runtime::ToolExecutionContext) and
+    /// records its rollback closure.
     pub fn register_tool_execution_intercept(
         &mut self,
         name: &str,

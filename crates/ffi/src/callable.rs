@@ -27,8 +27,8 @@ use nemo_relay::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity,
     LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
     LlmSanitizeRequestContext, LlmSanitizeRequestFn, LlmSanitizeResponseContext,
-    LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionContext,
+    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
@@ -146,9 +146,18 @@ pub type NemoRelayToolExecNextFn =
 /// or an equivalent allocation compatible with `nemo_relay_string_free`.
 /// Ownership transfers to Relay when the callback returns; the callback must
 /// not free or reuse the string afterward, and Relay frees it exactly once.
+/// Tool execution intercept callback receiving the full call context.
+///
+/// `context_json` is a JSON object with `tool_name`, `args`, and
+/// `tool_call_id` fields. `tool_call_id` is `null` when the managed tool call
+/// did not record one. New context fields may be added to this object without
+/// another ABI change, so callbacks must ignore unknown fields.
+///
+/// The returned JSON must contain a `result` field and may contain `annotation`
+/// and `pending_marks`; ownership transfers to Relay on return.
 pub type NemoRelayToolExecInterceptCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
-    args_json: *const c_char,
+    context_json: *const c_char,
     next_fn: NemoRelayToolExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char;
@@ -498,9 +507,30 @@ pub fn wrap_tool_exec_intercept_fn(
     free_fn: NemoRelayFreeFn,
 ) -> ToolExecutionFn {
     let ud = make_user_data(user_data, free_fn);
-    Arc::new(move |_name: &str, args: Json, next: ToolExecutionNextFn| {
-        let ud = ud.clone();
-        Box::pin(async move {
+    Arc::new(
+        move |context: ToolExecutionContext, next: ToolExecutionNextFn| {
+            let ud = ud.clone();
+            let context_json = serde_json::json!({
+                "tool_name": context.tool_name(),
+                "args": context.args(),
+                "tool_call_id": context.tool_call_id(),
+            });
+            Box::pin(call_tool_exec_intercept_cb(cb, ud, context_json, next))
+        },
+    )
+}
+
+/// Invoke a C tool execution intercept callback and decode its outcome.
+///
+/// `primary` is the serialized tool execution context passed to the callback.
+async fn call_tool_exec_intercept_cb(
+    cb: NemoRelayToolExecInterceptCb,
+    ud: std::sync::Arc<UserData>,
+    primary: Json,
+    next: ToolExecutionNextFn,
+) -> Result<ToolExecutionInterceptOutcome> {
+    {
+        {
             // Package the Rust next fn into an FFI-safe pair
             let next_box = Box::new(next);
             let next_ctx = Box::into_raw(next_box) as *mut libc::c_void;
@@ -540,7 +570,7 @@ pub fn wrap_tool_exec_intercept_fn(
                 }
             }
 
-            let c_args = json_to_c_string(&args);
+            let c_args = json_to_c_string(&primary);
             clear_last_error();
             let result_ptr = unsafe { cb(ud.ptr, c_args, tool_next_trampoline, next_ctx) };
             unsafe { drop(Box::from_raw(next_ctx as *mut ToolExecutionNextFn)) };
@@ -554,8 +584,8 @@ pub fn wrap_tool_exec_intercept_fn(
                     "invalid tool execution intercept outcome JSON: {error}"
                 ))
             })
-        })
-    })
+        }
+    }
 }
 
 /// Wrap a C LLM execution intercept callback into an `Arc<dyn Fn(LlmRequest, LlmExecutionNextFn) -> ...>`.

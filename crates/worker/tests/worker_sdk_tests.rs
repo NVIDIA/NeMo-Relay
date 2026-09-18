@@ -698,15 +698,18 @@ async fn worker_service_invokes_every_registration_surface() {
         "phase",
         "tool_request",
     );
-    let tool_outcome = invoke_tool_execution(
-        &mut client,
-        tool_invoke(
-            "tool-exec",
-            RegistrationSurface::ToolExecutionIntercept,
-            json!({}),
-        ),
-    )
-    .await;
+    let mut tool_execution_request = tool_invoke(
+        "tool-exec",
+        RegistrationSurface::ToolExecutionIntercept,
+        json!({}),
+    );
+    let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Tool(invocation)) =
+        tool_execution_request.payload.as_mut()
+    else {
+        panic!("tool execution request must contain a tool invocation");
+    };
+    invocation.tool_call_id = Some("call-worker-1".into());
+    let tool_outcome = invoke_tool_execution(&mut client, tool_execution_request).await;
     assert_eq!(tool_outcome.pending_marks.len(), 1);
     assert_eq!(
         tool_outcome.pending_marks[0],
@@ -717,6 +720,7 @@ async fn worker_service_invokes_every_registration_surface() {
     );
     assert_eq!(tool_outcome.annotation, Some(json!({"source": "host"})));
     let tool_exec = tool_outcome.result;
+    assert_json_field(tool_exec.clone(), "tool_call_id", "call-worker-1");
     assert_json_field(tool_exec.clone(), "next", "tool");
     assert_json_field(tool_exec, "phase", "tool_exec");
     let conditional_middleware = client
@@ -1096,6 +1100,7 @@ async fn worker_service_reports_structured_callback_and_payload_errors() {
                             schema: "nemo.relay.Json@1".into(),
                             json: b"{".to_vec(),
                         }),
+                        tool_call_id: None,
                     },
                 )),
                 ..tool_invoke(
@@ -1931,7 +1936,7 @@ impl WorkerPlugin for CancellationPlugin {
     fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
         let unary_started = self.unary_started.clone();
         let unary_cancelled = self.unary_cancelled.clone();
-        ctx.register_tool_execution_intercept("cancel-unary", 0, move |_, _, _| {
+        ctx.register_tool_execution_intercept("cancel-unary", 0, move |_context, _next| {
             let unary_started = unary_started.clone();
             let unary_cancelled = unary_cancelled.clone();
             async move {
@@ -2107,9 +2112,16 @@ impl WorkerPlugin for SurfacePlugin {
         });
 
         let tool_runtime = runtime.clone();
-        ctx.register_tool_execution_intercept("tool-exec", 1, move |_, value, next: ToolNext| {
+        ctx.register_tool_execution_intercept("tool-exec", 1, move |context, next: ToolNext| {
             let runtime = tool_runtime.clone();
             async move {
+                if context.tool_name() != "tool" || context.args() != &json!({}) {
+                    return Err(WorkerSdkError::Callback(format!(
+                        "unexpected tool execution context: {context:?}"
+                    )));
+                }
+                let tool_call_id = context.tool_call_id().map(str::to_owned);
+                let value = context.into_args();
                 let registrations = runtime
                     .list_runtime_registrations(Some(BTreeSet::from([
                         RuntimeRegistrationKind::Subscriber,
@@ -2212,6 +2224,11 @@ impl WorkerPlugin for SurfacePlugin {
                 runtime.drop_scope_stack(&stack_id).await?;
                 let mut next_value = next.call(value).await?;
                 next_value.result = set_json_field(next_value.result, "phase", "tool_exec");
+                next_value
+                    .result
+                    .as_object_mut()
+                    .expect("tool execution result must be a JSON object")
+                    .insert("tool_call_id".into(), json!(tool_call_id));
                 Ok(
                     ToolExecutionInterceptOutcome::from(next_value).with_pending_mark(
                         PendingMarkSpec::builder()
@@ -2223,7 +2240,7 @@ impl WorkerPlugin for SurfacePlugin {
             }
         });
         let scope_runtime = runtime.clone();
-        ctx.register_tool_execution_intercept("tool-scope-types", 1, move |_, _, _| {
+        ctx.register_tool_execution_intercept("tool-scope-types", 1, move |_context, _next| {
             let runtime = scope_runtime.clone();
             async move {
                 for scope_type in [
@@ -3043,6 +3060,7 @@ fn tool_invoke(
             ToolInvocation {
                 tool_name: "tool".into(),
                 value: Some(json_env(value)),
+                tool_call_id: None,
             },
         )),
     }

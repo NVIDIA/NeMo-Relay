@@ -27,7 +27,7 @@ if os.environ.get("NEMO_RELAY_SKIP_PYTHON_PLUGIN_TESTS") == "1":
 
 pytest.importorskip("grpc")
 
-from nemo_relay_plugin import PluginContext, PluginRuntime, ToolExecutionResult  # noqa: E402
+from nemo_relay_plugin import PluginContext, PluginRuntime, ToolExecutionContext, ToolExecutionResult  # noqa: E402
 
 EXAMPLE_ROOT = Path(__file__).parents[1]
 MODULE_NAME = "nemo_relay_python_grpc_worker_example.worker"
@@ -99,7 +99,7 @@ def test_manifest_digest_matches_worker_source() -> None:
 def test_manifest_declares_current_worker_protocol() -> None:
     manifest = read_manifest()
 
-    assert manifest["compat"] == {"relay": ">=0.8.0,<1.0", "worker_protocol": "grpc-v1"}
+    assert manifest["compat"] == {"relay": ">=0.9.0,<1.0", "worker_protocol": "grpc-v1"}
 
 
 def test_schema_declares_only_supported_groups() -> None:
@@ -180,7 +180,7 @@ def test_wrong_type_is_rejected(example: Any) -> None:
         ({"registration_control": {"reason": ""}}, "registration_control.reason"),
     ],
 )
-def test_invalid_registration_control_is_rejected(example: Any, config: dict[str, Any], field: str):
+def test_invalid_registration_control_is_rejected(example: Any, config: dict[str, Any], field: str) -> None:
     diagnostics = example.ExamplePythonWorker().validate(config)
 
     assert any(item.code == "examples.python_grpc_worker.invalid_type" and item.field == field for item in diagnostics)
@@ -239,7 +239,7 @@ def test_register_installs_all_protocol_surfaces(example: Any) -> None:
     assert all(getattr(context, method).call_count >= 1 for method in registration_methods)
 
 
-def test_enabled_registration_control_registers_expected_gate(example: Any):
+def test_enabled_registration_control_registers_expected_gate(example: Any) -> None:
     context, _runtime = configured_context()
     config = deepcopy(example.DEFAULT_CONFIG)
     config["registration_control"]["enabled"] = True
@@ -379,7 +379,10 @@ async def test_runtime_helpers_clean_up_successful_request(example: Any) -> None
     next_call = MagicMock()
     next_call.call = AsyncMock(return_value=ToolExecutionResult({"ok": True}))
 
-    await intercept("safe_tool", {"value": 1}, next_call)
+    await intercept(
+        ToolExecutionContext(tool_name="safe_tool", args={"value": 1}, tool_call_id="call-runtime"),
+        next_call,
+    )
 
     runtime.push_scope.assert_awaited_once()
     runtime.pop_scope.assert_awaited_once_with("scope-handle", output={"done": True})
@@ -394,7 +397,10 @@ async def test_runtime_helpers_close_failed_request(example: Any) -> None:
     next_call.call = AsyncMock(return_value=ToolExecutionResult({"ok": True}))
 
     with pytest.raises(RuntimeError, match="mark failed"):
-        await intercept("safe_tool", {"value": 1}, next_call)
+        await intercept(
+            ToolExecutionContext(tool_name="safe_tool", args={"value": 1}, tool_call_id="call-runtime"),
+            next_call,
+        )
 
     runtime.pop_scope.assert_awaited_once_with("scope-handle", metadata={"failed": True})
     runtime.create_scope_stack.assert_not_awaited()
@@ -409,7 +415,10 @@ async def test_runtime_cleanup_preserves_the_callback_error(example: Any) -> Non
     next_call.call = AsyncMock(return_value=ToolExecutionResult({"ok": True}))
 
     with pytest.raises(RuntimeError, match="mark failed"):
-        await intercept("safe_tool", {"value": 1}, next_call)
+        await intercept(
+            ToolExecutionContext(tool_name="safe_tool", args={"value": 1}, tool_call_id="call-runtime"),
+            next_call,
+        )
 
     runtime.pop_scope.assert_awaited_once_with("scope-handle", metadata={"failed": True})
 
@@ -433,9 +442,13 @@ async def test_tool_execution_returns_pending_mark(example: Any) -> None:
     next_call = MagicMock()
     next_call.call = AsyncMock(return_value=ToolExecutionResult({"ok": True}, annotation={"source": "application"}))
 
-    outcome = await intercept("safe_tool", {"value": 1}, next_call)
+    outcome = await intercept(
+        ToolExecutionContext(tool_name="safe_tool", args={"value": 1}, tool_call_id="call-execution"),
+        next_call,
+    )
 
     assert outcome.result == {"ok": True}
+    next_call.call.assert_awaited_once_with({"value": 1})
     assert outcome.annotation == {
         "upstream": {"source": "application"},
         "worker": {"tool_name": "safe_tool", "tag": "documentation"},

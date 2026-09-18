@@ -36,8 +36,8 @@ use crate::api::runtime::callbacks::{
     LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
     LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs, LlmStreamInner, ToolConditionalFn,
-    ToolExecutionFn, ToolExecutionNextFn, ToolExecutionOutcomeNextFn, ToolInterceptFn,
-    ToolSanitizeFn,
+    ToolExecutionContext, ToolExecutionFn, ToolExecutionNextFn, ToolExecutionOutcomeNextFn,
+    ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::continuation_context::{
     MiddlewareContinuationContext, MiddlewareContinuationGuard, MiddlewareContinuationLease,
@@ -1333,7 +1333,9 @@ impl NemoRelayContextState {
     /// Build the composed tool execution continuation chain.
     ///
     /// # Parameters
-    /// - `name`: Tool name passed into each execution intercept.
+    /// - `context`: Per-call context template passed into each execution
+    ///   intercept. Its argument payload is replaced per hop with the arguments
+    ///   entering that intercept.
     /// - `default_fn`: Base tool callback that should run after all intercepts.
     /// - `scope_locals`: Scope-local execution intercept registries collected
     ///   from the active scope stack.
@@ -1343,7 +1345,7 @@ impl NemoRelayContextState {
     /// every matching execution intercept.
     pub(crate) fn tool_build_execution_chain(
         &self,
-        name: &str,
+        context: &ToolExecutionContext,
         default_fn: ToolExecutionNextFn,
         scope_locals: &[&SortedRegistry<ExecutionIntercept<ToolExecutionFn>>],
     ) -> ToolExecutionOutcomeNextFn {
@@ -1360,13 +1362,13 @@ impl NemoRelayContextState {
                     .map(ToolExecutionInterceptOutcome::from)
             })
         });
-        let name = name.to_string();
+        let template = context.clone();
         for (callable, _) in matching.into_iter().rev() {
             let current_next = next.clone();
-            let current_name = name.clone();
+            let current_context = template.clone();
             next = Arc::new(move |args| {
                 let callable = callable.clone();
-                let current_name = current_name.clone();
+                let current_context = current_context.clone();
                 let (continuation, continuation_guard) = MiddlewareContinuationLease::capture();
                 let next_sequence = Arc::new(AtomicUsize::new(0));
                 let downstream_marks = Arc::new(Mutex::new(Vec::new()));
@@ -1393,7 +1395,7 @@ impl NemoRelayContextState {
                     })
                 };
                 Box::pin(async move {
-                    let outcome = callable(&current_name, args, raw_next).await;
+                    let outcome = callable(current_context.with_args(args), raw_next).await;
                     drop(continuation_guard);
                     let mut outcome = outcome?;
                     let mut downstream_batches = std::mem::take(

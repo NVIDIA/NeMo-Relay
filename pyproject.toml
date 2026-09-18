@@ -49,7 +49,10 @@ dev = [
     "maturin>=1.0,<2.0; sys_platform != 'linux'",
     "pip-licenses>=5,<6",
     "pre-commit~=4.0",
+    "pylic>=5.0.1",
     "ruff~=0.11",
+    # Transitive dependency of beautifulsoup4; keep it at a patched release.
+    "soupsieve>=2.9.0",
     "ty>=0.0.1a7",
     "uv~=0.11.0",
 ]
@@ -162,3 +165,30 @@ select = ["E", "F", "W", "I"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["nemo_relay", "nemo_relay_plugin"]
+
+[tool.pylic]
+safe_licenses = [
+    # Apache
+    "Apache-2.0",
+    "Apache-2.0 AND MIT",
+    "Apache 2.0",
+    "Apache License 2.0",
+    "Apache Software License",
+    # BSD
+    "BSD License",
+    "BSD-3-Clause",
+    "3-Clause BSD License",
+    "BSD-2-Clause",
+    # ISC
+    "ISC License (ISCL)",
+    # MIT
+    "MIT License",
+    "MIT",
+    # PSFL
+    "Python Software Foundation License",
+    "PSF-2.0",
+]
+unsafe_packages = [
+    "certifi", # Mozilla Public License 2.0 (MPL 2.0)
+    "matplotlib-inline", # unknown derived
+]

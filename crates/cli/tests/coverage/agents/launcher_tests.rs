@@ -1482,6 +1482,125 @@ fn claude_settings_overlay_handles_inline_json_and_rejects_malformed_sources() {
     );
 }
 
+fn prepared_claude<I, S>(argv: I) -> PreparedAgentLaunch
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    PreparedAgentLaunch::new(
+        CodingAgent::ClaudeCode,
+        argv.into_iter().map(Into::into).collect(),
+        "http://127.0.0.1:1234",
+        &ResolvedConfig::default(),
+        true,
+    )
+    .unwrap()
+}
+
+fn claude_hook_downgrade_note(prepared: &PreparedAgentLaunch) -> Option<&str> {
+    prepared
+        .non_tty_warnings
+        .iter()
+        .find(|note| note.contains("hooks at risk"))
+        .map(String::as_str)
+}
+
+#[test]
+fn non_tty_status_selects_only_the_sanitized_warning_channel() {
+    let _env = EnvScope::set(&[
+        ("CLAUDE_CODE_SAFE_MODE", None),
+        ("CLAUDE_CODE_SIMPLE", None),
+    ]);
+    let mut prepared = prepared_claude(["claude", "--bare", "-p", "ping"]);
+    prepared
+        .notes
+        .push("private path /tmp/relay-private and secret value".into());
+
+    let warnings = prepared.non_tty_status_warnings();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Claude bare mode"));
+    assert!(!warnings.join("\n").contains("relay-private"));
+}
+
+#[test]
+fn claude_hook_downgrade_detects_exact_arguments_before_the_prompt_boundary() {
+    let _env = EnvScope::set(&[
+        ("CLAUDE_CODE_SAFE_MODE", None),
+        ("CLAUDE_CODE_SIMPLE", None),
+    ]);
+    for (argv, expected) in [
+        (
+            vec!["claude", "--safe-mode", "-p", "ping"],
+            Some("Claude safe mode"),
+        ),
+        (
+            vec!["claude", "-p", "ping", "--bare"],
+            Some("Claude bare mode"),
+        ),
+        (vec!["claude", "--restricted"], None),
+        (vec!["claude", "--safe-mode=true", "--barely"], None),
+        (vec!["claude", "--", "--safe-mode", "--bare"], None),
+    ] {
+        let prepared = prepared_claude(argv);
+        let note = claude_hook_downgrade_note(&prepared);
+        match expected {
+            Some(expected) => assert!(note.unwrap().contains(expected)),
+            None => assert!(note.is_none(), "unexpected downgrade note: {note:?}"),
+        }
+    }
+}
+
+#[test]
+fn claude_hook_downgrade_matches_claude_raw_token_semantics_and_suppresses_help() {
+    let _env = EnvScope::set(&[
+        ("CLAUDE_CODE_SAFE_MODE", None),
+        ("CLAUDE_CODE_SIMPLE", None),
+    ]);
+
+    // Claude 2.1.267 enables bare mode from the raw token even when --model consumes it.
+    let prepared = prepared_claude(["claude", "--model", "--bare", "--init-only"]);
+    assert!(claude_hook_downgrade_note(&prepared).is_some());
+
+    for argv in [
+        vec!["claude", "--safe-mode", "--help"],
+        vec!["claude", "--bare", "-v"],
+    ] {
+        let prepared = prepared_claude(argv);
+        assert!(claude_hook_downgrade_note(&prepared).is_none());
+    }
+
+    let prepared = prepared_claude(["claude", "--model", "sonnet", "--bare", "-p", "ping"]);
+    assert!(
+        claude_hook_downgrade_note(&prepared)
+            .unwrap()
+            .contains("Claude bare mode")
+    );
+}
+
+#[test]
+fn claude_hook_downgrade_detects_inherited_environment_with_claude_truthiness() {
+    {
+        let _env = EnvScope::set(&[
+            (
+                "CLAUDE_CODE_SAFE_MODE",
+                Some(std::ffi::OsStr::new(" TrUe ")),
+            ),
+            ("CLAUDE_CODE_SIMPLE", Some(std::ffi::OsStr::new("YES"))),
+        ]);
+        let prepared = prepared_claude(["claude"]);
+        let note = claude_hook_downgrade_note(&prepared).unwrap();
+        assert!(note.contains("Claude safe and bare modes"));
+    }
+    {
+        let _env = EnvScope::set(&[
+            ("CLAUDE_CODE_SAFE_MODE", Some(std::ffi::OsStr::new("0"))),
+            ("CLAUDE_CODE_SIMPLE", Some(std::ffi::OsStr::new("false"))),
+        ]);
+        let prepared = prepared_claude(["claude", "--restricted"]);
+        assert!(claude_hook_downgrade_note(&prepared).is_none());
+    }
+}
+
 #[test]
 fn codex_session_hook_state_rejects_every_malformed_generated_shape() {
     let malformed = [
@@ -1846,6 +1965,7 @@ async fn gateway_failure_terminates_the_agent_and_restores_private_state() {
         env: Vec::new(),
         temp_dirs: vec![overlay.clone()],
         notes: Vec::new(),
+        non_tty_warnings: Vec::new(),
         proxy_credential: crate::provider_auth::TransparentProxyCredential::from_static(
             "test-proxy-token",
         ),

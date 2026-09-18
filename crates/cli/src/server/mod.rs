@@ -39,12 +39,13 @@ use crate::configuration::{
 };
 use crate::error::CliError;
 use crate::gateway;
+use crate::operational::{self, OperationalContext};
 use crate::plugins::lifecycle::{ActiveDynamicPluginComponent, DynamicPluginActivationSnapshot};
 use crate::sessions::SessionManager;
 
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
-const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(300);
+// A successful read resets this limit, allowing healthy streaming responses to continue.
+const HTTP_IDLE_READ_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -335,12 +336,7 @@ async fn serve_listener_with_dynamic_inner(
         };
     let shutdown = server_shutdown_future(shutdown_mode, idle_shutdown);
     let shutdown = combine_shutdown_futures(shutdown, bootstrap_shutdown_rx);
-    log::info!(
-        target: "nemo_relay.server",
-        event = "server_shutdown_started",
-        instance_id = instance_id.as_str();
-        "Gateway server shutdown started"
-    );
+    let shutdown = shutdown.map(|shutdown| log_shutdown_started(shutdown, instance_id.clone()));
     let serve_result = match shutdown {
         Some(shutdown) => {
             axum::serve(listener, app)
@@ -372,6 +368,18 @@ fn server_shutdown_future(
         })),
         None => idle_shutdown,
     }
+}
+
+fn log_shutdown_started(shutdown: ShutdownFuture, instance_id: String) -> ShutdownFuture {
+    Box::pin(async move {
+        shutdown.await;
+        log::info!(
+            target: "nemo_relay.server",
+            event = "server_shutdown_started",
+            instance_id = instance_id.as_str();
+            "Gateway server shutdown started"
+        );
+    })
 }
 
 fn combine_shutdown_futures(
@@ -505,12 +513,7 @@ impl AppState {
     ) -> Self {
         let sessions = SessionManager::new(config.clone());
         sessions.start_idle_sweeper();
-        let http = Client::builder()
-            .connect_timeout(HTTP_CONNECT_TIMEOUT)
-            .timeout(HTTP_REQUEST_TIMEOUT)
-            .read_timeout(HTTP_READ_TIMEOUT)
-            .build()
-            .expect("gateway HTTP client configuration is valid");
+        let http = gateway_http_client(HTTP_IDLE_READ_TIMEOUT, false);
         // A second client for destinations the caller named, which must not follow redirects.
         //
         // Validation applies to the URL that was named; a redirect names a different one, and
@@ -518,13 +521,7 @@ impl AppState {
         // here either -- it covers `Authorization` across origins, and provider keys travel in
         // `x-api-key` and friends, which are ordinary headers to it. So a validated `https`
         // endpoint could 307 a caller's provider key to any host, including over plain http.
-        let http_no_redirect = Client::builder()
-            .connect_timeout(HTTP_CONNECT_TIMEOUT)
-            .timeout(HTTP_REQUEST_TIMEOUT)
-            .read_timeout(HTTP_READ_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("gateway HTTP client configuration is valid");
+        let http_no_redirect = gateway_http_client(HTTP_IDLE_READ_TIMEOUT, true);
         Self {
             config,
             bootstrap_fingerprint,
@@ -642,6 +639,20 @@ impl AppState {
         headers.remove(HOOK_CLIENT_TOKEN_HEADER);
         Ok(identity)
     }
+}
+
+fn gateway_http_client(idle_read_timeout: Duration, no_redirect: bool) -> Client {
+    let builder = Client::builder()
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .read_timeout(idle_read_timeout);
+    let builder = if no_redirect {
+        builder.redirect(reqwest::redirect::Policy::none())
+    } else {
+        builder
+    };
+    builder
+        .build()
+        .expect("gateway HTTP client configuration is valid")
 }
 
 fn router_with_state(state: AppState) -> Router {
@@ -1095,20 +1106,39 @@ async fn codex_hook(
 ) -> Result<Json<Value>, CliError> {
     state.touch();
     let owner = state.authorize_hook_request(&mut headers)?;
-    let Json(payload) = payload.map_err(hook_payload_rejection)?;
+    let operational = OperationalContext::take_from_headers(&mut headers);
+    let Json(payload) = payload.map_err(|error| {
+        hook_payload_rejection(error, state.config.max_hook_payload_bytes, &operational)
+    })?;
     let outcome = codex::adapt(payload, &headers);
-    state
+    let operational = outcome
+        .events
+        .first()
+        .map(|event| operational.clone().with_session(event.session_id()))
+        .unwrap_or(operational);
+    operational::hook_started(&operational, "hook_server");
+    if let Err(error) = state
         .sessions
         .apply_authenticated_events(&headers, outcome.events, &owner)
-        .await?;
+        .await
+    {
+        operational::hook_failed(&operational, "hook_server", error.log_kind(), true);
+        return Err(error);
+    }
     if let Some(permission) = outcome.permission
         && let Err(error) = authorize_hook_permission(&state, permission, &owner).await
     {
+        if error.guardrail_rejection_reason().is_some() {
+            operational::hook_completed(&operational, "hook_server", "denied");
+        } else {
+            operational::hook_failed(&operational, "hook_server", error.log_kind(), true);
+        }
         return Ok(Json(serde_json::json!({
             "decision": "deny",
             "reason": permission_denial_reason(error),
         })));
     }
+    operational::hook_completed(&operational, "hook_server", "completed");
     Ok(Json(outcome.response))
 }
 
@@ -1121,14 +1151,36 @@ async fn claude_code_hook(
 ) -> Result<Json<Value>, CliError> {
     state.touch();
     let owner = state.authorize_hook_request(&mut headers)?;
-    let Json(payload) = payload.map_err(hook_payload_rejection)?;
+    let operational = OperationalContext::take_from_headers(&mut headers);
+    let Json(payload) = payload.map_err(|error| {
+        hook_payload_rejection(error, state.config.max_hook_payload_bytes, &operational)
+    })?;
     let outcome = claude_code::adapt(payload, &headers);
-    state
+    let operational = outcome
+        .events
+        .first()
+        .map(|event| operational.clone().with_session(event.session_id()))
+        .unwrap_or(operational);
+    operational::hook_started(&operational, "hook_server");
+    if let Err(error) = state
         .sessions
         .apply_authenticated_events(&headers, outcome.events, &owner)
-        .await?;
+        .await
+    {
+        operational::hook_failed(&operational, "hook_server", error.log_kind(), true);
+        return Err(error);
+    }
     if let Some(permission) = outcome.permission {
         let result = authorize_hook_permission(&state, permission, &owner).await;
+        match &result {
+            Ok(()) => operational::hook_completed(&operational, "hook_server", "completed"),
+            Err(error) if error.guardrail_rejection_reason().is_some() => {
+                operational::hook_completed(&operational, "hook_server", "denied");
+            }
+            Err(error) => {
+                operational::hook_failed(&operational, "hook_server", error.log_kind(), true);
+            }
+        }
         return Ok(Json(match result {
             Ok(()) => serde_json::json!({
                 "continue": true,
@@ -1153,6 +1205,7 @@ async fn claude_code_hook(
             }
         }));
     }
+    operational::hook_completed(&operational, "hook_server", "completed");
     Ok(Json(outcome.response))
 }
 
@@ -1167,20 +1220,33 @@ async fn claude_code_hook(
 // means giving the extension a credential first; see `SessionManager::apply_events`.
 async fn pi_hook(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    mut headers: HeaderMap,
     payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Json<Value>, CliError> {
     state.touch();
-    let Json(payload) = payload.map_err(hook_payload_rejection)?;
+    let operational = OperationalContext::take_from_headers(&mut headers);
+    let Json(payload) = payload.map_err(|error| {
+        hook_payload_rejection(error, state.config.max_hook_payload_bytes, &operational)
+    })?;
     let outcome = pi::adapt(payload, &headers);
-    let effects = state
-        .sessions
-        .apply_events(&headers, outcome.events)
-        .await?;
+    let operational = outcome
+        .events
+        .first()
+        .map(|event| operational.clone().with_session(event.session_id()))
+        .unwrap_or(operational);
+    operational::hook_started(&operational, "hook_server");
+    let effects = match state.sessions.apply_events(&headers, outcome.events).await {
+        Ok(effects) => effects,
+        Err(error) => {
+            operational::hook_failed(&operational, "hook_server", error.log_kind(), true);
+            return Err(error);
+        }
+    };
     // pi is the one agent whose hook response can carry a rewritten payload back: its `tool_call`
     // hook documents in-place mutation of `input`, so the extension can apply what a request
     // intercept produced. Absent a rewrite the body stays `{}`, which is what an allow has always
     // been, so an older extension keeps working unchanged.
+    operational::hook_completed(&operational, "hook_server", "completed");
     Ok(Json(pi::response_with_effects(outcome.response, &effects)))
 }
 
@@ -1207,12 +1273,24 @@ fn permission_denial_reason(error: CliError) -> String {
         .unwrap_or_else(|| error.to_string())
 }
 
-fn hook_payload_rejection(rejection: JsonRejection) -> CliError {
+fn hook_payload_rejection(
+    rejection: JsonRejection,
+    limit_bytes: usize,
+    operational: &OperationalContext,
+) -> CliError {
     if rejection.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
-        CliError::PayloadTooLarge(rejection.to_string())
-    } else {
-        CliError::InvalidPayload(rejection.to_string())
+        operational::limit_exceeded(
+            operational,
+            "hook_server",
+            "max_hook_payload_bytes",
+            limit_bytes,
+        );
     }
+    if rejection.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
+        return CliError::PayloadTooLarge(rejection.to_string());
+    }
+    operational::hook_failed(operational, "hook_server", "invalid_payload", true);
+    CliError::InvalidPayload(rejection.to_string())
 }
 
 #[cfg(test)]

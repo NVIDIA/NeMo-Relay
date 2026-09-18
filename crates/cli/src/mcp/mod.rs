@@ -14,7 +14,7 @@ use std::process::ExitCode;
 
 use serde_json::{Value, json};
 
-use crate::error::CliError;
+use crate::error::{CliError, McpFailureReason};
 use crate::installation::generation::{GENERATION_FILE_ENV, GENERATION_TOKEN_ENV};
 use crate::server::GatewayOverrides;
 
@@ -37,6 +37,7 @@ pub(crate) async fn run(server_args: &GatewayOverrides) -> Result<ExitCode, CliE
                 crate::configuration::GATEWAY_URL_ENV,
                 crate::configuration::TRANSPARENT_RUN_ENV
             ))
+            .with_mcp_failure_reason(McpFailureReason::GatewayConfigurationFailed)
         })?;
         let bootstrap_fingerprint =
             crate::configuration::transparent_gateway_fingerprint(&gateway_url);
@@ -61,7 +62,11 @@ pub(crate) async fn run(server_args: &GatewayOverrides) -> Result<ExitCode, CliE
                 log::error!(
                     target: "nemo_relay.mcp",
                     event = "mcp_session_failed",
-                    error_kind = error.log_kind();
+                    error_kind = error.log_kind(),
+                    failure_reason = error
+                        .mcp_failure_reason()
+                        .unwrap_or(McpFailureReason::UnknownMcpFailure)
+                        .as_str();
                     "MCP session failed"
                 );
                 Err(error)
@@ -95,7 +100,11 @@ pub(crate) async fn run(server_args: &GatewayOverrides) -> Result<ExitCode, CliE
             log::error!(
                 target: "nemo_relay.mcp",
                 event = "mcp_session_failed",
-                error_kind = error.log_kind();
+                error_kind = error.log_kind(),
+                failure_reason = error
+                    .mcp_failure_reason()
+                    .unwrap_or(McpFailureReason::UnknownMcpFailure)
+                    .as_str();
                 "MCP session failed"
             );
             Err(error)

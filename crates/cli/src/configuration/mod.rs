@@ -6,7 +6,7 @@ mod types;
 
 pub(crate) use types::*;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -1487,7 +1487,7 @@ where
     let paths = deduplicate_plugin_config_paths(paths);
     let mut dynamic_plugins = Vec::new();
     let mut dynamic_plugin_policy = DynamicPluginHostPolicy::default();
-    let mut seen_plugin_ids = HashSet::new();
+    let mut dynamic_plugin_indices = HashMap::new();
     let mut contributing_sources = Vec::new();
     let mut runtime_documents = Vec::new();
 
@@ -1504,14 +1504,22 @@ where
                     path.display()
                 ))
             })?;
-        let resolved_plugins =
-            resolve_dynamic_plugin_refs(path, &mut parsed, &mut seen_plugin_ids)?;
+        let resolved_plugins = resolve_dynamic_plugin_refs(path, &mut parsed)?;
         if !resolved_plugins.dynamic_plugins.is_empty()
             || resolved_plugins.dynamic_plugin_policy != DynamicPluginHostPolicy::default()
         {
             contributing_sources.push(path.clone());
         }
-        dynamic_plugins.extend(resolved_plugins.dynamic_plugins);
+        for plugin in resolved_plugins.dynamic_plugins {
+            if let Some(index) = dynamic_plugin_indices.get(&plugin.plugin_id) {
+                // Dynamic plugin declarations layer by manifest ID. The later source owns the
+                // effective manifest, lifecycle state, and opaque configuration.
+                dynamic_plugins[*index] = plugin;
+            } else {
+                dynamic_plugin_indices.insert(plugin.plugin_id.clone(), dynamic_plugins.len());
+                dynamic_plugins.push(plugin);
+            }
+        }
         dynamic_plugin_policy.merge_from(resolved_plugins.dynamic_plugin_policy);
         runtime_documents.push((
             path.clone(),
@@ -1568,7 +1576,6 @@ struct ResolvedDynamicPluginRefs {
 fn resolve_dynamic_plugin_refs(
     source: &Path,
     value: &mut toml::Value,
-    seen_plugin_ids: &mut HashSet<String>,
 ) -> Result<ResolvedDynamicPluginRefs, CliError> {
     let Some(root) = value.as_table_mut() else {
         return Ok(ResolvedDynamicPluginRefs {
@@ -1601,6 +1608,7 @@ fn resolve_dynamic_plugin_refs(
     }
 
     let mut resolved = Vec::with_capacity(plugins.dynamic.len());
+    let mut seen_plugin_ids = HashSet::new();
     for dynamic in plugins.dynamic {
         let manifest_path = resolve_dynamic_manifest_path(source, &dynamic.manifest);
         let (manifest, manifest_ref) = load_bounded_dynamic_plugin_manifest(&manifest_path)
@@ -1613,7 +1621,7 @@ fn resolve_dynamic_plugin_refs(
         let plugin_id = manifest.plugin.id.trim().to_owned();
         if !seen_plugin_ids.insert(plugin_id.clone()) {
             return Err(CliError::Config(format!(
-                "duplicate dynamic plugin id '{}' in {} across plugins.toml sources",
+                "duplicate dynamic plugin id '{}' in {}",
                 plugin_id,
                 source.display()
             )));

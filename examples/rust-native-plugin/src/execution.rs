@@ -21,13 +21,15 @@ pub(crate) fn register(
             let tag = config.tag.clone();
             let runtime = runtime.clone();
             let runtime_config = config.runtime.clone();
-            move |_name, request, next| {
+            move |context, next| {
                 let tag = tag.clone();
                 let runtime = runtime.clone();
                 let runtime_config = runtime_config.clone();
                 async move {
                     emit_configured_runtime_events(&runtime, &tag, &runtime_config)?;
-                    Ok(ToolExecutionInterceptOutcome::from(next.call(request).await?))
+                    Ok(ToolExecutionInterceptOutcome::from(
+                        next.call(context.args).await?,
+                    ))
                 }
             }
         })?;
@@ -42,8 +44,8 @@ pub(crate) fn register(
         config.execution.priority,
         {
             let emit_pending_marks = config.execution.emit_pending_marks;
-            move |_name, request, next| async move {
-                let result = next.call(request).await?;
+            move |context, next| async move {
+                let result = next.call(context.args).await?;
                 let mut outcome = ToolExecutionInterceptOutcome::from(result);
                 if emit_pending_marks {
                     outcome = outcome.with_pending_mark(

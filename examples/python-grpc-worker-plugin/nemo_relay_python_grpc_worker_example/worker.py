@@ -21,6 +21,7 @@ from nemo_relay_plugin import (
     PluginContext,
     RuntimeRegistrationKind,
     ScopeType,
+    ToolExecutionContext,
     ToolExecutionInterceptOutcome,
     ToolExecutionResult,
     WorkerPlugin,
@@ -253,9 +254,9 @@ class ExamplePythonWorker(WorkerPlugin):
         if not settings["emit_marks"] and not settings["emit_isolated_scope"]:
             return
 
-        async def runtime_events(_name: str, args: Json, next_call: Any) -> ToolExecutionInterceptOutcome:
+        async def runtime_events(context: ToolExecutionContext, next_call: Any) -> ToolExecutionInterceptOutcome:
             await _emit_runtime_events(ctx, tag, settings)
-            downstream = await next_call.call(args)
+            downstream = await next_call.call(context.args)
             return ToolExecutionInterceptOutcome(
                 result=downstream.result,
                 annotation=downstream.annotation,
@@ -268,13 +269,13 @@ class ExamplePythonWorker(WorkerPlugin):
         priority = cast(int, execution["priority"])
         emit_pending_marks = cast(bool, execution["emit_pending_marks"])
 
-        async def tool_execution(name: str, args: Json, next_call: Any) -> ToolExecutionInterceptOutcome:
-            result: ToolExecutionResult = await next_call.call(args)
+        async def tool_execution(context: ToolExecutionContext, next_call: Any) -> ToolExecutionInterceptOutcome:
+            result: ToolExecutionResult = await next_call.call(context.args)
             marks = (
                 [
                     PendingMarkSpec(
                         name="example.python_worker.tool_execution",
-                        data={"tool_name": name, "tag": tag},
+                        data={"tool_name": context.tool_name, "tag": tag},
                     )
                 ]
                 if emit_pending_marks
@@ -284,7 +285,7 @@ class ExamplePythonWorker(WorkerPlugin):
                 result=result.result,
                 annotation={
                     "upstream": result.annotation,
-                    "worker": {"tool_name": name, "tag": tag},
+                    "worker": {"tool_name": context.tool_name, "tag": tag},
                 },
                 pending_marks=marks,
             )

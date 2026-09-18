@@ -26,19 +26,25 @@ use opentelemetry_otlp::{
 use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
-use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Stream, Temporality};
+use opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader;
+use opentelemetry_sdk::metrics::{SdkMeterProvider, Stream, Temporality};
+use opentelemetry_sdk::runtime;
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 
 use super::OpenTelemetryRuntimeDiagnostics;
+use super::header_file::{
+    HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
+    has_configured_headers, validate_header_files, validate_header_http_endpoint,
+};
 use super::otel::{OpenTelemetryError, OtlpTransport, Result, normalize_shutdown_result};
 use super::otel_signal::{
     MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics, build_grpc_metadata,
     build_in_owned_runtime, classify_metric_mark, reject_signal_header_environment,
     resolve_header_env, resolve_http_signal_endpoint, should_relog_runtime_diagnostic,
-    signal_resource, validate_signal_headers,
+    signal_resource, validate_signal_headers, validate_telemetry_sdk_resource_attributes,
 };
 
 const DEFAULT_EXPORT_INTERVAL: Duration = Duration::from_secs(60);
@@ -98,6 +104,7 @@ pub struct OpenTelemetryMetricConfig {
     endpoint: String,
     headers: HashMap<String, String>,
     header_env: HashMap<String, String>,
+    header_file: HeaderFiles,
     resource_attributes: HashMap<String, String>,
     service_name: String,
     service_namespace: Option<String>,
@@ -119,6 +126,7 @@ impl OpenTelemetryMetricConfig {
             endpoint: endpoint.into(),
             headers: HashMap::new(),
             header_env: HashMap::new(),
+            header_file: HashMap::new(),
             resource_attributes: HashMap::new(),
             service_name: "unknown_service".to_string(),
             service_namespace: None,
@@ -149,6 +157,15 @@ impl OpenTelemetryMetricConfig {
     /// Map an exporter header name to the environment variable supplying its value.
     pub fn with_header_env(mut self, key: impl Into<String>, variable: impl Into<String>) -> Self {
         self.header_env.insert(key.into(), variable.into());
+        self
+    }
+
+    pub(crate) fn with_header_file(
+        mut self,
+        key: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Self {
+        self.header_file.insert(key.into(), path.into());
         self
     }
 
@@ -247,8 +264,14 @@ impl OpenTelemetryMetricConfig {
                 "cardinality_limit must be less than usize::MAX".to_string(),
             ));
         }
+        validate_telemetry_sdk_resource_attributes(&self.resource_attributes)?;
         reject_signal_header_environment("OTEL_EXPORTER_OTLP_METRICS_HEADERS")?;
-        validate_signal_headers(&self.headers)
+        validate_signal_headers(&self.headers)?;
+        if has_configured_headers(&self.headers, &self.header_env, &self.header_file) {
+            validate_header_http_endpoint(&self.endpoint)
+                .map_err(OpenTelemetryError::ExporterBuild)?;
+        }
+        Ok(())
     }
 }
 
@@ -274,6 +297,14 @@ struct MetricSubscriberInner {
     _runtime: SignalExporterRuntime,
 }
 
+impl Drop for MetricSubscriberInner {
+    fn drop(&mut self) {
+        // Drain Relay delivery before the provider collects and exports final metric state.
+        let _ = flush_subscribers();
+        let _ = normalize_shutdown_result(self.provider.shutdown());
+    }
+}
+
 impl OpenTelemetryMetricSubscriber {
     /// Build an OTLP metric subscriber with an independently owned provider.
     pub fn new(config: OpenTelemetryMetricConfig) -> Result<Self> {
@@ -292,6 +323,8 @@ impl OpenTelemetryMetricSubscriber {
 
     fn new_with_runtime_diagnostics(mut config: OpenTelemetryMetricConfig) -> Result<Self> {
         config.validate()?;
+        validate_header_files(&config.headers, &config.header_env, &config.header_file)
+            .map_err(OpenTelemetryError::ExporterBuild)?;
         config.headers = resolve_header_env(&config.headers, &config.header_env)?;
         validate_signal_headers(&config.headers)?;
         let instrumentation_scope = config.instrumentation_scope.clone();
@@ -374,6 +407,8 @@ impl OpenTelemetryMetricSubscriber {
     }
 
     /// Collect and export current metric aggregates immediately.
+    ///
+    /// This is a synchronous completion barrier; call it from a blocking task in async code.
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
         self.inner
@@ -385,10 +420,11 @@ impl OpenTelemetryMetricSubscriber {
     /// Shut down the meter provider, including its final collection.
     ///
     /// Deregister this subscriber before calling shutdown.
+    /// This waits for the final collection and export and should run in a blocking task in async
+    /// code.
     pub fn shutdown(&self) -> Result<()> {
         let barrier = flush_subscribers().map_err(OpenTelemetryError::Core);
-        let provider = normalize_shutdown_result(self.inner.provider.shutdown())
-            .map_err(|error| OpenTelemetryError::MetricProvider(error.to_string()));
+        let provider = self.shutdown_provider();
         barrier.and(provider)
     }
 
@@ -415,6 +451,19 @@ fn build_metric_provider(
                 .with_temporality(temporality)
                 .with_timeout(config.timeout)
                 .with_endpoint(resolve_http_metric_endpoint(&config.endpoint).into_owned());
+            let client = reqwest::Client::builder()
+                .timeout(config.timeout)
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
+            builder = if config.header_file.is_empty() {
+                builder.with_http_client(client)
+            } else {
+                builder.with_http_client(HeaderFileHttpClient::new(
+                    client,
+                    HeaderFileResolver::new(config.header_file.clone()),
+                ))
+            };
             if !config.headers.is_empty() {
                 builder = builder.with_headers(config.headers.clone());
             }
@@ -432,6 +481,11 @@ fn build_metric_provider(
             if !config.headers.is_empty() {
                 builder = builder.with_metadata(build_grpc_metadata(&config.headers)?);
             }
+            if !config.header_file.is_empty() {
+                builder = builder.with_interceptor(HeaderFileInterceptor::new(
+                    HeaderFileResolver::new(config.header_file.clone()),
+                ));
+            }
             builder
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
@@ -442,7 +496,7 @@ fn build_metric_provider(
         inner: exporter,
         diagnostics,
     };
-    let reader = PeriodicReader::builder(exporter)
+    let reader = PeriodicReader::builder(exporter, runtime::Tokio)
         .with_interval(config.export_interval)
         .build();
     let cardinality_limit = config.cardinality_limit;

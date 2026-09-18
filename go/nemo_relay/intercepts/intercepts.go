@@ -55,7 +55,7 @@ func DeregisterToolRequest(name string) error {
 // --- Tool Execution ---
 
 // RegisterToolExecution registers a tool execution intercept following the
-// middleware chain pattern. execFn is called with args and a next function.
+// middleware chain pattern. execFn receives the call context and a next function.
 // Call next to continue the chain or skip it to short-circuit. This is a
 // shorthand for [nemo_relay.RegisterToolExecutionIntercept].
 func RegisterToolExecution(name string, priority int32, execFn nemo_relay.ToolExecutionInterceptFunc) error {

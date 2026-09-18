@@ -178,7 +178,7 @@ fn prompt_dynamic_value(
                 .unwrap_or(0);
             let selected = Select::with_theme(theme)
                 .with_prompt(single_line_text(&field.title))
-                .items(&values)
+                .items(values)
                 .default(default)
                 .interact()
                 .map_err(editor_error)?;

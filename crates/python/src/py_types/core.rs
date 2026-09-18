@@ -20,7 +20,7 @@ use nemo_relay::api::llm::LlmRequestInterceptOutcome;
 use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 use nemo_relay::api::runtime::{
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, PropagationContext,
-    ThreadScopeStackBinding,
+    ThreadScopeStackBinding, ToolExecutionContext,
 };
 use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 
@@ -1220,6 +1220,53 @@ impl PyToolExecutionResult {
                 .as_ref()
                 .map(|value| py_to_json(value.as_ref().bind(py)))
                 .transpose()?,
+        })
+    }
+}
+
+/// Structured per-call context delivered to tool execution intercepts.
+#[pyclass(name = "ToolExecutionContext", frozen)]
+pub struct PyToolExecutionContext {
+    tool_name: String,
+    args: Arc<Py<PyAny>>,
+    tool_call_id: Option<String>,
+}
+
+#[pymethods]
+impl PyToolExecutionContext {
+    /// Name of the tool being executed.
+    #[getter]
+    fn tool_name(&self) -> &str {
+        &self.tool_name
+    }
+
+    /// JSON argument payload entering this intercept.
+    #[getter]
+    fn args(&self, py: Python<'_>) -> Py<PyAny> {
+        self.args.as_ref().clone_ref(py)
+    }
+
+    /// Provider-issued tool-call correlation identifier, or `None` when the
+    /// managed tool call did not record one.
+    #[getter]
+    fn tool_call_id(&self) -> Option<&str> {
+        self.tool_call_id.as_deref()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ToolExecutionContext(tool_name={:?}, tool_call_id={:?})",
+            self.tool_name, self.tool_call_id
+        )
+    }
+}
+
+impl PyToolExecutionContext {
+    pub(crate) fn from_inner(py: Python<'_>, inner: &ToolExecutionContext) -> PyResult<Self> {
+        Ok(Self {
+            tool_name: inner.tool_name().to_string(),
+            args: Arc::new(json_to_py(py, inner.args())?),
+            tool_call_id: inner.tool_call_id().map(str::to_string),
         })
     }
 }

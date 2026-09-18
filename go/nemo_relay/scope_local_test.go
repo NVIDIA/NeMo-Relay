@@ -719,10 +719,13 @@ func TestScopeLocalToolExecutionIntercept(t *testing.T) {
 	defer stack.Close()
 	stack.Run(func() {
 		const annotationSource = "scope-local-callback"
+		const expectedToolCallID = "go-scope-call-77"
 		handle, _ := PushScope("exec_intercept_scope", ScopeTypeAgent)
 		defer PopScope(handle)
-		err := ScopeRegisterToolExecutionIntercept(handle.UUID(), "scope_exec_int", 1, func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
-			result, err := next(args)
+		var seen ToolExecutionContext
+		err := ScopeRegisterToolExecutionIntercept(handle.UUID(), "scope_exec_int", 1, func(context ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
+			seen = context
+			result, err := next(context.Args)
 			if err != nil {
 				return ToolExecutionInterceptOutcome{}, err
 			}
@@ -740,7 +743,7 @@ func TestScopeLocalToolExecutionIntercept(t *testing.T) {
 				Result:     json.RawMessage(`{"original": true}`),
 				Annotation: json.RawMessage(`{"source":"` + annotationSource + `"}`),
 			}, nil
-		})
+		}, WithToolCallID(expectedToolCallID))
 		if err != nil {
 			t.Fatalf(scopeLocalToolCallExecuteFailed, err)
 		}
@@ -751,6 +754,12 @@ func TestScopeLocalToolExecutionIntercept(t *testing.T) {
 		}
 		if output["exec_intercepted"] != true {
 			t.Fatal("expected exec_intercepted=true")
+		}
+		if seen.ToolName != "exec_int_tool" {
+			t.Fatalf("scope-local intercept saw unexpected tool name: %q", seen.ToolName)
+		}
+		if seen.ToolCallID == nil || *seen.ToolCallID != expectedToolCallID {
+			t.Fatalf("scope-local intercept saw unexpected tool call id: %v", seen.ToolCallID)
 		}
 		var annotation map[string]any
 		if err := json.Unmarshal(result.Annotation, &annotation); err != nil {
@@ -1070,9 +1079,9 @@ func assertScopeLocalToolWrappersDeregister(t *testing.T, scopeUUID string) {
 		&executionInterceptCalls,
 		func() error {
 			return ScopeRegisterToolExecutionIntercept(scopeUUID, "tool_scope_exec_int", 1,
-				func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
+				func(context ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
 					executionInterceptCalls++
-					return toolExecutionOutcome(next(args))
+					return toolExecutionOutcome(next(context.Args))
 				},
 			)
 		},

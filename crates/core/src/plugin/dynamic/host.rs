@@ -29,19 +29,26 @@ use super::{
 };
 
 #[cfg(feature = "worker-grpc")]
-use super::{WorkerPluginActivation, WorkerPluginLoadSpec, load_worker_plugins};
+use super::{WorkerPluginActivation, WorkerPluginLoadSpec, prepare_worker_plugins};
 
 /// Initializes the process-wide static and dynamic plugin host.
 ///
 /// The returned handle must remain alive while any plugin-provided callback can
 /// run. Closing or dropping it unregisters components before unloading dynamic
 /// runtimes.
+/// Workers are authenticated and validated before component initialization.
+/// Their `Register` RPC runs when the worker component activates, after earlier
+/// static components have installed their runtime registrations.
 pub async fn initialize(
     config: PluginConfig,
     additional_plugins_toml: Option<PathBuf>,
 ) -> Result<PluginHostActivation> {
     let resolved = resolve_plugin_host_config(config, additional_plugins_toml.as_deref())?;
-    let dynamic_reports = resolved.dynamic_reports;
+    let dynamic_reports = resolved
+        .dynamic_reports
+        .into_iter()
+        .map(|entry| entry.report)
+        .collect();
     let config_paths = resolved.config_paths;
     let resolved_config = resolved.resolved_config;
     let (mut activation, config_report) = PluginHostActivation::activate_validated(
@@ -198,6 +205,8 @@ impl PluginHostActivation {
 
         #[cfg(feature = "worker-grpc")]
         let worker = {
+            // Register can discover and gate preceding static subscribers. Only
+            // prepare workers here; their adapters register during initialization.
             let worker_specs = dynamic_plugins
                 .iter()
                 .filter(|plugin| plugin.kind == DynamicPluginKind::Worker)
@@ -210,7 +219,7 @@ impl PluginHostActivation {
                 .collect::<Vec<_>>();
             (!worker_specs.is_empty())
                 .then(|| {
-                    load_worker_plugins(worker_specs)
+                    prepare_worker_plugins(worker_specs)
                         .map_err(|error| plugin_error_context("worker plugin load failed", error))
                 })
                 .transpose()?

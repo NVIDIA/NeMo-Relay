@@ -58,22 +58,27 @@ Save it as `quickstart.py` in the same Python project where you installed
 
 ```python
 import asyncio
+from collections.abc import AsyncIterator
+from typing import TypedDict
 
 import nemo_relay
 
-def on_event(event) -> None:
+class SearchArgs(TypedDict):
+    query: str
+
+def on_event(event: nemo_relay.Event) -> None:
     print(f"event={event.kind} name={event.name}")
 
-async def search(args):
+async def search(args: SearchArgs) -> nemo_relay.ToolExecutionResult[dict[str, str]]:
     return nemo_relay.ToolExecutionResult({"echo": args["query"]})
 
-async def model(request):
+async def model(request: nemo_relay.LLMRequest) -> dict[str, object]:
     return {
         "messages": request.content["messages"],
         "ok": True,
     }
 
-async def main():
+async def main() -> None:
     nemo_relay.subscribers.register("quickstart-printer", on_event)
 
     with nemo_relay.scope.scope("demo-agent", nemo_relay.ScopeType.Agent) as handle:

@@ -287,7 +287,7 @@ ffi_scope_intercept_tool_api!(
 /// - `scope_uuid`: UUID of the target scope (null-terminated C string).
 /// - `name`: Unique intercept name.
 /// - `priority`: Execution priority (lower runs first).
-/// - `exec_cb`: Middleware callback receiving args and a next function.
+/// - `exec_cb`: Middleware callback receiving context and a next function.
 /// - `exec_user_data`: Opaque pointer for the execution callback.
 /// - `exec_free`: Optional destructor for `exec_user_data`.
 ///

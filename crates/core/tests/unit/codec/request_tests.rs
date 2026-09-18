@@ -6,6 +6,56 @@
 use super::*;
 use serde_json::json;
 
+#[test]
+fn native_tool_definition_identities_preserve_provider_boundaries() {
+    for kind in [
+        "web_search",
+        "web_search_preview",
+        "file_search",
+        "computer_use_preview",
+        "code_interpreter",
+        "image_generation",
+        "local_shell",
+        "shell",
+        "apply_patch",
+    ] {
+        let tool = ToolDefinition::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: kind.into(),
+            value: json!({"type": kind}),
+        };
+        assert_eq!(tool_definition_identities(&tool), vec![(kind, kind)]);
+    }
+    for (provider, value) in [
+        ("unknown", json!({"type": "web_search"})),
+        ("openai_responses", json!({"type": "future_unknown"})),
+        (
+            "openai_responses",
+            json!({"type": "web_search", "name": " "}),
+        ),
+        (
+            "gemini",
+            json!({"googleSearch": false, "futureUnknown": {}}),
+        ),
+    ] {
+        let tool = ToolDefinition::ProviderNative {
+            provider: provider.into(),
+            kind: "unknown".into(),
+            value,
+        };
+        assert!(tool_definition_identities(&tool).is_empty());
+    }
+    let tool = ToolDefinition::ProviderNative {
+        provider: "custom".into(),
+        kind: "custom-type".into(),
+        value: json!({"name": "explicit-name"}),
+    };
+    assert_eq!(
+        tool_definition_identities(&tool),
+        vec![("custom-type", "explicit-name")]
+    );
+}
+
 // -------------------------------------------------------------------
 // AnnotatedLlmRequest serialization round-trip
 // -------------------------------------------------------------------

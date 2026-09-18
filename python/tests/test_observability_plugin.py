@@ -96,7 +96,7 @@ class _AtofCapture:
 
 
 class TestObservabilityConfigHelpers:
-    def test_opentelemetry_endpoint_preserves_existing_positional_arguments(self):
+    def test_opentelemetry_endpoint_preserves_existing_positional_arguments(self) -> None:
         endpoint = OpenTelemetryEndpointConfig(
             "full",
             "http://localhost:4318/v1/traces",
@@ -122,7 +122,22 @@ class TestObservabilityConfigHelpers:
         assert endpoint.scheduled_delay_millis is None
         assert endpoint.completed_span_context_ttl_millis is None
 
-    def test_defaults_and_component_wrapper(self):
+    def test_header_file_serializes_for_every_remote_observability_destination(self) -> None:
+        path = "/var/run/secrets/telemetry/token"
+        assert AtofStreamSinkConfig(url="https://example.com/events", header_file={"authorization": path}).to_dict()[
+            "header_file"
+        ] == {"authorization": path}
+        assert HttpStorageConfig(endpoint="https://example.com/atif", header_file={"authorization": path}).to_dict()[
+            "header_file"
+        ] == {"authorization": path}
+        assert OpenTelemetryEndpointConfig(
+            "full", "https://example.com/v1/traces", header_file={"authorization": path}
+        ).to_dict()["header_file"] == {"authorization": path}
+        assert OpenTelemetrySignalEndpointConfig(
+            "https://example.com/v1/logs", header_file={"authorization": path}
+        ).to_dict()["header_file"] == {"authorization": path}
+
+    def test_defaults_and_component_wrapper(self) -> None:
         assert AtofConfig().to_dict() == {"enabled": False}
         assert AtifConfig().to_dict() == {
             "enabled": False,
@@ -182,7 +197,7 @@ class TestObservabilityConfigHelpers:
         full_payload_config = ObservabilityConfig(enable_full_payloads=True).to_dict()
         assert full_payload_config["enable_full_payloads"] is True
 
-    def test_opentelemetry_signal_section_defaults_and_serialization(self):
+    def test_opentelemetry_signal_section_defaults_and_serialization(self) -> None:
         endpoint = OpenTelemetrySignalEndpointConfig(
             "https://collector.example/custom/logs",
             headers={"x-static": "value"},
@@ -226,7 +241,7 @@ class TestObservabilityConfigHelpers:
         assert section["metrics"] == metrics.to_dict()
         assert typing.cast(dict[str, object], section["metrics"])["endpoints"] == [endpoint.to_dict()]
 
-    def test_validation_rejects_bad_values(self):
+    def test_validation_rejects_bad_values(self) -> None:
         report = validate_plugin_config(
             plugin.PluginConfig(
                 components=[
@@ -243,10 +258,10 @@ class TestObservabilityConfigHelpers:
         fields = {diag.get("field") for diag in report["diagnostics"]}
         assert {"sinks[0].mode", "filename_template"} <= fields
 
-    def test_list_kinds_includes_builtin_observability(self):
+    def test_list_kinds_includes_builtin_observability(self) -> None:
         assert OBSERVABILITY_PLUGIN_KIND in plugin.list_kinds()
 
-    def test_s3_storage_config_serializes_credential_fields(self):
+    def test_s3_storage_config_serializes_credential_fields(self) -> None:
         storage = S3StorageConfig(
             bucket="my-bucket",
             key_prefix="prefix/",
@@ -271,7 +286,7 @@ class TestObservabilityConfigHelpers:
         atif = AtifConfig(enabled=True, storage=[storage])
         assert atif.to_dict()["storage"] == [storage.to_dict()]
 
-    def test_atof_sink_config_serializes_streaming_fields(self):
+    def test_atof_sink_config_serializes_streaming_fields(self) -> None:
         sink = AtofStreamSinkConfig(
             url="http://localhost:8080/events",
             name="switchyard",
@@ -294,14 +309,14 @@ class TestObservabilityConfigHelpers:
         assert AtofConfig(sinks=[sink]).to_dict()["sinks"] == [sink.to_dict()]
         assert "name" not in AtofStreamSinkConfig(url="http://localhost:8080/events").to_dict()
 
-    def test_atof_endpoint_alias_preserves_positional_transport(self):
+    def test_atof_endpoint_alias_preserves_positional_transport(self) -> None:
         endpoint = AtofEndpointConfig("http://localhost:8080/events", "websocket")
         assert endpoint.transport == "websocket"
         assert endpoint.name is None
 
     async def test_atof_stream_sink_snapshots_header_env(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ):
+    ) -> None:
         variable = "NEMO_RELAY_TEST_ATOF_HEADER_ENV"
         credential = "Bearer relay-499"
         monkeypatch.setenv(variable, credential)
@@ -342,7 +357,7 @@ class TestObservabilityConfigHelpers:
         assert credential not in json.dumps(report)
         assert credential not in caplog.text
 
-    def test_http_storage_config_serializes_headers(self):
+    def test_http_storage_config_serializes_headers(self) -> None:
         s3 = S3StorageConfig(bucket="archive")
         http = HttpStorageConfig(
             endpoint="https://example.com/atif",
@@ -361,7 +376,7 @@ class TestObservabilityConfigHelpers:
         assert atif.to_dict()["storage"] == [s3.to_dict(), http.to_dict()]
 
     @pytest.mark.parametrize("use_context_manager", [True, False])
-    async def test_atof_and_atif_file_outputs(self, tmp_path: Path, use_context_manager: bool):
+    async def test_atof_and_atif_file_outputs(self, tmp_path: Path, use_context_manager: bool) -> None:
         config = ObservabilityConfig(
             atof=AtofConfig(
                 enabled=True,
@@ -439,14 +454,14 @@ class TestObservabilityConfigHelpers:
         tmp_path: Path,
         field_name_policy: typing.Literal["preserve", "replace_dots"],
         expected_data: dict[str, object],
-    ):
+    ) -> None:
         received: list[bytes] = []
         request_received = threading.Event()
         allow_response = threading.Event()
         teardown_started = threading.Event()
 
         class CaptureHandler(BaseHTTPRequestHandler):
-            def do_POST(self):
+            def do_POST(self) -> None:
                 content_length = int(self.headers["Content-Length"])
                 received.append(self.rfile.read(content_length))
                 request_received.set()
@@ -531,7 +546,7 @@ class TestObservabilityConfigHelpers:
             server_thread.join(timeout=5)
             server.server_close()
 
-    async def test_atif_flushes_open_agent_on_clear(self, tmp_path):
+    async def test_atif_flushes_open_agent_on_clear(self, tmp_path) -> None:
         activation = await plugin.initialize(
             plugin.PluginConfig(
                 components=[
@@ -546,7 +561,7 @@ class TestObservabilityConfigHelpers:
         finally:
             scope.pop(handle)
 
-    async def test_atif_can_use_propagation_root_as_run_session_id(self, tmp_path):
+    async def test_atif_can_use_propagation_root_as_run_session_id(self, tmp_path) -> None:
         request_id = "018f47a4-3af7-7d94-8e61-9f0f89b5d312"
         stack = create_scope_stack_from_propagation(PropagationContext(request_id, request_id))
         activation = await plugin.initialize(
@@ -577,7 +592,7 @@ class TestObservabilityConfigHelpers:
         assert trajectory["trajectory_id"] == handle.uuid
         assert trajectory["extra"]["nemo_relay"]["session_instance_id"] == request_id
 
-    async def test_atif_non_string_metadata_is_reported_on_failed_close(self, tmp_path):
+    async def test_atif_non_string_metadata_is_reported_on_failed_close(self, tmp_path) -> None:
         activation = await plugin.initialize(
             plugin.PluginConfig(
                 components=[
@@ -618,7 +633,7 @@ class TestObservabilityConfigHelpers:
                 await activation.close()
         assert not activation.is_active
 
-    async def test_atif_splits_multiple_top_level_agent_scopes(self, tmp_path):
+    async def test_atif_splits_multiple_top_level_agent_scopes(self, tmp_path) -> None:
         activation = await plugin.initialize(
             plugin.PluginConfig(
                 components=[

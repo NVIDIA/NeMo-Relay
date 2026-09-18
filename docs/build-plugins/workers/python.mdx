@@ -6,7 +6,7 @@ position: 31
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-The `examples/python-grpc-worker-plugin` package uses the 0.8.0
+The `examples/python-grpc-worker-plugin` package uses the 0.9.0
 `nemo-relay-plugin` SDK and the shared documentation configuration. Its worker registers
 all 16 [surfaces](/build-plugins/workers/middleware-and-continuations), accepts
 synchronous and asynchronous callback forms where the
@@ -35,7 +35,7 @@ Run the package's atomic tests before creating a managed environment:
 Relay creates the managed environment from the package root named by the
 [manifest](/build-plugins/package-discoverable-plugins). A
 minimal `pyproject.toml` therefore needs a standard build backend, a package, and the
-0.8 worker SDK dependency:
+0.9 worker SDK dependency:
 
 ```toml
 [build-system]
@@ -46,7 +46,7 @@ build-backend = "setuptools.build_meta"
 name = "nemo-relay-python-grpc-worker-example"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["nemo-relay-plugin>=0.8.0"]
+dependencies = ["nemo-relay-plugin>=0.9.0"]
 
 [dependency-groups]
 test = ["pytest>=8", "pytest-asyncio>=0.26"]
@@ -77,16 +77,16 @@ export NEMO_RELAY_PLUGIN_SNAPSHOT_DIR=/var/tmp/nrs
 ```
 
 ```python
-from nemo_relay_plugin import DiagnosticLevel, WorkerPlugin, serve_plugin
+from nemo_relay_plugin import ConfigDiagnostic, DiagnosticLevel, Json, PluginContext, WorkerPlugin, serve_plugin
 
 class ExamplePythonWorker(WorkerPlugin):
     plugin_id = "examples.python_grpc_worker"
     allows_multiple_components = False
 
-    def validate(self, config):
+    def validate(self, config: Json) -> list[ConfigDiagnostic]:
         return validate_config(config)
 
-    def register(self, ctx, config):
+    def register(self, ctx: PluginContext, config: Json) -> None:
         diagnostics = validate_config(config)
         errors = [
             item for item in diagnostics
@@ -110,7 +110,7 @@ class ExamplePythonWorker(WorkerPlugin):
         if settings["execution"]["enabled"]:
             self._register_execution(ctx, settings["tag"], settings["execution"])
 
-async def main():
+async def main() -> None:
     await serve_plugin(ExamplePythonWorker())
 ```
 
@@ -129,7 +129,7 @@ id = "examples.python_grpc_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=0.9.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [capabilities]
@@ -150,12 +150,11 @@ runtime = "python"
 entrypoint = "nemo_relay_python_grpc_worker_example.worker:main"
 ```
 
-The manifest uses `relay = ">=0.8.0,<1.0"` because Relay 0.8 changes the `grpc-v1`
-[tool-result boundary](/build-plugins/workers/grpc-v1-protocol). `ToolNext.call()`
-returns `ToolExecutionResult`, whose `result`
-contains the application payload and whose optional `annotation` remains adjacent opaque
-metadata. The protocol identifier stays `grpc-v1`, but workers built against earlier
-generated bindings cannot decode the current structural result messages.
+The manifest requires Relay 0.9 because this worker uses the context-aware tool execution
+callback contract. The protocol identifier remains `grpc-v1`. `ToolNext.call()` returns
+`ToolExecutionResult`, whose `result` contains the application payload and whose optional
+`annotation` remains adjacent opaque metadata. See the
+[protocol reference](/build-plugins/workers/grpc-v1-protocol) for the complete boundary.
 
 ## Install and Activate the Package
 

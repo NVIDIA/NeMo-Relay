@@ -3,32 +3,34 @@
 
 /// <reference lib="esnext.disposable" />
 
-import type { EventSanitizeFields, Json, RuntimeRegistrationKind, ToolExecutionResult } from './index';
-import type { LlmCodec, LlmResponseCodec } from './typed';
+import type {
+  EventMetadata,
+  EventSanitizeFields,
+  Json,
+  LlmRequestInterceptOutcome,
+  LlmSanitizeRequestContext,
+  LlmSanitizeResponseContext,
+  PendingMarkSpec,
+  RuntimeRegistrationKind,
+  ToolExecutionContext,
+  ToolExecutionResult,
+} from './index';
 
-/** Codec identity available while a managed LLM event is sanitized. */
-export type LlmCodecIdentity =
-  | { kind: 'none' }
-  | {
-      kind: 'builtin';
-      id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'oci_genai' | 'gemini_generate_content';
-    }
-  | { kind: 'runtime'; id: string }
-  | { kind: 'opaque' };
-
-/** Codec context available while an LLM request is sanitized. */
-export interface LlmSanitizeRequestContext {
-  codec: LlmCodecIdentity;
-  /** Resolve the active codec for this callback. Do not retain the result after the callback returns. */
-  resolveCodec(): LlmCodec | null;
-}
-
-/** Codec context available while an LLM response is sanitized. */
-export interface LlmSanitizeResponseContext {
-  codec: LlmCodecIdentity;
-  /** Resolve the active codec for this callback. Do not retain the result after the callback returns. */
-  resolveCodec(): LlmResponseCodec | null;
-}
+export type {
+  EventMetadata,
+  EventMetadataScalar,
+  EventMetadataValue,
+  LlmCodecIdentity,
+  LlmOptimizationContribution,
+  LlmOptimizationDataSchema,
+  LlmOptimizationModel,
+  LlmOptimizationModelTransition,
+  LlmOptimizationTokenImpact,
+  LlmOptimizationTokens,
+  LlmRequestInterceptOutcome,
+  LlmSanitizeRequestContext,
+  LlmSanitizeResponseContext,
+} from './index';
 
 /** Policy behavior for unsupported configuration. */
 export type UnsupportedBehavior = 'ignore' | 'warn' | 'error';
@@ -134,87 +136,6 @@ export interface DynamicPluginValidationReport {
   selected: boolean;
 }
 
-/** A mark Relay materializes under a managed lifecycle. */
-export interface PendingMarkSpec {
-  name: string;
-  category?: string | null;
-  categoryProfile?: Json;
-  data?: Json;
-  dataSchema?: { name: string; version: string } | null;
-  metadata?: Json;
-  severity?: 'trace' | 'debug' | 'info' | 'warn' | 'warning' | 'error' | null;
-}
-
-/** Schema tag attached to an opaque optimization contribution payload. */
-export interface LlmOptimizationDataSchema {
-  name: string;
-  version: string;
-}
-
-/** Model identity retained for counterfactual pricing and downstream repricing. */
-export interface LlmOptimizationModel {
-  model: string;
-  provider?: string;
-}
-
-/** Baseline and effective model identities for a routing optimization. */
-export interface LlmOptimizationModelTransition {
-  baseline?: LlmOptimizationModel;
-  effective?: LlmOptimizationModel;
-}
-
-/** Explicit token evidence, independent from a pricing catalog. */
-export interface LlmOptimizationTokens {
-  /** Token counts must be non-negative JavaScript safe integers. */
-  prompt_tokens?: number;
-  /** Token counts must be non-negative JavaScript safe integers. */
-  completion_tokens?: number;
-  /** Token counts must be non-negative JavaScript safe integers. */
-  cache_read_tokens?: number;
-  /** Token counts must be non-negative JavaScript safe integers. */
-  cache_write_tokens?: number;
-  /** Token counts must be non-negative JavaScript safe integers. */
-  total_tokens?: number;
-}
-
-/** Baseline, effective, and saved token evidence for one optimization. */
-export interface LlmOptimizationTokenImpact {
-  baseline?: LlmOptimizationTokens;
-  effective?: LlmOptimizationTokens;
-  saved?: LlmOptimizationTokens;
-  quality?: 'observed' | 'estimated';
-  estimation_method?: string;
-}
-
-/**
- * One plugin's optimization evidence.
- *
- * `kind` is deliberately an open string so new optimizer categories round-trip
- * without a Relay release. Unknown top-level fields are retained by the wire
- * contract and represented by this interface's JSON extension surface.
- */
-export interface LlmOptimizationContribution {
-  id?: string;
-  /** Relay ordering must remain within JavaScript's safe-integer range. */
-  sequence?: number;
-  producer: string;
-  kind: 'input_compression' | 'model_routing' | (string & {});
-  applied: boolean;
-  model_transition?: LlmOptimizationModelTransition;
-  token_impact?: LlmOptimizationTokenImpact;
-  payload_schema?: LlmOptimizationDataSchema;
-  payload?: Json;
-  [key: string]: Json | undefined;
-}
-
-/** Canonical result returned by an LLM request intercept. */
-export interface LlmRequestInterceptOutcome {
-  request: Json;
-  annotated?: Json | null;
-  pendingMarks?: PendingMarkSpec[];
-  optimizationContributions?: LlmOptimizationContribution[];
-}
-
 /**
  * Canonical result returned by a tool execution intercept.
  *
@@ -227,18 +148,6 @@ export interface ToolExecutionInterceptOutcome {
   annotation?: Json;
   pendingMarks?: PendingMarkSpec[];
 }
-
-/** Scalar value accepted in event metadata additions. */
-export type EventMetadataScalar = string | number | boolean;
-
-/**
- * Flat value accepted in event metadata additions. After JSON conversion,
- * numeric arrays must contain only integer values or only floating-point values.
- */
-export type EventMetadataValue = EventMetadataScalar | string[] | number[] | boolean[];
-
-/** Metadata additions returned by an event metadata injector. */
-export type EventMetadata = Record<string, EventMetadataValue>;
 
 /** Component-scoped registration context passed to plugin handlers. */
 export interface PluginContext {
@@ -360,7 +269,7 @@ export interface PluginContext {
     name: string,
     priority: number,
     callback: (
-      args: Json,
+      context: ToolExecutionContext,
       next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>,
     ) => ToolExecutionInterceptOutcome | Promise<ToolExecutionInterceptOutcome>,
   ): void;
@@ -417,7 +326,9 @@ export declare function ComponentSpec(
  * then applies programmatic config and activates one owned lifetime.
  *
  * @param config - Programmatic configuration. It overrides file values.
- * @param additionalPluginsToml - Optional explicit `plugins.toml` layer.
+ * @param additionalPluginsToml - Optional explicit `plugins.toml` layer. A
+ * missing explicit file is reported as a `plugin.configuration_file_missing`
+ * warning in the host report.
  * @returns An owned activation with the unified host report.
  * @remarks Keep the returned activation alive while callbacks may run and call
  * `close()` or use `await using` for deterministic teardown.
@@ -430,7 +341,9 @@ export declare function initialize(config: PluginConfig, additionalPluginsToml?:
  * while leaving the process-wide host lease untouched.
  *
  * @param config - Programmatic configuration. It overrides file values.
- * @param additionalPluginsToml - Optional explicit `plugins.toml` layer.
+ * @param additionalPluginsToml - Optional explicit `plugins.toml` layer. A
+ * missing explicit file is reported as a `plugin.configuration_file_missing`
+ * warning in the host report.
  * @returns Structured static and dynamic validation report.
  * @remarks Validation performs no activation and does not acquire the host lease.
  */

@@ -1176,11 +1176,12 @@ fn native_loader_falls_back_to_abi_v3_plugins() {
 }
 
 #[test]
-fn native_loader_supports_current_v4_and_legacy_v2_plugins() {
+fn native_loader_supports_current_v5_frozen_v4_and_legacy_v2_plugins() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
     let fixture = build_fixture_plugin();
 
     for (plugin_id, symbol) in [
+        ("fixture_native_v5", "nemo_relay_fixture_native_plugin_v5"),
         ("fixture_native_v4", "nemo_relay_fixture_native_plugin_v4"),
         ("fixture_native_v2", "nemo_relay_fixture_native_plugin_v2"),
     ] {
@@ -1529,6 +1530,39 @@ async fn plugin_host_activation_owns_configuration_until_close() {
         .await
         .expect("cleared intercept chain should be empty");
     assert_eq!(unchanged, json!({ "input": true }));
+}
+
+#[tokio::test]
+async fn native_registration_discovers_static_observability() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+    let collector = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/v1/traces", collector.local_addr().unwrap());
+    let config: PluginConfig = serde_json::from_value(json!({
+        "components": [{"kind": "observability", "enabled": true, "config": {
+            "opentelemetry": {"enabled": true, "endpoints": [{
+                "type": "gen_ai", "endpoint": endpoint
+            }]}
+        }}]
+    }))
+    .unwrap();
+    let mut spec = host_spec("fixture_native", &manifest_ref);
+    spec.config = Map::from_iter([("discover_observability".into(), json!(true))]);
+
+    let (mut activation, report) =
+        PluginHostActivation::initialize_with_verified_specs(config, [spec])
+            .await
+            .expect("native registration must discover static OpenTelemetry subscribers");
+    assert!(!report.has_errors());
+    activation
+        .close()
+        .expect("native host should close cleanly");
+    assert!(
+        nemo_relay::api::registry::list_runtime_registrations(None)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]

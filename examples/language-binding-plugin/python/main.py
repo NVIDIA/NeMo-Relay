@@ -8,8 +8,9 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
+from collections.abc import AsyncIterator, Awaitable, Callable
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
 import nemo_relay
 from nemo_relay import llm, plugin, scope, subscribers, tools
@@ -238,7 +239,9 @@ class DocumentationPlugin:
         if observe["enabled"]:
             context.register_subscriber("events", lambda event: self.events.append(event.name))
 
-            def sanitize_event(_event, fields):
+            def sanitize_event(
+                _event: nemo_relay.Event, fields: nemo_relay.EventSanitizeFields
+            ) -> nemo_relay.EventSanitizeFields:
                 return {
                     "data": redact_json(fields["data"], observe["redact_keys"]),
                     "category_profile": redact_json(fields["category_profile"], observe["redact_keys"]),
@@ -258,7 +261,9 @@ class DocumentationPlugin:
                 "tool-response-sanitizer", 10, lambda _name, value: redact_json(value, observe["redact_keys"])
             )
 
-            def sanitize_llm_request(request, _codec_context):
+            def sanitize_llm_request(
+                request: nemo_relay.LLMRequest, _codec_context: nemo_relay.LlmSanitizeRequestContext
+            ) -> nemo_relay.LLMRequest:
                 return nemo_relay.LLMRequest(request.headers, redact_json(request.content, observe["redact_keys"]))
 
             context.register_llm_sanitize_request_guardrail("llm-request-sanitizer", 10, sanitize_llm_request)
@@ -282,7 +287,7 @@ class DocumentationPlugin:
                 lambda _name, args: {**args, "plugin_tag": tag},
             )
 
-            def llm_policy(request):
+            def llm_policy(request: nemo_relay.LLMRequest) -> str | None:
                 model = request.content.get("model") if isinstance(request.content, dict) else None
                 if requests["mode"] == "enforce" and model in requests["blocked_models"]:
                     return f"model '{model}' is blocked"
@@ -290,7 +295,9 @@ class DocumentationPlugin:
 
             context.register_llm_conditional_execution_guardrail("llm-policy", 10, llm_policy)
 
-            def llm_request(_name, request, annotated):
+            def llm_request(
+                _name: str, request: nemo_relay.LLMRequest, annotated: nemo_relay.AnnotatedLLMRequest | None
+            ) -> nemo_relay.LLMRequestInterceptOutcome:
                 return nemo_relay.LLMRequestInterceptOutcome(
                     nemo_relay.LLMRequest(
                         {**request.headers, requests["header_name"]: requests["header_value"]},
@@ -308,7 +315,10 @@ class DocumentationPlugin:
 
         if settings["runtime"]["emit_marks"] or settings["runtime"]["emit_isolated_scope"]:
 
-            async def runtime_events(_name, args, next_call):
+            async def runtime_events(
+                context: nemo_relay.ToolExecutionContext,
+                next_call: Callable[[nemo_relay.Json], Awaitable[nemo_relay.ToolExecutionResult[nemo_relay.Json]]],
+            ) -> nemo_relay.ToolExecutionInterceptOutcome:
                 if settings["runtime"]["emit_marks"]:
                     scope.event(
                         "documentation-plugin.request",
@@ -318,7 +328,7 @@ class DocumentationPlugin:
                     with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
                         with scope.scope("documentation-plugin.isolated", nemo_relay.ScopeType.Custom):
                             pass
-                downstream = await next_call(args)
+                downstream = await next_call(context.args)
                 return nemo_relay.ToolExecutionInterceptOutcome(
                     downstream.result,
                     annotation=downstream.annotation,
@@ -326,14 +336,20 @@ class DocumentationPlugin:
 
             context.register_tool_execution_intercept("runtime-events", 0, runtime_events)
 
-        async def stream_request(_request, next_call):
+        async def stream_request(
+            _request: nemo_relay.LLMRequest,
+            next_call: Callable[[nemo_relay.LLMRequest], Awaitable[AsyncIterator[nemo_relay.Json]]],
+        ) -> AsyncIterator[nemo_relay.Json]:
             async for chunk in await next_call(_request):
-                yield {**chunk, "plugin_stream": True}
+                yield {**cast(nemo_relay.JsonObject, chunk), "plugin_stream": True}
 
         if execution["enabled"]:
 
-            async def tool_execution(_name, args, next_call):
-                result = await next_call(args)
+            async def tool_execution(
+                context: nemo_relay.ToolExecutionContext,
+                next_call: Callable[[nemo_relay.Json], Awaitable[nemo_relay.ToolExecutionResult[nemo_relay.Json]]],
+            ) -> nemo_relay.ToolExecutionInterceptOutcome:
+                result = await next_call(context.args)
                 marks = (
                     [nemo_relay.PendingMarkSpec("documentation-plugin.tool-complete")]
                     if execution["emit_pending_marks"]
@@ -347,7 +363,11 @@ class DocumentationPlugin:
 
             context.register_tool_execution_intercept("tool-execution", execution["priority"], tool_execution)
 
-            async def llm_execution(_name, request, next_call):
+            async def llm_execution(
+                _name: str,
+                request: nemo_relay.LLMRequest,
+                next_call: Callable[[nemo_relay.LLMRequest], Awaitable[nemo_relay.Json]],
+            ) -> nemo_relay.Json:
                 return await next_call(request)
 
             context.register_llm_execution_intercept("llm-execution", execution["priority"], llm_execution)
@@ -374,7 +394,7 @@ def component(mode: str, *, enabled: bool = True) -> plugin.PluginConfig:
 
 async def main() -> dict[str, Any]:
     implementation = DocumentationPlugin()
-    plugin.register("documentation-plugin", implementation)
+    plugin.register("documentation-plugin", cast(plugin.Plugin, implementation))
     print("registered:", plugin.list_kinds())
     invalid = plugin.validate(component("invalid"))["config"]["diagnostics"]
     assert invalid[0]["code"] == "documentation-plugin.unsupported_mode"
@@ -407,19 +427,22 @@ async def main() -> dict[str, Any]:
         assert tool_result.annotation == {"source": "application"}
         print("tool:", tool_result)
         request = nemo_relay.LLMRequest({}, {"model": "allowed-model"})
-        llm_result = await llm.execute("allowed-model", request, lambda req: {"headers": req.headers})
-        assert llm_result["headers"]["x-nemo-relay-plugin"] == "documentation"
+        llm_result = cast(
+            nemo_relay.JsonObject,
+            await llm.execute("allowed-model", request, lambda req: {"headers": req.headers}),
+        )
+        assert cast(nemo_relay.JsonObject, llm_result["headers"])["x-nemo-relay-plugin"] == "documentation"
         print("llm:", llm_result)
 
-        async def provider(_request):
+        async def provider(_request: nemo_relay.LLMRequest) -> AsyncIterator[nemo_relay.Json]:
             yield {"chunk": 1}
             yield {"chunk": 2}
 
-        chunks: list[dict[str, Any]] = []
+        chunks: list[nemo_relay.Json] = []
         stream = await llm.stream_execute("allowed-model", request, provider, chunks.append, lambda: {"done": True})
         streamed: list[dict[str, Any]] = []
         async for chunk in stream:
-            streamed.append(chunk)
+            streamed.append(cast(nemo_relay.JsonObject, chunk))
             print("stream:", chunk)
         assert len(streamed) == 2
         assert all(chunk["plugin_stream"] is True for chunk in streamed)

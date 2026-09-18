@@ -276,7 +276,7 @@ fn v1_artifact_bytes_do_not_depend_on_binary_or_platform_versioning() {
 fn canonical_v1_bundle_matches_the_release_frozen_golden_digest() {
     // This digest pins the release-candidate v1 manifest and every artifact byte for a canonical
     // deployment. After v1 is published, behavior changes must use a separately named v2 family.
-    const GOLDEN_SHA256: &str = "2016bff51f766cd6c9857fa6c5c089ac160c9e3747ac89112e69681c5a2da6a9";
+    const GOLDEN_SHA256: &str = "de9788ebe6c84b377f7cc583f1d725ae93fd82ba714382e11ffc034d9a642777";
     let rendered = render_bundle(&spec([
         ManagedAgent::Codex,
         ManagedAgent::ClaudeCode,

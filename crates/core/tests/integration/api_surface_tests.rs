@@ -1165,7 +1165,7 @@ fn assert_global_tool_registry() {
     register_tool_execution_intercept(
         "tool-execution",
         1,
-        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
+        Arc::new(|context, _next| Box::pin(async move { Ok(context.into_args().into()) })),
     )
     .unwrap();
     assert!(deregister_tool_execution_intercept("tool-execution").unwrap());
@@ -1418,7 +1418,7 @@ fn assert_scope_tool_registry(scope_uuid: &uuid::Uuid) {
         scope_uuid,
         "tool-execution",
         1,
-        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
+        Arc::new(|context, _next| Box::pin(async move { Ok(context.into_args().into()) })),
     )
     .unwrap();
     assert!(scope_deregister_tool_execution_intercept(scope_uuid, "tool-execution").unwrap());
@@ -1568,7 +1568,7 @@ fn assert_missing_scope_registry_errors(scope_uuid: &uuid::Uuid) {
             scope_uuid,
             "missing-tool-exec",
             1,
-            Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
+            Arc::new(|context, _next| Box::pin(async move { Ok(context.into_args().into()) })),
         )
         .unwrap_err(),
         "scope",

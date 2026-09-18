@@ -59,6 +59,7 @@ describe('Type constants', () => {
         'NodeNext',
         'tests/public_observability_api_fixture.ts',
         'tests/public_event_metadata_api_fixture.ts',
+        'tests/public_pii_redaction_api_fixture.ts',
       ],
       {
         cwd: fileURLToPath(new URL('..', import.meta.url)),

@@ -821,6 +821,21 @@ class LlmRequestInterceptOutcome:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class ToolExecutionContext:
+    """Per-call context provided to a tool execution intercept.
+
+    ``tool_call_id`` is the provider-issued correlation identifier recorded on
+    the managed tool call, or ``None`` when the call did not record one. It lets
+    an intercept that completes execution without calling
+    :meth:`ToolNext.call` associate its result with the originating tool call.
+    """
+
+    tool_name: str
+    args: Json
+    tool_call_id: str | None = None
+
+
 @dataclass(slots=True)
 class ToolExecutionResult:
     """Canonical application-visible result of tool execution."""
@@ -1026,7 +1041,7 @@ ConditionalMiddlewareCallback: TypeAlias = Callable[
 ]
 ToolRequestCallback: TypeAlias = Callable[[str, Json], Json | Awaitable[Json]]
 ToolExecutionCallback: TypeAlias = Callable[
-    [str, Json, "ToolNext"],
+    ["ToolExecutionContext", "ToolNext"],
     ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome],
 ]
 LlmSanitizeRequestCallback: TypeAlias = Callable[
@@ -1369,7 +1384,7 @@ class PluginContext:
 
         Args:
             name: Component-local registration name.
-            callback: Function receiving ``(tool_name, arguments, next_call)``
+            callback: Function receiving ``(context, next_call)``
                 and returning :class:`ToolExecutionInterceptOutcome`, directly
                 or through an awaitable. It can call :meth:`ToolNext.call`
                 zero, one, or multiple times while the invocation is active.
@@ -2501,10 +2516,14 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 )
                 return _json_response(result)
             if request.surface == pb.TOOL_EXECUTION_INTERCEPT:
+                context = ToolExecutionContext(
+                    tool_name=request.tool.tool_name,
+                    args=_decode_required_envelope(request.tool.value, "tool value"),
+                    tool_call_id=(request.tool.tool_call_id if request.tool.HasField("tool_call_id") else None),
+                )
                 result = await _maybe_await(
                     self._handler(self._handlers.tool_executions, request.registration_name)(
-                        request.tool.tool_name,
-                        _decode_required_envelope(request.tool.value, "tool value"),
+                        context,
                         ToolNext(self._runtime, request.continuation_id),
                     )
                 )

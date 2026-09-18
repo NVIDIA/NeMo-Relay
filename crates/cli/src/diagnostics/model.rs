@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use nemo_relay::plugin::dynamic::PluginHostReport;
 use serde::Serialize;
 
 use crate::configuration::{DynamicPluginHostConfigStatus, GatewayConfig};
@@ -81,10 +82,23 @@ pub(crate) struct ConfigurationInfo {
     pub upstream_auth: UpstreamAuthInfo,
     pub plugin_configs: Vec<ConfigLayer>,
     pub plugin_resolution: Check,
+    /// The core-owned plugin-host preflight used by the public binding APIs.
+    pub plugin_host_validation: PluginHostValidation,
     pub resolution: Check,
     pub default_agent: Option<String>,
     pub configured_agents: Vec<String>,
     pub dynamic_plugins: Vec<DynamicPluginReferenceInfo>,
+}
+
+/// Result of the same non-activating plugin preflight exposed as
+/// `plugin::dynamic::validate` in Rust and `nemo_relay.plugin.validate` in Python.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct PluginHostValidation {
+    pub status: Status,
+    pub details: String,
+    /// The full, redacted core report is present whenever the preflight ran.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report: Option<PluginHostReport>,
 }
 
 #[derive(Debug, Clone, Serialize)]

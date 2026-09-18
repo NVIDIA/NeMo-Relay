@@ -8,7 +8,7 @@ use crate::acg::stability::StabilityAnalysisResult;
 use crate::types::cache::HotCache;
 use crate::types::metadata::{MetadataEnvelope, ParallelHint};
 use crate::types::plan::{ExecutionPlan, ParallelGroup};
-use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
+use nemo_relay::api::runtime::{ToolExecutionContext, create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::{ScopeHandle, ScopeType};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -101,7 +101,7 @@ async fn test_tool_intercept_calls_next() {
     let next: ToolExecutionNextFn =
         Arc::new(|_args| Box::pin(async move { Ok(json!({"result": "ok"}).into()) }));
 
-    let result = intercept("test", json!({"input": 1}), next).await;
+    let result = intercept(ToolExecutionContext::new("test", json!({"input": 1})), next).await;
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), json!({"result": "ok"}).into());
 }
@@ -124,7 +124,11 @@ async fn test_tool_intercept_with_populated_cache() {
         Arc::new(|_args| Box::pin(async move { Ok(json!({"from_next": true}).into()) }));
 
     // Should not panic and should return next's result
-    let result = intercept("test", json!({"tool_input": "data"}), next).await;
+    let result = intercept(
+        ToolExecutionContext::new("test", json!({"tool_input": "data"})),
+        next,
+    )
+    .await;
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), json!({"from_next": true}).into());
 }
@@ -146,7 +150,7 @@ async fn test_tool_intercept_passes_args_to_next() {
     let next: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
 
     let input = json!({"tool_arg": "value", "count": 42});
-    let result = intercept("test", input.clone(), next).await;
+    let result = intercept(ToolExecutionContext::new("test", input.clone()), next).await;
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), input.into());
 }
@@ -322,9 +326,15 @@ async fn test_schedule_mode_intercept_waits_for_primer_before_running_follower()
         })
     };
 
-    let primer = tokio::spawn(intercept("search", json!({"call": 1}), next.clone()));
+    let primer = tokio::spawn(intercept(
+        ToolExecutionContext::new("search", json!({"call": 1})),
+        next.clone(),
+    ));
     tokio::task::yield_now().await;
-    let follower = tokio::spawn(intercept("search", json!({"call": 2}), next.clone()));
+    let follower = tokio::spawn(intercept(
+        ToolExecutionContext::new("search", json!({"call": 2})),
+        next.clone(),
+    ));
 
     assert_eq!(primer.await.unwrap().unwrap(), json!({"call": 1}).into());
     assert_eq!(follower.await.unwrap().unwrap(), json!({"call": 2}).into());

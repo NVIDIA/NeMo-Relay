@@ -452,6 +452,19 @@ the header and keeps the static behavior below. Point it at a provider with
 | Model's API has no gateway route | Skipped (`unserviceable-api`) | Skipped (`unserviceable-api`) |
 | The provider's models do not share one endpoint | Redirected only if both upstreams already point at it | Redirected only if both upstreams already point at it |
 
+The gateway does not serve Google's Gemini or Vertex API. A Gemini model is
+therefore skipped with `unserviceable-api`: pi keeps using the normal Google
+endpoint, but its model request does not reach Relay. This means Relay cannot
+record the LLM call or apply LLM request rules to it.
+
+To route Gemini model traffic through Relay, use a provider or proxy that
+accepts OpenAI Completions, OpenAI Responses, or Anthropic Messages requests,
+then configure Pi to use that compatible API. A Gemini endpoint cannot use an
+OpenAI or Anthropic gateway route because the request formats differ. Relay's
+Gemini codec can translate Gemini data in
+[application integrations](/integrate-into-frameworks/provider-codecs), but it
+does not add a gateway route.
+
 `registerProvider` rewrites every model of the provider, not only the selected
 one, so the check is applied to the whole provider either way. A provider that
 mixes endpoints — Fireworks serves `anthropic-messages` at `/inference` and

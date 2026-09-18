@@ -129,6 +129,36 @@ pub(super) fn validate_annotated_request_consumer_compatibility(
     Ok(())
 }
 
+pub(super) fn validate_tool_execution_context_compatibility(
+    relay: &str,
+    plugin_kind: &str,
+) -> crate::plugin::Result<()> {
+    let requirement = VersionReq::parse(relay).map_err(|error| {
+        PluginError::InvalidConfig(format!("invalid compat.relay version requirement: {error}"))
+    })?;
+    if version_requirement_matches_minor(&requirement, 0, 8) {
+        return Err(PluginError::InvalidConfig(format!(
+            "dynamic plugin '{plugin_kind}' registers a context-aware tool execution intercept and must declare compat.relay = \">=0.9,<1.0\" or another range that excludes Relay 0.8"
+        )));
+    }
+    Ok(())
+}
+
+fn version_requirement_matches_minor(requirement: &VersionReq, major: u64, minor: u64) -> bool {
+    let first_version = Version::new(major, minor, 0);
+    let mut next_minor = first_version.clone();
+    increment_minor(&mut next_minor);
+    let candidate = requirement
+        .comparators
+        .iter()
+        .filter_map(comparator_minimum)
+        .filter(|version| version >= &first_version)
+        .max()
+        .unwrap_or(first_version);
+
+    candidate < next_minor && requirement.matches(&candidate)
+}
+
 fn parse_dynamic_plugin_relay_requirement<'a>(
     relay: Option<&'a str>,
     plugin_type: &str,

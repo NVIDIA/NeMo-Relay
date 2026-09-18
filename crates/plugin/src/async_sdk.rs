@@ -802,6 +802,24 @@ struct NameValueInvocation {
     value: Json,
 }
 
+/// Per-call context delivered to a native async tool execution intercept.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ToolExecutionContext {
+    /// Tool name associated with the execution.
+    pub tool_name: String,
+    /// JSON argument payload entering this intercept.
+    pub args: Json,
+    /// Provider-issued tool-call correlation identifier, when supplied.
+    pub tool_call_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ToolExecutionInvocation {
+    name: String,
+    value: Json,
+    tool_call_id: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct RequestInvocation {
     request: LlmRequest,
@@ -1058,7 +1076,7 @@ impl CodecIdentityInvocation {
 
 impl PluginContext<'_> {
     fn host_v4(&self) -> Result<HostV4> {
-        if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION
+        if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL
             || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV4>()
         {
             return Err("typed async native middleware requires Relay ABI v4".into());
@@ -1349,7 +1367,7 @@ impl PluginContext<'_> {
         callback: F,
     ) -> Result<()>
     where
-        F: Fn(String, Json, ToolNext) -> Fut + Send + Sync + 'static,
+        F: Fn(ToolExecutionContext, ToolNext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<ToolExecutionInterceptOutcome>> + Send + 'static,
     {
         let callback = Arc::new(callback);
@@ -1361,12 +1379,17 @@ impl PluginContext<'_> {
             Box::new(move |value, next, _| {
                 let callback = Arc::clone(&callback);
                 Box::pin(async move {
-                    let invocation: NameValueInvocation =
+                    let invocation: ToolExecutionInvocation =
                         serde_json::from_value(value).map_err(|error| error.to_string())?;
                     let next = ToolNext(
                         next.ok_or_else(|| "tool execution continuation was null".to_string())?,
                     );
-                    serde_json::to_value(callback(invocation.name, invocation.value, next).await?)
+                    let context = ToolExecutionContext {
+                        tool_name: invocation.name,
+                        args: invocation.value,
+                        tool_call_id: invocation.tool_call_id,
+                    };
+                    serde_json::to_value(callback(context, next).await?)
                         .map_err(|error| error.to_string())
                 })
             }),

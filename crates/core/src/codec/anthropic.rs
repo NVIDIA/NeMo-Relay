@@ -1302,6 +1302,15 @@ impl AnthropicMessagesStreamingState {
                     block.has_citations = true;
                 }
             }
+            "compaction_delta"
+                if block.skeleton.get("type").and_then(Json::as_str) == Some("compaction") =>
+            {
+                for field in ["content", "encrypted_content"] {
+                    if let Some(value) = delta.get(field) {
+                        block.skeleton.insert(field.to_string(), value.clone());
+                    }
+                }
+            }
             // thinking_delta, signature_delta, and any future delta types fall through; the block
             // skeleton retains whatever shape was set at content_block_start.
             _ => {}

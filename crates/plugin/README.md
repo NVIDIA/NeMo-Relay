@@ -32,7 +32,7 @@ the dynamic-library boundary on the stable C-compatible ABI.
 | `PluginContext` | Installs component-owned subscribers, guardrails, intercepts, continuations, and streams. |
 | `PluginRuntime` | Emits marks and manages Relay-owned scopes and scope stacks through typed host helpers. |
 | `nemo_relay_plugin!` | Exports the one versioned native entry point used by the loader. |
-| Native ABI v4 | Keeps C-compatible host and plugin tables behind the safe Rust interface while the host retains frozen v3 and v2 tables for previously compiled plugins. |
+| Native ABI v5 | Keeps C-compatible host and plugin tables behind the safe Rust interface while the host retains frozen v4, v3, and v2 tables for previously compiled plugins. |
 | Typed async middleware | Drives guardrails, sanitizers, and intercepts on a per-component SDK-owned Tokio executor. Subscribers and raw ABI registrations remain synchronous. |
 | Async continuations and streams | `ToolNext`, `LlmNext`, and `LlmStreamNext` support repeated or concurrent downstream calls. Streaming LLM continuations use a pull-based host handle. |
 | Tool results | `ToolNext` returns `ToolExecutionResult`, which keeps an application result and optional annotation together. |
@@ -95,9 +95,13 @@ tight CPU budget. Do not block these workers; use async I/O or
 Relay 0.8 establishes canonical tool results as the native API 1 baseline. Tool
 callbacks and `ToolNext` return `ToolExecutionResult`, preserving an application result
 and optional opaque annotation. Tool execution intercepts return the same pair plus
-Relay-owned pending marks. The manifest contract remains `compat.native_api = "1"` and
-the C host-table ABI remains v4, but plugins must rebuild and exclude pre-0.8 Relay
-versions because the JSON result boundary changed.
+Relay-owned pending marks. The manifest contract remains `compat.native_api = "1"`.
+Relay 0.9 advances the C host-table ABI to v5 for `ToolExecutionContext`; the host keeps
+the frozen v4 table for previously compiled plugins. Plugins that register a
+context-aware tool execution intercept must rebuild and set
+`compat.relay = ">=0.9.0,<1.0"`; the required registration is unavailable in the v4 host
+table. Typed async plugins that do not use this registration may retain
+`compat.relay = ">=0.8.0,<1.0"`.
 
 Set a plugin-wide default in Rust, then let the component's TOML configuration
 override it:

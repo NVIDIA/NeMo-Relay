@@ -29,7 +29,7 @@ This workflow assumes `upstream` is the NVIDIA repository remote
    If the remote release branch already exists, verify it points where expected
    before continuing.
 4. Create a PR branch from latest `upstream/main`, for example
-   `docs/code-freeze-<major>.<minor>`.
+   `chore/version-bump-<major>.<minor>`.
 5. Update `.github/nightly-alpha-branches.yaml` to include the new release
    branch.
 6. Run `just set-version <next-version>` to update all project-owned

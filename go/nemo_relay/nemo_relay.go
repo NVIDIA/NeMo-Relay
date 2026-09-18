@@ -150,7 +150,7 @@ extern int32_t nemo_relay_register_tool_request_intercept(const char* name, int3
 extern int32_t nemo_relay_deregister_tool_request_intercept(const char* name);
 // Middleware chain intercept callback types (must be declared before use in externs)
 typedef char* (*NemoRelayToolExecNextFn)(const char* args_json, void* next_ctx);
-typedef char* (*NemoRelayToolExecInterceptCb)(void* user_data, const char* args_json, NemoRelayToolExecNextFn next_fn, void* next_ctx);
+typedef char* (*NemoRelayToolExecInterceptCb)(void* user_data, const char* context_json, NemoRelayToolExecNextFn next_fn, void* next_ctx);
 extern int32_t nemo_relay_register_tool_execution_intercept(const char* name, int32_t priority, NemoRelayToolExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
 extern int32_t nemo_relay_deregister_tool_execution_intercept(const char* name);
 
@@ -323,6 +323,7 @@ extern char* goLlmResponseTrampoline(void*, const char*, NemoRelayLlmSanitizeRes
 extern char* goLlmConditionalTrampoline(void*, const FfiLLMRequest*);
 extern char* goLlmExecTrampoline(void*, const char*);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
+extern char* goToolExecInterceptContextTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
 extern char* goLlmExecInterceptTrampoline(void*, const char*, NemoRelayLlmExecNextFn, void*);
 
 // Codec trampolines (used at execute time, not registration)
@@ -1732,7 +1733,7 @@ func DeregisterToolRequestIntercept(name string) error {
 }
 
 // RegisterToolExecutionIntercept registers an execution intercept following
-// the middleware chain pattern. execFn is called with the args and a `next`
+// the middleware chain pattern. execFn receives ToolExecutionContext and a `next`
 // function. Call `next` to invoke the next intercept or original
 // implementation; skip calling `next` to short-circuit the chain.
 func RegisterToolExecutionIntercept(name string, priority int32, execFn ToolExecutionInterceptFunc) error {
@@ -1748,7 +1749,7 @@ func RegisterToolExecutionIntercept(name string, priority int32, execFn ToolExec
 }
 
 // DeregisterToolExecutionIntercept removes a previously registered tool
-// execution intercept by name.
+// execution intercept by name, registered through either registration shape.
 func DeregisterToolExecutionIntercept(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
@@ -3321,7 +3322,7 @@ func ScopeRegisterToolExecutionIntercept(scopeUUID, name string, priority int32,
 }
 
 // ScopeDeregisterToolExecutionIntercept removes a scope-local tool execution
-// intercept by name.
+// intercept by name, registered through either registration shape.
 func ScopeDeregisterToolExecutionIntercept(scopeUUID, name string) error {
 	cScopeUUID := C.CString(scopeUUID)
 	defer C.free(unsafe.Pointer(cScopeUUID))

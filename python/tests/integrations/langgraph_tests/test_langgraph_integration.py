@@ -82,7 +82,7 @@ def _events_to_strings(events: list[nemo_relay.Event]) -> list[str]:
     return event_strings
 
 
-def test_handler_type(callback_handler: NemoRelayCallbackHandler):
+def test_handler_type(callback_handler: NemoRelayCallbackHandler) -> None:
     from langgraph.callbacks import GraphCallbackHandler
 
     from nemo_relay.integrations.langchain.callbacks import NemoRelayCallbackHandler as LangChainCallbackHandler
@@ -95,7 +95,7 @@ def test_handler_type(callback_handler: NemoRelayCallbackHandler):
 def test_create_tool_node_routes_standalone_tool_calls_through_relay(
     use_async: bool,
     subscribed_events: list[nemo_relay.Event],
-):
+) -> None:
     from langchain_core.messages import AIMessage
     from langchain_core.tools import tool
     from langgraph.graph import END, START, StateGraph
@@ -110,8 +110,8 @@ def test_create_tool_node_routes_standalone_tool_calls_through_relay(
     add_offset.__annotations__["state"] = Annotated[dict[str, Any], InjectedState]
     add_offset_tool = tool(add_offset)
 
-    async def rewrite_tool_args(_name: str, args: nemo_relay.Json, next_call: Any) -> Any:
-        downstream = await next_call({**cast(dict[str, Any], args), "value": 4})
+    async def rewrite_tool_args(context: nemo_relay.ToolExecutionContext, next_call: Any) -> Any:
+        downstream = await next_call({**cast(dict[str, Any], context.args), "value": 4})
         return nemo_relay.ToolExecutionInterceptOutcome(
             downstream.result,
             annotation=downstream.annotation,
@@ -161,7 +161,7 @@ def test_create_tool_node_routes_standalone_tool_calls_through_relay(
 
 def test_exported_tool_node_wrappers_support_direct_tool_node_construction(
     subscribed_events: list[nemo_relay.Event],
-):
+) -> None:
     from langchain_core.messages import AIMessage
     from langchain_core.tools import tool
     from langgraph.graph import END, START, MessagesState, StateGraph
@@ -203,7 +203,7 @@ def test_exported_tool_node_wrappers_support_direct_tool_node_construction(
 
 def test_create_tool_node_preserves_command_and_error_handling(
     subscribed_events: list[nemo_relay.Event],
-):
+) -> None:
     from langchain_core.messages import AIMessage, ToolMessage
     from langchain_core.tools import tool
     from langgraph.graph import END, START, StateGraph
@@ -273,7 +273,7 @@ def test_create_tool_node_preserves_command_and_error_handling(
 def test_create_tool_node_preserves_selective_error_handling(
     use_async: bool,
     policy: type[ValueError] | tuple[type[ValueError], ...],
-):
+) -> None:
     from langchain_core.messages import AIMessage
     from langchain_core.tools import tool
     from langgraph.graph import END, START, StateGraph
@@ -328,7 +328,7 @@ def test_create_tool_node_preserves_selective_error_handling(
 
 
 @pytest.mark.parametrize("use_async", [False, True])
-def test_create_tool_node_preserves_list_command_results(use_async: bool):
+def test_create_tool_node_preserves_list_command_results(use_async: bool) -> None:
     from langchain_core.messages import AIMessage, ToolMessage
     from langchain_core.tools import tool
     from langgraph.graph import END, START, StateGraph
@@ -368,7 +368,7 @@ def test_create_tool_node_preserves_list_command_results(use_async: bool):
 
 
 @pytest.mark.parametrize("use_async", [False, True])
-def test_create_tool_node_propagates_graph_interrupts(use_async: bool):
+def test_create_tool_node_propagates_graph_interrupts(use_async: bool) -> None:
     from langchain_core.messages import AIMessage
     from langchain_core.tools import tool
     from langgraph.checkpoint.memory import MemorySaver
@@ -409,7 +409,7 @@ def test_create_tool_node_propagates_graph_interrupts(use_async: bool):
 
 
 @pytest.mark.parametrize("wrapper_name", ["wrap_tool_call", "awrap_tool_call"])
-def test_create_tool_node_rejects_custom_tool_wrappers(wrapper_name: str):
+def test_create_tool_node_rejects_custom_tool_wrappers(wrapper_name: str) -> None:
     from nemo_relay.integrations.langgraph import create_tool_node
 
     with pytest.raises(ValueError, match="construct ToolNode directly"):
@@ -431,7 +431,7 @@ class TestGraphCallbacks:
         sync_graph: CompiledStateGraph,
         subscribed_events: list[nemo_relay.Event],
         callback_handler: NemoRelayCallbackHandler,
-    ):
+    ) -> None:
         with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
             result = sync_graph.invoke({"value": 1}, config={"callbacks": [callback_handler]})
 
@@ -445,7 +445,7 @@ class TestGraphCallbacks:
         async_graph: CompiledStateGraph,
         subscribed_events: list[nemo_relay.Event],
         callback_handler: NemoRelayCallbackHandler,
-    ):
+    ) -> None:
         with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
             result = await async_graph.ainvoke({"value": 1}, config={"callbacks": [callback_handler]})
 
@@ -458,7 +458,7 @@ class TestGraphCallbacks:
 def test_complete_skill_read_inside_langgraph_emits_mark(
     subscribed_events: list[nemo_relay.Event],
     callback_handler: NemoRelayCallbackHandler,
-):
+) -> None:
     from langgraph.graph import END, START, StateGraph
 
     def load_skill(state: State) -> State:
@@ -492,7 +492,7 @@ def test_complete_skill_read_inside_langgraph_emits_mark(
 def test_graph_lifecycle_callbacks_emit_marks(
     subscribed_events: list[nemo_relay.Event],
     callback_handler: NemoRelayCallbackHandler,
-):
+) -> None:
     from langgraph.callbacks import GraphInterruptEvent, GraphResumeEvent
     from langgraph.types import Interrupt
 
@@ -574,7 +574,7 @@ def _build_fan_out_graph() -> CompiledStateGraph:
 async def test_parallel_fan_out_leaves_the_enclosing_scope_closable(
     callback_handler: NemoRelayCallbackHandler,
     subscribed_events: list[nemo_relay.Event],
-):
+) -> None:
     """The reported failure, driven by a real graph rather than synthesized callbacks.
 
     Before the ordering fix, the branch that finished first was abandoned on the stack
@@ -644,7 +644,7 @@ def _build_nested_fan_out_graph() -> CompiledStateGraph:
 async def test_nested_fan_out_closes_every_scope(
     callback_handler: NemoRelayCallbackHandler,
     subscribed_events: list[nemo_relay.Event],
-):
+) -> None:
     """Several completions waiting at once, at two depths, must all close in order."""
 
     graph = _build_nested_fan_out_graph()
@@ -668,7 +668,7 @@ async def test_nested_fan_out_closes_every_scope(
 async def test_a_failing_node_still_closes_its_siblings(
     callback_handler: NemoRelayCallbackHandler,
     subscribed_events: list[nemo_relay.Event],
-):
+) -> None:
     """A node raising mid-fan-out completes through ``on_chain_error``.
 
     The failed run's scope has to be closed like any other, or it strands its siblings

@@ -26,8 +26,8 @@ equivalent binding configuration.
 
 For native packages, `compat.native_api = "1"` is the authored manifest contract. It is
 not the [C host-table ABI number](/build-plugins/native/native-abi-reference). The
-current SDK requests ABI v4 and the host retains frozen v3 and v2 compatibility for
-older compiled plugins. For workers, declare `compat.worker_protocol = "grpc-v1"`; the
+current SDK requests ABI v5 and the host retains frozen v4, v3, and v2 compatibility
+for older compiled plugins. For workers, declare `compat.worker_protocol = "grpc-v1"`; the
 [handshake](/build-plugins/workers/grpc-v1-protocol) still negotiates the exact
 protocol, surfaces, authentication token, and lifecycle at startup.
 
@@ -48,7 +48,7 @@ id = "examples.python_grpc_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=0.9.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -81,7 +81,7 @@ id = "examples.rust_native_policy"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=0.9.0,<1.0"
 native_api = "1"
 
 [defaults]
@@ -113,7 +113,7 @@ id = "examples.rust_grpc_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=0.9.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]

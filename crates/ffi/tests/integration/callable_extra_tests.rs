@@ -6,6 +6,7 @@
 use super::*;
 use std::ptr;
 
+use nemo_relay::api::runtime::ToolExecutionContext;
 use tokio_stream::StreamExt;
 
 use super::test_support::resolve;
@@ -190,7 +191,10 @@ fn test_callable_extra_trampoline_and_helper_paths() {
         })
     });
     let tool_err = runtime
-        .block_on(tool_intercept("tool", json!({"value": 1}), tool_next))
+        .block_on(tool_intercept(
+            ToolExecutionContext::new("tool", json!({"value": 1})),
+            tool_next,
+        ))
         .unwrap_err();
     assert!(tool_err.to_string().contains("tool next failed"));
 

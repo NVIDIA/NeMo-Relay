@@ -513,6 +513,7 @@ impl PreparedAgentLaunch {
             ],
             temp_dirs: Vec::new(),
             notes: Vec::new(),
+            non_tty_warnings: Vec::new(),
             proxy_credential,
             secret_env_names: Vec::new(),
         };
@@ -561,17 +562,18 @@ impl PreparedAgentLaunch {
         Ok(())
     }
 
-    // Prints a compact pre-launch status banner so users see at a glance which plugin
-    // configuration is active, including plugin names and enabled/disabled state, before the
-    // agent's own UI takes over the terminal. Always emitted on stderr so it never contaminates
-    // piped/redirected agent output, and suppressed entirely when stdout is not a TTY — scripts
-    // capturing the agent stream get a clean pipe, interactive users still get the bordered frame.
-    // Distinct from `print()`, which is the verbose `--print` / `--dry-run` dump intended for
-    // inspection.
+    // Ordinary notes may contain paths or user-controlled text; they never cross this boundary.
+    fn non_tty_status_warnings(&self) -> &[String] {
+        &self.non_tty_warnings
+    }
+
+    // Prints the full status frame for interactive launches. Non-TTY launches preserve clean
+    // stdout and emit only warnings explicitly recorded as safe for stderr.
     fn print_live_status(&self, agent: CodingAgent, gateway_url: &str, resolved: &ResolvedConfig) {
-        // Suppress entirely on non-TTY stdout: when the user redirects the agent's stream to a
-        // file or pipes it into another tool, no banner should appear ahead of that output.
         if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+            for warning in self.non_tty_status_warnings() {
+                eprintln!("warning: {warning}");
+            }
             return;
         }
 
@@ -594,9 +596,9 @@ impl PreparedAgentLaunch {
                 ));
             }
         }
-        if !self.notes.is_empty() {
+        if !self.notes.is_empty() || !self.non_tty_warnings.is_empty() {
             lines.push(String::new());
-            for note in &self.notes {
+            for note in self.notes.iter().chain(&self.non_tty_warnings) {
                 lines.push(format!("⚠ {note}"));
             }
         }
@@ -647,7 +649,7 @@ impl PreparedAgentLaunch {
                 }
             );
         }
-        for note in &self.notes {
+        for note in self.notes.iter().chain(&self.non_tty_warnings) {
             println!("note = {note}");
         }
     }

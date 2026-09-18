@@ -289,8 +289,8 @@ describe('core plugins', () => {
 
     plugin.register(pluginKind, {
       register(_config, context) {
-        context.registerToolExecutionIntercept('target', 100, async (args, next) => {
-          const downstream = await next(args);
+        context.registerToolExecutionIntercept('target', 100, async (toolContext, next) => {
+          const downstream = await next(toolContext.args);
           return {
             result: {
               ...downstream.result,
@@ -299,10 +299,10 @@ describe('core plugins', () => {
             ...(downstream.annotation == null ? {} : { annotation: downstream.annotation }),
           };
         });
-        context.registerToolExecutionIntercept('blocker', -100, async (args, next) => {
+        context.registerToolExecutionIntercept('blocker', -100, async (toolContext, next) => {
           blockerEntered();
           await release;
-          return await next(args);
+          return await next(toolContext.args);
         });
       },
     });

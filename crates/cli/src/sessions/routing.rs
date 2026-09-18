@@ -4,18 +4,220 @@
 //! Child-session aliasing and lifecycle-event routing.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use nemo_relay::api::runtime::SubscriberDelivery;
 use serde_json::Value;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use crate::agents::shared::alignment::{
-    self, PendingSubagentStart, SessionAlias, SessionAlignmentState, merge_metadata,
+    PendingSubagentStart, SessionAlias, SessionAlignmentState, SessionRouteCleanup, merge_metadata,
 };
 use crate::configuration::SessionConfig;
 use crate::error::CliError;
 use crate::events::{AgentKind, NormalizedEvent, SessionEvent};
 
-use super::{LlmGatewayStart, Session, ToolArgumentTransform};
+use super::{
+    AuthenticatedOwners, AuthenticatedReservations, LlmGatewayStart, Session, SessionActivity,
+    SessionActivityGuard, ToolArgumentTransform,
+};
+
+// Event application temporarily removes a session from the shared directory so unrelated sessions
+// can progress during middleware awaits. If the request is cancelled, this guard restores that
+// session before releasing its gate or allowing shutdown to proceed.
+struct InFlightSession {
+    sessions: Arc<Mutex<HashMap<String, Session>>>,
+    session_id: String,
+    session: Option<Session>,
+    gate: Option<OwnedMutexGuard<()>>,
+    activity: Option<SessionActivityGuard>,
+}
+
+impl InFlightSession {
+    fn new(
+        sessions: Arc<Mutex<HashMap<String, Session>>>,
+        session_id: String,
+        session: Session,
+        gate: OwnedMutexGuard<()>,
+        activity: SessionActivityGuard,
+    ) -> Self {
+        Self {
+            sessions,
+            session_id,
+            session: Some(session),
+            gate: Some(gate),
+            activity: Some(activity),
+        }
+    }
+
+    fn session_mut(&mut self) -> &mut Session {
+        self.session
+            .as_mut()
+            .expect("in-flight session should own its session")
+    }
+
+    async fn restore(mut self) -> (OwnedMutexGuard<()>, SessionActivityGuard) {
+        let mut sessions = self.sessions.lock().await;
+        sessions.insert(
+            self.session_id.clone(),
+            self.session
+                .take()
+                .expect("in-flight session should own its session"),
+        );
+        drop(sessions);
+        self.take_guards()
+    }
+
+    fn discard(mut self) -> (OwnedMutexGuard<()>, SessionActivityGuard) {
+        self.session.take();
+        self.take_guards()
+    }
+
+    fn take_guards(&mut self) -> (OwnedMutexGuard<()>, SessionActivityGuard) {
+        (
+            self.gate
+                .take()
+                .expect("in-flight session should own its gate"),
+            self.activity
+                .take()
+                .expect("in-flight session should own its activity"),
+        )
+    }
+}
+
+impl Drop for InFlightSession {
+    fn drop(&mut self) {
+        let Some(session) = self.session.take() else {
+            return;
+        };
+        let sessions = Arc::clone(&self.sessions);
+        let session_id = self.session_id.clone();
+        let gate = self.gate.take();
+        let activity = self.activity.take();
+        drop(tokio::spawn(async move {
+            sessions.lock().await.insert(session_id, session);
+            drop(gate);
+            drop(activity);
+        }));
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct AuthenticatedRouting<'a> {
+    pub(super) owner: Option<&'a str>,
+    owners: Option<&'a AuthenticatedOwners>,
+    reservations: Option<&'a AuthenticatedReservations>,
+}
+
+impl<'a> AuthenticatedRouting<'a> {
+    pub(super) fn new(
+        owner: Option<&'a str>,
+        owners: &'a AuthenticatedOwners,
+        reservations: &'a AuthenticatedReservations,
+    ) -> Self {
+        Self {
+            owner,
+            owners: owner.map(|_| owners),
+            reservations: owner.map(|_| reservations),
+        }
+    }
+}
+
+pub(super) struct SessionEventApplier<'a> {
+    sessions: &'a Arc<Mutex<HashMap<String, Session>>>,
+    activity: &'a SessionActivity,
+    config: SessionConfig,
+}
+
+pub(super) struct AppliedSessionEvent {
+    pub(super) outcome: Option<(
+        bool,
+        Option<SubscriberDelivery>,
+        Option<ToolArgumentTransform>,
+    )>,
+    pub(super) session_gate: OwnedMutexGuard<()>,
+    pub(super) activity: SessionActivityGuard,
+}
+
+impl<'a> SessionEventApplier<'a> {
+    pub(super) fn new(
+        sessions: &'a Arc<Mutex<HashMap<String, Session>>>,
+        activity: &'a SessionActivity,
+        config: SessionConfig,
+    ) -> Self {
+        Self {
+            sessions,
+            activity,
+            config,
+        }
+    }
+
+    pub(super) async fn apply(
+        &self,
+        session_id: &str,
+        event: NormalizedEvent,
+        event_kind: AgentKind,
+        is_agent_started: bool,
+        session_gate: OwnedMutexGuard<()>,
+        activity: SessionActivityGuard,
+    ) -> Result<AppliedSessionEvent, CliError> {
+        if self.activity.is_closing() {
+            return Ok(AppliedSessionEvent {
+                outcome: None,
+                session_gate,
+                activity,
+            });
+        }
+        let session = {
+            let mut sessions = self.sessions.lock().await;
+            sessions.remove(session_id)
+        };
+        if session.is_none() && event.is_terminal() {
+            return Ok(AppliedSessionEvent {
+                outcome: None,
+                session_gate,
+                activity,
+            });
+        }
+        let session = session.unwrap_or_else(|| {
+            Session::new(session_id.to_string(), event_kind, self.config.clone())
+        });
+        let mut in_flight = InFlightSession::new(
+            Arc::clone(self.sessions),
+            session_id.to_string(),
+            session,
+            session_gate,
+            activity,
+        );
+        if is_agent_started
+            && in_flight.session_mut().agent_kind == AgentKind::Gateway
+            && event_kind != AgentKind::Gateway
+        {
+            in_flight.session_mut().agent_kind = event_kind;
+        }
+        match in_flight.session_mut().apply(event).await {
+            Ok(subscriber_delivery) => {
+                let session = in_flight.session_mut();
+                let is_empty = session.is_empty();
+                let tool_argument_transform = session.take_tool_argument_transform();
+                let (session_gate, activity) = if is_empty {
+                    in_flight.discard()
+                } else {
+                    in_flight.restore().await
+                };
+                Ok(AppliedSessionEvent {
+                    outcome: Some((is_empty, subscriber_delivery, tool_argument_transform)),
+                    session_gate,
+                    activity,
+                })
+            }
+            Err(error) => {
+                drop(in_flight.restore().await);
+                Err(error)
+            }
+        }
+    }
+}
 
 pub(super) fn apply_start_alias(start: &mut LlmGatewayStart, alias: &SessionAlias) {
     start.session_id = Some(alias.parent_session_id.clone());
@@ -24,18 +226,16 @@ pub(super) fn apply_start_alias(start: &mut LlmGatewayStart, alias: &SessionAlia
 }
 
 pub(super) async fn queue_or_promote_child_start(
-    event: &mut NormalizedEvent,
+    pending_child: Option<(String, PendingSubagentStart)>,
     sessions: &mut HashMap<String, Session>,
     alignment_state: &mut SessionAlignmentState,
     config: SessionConfig,
-    authenticated_owners: Option<&HashMap<String, String>>,
-    authenticated_owner: Option<&str>,
+    authenticated: AuthenticatedRouting<'_>,
 ) -> Result<bool, CliError> {
-    let Some((child_session_id, mut pending)) = alignment::pending_subagent_start(event).await
-    else {
+    let Some((child_session_id, mut pending)) = pending_child else {
         return Ok(false);
     };
-    pending.set_authenticated_owner(authenticated_owner.map(ToOwned::to_owned));
+    pending.set_authenticated_owner(authenticated.owner.map(ToOwned::to_owned));
     if sessions
         .get(&child_session_id)
         .is_some_and(|session| !session.can_reparent_as_subagent_alias())
@@ -44,10 +244,12 @@ pub(super) async fn queue_or_promote_child_start(
     }
     if sessions.contains_key(pending.parent_session_id()) {
         if !parent_owner_matches(
-            authenticated_owners,
+            authenticated,
             pending.parent_session_id(),
             pending.authenticated_owner(),
-        ) {
+        )
+        .await
+        {
             return Err(CliError::Unauthorized(format!(
                 "Relay hook client does not own session '{}'",
                 pending.parent_session_id()
@@ -60,7 +262,7 @@ pub(super) async fn queue_or_promote_child_start(
             child_session_id,
             pending,
             config,
-            authenticated_owners,
+            authenticated,
         )
         .await?;
     } else {
@@ -70,52 +272,21 @@ pub(super) async fn queue_or_promote_child_start(
     Ok(true)
 }
 
-pub(super) async fn apply_event_to_session(
-    sessions: &mut HashMap<String, Session>,
-    session_id: &str,
-    event: NormalizedEvent,
-    event_kind: AgentKind,
-    config: SessionConfig,
-    is_agent_started: bool,
-) -> Result<
-    (
-        bool,
-        Option<SubscriberDelivery>,
-        Option<ToolArgumentTransform>,
-    ),
-    CliError,
-> {
-    let session = sessions
-        .entry(session_id.to_string())
-        .or_insert_with(|| Session::new(session_id.to_string(), event_kind, config));
-    if is_agent_started
-        && session.agent_kind == AgentKind::Gateway
-        && event_kind != AgentKind::Gateway
-    {
-        session.agent_kind = event_kind;
-    }
-    let subscriber_delivery = session.apply(event).await?;
-    let tool_argument_transform = session.take_tool_argument_transform();
-    Ok((
-        session.is_empty(),
-        subscriber_delivery,
-        tool_argument_transform,
-    ))
-}
-
 pub(super) async fn promote_pending_subagents_for_parent(
     sessions: &mut HashMap<String, Session>,
     alignment_state: &mut SessionAlignmentState,
     parent_session_id: &str,
     config: SessionConfig,
-    authenticated_owners: Option<&HashMap<String, String>>,
+    authenticated: AuthenticatedRouting<'_>,
 ) -> Result<(), CliError> {
     for (child_session_id, pending) in alignment_state.pending_for_parent(parent_session_id) {
         if !parent_owner_matches(
-            authenticated_owners,
+            authenticated,
             parent_session_id,
             pending.authenticated_owner(),
-        ) {
+        )
+        .await
+        {
             continue;
         }
         promote_pending_subagent(
@@ -124,7 +295,7 @@ pub(super) async fn promote_pending_subagents_for_parent(
             child_session_id,
             pending,
             config.clone(),
-            authenticated_owners,
+            authenticated,
         )
         .await?;
     }
@@ -137,7 +308,7 @@ pub(super) async fn promote_pending_subagent(
     child_session_id: String,
     pending: PendingSubagentStart,
     config: SessionConfig,
-    authenticated_owners: Option<&HashMap<String, String>>,
+    authenticated: AuthenticatedRouting<'_>,
 ) -> Result<Option<SessionAlias>, CliError> {
     if sessions
         .get(&child_session_id)
@@ -148,10 +319,12 @@ pub(super) async fn promote_pending_subagent(
     sessions.remove(&child_session_id);
     let parent_session_id = pending.parent_session_id().to_string();
     if !parent_owner_matches(
-        authenticated_owners,
+        authenticated,
         &parent_session_id,
         pending.authenticated_owner(),
-    ) {
+    )
+    .await
+    {
         return Ok(None);
     }
     let parent_session = sessions
@@ -181,30 +354,26 @@ pub(super) async fn promote_pending_subagent(
     Ok(Some(alias))
 }
 
-fn parent_owner_matches(
-    authenticated_owners: Option<&HashMap<String, String>>,
+async fn parent_owner_matches(
+    authenticated: AuthenticatedRouting<'_>,
     parent_session_id: &str,
     pending_owner: Option<&str>,
 ) -> bool {
-    match (authenticated_owners, pending_owner) {
-        (Some(owners), Some(owner)) => owners
-            .get(parent_session_id)
-            .is_some_and(|existing| existing == owner),
+    match (
+        authenticated.owners,
+        authenticated.reservations,
+        pending_owner,
+    ) {
+        (Some(owners), Some(reservations), Some(owner)) => {
+            super::owner_matches(owners, reservations, parent_session_id, owner).await
+        }
         _ => true,
     }
 }
 
-pub(super) fn route_event_for_session(
+pub(super) fn prepare_event_for_session(
     event: NormalizedEvent,
-    sessions: &mut HashMap<String, Session>,
-    alignment_state: &mut SessionAlignmentState,
-) -> Option<(NormalizedEvent, String, bool)> {
-    let event = alignment_state.route_event(event);
-    let session_id = event.session_id().to_string();
-    let is_agent_started = matches!(&event, NormalizedEvent::AgentStarted(_));
-
-    if event.is_terminal() && !sessions.contains_key(&session_id) {
-        return None;
-    }
-    Some((event, session_id, is_agent_started))
+    alignment_state: &SessionAlignmentState,
+) -> (NormalizedEvent, SessionRouteCleanup) {
+    alignment_state.prepare_route(event)
 }

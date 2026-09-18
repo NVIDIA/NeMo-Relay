@@ -196,6 +196,27 @@ fn registry_rejects_invalid_raw_record_load_shapes() {
 }
 
 #[test]
+fn registry_replacement_rejects_invalid_record_shapes() {
+    let mut registry = DynamicPluginRegistry::new();
+    registry.add(sample_record()).expect("register plugin");
+    let mut replacement = sample_record();
+    replacement.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        runtime: WorkerRuntime::Python,
+        entrypoint: String::new(),
+    });
+
+    let err = registry
+        .replace_declaration("acme.guardrails.pii", replacement)
+        .expect_err("invalid replacement shape should fail");
+    match err {
+        PluginError::InvalidConfig(message) => {
+            assert!(message.contains("load shape"), "{message}");
+        }
+        other => panic!("unexpected invalid replacement error: {other}"),
+    }
+}
+
+#[test]
 fn registry_rejects_invalid_raw_record_compatibility_shapes() {
     let mut registry = DynamicPluginRegistry::new();
     let mut record = sample_record();
@@ -1928,6 +1949,24 @@ fn annotated_request_consumers_must_exclude_relay_zero_five() {
 
     validate_annotated_request_consumer_compatibility(">=0.6,<1.0", "example.request_interceptor")
         .unwrap();
+}
+
+#[test]
+fn context_aware_tool_execution_plugins_must_exclude_relay_zero_eight() {
+    for requirement in [">=0.8,<1.0", ">=0.8.0,<0.8.1", ">=0.8.1,<0.8.2"] {
+        let error = validate_tool_execution_context_compatibility(
+            requirement,
+            "example.tool_execution_interceptor",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains(">=0.9,<1.0"));
+    }
+
+    validate_tool_execution_context_compatibility(
+        ">=0.9,<1.0",
+        "example.tool_execution_interceptor",
+    )
+    .unwrap();
 }
 
 #[test]

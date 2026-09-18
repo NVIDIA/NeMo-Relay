@@ -98,8 +98,15 @@ downstream result, then adds the pending mark without exposing it to the applica
 <Tabs>
 <Tab title="Python" language="python">
 ```python
-async def tool_execution(_name, args, next_call):
-    downstream = await next_call(args)
+from collections.abc import Awaitable, Callable
+
+from nemo_relay import Json, PendingMarkSpec, ToolExecutionContext, ToolExecutionInterceptOutcome, ToolExecutionResult
+
+async def tool_execution(
+    context: ToolExecutionContext,
+    next_call: Callable[[Json], Awaitable[ToolExecutionResult[Json]]],
+) -> ToolExecutionInterceptOutcome:
+    downstream = await next_call(context.args)
     return ToolExecutionInterceptOutcome(
         downstream.result,
         [PendingMarkSpec("plugin.tool.complete")],
@@ -116,8 +123,8 @@ context.register_tool_execution_intercept(
 context.registerToolExecutionIntercept(
   'tool_execution',
   executionPriority,
-  async (args, next) => {
-    const downstream = await next(args);
+  async (context, next) => {
+    const downstream = await next(context.args);
     return {
       ...downstream,
       pendingMarks: [{ name: 'plugin.tool.complete' }],
@@ -131,8 +138,10 @@ context.registerToolExecutionIntercept(
 context.register_tool_execution_intercept(
     "tool_execution",
     execution_priority,
-    move |_name, request, next| async move {
-        Ok(ToolExecutionInterceptOutcome::from(next.call(request).await?)
+    move |context, next| async move {
+        Ok(ToolExecutionInterceptOutcome::from(
+            next.call(context.into_args()).await?,
+        )
             .with_pending_mark(
                 PendingMarkSpec::builder()
                     .name("plugin.tool.complete")
@@ -145,6 +154,14 @@ context.register_tool_execution_intercept(
 ```
 </Tab>
 </Tabs>
+
+Each binding's tool execution registration receives a `ToolExecutionContext`
+and the continuation. The context exposes the tool name, the arguments entering
+the intercept, and the managed `tool_call_id`, which a plugin needs when it
+completes execution itself and must still associate its result with the
+originating tool call. See
+[Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
+for the full field list.
 
 The application receives the `ToolExecutionResult`, including its optional annotation,
 from the tool path and provider JSON from the LLM paths. Relay consumes pending marks and

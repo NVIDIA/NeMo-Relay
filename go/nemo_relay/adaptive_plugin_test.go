@@ -150,8 +150,8 @@ func registerLifecycleInterceptors(ctx *PluginContext, pluginKind string) error 
 	if err := ctx.RegisterToolExecutionIntercept(
 		"tool_exec",
 		7,
-		func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
-			resultJSON, err := next(args)
+		func(context ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
+			resultJSON, err := next(context.Args)
 			if err != nil {
 				return ToolExecutionInterceptOutcome{}, err
 			}
@@ -565,8 +565,8 @@ func TestPluginFuncsAndClosedContextBranches(t *testing.T) {
 			})
 		}},
 		{"tool execution", func() error {
-			return closed.RegisterToolExecutionIntercept("tool_exec", 1, func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
-				return toolExecutionOutcome(next(args))
+			return closed.RegisterToolExecutionIntercept("tool_exec", 1, func(context ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
+				return toolExecutionOutcome(next(context.Args))
 			})
 		}},
 	}

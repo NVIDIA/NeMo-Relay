@@ -56,6 +56,8 @@ function ComponentSpec(kind, config = {}, { enabled = true } = {}) {
  *
  * @param {object} config - Lowest-precedence programmatic configuration.
  * @param {string} [additionalPluginsToml] - Optional explicit `plugins.toml` layer.
+ * A missing explicit file is reported as a `plugin.configuration_file_missing`
+ * warning in the host report.
  * @returns {Promise<object>} An owned activation with the unified host report.
  * @remarks Keep the returned activation alive while callbacks may run and call
  * `close()` or use `await using` for deterministic teardown.
@@ -72,6 +74,8 @@ function initialize(config, additionalPluginsToml) {
  *
  * @param {object} config - Lowest-precedence programmatic configuration.
  * @param {string} [additionalPluginsToml] - Optional explicit `plugins.toml` layer.
+ * A missing explicit file is reported as a `plugin.configuration_file_missing`
+ * warning in the host report.
  * @returns {PluginHostReport} Structured static and dynamic validation report.
  * @remarks Validation performs no activation and does not acquire the host lease.
  */

@@ -633,9 +633,11 @@ fn assert_native_digest_edges() {
 
 fn assert_native_host_api_versions() {
     let current = native_host_api();
+    let frozen_v4 = native_host_api_v4();
     let frozen_v3 = native_host_api_v3();
     let legacy = native_host_api_v2();
     assert!(!current.is_null());
+    assert!(!frozen_v4.is_null());
     assert!(!frozen_v3.is_null());
     assert!(!legacy.is_null());
     assert_eq!(
@@ -644,11 +646,19 @@ fn assert_native_host_api_versions() {
     );
     assert_eq!(unsafe { (*frozen_v3).abi_version }, 3);
     assert_eq!(
+        unsafe { (*frozen_v4).abi_version },
+        NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL
+    );
+    assert_eq!(
         unsafe { (*legacy).abi_version },
         NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY
     );
     assert_eq!(
         unsafe { (*current).struct_size },
+        std::mem::size_of::<NemoRelayNativeHostApiV5>()
+    );
+    assert_eq!(
+        unsafe { (*frozen_v4).struct_size },
         std::mem::size_of::<NemoRelayNativeHostApiV4>()
     );
     assert_eq!(
@@ -659,6 +669,11 @@ fn assert_native_host_api_versions() {
         unsafe { (*legacy).struct_size },
         std::mem::size_of::<NemoRelayNativeHostApiV1>()
     );
+    assert_native_host_api_v5_layout();
+    assert_native_host_api_v4_layout();
+}
+
+fn assert_native_host_api_v4_layout() {
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV4>(), 8);
@@ -727,6 +742,35 @@ fn assert_native_host_api_versions() {
                 plugin_context_register_conditional_middleware_guardrail_callback
             ),
             292
+        );
+    }
+}
+
+fn assert_native_host_api_v5_layout() {
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV5>(), 8);
+        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV5>(), 608);
+        assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV5, v4), 0);
+        assert_eq!(
+            std::mem::offset_of!(
+                NemoRelayNativeHostApiV5,
+                plugin_context_register_tool_execution_intercept
+            ),
+            600
+        );
+    }
+    #[cfg(target_pointer_width = "32")]
+    {
+        assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV5>(), 4);
+        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV5>(), 300);
+        assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV5, v4), 0);
+        assert_eq!(
+            std::mem::offset_of!(
+                NemoRelayNativeHostApiV5,
+                plugin_context_register_tool_execution_intercept
+            ),
+            296
         );
     }
 }
@@ -1735,7 +1779,7 @@ fn assert_native_json_output_and_host_api() {
     assert_eq!(host_api.abi_version, NEMO_RELAY_NATIVE_ABI_VERSION);
     assert_eq!(
         host_api.struct_size,
-        std::mem::size_of::<NemoRelayNativeHostApiV4>()
+        std::mem::size_of::<NemoRelayNativeHostApiV5>()
     );
 }
 
@@ -4531,6 +4575,85 @@ unsafe extern "C" fn noop_tool_execution(
     NemoRelayStatus::Ok
 }
 
+#[cfg(unix)]
+unsafe extern "C" fn noop_tool_execution_context(
+    _user_data: *mut c_void,
+    _context_json: *const NemoRelayNativeString,
+    _next_fn: NemoRelayNativeToolNextFn,
+    _next_ctx: *mut c_void,
+    _out_outcome_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::Ok
+}
+
+#[cfg(unix)]
+unsafe extern "C" fn tool_execution_context_round_trip(
+    user_data: *mut c_void,
+    context_json: *const NemoRelayNativeString,
+    next_fn: NemoRelayNativeToolNextFn,
+    next_ctx: *mut c_void,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let context = match read_native_string(context_json)
+        .ok()
+        .and_then(|value| serde_json::from_str::<Json>(&value).ok())
+    {
+        Some(context) => context,
+        None => return NemoRelayStatus::InvalidArg,
+    };
+    unsafe { &*(user_data as *const Mutex<Option<Json>>) }
+        .lock()
+        .unwrap()
+        .replace(context.clone());
+
+    let args = match native_string_from_json(&context["args"]) {
+        Some(args) => args,
+        None => return NemoRelayStatus::Internal,
+    };
+    let mut result = ptr::null_mut();
+    let status = unsafe { next_fn(args, next_ctx, &mut result) };
+    unsafe { native_string_free(args) };
+    if status != NemoRelayStatus::Ok {
+        return status;
+    }
+
+    let mut outcome = match take_json_from_native_string(result, "missing tool result") {
+        Ok(outcome) => outcome,
+        Err(_) => return NemoRelayStatus::Internal,
+    };
+    outcome["pending_marks"] = json!([]);
+    let Some(outcome) = native_string_from_json(&outcome) else {
+        return NemoRelayStatus::Internal;
+    };
+    unsafe { *out_outcome_json = outcome };
+    NemoRelayStatus::Ok
+}
+
+#[cfg(unix)]
+unsafe extern "C" fn tool_execution_context_error(
+    _user_data: *mut c_void,
+    _context_json: *const NemoRelayNativeString,
+    _next_fn: NemoRelayNativeToolNextFn,
+    _next_ctx: *mut c_void,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    unsafe { *out_outcome_json = native_string(r#"{"discarded":true}"#) };
+    set_native_last_error("tool execution context failed");
+    NemoRelayStatus::InvalidArg
+}
+
+#[cfg(unix)]
+unsafe extern "C" fn tool_execution_context_malformed_outcome(
+    _user_data: *mut c_void,
+    _context_json: *const NemoRelayNativeString,
+    _next_fn: NemoRelayNativeToolNextFn,
+    _next_ctx: *mut c_void,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    unsafe { *out_outcome_json = native_string(r#"{"pending_marks":[]}"#) };
+    NemoRelayStatus::Ok
+}
+
 unsafe extern "C" fn noop_llm_request(
     _user_data: *mut c_void,
     _request_json: *const NemoRelayNativeString,
@@ -4766,7 +4889,7 @@ fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
     assert_registration_entrypoints_reject_invalid_names(ctx);
     assert_registration_entrypoints_accept_valid_names(ctx);
     assert_async_registration_entrypoints_validate_contracts(ctx);
-    assert_async_request_registration_rejects_legacy_relay_contract();
+    assert_context_registrations_reject_legacy_relay_contracts();
 }
 
 #[cfg(unix)]
@@ -5167,7 +5290,7 @@ fn assert_async_registration_entrypoints_validate_contracts(
 }
 
 #[cfg(unix)]
-fn assert_async_request_registration_rejects_legacy_relay_contract() {
+fn assert_context_registrations_reject_legacy_relay_contracts() {
     let instance = Arc::new(NativePluginInstance {
         plugin_kind: "test.native.legacy".into(),
         relay_compat: "^0.5".into(),
@@ -5197,6 +5320,35 @@ fn assert_async_request_registration_rejects_legacy_relay_contract() {
         NemoRelayStatus::InvalidArg
     );
     assert_last_error_contains("excludes Relay 0.5");
+
+    let context_instance = Arc::new(NativePluginInstance {
+        plugin_kind: "test.native.context-legacy".into(),
+        relay_compat: "^0.8".into(),
+        allows_multiple_components: false,
+        plugin: Mutex::new(NemoRelayNativePluginV1::default()),
+        _library: libloading::os::unix::Library::this().into(),
+    });
+    let mut context_registration = PluginRegistrationContext::new();
+    let mut context_host = NativeHostPluginContext {
+        ctx: ptr::from_mut(&mut context_registration),
+        instance: context_instance,
+    };
+    let frees = AtomicUsize::new(0);
+    assert_eq!(
+        unsafe {
+            native_plugin_context_register_tool_execution_intercept_v5(
+                ptr::from_mut(&mut context_host).cast(),
+                name,
+                0,
+                noop_tool_execution_context,
+                (&frees as *const AtomicUsize).cast_mut().cast(),
+                Some(count_user_data_free),
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+    assert_eq!(frees.load(Ordering::SeqCst), 1);
+    assert_last_error_contains("excludes Relay 0.8");
     unsafe { native_string_free(name) };
 }
 
@@ -5322,11 +5474,14 @@ async fn native_async_wrappers_validate_callback_result_shapes() {
         None,
     );
     assert!(
-        tool_execution("tool", json!({}), tool_next(Ok(Json::Null)))
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("invalid native async tool outcome")
+        tool_execution(
+            ToolExecutionContext::new("tool", json!({})),
+            tool_next(Ok(Json::Null))
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("invalid native async tool outcome")
     );
 
     let fields = EventSanitizeFields::default();
@@ -6125,11 +6280,14 @@ async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
         None,
     );
     assert!(
-        tool_execution("tool", json!({}), tool_next(Ok(Json::Null)))
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("tool execution failed")
+        tool_execution(
+            ToolExecutionContext::new("tool", json!({})),
+            tool_next(Ok(Json::Null)),
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("tool execution failed")
     );
 
     let llm_conditional = wrap_llm_conditional_fn(
@@ -6195,6 +6353,78 @@ async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
             .expect("native stream callback should fail")
             .to_string()
             .contains("LLM stream execution failed")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_tool_execution_context_preserves_fields_and_callback_boundaries() {
+    let instance = Arc::new(NativePluginInstance {
+        plugin_kind: "test.native.tool-execution-context".into(),
+        relay_compat: ">=0.9,<1.0".into(),
+        allows_multiple_components: false,
+        plugin: Mutex::new(NemoRelayNativePluginV1::default()),
+        _library: libloading::os::unix::Library::this().into(),
+    });
+    let observed_context = Mutex::new(None);
+    let context = ToolExecutionContext::new("lookup", json!({"query": "private"}))
+        .with_tool_call_id(Some("call-native-1".into()));
+    let debug = format!("{context:?}");
+    assert!(debug.contains("lookup"));
+    assert!(debug.contains("call-native-1"));
+    assert!(!debug.contains("private"));
+
+    let callback = wrap_tool_execution_context_fn(
+        Arc::clone(&instance),
+        tool_execution_context_round_trip,
+        ptr::from_ref(&observed_context).cast_mut().cast(),
+        None,
+    );
+    let outcome = callback(context, tool_next(Ok(json!({"answer": 42}))))
+        .await
+        .unwrap();
+    assert_eq!(outcome.result, json!({"answer": 42}));
+    assert_eq!(
+        observed_context.lock().unwrap().as_ref(),
+        Some(&json!({
+            "tool_name": "lookup",
+            "args": {"query": "private"},
+            "tool_call_id": "call-native-1",
+        }))
+    );
+
+    let callback = wrap_tool_execution_context_fn(
+        Arc::clone(&instance),
+        tool_execution_context_error,
+        ptr::null_mut(),
+        None,
+    );
+    assert!(
+        callback(
+            ToolExecutionContext::new("lookup", json!({})),
+            tool_next(Ok(Json::Null)),
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("tool execution context failed")
+    );
+
+    let callback = wrap_tool_execution_context_fn(
+        instance,
+        tool_execution_context_malformed_outcome,
+        ptr::null_mut(),
+        None,
+    );
+    assert!(
+        callback(
+            ToolExecutionContext::new("lookup", json!({})),
+            tool_next(Ok(Json::Null)),
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("invalid native tool execution outcome")
     );
 }
 

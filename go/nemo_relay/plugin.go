@@ -30,7 +30,7 @@ typedef int32_t (*NemoRelayLlmRequestInterceptCb)(void* user_data, const char* n
 typedef char* (*NemoRelayLlmExecNextFn)(const char* native_json, void* next_ctx);
 typedef char* (*NemoRelayLlmExecInterceptCb)(void* user_data, const char* native_json, NemoRelayLlmExecNextFn next_fn, void* next_ctx);
 typedef char* (*NemoRelayToolExecNextFn)(const char* args_json, void* next_ctx);
-typedef char* (*NemoRelayToolExecInterceptCb)(void* user_data, const char* args_json, NemoRelayToolExecNextFn next_fn, void* next_ctx);
+typedef char* (*NemoRelayToolExecInterceptCb)(void* user_data, const char* context_json, NemoRelayToolExecNextFn next_fn, void* next_ctx);
 
 extern int32_t nemo_relay_plugin_initialize(const char* config_json, const char* additional_plugins_toml, FfiPluginHostActivation** out_activation, char** out_report_json);
 extern int32_t nemo_relay_plugin_host_activation_report_json(FfiPluginHostActivation* activation, char** out_report_json);
@@ -75,6 +75,7 @@ extern char* goLlmConditionalTrampoline(void*, const void*);
 extern char* goLlmExecInterceptTrampoline(void*, const char*, NemoRelayLlmExecNextFn, void*);
 extern int32_t goLlmRequestInterceptTrampoline(void*, const char*, const void*, const char*, char**);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
+extern char* goToolExecInterceptContextTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
 */
 import "C"
 
@@ -416,6 +417,8 @@ func marshalPluginHostActivationConfig(config PluginConfig) ([]byte, error) {
 // Initialize activates the core-owned static and dynamic plugin host.
 // An optional explicit file replaces user-file discovery. Relay merges the
 // selected file with the system file, then applies programmatic config.
+// A missing explicit file is reported as a plugin.configuration_file_missing
+// warning in the returned host report rather than as an error.
 func Initialize(config PluginConfig, additionalPluginsTOML *string) (*PluginHostActivation, PluginHostReport, error) {
 	configPayload, err := marshalPluginHostActivationConfig(config)
 	if err != nil {
@@ -436,6 +439,8 @@ func Initialize(config PluginConfig, additionalPluginsTOML *string) (*PluginHost
 
 // Validate validates the same layered plugin-host configuration as Initialize
 // without loading code or acquiring the process-wide host lease.
+// A missing explicit file is reported as a plugin.configuration_file_missing
+// warning in the returned host report rather than as an error.
 func Validate(config PluginConfig, additionalPluginsTOML *string) (PluginHostReport, error) {
 	payload, err := marshalPluginHostActivationConfig(config)
 	if err != nil {

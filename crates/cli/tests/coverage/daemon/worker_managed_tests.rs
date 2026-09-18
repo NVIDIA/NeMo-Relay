@@ -28,8 +28,12 @@ type ProviderRequests = Arc<std::sync::Mutex<Vec<(HeaderMap, Bytes)>>>;
 #[tokio::test]
 async fn observation_preserves_delivery_while_capturing_json() {
     let expected = Bytes::from_static(br#"{"ok":true}"#);
-    let (body, observation) =
-        observe_body(Full::new(expected.clone()), StatusCode::OK, expected.len());
+    let (body, observation) = observe_body(
+        Full::new(expected.clone()),
+        StatusCode::OK,
+        expected.len(),
+        OperationalContext::new(),
+    );
     let delivered = body.collect().await.expect("delivered body").to_bytes();
     let observed = observation
         .finish(ProviderSurface::OpenAIResponses, false)
@@ -43,7 +47,12 @@ async fn observation_preserves_delivery_while_capturing_json() {
 #[tokio::test]
 async fn capture_limit_truncates_observation_without_truncating_delivery() {
     let expected = Bytes::from_static(br#"{"too":"large"}"#);
-    let (body, observation) = observe_body(Full::new(expected.clone()), StatusCode::OK, 3);
+    let (body, observation) = observe_body(
+        Full::new(expected.clone()),
+        StatusCode::OK,
+        3,
+        OperationalContext::new(),
+    );
     let delivered = body.collect().await.expect("delivered body").to_bytes();
     let observed = observation
         .finish(ProviderSurface::OpenAIResponses, false)
@@ -67,6 +76,7 @@ async fn saturated_observation_queue_never_blocks_or_truncates_delivery() {
         StreamBody::new(futures_util::stream::iter(frames)),
         StatusCode::OK,
         usize::MAX,
+        OperationalContext::new(),
     );
 
     let mut delivered = Vec::new();
@@ -99,6 +109,7 @@ async fn dropping_delivery_marks_observation_cancelled_and_terminates_it() {
         StreamBody::new(futures_util::stream::iter(frames)),
         StatusCode::OK,
         usize::MAX,
+        OperationalContext::new(),
     );
     let first = body
         .frame()
@@ -133,6 +144,7 @@ async fn observation_body_deadline_terminates_a_stalled_observer() {
         receiver,
         signal: Arc::new(ObservationSignal::new()),
         status: StatusCode::OK,
+        operational: OperationalContext::new(),
     };
     let observed = observation
         .finish(ProviderSurface::OpenAIResponses, false)
@@ -147,6 +159,43 @@ async fn observation_body_deadline_terminates_a_stalled_observer() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn stream_observation_rearms_stall_warning_after_each_silent_interval() {
+    let (sender, receiver) = tokio::sync::mpsc::channel(2);
+    let operational = OperationalContext::new();
+    let mut observation = ObservationReceiver {
+        receiver,
+        signal: Arc::new(ObservationSignal::new()),
+        status: StatusCode::OK,
+        operational: operational.clone(),
+    };
+    let mut first_event_warned = false;
+    let mut last_event_at = tokio::time::Instant::now();
+    let threshold =
+        Duration::from_millis(crate::operational::UPSTREAM_STREAM_STALL_THRESHOLD_MILLIS);
+
+    let delayed_sender = sender.clone();
+    let send = tokio::spawn(async move {
+        tokio::time::sleep(threshold.saturating_mul(2) + Duration::from_millis(1)).await;
+        delayed_sender
+            .send(Bytes::from_static(b"after-stall"))
+            .await
+            .unwrap();
+    });
+    assert_eq!(
+        observation
+            .next_stream_chunk(false, &mut first_event_warned, &mut last_event_at)
+            .await,
+        Some(Bytes::from_static(b"after-stall"))
+    );
+    send.await.unwrap();
+
+    assert_eq!(
+        crate::operational::test_delayed_event_count(&operational, "upstream_stream_stalled"),
+        2
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn successful_stream_observation_can_outlive_the_response_head_deadline() {
     let (sender, receiver) = tokio::sync::mpsc::channel(4);
     let signal = Arc::new(ObservationSignal::new());
@@ -154,6 +203,7 @@ async fn successful_stream_observation_can_outlive_the_response_head_deadline() 
         receiver,
         signal: Arc::clone(&signal),
         status: StatusCode::OK,
+        operational: OperationalContext::new(),
     };
     let task = tokio::spawn(observation.finish(ProviderSurface::OpenAIChat, true));
     tokio::task::yield_now().await;
@@ -371,6 +421,7 @@ async fn unbuffered_dispatch_returns_response_head_without_collecting_request_bo
             ProviderRoute::OpenAi,
             &config,
             DEFAULT_OBSERVATION_CAPTURE_BYTES,
+            OperationalContext::new(),
         ),
     )
     .await
@@ -389,6 +440,62 @@ async fn unbuffered_dispatch_returns_response_head_without_collecting_request_bo
     assert_eq!(delivered, "data: [DONE]\n\n");
     let observed = observation
         .finish(ProviderSurface::OpenAIResponses, true)
+        .await;
+    assert_eq!(observed.terminal, OBSERVATION_COMPLETE);
+    server.abort();
+}
+
+#[tokio::test]
+async fn unbuffered_dispatch_uses_request_streaming_hint_for_upstream_telemetry() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind provider");
+    let address = listener.local_addr().expect("provider address");
+    let app = Router::new().route(
+        "/v1/responses",
+        post(|| async {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .expect("provider response")
+        }),
+    );
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve provider");
+    });
+    let request = Request::post("/v1/responses")
+        .body(Body::empty())
+        .expect("buffered request");
+    let config = GatewayConfig {
+        openai_base_url: format!("http://{address}"),
+        ..GatewayConfig::default()
+    };
+    let operational = OperationalContext::new();
+
+    let (response, observation, streaming) = dispatch_unbuffered_observed(
+        crate::daemon::common::transport::pooled_client().expect("provider client"),
+        request,
+        ProviderRoute::OpenAi,
+        &config,
+        DEFAULT_OBSERVATION_CAPTURE_BYTES,
+        operational.clone(),
+    )
+    .await
+    .expect("provider response");
+
+    assert!(!streaming);
+    assert_eq!(
+        crate::operational::test_upstream_started_outcomes(&operational),
+        ["buffered"]
+    );
+    let _ = response
+        .into_body()
+        .collect()
+        .await
+        .expect("delivered response");
+    let observed = observation
+        .finish(ProviderSurface::OpenAIResponses, false)
         .await;
     assert_eq!(observed.terminal, OBSERVATION_COMPLETE);
     server.abort();
@@ -724,6 +831,7 @@ async fn prepared_requests_and_both_dispatch_paths_preserve_provider_contracts()
         None,
         &config,
         DEFAULT_OBSERVATION_CAPTURE_BYTES,
+        OperationalContext::new(),
     )
     .await
     .expect("observed provider dispatch");
@@ -907,6 +1015,7 @@ async fn observation_reports_provider_body_errors_and_metadata() {
         StreamBody::new(frames),
         StatusCode::BAD_GATEWAY,
         DEFAULT_OBSERVATION_CAPTURE_BYTES,
+        OperationalContext::new(),
     );
     assert!(body.frame().await.expect("body frame").is_err());
     let observed = observation
@@ -1710,6 +1819,7 @@ async fn observation_handles_empty_invalid_and_unsuccessful_provider_responses()
         http_body_util::Empty::<Bytes>::new(),
         StatusCode::BAD_REQUEST,
         DEFAULT_OBSERVATION_CAPTURE_BYTES,
+        OperationalContext::new(),
     );
     assert!(body.is_end_stream());
     let observed = observation
@@ -1724,6 +1834,7 @@ async fn observation_handles_empty_invalid_and_unsuccessful_provider_responses()
         Full::new(malformed.clone()),
         StatusCode::OK,
         DEFAULT_OBSERVATION_CAPTURE_BYTES,
+        OperationalContext::new(),
     );
     assert_eq!(body.collect().await.unwrap().to_bytes(), malformed);
     let observed = observation

@@ -17,7 +17,7 @@ use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LENGTH
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri};
 use axum::response::IntoResponse;
 use http_body_util::LengthLimitError;
-use hyper::body::{Body as HttpBody, Frame, SizeHint};
+use hyper::body::{Body as HttpBody, Frame, Incoming, SizeHint};
 use nemo_relay::api::llm::{
     LlmCallEndParams, LlmCallParams, LlmRequest, llm_call, llm_call_end, llm_conditional_execution,
     llm_request_intercepts,
@@ -42,6 +42,7 @@ use super::super::common::transport::{
 use crate::agents::shared::adapters::{claude_code, codex, pi};
 use crate::configuration::GatewayConfig;
 use crate::error::CliError;
+use crate::operational::{self, OperationalContext};
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::server::ServerPluginActivation;
 use crate::sessions::{GatewayCallPrep, GatewaySessionFinish, SessionManager};
@@ -106,6 +107,11 @@ const INTERNAL_DISPATCH_ROUTE_HEADER: &str = "x-nemo-relay-internal-dispatch-rou
 const INTERNAL_DISPATCH_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
 const INTERNAL_RETRY_AWARE_HEADER: &str = "x-nemo-relay-internal-retry-aware";
 
+#[derive(Clone, Copy)]
+pub(super) struct ProviderMiddlewareRequirements {
+    request_body_decode_required: bool,
+}
+
 /// Runtime-owned plugin activation, hook sessions, and response observation.
 pub(super) struct ManagedRuntime {
     config: GatewayConfig,
@@ -125,7 +131,7 @@ impl ManagedRuntime {
         let activation =
             crate::server::initialize_plugin_host(config.plugin_config.clone(), dynamic_plugins)
                 .await?;
-        if let Err(error) = reject_incompatible_execution_middleware() {
+        if let Err(error) = provider_middleware_requirements() {
             if let Some(activation) = activation {
                 let _ = activation.clear();
             }
@@ -144,8 +150,18 @@ impl ManagedRuntime {
 
     /// Rechecks the transport contract before a provider body is polled. Plugin activation is
     /// normally static, but this also fails closed if a component installs middleware later.
+    #[cfg(test)]
     pub(super) fn ensure_streaming_transport_compatible(&self) -> Result<(), CliError> {
-        reject_incompatible_execution_middleware()
+        self.provider_middleware_requirements().map(|_| ())
+    }
+
+    /// Snapshots the middleware contract once for an incoming provider request.
+    /// This keeps late registration fail-closed while avoiding separate global
+    /// registry enumeration for raw-delivery compatibility and body decoding.
+    pub(super) fn provider_middleware_requirements(
+        &self,
+    ) -> Result<ProviderMiddlewareRequirements, CliError> {
+        provider_middleware_requirements()
     }
 
     pub(super) async fn close(&self) -> Result<(), CliError> {
@@ -177,35 +193,92 @@ impl ManagedRuntime {
         request: Request<Body>,
     ) -> Result<Value, CliError> {
         let (mut parts, body) = request.into_parts();
+        let operational = OperationalContext::take_from_headers(&mut parts.headers);
         strip_worker_headers(&mut parts.headers);
         let bytes = axum::body::to_bytes(body, self.config.max_hook_payload_bytes)
             .await
-            .map_err(body_read_error)?;
-        let payload = serde_json::from_slice::<Value>(&bytes)
-            .map_err(|error| CliError::InvalidPayload(error.to_string()))?;
+            .map_err(|error| {
+                let error = body_read_error(error);
+                if matches!(error, CliError::PayloadTooLarge(_)) {
+                    operational::limit_exceeded(
+                        &operational,
+                        "managed_worker_hook",
+                        "max_hook_payload_bytes",
+                        self.config.max_hook_payload_bytes,
+                    );
+                }
+                error
+            })?;
+        let payload = serde_json::from_slice::<Value>(&bytes).map_err(|error| {
+            operational::hook_failed(&operational, "managed_worker_hook", "invalid_payload", true);
+            CliError::InvalidPayload(error.to_string())
+        })?;
         match route {
             HookRoute::Codex => {
                 let outcome = codex::adapt(payload, &parts.headers);
-                self.sessions
+                let operational = outcome
+                    .events
+                    .first()
+                    .map(|event| operational.clone().with_session(event.session_id()))
+                    .unwrap_or(operational);
+                operational::hook_started(&operational, "managed_worker_hook");
+                if let Err(error) = self
+                    .sessions
                     .apply_authenticated_events(&parts.headers, outcome.events, &self.owner)
-                    .await?;
+                    .await
+                {
+                    operational::hook_failed(
+                        &operational,
+                        "managed_worker_hook",
+                        error.log_kind(),
+                        true,
+                    );
+                    return Err(error);
+                }
                 if let Some(permission) = outcome.permission
                     && let Err(error) = self.authorize_permission(permission).await
                 {
+                    operational::hook_completed(&operational, "managed_worker_hook", "denied");
                     return Ok(json!({
                         "decision": "deny",
                         "reason": permission_denial_reason(error),
                     }));
                 }
+                operational::hook_completed(&operational, "managed_worker_hook", "completed");
                 Ok(outcome.response)
             }
             HookRoute::Claude => {
                 let outcome = claude_code::adapt(payload, &parts.headers);
-                self.sessions
+                let operational = outcome
+                    .events
+                    .first()
+                    .map(|event| operational.clone().with_session(event.session_id()))
+                    .unwrap_or(operational);
+                operational::hook_started(&operational, "managed_worker_hook");
+                if let Err(error) = self
+                    .sessions
                     .apply_authenticated_events(&parts.headers, outcome.events, &self.owner)
-                    .await?;
+                    .await
+                {
+                    operational::hook_failed(
+                        &operational,
+                        "managed_worker_hook",
+                        error.log_kind(),
+                        true,
+                    );
+                    return Err(error);
+                }
                 if let Some(permission) = outcome.permission {
                     let result = self.authorize_permission(permission).await;
+                    operational::hook_completed(
+                        &operational,
+                        "managed_worker_hook",
+                        if result.is_ok() {
+                            "completed"
+                        } else {
+                            "denied"
+                        },
+                    );
                     return Ok(match result {
                         Ok(()) => json!({
                             "continue": true,
@@ -226,17 +299,37 @@ impl ManagedRuntime {
                         }),
                     });
                 }
+                operational::hook_completed(&operational, "managed_worker_hook", "completed");
                 Ok(outcome.response)
             }
             HookRoute::Pi => {
                 let outcome = pi::adapt(payload, &parts.headers);
+                let operational = outcome
+                    .events
+                    .first()
+                    .map(|event| operational.clone().with_session(event.session_id()))
+                    .unwrap_or(operational);
+                operational::hook_started(&operational, "managed_worker_hook");
                 // A daemon worker is already isolated to one authenticated machine owner. Keep
                 // pi's response-transform behavior while using that isolation as its ownership
                 // boundary, just as the personal gateway does for its local extension.
-                let effects = self
+                let effects = match self
                     .sessions
                     .apply_events(&parts.headers, outcome.events)
-                    .await?;
+                    .await
+                {
+                    Ok(effects) => effects,
+                    Err(error) => {
+                        operational::hook_failed(
+                            &operational,
+                            "managed_worker_hook",
+                            error.log_kind(),
+                            true,
+                        );
+                        return Err(error);
+                    }
+                };
+                operational::hook_completed(&operational, "managed_worker_hook", "completed");
                 Ok(pi::response_with_effects(outcome.response, &effects))
             }
         }
@@ -256,16 +349,34 @@ impl ManagedRuntime {
         }
     }
 
+    #[cfg(test)]
     pub(super) async fn proxy_provider(
+        &self,
+        upstream: PooledClient,
+        request: Request<Body>,
+        route: ProviderRoute,
+    ) -> Result<Response<RelayBody>, CliError> {
+        self.proxy_provider_with_requirements(
+            upstream,
+            request,
+            route,
+            self.provider_middleware_requirements()?,
+        )
+        .await
+    }
+
+    pub(super) async fn proxy_provider_with_requirements(
         &self,
         upstream: PooledClient,
         mut request: Request<Body>,
         route: ProviderRoute,
+        middleware: ProviderMiddlewareRequirements,
     ) -> Result<Response<RelayBody>, CliError> {
         let Some(surface) = provider_surface(request.uri().path()) else {
             return dispatch_unmanaged(upstream, request, route, &self.config).await;
         };
-        if !request_body_decode_required()? {
+        let operational = OperationalContext::take_from_headers(request.headers_mut());
+        if !middleware.request_body_decode_required {
             strip_worker_headers(request.headers_mut());
             strip_untrusted_dispatch_headers(request.headers_mut());
             let streaming_hint = request_streaming_hint(request.headers());
@@ -280,8 +391,9 @@ impl ManagedRuntime {
                 .sessions
                 .prepare_gateway_call(request.headers(), start)
                 .await?;
+            let operational = operational.with_session(prep.session_id.clone());
             return self
-                .proxy_unbuffered(upstream, request, route, surface, prep, streaming_hint)
+                .proxy_unbuffered(upstream, request, route, surface, prep, operational)
                 .await;
         }
         let prepared = PreparedProviderRequest::read(request, &self.config).await?;
@@ -296,7 +408,9 @@ impl ManagedRuntime {
             .sessions
             .prepare_gateway_call(&prepared.headers, start)
             .await?;
+        let operational = operational.with_session(prep.session_id.clone());
         if prep.bypass_managed_pipeline {
+            let streaming = prepared.streaming;
             GatewayCallCleanup::new(self.sessions.clone(), &prep)
                 .finish()
                 .await;
@@ -307,11 +421,17 @@ impl ManagedRuntime {
                 None,
                 &self.config,
                 self.observation_capture_bytes,
+                operational,
             )
             .await
-            .map(|(response, _)| response);
+            .map(move |(response, observation)| {
+                tokio::spawn(async move {
+                    let _ = observation.finish(surface, streaming).await;
+                });
+                response
+            });
         }
-        self.proxy_managed(upstream, prepared, route, surface, prep)
+        self.proxy_managed(upstream, prepared, route, surface, prep, operational)
             .await
     }
 
@@ -322,8 +442,9 @@ impl ManagedRuntime {
         route: ProviderRoute,
         surface: ProviderSurface,
         prep: GatewayCallPrep,
-        streaming_hint: bool,
+        operational: OperationalContext,
     ) -> Result<Response<RelayBody>, CliError> {
+        let streaming_hint = request_streaming_hint(request.headers());
         let cleanup = GatewayCallCleanup::new(self.sessions.clone(), &prep);
         let GatewayCallPrep {
             scope_stack,
@@ -370,6 +491,7 @@ impl ManagedRuntime {
             route,
             &self.config,
             self.observation_capture_bytes,
+            operational.clone(),
         )
         .await;
         let (response, observation, response_streaming) = match response {
@@ -430,6 +552,7 @@ impl ManagedRuntime {
         route: ProviderRoute,
         surface: ProviderSurface,
         prep: GatewayCallPrep,
+        operational: OperationalContext,
     ) -> Result<Response<RelayBody>, CliError> {
         let cleanup = GatewayCallCleanup::new(self.sessions.clone(), &prep);
         let GatewayCallPrep {
@@ -512,6 +635,7 @@ impl ManagedRuntime {
             Some(&outcome.request),
             &self.config,
             self.observation_capture_bytes,
+            operational.clone(),
         )
         .await;
         let (response, observation) = match response {
@@ -616,6 +740,7 @@ async fn dispatch_unbuffered_observed(
     route: ProviderRoute,
     config: &GatewayConfig,
     capture_limit: usize,
+    operational: OperationalContext,
 ) -> Result<(Response<RelayBody>, ObservationReceiver, bool), CliError> {
     let allow_environment_provider_auth =
         crate::gateway::daemon_allows_environment_provider_auth(request.headers());
@@ -646,19 +771,19 @@ async fn dispatch_unbuffered_observed(
         HeaderName::from_static(WORKER_TOKEN_HEADER),
         HeaderName::from_static(WORKER_ROUTE_FAILURE_HEADER),
     ];
+    let streaming = request_streaming_hint(request.headers());
     let request = prepare_forward_request(request, destination, &strip)
         .map_err(|error| CliError::InvalidPayload(error.to_string()))?
         .map(box_body);
-    let response = tokio::time::timeout(RESPONSE_HEAD_TIMEOUT, upstream.request(request))
-        .await
-        .map_err(|_| CliError::Launch("provider response-head timeout".into()))?
-        .map_err(|error| CliError::Launch(error.to_string()))?;
-    let response = prepare_forward_response(response, &strip)
-        .map_err(|error| CliError::Launch(error.to_string()))?;
+    let response = request_worker_upstream(upstream, request, &operational, streaming).await?;
+    let response = prepare_forward_response(response, &strip).map_err(|error| {
+        operational::upstream_failed(&operational, "invalid_response");
+        CliError::Launch(error.to_string())
+    })?;
     let status = response.status();
     let streaming = response_streaming(response.headers());
     let (parts, body) = response.into_parts();
-    let (body, observation) = observe_body(body, status, capture_limit);
+    let (body, observation) = observe_body(body, status, capture_limit, operational);
     Ok((Response::from_parts(parts, body), observation, streaming))
 }
 
@@ -727,6 +852,7 @@ async fn dispatch_observed(
     effective: Option<&LlmRequest>,
     config: &GatewayConfig,
     capture_limit: usize,
+    operational: OperationalContext,
 ) -> Result<(Response<RelayBody>, ObservationReceiver), CliError> {
     let allow_environment_provider_auth =
         crate::gateway::daemon_allows_environment_provider_auth(&prepared.headers);
@@ -755,16 +881,57 @@ async fn dispatch_observed(
     let request = prepare_forward_request(request, destination, &strip)
         .map_err(|error| CliError::InvalidPayload(error.to_string()))?
         .map(box_body);
-    let response = tokio::time::timeout(RESPONSE_HEAD_TIMEOUT, upstream.request(request))
-        .await
-        .map_err(|_| CliError::Launch("provider response-head timeout".into()))?
-        .map_err(|error| CliError::Launch(error.to_string()))?;
-    let response = prepare_forward_response(response, &strip)
-        .map_err(|error| CliError::Launch(error.to_string()))?;
+    let response =
+        request_worker_upstream(upstream, request, &operational, prepared.streaming).await?;
+    let response = prepare_forward_response(response, &strip).map_err(|error| {
+        operational::upstream_failed(&operational, "invalid_response");
+        CliError::Launch(error.to_string())
+    })?;
     let status = response.status();
     let (parts, body) = response.into_parts();
-    let (body, observation) = observe_body(body, status, capture_limit);
+    let (body, observation) = observe_body(body, status, capture_limit, operational);
     Ok((Response::from_parts(parts, body), observation))
+}
+
+/// Sends one managed-worker provider request while preserving the existing response-head timeout.
+/// The ten-second observation timer reports slow headers but never cancels the request.
+async fn request_worker_upstream(
+    upstream: PooledClient,
+    request: Request<RelayBody>,
+    operational: &OperationalContext,
+    streaming: bool,
+) -> Result<Response<Incoming>, CliError> {
+    operational::upstream_started(operational, streaming);
+    let request = tokio::time::timeout(RESPONSE_HEAD_TIMEOUT, upstream.request(request));
+    tokio::pin!(request);
+    let response = tokio::select! {
+        response = &mut request => response,
+        _ = tokio::time::sleep(Duration::from_millis(crate::operational::UPSTREAM_RESPONSE_THRESHOLD_MILLIS)) => {
+            operational::upstream_delayed(
+                operational,
+                "upstream_headers_delayed",
+                crate::operational::UPSTREAM_RESPONSE_THRESHOLD_MILLIS,
+            );
+            request.await
+        }
+    };
+    match response {
+        Ok(Ok(response)) => {
+            operational::upstream_headers_received(operational, streaming);
+            if !response.status().is_success() {
+                operational::upstream_status(operational, response.status().as_u16());
+            }
+            Ok(response)
+        }
+        Ok(Err(error)) => {
+            operational::upstream_failed(operational, "transport");
+            Err(CliError::Launch(error.to_string()))
+        }
+        Err(_) => {
+            operational::upstream_failed(operational, "transport");
+            Err(CliError::Launch("provider response-head timeout".into()))
+        }
+    }
 }
 
 fn effective_destination(
@@ -866,6 +1033,7 @@ fn has_explicit_target(request: &LlmRequest) -> bool {
 fn strip_worker_headers(headers: &mut HeaderMap) {
     headers.remove(CLIENT_TOKEN_HEADER);
     headers.remove(WORKER_TOKEN_HEADER);
+    headers.remove(crate::operational::OPERATION_ID_HEADER);
 }
 
 fn strip_internal_headers(headers: &mut HeaderMap) {
@@ -1015,14 +1183,30 @@ fn prepared_streaming(request: &LlmRequest) -> bool {
     stream_mode(request)
 }
 
-fn request_body_decode_required() -> Result<bool, CliError> {
+fn provider_middleware_requirements() -> Result<ProviderMiddlewareRequirements, CliError> {
     let kinds = BTreeSet::from([
         RuntimeRegistrationKind::LlmSanitizeRequestGuardrail,
         RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
         RuntimeRegistrationKind::LlmRequestIntercept,
+        RuntimeRegistrationKind::LlmExecutionIntercept,
+        RuntimeRegistrationKind::LlmStreamExecutionIntercept,
     ]);
     let registrations = list_runtime_registrations(Some(&kinds)).map_err(CliError::from)?;
-    Ok(registrations.iter().any(registration_reads_request_body))
+    let incompatible = incompatible_registration_names(&registrations);
+    if !incompatible.is_empty() {
+        return Err(CliError::Config(format!(
+            "daemon worker raw delivery is incompatible with LLM execution middleware: {}",
+            incompatible.join(", ")
+        )));
+    }
+    Ok(ProviderMiddlewareRequirements {
+        request_body_decode_required: registrations.iter().any(registration_reads_request_body),
+    })
+}
+
+#[cfg(test)]
+fn request_body_decode_required() -> Result<bool, CliError> {
+    provider_middleware_requirements().map(|requirements| requirements.request_body_decode_required)
 }
 
 fn registration_reads_request_body(registration: &RuntimeRegistrationIdentity) -> bool {
@@ -1034,24 +1218,9 @@ fn registration_reads_request_body(registration: &RuntimeRegistrationIdentity) -
     )
 }
 
+#[cfg(test)]
 fn reject_incompatible_execution_middleware() -> Result<(), CliError> {
-    // Execution intercepts own the provider callback and may replace, suppress, retry, or mutate
-    // its result. The raw worker transport cannot safely invoke that contract while also returning
-    // the provider's response head and frames unchanged. Request intercepts and conditional
-    // execution guardrails remain supported above the transport boundary.
-    let kinds = BTreeSet::from([
-        RuntimeRegistrationKind::LlmExecutionIntercept,
-        RuntimeRegistrationKind::LlmStreamExecutionIntercept,
-    ]);
-    let registrations = list_runtime_registrations(Some(&kinds)).map_err(CliError::from)?;
-    let incompatible = incompatible_registration_names(&registrations);
-    if incompatible.is_empty() {
-        return Ok(());
-    }
-    Err(CliError::Config(format!(
-        "daemon worker raw delivery is incompatible with LLM execution middleware: {}",
-        incompatible.join(", ")
-    )))
+    provider_middleware_requirements().map(|_| ())
 }
 
 fn incompatible_registration_names(registrations: &[RuntimeRegistrationIdentity]) -> Vec<String> {
@@ -1236,6 +1405,7 @@ struct ObservationReceiver {
     receiver: mpsc::Receiver<Bytes>,
     signal: Arc<ObservationSignal>,
     status: StatusCode,
+    operational: OperationalContext,
 }
 
 struct ObservedResponse {
@@ -1266,20 +1436,36 @@ impl ObservedResponse {
 impl ObservationReceiver {
     async fn finish(self, surface: ProviderSurface, streaming: bool) -> ObservedResponse {
         let status = self.status;
+        let operational = self.operational.clone();
         match tokio::time::timeout(
             OBSERVATION_COMPLETION_TIMEOUT,
             self.finish_inner(surface, streaming),
         )
         .await
         {
-            Ok(observed) => observed,
-            Err(_) => ObservedResponse {
-                value: None,
-                truncated: true,
-                terminal: OBSERVATION_ACTIVE,
-                status,
-                failure: Some("provider response observation timed out".to_owned()),
-            },
+            Ok(observed) => {
+                match observed.terminal {
+                    OBSERVATION_COMPLETE => {
+                        operational::upstream_completed(&operational, streaming)
+                    }
+                    OBSERVATION_BODY_ERROR => {
+                        operational::upstream_stream_read_failed(&operational)
+                    }
+                    OBSERVATION_CANCELLED => operational::upstream_cancelled(&operational),
+                    _ => operational::upstream_failed(&operational, "observation"),
+                }
+                observed
+            }
+            Err(_) => {
+                operational::upstream_failed(&operational, "observation");
+                ObservedResponse {
+                    value: None,
+                    truncated: true,
+                    terminal: OBSERVATION_ACTIVE,
+                    status,
+                    failure: Some("provider response observation timed out".to_owned()),
+                }
+            }
         }
     }
 
@@ -1328,13 +1514,27 @@ impl ObservationReceiver {
         let mut collector = codec.collector();
         let finalizer = codec.finalizer();
         let mut valid = true;
-        while let Some(chunk) = self.receiver.recv().await {
+        let mut first_event = true;
+        let mut first_event_warned = false;
+        let mut last_event_at = tokio::time::Instant::now();
+        loop {
+            let chunk = self
+                .next_stream_chunk(first_event, &mut first_event_warned, &mut last_event_at)
+                .await;
+            let Some(chunk) = chunk else {
+                break;
+            };
             if !valid || self.signal.truncated.load(Ordering::Acquire) {
                 continue;
             }
             for event in decoder.push_bytes_results(&chunk) {
                 match event {
                     Ok(event) => {
+                        if first_event {
+                            operational::upstream_first_event(&self.operational);
+                            first_event = false;
+                        }
+                        last_event_at = tokio::time::Instant::now();
                         if collector(event.data).is_ok() {
                             continue;
                         }
@@ -1353,12 +1553,60 @@ impl ObservationReceiver {
         if valid
             && !self.signal.truncated.load(Ordering::Acquire)
             && let Ok(Some(event)) = decoder.finish()
-            && collector(event.data).is_err()
         {
-            self.signal.truncate();
-            valid = false;
+            if first_event {
+                operational::upstream_first_event(&self.operational);
+            }
+            if collector(event.data).is_err() {
+                self.signal.truncate();
+                valid = false;
+            }
         }
         (valid && !self.signal.truncated.load(Ordering::Acquire)).then(finalizer)
+    }
+
+    async fn next_stream_chunk(
+        &mut self,
+        first_event: bool,
+        first_event_warned: &mut bool,
+        last_event_at: &mut tokio::time::Instant,
+    ) -> Option<Bytes> {
+        let threshold = if first_event {
+            Duration::from_millis(crate::operational::UPSTREAM_RESPONSE_THRESHOLD_MILLIS)
+        } else {
+            Duration::from_millis(crate::operational::UPSTREAM_STREAM_STALL_THRESHOLD_MILLIS)
+        };
+        let mut next = Box::pin(self.receiver.recv());
+        if first_event && *first_event_warned {
+            return next.await;
+        }
+        let mut deadline = *last_event_at + threshold;
+        loop {
+            let delay = tokio::time::sleep_until(deadline);
+            tokio::pin!(delay);
+            let chunk = tokio::select! {
+                chunk = &mut next => Some(chunk),
+                _ = &mut delay => None,
+            };
+            if let Some(chunk) = chunk {
+                break chunk;
+            }
+            operational::upstream_delayed(
+                &self.operational,
+                if first_event {
+                    "upstream_first_event_delayed"
+                } else {
+                    "upstream_stream_stalled"
+                },
+                threshold.as_millis() as u64,
+            );
+            if first_event {
+                *first_event_warned = true;
+                break next.await;
+            }
+            *last_event_at = tokio::time::Instant::now();
+            deadline = *last_event_at + threshold;
+        }
     }
 }
 
@@ -1366,6 +1614,7 @@ fn observe_body<B>(
     body: B,
     status: StatusCode,
     capture_limit: usize,
+    operational: OperationalContext,
 ) -> (RelayBody, ObservationReceiver)
 where
     B: HttpBody<Data = Bytes> + Send + Unpin + 'static,
@@ -1392,6 +1641,7 @@ where
             receiver,
             signal,
             status,
+            operational,
         },
     )
 }

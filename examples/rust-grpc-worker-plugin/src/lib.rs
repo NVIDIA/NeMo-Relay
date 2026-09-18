@@ -268,13 +268,15 @@ fn register_execution(context: &mut PluginContext, config: &ExampleConfig) {
         context.register_tool_execution_intercept("documentation_runtime_events", 0, {
             let tag = config.tag.clone();
             let runtime_config = config.runtime.clone();
-            move |_name, value, next| {
+            move |context, next| {
                 let runtime = runtime.clone();
                 let tag = tag.clone();
                 let runtime_config = runtime_config.clone();
                 async move {
                     emit_runtime_events(&runtime, &tag, &runtime_config).await?;
-                    Ok(ToolExecutionInterceptOutcome::from(next.call(value).await?))
+                    Ok(ToolExecutionInterceptOutcome::from(
+                        next.call(context.into_args()).await?,
+                    ))
                 }
             }
         });
@@ -289,8 +291,8 @@ fn register_execution(context: &mut PluginContext, config: &ExampleConfig) {
         config.execution.priority,
         {
             let emit_marks = config.execution.emit_pending_marks;
-            move |_name, value, next| async move {
-                let result = next.call(value).await?;
+            move |context, next| async move {
+                let result = next.call(context.into_args()).await?;
                 let mut outcome = ToolExecutionInterceptOutcome::from(result);
                 if emit_marks {
                     outcome = outcome.with_pending_mark(

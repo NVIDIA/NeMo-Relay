@@ -179,6 +179,17 @@ async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, 
             error_kind = error.log_kind();
             "CLI command was rejected by policy"
         ),
+        Err(error) if command_name == "mcp" => log::error!(
+            target: "nemo_relay.cli",
+            event = "command_failed",
+            command = command_name,
+            error_kind = error.log_kind(),
+            failure_reason = error
+                .mcp_failure_reason()
+                .unwrap_or(error::McpFailureReason::UnknownMcpFailure)
+                .as_str();
+            "CLI command failed"
+        ),
         Err(error) => log::error!(
             target: "nemo_relay.cli",
             event = "command_failed",

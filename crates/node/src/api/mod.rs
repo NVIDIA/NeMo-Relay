@@ -3458,9 +3458,7 @@ pub fn register_event_metadata_injector(
     env: Env,
     name: String,
     priority: i32,
-    #[napi(
-        ts_arg_type = "(event: Json) => import('./plugin').EventMetadata | Promise<import('./plugin').EventMetadata>"
-    )]
+    #[napi(ts_arg_type = "(event: Json) => EventMetadata | Promise<EventMetadata>")]
     injector: JsFunction,
 ) -> Result<()> {
     core_registry_api::register_event_metadata_injector(
@@ -3905,18 +3903,18 @@ napi_intercept_tool_api!(
 
 /// Register a tool execution intercept following the middleware chain pattern.
 ///
-/// The `callable` receives the args and a `next` function. Call `next(args)` to invoke
-/// the next intercept or original implementation; skip calling `next` to short-circuit
-/// the chain. `next` may be called repeatedly or concurrently while `callable` is
-/// pending; each call receives an isolated scope-stack branch, and unfinished or
-/// later calls reject after `callable` settles.
+/// The `callable` receives `ToolExecutionContext` and `next`. The context
+/// exposes `toolName`, `args`, and `toolCallId`; `toolCallId` is `null` when
+/// the managed call has no provider-issued correlation identifier. Call
+/// `next(context.args)` to continue the chain, or return an outcome directly
+/// to short-circuit execution.
 #[napi]
 pub fn register_tool_execution_intercept(
     env: Env,
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(args: Json, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<import('./plugin').PendingMarkSpec> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<import('./plugin').PendingMarkSpec> }>"
+        ts_arg_type = "(context: ToolExecutionContext, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<PendingMarkSpec> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<PendingMarkSpec> }>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -3936,7 +3934,8 @@ pub fn register_tool_execution_intercept(
 
 /// Deregister a tool execution intercept by name.
 ///
-/// Returns `true` if an intercept with that name was found and removed.
+/// Removes an intercept registered through either registration shape. Returns
+/// `true` if an intercept with that name was found and removed.
 #[napi]
 pub fn deregister_tool_execution_intercept(name: String) -> Result<bool> {
     core_registry_api::deregister_tool_execution_intercept(&name).map_err(to_napi_err)
@@ -3958,7 +3957,7 @@ pub fn register_llm_sanitize_request_guardrail(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(request: Json, context: import('./plugin').LlmSanitizeRequestContext) => Json | null | Promise<Json | null>"
+        ts_arg_type = "(request: Json, context: LlmSanitizeRequestContext) => Json | null | Promise<Json | null>"
     )]
     guardrail: JsFunction,
 ) -> Result<()> {
@@ -3992,7 +3991,7 @@ pub fn register_llm_sanitize_response_guardrail(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(response: Json, context: import('./plugin').LlmSanitizeResponseContext) => Json | null | Promise<Json | null>"
+        ts_arg_type = "(response: Json, context: LlmSanitizeResponseContext) => Json | null | Promise<Json | null>"
     )]
     guardrail: JsFunction,
 ) -> Result<()> {
@@ -4065,7 +4064,7 @@ pub fn register_llm_request_intercept(
     priority: i32,
     break_chain: bool,
     #[napi(
-        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => import('./plugin').LlmRequestInterceptOutcome | Promise<import('./plugin').LlmRequestInterceptOutcome>"
+        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => LlmRequestInterceptOutcome | Promise<LlmRequestInterceptOutcome>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -4245,9 +4244,7 @@ pub fn scope_register_event_metadata_injector(
     scope_uuid: String,
     name: String,
     priority: i32,
-    #[napi(
-        ts_arg_type = "(event: Json) => import('./plugin').EventMetadata | Promise<import('./plugin').EventMetadata>"
-    )]
+    #[napi(ts_arg_type = "(event: Json) => EventMetadata | Promise<EventMetadata>")]
     injector: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
@@ -4514,11 +4511,11 @@ napi_scope_intercept_tool_api!(
 
 /// Register a scope-local tool execution intercept following the middleware chain pattern.
 ///
-/// The `callable` receives the args and a `next` function. Call `next(args)` to invoke
-/// the next intercept or original implementation; skip calling `next` to short-circuit
-/// the chain. `next` may be called repeatedly or concurrently while `callable` is
-/// pending; each call receives an isolated scope-stack branch, and unfinished or
-/// later calls reject after `callable` settles.
+/// The `callable` receives `ToolExecutionContext` and `next`. The context
+/// exposes `toolName`, `args`, and `toolCallId`; `toolCallId` is `null` when
+/// the managed call has no provider-issued correlation identifier. Call
+/// `next(context.args)` to continue the chain, or return an outcome directly
+/// to short-circuit execution.
 #[napi]
 pub fn scope_register_tool_execution_intercept(
     env: Env,
@@ -4526,7 +4523,7 @@ pub fn scope_register_tool_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(args: Json, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<import('./plugin').PendingMarkSpec> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<import('./plugin').PendingMarkSpec> }>"
+        ts_arg_type = "(context: ToolExecutionContext, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<PendingMarkSpec> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<PendingMarkSpec> }>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -4549,7 +4546,9 @@ pub fn scope_register_tool_execution_intercept(
 
 /// Deregister a scope-local tool execution intercept by name.
 ///
-/// Returns `true` if an intercept with that name was found and removed from the specified scope.
+/// Removes an intercept registered through either registration shape. Returns
+/// `true` if an intercept with that name was found and removed from the
+/// specified scope.
 #[napi]
 pub fn scope_deregister_tool_execution_intercept(scope_uuid: String, name: String) -> Result<bool> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
@@ -4575,7 +4574,7 @@ pub fn scope_register_llm_sanitize_request_guardrail(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(request: Json, context: import('./plugin').LlmSanitizeRequestContext) => Json | null | Promise<Json | null>"
+        ts_arg_type = "(request: Json, context: LlmSanitizeRequestContext) => Json | null | Promise<Json | null>"
     )]
     guardrail: JsFunction,
 ) -> Result<()> {
@@ -4620,7 +4619,7 @@ pub fn scope_register_llm_sanitize_response_guardrail(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(response: Json, context: import('./plugin').LlmSanitizeResponseContext) => Json | null | Promise<Json | null>"
+        ts_arg_type = "(response: Json, context: LlmSanitizeResponseContext) => Json | null | Promise<Json | null>"
     )]
     guardrail: JsFunction,
 ) -> Result<()> {
@@ -4712,7 +4711,7 @@ pub fn scope_register_llm_request_intercept(
     priority: i32,
     break_chain: bool,
     #[napi(
-        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => import('./plugin').LlmRequestInterceptOutcome | Promise<import('./plugin').LlmRequestInterceptOutcome>"
+        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => LlmRequestInterceptOutcome | Promise<LlmRequestInterceptOutcome>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -4935,9 +4934,7 @@ pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<
 /// Run the registered LLM request intercept chain on the given request.
 /// The `request` should be a JSON object with `headers` and `content` fields matching
 /// the `LlmRequest` schema. Returns the transformed request as JSON.
-#[napi(
-    ts_return_type = "Promise<{ request: Json; annotated: Json | null; pendingMarks: Array<import('./plugin').PendingMarkSpec>; optimizationContributions: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }>"
-)]
+#[napi(ts_return_type = "Promise<LlmRequestInterceptOutcome>")]
 pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<JsObject> {
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;

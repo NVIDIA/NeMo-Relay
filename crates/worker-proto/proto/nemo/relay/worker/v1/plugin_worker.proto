@@ -250,6 +250,10 @@ message ConditionalMiddlewareInvocation {
 message ToolInvocation {
   string tool_name = 1;
   JsonEnvelope value = 2;
+  // Provider-issued tool-call correlation identifier recorded on the managed
+  // tool call. Unset when the call did not record one, and unset for
+  // invocations that are not tool execution intercepts.
+  optional string tool_call_id = 3;
 }
 
 message LlmInvocation {

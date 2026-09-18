@@ -460,8 +460,8 @@ async def llm_stream_execution_intercept(request, next):
 def tool_request_intercept(name, value):
     return value
 
-async def tool_execution_intercept(name, value, next):
-    downstream = await next(value)
+async def tool_execution_intercept(context, next):
+    downstream = await next(context.args)
     return ToolOutcome(downstream.result, annotation=downstream.annotation)
 
 class CoveragePlugin:
@@ -808,8 +808,8 @@ fn test_async_exec_and_intercept_wrappers() {
 async def tool_exec(args):
     return ToolResult({"tool": args["x"] + 1}, {"source": "python-exec"})
 
-async def tool_intercept(name, args, next):
-    downstream = await next({"x": args["x"] + 1})
+async def tool_intercept(context, next):
+    downstream = await next({"x": context.args["x"] + 1})
     result = dict(downstream.result)
     result["wrapped"] = True
     return ToolOutcome(result, annotation=downstream.annotation)
@@ -857,9 +857,15 @@ async def llm_intercept(name, request, next):
                     })
                 });
                 assert_eq!(
-                    tool_intercept("tool", json!({"x": 2}), tool_next)
-                        .await
-                        .unwrap(),
+                    tool_intercept(
+                        nemo_relay::api::runtime::ToolExecutionContext::new(
+                            "tool",
+                            json!({"x": 2}),
+                        ),
+                        tool_next,
+                    )
+                    .await
+                    .unwrap(),
                     nemo_relay::api::tool::ToolExecutionInterceptOutcome::annotated(
                         json!({"next": 3, "wrapped": true}),
                         json!({"source": "python-next"})
@@ -953,7 +959,7 @@ fn test_async_wrapper_error_paths_and_sync_stream_intercept() {
 async def tool_exec_fail(args):
     raise RuntimeError("tool exec boom")
 
-async def tool_intercept_fail(name, args, next):
+async def tool_intercept_fail(context, next):
     raise RuntimeError("tool intercept boom")
 
 async def llm_exec_fail(request):
@@ -1017,11 +1023,17 @@ async def llm_stream_intercept_fail(request, next):
                 let tool_next: ToolExecutionNextFn =
                     Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
                 assert!(
-                    tool_intercept("tool", json!({"x": 1}), tool_next)
-                        .await
-                        .unwrap_err()
-                        .to_string()
-                        .contains("tool intercept boom")
+                    tool_intercept(
+                        nemo_relay::api::runtime::ToolExecutionContext::new(
+                            "tool",
+                            json!({"x": 1}),
+                        ),
+                        tool_next,
+                    )
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("tool intercept boom")
                 );
 
                 let llm_exec = wrap_py_llm_exec_fn(llm_exec_fail_py);

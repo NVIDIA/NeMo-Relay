@@ -120,8 +120,8 @@ fn sync_wrappers_and_codec_errors_cover_remaining_branches() {
 def sync_tool_exec(args):
     return ToolResult({"sync_tool": args["x"] + 1})
 
-def sync_tool_intercept(name, args, next):
-    return ToolOutcome({"name": name, "value": args["x"] + 2})
+def sync_tool_intercept(context, next):
+    return ToolOutcome({"name": context.tool_name, "value": context.args["x"] + 2})
 
 def sync_llm_exec(request):
     return {"model": request.content["model"], "mode": "sync"}
@@ -199,9 +199,12 @@ class RaisingResponseCodec:
             let tool_next: ToolExecutionNextFn =
                 Arc::new(|args| Box::pin(async move { Ok(json!({"next": args["x"]}).into()) }));
             assert_eq!(
-                tool_intercept("tool", json!({"x": 3}), tool_next)
-                    .await
-                    .unwrap(),
+                tool_intercept(
+                    nemo_relay::api::runtime::ToolExecutionContext::new("tool", json!({"x": 3}),),
+                    tool_next,
+                )
+                .await
+                .unwrap(),
                 json!({"name": "tool", "value": 5}).into()
             );
 

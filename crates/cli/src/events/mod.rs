@@ -25,6 +25,15 @@ impl AgentKind {
         }
     }
 
+    /// Default classification for tools executed by a known local harness.
+    /// A generic gateway does not establish where or how a tool executes.
+    pub(crate) const fn tool_execution_type(self) -> Option<&'static str> {
+        match self {
+            Self::ClaudeCode | Self::Codex | Self::Pi => Some("function"),
+            Self::Gateway => None,
+        }
+    }
+
     // Whether this harness reports the *opening* of a conversation turn, not just its close.
     //
     // Codex and Claude Code only signal a turn boundary on `Stop`, so the gateway has to open

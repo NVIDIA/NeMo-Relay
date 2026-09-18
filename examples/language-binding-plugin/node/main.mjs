@@ -290,14 +290,14 @@ export const documentationPlugin = {
       );
     }
     if (runtime.emit_marks || runtime.emit_isolated_scope) {
-      context.registerToolExecutionIntercept('runtime-events', 0, async (args, next) => {
+      context.registerToolExecutionIntercept('runtime-events', 0, async (toolContext, next) => {
         emitRuntimeEvents(runtime, settings.tag);
-        return await next(args);
+        return await next(toolContext.args);
       });
     }
     if (execution.enabled) {
-      context.registerToolExecutionIntercept('tool-execution', execution.priority, async (args, next) => {
-        const downstream = await next(args);
+      context.registerToolExecutionIntercept('tool-execution', execution.priority, async (toolContext, next) => {
+        const downstream = await next(toolContext.args);
         return {
           ...downstream,
           pendingMarks: execution.emit_pending_marks ? [{ name: 'documentation-plugin.tool-complete' }] : [],

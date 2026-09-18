@@ -7,7 +7,8 @@ use std::sync::Arc;
 use super::*;
 use crate::daemon::common::client::{begin_handshake, control_client};
 use crate::daemon::common::control::{
-    WorkerNetworkHintProof, WorkerReadyPayload, WorkerRegisterResponse,
+    WorkerActivationFailureReason, WorkerNetworkHintProof, WorkerReadyPayload,
+    WorkerRegisterResponse,
 };
 use crate::daemon::common::routes::HookRoute;
 use crate::daemon::common::state::ROUTE_TOKEN_ENV;
@@ -501,7 +502,10 @@ async fn forwarding_rejects_invalid_destinations_and_worker_credentials_before_i
         invalid_destination.response.status(),
         StatusCode::BAD_GATEWAY
     );
-    assert!(!invalid_destination.communication_failure);
+    assert!(matches!(
+        invalid_destination.failure,
+        Some(ForwardFailure::InvalidDestination)
+    ));
 
     let invalid_credential = forward(
         &client,
@@ -518,7 +522,7 @@ async fn forwarding_rejects_invalid_destinations_and_worker_credentials_before_i
         invalid_credential.response.status(),
         StatusCode::INTERNAL_SERVER_ERROR
     );
-    assert!(!invalid_credential.communication_failure);
+    assert!(invalid_credential.failure.is_none());
 }
 
 #[tokio::test]
@@ -766,6 +770,92 @@ async fn unreachable_worker_marks_its_authenticated_route_pass_through() {
         state.registry.resolve_target(&credential.digest()),
         Ok(ResolvedTarget::PassThrough)
     ));
+}
+
+#[tokio::test]
+async fn authenticated_hook_forwarding_preserves_the_operation_id_for_the_worker() {
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x67_u8; 32]);
+    let credential = RouteCredential::parse(token.clone()).expect("route credential");
+    let state = test_daemon_state(false, &token, GatewayConfig::default());
+    let fingerprint = MachineIdentity::generate()
+        .expect("machine identity")
+        .identity
+        .fingerprint();
+    let activation_id = "operation-id-hook-activation";
+    state
+        .registry
+        .register_mcp(
+            McpRegistration {
+                fingerprint,
+                token_digest: credential.digest(),
+                session_id: McpSessionId::new("operation-id-hook-session").expect("session"),
+                lease_expires_at_unix_ms: u64::MAX,
+            },
+            WorkerLaunch {
+                activation_id: activation_id.into(),
+                activation_token: SensitiveString::new("activation-token").expect("token"),
+                deadline_unix_ms: u64::MAX,
+                bind_ip: Ipv4Addr::LOCALHOST,
+                port: 0,
+                advertise_address: None,
+            },
+        )
+        .expect("register route");
+
+    let captured = Arc::new(std::sync::Mutex::new(None));
+    let worker = Router::new().fallback({
+        let captured = Arc::clone(&captured);
+        move |headers: HeaderMap| {
+            let captured = Arc::clone(&captured);
+            async move {
+                *captured.lock().expect("capture worker request") = Some(headers);
+                Response::new(Body::from("{}"))
+            }
+        }
+    });
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("worker bind");
+    let address = listener.local_addr().expect("worker address");
+    let worker_task = tokio::spawn(async move {
+        axum::serve(listener, worker).await.expect("worker serve");
+    });
+    state
+        .registry
+        .mark_worker_ready(
+            fingerprint,
+            activation_id,
+            Arc::new(
+                WorkerTarget::new(
+                    "operation-id-worker",
+                    format!("http://{address}"),
+                    SensitiveString::new("worker-session-token").expect("token"),
+                )
+                .expect("worker target"),
+            ),
+        )
+        .expect("publish route");
+
+    let operation_id = "018f0f3f-3f7a-7b72-9d0d-e0d8ced91d8b";
+    let response = router(Arc::clone(&state))
+        .oneshot(
+            Request::post("/hooks/codex")
+                .header(CLIENT_TOKEN_HEADER, &token)
+                .header(crate::operational::OPERATION_ID_HEADER, operation_id)
+                .body(Body::from("{}"))
+                .expect("hook request"),
+        )
+        .await
+        .expect("hook response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        captured
+            .lock()
+            .expect("capture worker request")
+            .as_ref()
+            .and_then(|headers| headers.get(crate::operational::OPERATION_ID_HEADER))
+            .and_then(|value| value.to_str().ok()),
+        Some(operation_id)
+    );
+    worker_task.abort();
 }
 
 #[tokio::test]
@@ -1510,7 +1600,7 @@ async fn control_handlers_reject_unknown_sessions_and_oversized_failure_payloads
         1,
         ActivationFailedPayload {
             activation_id: "x".repeat(129),
-            reason: "reason".into(),
+            failure_reason: WorkerActivationFailureReason::WorkerProcessSpawnFailed,
         },
     )
     .unwrap();
@@ -2019,6 +2109,10 @@ fn public_ingress_keeps_only_authenticated_provider_routing_metadata() {
         crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
         HeaderValue::from_static("https://custom.example/v1"),
     );
+    headers.insert(
+        crate::operational::OPERATION_ID_HEADER,
+        HeaderValue::from_static("018f0f3f-3f7a-7b72-9d0d-e0d8ced91d8b"),
+    );
     let mut hook_headers = headers.clone();
     strip_public_relay_headers(&mut headers, PublicRoute::Provider(ProviderRoute::OpenAi));
     assert!(headers.contains_key(CLIENT_TOKEN_HEADER));
@@ -2026,12 +2120,24 @@ fn public_ingress_keeps_only_authenticated_provider_routing_metadata() {
     assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-url"));
     assert!(!headers.contains_key(WORKER_TOKEN_HEADER));
     assert!(!headers.contains_key("x-nemo-relay-bootstrap-proof"));
+    assert!(!headers.contains_key(crate::operational::OPERATION_ID_HEADER));
 
     strip_public_relay_headers(
         &mut hook_headers,
         PublicRoute::Hook(crate::daemon::common::routes::HookRoute::Pi),
     );
     assert!(!hook_headers.contains_key(crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER));
+    assert!(hook_headers.contains_key(crate::operational::OPERATION_ID_HEADER));
+
+    hook_headers.insert(
+        crate::operational::OPERATION_ID_HEADER,
+        HeaderValue::from_static("untrusted-native-text"),
+    );
+    strip_public_relay_headers(
+        &mut hook_headers,
+        PublicRoute::Hook(crate::daemon::common::routes::HookRoute::Pi),
+    );
+    assert!(!hook_headers.contains_key(crate::operational::OPERATION_ID_HEADER));
 }
 
 #[test]

@@ -8,7 +8,7 @@ id = "examples.python_grpc_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=0.9.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -25,7 +25,7 @@ manifest_root = "."
 artifact = "nemo_relay_python_grpc_worker_example/worker.py"
 
 [integrity]
-sha256 = "sha256:c8216a5d15103052ba6990b0a2b30bdd87285ba566c3f5d255c8124133a9e21e"
+sha256 = "sha256:3cd034b104d1d6aec431aad732d7ef2e1a66c7c68bf289f4b2fbac8e881effa3"
 
 [load]
 runtime = "python"

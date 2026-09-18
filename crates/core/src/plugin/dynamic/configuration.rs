@@ -3,7 +3,7 @@
 
 //! Core-owned `plugins.toml` discovery and dynamic-plugin selection.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -153,10 +153,20 @@ pub(crate) struct ResolvedPluginHostConfig {
     pub(crate) config: PluginConfig,
     pub(crate) policy: DynamicPluginHostPolicy,
     pub(crate) dynamic_plugins: Vec<super::VerifiedDynamicPluginSpec>,
-    pub(crate) dynamic_reports: Vec<DynamicPluginValidationReport>,
+    pub(super) dynamic_reports: Vec<ResolvedDynamicPluginReport>,
     pub(crate) diagnostics: Vec<crate::plugin::ConfigDiagnostic>,
     pub(crate) config_paths: Vec<String>,
     pub(crate) resolved_config: Json,
+}
+
+/// A validation report with the lifecycle selection used to request it.
+///
+/// `DynamicPluginValidationReport::selected` describes whether the host will
+/// activate the plugin. Keep the requested selection separately so preflight
+/// validation can report a required plugin that failed validation.
+pub(super) struct ResolvedDynamicPluginReport {
+    pub(super) requested: bool,
+    pub(super) report: DynamicPluginValidationReport,
 }
 
 #[derive(Debug, Deserialize)]
@@ -185,6 +195,13 @@ struct FileDynamicPlugin {
     manifest: String,
     #[serde(default)]
     config: Map<String, Json>,
+}
+
+struct ResolvedDynamicPluginDeclaration {
+    source: PathBuf,
+    declared: FileDynamicPlugin,
+    manifest: DynamicPluginManifest,
+    manifest_ref: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -256,13 +273,15 @@ pub(crate) fn validate_request(request: PluginHostValidationRequest) -> Result<P
         PluginHostValidationTarget::All => resolved
             .dynamic_reports
             .into_iter()
-            .filter(|report| report.selected)
+            .filter(|entry| entry.requested)
+            .map(|entry| entry.report)
             .collect(),
         PluginHostValidationTarget::PluginId(plugin_id) => {
             let reports = resolved
                 .dynamic_reports
                 .into_iter()
-                .filter(|report| report.plugin_id == plugin_id)
+                .filter(|entry| entry.report.plugin_id == plugin_id)
+                .map(|entry| entry.report)
                 .collect::<Vec<_>>();
             if reports.is_empty() {
                 return Err(PluginError::NotFound(format!(
@@ -297,7 +316,7 @@ fn resolve_plugin_host_config_inner(
     reject_required_failures: bool,
 ) -> Result<ResolvedPluginHostConfig> {
     let paths = plugin_config_paths(explicit_path, crate::plugin::user_config_dir());
-    let files = read_plugin_files(&paths)?;
+    let (files, mut diagnostics) = read_plugin_files(&paths, explicit_path)?;
     let resolved = resolve_plugin_config_documents(
         programmatic,
         explicit_path,
@@ -306,33 +325,20 @@ fn resolve_plugin_host_config_inner(
             .map(|document| (document.source.clone(), document.value.clone()))
             .collect(),
     )?;
-    let mut policy = DynamicPluginHostPolicy::default();
+    diagnostics.extend(resolved.diagnostics.iter().cloned());
+    let (mut policy, declarations) = resolve_dynamic_plugin_declarations(files)?;
     let mut active = Vec::new();
     let mut reports = Vec::new();
-    let mut seen_ids = HashSet::new();
-    let mut declarations = Vec::new();
 
-    for PluginFileDocument { source, file, .. } in files {
-        if let Some(file_policy) = file.plugins.policy {
-            policy.merge_from(file_policy.into());
-        }
-        declarations.extend(
-            file.plugins
-                .dynamic
-                .into_iter()
-                .map(|declared| (source.clone(), declared)),
-        );
-    }
     policy.apply_secure_defaults();
-    for (source, declared) in declarations {
-        let manifest_path = resolve_manifest_path(&source, &declared.manifest);
-        let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)?;
+    for ResolvedDynamicPluginDeclaration {
+        source,
+        declared,
+        manifest,
+        manifest_ref,
+    } in declarations
+    {
         let plugin_id = manifest.plugin.id.trim().to_owned();
-        if !seen_ids.insert(plugin_id.clone()) {
-            return Err(PluginError::InvalidConfig(format!(
-                "duplicate dynamic plugin id '{plugin_id}' in resolved plugins.toml layers"
-            )));
-        }
         let state = state_for_plugin(&source, &manifest_ref, &plugin_id)?;
         let selected = state.as_ref().map(|state| state.selected).unwrap_or(true);
         let evaluated_policy = evaluate_dynamic_plugin_host_policy(&policy, &manifest);
@@ -346,7 +352,10 @@ fn resolve_plugin_host_config_inner(
         let valid = report.failure.is_none();
         let effective_selected = report.selected;
         let failure = report.failure.clone();
-        reports.push(report);
+        reports.push(ResolvedDynamicPluginReport {
+            requested: selected,
+            report,
+        });
         if selected
             && !valid
             && reject_required_failures
@@ -375,8 +384,52 @@ fn resolve_plugin_host_config_inner(
         policy,
         dynamic_plugins: active,
         dynamic_reports: reports,
-        diagnostics: resolved.diagnostics,
+        diagnostics,
     })
+}
+
+fn resolve_dynamic_plugin_declarations(
+    files: Vec<PluginFileDocument>,
+) -> Result<(
+    DynamicPluginHostPolicy,
+    Vec<ResolvedDynamicPluginDeclaration>,
+)> {
+    let mut policy = DynamicPluginHostPolicy::default();
+    let mut declarations = Vec::new();
+    let mut declaration_indices = HashMap::new();
+
+    for PluginFileDocument { source, file, .. } in files {
+        if let Some(file_policy) = file.plugins.policy {
+            policy.merge_from(file_policy.into());
+        }
+        let mut seen_ids = HashSet::new();
+        for declared in file.plugins.dynamic {
+            let manifest_path = resolve_manifest_path(&source, &declared.manifest);
+            let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)?;
+            let plugin_id = manifest.plugin.id.trim().to_owned();
+            if !seen_ids.insert(plugin_id.clone()) {
+                return Err(PluginError::InvalidConfig(format!(
+                    "duplicate dynamic plugin id '{plugin_id}' in {}",
+                    source.display()
+                )));
+            }
+            let declaration = ResolvedDynamicPluginDeclaration {
+                source: source.clone(),
+                declared,
+                manifest,
+                manifest_ref,
+            };
+            if let Some(index) = declaration_indices.get(&plugin_id) {
+                // Dynamic plugin declarations layer by manifest ID. The later source owns the
+                // effective manifest, lifecycle state, and opaque configuration.
+                declarations[*index] = declaration;
+            } else {
+                declaration_indices.insert(plugin_id, declarations.len());
+                declarations.push(declaration);
+            }
+        }
+    }
+    Ok((policy, declarations))
 }
 
 pub(crate) fn sanitized_plugin_config(config: &PluginConfig) -> Json {
@@ -527,21 +580,44 @@ fn validate_declaration(
     if schema_failure.is_some() {
         status.manifest = DynamicPluginCheckState::Invalid;
     }
-    let is_valid = failure.is_none();
+    let effective_selected = selected
+        && evaluated_policy.policy_satisfied
+        && schema_failure.is_none()
+        && (trust.last_error(&plugin_id).is_none()
+            || evaluated_policy.startup_class == DynamicPluginStartupClass::Optional);
     DynamicPluginValidationReport {
         plugin_id,
         manifest_ref,
         kind: manifest.plugin.kind,
         status,
         failure,
-        selected: selected && is_valid,
+        selected: effective_selected,
     }
 }
 
-fn read_plugin_files(paths: &[PathBuf]) -> Result<Vec<PluginFileDocument>> {
+fn read_plugin_files(
+    paths: &[PathBuf],
+    explicit_path: Option<&Path>,
+) -> Result<(
+    Vec<PluginFileDocument>,
+    Vec<crate::plugin::ConfigDiagnostic>,
+)> {
     let mut files = Vec::new();
+    let mut diagnostics = Vec::new();
     for source in paths {
         if !plugin_file_is_present(source, std::fs::symlink_metadata(source))? {
+            if explicit_path == Some(source.as_path()) {
+                diagnostics.push(crate::plugin::ConfigDiagnostic {
+                    level: crate::plugin::DiagnosticLevel::Warning,
+                    code: "plugin.configuration_file_missing".to_string(),
+                    component: None,
+                    field: Some("additional_plugins_toml".to_string()),
+                    message: format!(
+                        "explicit plugin configuration file does not exist: {}",
+                        source.display()
+                    ),
+                });
+            }
             continue;
         }
         let raw = read_utf8_plugin_file(source)?;
@@ -563,7 +639,7 @@ fn read_plugin_files(paths: &[PathBuf]) -> Result<Vec<PluginFileDocument>> {
             file,
         });
     }
-    Ok(files)
+    Ok((files, diagnostics))
 }
 
 fn plugin_file_is_present(

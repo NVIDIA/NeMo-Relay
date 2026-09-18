@@ -80,18 +80,29 @@ fn toml_basic_string(value: &str) -> String {
 }
 
 fn write_jsonl_logging_config(temp: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    write_jsonl_logging_config_at_level(temp, "info")
+}
+
+fn write_debug_jsonl_logging_config(temp: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    write_jsonl_logging_config_at_level(temp, "debug")
+}
+
+fn write_jsonl_logging_config_at_level(
+    temp: &Path,
+    level: &str,
+) -> (std::path::PathBuf, std::path::PathBuf) {
     let config_path = temp.join("logging.toml");
     let log_path = temp.join("operational.jsonl");
     std::fs::write(
         &config_path,
         format!(
             r#"[logging]
-level = "info"
+level = "{level}"
 stderr_format = "jsonl"
 
 [[logging.sinks]]
 path = {}
-level = "info"
+level = "{level}"
 format = "jsonl"
 queue_capacity = 64
 "#,
@@ -115,6 +126,24 @@ fn read_jsonl_event(path: &Path, event: &str) -> serde_json::Value {
         .into_iter()
         .find(|record| record["event"] == event)
         .unwrap_or_else(|| panic!("missing {event} record in {}", path.display()))
+}
+
+fn wait_for_jsonl_event(path: &Path, event: &str) -> serde_json::Value {
+    let deadline = Instant::now() + SIDECAR_PUBLICATION_TIMEOUT;
+    loop {
+        if let Ok(contents) = std::fs::read_to_string(path)
+            && let Some(record) = contents
+                .lines()
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .find(|record: &serde_json::Value| record["event"] == event)
+        {
+            return record;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for {event} record in {}", path.display());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn write_dynamic_plugin_manifest(dir: &std::path::Path, plugin_id: &str) {
@@ -827,9 +856,23 @@ fn start_mcp_client_with_generation(
     idle_timeout_secs: &str,
     generation: Option<&std::path::Path>,
 ) -> (Child, ChildStdin) {
+    start_mcp_client_with_generation_and_logging(temp, bind, idle_timeout_secs, generation, None)
+}
+
+fn start_mcp_client_with_generation_and_logging(
+    temp: &std::path::Path,
+    bind: SocketAddr,
+    idle_timeout_secs: &str,
+    generation: Option<&std::path::Path>,
+    logging_config: Option<&std::path::Path>,
+) -> (Child, ChildStdin) {
     let mut command = Command::new(gateway_bin());
+    command.arg("--bind").arg(bind.to_string());
+    if let Some(logging_config) = logging_config {
+        command.arg("--log-config-path").arg(logging_config);
+    }
     command
-        .args(["--bind", &bind.to_string(), "mcp"])
+        .arg("mcp")
         .env("HOME", temp)
         .env("XDG_CONFIG_HOME", temp.join("xdg"))
         .env("XDG_RUNTIME_DIR", temp.join("runtime"))
@@ -1739,19 +1782,105 @@ fn cli_mcp_clients_share_gateway_until_final_idle_shutdown() {
 #[test]
 fn cli_mcp_restarts_one_stopped_gateway_then_fails_after_the_second_stop() {
     let temp = tempfile::tempdir().unwrap();
-    let (mut client, _stdin) = start_mcp_client(temp.path(), "127.0.0.1:0".parse().unwrap());
+    let (logging_config, log_path) = write_jsonl_logging_config(temp.path());
+    let (mut client, _stdin) = start_mcp_client_with_generation_and_logging(
+        temp.path(),
+        "127.0.0.1:0".parse().unwrap(),
+        "1",
+        None,
+        Some(&logging_config),
+    );
     let first = wait_for_owned_sidecar(temp.path(), None);
     let first_pid = first["pid"].as_u64().unwrap();
 
     stop_owned_sidecar(&first);
     let second = wait_for_owned_sidecar(temp.path(), Some(first_pid));
     assert_ne!(second["pid"], first["pid"]);
+    wait_for_jsonl_event(&log_path, "gateway_recovered");
 
     stop_owned_sidecar(&second);
     let status = wait_child(&mut client);
     assert!(
         !status.success(),
         "MCP client unexpectedly restarted the shared gateway twice"
+    );
+    let records = read_jsonl_records(&log_path);
+    let session_failure = records
+        .iter()
+        .find(|record| record["event"] == "mcp_session_failed")
+        .expect("mcp_session_failed record");
+    let command_failure = records
+        .iter()
+        .find(|record| record["event"] == "command_failed" && record["fields"]["command"] == "mcp")
+        .expect("MCP command_failed record");
+    assert_eq!(
+        session_failure["fields"]["failure_reason"],
+        "gateway_recovered_then_unhealthy"
+    );
+    assert_eq!(
+        command_failure["fields"]["failure_reason"],
+        "gateway_recovered_then_unhealthy"
+    );
+}
+
+#[test]
+fn cli_mcp_logs_static_heartbeat_configuration_failure_reason() {
+    let temp = tempfile::tempdir().unwrap();
+    let (logging_config, log_path) = write_jsonl_logging_config(temp.path());
+    let secret = "NEMO_RELAY_HEARTBEAT_SECRET_SENTINEL";
+    let output = Command::new(gateway_bin())
+        .args(["--log-config-path"])
+        .arg(&logging_config)
+        .args(["--bind", "127.0.0.1:0", "mcp"])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
+        .env("TMPDIR", temp.path())
+        .env("NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS", secret)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS")
+    );
+    let contents = std::fs::read_to_string(&log_path).unwrap();
+    assert!(!contents.contains(secret));
+    let failure = read_jsonl_event(&log_path, "command_failed");
+    assert_eq!(failure["fields"]["command"], "mcp");
+    assert_eq!(
+        failure["fields"]["failure_reason"],
+        "heartbeat_configuration_failed"
+    );
+}
+
+#[test]
+fn cli_mcp_logs_gateway_acquisition_failure_reason() {
+    let temp = tempfile::tempdir().unwrap();
+    let (logging_config, log_path) = write_jsonl_logging_config(temp.path());
+    let output = Command::new(gateway_bin())
+        .args(["--log-config-path"])
+        .arg(&logging_config)
+        .args(["--bind", "0.0.0.0:0", "mcp"])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
+        .env("TMPDIR", temp.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let gateway_failure = read_jsonl_event(&log_path, "gateway_acquisition_failed");
+    assert_eq!(
+        gateway_failure["fields"]["failure_reason"],
+        "gateway_acquisition_failed"
+    );
+    let command_failure = read_jsonl_event(&log_path, "command_failed");
+    assert_eq!(command_failure["fields"]["command"], "mcp");
+    assert_eq!(
+        command_failure["fields"]["failure_reason"],
+        "gateway_acquisition_failed"
     );
 }
 
@@ -4061,6 +4190,142 @@ anthropic_base_url = "http://127.0.0.1:1"
 }
 
 #[test]
+fn claude_hook_downgrade_cli_is_visible_structured_and_redacted() {
+    let temp = tempfile::tempdir().unwrap();
+    let (logging_config, log_path) = write_jsonl_logging_config(temp.path());
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        r#"
+[upstream]
+openai_base_url = "http://127.0.0.1:1"
+anthropic_base_url = "http://127.0.0.1:1"
+
+[agents.claude]
+command = "mise --bare exec -- claude"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .env_remove("CLAUDE_CODE_SAFE_MODE")
+        .env_remove("CLAUDE_CODE_SIMPLE")
+        .args(["--log-config-path"])
+        .arg(&logging_config)
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "run",
+            "--agent",
+            "claude",
+            "--dry-run",
+            "--",
+            "--safe-mode",
+            "-p",
+            "private prompt sentinel",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Claude hooks at risk (Claude safe mode)"));
+    assert!(
+        stderr.contains("claude_relay_hook_integrity_at_risk"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("private prompt sentinel"));
+
+    let diagnostic = read_jsonl_event(&log_path, "agent_invocation_warning");
+    assert_eq!(
+        diagnostic["fields"]["diagnostic_code"],
+        "claude_relay_hook_integrity_at_risk"
+    );
+    assert_eq!(diagnostic["fields"]["safe_mode_signal"], "true");
+    assert_eq!(diagnostic["fields"]["bare_mode_signal"], "false");
+    assert_eq!(diagnostic["fields"]["model_routing"], "configured");
+    assert_eq!(diagnostic["fields"]["hook_integrity"], "at_risk");
+    assert_eq!(diagnostic["fields"]["command_modified"], "false");
+    assert_eq!(
+        diagnostic["fields"]["action"],
+        "remove_hook_disabling_claude_mode_if_hook_integrity_is_required"
+    );
+    assert_eq!(diagnostic["fields"]["arguments_redacted"], "true");
+    assert!(!diagnostic.to_string().contains("private prompt sentinel"));
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_bare_hook_warning_is_visible_in_a_default_non_tty_live_run() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&xdg).unwrap();
+    let agent = temp.path().join("fake-claude");
+    std::fs::write(
+        &agent,
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo '2.1.267 (Claude Code)'\nfi\nexit 0\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "[agents.claude]\ncommand = {}\n",
+            toml_basic_string(agent.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env_remove("CLAUDE_CODE_SAFE_MODE")
+        .env_remove("CLAUDE_CODE_SIMPLE")
+        .env_remove("NEMO_RELAY_LOG")
+        .env_remove("NEMO_RELAY_LOG_STDERR")
+        .env_remove("NEMO_RELAY_LOG_STDERR_FORMAT")
+        .env_remove("NEMO_RELAY_LOG_CONFIG_PATH")
+        .env("ANTHROPIC_API_KEY", "private-live-key-sentinel")
+        .args(["--config"])
+        .arg(&config)
+        .args([
+            "run",
+            "--agent",
+            "claude",
+            "--",
+            "--bare",
+            "-p",
+            "private-live-prompt-sentinel",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(output.stdout.is_empty());
+    assert!(
+        stderr.contains("Claude hooks at risk (Claude bare mode)"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("private-live-prompt-sentinel"), "{stderr}");
+    assert!(!stderr.contains("private-live-key-sentinel"), "{stderr}");
+    assert!(
+        !stderr.contains(temp.path().to_string_lossy().as_ref()),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn invocation_diagnostic_does_not_preflight_live_launches() {
     let temp = tempfile::tempdir().unwrap();
     let config = temp.path().join("config.toml");
@@ -4792,6 +5057,84 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
     assert!(request.contains("x-nemo-relay-config-profile: coverage"));
     assert!(request.contains("x-nemo-relay-gateway-mode: passthrough"));
     assert!(request.contains(r#"{"hook_event_name":"sessionStart"}"#));
+}
+
+#[test]
+fn cli_hook_forward_debug_records_are_safe_and_do_not_include_hook_details() {
+    let temp = tempfile::tempdir().unwrap();
+    let (config_path, log_path) = write_debug_jsonl_logging_config(temp.path());
+    let (server_url, received) = spawn_single_request_server(200, r#"{"continue":true}"#);
+    let sentinels = [
+        "NEMO_RELAY_TOOL_SENTINEL",
+        "NEMO_RELAY_ARGUMENT_SENTINEL",
+        "NEMO_RELAY_RESULT_SENTINEL",
+        "NEMO_RELAY_PROMPT_SENTINEL",
+        "NEMO_RELAY_PROVIDER_SENTINEL",
+        "NEMO_RELAY_MODEL_SENTINEL",
+        "NEMO_RELAY_HEADER_SENTINEL",
+        "NEMO_RELAY_URL_SENTINEL",
+        "NEMO_RELAY_CREDENTIAL_SENTINEL",
+    ];
+    let payload = r#"{
+        "hook_event_name":"NEMO_RELAY_EVENT_SENTINEL",
+        "tool_name":"NEMO_RELAY_TOOL_SENTINEL",
+        "tool_input":{"argument":"NEMO_RELAY_ARGUMENT_SENTINEL"},
+        "tool_result":"NEMO_RELAY_RESULT_SENTINEL",
+        "prompt":"NEMO_RELAY_PROMPT_SENTINEL"
+    }"#;
+    let metadata = r#"{"provider":"NEMO_RELAY_PROVIDER_SENTINEL","model":"NEMO_RELAY_MODEL_SENTINEL","headers":"NEMO_RELAY_HEADER_SENTINEL","url":"NEMO_RELAY_URL_SENTINEL","credential":"NEMO_RELAY_CREDENTIAL_SENTINEL"}"#;
+    let mut child = Command::new(gateway_bin())
+        .args(["--log-config-path"])
+        .arg(&config_path)
+        .args([
+            "hook-forward",
+            "codex",
+            "--profile",
+            "coverage",
+            "--session-metadata",
+            metadata,
+            "--gateway-mode",
+            "passthrough",
+            "--fail-closed",
+        ])
+        .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(request.contains("NEMO_RELAY_TOOL_SENTINEL"));
+    let contents = std::fs::read_to_string(&log_path).unwrap();
+    for sentinel in sentinels {
+        assert!(
+            !contents.contains(sentinel),
+            "operational log exposed sensitive input: {sentinel}"
+        );
+    }
+    assert!(!contents.contains("NEMO_RELAY_EVENT_SENTINEL"));
+    let records = read_jsonl_records(&log_path);
+    for event in ["hook_started", "hook_completed"] {
+        assert!(
+            records
+                .iter()
+                .any(|record| record["event"] == event && record["level"] == "debug"),
+            "missing debug {event} record: {records:?}"
+        );
+    }
 }
 
 #[test]

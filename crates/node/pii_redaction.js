@@ -33,7 +33,7 @@ function defaultConfig() {
  */
 function builtinConfig(config = {}) {
   return {
-    action: 'remove',
+    ...(config.preset === 'trajectory_context' ? {} : { action: 'remove' }),
     ...config,
   };
 }

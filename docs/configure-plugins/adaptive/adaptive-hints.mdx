@@ -84,7 +84,7 @@ report = nemo_relay.plugin.validate(plugin_config)["config"]
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
-async def main():
+async def main() -> None:
     async with nemo_relay.plugin.activate(plugin_config):
         # Run instrumented application work here.
         pass

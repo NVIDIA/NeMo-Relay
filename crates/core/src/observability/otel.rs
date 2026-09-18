@@ -24,9 +24,15 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::header_file::{
+    HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
+    validate_header_files,
+};
 use super::otel_signal::{
-    MetricMarkClassification, SignalRuntimeDiagnostics, classify_metric_mark, resolve_header_env,
-    should_relog_runtime_diagnostic,
+    MetricMarkClassification, SignalRuntimeDiagnostics, TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS,
+    classify_metric_mark, resolve_header_env, retry_batch_processor_channel_full,
+    should_relog_runtime_diagnostic, telemetry_resource,
+    validate_telemetry_sdk_resource_attributes,
 };
 use super::{
     MarkProjection, OpenTelemetryRuntimeDiagnostics, OpenTelemetryType, OtlpAttributeMapping,
@@ -53,12 +59,13 @@ use opentelemetry::{Context, KeyValue};
 use opentelemetry_otlp::{
     Protocol, SpanExporter as OtlpSpanExporter, WithExportConfig, WithHttpConfig,
 };
-use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
+use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor as AsyncBatchSpanProcessor;
 use opentelemetry_sdk::trace::{
-    BatchConfigBuilder, BatchSpanProcessor, IdGenerator, RandomIdGenerator, SdkTracer,
-    SdkTracerProvider, Span, SpanData, SpanExporter, SpanProcessor,
+    BatchConfigBuilder, IdGenerator, RandomIdGenerator, SdkTracer, SdkTracerProvider, Span,
+    SpanData, SpanExporter, SpanProcessor,
 };
+use opentelemetry_sdk::{Resource, runtime};
 use uuid::Uuid;
 
 use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
@@ -231,6 +238,27 @@ fn trace_endpoint_log_identity(endpoint: &str) -> String {
     format!("{}://{host}:{port}", endpoint.scheme())
 }
 
+/// Require protected transport for remote OTLP trace exports, regardless of projection.
+pub(super) fn validate_trace_endpoint(endpoint: &str) -> Result<()> {
+    let protected = reqwest::Url::parse(endpoint).is_ok_and(|url| {
+        let host = url.host_str().unwrap_or_default();
+        let loopback = host.eq_ignore_ascii_case("localhost")
+            || host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback());
+        url.scheme() == "https" || (url.scheme() == "http" && loopback)
+    });
+    if !protected {
+        return Err(OpenTelemetryError::ExporterBuild(
+            "OTLP trace endpoints require HTTPS; HTTP is allowed only for localhost or loopback IP addresses"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Configuration for the OpenTelemetry subscriber.
 #[derive(Debug, Clone)]
 pub struct OpenTelemetryConfig {
@@ -238,6 +266,7 @@ pub struct OpenTelemetryConfig {
     endpoint: String,
     headers: HashMap<String, String>,
     header_env: HashMap<String, String>,
+    header_file: HeaderFiles,
     resource_attributes: HashMap<String, String>,
     service_name: String,
     service_namespace: Option<String>,
@@ -263,6 +292,7 @@ impl OpenTelemetryConfig {
             endpoint: String::new(),
             headers: HashMap::new(),
             header_env: HashMap::new(),
+            header_file: HashMap::new(),
             resource_attributes: HashMap::new(),
             service_name: "unknown_service".to_string(),
             service_namespace: None,
@@ -338,6 +368,15 @@ impl OpenTelemetryConfig {
     /// Maps an exporter header name to the environment variable supplying its value.
     pub fn with_header_env(mut self, key: impl Into<String>, variable: impl Into<String>) -> Self {
         self.header_env.insert(key.into(), variable.into());
+        self
+    }
+
+    pub(crate) fn with_header_file(
+        mut self,
+        key: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Self {
+        self.header_file.insert(key.into(), path.into());
         self
     }
 
@@ -534,6 +573,24 @@ struct Inner {
     _runtime: Option<ExporterRuntime>,
 }
 
+impl Drop for Inner {
+    fn drop(&mut self) {
+        // An externally supplied provider remains owned by its caller. Providers built by this
+        // subscriber, however, must finish their accepted exports before their runtime exits.
+        if self._runtime.is_none() {
+            return;
+        }
+        // Accept all Relay events queued before teardown before closing the provider.
+        let _ = flush_subscribers();
+        let dynamic_providers = self
+            .processor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .dynamic_providers();
+        let _ = shutdown_trace_providers(self.provider.clone(), dynamic_providers);
+    }
+}
+
 struct ExporterRuntime {
     stop: Option<mpsc::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
@@ -574,6 +631,7 @@ impl OpenTelemetrySubscriber {
                 "endpoint must be a nonblank string".to_string(),
             ));
         }
+        validate_trace_endpoint(&config.endpoint)?;
         if config.completed_span_context_ttl.is_zero() {
             return Err(OpenTelemetryError::ExporterBuild(
                 "completed_span_context_ttl must be greater than 0".to_string(),
@@ -585,8 +643,11 @@ impl OpenTelemetrySubscriber {
             .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
         validate_metadata_promotion_prefixes(&config.promote_resource_metadata_prefixes)
             .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
+        validate_telemetry_sdk_resource_attributes(&config.resource_attributes)?;
         reject_global_header_environment()?;
         validate_headers(&config.headers)?;
+        validate_header_files(&config.headers, &config.header_env, &config.header_file)
+            .map_err(OpenTelemetryError::ExporterBuild)?;
         config.headers = resolve_header_env(&config.headers, &config.header_env)?;
         validate_headers(&config.headers)?;
         let runtime_diagnostics = SignalRuntimeDiagnostics::new(diagnostic_field);
@@ -608,6 +669,9 @@ impl OpenTelemetrySubscriber {
     }
 
     /// Builds a subscriber from an already-configured tracer provider.
+    ///
+    /// Keep the runtime that drives an asynchronous processor alive until after this subscriber
+    /// has been flushed or shut down.
     pub fn from_tracer_provider(
         provider: SdkTracerProvider,
         instrumentation_scope: impl Into<String>,
@@ -822,6 +886,7 @@ impl OpenTelemetrySubscriber {
     /// Flushes finished spans through the underlying tracer provider.
     ///
     /// After a successful flush, runtime diagnostics include queue drops observed so far.
+    /// This is a synchronous completion barrier; call it from a blocking task in async code.
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
         // Keep the processor lock guard temporary: subscriber callbacks also use it.
@@ -833,23 +898,14 @@ impl OpenTelemetrySubscriber {
                 OpenTelemetryError::TraceProvider("event processor lock poisoned".to_string())
             })?
             .dynamic_providers();
-        let mut errors = Vec::new();
-        if let Err(error) = self.inner.provider.force_flush() {
-            errors.push(error.to_string());
-        }
-        for provider in dynamic_providers {
-            if let Err(error) = provider.force_flush() {
-                errors.push(error.to_string());
-            }
-        }
-        errors.into_iter().next().map_or(Ok(()), |error| {
-            Err(OpenTelemetryError::TraceProvider(error))
-        })
+        flush_trace_providers(self.inner.provider.clone(), dynamic_providers)
+            .map_err(OpenTelemetryError::TraceProvider)
     }
 
     /// Shuts down the underlying tracer provider.
     ///
     /// Call `deregister(...)` first if the subscriber is still registered with NeMo Relay.
+    /// This waits for the final export and should run in a blocking task in async code.
     pub fn shutdown(&self) -> Result<()> {
         let barrier_error = flush_subscribers().err().map(OpenTelemetryError::Core);
         let provider_result = self.shutdown_provider();
@@ -869,27 +925,48 @@ impl OpenTelemetrySubscriber {
                 OpenTelemetryError::TraceProvider("event processor lock poisoned".to_string())
             })?
             .dynamic_providers();
-        let mut dynamic_errors = Vec::new();
-        for provider in dynamic_providers {
-            if let Err(error) = normalize_shutdown_result(provider.shutdown()) {
-                dynamic_errors.push(error.to_string());
-            }
-        }
-        let provider_result = self.inner.provider.shutdown();
-        if provider_result.is_ok() {
-            log::info!(
-                target: "nemo_relay.observability",
-                event = "exporter_shutdown",
-                exporter = "opentelemetry";
-                "OpenTelemetry exporter shut down"
-            );
-        }
-        normalize_shutdown_result(provider_result)
-            .map_err(|error| OpenTelemetryError::TraceProvider(error.to_string()))?;
-        dynamic_errors.into_iter().next().map_or(Ok(()), |error| {
-            Err(OpenTelemetryError::TraceProvider(error))
-        })
+        shutdown_trace_providers(self.inner.provider.clone(), dynamic_providers)
+            .map_err(OpenTelemetryError::TraceProvider)
     }
+}
+
+fn flush_trace_providers(
+    provider: SdkTracerProvider,
+    dynamic_providers: Vec<SdkTracerProvider>,
+) -> std::result::Result<(), String> {
+    let mut errors = Vec::new();
+    if let Err(error) = provider.force_flush() {
+        errors.push(error.to_string());
+    }
+    for provider in dynamic_providers {
+        if let Err(error) = provider.force_flush() {
+            errors.push(error.to_string());
+        }
+    }
+    errors.into_iter().next().map_or(Ok(()), Err)
+}
+
+fn shutdown_trace_providers(
+    provider: SdkTracerProvider,
+    dynamic_providers: Vec<SdkTracerProvider>,
+) -> std::result::Result<(), String> {
+    let mut dynamic_errors = Vec::new();
+    for provider in dynamic_providers {
+        if let Err(error) = normalize_shutdown_result(provider.shutdown()) {
+            dynamic_errors.push(error.to_string());
+        }
+    }
+    let provider_result = provider.shutdown();
+    if provider_result.is_ok() {
+        log::info!(
+            target: "nemo_relay.observability",
+            event = "exporter_shutdown",
+            exporter = "opentelemetry";
+            "OpenTelemetry exporter shut down"
+        );
+    }
+    normalize_shutdown_result(provider_result).map_err(|error| error.to_string())?;
+    dynamic_errors.into_iter().next().map_or(Ok(()), Err)
 }
 
 fn build_owned_tracer_provider(
@@ -1008,10 +1085,23 @@ fn build_tracer_provider_with_resource(
 ) -> Result<SdkTracerProvider> {
     let exporter = match config.transport {
         OtlpTransport::HttpBinary => {
+            let client = reqwest::Client::builder()
+                .timeout(config.timeout)
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
             let mut builder = OtlpSpanExporter::builder()
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
                 .with_timeout(config.timeout);
+            if !config.header_file.is_empty() {
+                builder = builder.with_http_client(HeaderFileHttpClient::new(
+                    client,
+                    HeaderFileResolver::new(config.header_file.clone()),
+                ));
+            } else {
+                builder = builder.with_http_client(client);
+            }
             builder =
                 builder.with_endpoint(resolve_http_trace_endpoint(&config.endpoint).into_owned());
             if !config.headers.is_empty() {
@@ -1030,6 +1120,11 @@ fn build_tracer_provider_with_resource(
             if !config.headers.is_empty() {
                 builder = builder.with_metadata(build_grpc_metadata(&config.headers)?);
             }
+            if !config.header_file.is_empty() {
+                builder = builder.with_interceptor(HeaderFileInterceptor::new(
+                    HeaderFileResolver::new(config.header_file.clone()),
+                ));
+            }
             builder
                 .build()
                 .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()))?
@@ -1040,11 +1135,7 @@ fn build_tracer_provider_with_resource(
     // sets on long-running spans; the OTel SDK default (128) silently drops
     // attributes added last in the span's lifecycle.
     let builder = SdkTracerProvider::builder()
-        .with_resource(
-            Resource::builder_empty()
-                .with_attributes(resource_attributes)
-                .build(),
-        )
+        .with_resource(telemetry_resource(resource_attributes))
         .with_id_generator(RelayIdGenerator)
         .with_max_attributes_per_span(u32::MAX)
         .with_max_attributes_per_event(u32::MAX);
@@ -1059,11 +1150,12 @@ fn build_tracer_provider_with_resource(
     if let Some(scheduled_delay) = config.scheduled_delay {
         batch_config = batch_config.with_scheduled_delay(scheduled_delay);
     }
-    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
+    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config_and_retry_timeout(
         exporter,
         config.endpoint.clone(),
         runtime_diagnostics,
         batch_config.build(),
+        config.timeout,
     );
     Ok(builder.with_span_processor(processor).build())
 }
@@ -1186,19 +1278,37 @@ impl TraceDeliveryDiagnostics {
 
 #[derive(Debug)]
 struct DiagnosticBatchSpanProcessor {
-    inner: BatchSpanProcessor,
+    inner: AsyncBatchSpanProcessor<runtime::Tokio>,
     completed_spans: AtomicU64,
     accepted_spans: Arc<AtomicU64>,
     diagnostics: Arc<TraceDeliveryDiagnostics>,
     reported_dropped_spans: AtomicU64,
+    retry_timeout: Duration,
 }
 
 impl DiagnosticBatchSpanProcessor {
+    #[cfg(test)]
     fn new_with_batch_config<E: SpanExporter + 'static>(
         exporter: E,
         endpoint: String,
         runtime_diagnostics: SignalRuntimeDiagnostics,
         batch_config: opentelemetry_sdk::trace::BatchConfig,
+    ) -> Self {
+        Self::new_with_batch_config_and_retry_timeout(
+            exporter,
+            endpoint,
+            runtime_diagnostics,
+            batch_config,
+            Duration::from_secs(3),
+        )
+    }
+
+    fn new_with_batch_config_and_retry_timeout<E: SpanExporter + 'static>(
+        exporter: E,
+        endpoint: String,
+        runtime_diagnostics: SignalRuntimeDiagnostics,
+        batch_config: opentelemetry_sdk::trace::BatchConfig,
+        retry_timeout: Duration,
     ) -> Self {
         let accepted_spans = Arc::new(AtomicU64::new(0));
         let diagnostics = Arc::new(TraceDeliveryDiagnostics::new(endpoint, runtime_diagnostics));
@@ -1208,13 +1318,14 @@ impl DiagnosticBatchSpanProcessor {
             diagnostics: Arc::clone(&diagnostics),
         };
         Self {
-            inner: BatchSpanProcessor::builder(exporter)
+            inner: AsyncBatchSpanProcessor::builder(exporter, runtime::Tokio)
                 .with_batch_config(batch_config)
                 .build(),
             completed_spans: AtomicU64::new(0),
             accepted_spans,
             diagnostics,
             reported_dropped_spans: AtomicU64::new(0),
+            retry_timeout,
         }
     }
 
@@ -1260,7 +1371,8 @@ impl SpanProcessor for DiagnosticBatchSpanProcessor {
     }
 
     fn force_flush(&self) -> OTelSdkResult {
-        let result = self.inner.force_flush();
+        let result =
+            retry_batch_processor_channel_full(self.retry_timeout, || self.inner.force_flush());
         if result.is_ok() {
             self.record_dropped_spans();
         }
@@ -1273,7 +1385,9 @@ impl SpanProcessor for DiagnosticBatchSpanProcessor {
     }
 
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
-        let result = self.inner.shutdown_with_timeout(timeout);
+        let result = retry_batch_processor_channel_full(self.retry_timeout.min(timeout), || {
+            self.inner.shutdown_with_timeout(timeout)
+        });
         if result.is_ok() {
             let dropped = self.record_dropped_spans();
             let export_failure = self.diagnostics.unresolved_failure_summary();
@@ -1328,6 +1442,7 @@ pub(super) struct ActiveSpan {
     start_model_name: Option<String>,
     projected_attributes: Vec<KeyValue>,
     projection_attribute_keys: HashSet<String>,
+    inferred_tool_attribute_keys: HashSet<String>,
     start_promoted_metadata: Vec<KeyValue>,
     descendant_error_type: Option<String>,
     descendant_exception_type: Option<String>,
@@ -1563,7 +1678,7 @@ impl OtelEventProcessor {
         dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicTracePipeline>>>,
     ) -> Self {
         let tracer = provider.tracer(instrumentation_scope.clone());
-        let (resource_metadata_prefixes, resource_metadata_protected_keys) = owned_config
+        let (resource_metadata_prefixes, mut resource_metadata_protected_keys) = owned_config
             .as_ref()
             .map(|config| {
                 (
@@ -1571,10 +1686,15 @@ impl OtelEventProcessor {
                     configured_resource_attributes(config)
                         .into_iter()
                         .map(|attribute| attribute.key.as_str().to_string())
-                        .collect(),
+                        .collect::<HashSet<_>>(),
                 )
             })
             .unwrap_or_default();
+        resource_metadata_protected_keys.extend(
+            TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS
+                .iter()
+                .map(|key| (*key).to_string()),
+        );
         Self {
             active_spans: HashMap::new(),
             completed_span_contexts: HashMap::new(),
@@ -1794,6 +1914,13 @@ impl OtelEventProcessor {
                 start_model_name,
                 projected_attributes,
                 projection_attribute_keys,
+                inferred_tool_attribute_keys: if self.otel_type == OpenTelemetryType::GenAi
+                    && event.scope_type() == Some(ScopeType::Tool)
+                {
+                    super::otel_genai::inferred_tool_attribute_keys(event)
+                } else {
+                    HashSet::new()
+                },
                 start_promoted_metadata,
                 descendant_error_type: None,
                 descendant_exception_type: None,
@@ -1819,6 +1946,28 @@ impl OtelEventProcessor {
             OpenTelemetryType::OpenInference => super::openinference::end_attributes(event),
         };
         let is_error = metadata_string(event, "otel.status_code") == Some("ERROR");
+        if self.otel_type == OpenTelemetryType::GenAi && event.scope_type() == Some(ScopeType::Tool)
+        {
+            // Explicit start identity (especially a typed call ID) remains
+            // authoritative. Only inferred defaults can be refined by explicit
+            // completion metadata, never by another inferred default.
+            let inferred_end_keys = super::otel_genai::inferred_tool_attribute_keys(event);
+            attributes.retain(|attribute| {
+                !matches!(
+                    attribute.key.as_str(),
+                    "gen_ai.tool.call.id"
+                        | "gen_ai.tool.type"
+                        | "gen_ai.tool.description"
+                        | "gen_ai.agent.name"
+                ) || !active_span
+                    .projection_attribute_keys
+                    .contains(attribute.key.as_str())
+                    || (active_span
+                        .inferred_tool_attribute_keys
+                        .contains(attribute.key.as_str())
+                        && !inferred_end_keys.contains(attribute.key.as_str()))
+            });
+        }
         let explicit_error_type = metadata_string(event, "error.type");
         let error_type = is_error.then(|| {
             explicit_error_type

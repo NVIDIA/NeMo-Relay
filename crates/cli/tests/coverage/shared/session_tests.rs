@@ -4,11 +4,15 @@
 use axum::http::HeaderMap;
 use nemo_relay::api::event::{Event, ScopeCategory};
 use nemo_relay::api::llm::{LlmCallExecuteParams, llm_call_execute};
+use nemo_relay::api::registry::{
+    deregister_tool_conditional_execution_guardrail, register_tool_conditional_execution_guardrail,
+};
 use nemo_relay::api::runtime::EventSubscriberFn;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::resolve::{
     ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
 };
+use nemo_relay::error::FlowError;
 use nemo_relay::observability::OpenTelemetryType;
 use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig, AtofExporterMode};
 use nemo_relay::observability::otel::OpenTelemetrySubscriber;
@@ -23,6 +27,339 @@ use std::sync::{Arc, Mutex as StdMutex};
 use super::*;
 use crate::events::{LlmHintEvent, SessionEvent, ToolEvent};
 use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
+
+struct ToolGuardrailCleanup(&'static str);
+
+impl Drop for ToolGuardrailCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_tool_conditional_execution_guardrail(self.0);
+    }
+}
+
+#[tokio::test]
+async fn cancelled_authenticated_hook_preserves_owner_until_session_ends() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-session-cancelled-hook-owner";
+    const TOOL: &str = "cancelled-hook-owner";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    let entered = Arc::new(tokio::sync::Notify::new());
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new({
+            let entered = Arc::clone(&entered);
+            move |name, _| {
+                let entered = Arc::clone(&entered);
+                Box::pin(async move {
+                    if name == TOOL {
+                        entered.notify_one();
+                        std::future::pending::<()>().await;
+                    }
+                    Ok(None)
+                })
+            }
+        }),
+    )
+    .unwrap();
+    let _guardrail_cleanup = ToolGuardrailCleanup(GUARDRAIL);
+
+    let manager = SessionManager::new(session_test_config());
+    let applying = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .apply_authenticated_events(
+                    &HeaderMap::new(),
+                    vec![NormalizedEvent::ToolStarted(ToolEvent {
+                        session_id: "cancelled-owner-session".into(),
+                        agent_kind: AgentKind::Codex,
+                        event_name: "PreToolUse".into(),
+                        tool_call_id: "cancelled-owner-tool".into(),
+                        tool_name: TOOL.into(),
+                        subagent_id: None,
+                        arguments: json!({}),
+                        result: Value::Null,
+                        status: None,
+                        payload: json!({}),
+                        metadata: json!({}),
+                    })],
+                    "client-a",
+                )
+                .await
+        }
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), entered.notified())
+        .await
+        .unwrap();
+    applying.abort();
+    assert!(applying.await.unwrap_err().is_cancelled());
+
+    let error = manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "cancelled-owner-session",
+                "SessionStart",
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CliError::Unauthorized(_)));
+
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentEnded(session_event(
+                "cancelled-owner-session",
+                "SessionEnd",
+            ))],
+            "client-a",
+        )
+        .await
+        .unwrap();
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "cancelled-owner-session",
+                "SessionStart",
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_authenticated_terminal_hook_releases_closed_owner() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "cancelled-terminal-session",
+                "SessionStart",
+            ))],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    let routing = manager.alignment_routing.lock().await;
+    let ending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .apply_authenticated_events(
+                    &HeaderMap::new(),
+                    vec![
+                        NormalizedEvent::AgentEnded(session_event(
+                            "cancelled-terminal-session",
+                            "SessionEnd",
+                        )),
+                        NormalizedEvent::AgentStarted(session_event(
+                            "cancelled-terminal-marker",
+                            "SessionStart",
+                        )),
+                    ],
+                    "client-a",
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if manager
+                .authenticated_reservations
+                .lock()
+                .await
+                .contains_key("cancelled-terminal-marker")
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("authenticated batch should reserve its new session");
+
+    let owners = manager.authenticated_owners.lock().await;
+    drop(routing);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if !manager
+                .inner
+                .lock()
+                .await
+                .contains_key("cancelled-terminal-session")
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("terminal event should remove its session");
+    ending.abort();
+    assert!(ending.await.unwrap_err().is_cancelled());
+    drop(owners);
+    manager.session_activity.wait_for_idle().await;
+
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "cancelled-terminal-session",
+                "SessionStart",
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_owner_cleanup_releases_each_reservation_once() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .authenticated_reservations
+        .lock()
+        .await
+        .insert("shared-reservation".into(), ("client-a".into(), 2));
+    manager
+        .authenticated_owners
+        .lock()
+        .await
+        .insert("closed-session".into(), "client-a".into());
+
+    let mut session_ids = HashSet::new();
+    session_ids.insert("shared-reservation".into());
+    let mut guard = AuthenticatedReservationGuard::new(
+        manager.clone(),
+        session_ids,
+        "client-a",
+        manager.session_activity.begin(),
+    );
+    guard.released_owner_ids.insert("closed-session".into());
+
+    let owners = manager.authenticated_owners.lock().await;
+    let releasing = tokio::spawn(guard.release());
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if manager
+                .authenticated_reservations
+                .lock()
+                .await
+                .get("shared-reservation")
+                .is_some_and(|(_, pending)| *pending == 1)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("reservation release should complete before owner cleanup");
+
+    releasing.abort();
+    assert!(releasing.await.unwrap_err().is_cancelled());
+    drop(owners);
+    manager.session_activity.wait_for_idle().await;
+
+    assert_eq!(
+        manager
+            .authenticated_reservations
+            .lock()
+            .await
+            .get("shared-reservation")
+            .map(|(_, pending)| *pending),
+        Some(1)
+    );
+}
+
+#[tokio::test]
+async fn terminal_event_for_unknown_session_does_not_claim_owner() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentEnded(session_event(
+                "unknown-terminal-session",
+                "SessionEnd",
+            ))],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "unknown-terminal-session",
+                "SessionStart",
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn authenticated_application_cannot_commit_owner_after_shutdown_begins() {
+    let manager = SessionManager::new(session_test_config());
+    let routing = manager.alignment_routing.lock().await;
+    let applying = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .apply_authenticated_events(
+                    &HeaderMap::new(),
+                    vec![NormalizedEvent::AgentStarted(session_event(
+                        "shutdown-owner-session",
+                        "SessionStart",
+                    ))],
+                    "client-a",
+                )
+                .await
+        }
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if manager
+                .authenticated_reservations
+                .lock()
+                .await
+                .contains_key("shutdown-owner-session")
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let closing_manager = manager.clone();
+    let mut closing = tokio::spawn(async move { closing_manager.close_all("test_shutdown").await });
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut closing)
+            .await
+            .is_err(),
+        "shutdown must wait for authenticated session routing"
+    );
+
+    drop(routing);
+    applying.await.unwrap().unwrap();
+    closing.await.unwrap().unwrap();
+
+    assert!(manager.inner.lock().await.is_empty());
+    assert!(manager.authenticated_owners.lock().await.is_empty());
+    assert!(manager.authenticated_reservations.lock().await.is_empty());
+}
 
 #[tokio::test]
 async fn authenticated_hook_clients_cannot_take_over_existing_sessions() {
@@ -142,6 +479,20 @@ async fn authenticated_child_cannot_promote_into_another_clients_parent() {
             .subagents
             .contains_key("child-thread")
     );
+
+    // The rejected child never created session state, so its reservation is released for a
+    // future independent session with the same client-provided ID.
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "child-thread",
+                "SessionStart",
+            ))],
+            "client-c",
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -240,6 +591,203 @@ async fn authenticated_alias_rejects_events_from_a_different_client() {
 }
 
 #[tokio::test]
+async fn cancelled_aliased_terminal_event_preserves_the_alias() {
+    let manager = SessionManager::new(session_test_config());
+    start_authenticated_codex_alias(&manager).await;
+    assert!(has_alignment_alias(&manager, "child-thread").await);
+
+    let parent_gate = session_gate(&manager.session_gates, "parent-thread").await;
+    let parent_gate = parent_gate.lock().await;
+    let ending = tokio::time::timeout(
+        Duration::from_millis(100),
+        manager.apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentEnded(codex_session_event(
+                "child-thread",
+                "SessionEnd",
+                json!({}),
+            ))],
+            "client-a",
+        ),
+    )
+    .await;
+    assert!(
+        ending.is_err(),
+        "terminal event should wait for its session"
+    );
+    drop(parent_gate);
+
+    assert!(has_alignment_alias(&manager, "child-thread").await);
+
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentEnded(codex_session_event(
+                "child-thread",
+                "SessionEnd",
+                json!({}),
+            ))],
+            "client-a",
+        )
+        .await
+        .unwrap();
+    assert!(!has_alignment_alias(&manager, "child-thread").await);
+}
+
+#[tokio::test]
+async fn hook_routing_rechecks_an_alias_removed_during_ownership_wait() {
+    let manager = SessionManager::new(session_test_config());
+    start_authenticated_codex_alias(&manager).await;
+
+    let child_gate = session_gate(&manager.session_gates, "child-thread").await;
+    let child_gate = child_gate.lock().await;
+    let owners = manager.authenticated_owners.lock().await;
+    let mut ending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            let config = manager
+                .default_config
+                .session_config_from_headers(&HeaderMap::new());
+            manager
+                .apply_hook_event(
+                    NormalizedEvent::AgentEnded(codex_session_event(
+                        "child-thread",
+                        "SessionEnd",
+                        json!({}),
+                    )),
+                    config,
+                    AuthenticatedRouting::new(
+                        Some("client-a"),
+                        &manager.authenticated_owners,
+                        &manager.authenticated_reservations,
+                    ),
+                    None,
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if manager.alignment_routing.try_lock().is_err() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("hook routing should reach the ownership check");
+
+    manager
+        .alignment
+        .lock()
+        .await
+        .clear_for_ended_subagent("parent-thread", "child-thread");
+    drop(owners);
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut ending)
+            .await
+            .is_err(),
+        "the routed event should wait for the original child session"
+    );
+    drop(child_gate);
+    tokio::time::timeout(Duration::from_secs(1), ending)
+        .await
+        .expect("hook routing should finish after the child gate opens")
+        .expect("hook routing task should not panic")
+        .expect("hook routing should succeed");
+}
+
+#[tokio::test]
+async fn shutdown_waits_for_cancelled_alignment_cleanup() {
+    let manager = SessionManager::new(session_test_config());
+    start_authenticated_codex_alias(&manager).await;
+
+    let cleanup = {
+        let alignment = manager.alignment.lock().await;
+        let (event, cleanup) = alignment.prepare_route(NormalizedEvent::AgentEnded(
+            codex_session_event("child-thread", "SessionEnd", json!({})),
+        ));
+        assert!(matches!(event, NormalizedEvent::SubagentEnded(_)));
+        cleanup
+    };
+    let gate = session_gate(&manager.session_gates, "parent-thread").await;
+    let session_gate = gate.lock_owned().await;
+    let routing = manager.alignment_routing.lock().await;
+    let commit = tokio::spawn(
+        AppliedRouteCleanup::new(
+            &manager,
+            cleanup,
+            session_gate,
+            manager.session_activity.begin(),
+        )
+        .commit(),
+    );
+    tokio::task::yield_now().await;
+    commit.abort();
+    assert!(commit.await.unwrap_err().is_cancelled());
+
+    let shutdown_blocker = manager.session_activity.begin();
+    let shutdown = tokio::spawn({
+        let manager = manager.clone();
+        async move { manager.close_all("test shutdown").await }
+    });
+    tokio::task::yield_now().await;
+    assert!(
+        !shutdown.is_finished(),
+        "shutdown should wait for cancelled alignment cleanup"
+    );
+    drop(routing);
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while has_alignment_alias(&manager, "child-thread").await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled alignment cleanup should remove the alias");
+    assert!(
+        !shutdown.is_finished(),
+        "shutdown should remain blocked until unrelated activity finishes"
+    );
+    drop(shutdown_blocker);
+
+    tokio::time::timeout(Duration::from_secs(1), shutdown)
+        .await
+        .expect("shutdown should finish after alignment cleanup")
+        .expect("shutdown task should not panic")
+        .expect("shutdown should succeed");
+}
+
+async fn start_authenticated_codex_alias(manager: &SessionManager) {
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(codex_session_event(
+                    "parent-thread",
+                    "SessionStart",
+                    json!({}),
+                )),
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "child-thread".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SessionStart".into(),
+                    payload: json!({
+                        "source": {"subagent": {"thread_spawn": {
+                            "parent_thread_id": "parent-thread"
+                        }}}
+                    }),
+                    metadata: json!({}),
+                }),
+            ],
+            "client-a",
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn pending_child_gateway_promotion_claims_its_authenticated_parent() {
     let manager = SessionManager::new(session_test_config());
     manager
@@ -278,6 +826,183 @@ async fn pending_child_gateway_promotion_claims_its_authenticated_parent() {
             .get("parent-thread"),
         Some(&"client-a".to_string())
     );
+    manager.end_llm(active, json!({}), json!({})).await.unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_gateway_promotion_preserves_the_pending_child_route() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: "child-thread".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SessionStart".into(),
+                payload: json!({
+                    "source": {"subagent": {"thread_spawn": {
+                        "parent_thread_id": "parent-thread"
+                    }}}
+                }),
+                metadata: json!({}),
+            })],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    let sessions = manager.inner.lock().await;
+    let starting = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .start_llm(
+                    &HeaderMap::new(),
+                    LlmGatewayStart {
+                        session_id: Some("child-thread".into()),
+                        ..llm_start()
+                    },
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if manager.alignment_routing.try_lock().is_err()
+                && manager.alignment.try_lock().is_err()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("gateway promotion should wait for the session directory");
+
+    starting.abort();
+    assert!(starting.await.unwrap_err().is_cancelled());
+    drop(sessions);
+
+    assert!(has_pending_alignment(&manager, "child-thread").await);
+    let active = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("child-thread".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(active.session_id, "parent-thread");
+    manager.end_llm(active, json!({}), json!({})).await.unwrap();
+}
+
+#[tokio::test]
+async fn completed_gateway_nonpromotion_removes_the_pending_child_route() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: "child-thread".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SessionStart".into(),
+                payload: json!({
+                    "source": {"subagent": {"thread_spawn": {
+                        "parent_thread_id": "parent-thread"
+                    }}}
+                }),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+    let mut child = Session::new(
+        "child-thread".into(),
+        AgentKind::Codex,
+        SessionConfig::default(),
+    );
+    child.session_started = true;
+    manager
+        .inner
+        .lock()
+        .await
+        .insert("child-thread".into(), child);
+
+    let mut start = LlmGatewayStart {
+        session_id: Some("child-thread".into()),
+        ..llm_start()
+    };
+    let alias = manager
+        .resolve_start_alias(&mut start, SessionConfig::default())
+        .await
+        .unwrap();
+
+    assert!(alias.is_none());
+    assert!(!has_pending_alignment(&manager, "child-thread").await);
+}
+
+#[tokio::test]
+async fn gateway_alias_resolution_rechecks_a_pending_route_after_waiting_for_ownership() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: "child-thread".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SessionStart".into(),
+                payload: json!({
+                    "source": {"subagent": {"thread_spawn": {
+                        "parent_thread_id": "parent-thread"
+                    }}}
+                }),
+                metadata: json!({}),
+            })],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    let owners = manager.authenticated_owners.lock().await;
+    let starting = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .start_llm(
+                    &HeaderMap::new(),
+                    LlmGatewayStart {
+                        session_id: Some("child-thread".into()),
+                        ..llm_start()
+                    },
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if manager.alignment_routing.try_lock().is_err() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("gateway alias resolution should reach the ownership check");
+    manager
+        .alignment
+        .lock()
+        .await
+        .remove_pending("child-thread");
+    drop(owners);
+
+    let active = tokio::time::timeout(Duration::from_secs(1), starting)
+        .await
+        .expect("gateway start should finish after the route changes")
+        .expect("gateway start task should not panic")
+        .expect("gateway start should succeed without the removed alias");
+    assert_eq!(active.session_id, "child-thread");
     manager.end_llm(active, json!({}), json!({})).await.unwrap();
 }
 
@@ -1130,6 +1855,278 @@ async fn nests_agent_subagent_and_tool_lifecycle() {
 }
 
 #[tokio::test]
+async fn claude_paired_tool_execution_metadata() {
+    assert_harness_tool_execution_metadata(AgentKind::ClaudeCode, false).await;
+}
+
+#[tokio::test]
+async fn claude_post_only_tool_execution_metadata() {
+    assert_harness_tool_execution_metadata(AgentKind::ClaudeCode, true).await;
+}
+
+#[tokio::test]
+async fn codex_paired_tool_execution_metadata() {
+    assert_harness_tool_execution_metadata(AgentKind::Codex, false).await;
+}
+
+#[tokio::test]
+async fn codex_post_only_tool_execution_metadata() {
+    assert_harness_tool_execution_metadata(AgentKind::Codex, true).await;
+}
+
+#[tokio::test]
+async fn pi_paired_tool_execution_metadata() {
+    assert_harness_tool_execution_metadata(AgentKind::Pi, false).await;
+}
+
+#[tokio::test]
+async fn pi_post_only_tool_execution_metadata() {
+    assert_harness_tool_execution_metadata(AgentKind::Pi, true).await;
+}
+
+async fn assert_harness_tool_execution_metadata(kind: AgentKind, post_only: bool) {
+    let session_id = format!("genai-{}-{post_only}", kind.as_str());
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let events = Arc::clone(&captured);
+    register_filtered_session_subscriber(
+        &session_id,
+        tracked_sessions(&[&session_id]),
+        Arc::new(move |event| events.lock().unwrap().push(event.clone())),
+    );
+    let manager = SessionManager::new(session_test_config());
+    let (start, end, shutdown, id_key, args_key) = match kind {
+        AgentKind::ClaudeCode => (
+            "PreToolUse",
+            "PostToolUse",
+            "SessionEnd",
+            "tool_use_id",
+            "tool_input",
+        ),
+        AgentKind::Codex => (
+            "preToolUse",
+            "postToolUse",
+            "sessionEnd",
+            "tool_call_id",
+            "arguments",
+        ),
+        AgentKind::Pi => (
+            "tool_call",
+            "tool_execution_end",
+            "session_shutdown",
+            "toolCallId",
+            "input",
+        ),
+        AgentKind::Gateway => unreachable!(),
+    };
+    let session_start = if kind == AgentKind::Pi {
+        "session_start"
+    } else {
+        "SessionStart"
+    };
+    let hooks = [session_start, start, end, shutdown];
+    for hook in hooks {
+        if post_only && hook == start {
+            continue;
+        }
+        let mut payload = json!({
+            "session_id": session_id, "hook_event_name": hook,
+            "tool_name": "shell", "result": {"stdout": "/tmp"},
+            "status": "success"
+        });
+        payload[id_key] = json!("gen-ai-call-1");
+        payload[args_key] =
+            json!({"command": "pwd", "description": "private invocation description"});
+        let headers = HeaderMap::new();
+        let outcome = match kind {
+            AgentKind::ClaudeCode => {
+                crate::agents::shared::adapters::claude_code::adapt(payload, &headers)
+            }
+            AgentKind::Codex => crate::agents::shared::adapters::codex::adapt(payload, &headers),
+            AgentKind::Pi => crate::agents::shared::adapters::pi::adapt(payload, &headers),
+            AgentKind::Gateway => unreachable!(),
+        };
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+    flush_subscribers().unwrap();
+    let events = captured.lock().unwrap();
+    let tool_events: Vec<_> = events
+        .iter()
+        .filter(|event| event.tool_call_id() == Some("gen-ai-call-1"))
+        .collect();
+    let start = tool_events
+        .iter()
+        .find(|event| event.scope_category() == Some(ScopeCategory::Start))
+        .unwrap();
+    let end = tool_events
+        .iter()
+        .find(|event| event.scope_category() == Some(ScopeCategory::End))
+        .unwrap();
+    assert_eq!(
+        tool_events.len(),
+        2,
+        "one start/end pair, including post-only hooks"
+    );
+    assert_eq!(start.uuid(), end.uuid());
+    assert_eq!(start.parent_uuid(), end.parent_uuid());
+    assert!(start.parent_uuid().is_some());
+    let metadata = start.metadata().unwrap();
+    assert_eq!(
+        metadata["gen_ai.tool.type"],
+        "function",
+        "{}",
+        kind.as_str()
+    );
+    assert_eq!(metadata["gen_ai.agent.name"], kind.as_str());
+    assert_eq!(
+        metadata["nemo_relay.tool.execution.defaults"]["gen_ai.tool.type"],
+        "function"
+    );
+    assert_eq!(
+        metadata["nemo_relay.tool.execution.defaults"]["gen_ai.agent.name"],
+        kind.as_str()
+    );
+    assert!(metadata.get("gen_ai.tool.description").is_none());
+    assert_harness_genai_tool_span(kind, &events);
+    drop(events);
+    assert!(deregister_subscriber(&session_id).unwrap());
+}
+
+fn assert_harness_genai_tool_span(kind: AgentKind, events: &[Event]) {
+    let exporter = InMemorySpanExporterBuilder::new().build();
+    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+        provider,
+        "harness-tool-metadata",
+        OpenTelemetryType::GenAi,
+    );
+    for event in events {
+        subscriber.subscriber()(event);
+    }
+    subscriber.force_flush().unwrap();
+    let spans = exporter.get_finished_spans().unwrap();
+    let tool = spans
+        .iter()
+        .find(|span| span.name == "execute_tool shell")
+        .unwrap();
+    let attrs = attr_map(&tool.attributes);
+    assert_eq!(attrs["gen_ai.agent.name"], kind.as_str());
+    assert_eq!(attrs["gen_ai.tool.type"], "function");
+    assert_eq!(attrs["gen_ai.tool.call.id"], "gen-ai-call-1");
+    assert_eq!(
+        serde_json::from_str::<Value>(&attrs["gen_ai.tool.call.arguments"]).unwrap()["command"],
+        "pwd"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&attrs["gen_ai.tool.call.result"]).unwrap()["stdout"],
+        "/tmp"
+    );
+    assert!(
+        spans
+            .iter()
+            .any(|span| span.span_context.span_id() == tool.parent_span_id)
+    );
+    subscriber.shutdown().unwrap();
+}
+
+#[test]
+fn tool_execution_metadata_preserves_explicit_values_and_subagent_identity() {
+    for kind in [
+        AgentKind::ClaudeCode,
+        AgentKind::Codex,
+        AgentKind::Pi,
+        AgentKind::Gateway,
+    ] {
+        let session = Session::new("metadata-policy".into(), kind, SessionConfig::default());
+        let mut explicit = json!({"gen_ai.tool.type": "extension", "gen_ai.agent.name": "custom-agent", "gen_ai.tool.description": "explicit"});
+        let expected = explicit.clone();
+        session.apply_tool_execution_metadata(&mut explicit, Some("worker-1"));
+        assert_eq!(explicit, expected);
+        let mut metadata = json!({});
+        session.apply_tool_execution_metadata(&mut metadata, Some("worker-1"));
+        assert_eq!(metadata["gen_ai.agent.name"], "subagent:worker-1");
+        assert_eq!(
+            metadata.get("gen_ai.tool.type").and_then(Value::as_str),
+            kind.tool_execution_type()
+        );
+        let mut absent = Value::Null;
+        session.apply_tool_execution_metadata(&mut absent, None);
+        assert!(absent.is_null());
+    }
+    let gateway = Session::new(
+        "gateway-policy".into(),
+        AgentKind::Gateway,
+        SessionConfig::default(),
+    );
+    let mut metadata = json!({});
+    gateway.apply_tool_execution_metadata(&mut metadata, None);
+    assert_eq!(
+        metadata,
+        json!({}),
+        "generic gateway must not invent execution semantics"
+    );
+}
+
+#[test]
+fn tool_execution_metadata_normalizes_default_provenance() {
+    for kind in [AgentKind::ClaudeCode, AgentKind::Codex, AgentKind::Pi] {
+        let session = Session::new("provenance-policy".into(), kind, SessionConfig::default());
+        for provenance in [
+            Value::Null,
+            json!(true),
+            json!(42),
+            json!("invalid"),
+            json!([]),
+            json!({"existing": "retained"}),
+        ] {
+            let mut metadata = json!({"nemo_relay.tool.execution.defaults": provenance});
+            session.apply_tool_execution_metadata(&mut metadata, None);
+            let defaults = &metadata["nemo_relay.tool.execution.defaults"];
+            assert_eq!(defaults["gen_ai.tool.type"], "function");
+            assert_eq!(defaults["gen_ai.agent.name"], kind.as_str());
+            if provenance.is_object() {
+                assert_eq!(defaults["existing"], "retained");
+            }
+        }
+        // Explicit values equal to the harness defaults must not gain provenance.
+        let mut explicit =
+            json!({"gen_ai.tool.type": "function", "gen_ai.agent.name": kind.as_str()});
+        let expected = explicit.clone();
+        session.apply_tool_execution_metadata(&mut explicit, None);
+        assert_eq!(explicit, expected);
+    }
+}
+
+#[test]
+fn tool_execution_metadata_respects_aliases_and_ignores_invalid_strings() {
+    for kind in [AgentKind::ClaudeCode, AgentKind::Codex, AgentKind::Pi] {
+        let session = Session::new("alias-policy".into(), kind, SessionConfig::default());
+        for canonical in [Value::Null, json!(""), json!("  "), json!(false)] {
+            let mut metadata = json!({
+                "gen_ai.tool.type": canonical,
+                "gen_ai.agent.name": canonical,
+                "tool_type": "datastore", "agent_name": "researcher"
+            });
+            let expected = metadata.clone();
+            session.apply_tool_execution_metadata(&mut metadata, None);
+            assert_eq!(metadata, expected);
+        }
+        let mut metadata = json!({"tool_type": "extension", "agent_name": "explicit"});
+        let expected = metadata.clone();
+        session.apply_tool_execution_metadata(&mut metadata, None);
+        assert_eq!(metadata, expected);
+        let mut invalid = json!({"gen_ai.tool.type": false, "agent_name": " "});
+        session.apply_tool_execution_metadata(&mut invalid, None);
+        assert_eq!(invalid["gen_ai.tool.type"], "function");
+        assert_eq!(invalid["gen_ai.agent.name"], kind.as_str());
+    }
+}
+
+#[tokio::test]
 async fn parallel_subagents_are_siblings_under_turn_scope() {
     let manager = SessionManager::new(session_test_config());
     manager
@@ -1559,6 +2556,380 @@ async fn terminal_subscriber_wait_releases_session_manager_locks() {
     parallel_result
         .expect("another session must remain writable while terminal subscribers are active")
         .unwrap();
+}
+
+#[tokio::test]
+async fn slow_tool_guardrail_does_not_block_another_session() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-session-isolation-slow-tool";
+    const TOOL: &str = "session-isolation-slow-tool";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started_tx = Arc::new(StdMutex::new(Some(started_tx)));
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let release_rx = Arc::new(StdMutex::new(Some(release_rx)));
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(move |name, _| {
+            let started_tx = Arc::clone(&started_tx);
+            let release_rx = Arc::clone(&release_rx);
+            let blocks = name == TOOL;
+            Box::pin(async move {
+                if blocks {
+                    if let Some(started) = started_tx.lock().unwrap().take() {
+                        let _ = started.send(());
+                    }
+                    let release = { release_rx.lock().unwrap().take() };
+                    if let Some(release) = release {
+                        let _ = release.await;
+                    }
+                }
+                Ok(None)
+            })
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let blocked_manager = manager.clone();
+    let blocked = tokio::spawn(async move {
+        blocked_manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "blocked-tool-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "blocked-tool".into(),
+                    tool_name: TOOL.into(),
+                    subagent_id: None,
+                    arguments: json!({}),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                })],
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), started_rx)
+        .await
+        .expect("slow guardrail should start")
+        .unwrap();
+
+    let parallel = tokio::time::timeout(
+        Duration::from_secs(5),
+        manager.apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::Notification(codex_session_event(
+                "parallel-tool-session",
+                "notification",
+                json!({ "session_id": "parallel-tool-session" }),
+            ))],
+        ),
+    )
+    .await;
+
+    release_tx.send(()).unwrap();
+    blocked.await.unwrap().unwrap();
+    deregister_tool_conditional_execution_guardrail(GUARDRAIL).unwrap();
+    parallel
+        .expect("another session must progress while a tool guardrail is waiting")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn failed_guardrail_batch_keeps_its_partial_session_owner() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-session-reservation-release";
+    const TOOL: &str = "session-reservation-release";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started_tx = Arc::new(StdMutex::new(Some(started_tx)));
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let release_rx = Arc::new(StdMutex::new(Some(release_rx)));
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(move |name, _| {
+            let started_tx = Arc::clone(&started_tx);
+            let release_rx = Arc::clone(&release_rx);
+            Box::pin(async move {
+                if name == TOOL {
+                    if let Some(started) = started_tx.lock().unwrap().take() {
+                        let _ = started.send(());
+                    }
+                    let release = { release_rx.lock().unwrap().take() };
+                    if let Some(release) = release {
+                        let _ = release.await;
+                    }
+                    return Err(FlowError::Internal("expected reservation failure".into()));
+                }
+                Ok(None)
+            })
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let event = || {
+        NormalizedEvent::ToolStarted(ToolEvent {
+            session_id: "reserved-session".into(),
+            agent_kind: AgentKind::Codex,
+            event_name: "PreToolUse".into(),
+            tool_call_id: "reserved-tool".into(),
+            tool_name: TOOL.into(),
+            subagent_id: None,
+            arguments: json!({}),
+            result: Value::Null,
+            status: None,
+            payload: json!({}),
+            metadata: json!({}),
+        })
+    };
+    let pending_manager = manager.clone();
+    let pending = tokio::spawn(async move {
+        pending_manager
+            .apply_authenticated_events(&HeaderMap::new(), vec![event()], "client-a")
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), started_rx)
+        .await
+        .expect("guardrail should start")
+        .unwrap();
+
+    let competing = manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "reserved-session",
+                "SessionStart",
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(competing, CliError::Unauthorized(_)));
+
+    release_tx.send(()).unwrap();
+    assert!(pending.await.unwrap().is_err());
+    assert_eq!(
+        manager
+            .authenticated_owners
+            .lock()
+            .await
+            .get("reserved-session")
+            .map(String::as_str),
+        Some("client-a")
+    );
+    deregister_tool_conditional_execution_guardrail(GUARDRAIL).unwrap();
+}
+
+#[tokio::test]
+async fn partially_applied_authenticated_batch_keeps_its_owner() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-session-partial-batch-owner";
+    const TOOL: &str = "session-partial-batch-owner";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(|name, _| {
+            Box::pin(async move {
+                (name == TOOL)
+                    .then(|| FlowError::Internal("expected partial batch failure".into()))
+                    .map_or(Ok(None), Err)
+            })
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let result = manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event(
+                    "partially-applied-session",
+                    "SessionStart",
+                )),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "partially-applied-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "partially-applied-tool".into(),
+                    tool_name: TOOL.into(),
+                    subagent_id: None,
+                    arguments: json!({}),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+            "client-a",
+        )
+        .await;
+    assert!(result.is_err());
+    assert_eq!(
+        manager
+            .authenticated_owners
+            .lock()
+            .await
+            .get("partially-applied-session")
+            .map(String::as_str),
+        Some("client-a")
+    );
+    deregister_tool_conditional_execution_guardrail(GUARDRAIL).unwrap();
+}
+
+#[tokio::test]
+async fn partially_failed_authenticated_batch_releases_closed_owner() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-session-partial-batch-closed-owner";
+    const TOOL: &str = "session-partial-batch-closed-owner";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(|name, _| {
+            Box::pin(async move {
+                (name == TOOL)
+                    .then(|| FlowError::Internal("expected partial batch failure".into()))
+                    .map_or(Ok(None), Err)
+            })
+        }),
+    )
+    .unwrap();
+    let _guardrail_cleanup = ToolGuardrailCleanup(GUARDRAIL);
+
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "closed-before-batch-failure",
+                "SessionStart",
+            ))],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    let result = manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentEnded(session_event(
+                    "closed-before-batch-failure",
+                    "SessionEnd",
+                )),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "failing-batch-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "failing-batch-tool".into(),
+                    tool_name: TOOL.into(),
+                    subagent_id: None,
+                    arguments: json!({}),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+            "client-a",
+        )
+        .await;
+    assert!(result.is_err());
+
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "closed-before-batch-failure",
+                "SessionStart",
+            ))],
+            "client-b",
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn close_all_waits_for_an_in_flight_session_application() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-session-close-all-drain";
+    const TOOL: &str = "session-close-all-drain";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started_tx = Arc::new(StdMutex::new(Some(started_tx)));
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let release_rx = Arc::new(StdMutex::new(Some(release_rx)));
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(move |name, _| {
+            let started_tx = Arc::clone(&started_tx);
+            let release_rx = Arc::clone(&release_rx);
+            Box::pin(async move {
+                if name == TOOL {
+                    if let Some(started) = started_tx.lock().unwrap().take() {
+                        let _ = started.send(());
+                    }
+                    let release = { release_rx.lock().unwrap().take() };
+                    if let Some(release) = release {
+                        let _ = release.await;
+                    }
+                }
+                Ok(None)
+            })
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let applying_manager = manager.clone();
+    let applying = tokio::spawn(async move {
+        applying_manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "close-all-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "close-all-tool".into(),
+                    tool_name: TOOL.into(),
+                    subagent_id: None,
+                    arguments: json!({}),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                })],
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), started_rx)
+        .await
+        .expect("guardrail should start")
+        .unwrap();
+
+    let closing_manager = manager.clone();
+    let mut closing = tokio::spawn(async move { closing_manager.close_all("test_shutdown").await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut closing)
+            .await
+            .is_err(),
+        "close_all must wait until the in-flight event releases its activity"
+    );
+
+    release_tx.send(()).unwrap();
+    applying.await.unwrap().unwrap();
+    closing.await.unwrap().unwrap();
+    assert!(manager.inner.lock().await.is_empty());
+    deregister_tool_conditional_execution_guardrail(GUARDRAIL).unwrap();
 }
 
 #[tokio::test]
@@ -2591,6 +3962,41 @@ async fn coding_agent_gen_ai_llm_spans_carry_conversation_identity() {
         .await
         .unwrap();
 
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "codex-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "tool-call-1".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: None,
+                    arguments: json!({"file_path": "README.md"}),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolEnded(ToolEvent {
+                    session_id: "codex-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PostToolUse".into(),
+                    tool_call_id: "tool-call-1".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: None,
+                    arguments: Value::Null,
+                    result: json!("README contents"),
+                    status: Some("success".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
     manager.close_all("test_shutdown").await.unwrap();
     flush_subscribers().unwrap();
     subscriber.force_flush().unwrap();
@@ -2610,6 +4016,17 @@ async fn coding_agent_gen_ai_llm_spans_carry_conversation_identity() {
     );
     assert_eq!(
         attributes_by_model["gpt-test"]
+            .get("gen_ai.conversation.id")
+            .map(String::as_str),
+        Some("codex-session")
+    );
+    let tool_attributes = spans
+        .iter()
+        .find(|span| span.name == "execute_tool Read")
+        .map(|span| attr_map(&span.attributes))
+        .expect("expected Codex tool span");
+    assert_eq!(
+        tool_attributes
             .get("gen_ai.conversation.id")
             .map(String::as_str),
         Some("codex-session")

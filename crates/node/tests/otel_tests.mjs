@@ -267,12 +267,16 @@ describe('OpenTelemetrySubscriber', () => {
     subscriber.register(name);
     try {
       const scope = pushScope('research-agent', ScopeType.Agent, null, null, null, null);
+      const tool = pushScope('search', ScopeType.Tool, null, null, null, null, { query: 'docs' });
+      popScope(tool, { hits: [] });
       popScope(scope);
 
       subscriber.forceFlush();
       const request = await collector.nextRequest();
       assert.equal(request.url, '/v1/traces');
       assertBodyContains(request.body, 'invoke_agent research-agent');
+      assertBodyContains(request.body, 'gen_ai.tool.call.arguments');
+      assertBodyContains(request.body, 'gen_ai.tool.call.result');
       assertBodyContains(request.body, 'gen_ai.operation.name');
       assert.equal(request.body.includes(Buffer.from('nemo_relay.', 'utf8')), false);
     } finally {

@@ -50,6 +50,11 @@ fn log_kinds_cover_every_operational_error_class() {
         (CliError::Config("config".into()), "configuration"),
         (CliError::Launch("launch".into()), "launch"),
         (
+            CliError::Launch("launch".into())
+                .with_mcp_failure_reason(McpFailureReason::GatewayRecoveryFailed),
+            "launch",
+        ),
+        (
             CliError::HookDelivery {
                 source: Box::new(CliError::Install("hook transport".into())),
             },
@@ -73,5 +78,54 @@ fn log_kinds_cover_every_operational_error_class() {
 
     for (error, expected) in errors {
         assert_eq!(error.log_kind(), expected);
+    }
+}
+
+#[test]
+fn mcp_failure_reasons_are_static_and_preserve_source_errors() {
+    let source = CliError::Launch("secret local detail".into());
+    let error = source.with_mcp_failure_reason(McpFailureReason::GatewayRecoveryFailed);
+
+    assert_eq!(
+        error.mcp_failure_reason(),
+        Some(McpFailureReason::GatewayRecoveryFailed)
+    );
+    assert_eq!(error.log_kind(), "launch");
+    assert_eq!(error.to_string(), "launcher error: secret local detail");
+
+    for reason in [
+        McpFailureReason::GenerationCaptureFailed,
+        McpFailureReason::GatewayConfigurationFailed,
+        McpFailureReason::HeartbeatConfigurationFailed,
+        McpFailureReason::GatewayAcquisitionFailed,
+        McpFailureReason::StdinReaderStartFailed,
+        McpFailureReason::GatewayHeartbeatTaskFailed,
+        McpFailureReason::GenerationLifecycleInvalid,
+        McpFailureReason::GenerationLifecycleInvalidDuringRecovery,
+        McpFailureReason::GatewayLifecycleVerificationTaskFailed,
+        McpFailureReason::GatewayRecoveryTaskFailed,
+        McpFailureReason::GatewayRecoveryFailed,
+        McpFailureReason::GatewayLeaseClosedDuringRecovery,
+        McpFailureReason::GatewayRecoveredThenUnhealthy,
+        McpFailureReason::GatewayRecoveredThenReplaced,
+        McpFailureReason::GatewayMonitorTaskFailed,
+        McpFailureReason::TransparentGatewayInitialVerificationFailed,
+        McpFailureReason::TransparentGatewayHeartbeatVerificationFailed,
+        McpFailureReason::TransparentGatewayUnavailable,
+        McpFailureReason::TransparentGatewayReplaced,
+        McpFailureReason::StdinFrameReadFailed,
+        McpFailureReason::McpResponseSerializationFailed,
+        McpFailureReason::StdoutWriteFailed,
+        McpFailureReason::StdoutFlushFailed,
+        McpFailureReason::UnknownMcpFailure,
+    ] {
+        assert!(
+            reason
+                .as_str()
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'_'),
+            "{} must be snake case",
+            reason.as_str()
+        );
     }
 }

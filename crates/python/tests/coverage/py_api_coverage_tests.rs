@@ -355,8 +355,8 @@ async def tool_exec(args):
         {"source": "python-coverage"},
     )
 
-async def tool_exec_intercept(name, args, next):
-    downstream = await next({"value": args["value"] + 3})
+async def tool_exec_intercept(context, next):
+    downstream = await next({"value": context.args["value"] + 3})
     result = dict(downstream.result)
     result["tool_intercepted"] = True
     return ToolExecutionInterceptOutcome(result, annotation=downstream.annotation)

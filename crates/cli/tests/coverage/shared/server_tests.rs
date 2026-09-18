@@ -6,6 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::State;
@@ -31,6 +32,7 @@ use nemo_relay::plugin::{
     ensure_builtin_plugins_registered, register_plugin,
 };
 use serde_json::{Map, Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, oneshot};
 use tokio::task::JoinHandle;
@@ -42,6 +44,83 @@ use crate::error::CliError;
 use crate::gateway::tls::RelayTlsIdentity;
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::test_support::{EnvScope, PLUGIN_CONFIG_TEST_LOCK};
+
+#[tokio::test]
+async fn disconnected_hook_request_retains_the_active_session() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-server-disconnected-hook-session";
+    const TOOL: &str = "disconnected-hook-session";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    let entered = Arc::new(tokio::sync::Notify::new());
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new({
+            let entered = Arc::clone(&entered);
+            move |name, _| {
+                let entered = Arc::clone(&entered);
+                Box::pin(async move {
+                    if name == TOOL {
+                        entered.notify_one();
+                        std::future::pending::<()>().await;
+                    }
+                    Ok(None)
+                })
+            }
+        }),
+    )
+    .unwrap();
+    let _guardrail_cleanup = ToolGuardrailCleanup(GUARDRAIL);
+
+    let state = AppState::new(test_config());
+    let sessions = state.sessions.clone();
+    let app = router_with_state(state);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let response = test_http_client()
+        .post(format!("http://{address}/hooks/codex"))
+        .json(&json!({
+            "session_id": "http-cancel-session",
+            "hook_event_name": "sessionStart"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let payload = json!({
+        "session_id": "http-cancel-session",
+        "hook_event_name": "PreToolUse",
+        "tool_call_id": "tool-1",
+        "tool_name": TOOL,
+        "tool_input": {}
+    })
+    .to_string();
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    let request = format!(
+        "POST /hooks/codex HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+        payload.len()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), entered.notified())
+        .await
+        .unwrap();
+    drop(stream);
+
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            sessions.test_contains_session("http-cancel-session")
+        )
+        .await
+        .expect("disconnect cleanup should finish")
+    );
+
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+}
 
 const GENERIC_TEST_PLUGIN_KIND: &str = "cli-test-generic-plugin";
 static GENERIC_TEST_PLUGIN_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
@@ -273,6 +352,78 @@ fn test_config() -> GatewayConfig {
 }
 
 #[tokio::test]
+async fn gateway_clients_allow_active_streams_past_the_idle_timeout() {
+    for no_redirect in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0_u8; 1];
+                socket.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n3\r\none\r\n",
+                )
+                .await
+                .unwrap();
+            for _ in 0..6 {
+                tokio::time::sleep(Duration::from_millis(60)).await;
+                socket.write_all(b"2\r\nx!\r\n").await.unwrap();
+            }
+            socket.write_all(b"0\r\n\r\n").await.unwrap();
+        });
+
+        let response = gateway_http_client(Duration::from_millis(300), no_redirect)
+            .get(format!("http://{address}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.bytes().await.unwrap(),
+            b"onex!x!x!x!x!x!".as_slice()
+        );
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn gateway_clients_reject_stalled_streams_after_the_idle_timeout() {
+    for no_redirect in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0_u8; 1];
+                socket.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n3\r\none\r\n",
+                )
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        });
+
+        let response = gateway_http_client(Duration::from_millis(200), no_redirect)
+            .get(format!("http://{address}"))
+            .send()
+            .await
+            .unwrap();
+        let error = response.bytes().await.unwrap_err();
+        assert!(error.is_timeout(), "expected a read timeout, got {error}");
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn responses_websocket_upgrades_request_http_fallback() {
     let app = router_with_state(AppState::new(test_config()));
 
@@ -471,6 +622,138 @@ async fn codex_hook_keeps_codex_response_shape() {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body, json!({}));
+}
+
+#[tokio::test]
+async fn codex_permission_request_without_tool_call_id_requires_one_matching_active_tool() {
+    let app = router(test_config());
+    macro_rules! send_codex_hook {
+        ($payload:expr) => {{
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/hooks/codex")
+                        .header("content-type", "application/json")
+                        .body(Body::from($payload.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            serde_json::from_slice::<Value>(
+                &response.into_body().collect().await.unwrap().to_bytes(),
+            )
+            .unwrap()
+        }};
+    }
+
+    let permission = |session_id, command| {
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "shell",
+            "tool_input": {"cmd": command}
+        })
+    };
+    let pre_tool = |session_id, command| {
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "PreToolUse",
+            "tool_name": "shell",
+            "tool_input": {"cmd": command}
+        })
+    };
+
+    let single_match = "codex-permission-single-match";
+    for payload in [
+        json!({"session_id": single_match, "hook_event_name": "SessionStart"}),
+        pre_tool(single_match, "pwd"),
+        permission(single_match, "pwd"),
+    ] {
+        assert_eq!(send_codex_hook!(payload), json!({}));
+    }
+
+    let no_match = "codex-permission-no-match";
+    assert_eq!(
+        send_codex_hook!(json!({"session_id": no_match, "hook_event_name": "SessionStart"})),
+        json!({})
+    );
+    assert_eq!(send_codex_hook!(pre_tool(no_match, "pwd")), json!({}));
+    assert_eq!(
+        send_codex_hook!(permission(no_match, "whoami"))["decision"],
+        json!("deny")
+    );
+
+    let ambiguous = "codex-permission-ambiguous";
+    assert_eq!(
+        send_codex_hook!(json!({"session_id": ambiguous, "hook_event_name": "SessionStart"})),
+        json!({})
+    );
+    assert_eq!(send_codex_hook!(pre_tool(ambiguous, "pwd")), json!({}));
+    assert_eq!(send_codex_hook!(pre_tool(ambiguous, "pwd")), json!({}));
+    assert_eq!(
+        send_codex_hook!(permission(ambiguous, "pwd"))["decision"],
+        json!("deny")
+    );
+
+    let session_one = "codex-permission-session-one";
+    let session_two = "codex-permission-session-two";
+    assert_eq!(
+        send_codex_hook!(json!({"session_id": session_one, "hook_event_name": "SessionStart"})),
+        json!({})
+    );
+    assert_eq!(
+        send_codex_hook!(json!({"session_id": session_two, "hook_event_name": "SessionStart"})),
+        json!({})
+    );
+    assert_eq!(send_codex_hook!(pre_tool(session_two, "pwd")), json!({}));
+    assert_eq!(
+        send_codex_hook!(permission(session_one, "pwd"))["decision"],
+        json!("deny")
+    );
+}
+
+#[tokio::test]
+async fn hook_operational_records_derive_session_tags_from_payloads_and_headers() {
+    let app = router(test_config());
+    let operation_id = "018f0f3f-3f7a-7b72-9d0d-e0d8ced91d8b";
+    let payload_session = "private-payload-session-sentinel";
+    let header_session = "private-header-session-sentinel";
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/codex")
+                .header("content-type", "application/json")
+                .header(crate::operational::OPERATION_ID_HEADER, operation_id)
+                .header("x-nemo-relay-session-id", header_session)
+                .body(Body::from(
+                    json!({
+                        "session_id": payload_session,
+                        "hook_event_name": "sessionStart"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let tags = crate::operational::test_hook_session_tags(operation_id);
+    assert_eq!(tags.len(), 1);
+    let tag = tags[0].as_deref().unwrap();
+    assert!(!tag.contains(payload_session));
+    assert!(!tag.contains(header_session));
+    assert_eq!(
+        tag,
+        OperationalContext::new()
+            .with_session(header_session)
+            .test_session_tag()
+            .unwrap()
+    );
 }
 
 #[tokio::test]

@@ -349,6 +349,9 @@ func TestOpenTelemetrySubscriberExportsGenAIAgentProjection(t *testing.T) {
 	runWithTestScopeStack(t, func() {
 		handle, err := PushScope("research-agent", ScopeTypeAgent)
 		requireNoError(t, err, "PushScope failed")
+		tool, err := PushScope("search", ScopeTypeTool, WithInput(json.RawMessage(`{"query":"docs"}`)))
+		requireNoError(t, err, "tool PushScope failed")
+		requireNoError(t, PopScope(tool, WithOutput(json.RawMessage(`{"hits":[]}`))), "tool PopScope failed")
 		requireNoError(t, PopScope(handle), "PopScope failed")
 	})
 	requireNoError(t, subscriber.ForceFlush(), "ForceFlush failed")
@@ -357,6 +360,8 @@ func TestOpenTelemetrySubscriberExportsGenAIAgentProjection(t *testing.T) {
 	case request := <-requests:
 		for _, needle := range [][]byte{
 			[]byte("invoke_agent research-agent"),
+			[]byte("gen_ai.tool.call.arguments"),
+			[]byte("gen_ai.tool.call.result"),
 			[]byte("gen_ai.operation.name"),
 		} {
 			if !bytes.Contains(request.Body, needle) {

@@ -129,6 +129,18 @@ not stop application work or delivery to the other exporters.
 
 ## Trace Endpoint Fields
 
+All trace projections (`full`, `gen_ai`, and `openinference`) require HTTPS for
+remote collectors, with either HTTP or gRPC transport. HTTP is permitted only
+for `localhost` and loopback IP addresses such as `127.0.0.1` and `[::1]`.
+Redaction does not disable this requirement. Existing remote plaintext trace
+endpoints must migrate to HTTPS or use a loopback collector.
+
+OTLP/HTTP trace exporters do not follow redirects, even to another HTTPS
+endpoint. This keeps an export from bypassing transport checks or sending its
+payload and credentials to another destination. Use the final collector URL.
+Log and metric HTTP exporters do the same when any header source is configured.
+gRPC does not use HTTP redirects.
+
 | Field | Default | Notes |
 |---|---|---|
 | `type` | Required | `full`, `gen_ai`, or `openinference`. |
@@ -145,7 +157,8 @@ not stop application work or delivery to the other exporters.
 | `completed_span_context_ttl_millis` | `60000` | Positive duration for retaining completed scopes' trace context for late marks. |
 | `headers` | `{}` | String-to-string exporter headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
-| `resource_attributes` | `{}` | String-to-string resource attributes. |
+| `header_file` | `{}` | Header names mapped to files read immediately before each OTLP HTTP request or gRPC call. |
+| `resource_attributes` | `{}` | String-to-string resource attributes. Relay automatically adds `telemetry.sdk.name`, `telemetry.sdk.language`, and `telemetry.sdk.version`; do not configure those reserved keys. |
 | `mark_projection` | `inherit` | Mark representation for `full` and `openinference`: `inherit`, `event`, or `tool`. |
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
@@ -283,7 +296,10 @@ The signal endpoint fields are `endpoint`, `transport`, `headers`,
 `service_version`, `instrumentation_scope`, and `timeout_millis`. Their defaults
 match the corresponding trace fields. Each signal rejects duplicate
 destinations within that signal. Logs, metrics, and traces can share the same
-authority because OTLP treats them as different signals.
+authority because OTLP treats them as different signals. All three signals
+automatically include the reserved `telemetry.sdk.name`, `telemetry.sdk.language`,
+and `telemetry.sdk.version` resource attributes; configuring those keys in
+`resource_attributes` rejects the endpoint.
 
 ## Trace Batch Processor Configuration
 
@@ -401,6 +417,22 @@ nonblank, with no surrounding whitespace, when the component activates. A header
 cannot appear in both `headers` and `header_env`, including names that differ
 only by ASCII case. Reactivate the plugin to pick up a changed environment
 value.
+
+Use `header_file` when another process updates a credential in place, such as a
+projected token file. Each file must be regular and exist when the plugin
+activates. Relay reads the file only when it exports. Relay removes trailing
+whitespace. A missing, unreadable, blank, or invalid value fails only that
+export, and diagnostics do not show the value. A header can use only one of
+`headers`, `header_env`, and `header_file`. Header names are case-insensitive.
+This applies to trace, log, and metric endpoints.
+
+Remote trace endpoints must use HTTPS. When you set any header source
+(`headers`, `header_env`, or `header_file`), remote log and metric endpoints
+must also use HTTPS. HTTP is allowed only for localhost and loopback IP
+addresses. OTLP/HTTP exporters do not follow redirects when headers are set.
+For example, an OIDC token-file writer must write the complete value `Bearer
+eyJ...` to the file. Relay does not add the authentication
+scheme for you.
 
 Process-global `OTEL_EXPORTER_OTLP_HEADERS`,
 `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, `OTEL_EXPORTER_OTLP_LOGS_HEADERS`, and
@@ -652,6 +684,14 @@ with high-cardinality attributes.
 
 ## GenAI Projection
 
+Set an OpenTelemetry endpoint's `type` to `gen_ai` to select this projection:
+
+```toml
+[[components.config.opentelemetry.endpoints]]
+type = "gen_ai"
+endpoint = "http://localhost:4318/v1/traces"
+```
+
 The `gen_ai` endpoint uses these operation names:
 
 | Relay scope | OpenTelemetry operation |
@@ -669,9 +709,52 @@ projection never emits `nemo_relay.*` fields. LLM spans include the
 `gen_ai.output.messages` attributes as JSON strings that follow the
 OpenTelemetry GenAI schemas. Each attribute is emitted only when its normalized
 instructions, messages, or response content is present. Redact sensitive
-content with an LLM or event sanitizer. Tool and retrieval payloads are not
-exported. Set top-level `enable_full_payloads = true` to retain complete
+content with an LLM or event sanitizer. Tool content is exported by default;
+retrieval payloads are not exported. Set top-level `enable_full_payloads = true` to retain complete
 sanitized LLM request history on every start span.
+
+The `gen_ai` projection includes sanitized `gen_ai.tool.call.arguments` at tool
+start, `gen_ai.tool.call.result` on successful completion, and
+`gen_ai.tool.definitions` on inference spans by default. These attributes can
+contain sensitive information. Use the PII redaction `trajectory_context`
+preset to remove opaque payloads while retaining analytical structure and trace
+parentage. Credential removal and event sanitizers run before projection.
+`enable_full_payloads` controls LLM request-history retention independently.
+
+Arguments and results are emitted as canonical JSON strings. Relay parses
+serialized JSON before projection, then preserves every non-null sanitized JSON
+value, including objects, arrays, strings, booleans, and numbers. Failed tool
+calls do not emit a result attribute. Result annotations remain separate and
+are never included in this projection. Tool definitions include only required
+`type` and `name` properties. Known OpenAI Responses built-ins use their native
+type as identity; recognized Gemini native tool groups emit an identity for each
+tool in the group. Explicit native names are preserved. Unknown unnamed native
+definitions are omitted rather than assigned invented identities.
+
+### Tool Identity
+
+Tool identity comes from instrumentation metadata and the typed tool-call ID,
+never from similarly named fields in tool arguments or results. Nonblank string
+metadata supports `gen_ai.tool.name`, `gen_ai.tool.type` / `tool_type`,
+`gen_ai.tool.call.id` / `tool_call_id`, `gen_ai.tool.description` /
+`tool_description` / `description`, and `gen_ai.agent.name` / `agent_name`.
+The typed call ID takes precedence. Absent tool names use the scope name;
+unknown descriptions, types, and agent names are omitted.
+
+Claude Code, Codex, and Pi tool hooks default `gen_ai.tool.type` to `function`
+because these harnesses execute tools locally. They default `gen_ai.agent.name`
+to `claude-code`, `codex`, or `pi`, or `subagent:<id>` when ownership is known.
+These defaults apply to paired hooks and post-only hooks that synthesize a
+start, without replacing explicitly supplied nonblank string metadata, including
+the `tool_type` and `agent_name` aliases. Generic gateway sessions
+do not infer a tool type or root executing-agent name. Invocation arguments
+are never used to infer tool descriptions.
+
+Harness defaults carry internal provenance. Explicit completion metadata may
+refine inferred tool type and agent name, including through their aliases.
+Explicit start metadata and typed tool-call IDs remain authoritative; later
+inferred values cannot replace them. This provenance is not exported as a GenAI
+attribute.
 
 ### Error Type Mapping
 

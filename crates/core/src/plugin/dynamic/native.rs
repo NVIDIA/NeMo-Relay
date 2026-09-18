@@ -32,8 +32,8 @@ use crate::api::runtime::{
     LlmCodecIdentity, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream,
     LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
-    LlmStreamExecutionNextFn, MiddlewareContinuationContext, ToolConditionalFn, ToolExecutionFn,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    LlmStreamExecutionNextFn, MiddlewareContinuationContext, ToolConditionalFn,
+    ToolExecutionContext, ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{
     ScopeStackHandle, ThreadScopeStackBinding, capture_thread_scope_stack, create_scope_stack,
@@ -57,15 +57,16 @@ use chrono::{DateTime, Utc};
 use libloading::{Library, Symbol};
 use nemo_relay_plugin::{
     NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
-    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
-    NemoRelayNativeAsyncLlmStreamOpenCb, NemoRelayNativeAsyncLlmStreamPullCb,
-    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
-    NemoRelayNativeAsyncNextResultCb, NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
+    NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL, NemoRelayNativeAsyncCallbackState,
+    NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncLlmStreamOpenCb,
+    NemoRelayNativeAsyncLlmStreamPullCb, NemoRelayNativeAsyncMiddlewareCb,
+    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncNextResultCb,
+    NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
     NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeConditionalMiddlewareCb,
     NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
     NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4,
-    NemoRelayNativeLlmAsyncStream, NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb,
-    NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCodec,
+    NemoRelayNativeHostApiV5, NemoRelayNativeLlmAsyncStream, NemoRelayNativeLlmCodecKind,
+    NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCodec,
     NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
     NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeRequestContext,
     NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmSanitizeResponseContext,
@@ -73,8 +74,8 @@ use nemo_relay_plugin::{
     NemoRelayNativePluginEntry, NemoRelayNativePluginRuntime, NemoRelayNativePluginV1,
     NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
     NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
-    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb,
-    NemoRelayStatus,
+    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolExecutionContextCb,
+    NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
 };
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
@@ -86,6 +87,7 @@ use super::{
     DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
     DynamicPluginTeardownOutcome, deregister_tracked_registrations_checked,
     validate_annotated_request_consumer_compatibility, validate_dynamic_plugin_relay_compatibility,
+    validate_tool_execution_context_compatibility,
 };
 
 /// Native plugin load request derived from host dynamic-plugin state.
@@ -407,9 +409,13 @@ fn load_one_native_plugin(
                 ))
             })?;
         let mut status = entry(native_host_api(), &mut plugin);
-        // Older SDKs reject newer tables. Negotiate from the current v4 table
-        // through separately frozen v3 and v2 tables so their struct sizes and
+        // Older SDKs reject newer tables. Negotiate from the current v5 table
+        // through separately frozen v4, v3, and v2 tables so their struct sizes and
         // function pointers do not change as the current ABI grows.
+        if status == NemoRelayStatus::InvalidArg {
+            drop_native_plugin_descriptor(&mut plugin);
+            status = entry(native_host_api_v4(), &mut plugin);
+        }
         if status == NemoRelayStatus::InvalidArg {
             drop_native_plugin_descriptor(&mut plugin);
             status = entry(native_host_api_v3(), &mut plugin);
@@ -860,6 +866,11 @@ unsafe extern "C" fn native_llm_response_codec_decode(
 }
 
 fn native_host_api() -> *const NemoRelayNativeHostApiV1 {
+    static HOST_API: OnceLock<NemoRelayNativeHostApiV5> = OnceLock::new();
+    &HOST_API.get_or_init(build_native_host_api_v5).v4.v3.v1 as *const NemoRelayNativeHostApiV1
+}
+
+fn native_host_api_v4() -> *const NemoRelayNativeHostApiV1 {
     static HOST_API: OnceLock<NemoRelayNativeHostApiV4> = OnceLock::new();
     &HOST_API.get_or_init(build_native_host_api_v4).v3.v1 as *const NemoRelayNativeHostApiV1
 }
@@ -961,7 +972,7 @@ fn build_native_host_api_v3() -> NemoRelayNativeHostApiV3 {
 
 fn build_native_host_api_v4() -> NemoRelayNativeHostApiV4 {
     let mut v3 = build_native_host_api_v3();
-    v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
+    v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL;
     v3.v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV4>();
     NemoRelayNativeHostApiV4 {
         v3,
@@ -991,6 +1002,17 @@ fn build_native_host_api_v4() -> NemoRelayNativeHostApiV4 {
             native_plugin_runtime_register_conditional_middleware_guardrail_callback,
         plugin_context_register_conditional_middleware_guardrail_callback:
             native_plugin_context_register_conditional_middleware_guardrail_callback,
+    }
+}
+
+fn build_native_host_api_v5() -> NemoRelayNativeHostApiV5 {
+    let mut v4 = build_native_host_api_v4();
+    v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
+    v4.v3.v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV5>();
+    NemoRelayNativeHostApiV5 {
+        v4,
+        plugin_context_register_tool_execution_intercept:
+            native_plugin_context_register_tool_execution_intercept_v5,
     }
 }
 
@@ -3579,9 +3601,15 @@ fn wrap_native_async_tool_execution(
     free_fn: NemoRelayNativeFreeFn,
 ) -> ToolExecutionFn {
     let user_data = make_user_data(instance, user_data, free_fn);
-    Arc::new(move |name, args, next| {
+    Arc::new(move |context: ToolExecutionContext, next| {
         let user_data = user_data.clone();
-        let invocation = serde_json::json!({"name": name, "value": args});
+        // `tool_call_id` is an additive field on the tool-invocation envelope;
+        // plugins built before it existed ignore it.
+        let invocation = serde_json::json!({
+            "name": context.tool_name(),
+            "value": context.args(),
+            "tool_call_id": context.tool_call_id(),
+        });
         Box::pin(async move {
             let outcome = invoke_native_async_callback(
                 cb,
@@ -3783,6 +3811,14 @@ unsafe extern "C" fn native_plugin_context_register_async_middleware(
     }
     if kind == NemoRelayNativeAsyncMiddlewareKind::LlmRequestIntercept
         && let Err(error) = validate_annotated_request_consumer_compatibility(
+            &instance.relay_compat,
+            &instance.plugin_kind,
+        )
+    {
+        return status_from_plugin_error(error);
+    }
+    if kind == NemoRelayNativeAsyncMiddlewareKind::ToolExecutionIntercept
+        && let Err(error) = validate_tool_execution_context_compatibility(
             &instance.relay_compat,
             &instance.plugin_kind,
         )
@@ -4467,6 +4503,42 @@ unsafe extern "C" fn native_plugin_context_register_tool_execution_intercept(
     }
 }
 
+unsafe extern "C" fn native_plugin_context_register_tool_execution_intercept_v5(
+    ctx: *mut NemoRelayNativePluginContext,
+    name: *const NemoRelayNativeString,
+    priority: i32,
+    cb: NemoRelayNativeToolExecutionContextCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> NemoRelayStatus {
+    clear_native_last_error();
+    let user_data_guard = NativeCallbackUserDataGuard::new(user_data, free_fn);
+    let host_context = match host_ctx_mut(ctx) {
+        Ok(context) => context,
+        Err(status) => return status,
+    };
+    let instance = host_context.instance.clone();
+    if let Err(error) =
+        validate_tool_execution_context_compatibility(&instance.relay_compat, &instance.plugin_kind)
+    {
+        return status_from_plugin_error(error);
+    }
+    let registration_context = unsafe { &mut *host_context.ctx };
+    let name = match read_name(name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    let (user_data, free_fn) = user_data_guard.transfer();
+    match registration_context.register_tool_execution_intercept(
+        &name,
+        priority,
+        wrap_tool_execution_context_fn(instance, cb, user_data, free_fn),
+    ) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_plugin_error(error),
+    }
+}
+
 unsafe extern "C" fn native_plugin_context_register_llm_sanitize_request_guardrail(
     ctx: *mut NemoRelayNativePluginContext,
     name: *const NemoRelayNativeString,
@@ -4958,8 +5030,9 @@ fn wrap_tool_execution_fn(
     free_fn: NemoRelayNativeFreeFn,
 ) -> ToolExecutionFn {
     let user_data = make_user_data(instance, user_data, free_fn);
-    Arc::new(move |name, args, next| {
-        let name = name.to_owned();
+    Arc::new(move |context, next| {
+        let name = context.tool_name().to_owned();
+        let args = context.into_args();
         let user_data = user_data.clone();
         Box::pin(async move {
             clear_native_last_error();
@@ -4999,6 +5072,59 @@ fn wrap_tool_execution_fn(
             )?;
             deserialize_native_tool_outcome(outcome_json).map_err(|err| {
                 FlowError::Internal(format!("invalid native tool execution outcome JSON: {err}"))
+            })
+        })
+    })
+}
+
+fn wrap_tool_execution_context_fn(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeToolExecutionContextCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> ToolExecutionFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |context, next| {
+        let user_data = user_data.clone();
+        let context = serde_json::json!({
+            "tool_name": context.tool_name(),
+            "args": context.args(),
+            "tool_call_id": context.tool_call_id(),
+        });
+        Box::pin(async move {
+            clear_native_last_error();
+            let context = native_string_from_json(&context)
+                .ok_or_else(|| FlowError::Internal("failed to allocate native context".into()))?;
+            let next_context = Box::into_raw(Box::new(next)) as *mut c_void;
+            let mut outcome = ptr::null_mut();
+            let status = unsafe {
+                cb(
+                    user_data.ptr,
+                    context,
+                    native_tool_next,
+                    next_context,
+                    &mut outcome,
+                )
+            };
+            unsafe {
+                drop(Box::from_raw(next_context as *mut ToolExecutionNextFn));
+                native_string_free(context);
+            }
+            if status != NemoRelayStatus::Ok {
+                if !outcome.is_null() {
+                    unsafe { native_string_free(outcome) };
+                }
+                return Err(flow_error_from_status(
+                    status,
+                    "native tool execution failed",
+                ));
+            }
+            let outcome = take_json_from_native_string(
+                outcome,
+                "native tool execution returned null outcome",
+            )?;
+            serde_json::from_value(outcome).map_err(|error| {
+                FlowError::Internal(format!("invalid native tool execution outcome: {error}"))
             })
         })
     })

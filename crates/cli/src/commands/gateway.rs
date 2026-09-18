@@ -55,6 +55,7 @@ pub(crate) async fn execute(
 
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const RELAY_PROCESS_NAMES: &[&str] = &["nemo-relay", "nemo-relay-pinned"];
 
 pub(super) fn stop_bind(server: &ServerArgs) -> SocketAddr {
     server
@@ -140,14 +141,18 @@ pub(super) fn select_relay_listener(
 }
 
 fn is_relay_process(process: &Process) -> bool {
-    Path::new(&process.name)
-        .file_stem()
+    is_relay_process_name(Path::new(&process.name))
+        || is_relay_process_name(Path::new(&process.path))
+}
+
+fn is_relay_process_name(path: &Path) -> bool {
+    path.file_stem()
         .and_then(|value| value.to_str())
-        .is_some_and(|value| value.eq_ignore_ascii_case("nemo-relay"))
-        || Path::new(&process.path)
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .is_some_and(|value| value.eq_ignore_ascii_case("nemo-relay"))
+        .is_some_and(|value| {
+            RELAY_PROCESS_NAMES
+                .iter()
+                .any(|name| value.eq_ignore_ascii_case(name))
+        })
 }
 
 fn wait_for_listener_exit(bind: SocketAddr, pid: u32) -> Result<(), CliError> {

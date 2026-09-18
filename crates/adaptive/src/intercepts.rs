@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use nemo_relay::api::runtime::{ToolExecutionFn, ToolExecutionNextFn};
 use nemo_relay::error::Result as FlowResult;
-use nemo_relay::json::Json;
 use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
@@ -121,11 +120,12 @@ pub(crate) fn create_tool_execution_intercept_with_mode(
     let cohort_registry: Arc<Mutex<HashMap<CohortKey, Arc<CohortGate>>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
-    Arc::new(move |name: &str, args: Json, next: ToolExecutionNextFn| {
+    Arc::new(move |context, next: ToolExecutionNextFn| {
         let cache = hot_cache.clone();
         let registry = cohort_registry.clone();
         let mode = mode.clone();
-        let name = name.to_string();
+        let name = context.tool_name().to_string();
+        let args = context.into_args();
         Box::pin(async move {
             let Some(cohort_key) = resolve_warm_first_cohort_key(&name, &mode, &cache) else {
                 return next(args).await.map(Into::into);
