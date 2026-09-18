@@ -7072,7 +7072,7 @@ licenses found in LICENSE.APACHE2 or LICENSE.MIT. Contributions to are
 made under the terms of *both* these licenses.
 ```
 
-## soupsieve (2.8.4)
+## soupsieve (2.9.2)
 
 ### Licenses
 License: `MIT`
