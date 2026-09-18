@@ -30,9 +30,9 @@ use super::header_file::{
 };
 use super::otel_signal::{
     MetricMarkClassification, SignalRuntimeDiagnostics, TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS,
-    automatic_protocol_is_unset, classify_metric_mark, resolve_header_env,
-    retry_batch_processor_channel_full, should_relog_runtime_diagnostic, telemetry_resource,
-    validate_telemetry_sdk_resource_attributes,
+    automatic_protocol_is_unset, automatic_signal_endpoint, classify_metric_mark,
+    resolve_header_env, retry_batch_processor_channel_full, should_relog_runtime_diagnostic,
+    telemetry_resource, validate_telemetry_sdk_resource_attributes,
 };
 use super::{
     MarkProjection, OpenTelemetryRuntimeDiagnostics, OpenTelemetryType, OtlpAttributeMapping,
@@ -72,6 +72,8 @@ use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
 
 /// Default period for attaching late marks to a completed scope's trace span.
 pub const DEFAULT_COMPLETED_SPAN_CONTEXT_TTL: Duration = Duration::from_secs(60);
+
+const AUTOMATIC_OTLP_ENDPOINT_MARKER: &str = "<environment>";
 
 use opentelemetry_otlp::WithTonicConfig;
 use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
@@ -218,6 +220,9 @@ pub fn resolve_http_trace_endpoint(endpoint: &str) -> Cow<'_, str> {
 /// distinguish independently configured collectors without exposing a token
 /// embedded in a URL.
 fn trace_endpoint_log_identity(endpoint: &str) -> String {
+    if endpoint == AUTOMATIC_OTLP_ENDPOINT_MARKER {
+        return "the environment-configured OTLP endpoint".to_string();
+    }
     let Ok(endpoint) = reqwest::Url::parse(endpoint) else {
         return "an invalid OTLP endpoint".to_string();
     };
@@ -327,7 +332,7 @@ impl OpenTelemetryConfig {
     /// exporter environment configuration.
     pub(crate) fn from_automatic_configuration() -> Self {
         Self {
-            endpoint: "<environment>".to_string(),
+            endpoint: AUTOMATIC_OTLP_ENDPOINT_MARKER.to_string(),
             automatic: true,
             ..Self::default_values()
         }
@@ -650,7 +655,15 @@ impl OpenTelemetrySubscriber {
                 "endpoint must be a nonblank string".to_string(),
             ));
         }
-        if !config.automatic {
+        if config.automatic {
+            let endpoint = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+                .ok_or_else(|| {
+                    OpenTelemetryError::ExporterBuild(
+                        "automatic trace exporter requires a nonblank OTLP endpoint".to_string(),
+                    )
+                })?;
+            validate_trace_endpoint(&endpoint)?;
+        } else {
             validate_trace_endpoint(&config.endpoint)?;
         }
         if config.completed_span_context_ttl.is_zero() {

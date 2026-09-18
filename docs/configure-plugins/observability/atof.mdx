@@ -169,24 +169,6 @@ stream-sink operation. Await it from Python and Node.js so queued sanitizers
 can finish on the running event loop. Teardown does not guarantee that a worker
 which timed out drained or closed.
 
-## Migrate From Version 1
-
-Use observability component `version = 4`. Version 3 remains accepted for
-trace-only compatibility and uses the same typed ATOF sink shape. NeMo Relay
-does not translate the removed ATOF fields from version 1.
-
-Make the following changes when you migrate a plugin configuration:
-
-- Move `output_directory`, `filename`, and `mode` from
-  `[components.config.atof]` into a sink with `type = "file"`.
-- Replace each `[[components.config.atof.endpoints]]` entry with a
-  `[[components.config.atof.sinks]]` entry that has `type = "stream"`.
-- Keep static request headers in `headers`, or use `header_env` to read complete
-  header values from environment variables at activation time.
-
-The plugin fans out each event delivered to its ATOF subscriber to every
-configured sink. The manual `AtofExporter` API is different: each exporter owns
-one file or stream sink.
 
 ## Expected Output
 

@@ -1196,22 +1196,11 @@ fn register_observability(
     config: ObservabilityConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
-    if !matches!(config.version, 3 | 4) {
+    if config.version != 4 {
         return Err(PluginError::InvalidConfig(format!(
-            "observability config version {} is unsupported",
+            "observability config version {} is unsupported; use version 4",
             config.version
         )));
-    }
-    if config.version == 3
-        && config
-            .opentelemetry
-            .as_ref()
-            .is_some_and(|section| section.logs.is_some() || section.metrics.is_some())
-    {
-        return Err(PluginError::InvalidConfig(
-            "observability config version 3 is trace-only; use version 4 for OpenTelemetry logs or metrics"
-                .to_string(),
-        ));
     }
     register_full_payload_policy(config.enable_full_payloads, ctx)?;
     if let Some(atof) = config.atof.filter(|section| section.enabled) {
@@ -1762,41 +1751,21 @@ fn register_automatic_opentelemetry(
     signals: AutomaticOtlpSignals,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
-    let trace_subscribers = if signals.traces && environment_signal_enabled("OTEL_TRACES_EXPORTER")
-    {
-        vec![IndexedOpenTelemetryResource {
-            index: 0,
-            value: OpenTelemetryResource::Active(Arc::new(
-                OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin()
-                    .map_err(observability_registration_error)?,
-            )),
-        }]
-    } else {
-        Vec::new()
-    };
-    let log_subscribers = if signals.logs && environment_signal_enabled("OTEL_LOGS_EXPORTER") {
-        vec![IndexedOpenTelemetryResource {
-            index: 0,
-            value: OpenTelemetryResource::Active(Arc::new(
-                OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin()
-                    .map_err(observability_registration_error)?,
-            )),
-        }]
-    } else {
-        Vec::new()
-    };
-    let metric_subscribers =
-        if signals.metrics && environment_signal_enabled("OTEL_METRICS_EXPORTER") {
-            vec![IndexedOpenTelemetryResource {
-                index: 0,
-                value: OpenTelemetryResource::Active(Arc::new(
-                    OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin()
-                        .map_err(observability_registration_error)?,
-                )),
-            }]
-        } else {
-            Vec::new()
-        };
+    let trace_subscribers = automatic_subscriber(
+        signals.traces && environment_signal_enabled("OTEL_TRACES_EXPORTER"),
+        "traces",
+        OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin,
+    );
+    let log_subscribers = automatic_subscriber(
+        signals.logs && environment_signal_enabled("OTEL_LOGS_EXPORTER"),
+        "logs",
+        OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin,
+    );
+    let metric_subscribers = automatic_subscriber(
+        signals.metrics && environment_signal_enabled("OTEL_METRICS_EXPORTER"),
+        "metrics",
+        OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin,
+    );
     if trace_subscribers.is_empty() && log_subscribers.is_empty() && metric_subscribers.is_empty() {
         return Ok(());
     }
@@ -1807,6 +1776,33 @@ fn register_automatic_opentelemetry(
         metric_subscribers,
         ctx,
     )
+}
+
+/// Build one automatic subscriber without preventing healthy signals from activating.
+fn automatic_subscriber<T>(
+    enabled: bool,
+    signal: &'static str,
+    build: impl FnOnce() -> crate::observability::otel::Result<T>,
+) -> Vec<IndexedOpenTelemetryResource<Arc<T>>> {
+    if !enabled {
+        return Vec::new();
+    }
+    match build() {
+        Ok(subscriber) => vec![IndexedOpenTelemetryResource {
+            index: 0,
+            value: OpenTelemetryResource::Active(Arc::new(subscriber)),
+        }],
+        Err(error) => {
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "automatic_opentelemetry_signal_skipped",
+                plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+                signal;
+                "Automatic OpenTelemetry {signal} exporter was skipped during activation; delivery continues to valid signals: {error}"
+            );
+            Vec::new()
+        }
+    }
 }
 
 struct OpenTelemetrySignalSubscribers {
@@ -3973,26 +3969,6 @@ fn validate_observability_section_values(
     }
     if let Some(section) = &config.opentelemetry {
         validate_opentelemetry_section(diagnostics, &config.policy, section);
-        let signal_field = if section.logs.is_some() {
-            Some("logs")
-        } else if section.metrics.is_some() {
-            Some("metrics")
-        } else {
-            None
-        };
-        if config.version == 3
-            && let Some(signal_field) = signal_field
-        {
-            push_policy_diag(
-                diagnostics,
-                UnsupportedBehavior::Error,
-                "observability.unsupported_value",
-                Some("opentelemetry".to_string()),
-                Some(signal_field.to_string()),
-                "observability config version 3 is trace-only; use version 4 for OpenTelemetry logs or metrics"
-                    .to_string(),
-            );
-        }
     }
 }
 
@@ -4803,16 +4779,14 @@ fn validate_opentelemetry_feature_support(
 }
 
 fn validate_version(diagnostics: &mut Vec<ConfigDiagnostic>, policy: &ConfigPolicy, version: u32) {
-    if !matches!(version, 3 | 4) {
+    if version != 4 {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
             "observability.unsupported_config_version",
             Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
             Some("version".to_string()),
-            format!(
-                "observability config version {version} is unsupported; use version 4 (or version 3 for trace-only compatibility)"
-            ),
+            format!("observability config version {version} is unsupported; use version 4"),
         );
     }
 }

@@ -42,7 +42,8 @@ use super::otel::{
 };
 use super::otel_signal::{
     MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics,
-    automatic_protocol_is_unset, build_grpc_metadata, build_in_owned_runtime, classify_metric_mark,
+    automatic_protocol_is_unset, automatic_signal_endpoint, automatic_signal_headers_configured,
+    build_grpc_metadata, build_in_owned_runtime, classify_metric_mark,
     reject_signal_header_environment, resolve_header_env, resolve_http_signal_endpoint,
     retry_batch_processor_channel_full, should_relog_runtime_diagnostic, signal_resource,
     validate_signal_headers, validate_telemetry_sdk_resource_attributes,
@@ -240,7 +241,18 @@ impl OpenTelemetryLogConfig {
                 "completed_span_context_ttl must be greater than 0".to_string(),
             ));
         }
-        if !self.automatic {
+        if self.automatic {
+            if automatic_signal_headers_configured("OTEL_EXPORTER_OTLP_LOGS_HEADERS") {
+                let endpoint = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
+                    .ok_or_else(|| {
+                        OpenTelemetryError::ExporterBuild(
+                            "automatic log exporter requires a nonblank OTLP endpoint".to_string(),
+                        )
+                    })?;
+                validate_header_http_endpoint(&endpoint)
+                    .map_err(OpenTelemetryError::ExporterBuild)?;
+            }
+        } else {
             validate_telemetry_sdk_resource_attributes(&self.resource_attributes)?;
             reject_signal_header_environment("OTEL_EXPORTER_OTLP_LOGS_HEADERS")?;
             validate_signal_headers(&self.headers)?;

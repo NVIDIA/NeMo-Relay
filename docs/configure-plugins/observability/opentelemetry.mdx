@@ -59,10 +59,10 @@ behavior; it does not inherit the setting.
 | `OTEL_RESOURCE_ATTRIBUTES` | Automatic and Relay endpoints | SDK parses resource attributes; does not activate export. Explicit Relay resource attributes override colliding keys. |
 | `OTEL_TRACES_SAMPLER` | Automatic and Relay endpoints | SDK sampler selection; does not activate export. Relay retains deterministic trace IDs and unlimited sanitized payload attribute limits. |
 | `OTEL_TRACES_SAMPLER_ARG` | Automatic and Relay endpoints | SDK sampler argument; does not activate export. |
-| `OTEL_BSP_SCHEDULE_DELAY` | Automatic | SDK span batch delay; does not activate export. |
+| `OTEL_BSP_SCHEDULE_DELAY` | Automatic and Relay trace endpoints | SDK span batch delay; does not activate export. |
 | `OTEL_BSP_EXPORT_TIMEOUT` | Automatic | SDK span batch export timeout; does not activate export. |
-| `OTEL_BSP_MAX_QUEUE_SIZE` | Automatic | SDK span batch queue limit; does not activate export. |
-| `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` | Automatic | SDK span batch size; does not activate export. |
+| `OTEL_BSP_MAX_QUEUE_SIZE` | Automatic and Relay trace endpoints | SDK span batch queue limit; does not activate export. |
+| `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` | Automatic and Relay trace endpoints | SDK span batch size; does not activate export. |
 | `OTEL_BSP_MAX_CONCURRENT_EXPORTS` | No | Relay's diagnostic span processor owns its execution model. |
 | `OTEL_BLRP_SCHEDULE_DELAY` | Automatic | SDK log-record batch delay; does not activate export. |
 | `OTEL_BLRP_EXPORT_TIMEOUT` | Automatic | SDK log-record batch export timeout; does not activate export. |
@@ -117,6 +117,11 @@ behavior; it does not inherit the setting.
 The automatic exporter is created in addition to Relay-configured endpoints.
 Process-global OTLP headers belong only to the automatic exporter; Relay never
 copies them to independently configured endpoints.
+
+Remote automatic trace endpoints must use HTTPS; plaintext HTTP is allowed
+only for localhost or a loopback IP address. Automatic log and metric headers
+have the same transport requirement, preventing credentials from being sent to
+remote plaintext endpoints.
 
 When independently configured Relay endpoints are active, do not set global
 OTLP header variables. The upstream OTLP builders read those process-global
@@ -1091,24 +1096,3 @@ release with `nemo_relay_string_free`. Use diagnostics to monitor rejected
 metric marks, capacity limits, and delivery failures without configuring the
 observability plugin. The plugin continues to include the same conditions in
 its runtime report.
-
-## Migrating from Version 3 to Version 4
-
-Version 4 adds the sibling `opentelemetry.logs` and
-`opentelemetry.metrics` sections. For the complete upgrade path and
-programmatic configuration, see
-[Migrating from Version 3 to Version 4](/configure-plugins/observability/configuration#migrating-from-version-3-to-version-4).
-
-## Version 2 to Version 3
-
-Version 3 replaces the separate version-2 sections:
-
-- Move the old `opentelemetry` fields into one endpoint with `type = "full"`.
-- Move the old `openinference` fields into the same section with
-  `type = "openinference"`.
-- Use `type = "gen_ai"` for standardized GenAI-only output.
-
-Version-2 OTLP section shapes are rejected when `version = 3`; NeMo Relay does
-not silently normalize them. For complete before-and-after configuration and
-binding API changes, refer to
-[Observability Configuration](/configure-plugins/observability/configuration#migrating-from-version-2).

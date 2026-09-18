@@ -5799,6 +5799,10 @@ fn trace_export_failures_are_diagnosed_until_a_later_export_recovers() {
 #[test]
 fn trace_endpoint_log_identity_redacts_and_validates_urls() {
     for (endpoint, expected) in [
+        (
+            AUTOMATIC_OTLP_ENDPOINT_MARKER,
+            "the environment-configured OTLP endpoint",
+        ),
         ("not a URL", "an invalid OTLP endpoint"),
         ("ftp://collector.example/secret", "an invalid OTLP endpoint"),
         (

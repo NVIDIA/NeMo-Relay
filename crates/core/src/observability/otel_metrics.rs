@@ -42,7 +42,8 @@ use super::header_file::{
 use super::otel::{OpenTelemetryError, OtlpTransport, Result, normalize_shutdown_result};
 use super::otel_signal::{
     MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics,
-    automatic_protocol_is_unset, build_grpc_metadata, build_in_owned_runtime, classify_metric_mark,
+    automatic_protocol_is_unset, automatic_signal_endpoint, automatic_signal_headers_configured,
+    build_grpc_metadata, build_in_owned_runtime, classify_metric_mark,
     reject_signal_header_environment, resolve_header_env, resolve_http_signal_endpoint,
     should_relog_runtime_diagnostic, signal_resource, validate_signal_headers,
     validate_telemetry_sdk_resource_attributes,
@@ -275,7 +276,19 @@ impl OpenTelemetryMetricConfig {
                 "cardinality_limit must be less than usize::MAX".to_string(),
             ));
         }
-        if !self.automatic {
+        if self.automatic {
+            if automatic_signal_headers_configured("OTEL_EXPORTER_OTLP_METRICS_HEADERS") {
+                let endpoint = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+                    .ok_or_else(|| {
+                        OpenTelemetryError::ExporterBuild(
+                            "automatic metric exporter requires a nonblank OTLP endpoint"
+                                .to_string(),
+                        )
+                    })?;
+                validate_header_http_endpoint(&endpoint)
+                    .map_err(OpenTelemetryError::ExporterBuild)?;
+            }
+        } else {
             validate_telemetry_sdk_resource_attributes(&self.resource_attributes)?;
             reject_signal_header_environment("OTEL_EXPORTER_OTLP_METRICS_HEADERS")?;
             validate_signal_headers(&self.headers)?;

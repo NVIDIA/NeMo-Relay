@@ -312,7 +312,7 @@ describe('core plugins', () => {
         version: 1,
         components: [
           plugin.ComponentSpec('observability', {
-            version: 3,
+            version: 4,
             atof: { enabled: false },
           }),
           adaptive.ComponentSpec({
