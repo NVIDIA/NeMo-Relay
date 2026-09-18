@@ -6,7 +6,9 @@
 use super::*;
 use crate::api::event::{
     BaseEvent, DataSchema, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MarkEvent,
+    ScopeCategory, ScopeEvent,
 };
+use crate::api::scope::ScopeType;
 use crate::logging::{
     FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
 };
@@ -286,6 +288,8 @@ fn metric_config_validates_limits_and_retains_resource_identity() {
             .with_max_instruments(0),
         OpenTelemetryMetricConfig::new("https://collector.example/v1/metrics")
             .with_cardinality_limit(0),
+        OpenTelemetryMetricConfig::new("https://collector.example/v1/metrics")
+            .with_promote_resource_metadata_prefixes(["nv.*"]),
     ] {
         assert!(config.validate().is_err());
     }
@@ -293,12 +297,17 @@ fn metric_config_validates_limits_and_retains_resource_identity() {
     let config = OpenTelemetryMetricConfig::new("https://collector.example/v1/metrics")
         .with_service_namespace("relay")
         .with_service_version("0.8.0")
+        .with_promote_resource_metadata_prefixes(["nv.client.", "nv.env."])
         .with_resource_attribute("deployment.environment", "test");
     assert_eq!(config.service_namespace.as_deref(), Some("relay"));
     assert_eq!(config.service_version.as_deref(), Some("0.8.0"));
     assert_eq!(
         config.resource_attributes.get("deployment.environment"),
         Some(&"test".to_string())
+    );
+    assert_eq!(
+        config.promote_resource_metadata_prefixes,
+        ["nv.client.", "nv.env."]
     );
 }
 
@@ -903,6 +912,124 @@ fn direct_http_subscribers_emit_decodable_signal_payloads() {
     assert_eq!(
         otlp_string_attribute(&metric_resource.attributes, "nv.project"),
         Some("observability-dev")
+    );
+
+    log_subscriber.shutdown().unwrap();
+    metric_subscriber.shutdown().unwrap();
+    metric_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+}
+
+#[test]
+fn log_and_metric_resources_promote_root_metadata_and_inherit_to_child_marks() {
+    let root_uuid = uuid::Uuid::now_v7();
+    let root_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(root_uuid)
+            .name("agent")
+            .metadata(json!({
+                "nv.client.name": "runtime-client",
+                "nv.client.version": "2.4.0",
+                "nv.env.type": "staging"
+            }))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        ScopeType::Agent.into(),
+        None,
+    ));
+
+    let log_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let log_receiver = capture_one_request(log_listener.try_clone().unwrap());
+    let log_endpoint = format!("http://{}", log_listener.local_addr().unwrap());
+    drop(log_listener);
+    let log_subscriber = OpenTelemetryLogSubscriber::new(
+        OpenTelemetryLogConfig::new(log_endpoint)
+            .with_resource_attribute("nv.client.name", "configured-client")
+            .with_promote_resource_metadata_prefixes(["nv.client.", "nv.env."]),
+    )
+    .unwrap();
+    log_subscriber.subscriber()(&root_start);
+    log_subscriber.subscriber()(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(root_uuid)
+            .name("child.log")
+            .build(),
+        None,
+        None,
+    )));
+    log_subscriber.force_flush().unwrap();
+    let log_request = log_receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    let logs = ExportLogsServiceRequest::decode(log_request.body.as_slice()).unwrap();
+    let log_resource = logs.resource_logs[0].resource.as_ref().unwrap();
+    assert_eq!(
+        otlp_string_attribute(&log_resource.attributes, "nv.client.name"),
+        Some("configured-client")
+    );
+    assert_eq!(
+        otlp_string_attribute(&log_resource.attributes, "nv.client.version"),
+        Some("2.4.0")
+    );
+    assert_eq!(
+        otlp_string_attribute(&log_resource.attributes, "nv.env.type"),
+        Some("staging")
+    );
+
+    let metric_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let metric_receiver = capture_requests(metric_listener.try_clone().unwrap(), 2);
+    let metric_endpoint = format!("http://{}", metric_listener.local_addr().unwrap());
+    drop(metric_listener);
+    let metric_subscriber = OpenTelemetryMetricSubscriber::new(
+        OpenTelemetryMetricConfig::new(metric_endpoint)
+            .with_export_interval(Duration::from_secs(60))
+            .with_resource_attribute("nv.client.name", "configured-client")
+            .with_promote_resource_metadata_prefixes(["nv.client.", "nv.env."]),
+    )
+    .unwrap();
+    metric_subscriber.subscriber()(&root_start);
+    metric_subscriber.subscriber()(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(root_uuid)
+            .name("metric.record")
+            .data(
+                serde_json::to_value(MetricEnvelope {
+                    measurements: vec![measurement(
+                        "example.promoted.resource",
+                        MetricKind::Counter,
+                        MetricValueType::U64,
+                        json!(1),
+                    )],
+                })
+                .unwrap(),
+            )
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    )));
+    metric_subscriber.force_flush().unwrap();
+    let metric_request = metric_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    let metrics = ExportMetricsServiceRequest::decode(metric_request.body.as_slice()).unwrap();
+    let metric_resource = metrics.resource_metrics[0].resource.as_ref().unwrap();
+    assert_eq!(
+        otlp_string_attribute(&metric_resource.attributes, "nv.client.name"),
+        Some("configured-client")
+    );
+    assert_eq!(
+        otlp_string_attribute(&metric_resource.attributes, "nv.client.version"),
+        Some("2.4.0")
+    );
+    assert_eq!(
+        otlp_string_attribute(&metric_resource.attributes, "nv.env.type"),
+        Some("staging")
     );
 
     log_subscriber.shutdown().unwrap();

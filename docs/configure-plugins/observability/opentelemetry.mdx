@@ -116,9 +116,9 @@ temporality = "cumulative"
 
 Relay replaces the terminal `/v1/traces` with `/v1/logs` and `/v1/metrics`.
 Derived destinations copy the trace endpoint's transport, authentication,
-resource attributes, service identity, instrumentation scope, and timeout. In
-this example, all three signals use the same authorization and `nv.project`
-routing value.
+resource attributes, resource-metadata promotion prefixes, service identity,
+instrumentation scope, and timeout. In this example, all three signals use the
+same authorization and `nv.project` routing value.
 
 When `enabled = true`, configure at least one trace endpoint or an enabled
 signal with explicit endpoints. NeMo Relay constructs every endpoint before
@@ -227,23 +227,26 @@ that must be attached to every span from an endpoint.
 
 ## Root Resource Metadata Promotion
 
-Set `promote_resource_metadata_prefixes` to derive resource attributes from the
-sanitized metadata on a trace root's Scope-start Event. Every span and scoped
-mark in that trace uses the same resource; child metadata and later root
-metadata changes do not modify it. The prefixes and supported value types match
+Set `promote_resource_metadata_prefixes` on a trace, log, or metric endpoint to
+derive resource attributes from the sanitized metadata on a root Scope-start
+Event. Every span, scoped log, and scoped metric measurement in that scope tree uses
+the same resource for its configured endpoint; child metadata and later root
+metadata changes do not modify it. Derived log and metric endpoints inherit the
+trace endpoint's prefixes. The prefixes and supported value types match
 `promote_metadata_prefixes`.
 
 Configured `service_name`, `service_namespace`, `service_version`, and explicit
 `resource_attributes` take precedence over promoted metadata with the same key.
-Each distinct effective resource creates a retained OTLP trace pipeline, so use
-only controlled, low-cardinality values such as deployment, region, or cluster
-identity. Do not promote request, tenant, or user identifiers.
+Each distinct effective resource creates a retained OTLP provider pipeline for
+each enabled signal, so use only controlled, low-cardinality values such as
+deployment, region, client version, or environment identity. Do not promote
+request, tenant, or user identifiers.
 
 Relay records two bounded runtime diagnostics for this setting. A rejected value
 produces `otel.resource_metadata_promotion_value_unsupported.<metadata-key>`.
 A failed resource-pipeline construction produces
-`otel.resource_metadata_pipeline_build_failed`; Relay then exports the trace
-through the endpoint's configured resource instead. Match both the
+`otel.resource_metadata_pipeline_build_failed`; Relay then exports the affected
+signal through the endpoint's configured resource instead. Match both the
 `otel.metadata_promotion_value_unsupported.` and
 `otel.resource_metadata_promotion_value_unsupported.` prefixes to monitor all
 rejected metadata keys.
@@ -283,7 +286,8 @@ enabled = true
 ```
 
 The signal endpoint fields are `endpoint`, `transport`, `headers`,
-`header_env`, `resource_attributes`, `service_name`, `service_namespace`,
+`header_env`, `header_file`, `resource_attributes`,
+`promote_resource_metadata_prefixes`, `service_name`, `service_namespace`,
 `service_version`, `instrumentation_scope`, and `timeout_millis`. Their defaults
 match the corresponding trace fields. Each signal rejects duplicate
 destinations within that signal. Logs, metrics, and traces can share the same

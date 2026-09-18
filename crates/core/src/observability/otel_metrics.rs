@@ -34,18 +34,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 
-use super::OpenTelemetryRuntimeDiagnostics;
 use super::header_file::{
     HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
     has_configured_headers, validate_header_files, validate_header_http_endpoint,
 };
-use super::otel::{OpenTelemetryError, OtlpTransport, Result, normalize_shutdown_result};
-use super::otel_signal::{
-    MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics, build_grpc_metadata,
-    build_in_owned_runtime, classify_metric_mark, reject_signal_header_environment,
-    resolve_header_env, resolve_http_signal_endpoint, should_relog_runtime_diagnostic,
-    signal_resource, validate_signal_headers, validate_telemetry_sdk_resource_attributes,
+use super::otel::{
+    DEFAULT_COMPLETED_SPAN_CONTEXT_TTL, OpenTelemetryError, OtlpTransport, Result,
+    normalize_shutdown_result,
 };
+use super::otel_signal::{
+    MetricMarkClassification, SignalExporterRuntime, SignalResourceLineage,
+    SignalRuntimeDiagnostics, build_grpc_metadata, build_in_owned_runtime, classify_metric_mark,
+    promoted_signal_resource_attributes, reject_signal_header_environment, resolve_header_env,
+    resolve_http_signal_endpoint, should_relog_runtime_diagnostic, signal_resource,
+    telemetry_resource, validate_signal_headers, validate_telemetry_sdk_resource_attributes,
+};
+use super::{OpenTelemetryRuntimeDiagnostics, validate_metadata_promotion_prefixes};
 
 const DEFAULT_EXPORT_INTERVAL: Duration = Duration::from_secs(60);
 const DEFAULT_MAX_INSTRUMENTS: usize = 256;
@@ -106,6 +110,7 @@ pub struct OpenTelemetryMetricConfig {
     header_env: HashMap<String, String>,
     header_file: HeaderFiles,
     resource_attributes: HashMap<String, String>,
+    promote_resource_metadata_prefixes: Vec<String>,
     service_name: String,
     service_namespace: Option<String>,
     service_version: Option<String>,
@@ -128,6 +133,7 @@ impl OpenTelemetryMetricConfig {
             header_env: HashMap::new(),
             header_file: HashMap::new(),
             resource_attributes: HashMap::new(),
+            promote_resource_metadata_prefixes: Vec::new(),
             service_name: "unknown_service".to_string(),
             service_namespace: None,
             service_version: None,
@@ -176,6 +182,16 @@ impl OpenTelemetryMetricConfig {
         value: impl Into<String>,
     ) -> Self {
         self.resource_attributes.insert(key.into(), value.into());
+        self
+    }
+
+    /// Promote matching root-scope Event metadata to OTLP resource attributes.
+    pub fn with_promote_resource_metadata_prefixes<I, S>(mut self, prefixes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.promote_resource_metadata_prefixes = prefixes.into_iter().map(Into::into).collect();
         self
     }
 
@@ -264,6 +280,8 @@ impl OpenTelemetryMetricConfig {
                 "cardinality_limit must be less than usize::MAX".to_string(),
             ));
         }
+        validate_metadata_promotion_prefixes(&self.promote_resource_metadata_prefixes)
+            .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
         validate_telemetry_sdk_resource_attributes(&self.resource_attributes)?;
         reject_signal_header_environment("OTEL_EXPORTER_OTLP_METRICS_HEADERS")?;
         validate_signal_headers(&self.headers)?;
@@ -289,8 +307,9 @@ pub struct OpenTelemetryMetricSubscriber {
 struct MetricSubscriberInner {
     // Drop instruments and meter before the provider, then stop its runtime.
     _processor: Arc<Mutex<MetricEventProcessor>>,
-    processor_lock_recovery_warned: Arc<AtomicBool>,
+    router: Arc<MetricRouter>,
     provider: SdkMeterProvider,
+    dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicMetricPipeline>>>,
     delivery_diagnostics: Arc<MetricDeliveryDiagnostics>,
     runtime_diagnostics: SignalRuntimeDiagnostics,
     subscriber: EventSubscriberFn,
@@ -301,7 +320,109 @@ impl Drop for MetricSubscriberInner {
     fn drop(&mut self) {
         // Drain Relay delivery before the provider collects and exports final metric state.
         let _ = flush_subscribers();
-        let _ = normalize_shutdown_result(self.provider.shutdown());
+        let _ = shutdown_metric_providers(
+            self.provider.clone(),
+            dynamic_metric_providers(&self.dynamic_pipelines),
+        );
+    }
+}
+
+#[derive(Clone)]
+struct MetricProcessorHandle {
+    processor: Arc<Mutex<MetricEventProcessor>>,
+    recovery_warned: Arc<AtomicBool>,
+}
+
+struct DynamicMetricPipeline {
+    provider: SdkMeterProvider,
+    handle: MetricProcessorHandle,
+    _runtime: SignalExporterRuntime,
+}
+
+struct MetricRouter {
+    base: MetricProcessorHandle,
+    dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicMetricPipeline>>>,
+    lineage: Mutex<SignalResourceLineage<String>>,
+    config: OpenTelemetryMetricConfig,
+    instrumentation_scope: String,
+    delivery_diagnostics: Arc<MetricDeliveryDiagnostics>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+}
+
+impl MetricRouter {
+    fn route(&self, event: &Event) -> MetricProcessorHandle {
+        let inherited_route = self
+            .lineage
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .existing_route(event);
+        let root_route = inherited_route.or_else(|| {
+            promoted_signal_resource_attributes(
+                event,
+                &self.config.promote_resource_metadata_prefixes,
+                Some(self.config.service_name.as_str()),
+                self.config.service_namespace.as_deref(),
+                self.config.service_version.as_deref(),
+                &self.config.resource_attributes,
+                &self.runtime_diagnostics,
+            )
+            .and_then(|(key, attributes)| {
+                match ensure_dynamic_metric_pipeline(
+                    &self.dynamic_pipelines,
+                    &self.config,
+                    &self.instrumentation_scope,
+                    attributes,
+                    Arc::clone(&self.delivery_diagnostics),
+                    self.runtime_diagnostics.clone(),
+                    &key,
+                ) {
+                    Ok(()) => Some(key),
+                    Err(error) => {
+                        let count = self.runtime_diagnostics.record(
+                            "otel.resource_metadata_pipeline_build_failed",
+                            format!(
+                                "OpenTelemetry metric resource pipeline was not created: {error}"
+                            ),
+                            1,
+                        );
+                        if should_relog_runtime_diagnostic(count) {
+                            log::warn!(
+                                target: "nemo_relay.observability",
+                                event = "otel_resource_metadata_pipeline_build_failed";
+                                "OpenTelemetry metric resource metadata pipeline was not created: {error}"
+                            );
+                        }
+                        None
+                    }
+                }
+            })
+        });
+        let route = self
+            .lineage
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .process(event, root_route, DEFAULT_COMPLETED_SPAN_CONTEXT_TTL);
+        route
+            .and_then(|key| {
+                self.dynamic_pipelines
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .get(&key)
+                    .map(|pipeline| pipeline.handle.clone())
+            })
+            .unwrap_or_else(|| self.base.clone())
+    }
+
+    fn process_validated(&self, event: &Event, measurements: &[ValidatedMetricMeasurement]) {
+        let handle = self.route(event);
+        let mut processor = lock_metric_processor(&handle.processor, &handle.recovery_warned);
+        processor.process_validated(event, measurements);
+    }
+
+    fn process_classification(&self, event: &Event, classification: MetricMarkClassification) {
+        let handle = self.route(event);
+        let mut processor = lock_metric_processor(&handle.processor, &handle.recovery_warned);
+        processor.process_classification(event, classification);
     }
 }
 
@@ -336,11 +457,12 @@ impl OpenTelemetryMetricSubscriber {
             runtime_diagnostics.clone(),
         ));
         let provider_diagnostics = Arc::clone(&delivery_diagnostics);
+        let provider_config = config.clone();
         let (provider, runtime) = build_in_owned_runtime("nemo-relay-otlp-metrics", move || {
-            build_metric_provider(&config, provider_diagnostics)
+            build_metric_provider(&provider_config, provider_diagnostics, None)
         })?;
-        let meter =
-            provider.meter_with_scope(InstrumentationScope::builder(instrumentation_scope).build());
+        let meter = provider
+            .meter_with_scope(InstrumentationScope::builder(instrumentation_scope.clone()).build());
         let processor = Arc::new(Mutex::new(
             MetricEventProcessor::new_with_runtime_diagnostics(
                 meter,
@@ -349,21 +471,31 @@ impl OpenTelemetryMetricSubscriber {
                 runtime_diagnostics.clone(),
             ),
         ));
-        let callback_processor = Arc::clone(&processor);
         let processor_lock_recovery_warned = Arc::new(AtomicBool::new(false));
-        let callback_recovery_warned_for_callback = Arc::clone(&processor_lock_recovery_warned);
+        let dynamic_pipelines = Arc::new(Mutex::new(HashMap::new()));
+        let router = Arc::new(MetricRouter {
+            base: MetricProcessorHandle {
+                processor: Arc::clone(&processor),
+                recovery_warned: processor_lock_recovery_warned,
+            },
+            dynamic_pipelines: Arc::clone(&dynamic_pipelines),
+            lineage: Mutex::new(SignalResourceLineage::new()),
+            config,
+            instrumentation_scope,
+            delivery_diagnostics: Arc::clone(&delivery_diagnostics),
+            runtime_diagnostics: runtime_diagnostics.clone(),
+        });
+        let callback_router = Arc::clone(&router);
         let subscriber: EventSubscriberFn = Arc::new(move |event| {
-            process_metric_event(
-                &callback_processor,
-                &callback_recovery_warned_for_callback,
-                event,
-            );
+            let classification = classify_metric_mark(event);
+            callback_router.process_classification(event, classification);
         });
         Ok(Self {
             inner: Arc::new(MetricSubscriberInner {
                 _processor: processor,
-                processor_lock_recovery_warned,
+                router,
                 provider,
+                dynamic_pipelines,
                 delivery_diagnostics,
                 runtime_diagnostics,
                 subscriber,
@@ -387,12 +519,7 @@ impl OpenTelemetryMetricSubscriber {
         event: &Event,
         measurements: &[ValidatedMetricMeasurement],
     ) {
-        process_validated_metric_measurements(
-            &self.inner._processor,
-            &self.inner.processor_lock_recovery_warned,
-            event,
-            measurements,
-        );
+        self.inner.router.process_validated(event, measurements);
     }
 
     /// Register the subscriber globally.
@@ -411,10 +538,11 @@ impl OpenTelemetryMetricSubscriber {
     /// This is a synchronous completion barrier; call it from a blocking task in async code.
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
-        self.inner
-            .provider
-            .force_flush()
-            .map_err(|error| OpenTelemetryError::MetricProvider(error.to_string()))
+        flush_metric_providers(
+            self.inner.provider.clone(),
+            dynamic_metric_providers(&self.inner.dynamic_pipelines),
+        )
+        .map_err(|error| OpenTelemetryError::MetricProvider(error.to_string()))
     }
 
     /// Shut down the meter provider, including its final collection.
@@ -429,8 +557,11 @@ impl OpenTelemetryMetricSubscriber {
     }
 
     pub(crate) fn shutdown_provider(&self) -> Result<()> {
-        normalize_shutdown_result(self.inner.provider.shutdown())
-            .map_err(|error| OpenTelemetryError::MetricProvider(error.to_string()))
+        shutdown_metric_providers(
+            self.inner.provider.clone(),
+            dynamic_metric_providers(&self.inner.dynamic_pipelines),
+        )
+        .map_err(OpenTelemetryError::MetricProvider)
     }
 
     pub(crate) fn delivery_failure_summary(&self) -> Option<String> {
@@ -438,9 +569,51 @@ impl OpenTelemetryMetricSubscriber {
     }
 }
 
+fn dynamic_metric_providers(
+    pipelines: &Mutex<HashMap<String, DynamicMetricPipeline>>,
+) -> Vec<SdkMeterProvider> {
+    pipelines
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .values()
+        .map(|pipeline| pipeline.provider.clone())
+        .collect()
+}
+
+fn flush_metric_providers(
+    provider: SdkMeterProvider,
+    dynamic_providers: Vec<SdkMeterProvider>,
+) -> std::result::Result<(), String> {
+    let mut errors = Vec::new();
+    if let Err(error) = provider.force_flush() {
+        errors.push(error.to_string());
+    }
+    for provider in dynamic_providers {
+        if let Err(error) = provider.force_flush() {
+            errors.push(error.to_string());
+        }
+    }
+    errors.into_iter().next().map_or(Ok(()), Err)
+}
+
+fn shutdown_metric_providers(
+    provider: SdkMeterProvider,
+    dynamic_providers: Vec<SdkMeterProvider>,
+) -> std::result::Result<(), String> {
+    let mut dynamic_errors = Vec::new();
+    for provider in dynamic_providers {
+        if let Err(error) = normalize_shutdown_result(provider.shutdown()) {
+            dynamic_errors.push(error.to_string());
+        }
+    }
+    normalize_shutdown_result(provider.shutdown()).map_err(|error| error.to_string())?;
+    dynamic_errors.into_iter().next().map_or(Ok(()), Err)
+}
+
 fn build_metric_provider(
     config: &OpenTelemetryMetricConfig,
     diagnostics: Arc<MetricDeliveryDiagnostics>,
+    resource_attributes: Option<Vec<KeyValue>>,
 ) -> Result<SdkMeterProvider> {
     let temporality = config.temporality.sdk();
     let exporter = match config.transport {
@@ -501,12 +674,16 @@ fn build_metric_provider(
         .build();
     let cardinality_limit = config.cardinality_limit;
     Ok(SdkMeterProvider::builder()
-        .with_resource(signal_resource(
-            &config.service_name,
-            config.service_namespace.as_deref(),
-            config.service_version.as_deref(),
-            &config.resource_attributes,
-        ))
+        .with_resource(if let Some(attributes) = resource_attributes {
+            telemetry_resource(attributes)
+        } else {
+            signal_resource(
+                &config.service_name,
+                config.service_namespace.as_deref(),
+                config.service_version.as_deref(),
+                &config.resource_attributes,
+            )
+        })
         .with_reader(reader)
         .with_view(move |instrument| {
             Stream::builder()
@@ -516,6 +693,52 @@ fn build_metric_provider(
                 .ok()
         })
         .build())
+}
+
+fn ensure_dynamic_metric_pipeline(
+    pipelines: &Mutex<HashMap<String, DynamicMetricPipeline>>,
+    config: &OpenTelemetryMetricConfig,
+    instrumentation_scope: &str,
+    attributes: Vec<KeyValue>,
+    diagnostics: Arc<MetricDeliveryDiagnostics>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+    key: &str,
+) -> Result<()> {
+    let mut pipelines = pipelines
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if pipelines.contains_key(key) {
+        return Ok(());
+    }
+    let config = config.clone();
+    let max_instruments = config.max_instruments;
+    let cardinality_limit = config.cardinality_limit;
+    let (provider, runtime) =
+        build_in_owned_runtime("nemo-relay-otlp-metrics-resource", move || {
+            build_metric_provider(&config, diagnostics, Some(attributes))
+        })?;
+    let meter = provider
+        .meter_with_scope(InstrumentationScope::builder(instrumentation_scope.to_string()).build());
+    let handle = MetricProcessorHandle {
+        processor: Arc::new(Mutex::new(
+            MetricEventProcessor::new_with_runtime_diagnostics(
+                meter,
+                max_instruments,
+                cardinality_limit,
+                runtime_diagnostics,
+            ),
+        )),
+        recovery_warned: Arc::new(AtomicBool::new(false)),
+    };
+    pipelines.insert(
+        key.to_string(),
+        DynamicMetricPipeline {
+            provider,
+            handle,
+            _runtime: runtime,
+        },
+    );
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -822,26 +1045,6 @@ impl MetricEventProcessor {
             );
         }
     }
-}
-
-fn process_metric_event(
-    processor: &Mutex<MetricEventProcessor>,
-    recovery_warned: &AtomicBool,
-    event: &Event,
-) {
-    let classification = classify_metric_mark(event);
-    let mut processor = lock_metric_processor(processor, recovery_warned);
-    processor.process_classification(event, classification);
-}
-
-fn process_validated_metric_measurements(
-    processor: &Mutex<MetricEventProcessor>,
-    recovery_warned: &AtomicBool,
-    event: &Event,
-    measurements: &[ValidatedMetricMeasurement],
-) {
-    let mut processor = lock_metric_processor(processor, recovery_warned);
-    processor.process_validated(event, measurements);
 }
 
 fn lock_metric_processor<'a>(
