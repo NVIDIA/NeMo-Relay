@@ -762,7 +762,7 @@ fn exporter_destinations_describe_observability_outputs() {
                 "kind": OBSERVABILITY_PLUGIN_KIND,
                 "enabled": true,
                 "config": {
-                    "version": 3,
+                    "version": 4,
                     "atof": {
                         "enabled": true,
                         "sinks": [

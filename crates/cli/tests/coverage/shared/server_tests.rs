@@ -481,7 +481,7 @@ fn startup_status_reports_bound_gateway_and_exporters() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 3,
+                    "version": 4,
                     "opentelemetry": {
                         "enabled": true,
                         "endpoints": [{
@@ -1513,7 +1513,7 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 3,
+                    "version": 4,
                     "atof": {
                         "enabled": true,
                         "sinks": [{
@@ -1630,7 +1630,7 @@ async fn terminal_hook_responses_wait_for_their_atif_snapshot() {
             "kind": "observability",
             "enabled": true,
             "config": {
-                "version": 3,
+                "version": 4,
                 "atif": {
                     "enabled": true,
                     "output_directory": atif_dir,
@@ -1790,7 +1790,7 @@ async fn serve_listener_observability_plugin_records_supported_agent_hooks() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 3,
+                    "version": 4,
                     "atof": {
                         "enabled": true,
                         "sinks": [{
@@ -2002,7 +2002,7 @@ async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 3,
+                    "version": 4,
                     "atof": {
                         "enabled": true,
                         "sinks": [{
@@ -2189,7 +2189,7 @@ async fn serve_listener_records_codex_stop_atof_contract() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 3,
+                    "version": 4,
                     "atof": {
                         "enabled": true,
                         "sinks": [{
@@ -2645,7 +2645,7 @@ async fn serve_listener_rejects_invalid_plugin_config() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 3,
+                    "version": 4,
                     "atof": {
                         "enabled": true,
                         "sinks": [{

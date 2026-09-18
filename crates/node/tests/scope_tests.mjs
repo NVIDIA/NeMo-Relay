@@ -50,7 +50,7 @@ function runSubscriberFailureChild({ callback, registration = 'global' }) {
       "    context.registerSubscriber('bad', () => { " + callback + ' });',
       '  },',
       '});',
-      "globalThis.pluginHost = await plugin.initialize({ version: 1, components: [plugin.ComponentSpec('observability', { version: 3 }), plugin.ComponentSpec(pluginKind)] });",
+      "globalThis.pluginHost = await plugin.initialize({ version: 1, components: [plugin.ComponentSpec('observability', { version: 4 }), plugin.ComponentSpec(pluginKind)] });",
     ].join('\n'),
   }[registration];
   const scopeEvent = registration === 'scope' ? 'scope' : 'null';

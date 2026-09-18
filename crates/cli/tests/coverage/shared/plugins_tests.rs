@@ -1171,7 +1171,7 @@ fn editor_save_preserves_unknown_observability_fields() {
             kind: OBSERVABILITY_PLUGIN_KIND.to_string(),
             enabled: true,
             config: json!({
-                "version": 3,
+                "version": 4,
                 "future_top_level": "preserve",
                 "atof": {
                     "enabled": true,
@@ -2641,7 +2641,7 @@ fn validate_config_reports_plugin_diagnostics() {
             kind: OBSERVABILITY_PLUGIN_KIND.to_string(),
             enabled: true,
             config: json!({
-                "version": 3,
+                "version": 4,
                 "atof": {
                     "enabled": true,
                     "sinks": [{

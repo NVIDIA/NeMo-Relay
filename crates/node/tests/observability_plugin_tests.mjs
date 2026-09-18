@@ -22,7 +22,7 @@ describe('observability plugin helpers', () => {
   it('builds defaults and plugin component shape', () => {
     assert.deepEqual(observability.defaultConfig(), { version: 4 });
     assert.equal(
-      observability.ComponentSpec({ version: 3, enable_full_payloads: true }).config.enable_full_payloads,
+      observability.ComponentSpec({ version: 4, enable_full_payloads: true }).config.enable_full_payloads,
       true,
     );
     assert.deepEqual(observability.atofConfig(), { enabled: false });
@@ -66,7 +66,7 @@ describe('observability plugin helpers', () => {
       },
     );
 
-    const component = observability.ComponentSpec({ version: 3, atof: observability.atofConfig() });
+    const component = observability.ComponentSpec({ version: 4, atof: observability.atofConfig() });
     assert.equal(component.kind, observability.OBSERVABILITY_PLUGIN_KIND);
     assert.equal(component.enabled, true);
   });
@@ -165,7 +165,7 @@ describe('observability plugin helpers', () => {
       version: 1,
       components: [
         observability.ComponentSpec({
-          version: 3,
+          version: 4,
           atof: observability.atofConfig({ sinks: [{ type: 'file', mode: 'bad' }] }),
           atif: observability.atifConfig({ filename_template: 'missing-placeholder.json' }),
         }),
@@ -231,7 +231,7 @@ describe('observability plugin helpers', () => {
   it('activates ATOF and ATIF file sinks', async () => {
     const outputDirectory = tempDir('node-observability-plugin');
     const config = {
-      version: 3,
+      version: 4,
       atof: observability.atofConfig({
         enabled: true,
         sinks: [{ type: 'file', output_directory: outputDirectory, filename: 'events.jsonl', mode: 'overwrite' }],
@@ -283,7 +283,7 @@ describe('observability plugin helpers', () => {
   it('splits ATIF files for multiple top-level agent scopes', async () => {
     const outputDirectory = tempDir('node-observability-plugin-multi-agent');
     const config = {
-      version: 3,
+      version: 4,
       atif: observability.atifConfig({
         enabled: true,
         output_directory: outputDirectory,
