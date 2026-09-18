@@ -5,8 +5,10 @@
 
 use super::*;
 use crate::api::event::{
-    BaseEvent, DataSchema, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MarkEvent,
+    BaseEvent, CategoryProfile, DataSchema, EventCategory, METRIC_DATA_SCHEMA_NAME,
+    METRIC_DATA_SCHEMA_VERSION, MarkEvent, ScopeCategory, ScopeEvent,
 };
+use crate::json::Json;
 use crate::logging::{
     FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
 };
@@ -534,6 +536,99 @@ fn valid_envelope_records_counter_gauge_and_negative_histogram() {
     let point = histogram.data_points().next().unwrap();
     assert_eq!(point.count(), 1);
     assert_eq!(point.sum(), -1.25);
+}
+
+#[test]
+fn metric_measurements_aggregate_across_propagation_roots() {
+    let (mut processor, exporter, provider) = processor();
+    for root_uuid in [uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2)] {
+        let mut counter = measurement(
+            "example.requests",
+            MetricKind::Counter,
+            MetricValueType::U64,
+            json!(1),
+        );
+        counter.attributes = Some(json!({"model": "example-model"}));
+        let mut event = metric_event(
+            METRIC_DATA_SCHEMA_VERSION,
+            serde_json::to_value(MetricEnvelope {
+                measurements: vec![counter],
+            })
+            .unwrap(),
+        );
+        event.set_propagation_root_uuid(Some(root_uuid));
+        processor.process(&event);
+    }
+    provider.force_flush().unwrap();
+
+    let batches = exporter.get_finished_metrics().unwrap();
+    let metric = batches
+        .iter()
+        .flat_map(|batch| batch.scope_metrics())
+        .flat_map(|scope| scope.metrics())
+        .find(|metric| metric.name() == "example.requests")
+        .expect("request counter");
+    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+        panic!("request counter must export as a u64 sum");
+    };
+    let points = sum.data_points().collect::<Vec<_>>();
+    assert_eq!(points.len(), 1);
+    assert_eq!(points[0].value(), 2);
+    assert!(
+        points[0]
+            .attributes()
+            .all(|attribute| attribute.key.as_str() != "nemo_relay.session.instance_id")
+    );
+}
+
+#[test]
+fn records_gen_ai_stream_time_to_first_chunk_as_standard_histogram() {
+    let (mut processor, exporter, provider) = processor();
+    let event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder().name("openai.chat.completions").build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(
+            CategoryProfile::builder()
+                .model_name("gpt-5")
+                .time_to_first_chunk(0.125)
+                .build(),
+        ),
+    ));
+
+    processor.process(&event);
+    provider.force_flush().unwrap();
+
+    let batches = exporter.get_finished_metrics().unwrap();
+    let metric = batches
+        .iter()
+        .flat_map(|batch| batch.scope_metrics())
+        .flat_map(|scope| scope.metrics())
+        .find(|metric| metric.name() == "gen_ai.client.operation.time_to_first_chunk")
+        .expect("GenAI time-to-first-chunk histogram");
+    assert_eq!(metric.unit(), "s");
+    let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = metric.data() else {
+        panic!("time-to-first-chunk must export as an f64 histogram");
+    };
+    let point = histogram.data_points().next().unwrap();
+    assert_eq!(point.count(), 1);
+    assert_eq!(point.sum(), 0.125);
+    assert!(
+        point
+            .attributes()
+            .any(|attribute| { attribute == &KeyValue::new("gen_ai.operation.name", "chat") })
+    );
+    assert!(
+        point
+            .attributes()
+            .any(|attribute| { attribute == &KeyValue::new("gen_ai.provider.name", "openai") })
+    );
+    assert!(
+        point
+            .attributes()
+            .any(|attribute| { attribute == &KeyValue::new("gen_ai.request.model", "gpt-5") })
+    );
 }
 
 #[test]
