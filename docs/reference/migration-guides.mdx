@@ -11,7 +11,20 @@ upgrade actions as they are identified during the 0.10 development cycle.
 
 ## Upgrade to NeMo Relay 0.10
 
-No migration actions have been recorded for NeMo Relay 0.10 yet.
+### Refresh Codex Provider Routing
+
+After upgrading the CLI, refresh personal Relay-managed Codex installations:
+
+```bash
+nemo-relay integrations refresh
+```
+
+To refresh only Codex, use `nemo-relay install codex --force`. Refreshing Codex
+switches persistent routing to the built-in OpenAI provider, preserving session
+identity and routing image generation through Relay. It replaces credential-bearing
+URLs with a plain gateway URL and a managed authentication assignment in
+`$CODEX_HOME/.env`. Quit and restart Codex after refreshing so the header is loaded.
+The gateway continues accepting legacy capability URLs for older clients.
 
 ## Related Release Information
 

@@ -430,6 +430,7 @@ async fn responses_websocket_upgrades_request_http_fallback() {
         "/responses",
         "/v1/responses",
         "/backend-api/codex/responses",
+        "/v1/nemo-relay/test-capability/responses",
     ] {
         let response = app
             .clone()
@@ -456,6 +457,7 @@ async fn responses_plain_get_remains_method_not_allowed() {
         "/responses",
         "/v1/responses",
         "/backend-api/codex/responses",
+        "/v1/nemo-relay/test-capability/responses",
     ] {
         let response = app
             .clone()
@@ -1005,8 +1007,9 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
     let mut headers = HeaderMap::new();
     assert!(
         !state
-            .authorize_provider_request(&mut headers)
+            .authorize_provider_request(&mut headers, "/v1/responses")
             .unwrap()
+            .0
             .allow_environment_provider_auth
     );
     headers.insert(
@@ -1015,8 +1018,9 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
     );
     assert!(
         !state
-            .authorize_provider_request(&mut headers)
+            .authorize_provider_request(&mut headers, "/v1/responses")
             .unwrap()
+            .0
             .allow_environment_provider_auth
     );
     headers.insert(
@@ -1025,16 +1029,18 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
     );
     assert!(
         state
-            .authorize_provider_request(&mut headers)
+            .authorize_provider_request(&mut headers, "/v1/responses")
             .unwrap()
+            .0
             .allow_environment_provider_auth
     );
 
     let foreground = AppState::new(test_config());
     assert!(
         foreground
-            .authorize_provider_request(&mut HeaderMap::new())
+            .authorize_provider_request(&mut HeaderMap::new(), "/v1/responses")
             .unwrap()
+            .0
             .allow_environment_provider_auth
     );
 
@@ -1042,8 +1048,9 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
         AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), false, None, None);
     assert!(
         explicit_daemon
-            .authorize_provider_request(&mut HeaderMap::new())
+            .authorize_provider_request(&mut HeaderMap::new(), "/v1/responses")
             .unwrap()
+            .0
             .allow_environment_provider_auth
     );
 
@@ -1057,7 +1064,7 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
     );
     assert!(
         transparent
-            .authorize_provider_request(&mut HeaderMap::new())
+            .authorize_provider_request(&mut HeaderMap::new(), "/v1/responses")
             .is_err()
     );
     let mut transparent_headers = HeaderMap::new();
@@ -1066,13 +1073,150 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
         HeaderValue::from_static("test-proxy-token"),
     );
     let authorization = transparent
-        .authorize_provider_request(&mut transparent_headers)
+        .authorize_provider_request(&mut transparent_headers, "/v1/responses")
         .unwrap();
-    assert!(authorization.allow_environment_provider_auth);
+    assert!(authorization.0.allow_environment_provider_auth);
     assert!(
         !transparent_headers
             .contains_key(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER)
     );
+}
+
+#[tokio::test]
+async fn managed_sidecar_consumes_codex_project_proof_and_preserves_provider_metadata() {
+    use crate::provider_auth::{CODEX_CLIENT_PROOF_HEADER, CODEX_CLIENT_PROOF_PREFIX};
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let state =
+        AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), true, None, None);
+    let proof = format!("{CODEX_CLIENT_PROOF_PREFIX}{};", key.client_token());
+    for (value, expected, authenticated) in [
+        (
+            "project-original".to_string(),
+            Some("project-original"),
+            false,
+        ),
+        (proof.clone(), None, true),
+        (
+            format!("{proof}project-original"),
+            Some("project-original"),
+            true,
+        ),
+        (
+            format!("{proof}{proof}project-original"),
+            Some("project-original"),
+            true,
+        ),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(CODEX_CLIENT_PROOF_HEADER, value.parse().unwrap());
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer nvapi-caller".parse().unwrap(),
+        );
+        headers.insert("openai-organization", "org-user".parse().unwrap());
+        let (authorization, path) = state
+            .authorize_provider_request(&mut headers, "/v1/responses")
+            .unwrap();
+        assert_eq!(authorization.allow_environment_provider_auth, authenticated);
+        assert_eq!(path, "/v1/responses");
+        assert_eq!(
+            headers
+                .get(CODEX_CLIENT_PROOF_HEADER)
+                .map(|value| value.to_str().unwrap()),
+            expected
+        );
+        assert_eq!(headers[header::AUTHORIZATION], "Bearer nvapi-caller");
+        assert_eq!(headers["openai-organization"], "org-user");
+    }
+    for value in [
+        format!("{CODEX_CLIENT_PROOF_PREFIX}bad;project"),
+        format!("{proof}{CODEX_CLIENT_PROOF_PREFIX}bad;project"),
+        CODEX_CLIENT_PROOF_PREFIX.to_string(),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(CODEX_CLIENT_PROOF_HEADER, value.parse().unwrap());
+        let error = state
+            .authorize_provider_request(&mut headers, "/v1/responses")
+            .unwrap_err();
+        assert!(!error.to_string().contains(&key.client_token()));
+    }
+    let mut duplicates = HeaderMap::new();
+    duplicates.append(CODEX_CLIENT_PROOF_HEADER, proof.parse().unwrap());
+    duplicates.append(
+        CODEX_CLIENT_PROOF_HEADER,
+        "ordinary-project".parse().unwrap(),
+    );
+    assert!(
+        state
+            .authorize_provider_request(&mut duplicates, "/v1/responses")
+            .is_err()
+    );
+    let mut browser = HeaderMap::new();
+    browser.insert(
+        CODEX_CLIENT_PROOF_HEADER,
+        format!("{CODEX_CLIENT_PROOF_PREFIX}{};", key.client_token())
+            .parse()
+            .unwrap(),
+    );
+    browser.insert(header::ORIGIN, "https://example.com".parse().unwrap());
+    assert!(
+        state
+            .authorize_provider_request(&mut browser, "/v1/responses")
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn managed_sidecar_accepts_capability_urls_without_forwarding_the_capability() {
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let state = AppState::new_with_bootstrap(
+        test_config(),
+        Some("expected-fingerprint".into()),
+        Some(key.clone()),
+        true,
+        None,
+        None,
+    );
+    let path = format!("/v1/nemo-relay/{}/responses", key.client_token());
+
+    let (authorization, provider_path) = state
+        .authorize_provider_request(&mut HeaderMap::new(), &path)
+        .unwrap();
+
+    assert!(authorization.allow_environment_provider_auth);
+    assert_eq!(provider_path, "/v1/responses");
+    assert!(
+        state
+            .authorize_provider_request(
+                &mut HeaderMap::new(),
+                "/v1/nemo-relay/hmac-sha256:wrong/responses"
+            )
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn router_rejects_invalid_provider_capabilities_before_proxying() {
+    let app = router_with_state(AppState::new_with_bootstrap(
+        test_config(),
+        Some("expected-fingerprint".into()),
+        Some(BootstrapChallengeKey::from_bytes(b"test challenge key")),
+        true,
+        None,
+        None,
+    ));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/nemo-relay/hmac-sha256:invalid/responses")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -3250,6 +3394,120 @@ async fn gateway_transparently_forwards_openai_image_generations() {
         json!("/v1/images/generations?output_format=png")
     );
     assert_eq!(body["authorization"], json!("Bearer image-test"));
+}
+
+#[tokio::test]
+async fn managed_capability_url_forwards_a_normalized_responses_request() {
+    let upstream = spawn_upstream(false).await;
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let app = router_with_state(AppState::new_with_bootstrap(
+        config,
+        Some("expected-fingerprint".into()),
+        Some(key.clone()),
+        true,
+        None,
+        None,
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/nemo-relay/{}/responses?include=usage",
+                    key.client_token()
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "model": "gpt-test", "input": "hello" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["path"], json!("/v1/responses?include=usage"));
+}
+
+#[tokio::test]
+async fn managed_capability_url_forwards_a_normalized_models_request() {
+    let upstream = spawn_models_upstream().await;
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let app = router_with_state(AppState::new_with_bootstrap(
+        config,
+        Some("expected-fingerprint".into()),
+        Some(key.clone()),
+        true,
+        None,
+        None,
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v1/nemo-relay/{}/models?limit=10",
+                    key.client_token()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["path"], json!("/v1/models?limit=10"));
+}
+
+#[tokio::test]
+async fn managed_capability_url_forwards_a_normalized_image_request() {
+    let upstream = spawn_upstream(false).await;
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let app = router_with_state(AppState::new_with_bootstrap(
+        config,
+        Some("expected-fingerprint".into()),
+        Some(key.clone()),
+        true,
+        None,
+        None,
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/nemo-relay/{}/images/generations?output_format=png",
+                    key.client_token()
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "model": "gpt-image-1", "prompt": "relay" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body["path"],
+        json!("/v1/images/generations?output_format=png")
+    );
 }
 
 #[tokio::test]
