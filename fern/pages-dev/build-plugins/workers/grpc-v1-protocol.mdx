@@ -33,6 +33,7 @@ service PluginWorker {
 }
 
 service RelayHostRuntime {
+  rpc Log(LogRequest) returns (HostAck);
   rpc EmitMark(EmitMarkRequest) returns (HostAck);
   rpc GetRuntimeDiagnostics(GetRuntimeDiagnosticsRequest)
       returns (GetRuntimeDiagnosticsResponse);
@@ -255,6 +256,7 @@ invocation ends.
 
 | RPC | Contract |
 |---|---|
+| `Log` | Emits an authenticated operational log record through Relay's configured sinks. |
 | `EmitMark` | Emits mark data and metadata under the supplied scope context. |
 | `GetRuntimeDiagnostics` | Returns the current bounded host-level diagnostic snapshot. |
 | `PushScope` | Opens a typed scope with name, data, metadata, and input, returning the handle required for pop. |
@@ -272,6 +274,7 @@ The host-runtime request and response fields are complete in the following table
 
 | RPC | Request Fields | Response Fields |
 |---|---|---|
+| `Log` | `activation_id`, `auth_token`, required `level`, optional `target`, `message`, and JSON-object `fields` | `HostAck.ok` or `HostAck.error` |
 | `EmitMark` | `activation_id`, `auth_token`, captured `scope`, `name`, optional `data`, `metadata`, `data_schema`, `severity`, and `category` | `HostAck.ok` or `HostAck.error` |
 | `GetRuntimeDiagnostics` | `activation_id` and `auth_token` | Ordered `RuntimeDiagnostic` entries with `code`, `message`, and `count` |
 | `PushScope` | `activation_id`, `auth_token`, captured `scope`, `name`, `scope_type`, and optional `data`, `metadata`, and `input` | `scope_handle_id` or `error` |
@@ -288,6 +291,11 @@ The host-runtime request and response fields are complete in the following table
 `ScopeContext` contains `scope_stack_id` and `parent_scope_id`. `ScopeType` supports
 agent, function, tool, LLM, retriever, embedder, reranker, guardrail, evaluator, custom,
 and unknown scopes. The unspecified wire value is invalid for a pushed scope.
+
+`LogRequest.level` is one of `error`, `warn`, `info`, `debug`, or `trace`. Relay prefixes
+the optional target with its worker-plugin namespace and applies its configured log filter.
+`fields` is a lossless JSON object: its keys become structured log attributes, so JSONL sinks
+preserve nested values rather than flattening them into the message.
 
 `EmitMarkRequest.data_schema` uses the `nemo.relay.DataSchema@1` envelope,
 `severity` accepts `trace`, `debug`, `info`, `warn`, or `error`, and `category` is an

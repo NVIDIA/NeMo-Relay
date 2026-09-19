@@ -2,7 +2,7 @@
 title: "Struct Plugin Runtime"
 sidebar-title: "PluginRuntime"
 description: "Cloneable high-level runtime handle for host APIs available to native plugins."
-position: 52
+position: 58
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -52,6 +52,42 @@ Deregisters an activation-owned eligibility gate.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn host_api(&amp;self) -&gt; &amp;<a href=\"struct-nemorelaynativehostapiv1\">NemoRelayNativeHostApiV1</a>"}} /></pre>
 
 Returns the underlying host ABI table.
+
+#### `log`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn log(\n    &amp;self,\n    level: <a href=\"enum-nemorelaynativeloglevel\">NemoRelayNativeLogLevel</a>,\n    target: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    message: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    fields: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Emits one operational log record through the Relay host's configured sinks.
+
+#### `trace`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn trace(\n    &amp;self,\n    target: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    message: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    fields: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Emits a trace-level operational log record through the Relay host.
+
+#### `debug`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn debug(\n    &amp;self,\n    target: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    message: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    fields: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Emits a debug-level operational log record through the Relay host.
+
+#### `info`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn info(\n    &amp;self,\n    target: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    message: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    fields: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Emits an info-level operational log record through the Relay host.
+
+#### `warn`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn warn(\n    &amp;self,\n    target: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    message: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    fields: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Emits a warn-level operational log record through the Relay host.
+
+#### `error`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn error(\n    &amp;self,\n    target: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    message: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    fields: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Emits an error-level operational log record through the Relay host.
 
 #### `current_scope`
 

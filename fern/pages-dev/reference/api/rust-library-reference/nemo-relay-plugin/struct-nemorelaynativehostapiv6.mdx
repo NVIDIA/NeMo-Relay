@@ -1,0 +1,52 @@
+---
+title: "Struct Nemo Relay Native Host ApiV6"
+sidebar-title: "NemoRelayNativeHostApiV6"
+description: "ABI-v6 host extension for operational logging."
+position: 42
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct NemoRelayNativeHostApiV6 &#123;\n    pub v5: <a href=\"struct-nemorelaynativehostapiv5\">NemoRelayNativeHostApiV5</a>,\n    pub log: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(level: <a href=\"enum-nemorelaynativeloglevel\">NemoRelayNativeLogLevel</a>, target: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, message: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, fields_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n&#125;"}} /></pre>
+
+ABI-v6 host extension for operational logging.
+
+The complete ABI-v5 table is the prefix, preserving layout compatibility.
+
+## Fields
+
+### `v5: NemoRelayNativeHostApiV5`
+
+Frozen ABI-v5 compatibility prefix.
+
+### `log: unsafe extern "C" fn(level: NemoRelayNativeLogLevel, target: *const NemoRelayNativeString, message: *const NemoRelayNativeString, fields_json: *const NemoRelayNativeString) -> NemoRelayStatus`
+
+Emits a record through the Relay host's configured operational logger.
+
+## Trait Implementations
+
+### `impl Clone for NemoRelayNativeHostApiV6`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-nemorelaynativehostapiv6\">NemoRelayNativeHostApiV6</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-nemorelaynativehostapiv6\">NemoRelayNativeHostApiV6</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Copy for NemoRelayNativeHostApiV6`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-nemorelaynativehostapiv6\">NemoRelayNativeHostApiV6</a>"}} /></pre>
+
+### `impl Send for NemoRelayNativeHostApiV6`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> for <a href=\"struct-nemorelaynativehostapiv6\">NemoRelayNativeHostApiV6</a>"}} /></pre>
+
+### `impl Sync for NemoRelayNativeHostApiV6`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> for <a href=\"struct-nemorelaynativehostapiv6\">NemoRelayNativeHostApiV6</a>"}} /></pre>

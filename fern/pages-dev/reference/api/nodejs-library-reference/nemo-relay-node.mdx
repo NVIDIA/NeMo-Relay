@@ -955,6 +955,44 @@ export const enum MetricTemporality {
 
 ## Functions
 
+### `log`
+
+Emit a structured operational log record through Relay's configured sinks.
+
+```ts
+export declare function log(level: string, message: string, target?: string | undefined | null, fields?: Json | undefined | null): void
+```
+
+### `trace`
+
+```ts
+export declare function trace(message: string, target?: string | undefined | null, fields?: Json | undefined | null): void
+```
+
+### `debug`
+
+```ts
+export declare function debug(message: string, target?: string | undefined | null, fields?: Json | undefined | null): void
+```
+
+### `info`
+
+```ts
+export declare function info(message: string, target?: string | undefined | null, fields?: Json | undefined | null): void
+```
+
+### `warn`
+
+```ts
+export declare function warn(message: string, target?: string | undefined | null, fields?: Json | undefined | null): void
+```
+
+### `error`
+
+```ts
+export declare function error(message: string, target?: string | undefined | null, fields?: Json | undefined | null): void
+```
+
 ### `pushStreamChunk`
 
 Push a chunk into the stream identified by `streamId`. Called from JavaScript during async generator iteration.

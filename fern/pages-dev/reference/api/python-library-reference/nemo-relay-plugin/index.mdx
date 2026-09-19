@@ -583,6 +583,54 @@ def PluginRuntime(*, activation_id: str, auth_token: str, host_stub: Any) -> Non
 
 Create an instance.
 
+##### `log`
+
+```python
+async def log(level: str, message: str, *, target: str = '', fields: Mapping[str, Json] | None = None) -> None
+```
+
+Emit one operational log record through Relay's configured sinks.
+
+##### `trace`
+
+```python
+async def trace(message: str, *, target: str = '', fields: Mapping[str, Json] | None = None) -> None
+```
+
+Emit a trace-level operational log record through Relay.
+
+##### `debug`
+
+```python
+async def debug(message: str, *, target: str = '', fields: Mapping[str, Json] | None = None) -> None
+```
+
+Emit a debug-level operational log record through Relay.
+
+##### `info`
+
+```python
+async def info(message: str, *, target: str = '', fields: Mapping[str, Json] | None = None) -> None
+```
+
+Emit an info-level operational log record through Relay.
+
+##### `warn`
+
+```python
+async def warn(message: str, *, target: str = '', fields: Mapping[str, Json] | None = None) -> None
+```
+
+Emit a warn-level operational log record through Relay.
+
+##### `error`
+
+```python
+async def error(message: str, *, target: str = '', fields: Mapping[str, Json] | None = None) -> None
+```
+
+Emit an error-level operational log record through Relay.
+
 ##### `list_runtime_registrations`
 
 ```python

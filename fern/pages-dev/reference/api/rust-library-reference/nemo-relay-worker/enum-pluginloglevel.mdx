@@ -1,0 +1,100 @@
+---
+title: "Enum Plugin LogLevel"
+sidebar-title: "PluginLogLevel"
+description: "Process-log severity for records emitted through the Relay host."
+position: 52
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub enum PluginLogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+```
+
+Process-log severity for records emitted through the Relay host.
+
+## Variants
+
+### `Error`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Error"}} /></pre>
+
+An error prevented the plugin from completing expected work.
+
+### `Warn`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Warn"}} /></pre>
+
+The plugin encountered a recoverable condition.
+
+### `Info`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Info"}} /></pre>
+
+Normal plugin lifecycle information.
+
+### `Debug`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Debug"}} /></pre>
+
+Diagnostic information useful while debugging a plugin.
+
+### `Trace`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Trace"}} /></pre>
+
+Fine-grained diagnostic information.
+
+## Trait Implementations
+
+### `impl Clone for PluginLogLevel`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-pluginloglevel\">PluginLogLevel</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-pluginloglevel\">PluginLogLevel</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for PluginLogLevel`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-pluginloglevel\">PluginLogLevel</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl PartialEq for PluginLogLevel`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-pluginloglevel\">PluginLogLevel</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-pluginloglevel\">PluginLogLevel</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Copy for PluginLogLevel`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-pluginloglevel\">PluginLogLevel</a>"}} /></pre>
+
+### `impl Eq for PluginLogLevel`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"enum-pluginloglevel\">PluginLogLevel</a>"}} /></pre>
+
+### `impl StructuralPartialEq for PluginLogLevel`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-pluginloglevel\">PluginLogLevel</a>"}} /></pre>
