@@ -296,6 +296,9 @@ This release fixes the following issues that also affect earlier releases:
   Gateway routing handles upstream URLs that already end in `/v1`.
   Collected streams also keep content and encrypted content from Anthropic
   `compaction_delta` events.
+- Anthropic Messages requests that enable server-side compaction or continue
+  from a compaction block bypass the optional response cache, avoiding replay
+  that cannot preserve the native compaction lifecycle.
 - OpenAI Responses decoding keeps Codex automation tool outputs. Codex routing
   overrides also stay in the launched command's execution scope.
 - Codex installation handles marketplace entries that point to missing files.

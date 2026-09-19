@@ -1373,6 +1373,20 @@ fn anthropic_stream_chunks() -> Vec<Json> {
     ]
 }
 
+/// A native Anthropic compaction stream. Cache replay cannot currently
+/// reproduce its `compaction_delta` lifecycle, so compaction-enabled requests
+/// must always forward this live sequence.
+fn anthropic_compaction_stream_chunks() -> Vec<Json> {
+    vec![
+        json!({"type": "message_start", "message": {"id": "msg_compact", "type": "message", "role": "assistant", "model": "claude-haiku-4-5", "content": [], "usage": {"input_tokens": 10, "output_tokens": 0}}}),
+        json!({"type": "content_block_start", "index": 0, "content_block": {"type": "compaction", "content": null}}),
+        json!({"type": "content_block_delta", "index": 0, "delta": {"type": "compaction_delta", "content": "summary"}}),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({"type": "message_delta", "delta": {"stop_reason": "compaction"}, "usage": {"input_tokens": 10, "output_tokens": 5}}),
+        json!({"type": "message_stop"}),
+    ]
+}
+
 /// Like [`stream_call`], but with a caller-chosen provider name (the value the
 /// gateway derives from the route, e.g. `"anthropic.messages"`).
 async fn stream_call_named(
@@ -1807,6 +1821,73 @@ async fn no_codec_system_less_anthropic_uses_provider_hint_and_caches() {
         "Hello, world.",
         "the replayed native chunks carry the assembled anthropic answer"
     );
+}
+
+#[tokio::test]
+async fn anthropic_compaction_streams_bypass_lookup_and_storage() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(scoped_cache_config()).await;
+
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let sink = Arc::clone(&captured);
+    register_subscriber(
+        "response_cache_anthropic_compaction_bypass_capture",
+        Arc::new(move |event: &Event| sink.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider =
+        counting_stream_provider(Arc::clone(&calls), anthropic_compaction_stream_chunks());
+    let request = || LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "context_management": {"edits": [{"type": "compact_20260112"}]},
+            "temperature": 0.0
+        }),
+    };
+
+    let first = stream_call_named("demo-provider", &provider, request()).await;
+    let second = stream_call_named("demo-provider", &provider, request()).await;
+    flush_subscribers().unwrap();
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "compaction-enabled streams must run live instead of being replayed"
+    );
+    let bypasses = captured
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| {
+            event.name() == "response_cache"
+                && event
+                    .data()
+                    .and_then(|data| data.get("status"))
+                    .and_then(Json::as_str)
+                    == Some("bypass")
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("nemo_relay.response_cache.reason"))
+                    .and_then(Json::as_str)
+                    == Some("anthropic_compaction")
+        })
+        .count();
+    assert_eq!(bypasses, 2, "each compaction stream must report a bypass");
+    for stream in [&first, &second] {
+        assert!(
+            stream.iter().any(|chunk| {
+                chunk.pointer("/delta/type").and_then(Json::as_str) == Some("compaction_delta")
+            }),
+            "a bypass must forward the native compaction delta instead of replaying a synthesized stream"
+        );
+    }
+
+    deregister_subscriber("response_cache_anthropic_compaction_bypass_capture").unwrap();
 }
 
 #[tokio::test]
