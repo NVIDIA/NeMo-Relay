@@ -1131,6 +1131,13 @@ fn copy_snapshot_entry(
     let resolved_metadata =
         fs::metadata(&resolved).map_err(|error| CliError::Config(error.to_string()))?;
     if resolved_metadata.is_dir() {
+        // Expanding the standard Linux venv alias would duplicate all installed packages in the
+        // activation snapshot and can exhaust the snapshot byte budget.
+        if skip_python_cache
+            && preserve_python_lib64_alias(&source_path, &destination_path, &metadata)?
+        {
+            return Ok(());
+        }
         return copy_snapshot_directory_contents(
             &resolved,
             &destination_path,
@@ -1162,6 +1169,47 @@ fn copy_snapshot_entry(
         budget,
         "runtime file",
     )
+}
+
+#[cfg(unix)]
+fn preserve_python_lib64_alias(
+    source: &Path,
+    destination: &Path,
+    metadata: &fs::Metadata,
+) -> Result<bool, CliError> {
+    if !metadata.file_type().is_symlink()
+        || source.file_name() != Some(std::ffi::OsStr::new("lib64"))
+        || source
+            .parent()
+            .is_none_or(|root| !root.join("pyvenv.cfg").is_file())
+    {
+        return Ok(false);
+    }
+    let target = fs::read_link(source).map_err(|error| {
+        CliError::Config(format!(
+            "failed to read Python venv lib64 symlink {}: {error}",
+            source.display()
+        ))
+    })?;
+    if target != Path::new("lib") {
+        return Ok(false);
+    }
+    std::os::unix::fs::symlink(&target, destination).map_err(|error| {
+        CliError::Config(format!(
+            "failed to preserve Python venv lib64 symlink {}: {error}",
+            destination.display()
+        ))
+    })?;
+    Ok(true)
+}
+
+#[cfg(not(unix))]
+fn preserve_python_lib64_alias(
+    _source: &Path,
+    _destination: &Path,
+    _metadata: &fs::Metadata,
+) -> Result<bool, CliError> {
+    Ok(false)
 }
 
 fn resolve_snapshot_entry(path: &Path, metadata: &fs::Metadata) -> Result<PathBuf, CliError> {
