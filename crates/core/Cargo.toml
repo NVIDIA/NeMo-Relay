@@ -89,7 +89,7 @@ tokio-tungstenite = { version = "0.29", default-features = false, features = ["c
 tower = { version = "0.5", features = ["util"], optional = true }
 hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 shell-words = "1"
-log = { version = "0.4", features = ["kv"] }
+log = { version = "0.4", features = ["kv", "kv_serde"] }
 spdlog-rs = { version = "0.5", features = ["log", "multi-thread"] }
 unicode-general-category = "1.1"
 

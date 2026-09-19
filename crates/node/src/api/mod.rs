@@ -118,6 +118,50 @@ fn cleanup_node_environment() {
     }
 }
 
+/// Emit a structured operational log record through Relay's configured sinks.
+#[napi]
+pub fn log(
+    level: String,
+    message: String,
+    target: Option<String>,
+    fields: Option<Json>,
+) -> napi::Result<()> {
+    let fields = match fields {
+        None => serde_json::Map::new(),
+        Some(Json::Object(fields)) => fields,
+        Some(_) => return Err(Error::from_reason("log fields must be an object")),
+    };
+    let target = target.unwrap_or_default();
+    let target = if target.is_empty() {
+        "nemo_relay.node".into()
+    } else {
+        format!("nemo_relay.node.{target}")
+    };
+    nemo_relay::logging::emit_str(&level, &target, &message, fields)
+        .map_err(|error| Error::from_reason(error.to_string()))
+}
+
+#[napi]
+pub fn trace(message: String, target: Option<String>, fields: Option<Json>) -> napi::Result<()> {
+    log("trace".into(), message, target, fields)
+}
+#[napi]
+pub fn debug(message: String, target: Option<String>, fields: Option<Json>) -> napi::Result<()> {
+    log("debug".into(), message, target, fields)
+}
+#[napi]
+pub fn info(message: String, target: Option<String>, fields: Option<Json>) -> napi::Result<()> {
+    log("info".into(), message, target, fields)
+}
+#[napi]
+pub fn warn(message: String, target: Option<String>, fields: Option<Json>) -> napi::Result<()> {
+    log("warn".into(), message, target, fields)
+}
+#[napi]
+pub fn error(message: String, target: Option<String>, fields: Option<Json>) -> napi::Result<()> {
+    log("error".into(), message, target, fields)
+}
+
 fn effective_scope_context(
     env: &Env,
 ) -> napi::Result<(

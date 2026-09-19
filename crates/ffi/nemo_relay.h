@@ -663,6 +663,20 @@ NemoRelayStatus nemo_relay_initialize_default_logging(void);
 NemoRelayStatus nemo_relay_shutdown_default_logging(void);
 
 /**
+ * Emits a structured operational log record for language bindings.
+ *
+ * # Safety
+ *
+ * `level`, `target`, and `message` must be non-null pointers to valid,
+ * NUL-terminated UTF-8 strings. When non-null, `fields_json` must meet the
+ * same requirements and contain a JSON object.
+ */
+NemoRelayStatus nemo_relay_log(const char *level,
+                               const char *target,
+                               const char *message,
+                               const char *fields_json);
+
+/**
  * Run the registered tool request intercept chain on the given arguments.
  *
  * This helper applies only the request-intercept middleware and does not emit

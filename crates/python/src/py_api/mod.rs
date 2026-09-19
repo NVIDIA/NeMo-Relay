@@ -150,6 +150,33 @@ fn py_shutdown_default_logging(py: Python<'_>) -> PyResult<()> {
         .map_err(to_py_err)
 }
 
+#[pyfunction]
+#[pyo3(signature = (level, message, target = String::new(), fields = None))]
+fn log(
+    py: Python<'_>,
+    level: String,
+    message: String,
+    target: String,
+    fields: Option<Py<PyAny>>,
+) -> PyResult<()> {
+    let fields = fields.map(|value| py_to_json(value.bind(py))).transpose()?;
+    let fields = match fields {
+        None => serde_json::Map::new(),
+        Some(serde_json::Value::Object(fields)) => fields,
+        Some(_) => {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "log fields must be an object",
+            ));
+        }
+    };
+    let target = if target.is_empty() {
+        "nemo_relay.python".into()
+    } else {
+        format!("nemo_relay.python.{target}")
+    };
+    nemo_relay::logging::emit_str(&level, &target, &message, fields).map_err(to_py_err)
+}
+
 fn python_event_loop_running(py: Python<'_>) -> PyResult<bool> {
     match py.import("asyncio")?.call_method0("get_running_loop") {
         Ok(_) => Ok(true),
@@ -2301,6 +2328,7 @@ fn scope_deregister_subscriber(scope_uuid: &str, name: &str) -> PyResult<bool> {
 /// Register all API functions into the given `PyModule`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_shutdown_default_logging, m)?)?;
+    m.add_function(wrap_pyfunction!(log, m)?)?;
 
     // Scope stack creation / binding / query
     m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;

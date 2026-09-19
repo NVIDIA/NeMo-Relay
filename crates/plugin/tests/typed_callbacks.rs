@@ -35,12 +35,13 @@ use nemo_relay_plugin::{
     NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeConditionalMiddlewareCb,
     NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
     NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4,
-    NemoRelayNativeHostApiV5, NemoRelayNativeLlmAsyncStream, NemoRelayNativeLlmCodecKind,
-    NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCodec,
-    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
-    NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeRequestContext,
-    NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmSanitizeResponseContext,
-    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
+    NemoRelayNativeHostApiV5, NemoRelayNativeHostApiV6, NemoRelayNativeLlmAsyncStream,
+    NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
+    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestInterceptCb,
+    NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
+    NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
+    NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
+    NemoRelayNativeLlmStreamV1, NemoRelayNativeLogLevel, NemoRelayNativePluginContext,
     NemoRelayNativePluginRuntime, NemoRelayNativePluginV1, NemoRelayNativeScopeHandle,
     NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType,
     NemoRelayNativeString, NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb,
@@ -465,7 +466,7 @@ static UNAVAILABLE_CONTEXT_GATE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn native_abi_struct_sizes_are_self_describing() {
-    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 5);
+    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 6);
     assert_eq!(
         size_of::<NemoRelayNativeHostApiV1>(),
         test_host().struct_size
@@ -537,6 +538,9 @@ fn assert_native_abi_platform_layout() {
         ),
         600
     );
+    assert_type_layout::<NemoRelayNativeHostApiV6>(8, 616);
+    assert_eq!(offset_of!(NemoRelayNativeHostApiV6, v5), 0);
+    assert_eq!(offset_of!(NemoRelayNativeHostApiV6, log), 608);
     assert_type_layout::<NemoRelayNativePluginV1>(8, 56);
     assert_eq!(plugin_offsets(), [0, 8, 16, 24, 32, 40, 48]);
     assert_type_layout::<NemoRelayNativeLlmStreamV1>(8, 40);
@@ -660,6 +664,15 @@ fn native_abi_v5_extension_is_append_only() {
             size_of::<NemoRelayNativeHostApiV4>()
         );
     }
+}
+
+#[test]
+fn native_abi_v6_logging_extension_is_append_only() {
+    assert_eq!(offset_of!(NemoRelayNativeHostApiV6, v5), 0);
+    assert_eq!(
+        offset_of!(NemoRelayNativeHostApiV6, log),
+        size_of::<NemoRelayNativeHostApiV5>()
+    );
 }
 
 fn host_api_v4_offsets() -> [usize; 12] {
@@ -2794,6 +2807,37 @@ fn test_host_v5() -> NemoRelayNativeHostApiV5 {
     }
 }
 
+unsafe extern "C" fn capture_plugin_log(
+    level: NemoRelayNativeLogLevel,
+    target: *const NemoRelayNativeString,
+    message: *const NemoRelayNativeString,
+    fields: *const NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let host = test_host();
+    let target = read_host_string(&host, target).expect("log target");
+    let message = read_host_string(&host, message).expect("log message");
+    let fields = if fields.is_null() {
+        String::new()
+    } else {
+        read_host_string(&host, fields).expect("log fields")
+    };
+    RUNTIME_CALLS
+        .lock()
+        .unwrap()
+        .push(format!("log:{level:?}:{target}:{message}:{fields}"));
+    NemoRelayStatus::Ok
+}
+
+fn test_host_v6() -> NemoRelayNativeHostApiV6 {
+    let mut v5 = test_host_v5();
+    v5.v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
+    v5.v4.v3.v1.struct_size = size_of::<NemoRelayNativeHostApiV6>();
+    NemoRelayNativeHostApiV6 {
+        v5,
+        log: capture_plugin_log,
+    }
+}
+
 fn test_llm_request() -> LlmRequest {
     LlmRequest {
         headers: Map::new(),
@@ -3247,6 +3291,43 @@ fn plugin_runtime_scope_mark_and_stack_helpers_call_host() {
     assert_eq!(SCOPE_STACK_FREES.load(Ordering::SeqCst), 1);
     assert_eq!(SCOPE_STACK_BINDING_RESTORES.load(Ordering::SeqCst), 1);
     assert_eq!(SCOPE_STACK_BINDING_FREES.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn plugin_runtime_logs_every_level_and_requires_native_abi_v6() {
+    let _guard = begin_test();
+    let legacy_host = test_host_v5();
+    let legacy_error = PluginRuntime::new(&legacy_host.v4.v3.v1)
+        .info("plugin", "unavailable", None)
+        .unwrap_err();
+    assert_eq!(legacy_error, "plugin logging requires native host ABI v6");
+
+    let host = test_host_v6();
+    let runtime = PluginRuntime::new(&host.v5.v4.v3.v1);
+    let fields = json!({"nested": {"ok": true}, "ordinal": 0});
+    runtime
+        .trace("plugin", "trace message", Some(&fields))
+        .unwrap();
+    runtime.debug("plugin", "debug message", None).unwrap();
+    runtime.info("plugin", "info message", None).unwrap();
+    runtime.warn("plugin", "warn message", None).unwrap();
+    runtime.error("plugin", "error message", None).unwrap();
+    nemo_relay_plugin::relay_info!(runtime, target: "macro", fields: fields, "macro {}", "message")
+        .unwrap();
+
+    let calls = RUNTIME_CALLS.lock().unwrap().clone();
+    for level in ["Trace", "Debug", "Info", "Warn", "Error"] {
+        assert!(
+            calls
+                .iter()
+                .any(|call| call.starts_with(&format!("log:{level}:plugin:"))),
+            "missing {level} log call: {calls:?}"
+        );
+    }
+    assert!(calls.iter().any(|call| {
+        call == r#"log:Info:macro:macro message:{"nested":{"ok":true},"ordinal":0}"#
+    }));
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
 }
 
 #[test]

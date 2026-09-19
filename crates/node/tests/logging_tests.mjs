@@ -133,4 +133,60 @@ worker.once('exit', (code) => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it('emits every log level with structured fields and an optional target', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'nemo-relay-node-binding-logging-'));
+    try {
+      const configPath = join(directory, 'logging.toml');
+      const logPath = join(directory, 'operational.jsonl');
+      writeFileSync(
+        configPath,
+        `[logging]
+level = "trace"
+stderr_format = "human"
+flush_interval_millis = 0
+
+[[logging.sinks]]
+path = ${JSON.stringify(logPath)}
+level = "trace"
+format = "jsonl"
+queue_capacity = 16
+`,
+      );
+      const source = `
+const relay = require('./index.js');
+relay.trace('trace message', 'binding', { ordinal: 0 });
+relay.debug('debug message', 'binding', { ordinal: 1 });
+relay.info('info message', 'binding', { ordinal: 2, nested: { ok: true } });
+relay.warn('warn message', 'binding', { ordinal: 3 });
+relay.error('error message', 'binding', { ordinal: 4 });
+relay.info('default target');
+`;
+      const result = requireBinding({ NEMO_RELAY_LOG_CONFIG_PATH: configPath }, source);
+
+      assert.equal(result.status, 0, result.stderr);
+      const records = readFileSync(logPath, 'utf8').trim().split('\n').map(JSON.parse);
+      const byMessage = new Map(records.map((record) => [record.message, record]));
+      for (const [ordinal, level] of ['trace', 'debug', 'info', 'warn', 'error'].entries()) {
+        const record = byMessage.get(`${level} message`);
+        assert.equal(record.level, level);
+        assert.equal(record.target, 'nemo_relay.node.binding');
+        assert.equal(record.fields.ordinal, ordinal);
+      }
+      assert.deepEqual(byMessage.get('info message').fields.nested, { ok: true });
+      assert.equal(byMessage.get('default target').target, 'nemo_relay.node');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects non-object structured fields', () => {
+    const result = requireBinding(
+      { NEMO_RELAY_LOG: 'trace' },
+      "require('./index.js').info('invalid fields', 'binding', ['not-an-object'])",
+    );
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /log fields must be an object/);
+  });
 });

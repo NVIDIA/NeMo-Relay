@@ -17,6 +17,7 @@ service PluginWorker {
 }
 
 service RelayHostRuntime {
+  rpc Log(LogRequest) returns (HostAck);
   rpc EmitMark(EmitMarkRequest) returns (HostAck);
   rpc GetRuntimeDiagnostics(GetRuntimeDiagnosticsRequest) returns (GetRuntimeDiagnosticsResponse);
   rpc PushScope(PushScopeRequest) returns (PushScopeResponse);
@@ -35,6 +36,27 @@ service RelayHostRuntime {
       returns (RegisterConditionalMiddlewareGuardrailResponse);
   rpc DeregisterConditionalMiddlewareGuardrail(DeregisterConditionalMiddlewareGuardrailRequest)
       returns (DeregisterConditionalMiddlewareGuardrailResponse);
+}
+
+// Process-log levels accepted from an authenticated plugin. The host owns the
+// final sink configuration and filters records with its configured threshold.
+enum LogLevel {
+  LOG_LEVEL_UNSPECIFIED = 0;
+  LOG_LEVEL_ERROR = 1;
+  LOG_LEVEL_WARN = 2;
+  LOG_LEVEL_INFO = 3;
+  LOG_LEVEL_DEBUG = 4;
+  LOG_LEVEL_TRACE = 5;
+}
+
+message LogRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+  LogLevel level = 3;
+  string target = 4;
+  string message = 5;
+  // Optional open plugin attributes. The JSON value must be an object.
+  JsonValue fields = 6;
 }
 
 message JsonEnvelope {

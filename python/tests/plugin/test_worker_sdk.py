@@ -391,6 +391,10 @@ class RecordingHostStub:
         self.requests.append(request)
         return self._host_ack("EmitMark")
 
+    async def Log(self, request: Any) -> Any:
+        self.requests.append(request)
+        return self._host_ack("Log")
+
     async def GetRuntimeDiagnostics(self, request: Any) -> Any:
         self.requests.append(request)
         return pb.GetRuntimeDiagnosticsResponse(
@@ -2468,6 +2472,44 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         await runtime.emit_mark("invalid-schema", data_schema={"name": "schema"})
     with pytest.raises(TypeError, match="measurements must contain mappings"):
         await runtime.emit_metric("invalid-metric", cast(Any, [42]))
+
+
+async def test_runtime_logs_every_level_with_structured_fields(host_stub: RecordingHostStub) -> None:
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host_stub)
+    await runtime.trace("trace message", target="plugin", fields={"ordinal": 0, "nested": {"ok": True}})
+    await runtime.debug("debug message", target="plugin")
+    await runtime.info("info message", target="plugin")
+    await runtime.warn("warn message", target="plugin")
+    await runtime.error("error message", target="plugin")
+    await runtime.log("warning", "warning alias", target="plugin")
+
+    requests = [request for request in host_stub.requests if isinstance(request, pb.LogRequest)]
+    assert [request.level for request in requests] == [
+        pb.LOG_LEVEL_TRACE,
+        pb.LOG_LEVEL_DEBUG,
+        pb.LOG_LEVEL_INFO,
+        pb.LOG_LEVEL_WARN,
+        pb.LOG_LEVEL_ERROR,
+        pb.LOG_LEVEL_WARN,
+    ]
+    assert all(request.activation_id == ACTIVATION_ID for request in requests)
+    assert all(request.auth_token == AUTH_TOKEN for request in requests)
+    assert all(request.target == "plugin" for request in requests)
+    assert [request.message for request in requests] == [
+        "trace message",
+        "debug message",
+        "info message",
+        "warn message",
+        "error message",
+        "warning alias",
+    ]
+    assert _decode_json_value(requests[0].fields, "fields") == {"ordinal": 0, "nested": {"ok": True}}
+    assert not requests[1].HasField("fields")
+
+    with pytest.raises(TypeError, match="fields must be a mapping"):
+        await runtime.info("invalid fields", fields=cast(Any, ["not", "a", "mapping"]))
+    with pytest.raises(ValueError, match="invalid plugin log level"):
+        await runtime.log("verbose", "invalid level")
 
 
 @pytest.mark.parametrize(

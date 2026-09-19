@@ -15,6 +15,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
+use serde_json::{Map, Value as Json};
 use spdlog::sink::Sink;
 use spdlog::{Logger, ThreadPool};
 use uuid::Uuid;
@@ -259,6 +260,48 @@ pub fn shutdown_default_logging() -> Result<()> {
     if let Some(runtime) = runtime {
         runtime.shutdown();
     }
+    Ok(())
+}
+
+/// Emits a structured operational record through Relay's configured logger.
+pub fn emit(level: log::Level, target: &str, message: &str, fields: Map<String, Json>) {
+    struct Fields(Map<String, Json>);
+    impl log::kv::Source for Fields {
+        fn visit<'kvs>(
+            &'kvs self,
+            visitor: &mut dyn log::kv::VisitSource<'kvs>,
+        ) -> std::result::Result<(), log::kv::Error> {
+            for (key, value) in &self.0 {
+                visitor.visit_pair(
+                    log::kv::Key::from_str(key),
+                    log::kv::Value::from_serde(value),
+                )?;
+            }
+            Ok(())
+        }
+    }
+    let fields = Fields(fields);
+    let args = format_args!("{message}");
+    let record = log::Record::builder()
+        .args(args)
+        .level(level)
+        .target(target)
+        .key_values(&fields)
+        .build();
+    log::logger().log(&record);
+}
+
+/// Emits a structured record using a binding-facing level name.
+pub fn emit_str(level: &str, target: &str, message: &str, fields: Map<String, Json>) -> Result<()> {
+    let level = match level {
+        "error" => log::Level::Error,
+        "warn" | "warning" => log::Level::Warn,
+        "info" => log::Level::Info,
+        "debug" => log::Level::Debug,
+        "trace" => log::Level::Trace,
+        _ => return Err(FlowError::InvalidArgument("invalid log level".into())),
+    };
+    emit(level, target, message, fields);
     Ok(())
 }
 
