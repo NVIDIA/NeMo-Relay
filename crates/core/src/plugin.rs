@@ -41,12 +41,18 @@ use crate::api::registry::{
     register_tool_request_intercept, register_tool_sanitize_request_guardrail,
     register_tool_sanitize_response_guardrail,
 };
+#[cfg(feature = "worker-grpc")]
+use crate::api::registry::{
+    register_contextual_llm_execution_intercept, register_contextual_llm_stream_execution_intercept,
+};
 use crate::api::runtime::{
     ConditionalMiddlewareGuardrailFn, EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn,
     LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
     LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn, ToolExecutionFn,
     ToolInterceptFn, ToolSanitizeFn,
 };
+#[cfg(feature = "worker-grpc")]
+use crate::api::runtime::{ContextualLlmExecutionFn, ContextualLlmStreamExecutionFn};
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 
@@ -876,26 +882,33 @@ impl PluginRegistrationContext {
         priority: i32,
         callback: LlmExecutionFn,
     ) -> Result<()> {
-        let qualified_name = self.qualify_name(name);
-        register_llm_execution_intercept(&qualified_name, priority, callback).map_err(|err| {
-            PluginError::RegistrationFailed(format!("llm execution intercept: {err}"))
-        })?;
+        self.register_execution_intercept(
+            name,
+            priority,
+            callback,
+            "llm execution intercept",
+            register_llm_execution_intercept,
+            deregister_llm_execution_intercept,
+        )
+    }
 
-        let name_owned = qualified_name;
-        self.registrations.push(PluginRegistration::new(
-            "plugin",
-            name_owned.clone(),
-            Box::new(move || {
-                deregister_llm_execution_intercept(&name_owned)
-                    .map(|_| ())
-                    .map_err(|err| {
-                        PluginError::RegistrationFailed(format!(
-                            "llm execution intercept deregistration failed: {err}"
-                        ))
-                    })
-            }),
-        ));
-        Ok(())
+    /// Registers an internal context-aware LLM execution intercept and records
+    /// its rollback closure.
+    #[cfg(feature = "worker-grpc")]
+    pub(crate) fn register_contextual_llm_execution_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ContextualLlmExecutionFn,
+    ) -> Result<()> {
+        self.register_execution_intercept(
+            name,
+            priority,
+            callback,
+            "llm execution intercept",
+            register_contextual_llm_execution_intercept,
+            deregister_llm_execution_intercept,
+        )
     }
 
     /// Registers an LLM stream execution intercept and records its rollback closure.
@@ -905,23 +918,56 @@ impl PluginRegistrationContext {
         priority: i32,
         callback: LlmStreamExecutionFn,
     ) -> Result<()> {
+        self.register_execution_intercept(
+            name,
+            priority,
+            callback,
+            "llm stream execution intercept",
+            register_llm_stream_execution_intercept,
+            deregister_llm_stream_execution_intercept,
+        )
+    }
+
+    /// Registers an internal context-aware streaming LLM execution intercept
+    /// and records its rollback closure.
+    #[cfg(feature = "worker-grpc")]
+    pub(crate) fn register_contextual_llm_stream_execution_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ContextualLlmStreamExecutionFn,
+    ) -> Result<()> {
+        self.register_execution_intercept(
+            name,
+            priority,
+            callback,
+            "llm stream execution intercept",
+            register_contextual_llm_stream_execution_intercept,
+            deregister_llm_stream_execution_intercept,
+        )
+    }
+
+    fn register_execution_intercept<F>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+        kind: &'static str,
+        register: fn(&str, i32, F) -> crate::error::Result<()>,
+        deregister: fn(&str) -> crate::error::Result<bool>,
+    ) -> Result<()> {
         let qualified_name = self.qualify_name(name);
-        register_llm_stream_execution_intercept(&qualified_name, priority, callback).map_err(
-            |err| PluginError::RegistrationFailed(format!("llm stream execution intercept: {err}")),
-        )?;
+        register(&qualified_name, priority, callback)
+            .map_err(|err| PluginError::RegistrationFailed(format!("{kind}: {err}")))?;
 
         let name_owned = qualified_name;
         self.registrations.push(PluginRegistration::new(
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                deregister_llm_stream_execution_intercept(&name_owned)
-                    .map(|_| ())
-                    .map_err(|err| {
-                        PluginError::RegistrationFailed(format!(
-                            "llm stream execution intercept deregistration failed: {err}"
-                        ))
-                    })
+                deregister(&name_owned).map(|_| ()).map_err(|err| {
+                    PluginError::RegistrationFailed(format!("{kind} deregistration failed: {err}"))
+                })
             }),
         ));
         Ok(())

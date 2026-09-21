@@ -11,6 +11,7 @@ use std::pin::Pin;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures_util::FutureExt;
@@ -26,7 +27,8 @@ use nemo_relay_worker_proto::v1::{
     HandshakeResponse, HealthRequest, HostAck, InvokeRequest, InvokeResponse, JsonEnvelope,
     JsonResult, JsonValue, ListRuntimeRegistrationsRequest, ListRuntimeRegistrationsResponse,
     LlmCodecDecodeRequest, LlmCodecDecodeResponse, LlmCodecEncodeRequest,
-    LlmCodecIdentity as ProtoLlmCodecIdentity, LlmCodecKind, LlmInvocation, LlmNextRequest,
+    LlmCodecIdentity as ProtoLlmCodecIdentity, LlmCodecKind,
+    LlmExecutionCodecContext as ProtoLlmExecutionCodecContext, LlmInvocation, LlmNextRequest,
     LlmSanitizeRequestContext as ProtoLlmSanitizeRequestContext,
     LlmSanitizeResponseContext as ProtoLlmSanitizeResponseContext, LlmStreamNextRequest, LogLevel,
     LogRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse,
@@ -47,8 +49,8 @@ use nemo_relay_worker_proto::{
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
-use tokio::sync::{mpsc, oneshot};
-use tokio_stream::StreamExt;
+use tokio::sync::{mpsc, oneshot, watch};
+use tokio_stream::{Stream, StreamExt};
 use tonic::transport::{Channel, Endpoint, Server};
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
@@ -81,10 +83,10 @@ use crate::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
 use crate::api::runtime::{
-    EventMetadataInjectorFn, EventSanitizeFn, LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream,
-    LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
-    MiddlewareContinuationContext, ToolExecutionContext, ToolExecutionNextFn, current_scope_stack,
-    with_scope_stack,
+    EventMetadataInjectorFn, EventSanitizeFn, LlmCodecIdentity, LlmExecutionCodecContext,
+    LlmExecutionNextFn, LlmJsonStream, LlmSanitizeRequestContext, LlmSanitizeResponseContext,
+    LlmStreamExecutionNextFn, LlmStreamInner, MiddlewareContinuationContext, ToolExecutionContext,
+    ToolExecutionNextFn, current_scope_stack, with_scope_stack,
 };
 use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
@@ -1411,6 +1413,7 @@ impl WorkerPluginInstance {
     ) -> crate::plugin::Result<()> {
         let name = registration.local_name.as_str();
         let priority = registration.priority;
+        let include_codec_context = registration.llm_execution_codec_context;
         let instance = Arc::new(self.clone_for_callback());
         let callback_name = name.to_owned();
         match surface {
@@ -1473,25 +1476,32 @@ impl WorkerPluginInstance {
                     })
                 }),
             ),
-            RegistrationSurface::LlmExecutionIntercept => ctx.register_llm_execution_intercept(
-                name,
-                priority,
-                Arc::new(move |model_name, request, next| {
-                    let instance = instance.clone();
-                    let callback_name = callback_name.clone();
-                    let model_name = model_name.to_owned();
-                    Box::pin(async move {
-                        instance
-                            .invoke_llm_execution(&callback_name, &model_name, request, next)
-                            .await
-                    })
-                }),
-            ),
-            RegistrationSurface::LlmStreamExecutionIntercept => ctx
-                .register_llm_stream_execution_intercept(
+            RegistrationSurface::LlmExecutionIntercept => ctx
+                .register_contextual_llm_execution_intercept(
                     name,
                     priority,
-                    Arc::new(move |model_name, request, next| {
+                    Arc::new(move |model_name, request, context, next| {
+                        let instance = instance.clone();
+                        let callback_name = callback_name.clone();
+                        let model_name = model_name.to_owned();
+                        Box::pin(async move {
+                            instance
+                                .invoke_llm_execution(
+                                    &callback_name,
+                                    &model_name,
+                                    request,
+                                    include_codec_context.then_some(context),
+                                    next,
+                                )
+                                .await
+                        })
+                    }),
+                ),
+            RegistrationSurface::LlmStreamExecutionIntercept => ctx
+                .register_contextual_llm_stream_execution_intercept(
+                    name,
+                    priority,
+                    Arc::new(move |model_name, request, context, next| {
                         let instance = instance.clone();
                         let callback_name = callback_name.clone();
                         let model_name = model_name.to_owned();
@@ -1501,6 +1511,7 @@ impl WorkerPluginInstance {
                                     &callback_name,
                                     &model_name,
                                     request,
+                                    include_codec_context.then_some(context),
                                     next,
                                 )
                                 .await
@@ -1672,6 +1683,48 @@ impl Drop for WorkerInvocationGuard {
     fn drop(&mut self) {
         self.cancel("host caller cancelled the worker invocation");
         self.cleanup();
+    }
+}
+
+struct WorkerStreamCompletionSignal(watch::Sender<bool>);
+
+impl Drop for WorkerStreamCompletionSignal {
+    fn drop(&mut self) {
+        self.0.send_replace(true);
+    }
+}
+
+struct WorkerForwardedLlmStream {
+    receiver: Option<tokio_stream::wrappers::ReceiverStream<FlowResult<Json>>>,
+    completion: watch::Receiver<bool>,
+}
+
+impl Stream for WorkerForwardedLlmStream {
+    type Item = FlowResult<Json>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        match this.receiver.as_mut() {
+            Some(receiver) => Pin::new(receiver).poll_next(cx),
+            None => Poll::Ready(None),
+        }
+    }
+}
+
+impl LlmStreamInner for WorkerForwardedLlmStream {
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
+        let this = self.get_mut();
+        this.receiver.take();
+        // Keep the stored observer reusable if this close future is cancelled.
+        let mut completion = this.completion.clone();
+        Box::pin(async move {
+            while !*completion.borrow_and_update() {
+                if completion.changed().await.is_err() {
+                    break;
+                }
+            }
+            Ok(())
+        })
     }
 }
 
@@ -1849,24 +1902,26 @@ impl WorkerPluginCallback {
                 ),
             )),
         );
-        let capability_id = context.resolve_codec().map(|codec| {
-            let capability_id = self
-                .host_state
-                .insert_request_codec(&invoke.invocation_id, codec);
-            let Some(invoke_request_payload::Payload::Llm(llm)) = invoke.payload.as_mut() else {
-                unreachable!("LLM sanitizer invocation must have an LLM payload");
-            };
-            let Some(llm_invocation::SanitizeContext::RequestSanitizeContext(context)) =
-                llm.sanitize_context.as_mut()
-            else {
-                unreachable!("request sanitizer invocation must have a request context");
-            };
-            context.codec_capability_id = Some(capability_id.clone());
-            capability_id
-        });
-        let _capability_guard = capability_id.as_ref().map(|capability_id| {
-            WorkerCodecCapabilityGuard::new(Arc::clone(&self.host_state), capability_id.clone())
-        });
+        let capability = context
+            .resolve_codec()
+            .map(|codec| -> FlowResult<WorkerCodecCapabilityGuard> {
+                let capability = self
+                    .host_state
+                    .issue_request_codec(&invoke.invocation_id, codec)?;
+                let Some(invoke_request_payload::Payload::Llm(llm)) = invoke.payload.as_mut()
+                else {
+                    unreachable!("LLM sanitizer invocation must have an LLM payload");
+                };
+                let Some(llm_invocation::SanitizeContext::RequestSanitizeContext(context)) =
+                    llm.sanitize_context.as_mut()
+                else {
+                    unreachable!("request sanitizer invocation must have a request context");
+                };
+                context.codec_capability_id = Some(capability.id().into());
+                Ok(capability)
+            })
+            .transpose();
+        let _capability = self.cleanup_after_setup_error(&invoke, capability)?;
         let response = self.invoke_async(invoke).await;
         optional_json_from_invoke_response(response?)?
             .map(serde_json::from_value)
@@ -1899,24 +1954,26 @@ impl WorkerPluginCallback {
                 ),
             )),
         );
-        let capability_id = context.resolve_codec().map(|codec| {
-            let capability_id = self
-                .host_state
-                .insert_response_codec(&invoke.invocation_id, codec);
-            let Some(invoke_request_payload::Payload::Llm(llm)) = invoke.payload.as_mut() else {
-                unreachable!("LLM sanitizer invocation must have an LLM payload");
-            };
-            let Some(llm_invocation::SanitizeContext::ResponseSanitizeContext(context)) =
-                llm.sanitize_context.as_mut()
-            else {
-                unreachable!("response sanitizer invocation must have a response context");
-            };
-            context.codec_capability_id = Some(capability_id.clone());
-            capability_id
-        });
-        let _capability_guard = capability_id.as_ref().map(|capability_id| {
-            WorkerCodecCapabilityGuard::new(Arc::clone(&self.host_state), capability_id.clone())
-        });
+        let capability = context
+            .resolve_codec()
+            .map(|codec| -> FlowResult<WorkerCodecCapabilityGuard> {
+                let capability = self
+                    .host_state
+                    .issue_response_codec(&invoke.invocation_id, codec)?;
+                let Some(invoke_request_payload::Payload::Llm(llm)) = invoke.payload.as_mut()
+                else {
+                    unreachable!("LLM sanitizer invocation must have an LLM payload");
+                };
+                let Some(llm_invocation::SanitizeContext::ResponseSanitizeContext(context)) =
+                    llm.sanitize_context.as_mut()
+                else {
+                    unreachable!("response sanitizer invocation must have a response context");
+                };
+                context.codec_capability_id = Some(capability.id().into());
+                Ok(capability)
+            })
+            .transpose();
+        let _capability = self.cleanup_after_setup_error(&invoke, capability)?;
         let response = self.invoke_async(invoke).await;
         optional_json_from_invoke_response(response?)
     }
@@ -1981,12 +2038,13 @@ impl WorkerPluginCallback {
         registration_name: &str,
         model_name: &str,
         request: LlmRequest,
+        execution_context: Option<LlmExecutionCodecContext>,
         next: LlmExecutionNextFn,
     ) -> FlowResult<Json> {
         let continuation_id = self
             .host_state
             .insert_continuation(Continuation::llm(next))?;
-        let invoke = self.base_request(
+        let mut invoke = self.base_request(
             registration_name,
             RegistrationSurface::LlmExecutionIntercept,
             Some(continuation_id),
@@ -1997,6 +2055,13 @@ impl WorkerPluginCallback {
                 None,
             )),
         );
+        let codec_capabilities = execution_context
+            .as_ref()
+            .map(|context| self.attach_llm_execution_codec_context(&mut invoke, context, true))
+            .transpose();
+        let _codec_capabilities = self
+            .cleanup_after_setup_error(&invoke, codec_capabilities)?
+            .unwrap_or_default();
         json_from_invoke_response(self.invoke_async(invoke).await?)
     }
 
@@ -2005,12 +2070,13 @@ impl WorkerPluginCallback {
         registration_name: &str,
         model_name: &str,
         request: LlmRequest,
+        execution_context: Option<LlmExecutionCodecContext>,
         next: LlmStreamExecutionNextFn,
     ) -> FlowResult<LlmJsonStream> {
         let continuation_id = self
             .host_state
             .insert_continuation(Continuation::llm_stream(next))?;
-        let invoke = self.base_request(
+        let mut invoke = self.base_request(
             registration_name,
             RegistrationSurface::LlmStreamExecutionIntercept,
             Some(continuation_id.clone()),
@@ -2021,13 +2087,27 @@ impl WorkerPluginCallback {
                 None,
             )),
         );
+        let codec_capabilities = execution_context
+            .as_ref()
+            .map(|context| self.attach_llm_execution_codec_context(&mut invoke, context, false))
+            .transpose();
+        let codec_capabilities = self
+            .cleanup_after_setup_error(&invoke, codec_capabilities)?
+            .unwrap_or_default();
         let mut client = self.client.clone();
         let mut guard = WorkerInvocationGuard::new(self, &invoke);
         let (tx, rx) = mpsc::channel(16);
         let (next_ready_tx, next_ready_rx) = oneshot::channel();
+        let (completion_tx, completion_rx) = watch::channel(false);
         self.runtime.spawn(async move {
+            let _completion = WorkerStreamCompletionSignal(completion_tx);
+            let _codec_capabilities = codec_capabilities;
             let result = tokio::select! {
-                result = worker_rpc(client.invoke_stream(worker_rpc_request(invoke))) => result,
+                // Stream setup can include awaiting the downstream provider through
+                // `next`, so the control-plane timeout must not cap it. Dropping the
+                // caller closes `rx`; the sibling branch then cancels the worker and
+                // releases the continuation and codec capabilities.
+                result = client.invoke_stream(worker_rpc_request(invoke)) => result,
                 _ = tx.closed() => {
                     guard.cancel("host stopped consuming the worker stream");
                     guard.finish();
@@ -2083,9 +2163,63 @@ impl WorkerPluginCallback {
                 "worker stream invocation ended before the downstream stream opened".into(),
             )
         })?;
-        Ok(LlmJsonStream::new(
-            tokio_stream::wrappers::ReceiverStream::new(rx),
-        ))
+        Ok(LlmJsonStream::from_closeable(WorkerForwardedLlmStream {
+            receiver: Some(tokio_stream::wrappers::ReceiverStream::new(rx)),
+            completion: completion_rx,
+        }))
+    }
+
+    fn attach_llm_execution_codec_context(
+        &self,
+        invoke: &mut InvokeRequest,
+        context: &LlmExecutionCodecContext,
+        include_response_capability: bool,
+    ) -> FlowResult<Vec<WorkerCodecCapabilityGuard>> {
+        let mut guards = Vec::with_capacity(2);
+
+        let mut request = ProtoLlmSanitizeRequestContext {
+            codec: Some(codec_identity_to_proto(context.request().codec())),
+            codec_capability_id: None,
+        };
+        if let Some(codec) = context.request().resolve_codec() {
+            let capability = self
+                .host_state
+                .issue_request_codec(&invoke.invocation_id, codec)?;
+            request.codec_capability_id = Some(capability.id().into());
+            guards.push(capability);
+        }
+
+        let mut response = ProtoLlmSanitizeResponseContext {
+            codec: Some(codec_identity_to_proto(context.response().codec())),
+            codec_capability_id: None,
+        };
+        if include_response_capability && let Some(codec) = context.response().resolve_codec() {
+            let capability = self
+                .host_state
+                .issue_response_codec(&invoke.invocation_id, codec)?;
+            response.codec_capability_id = Some(capability.id().into());
+            guards.push(capability);
+        }
+
+        let Some(invoke_request_payload::Payload::Llm(llm)) = invoke.payload.as_mut() else {
+            unreachable!("LLM execution invocation must have an LLM payload");
+        };
+        llm.execution_codec_context = Some(Box::new(ProtoLlmExecutionCodecContext {
+            request: Some(request),
+            response: Some(response),
+        }));
+        Ok(guards)
+    }
+
+    fn cleanup_after_setup_error<T>(
+        &self,
+        invoke: &InvokeRequest,
+        result: FlowResult<T>,
+    ) -> FlowResult<T> {
+        result.inspect_err(|_| {
+            let mut guard = WorkerInvocationGuard::new(self, invoke);
+            guard.finish();
+        })
     }
 
     fn base_request(
@@ -2121,9 +2255,15 @@ impl WorkerPluginCallback {
     async fn invoke_async(&self, request: InvokeRequest) -> FlowResult<InvokeResponse> {
         let callback_name = request.registration_name.clone();
         let surface = request.surface;
-        let result = self
-            .invoke_async_with_timeout(request, WORKER_RPC_TIMEOUT)
-            .await;
+        // A continuation-bearing callback can legitimately include downstream
+        // provider latency. The caller still owns cancellation through the
+        // invocation guard, but the control-plane timeout must not cap `next`.
+        let result = if request.continuation_id.is_empty() {
+            self.invoke_async_with_timeout(request, WORKER_RPC_TIMEOUT)
+                .await
+        } else {
+            self.invoke_async_without_timeout(request).await
+        };
         if let Err(error) = &result {
             let surface_name = RegistrationSurface::try_from(surface)
                 .map(|surface| surface.as_str_name())
@@ -2138,6 +2278,19 @@ impl WorkerPluginCallback {
             );
         }
         result
+    }
+
+    async fn invoke_async_without_timeout(
+        &self,
+        request: InvokeRequest,
+    ) -> FlowResult<InvokeResponse> {
+        let mut guard = WorkerInvocationGuard::new(self, &request);
+        let mut client = self.client.clone();
+        let result = client.invoke(worker_rpc_request(request)).await;
+        guard.finish();
+        result
+            .map(|response| response.into_inner())
+            .map_err(|err| worker_status_to_flow("worker invoke failed", err))
     }
 
     async fn invoke_async_with_timeout(
@@ -2339,11 +2492,8 @@ struct WorkerCodecCapabilityGuard {
 }
 
 impl WorkerCodecCapabilityGuard {
-    fn new(host_state: Arc<WorkerHostRuntimeState>, capability_id: String) -> Self {
-        Self {
-            host_state,
-            capability_id,
-        }
+    fn id(&self) -> &str {
+        &self.capability_id
     }
 }
 
@@ -2523,30 +2673,43 @@ impl WorkerHostRuntimeState {
         Ok(handle)
     }
 
-    fn insert_request_codec(&self, invocation_id: &str, codec: Arc<dyn LlmCodec>) -> String {
-        self.insert_codec(invocation_id, WorkerCodecDirection::Request(codec))
+    fn issue_request_codec(
+        self: &Arc<Self>,
+        invocation_id: &str,
+        codec: Arc<dyn LlmCodec>,
+    ) -> FlowResult<WorkerCodecCapabilityGuard> {
+        self.issue_codec(invocation_id, WorkerCodecDirection::Request(codec))
     }
 
-    fn insert_response_codec(
-        &self,
+    fn issue_response_codec(
+        self: &Arc<Self>,
         invocation_id: &str,
         codec: Arc<dyn LlmResponseCodec>,
-    ) -> String {
-        self.insert_codec(invocation_id, WorkerCodecDirection::Response(codec))
+    ) -> FlowResult<WorkerCodecCapabilityGuard> {
+        self.issue_codec(invocation_id, WorkerCodecDirection::Response(codec))
     }
 
-    fn insert_codec(&self, invocation_id: &str, direction: WorkerCodecDirection) -> String {
+    fn issue_codec(
+        self: &Arc<Self>,
+        invocation_id: &str,
+        direction: WorkerCodecDirection,
+    ) -> FlowResult<WorkerCodecCapabilityGuard> {
         let id = format!("codec-{}", Uuid::now_v7());
-        if let Ok(mut codecs) = self.codecs.lock() {
-            codecs.insert(
-                id.clone(),
-                WorkerCodecCapability {
-                    invocation_id: invocation_id.to_owned(),
-                    direction,
-                },
-            );
-        }
-        id
+        let mut codecs = self
+            .codecs
+            .lock()
+            .map_err(|error| FlowError::Internal(format!("codec lock poisoned: {error}")))?;
+        codecs.insert(
+            id.clone(),
+            WorkerCodecCapability {
+                invocation_id: invocation_id.to_owned(),
+                direction,
+            },
+        );
+        Ok(WorkerCodecCapabilityGuard {
+            host_state: Arc::clone(self),
+            capability_id: id,
+        })
     }
 
     fn remove_codec(&self, id: &str) {
@@ -3611,6 +3774,7 @@ fn invoke_request_payload_llm(
             .as_ref()
             .map(|response| json_envelope_infallible(JSON_SCHEMA, response)),
         sanitize_context: None,
+        execution_codec_context: None,
     })
 }
 
@@ -3633,6 +3797,7 @@ fn invoke_request_payload_llm_context(
             .as_ref()
             .map(|response| json_envelope_infallible(JSON_SCHEMA, response)),
         sanitize_context: Some(context.into()),
+        execution_codec_context: None,
     })
 }
 
@@ -3941,6 +4106,18 @@ fn validate_registration_plan(
         if surface == RegistrationSurface::Unspecified {
             return Err(PluginError::RegistrationFailed(format!(
                 "worker plugin '{plugin_id}' returned unspecified registration surface"
+            )));
+        }
+        if registration.llm_execution_codec_context
+            && !matches!(
+                surface,
+                RegistrationSurface::LlmExecutionIntercept
+                    | RegistrationSurface::LlmStreamExecutionIntercept
+            )
+        {
+            return Err(PluginError::RegistrationFailed(format!(
+                "worker plugin '{plugin_id}' requested LLM execution codec context for incompatible surface {}",
+                surface.as_str_name()
             )));
         }
     }

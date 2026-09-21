@@ -258,6 +258,22 @@ class WorkerResponseCodec:
         return await self._runtime._decode_llm_codec_response(self._capability_id, self._invocation_id, response)
 
 
+@dataclass(frozen=True)
+class LlmExecutionContext:
+    """Invocation-scoped codec identities and operations for LLM execution middleware.
+
+    The identities describe the codecs selected when Relay created the managed
+    invocation. Rewriting a request into another provider's wire format does
+    not select a new codec; incompatible codec operations fail.
+    """
+
+    available: bool
+    request_codec_identity: LlmCodecIdentity
+    response_codec_identity: LlmCodecIdentity
+    request_codec: WorkerRequestCodec | None = field(default=None, repr=False, compare=False)
+    response_codec: WorkerResponseCodec | None = field(default=None, repr=False, compare=False)
+
+
 def _llm_codec_identity(invocation: pb.LlmInvocation) -> LlmCodecIdentity:
     """Return the codec identity from a worker invocation."""
     context = getattr(invocation, invocation.WhichOneof("sanitize_context") or "", None)
@@ -280,6 +296,42 @@ def _codec_identity(codec_kind: int, codec_id: str | None) -> LlmCodecIdentity:
 def _llm_codec_capability(invocation: pb.LlmInvocation) -> str | None:
     context = getattr(invocation, invocation.WhichOneof("sanitize_context") or "", None)
     return context.codec_capability_id if context is not None and context.HasField("codec_capability_id") else None
+
+
+def _llm_execution_context(
+    invocation: pb.LlmInvocation,
+    runtime: "PluginRuntime",
+    invocation_id: str,
+) -> LlmExecutionContext:
+    if not invocation.HasField("execution_codec_context"):
+        return LlmExecutionContext(
+            available=False,
+            request_codec_identity=LlmCodecIdentity("none"),
+            response_codec_identity=LlmCodecIdentity("none"),
+        )
+    context = invocation.execution_codec_context
+    if not context.HasField("request") or not context.request.HasField("codec"):
+        raise WorkerSdkError("malformed LLM execution codec context: request codec identity is missing")
+    if not context.HasField("response") or not context.response.HasField("codec"):
+        raise WorkerSdkError("malformed LLM execution codec context: response codec identity is missing")
+
+    request_id = context.request.codec_capability_id if context.request.HasField("codec_capability_id") else None
+    response_id = context.response.codec_capability_id if context.response.HasField("codec_capability_id") else None
+    request_identity = _codec_identity(
+        context.request.codec.kind,
+        context.request.codec.id if context.request.codec.HasField("id") else None,
+    )
+    response_identity = _codec_identity(
+        context.response.codec.kind,
+        context.response.codec.id if context.response.codec.HasField("id") else None,
+    )
+    return LlmExecutionContext(
+        available=True,
+        request_codec_identity=request_identity,
+        response_codec_identity=response_identity,
+        request_codec=(WorkerRequestCodec(runtime, request_id, invocation_id) if request_id else None),
+        response_codec=(WorkerResponseCodec(runtime, response_id, invocation_id) if response_id else None),
+    )
 
 
 WORKER_PROTOCOL = "grpc-v1"
@@ -1056,8 +1108,15 @@ LlmRequestCallback: TypeAlias = Callable[
     LlmRequestInterceptOutcome | Awaitable[LlmRequestInterceptOutcome],
 ]
 LlmExecutionCallback: TypeAlias = Callable[[str, LlmRequest, "LlmNext"], Json | Awaitable[Json]]
+LlmExecutionWithContextCallback: TypeAlias = Callable[
+    [str, LlmRequest, LlmExecutionContext, "LlmNext"], Json | Awaitable[Json]
+]
 LlmStreamExecutionCallback: TypeAlias = Callable[
     [str, LlmRequest, "LlmStreamNext"],
+    Iterable[Json] | AsyncIterator[Json] | Awaitable[Iterable[Json] | AsyncIterator[Json]],
+]
+LlmStreamExecutionWithContextCallback: TypeAlias = Callable[
+    [str, LlmRequest, LlmExecutionContext, "LlmStreamNext"],
     Iterable[Json] | AsyncIterator[Json] | Awaitable[Iterable[Json] | AsyncIterator[Json]],
 ]
 
@@ -1081,8 +1140,8 @@ class _Handlers:
     llm_sanitize_responses: dict[str, LlmSanitizeResponseCallback]
     llm_conditionals: dict[str, LlmConditionalCallback]
     llm_requests: dict[str, LlmRequestCallback]
-    llm_executions: dict[str, LlmExecutionCallback]
-    llm_stream_executions: dict[str, LlmStreamExecutionCallback]
+    llm_executions: dict[str, LlmExecutionWithContextCallback]
+    llm_stream_executions: dict[str, LlmStreamExecutionWithContextCallback]
 
     @classmethod
     def empty(cls) -> _Handlers:
@@ -1493,6 +1552,25 @@ class PluginContext:
             priority: Execution order. Lower values run first.
         """
         self._push_registration(name, pb.LLM_EXECUTION_INTERCEPT, priority, False)
+        self._handlers.llm_executions[name] = lambda model, request, _context, next_call: callback(
+            model, request, next_call
+        )
+
+    def register_llm_execution_intercept_with_context(
+        self,
+        name: str,
+        callback: LlmExecutionWithContextCallback,
+        *,
+        priority: int = 0,
+    ) -> None:
+        """Register LLM execution middleware with invocation-scoped codecs."""
+        self._push_registration(
+            name,
+            pb.LLM_EXECUTION_INTERCEPT,
+            priority,
+            False,
+            llm_execution_codec_context=True,
+        )
         self._handlers.llm_executions[name] = callback
 
     def register_llm_stream_execution_intercept(
@@ -1520,9 +1598,40 @@ class PluginContext:
             error.
         """
         self._push_registration(name, pb.LLM_STREAM_EXECUTION_INTERCEPT, priority, False)
+        self._handlers.llm_stream_executions[name] = lambda model, request, _context, next_call: callback(
+            model, request, next_call
+        )
+
+    def register_llm_stream_execution_intercept_with_context(
+        self,
+        name: str,
+        callback: LlmStreamExecutionWithContextCallback,
+        *,
+        priority: int = 0,
+    ) -> None:
+        """Register streaming middleware with request codec access.
+
+        The context identifies the response codec but does not expose a
+        response decoder because stream chunks are not complete responses.
+        """
+        self._push_registration(
+            name,
+            pb.LLM_STREAM_EXECUTION_INTERCEPT,
+            priority,
+            False,
+            llm_execution_codec_context=True,
+        )
         self._handlers.llm_stream_executions[name] = callback
 
-    def _push_registration(self, name: str, surface: int, priority: int, break_chain: bool) -> None:
+    def _push_registration(
+        self,
+        name: str,
+        surface: int,
+        priority: int,
+        break_chain: bool,
+        *,
+        llm_execution_codec_context: bool = False,
+    ) -> None:
         if any(
             registration.local_name == name and registration.surface == surface
             for registration in self._handlers.registrations
@@ -1534,6 +1643,7 @@ class PluginContext:
                 surface=surface,
                 priority=priority,
                 break_chain=break_chain,
+                llm_execution_codec_context=llm_execution_codec_context,
             )
         )
 
@@ -2478,9 +2588,10 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
             handler = self._handler(self._handlers.llm_stream_executions, request.registration_name)
             payload = _require_payload(request, "llm")
             llm_request = _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA)
+            execution_context = _llm_execution_context(payload, self._runtime, request.invocation_id)
             next_call = LlmStreamNext(self._runtime, request.continuation_id)
             with _bind_invocation_scope(request):
-                stream = await _maybe_await(handler(payload.model_name, llm_request, next_call))
+                stream = await _maybe_await(handler(payload.model_name, llm_request, execution_context, next_call))
                 async for value in _as_async_iter(stream):
                     await queue.put(pb.StreamChunk(value=_json_envelope(JSON_SCHEMA, value)))
         except asyncio.CancelledError:
@@ -2653,6 +2764,7 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 self._handler(self._handlers.llm_executions, request.registration_name)(
                     payload.model_name,
                     _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA),
+                    _llm_execution_context(payload, self._runtime, request.invocation_id),
                     LlmNext(self._runtime, request.continuation_id),
                 )
             )
