@@ -817,7 +817,7 @@ impl MetricEventProcessor {
     }
 }
 
-fn gen_ai_stream_time_to_first_chunk_measurement(
+pub(super) fn gen_ai_stream_time_to_first_chunk_measurement(
     event: &Event,
 ) -> Option<ValidatedMetricMeasurement> {
     if event.scope_category() != Some(crate::api::event::ScopeCategory::End)
