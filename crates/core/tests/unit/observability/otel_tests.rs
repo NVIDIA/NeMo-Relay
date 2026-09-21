@@ -4311,6 +4311,105 @@ fn otlp_string_attribute<'a>(attributes: &'a [OtlpKeyValue], key: &str) -> Optio
         })
 }
 
+#[test]
+fn exported_logs_join_trace_spans_with_unobserved_local_parents_and_late_marks() {
+    use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_global();
+    for projection in [
+        OpenTelemetryType::Full,
+        OpenTelemetryType::GenAi,
+        OpenTelemetryType::OpenInference,
+    ] {
+        for imported in [false, true] {
+            let traces_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let logs_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let trace_endpoint =
+                format!("http://{}/v1/traces", traces_listener.local_addr().unwrap());
+            let log_endpoint = format!("http://{}/v1/logs", logs_listener.local_addr().unwrap());
+            let (trace_tx, trace_rx) = mpsc::channel();
+            let (log_tx, log_rx) = mpsc::channel();
+            spawn_http_collector(traces_listener, trace_tx);
+            spawn_http_collector(logs_listener, log_tx);
+            let traces = OpenTelemetrySubscriber::new(
+                OpenTelemetryConfig::new(projection, trace_endpoint)
+                    .with_scheduled_delay(Duration::from_secs(60)),
+            )
+            .unwrap();
+            let logs =
+                OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new(log_endpoint)).unwrap();
+            let trace_callback = traces.subscriber();
+            let log_callback = logs.subscriber();
+            let root = Uuid::now_v7();
+            let missing_parent = Uuid::now_v7();
+            let turn = Uuid::now_v7();
+            let tool = Uuid::now_v7();
+            let mut start =
+                make_start_event(turn, Some(missing_parent), "turn", ScopeType::Custom, None);
+            start.set_propagation_root_uuid(Some(root));
+            if imported {
+                start.set_propagation_parent_uuid(Some(missing_parent));
+            }
+            let tool_start =
+                make_start_event(tool, Some(turn), "ordinary-tool", ScopeType::Tool, None);
+            let tool_end = make_end_event(tool, Some(turn), "ordinary-tool", ScopeType::Tool, None);
+            let turn_end =
+                make_end_event(turn, Some(missing_parent), "turn", ScopeType::Custom, None);
+            let events = [
+                start,
+                tool_start,
+                make_mark_event(Some(tool), "nv.agent.tool.start", None),
+                make_mark_event(Some(turn), "plugin.custom.mark", None),
+                tool_end,
+                turn_end,
+                make_mark_event(Some(tool), "late.tool.mark", None),
+                make_mark_event(Some(turn), "late.turn.mark", None),
+            ];
+            for event in &events {
+                trace_callback(event);
+                log_callback(event);
+            }
+            traces.force_flush().unwrap();
+            logs.force_flush().unwrap();
+            let trace_request = trace_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let log_request = log_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let trace_export =
+                ExportTraceServiceRequest::decode(trace_request.body.as_slice()).unwrap();
+            let log_export = ExportLogsServiceRequest::decode(log_request.body.as_slice()).unwrap();
+            let spans: Vec<_> = trace_export
+                .resource_spans
+                .iter()
+                .flat_map(|r| &r.scope_spans)
+                .flat_map(|s| &s.spans)
+                .collect();
+            let records: Vec<_> = log_export
+                .resource_logs
+                .iter()
+                .flat_map(|r| &r.scope_logs)
+                .flat_map(|s| &s.log_records)
+                .collect();
+            assert_eq!(records.len(), 4);
+            let expected_trace = relay_trace_id(if imported { root } else { turn }).to_bytes();
+            for record in records {
+                assert_eq!(
+                    record.trace_id, expected_trace,
+                    "{projection:?}, imported={imported}"
+                );
+                assert!(
+                    spans
+                        .iter()
+                        .any(|span| span.trace_id == record.trace_id
+                            && span.span_id == record.span_id),
+                    "every log must join an exported span: {projection:?}, imported={imported}"
+                );
+            }
+            traces.shutdown().unwrap();
+            logs.shutdown().unwrap();
+        }
+    }
+}
+
 fn assert_telemetry_sdk_resource(attributes: &[OtlpKeyValue]) {
     assert_eq!(
         otlp_string_attribute(attributes, "telemetry.sdk.name"),
