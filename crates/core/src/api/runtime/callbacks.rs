@@ -628,7 +628,9 @@ pub type LlmFinalizerFn = Box<dyn FnOnce() -> Json + Send>;
 /// # Returns
 /// A shared reference to a scope-local streaming execution registry.
 pub(crate) type LlmStreamExecutionRegistryRef<'a> = &'a crate::registry::SortedRegistry<
-    crate::api::registry::ExecutionIntercept<LlmStreamExecutionFn>,
+    crate::api::registry::ExecutionIntercept<
+        super::llm_execution_context::ContextualLlmStreamExecutionFn,
+    >,
 >;
 /// Slice of scope-local streaming execution registries.
 ///

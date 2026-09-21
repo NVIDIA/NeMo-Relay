@@ -3138,6 +3138,7 @@ fn llm_invoke(
                 annotated_request: annotated_request.map(json_env),
                 response: response.map(json_env),
                 sanitize_context: None,
+                execution_codec_context: None,
             },
         )),
     }
@@ -3162,6 +3163,7 @@ fn llm_invoke_without_request(
                 annotated_request: None,
                 response: None,
                 sanitize_context: None,
+                execution_codec_context: None,
             },
         )),
     }

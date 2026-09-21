@@ -36,7 +36,9 @@ _TYPE_ALIASES = {
     "LlmConditionalCallback",
     "LlmRequestCallback",
     "LlmExecutionCallback",
+    "LlmExecutionWithContextCallback",
     "LlmStreamExecutionCallback",
+    "LlmStreamExecutionWithContextCallback",
 }
 
 

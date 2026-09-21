@@ -1152,6 +1152,12 @@ check-python-worker-proto:
     }
     assert pb.SUBSCRIBER == 1
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
+    execution_context = pb.LlmInvocation.DESCRIPTOR.fields_by_name["execution_codec_context"]
+    assert execution_context.number == 11
+    assert execution_context.containing_oneof is None
+    assert {
+        field.name for field in pb.LlmInvocation.DESCRIPTOR.oneofs_by_name["sanitize_context"].fields
+    } == {"request_sanitize_context", "response_sanitize_context"}
     tool_next = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["ToolNext"]
     assert tool_next.output_type.full_name == "nemo.relay.worker.v1.ToolExecutionResultResponse"
     runtime_diagnostics = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["GetRuntimeDiagnostics"]
@@ -1566,7 +1572,7 @@ test-python-plugin-e2e:
     NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT="$environment_ref" \
         cargo nextest run --locked -p nemo-relay --features worker-grpc \
         --test worker_plugin_integration \
-        -E 'test(python_worker_host_runtime_mark_and_mutated_request_round_trip)' \
+        -E 'test(python_worker_host_runtime_mark_and_mutated_request_round_trip) + test(python_worker_execution_codec_context_round_trips_host_codecs)' \
         --no-capture \
         --profile ci
     kill "$gateway_pid" 2>/dev/null || true

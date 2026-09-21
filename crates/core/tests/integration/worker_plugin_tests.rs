@@ -14,6 +14,7 @@ use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
     llm_stream_call_execute,
 };
+use nemo_relay::api::runtime::LlmCodecIdentity;
 use nemo_relay::api::runtime::{LlmJsonStream, TASK_SCOPE_STACK, create_scope_stack};
 use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
@@ -22,8 +23,10 @@ use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, regi
 use nemo_relay::api::tool::{
     ToolCallExecuteParams, ToolExecutionResult, tool_call_execute, tool_request_intercepts,
 };
+use nemo_relay::codec::openai_chat::OpenAIChatCodec;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::traits::LlmCodec;
+use nemo_relay::codec::response::AnnotatedLlmResponse;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::Result as FlowResult;
 use nemo_relay::observability::otel_logs::{OpenTelemetryLogConfig, OpenTelemetryLogSubscriber};
 use nemo_relay::observability::otel_metrics::{
@@ -1581,28 +1584,9 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
     let manifest_ref = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples/python-grpc-worker-plugin/relay-plugin.toml");
     let config = Map::from_iter([("tag".into(), json!("managed-environment"))]);
-    let activation = load_worker_plugins([WorkerPluginLoadSpec {
-        plugin_id: "examples.python_grpc_worker".into(),
-        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-        environment_ref: Some(
-            PathBuf::from(environment_ref)
-                .to_string_lossy()
-                .into_owned(),
-        ),
-        config: config.clone(),
-    }])
-    .expect("managed Python worker should load");
-    let mut cleanup = PythonWorkerCleanup::new(activation);
-
-    let mut plugin_config = PluginConfig::default();
-    plugin_config.components.push(PluginComponentSpec {
-        kind: "examples.python_grpc_worker".into(),
-        enabled: true,
-        config,
-    });
-    test_initialize_plugin_host_exact(plugin_config)
-        .await
-        .expect("managed Python worker should initialize");
+    let mut cleanup =
+        load_and_initialize_python_worker(&manifest_ref, &PathBuf::from(environment_ref), config)
+            .await;
 
     let events = Arc::new(Mutex::new(Vec::<Event>::new()));
     let captured = events.clone();
@@ -1694,6 +1678,147 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
     drop(cleanup);
 }
 
+#[tokio::test]
+async fn python_worker_execution_codec_context_round_trips_host_codecs() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let Some(environment_ref) = std::env::var_os("NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT")
+    else {
+        eprintln!(
+            "skipping Python worker codec-context round-trip; \
+             NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT is unset"
+        );
+        return;
+    };
+    let (manifest_dir, manifest_ref) = write_python_codec_context_worker();
+    let cleanup = load_and_initialize_python_worker(
+        &manifest_ref,
+        &PathBuf::from(environment_ref),
+        Map::new(),
+    )
+    .await;
+
+    struct Case {
+        name: &'static str,
+        identity_kind: &'static str,
+        identity_id: &'static str,
+        answer: &'static str,
+        request_codec: Arc<dyn LlmCodec>,
+        response_codec: Arc<dyn LlmResponseCodec>,
+    }
+
+    for case in [
+        Case {
+            name: "builtin-openai-chat",
+            identity_kind: "builtin",
+            identity_id: "openai_chat",
+            answer: "provider answer",
+            request_codec: Arc::new(OpenAIChatCodec),
+            response_codec: Arc::new(OpenAIChatCodec),
+        },
+        Case {
+            name: "runtime-openai-chat",
+            identity_kind: "runtime",
+            identity_id: "tests.openai_chat.v1",
+            answer: "runtime answer",
+            request_codec: Arc::new(RuntimeOpenAiChatCodec),
+            response_codec: Arc::new(RuntimeOpenAiChatCodec),
+        },
+        // A third invocation proves the spawned worker remains responsive after
+        // exercising both directional codec capabilities.
+        Case {
+            name: "post-round-trip-health",
+            identity_kind: "builtin",
+            identity_id: "openai_chat",
+            answer: "healthy",
+            request_codec: Arc::new(OpenAIChatCodec),
+            response_codec: Arc::new(OpenAIChatCodec),
+        },
+    ] {
+        let provider_only = json!({"lane": case.name, "preserve": true});
+        let expected_provider_only = provider_only.clone();
+        let answer = case.answer;
+        let response = llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name(format!("python-worker-codec-context-{}", case.name))
+                .request(LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "model": "caller-model",
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "provider_only": provider_only,
+                    }),
+                })
+                .codec(case.request_codec)
+                .response_codec(case.response_codec)
+                .func(Arc::new(move |request| {
+                    let expected_provider_only = expected_provider_only.clone();
+                    Box::pin(async move {
+                        assert_eq!(request.content["model"], "worker-model");
+                        assert_eq!(request.content["provider_only"], expected_provider_only);
+                        Ok(json!({
+                            "id": "chatcmpl-codec-context",
+                            "object": "chat.completion",
+                            "model": "provider-model",
+                            "choices": [{
+                                "index": 0,
+                                "message": {"role": "assistant", "content": answer},
+                                "finish_reason": "stop",
+                            }],
+                        }))
+                    })
+                }))
+                .build(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{} codec-context call failed: {error}", case.name));
+
+        assert_eq!(
+            response["_codec_context_probe"],
+            json!({
+                "request_kind": case.identity_kind,
+                "request_id": case.identity_id,
+                "response_kind": case.identity_kind,
+                "response_id": case.identity_id,
+                "decoded_model": "provider-model",
+                "decoded_message": case.answer,
+            })
+        );
+    }
+
+    drop(cleanup);
+    drop(manifest_dir);
+}
+
+struct RuntimeOpenAiChatCodec;
+
+impl LlmCodec for RuntimeOpenAiChatCodec {
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::Runtime("tests.openai_chat.v1".into())
+    }
+
+    fn decode(&self, request: &LlmRequest) -> FlowResult<AnnotatedLlmRequest> {
+        OpenAIChatCodec.decode(request)
+    }
+
+    fn encode(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+    ) -> FlowResult<LlmRequest> {
+        OpenAIChatCodec.encode(annotated, original)
+    }
+}
+
+impl LlmResponseCodec for RuntimeOpenAiChatCodec {
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::Runtime("tests.openai_chat.v1".into())
+    }
+
+    fn decode_response(&self, response: &Json) -> FlowResult<AnnotatedLlmResponse> {
+        OpenAIChatCodec.decode_response(response)
+    }
+}
+
 struct FixtureCodec;
 
 impl LlmCodec for FixtureCodec {
@@ -1752,6 +1877,31 @@ impl PythonWorkerCleanup {
             subscriber_name: None,
         }
     }
+}
+
+async fn load_and_initialize_python_worker(
+    manifest_ref: &Path,
+    environment_ref: &Path,
+    config: Map<String, Json>,
+) -> PythonWorkerCleanup {
+    let activation = load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: "examples.python_grpc_worker".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: Some(environment_ref.to_string_lossy().into_owned()),
+        config: config.clone(),
+    }])
+    .expect("managed Python worker should load");
+    let cleanup = PythonWorkerCleanup::new(activation);
+    let mut plugin_config = PluginConfig::default();
+    plugin_config.components.push(PluginComponentSpec {
+        kind: "examples.python_grpc_worker".into(),
+        enabled: true,
+        config,
+    });
+    test_initialize_plugin_host_exact(plugin_config)
+        .await
+        .expect("managed Python worker should initialize");
+    cleanup
 }
 
 impl Drop for PythonWorkerCleanup {
@@ -1889,6 +2039,59 @@ entrypoint = {entrypoint}
         runtime = toml_string(runtime),
         entrypoint = toml_string(entrypoint)
     ))
+}
+
+fn write_python_codec_context_worker() -> (TempDir, PathBuf) {
+    const WORKER: &str = r#"
+from nemo_relay_plugin import WorkerPlugin, serve_plugin
+
+
+class CodecContextProbe(WorkerPlugin):
+    plugin_id = "examples.python_grpc_worker"
+
+    def register(self, ctx, config):
+        del config
+
+        async def execute(_name, request, context, next_call):
+            if not context.available:
+                raise RuntimeError("execution codec context is unavailable")
+            if context.request_codec is None or context.response_codec is None:
+                raise RuntimeError("directional codec proxy is unavailable")
+
+            annotated = await context.request_codec.decode(request)
+            annotated["model"] = "worker-model"
+            encoded = await context.request_codec.encode(annotated, request)
+            response = await next_call.call(encoded)
+            decoded = await context.response_codec.decode(response)
+
+            result = dict(response)
+            result["_codec_context_probe"] = {
+                "request_kind": context.request_codec_identity.kind,
+                "request_id": context.request_codec_identity.id,
+                "response_kind": context.response_codec_identity.kind,
+                "response_id": context.response_codec_identity.id,
+                "decoded_model": decoded.get("model"),
+                "decoded_message": decoded.get("message"),
+            }
+            return result
+
+        ctx.register_llm_execution_intercept_with_context("codec_context_probe", execute)
+
+
+async def main():
+    await serve_plugin(CodecContextProbe())
+"#;
+
+    let relay = supported_relay_requirement();
+    let (temp, manifest) = write_worker_manifest(
+        "examples.python_grpc_worker",
+        &relay,
+        "python",
+        "codec_context_probe:main",
+    );
+    std::fs::write(temp.path().join("codec_context_probe.py"), WORKER)
+        .expect("Python codec-context worker fixture should be written");
+    (temp, manifest)
 }
 
 fn write_manifest_text(contents: &str) -> (TempDir, PathBuf) {

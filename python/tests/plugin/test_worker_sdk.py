@@ -736,6 +736,14 @@ def test_generated_proto_matches_worker_contract() -> None:
         "Shutdown",
     }
     assert pb.InvokeRequest.DESCRIPTOR.fields_by_name["auth_token"].number == 7
+    assert pb.Registration.DESCRIPTOR.fields_by_name["llm_execution_codec_context"].number == 6
+    execution_context = pb.LlmInvocation.DESCRIPTOR.fields_by_name["execution_codec_context"]
+    assert execution_context.number == 11
+    assert execution_context.containing_oneof is None
+    assert {field.name for field in pb.LlmInvocation.DESCRIPTOR.oneofs_by_name["sanitize_context"].fields} == {
+        "request_sanitize_context",
+        "response_sanitize_context",
+    }
     assert pb.HealthRequest.DESCRIPTOR.fields_by_name["activation_id"].number == 1
     assert pb.HealthRequest.DESCRIPTOR.fields_by_name["auth_token"].number == 2
     assert pb.SUBSCRIBER == 1
@@ -1106,6 +1114,87 @@ def test_plugin_context_registers_llm_sanitizers_under_standard_names() -> None:
         ("request", pb.LLM_SANITIZE_REQUEST_GUARDRAIL),
         ("response", pb.LLM_SANITIZE_RESPONSE_GUARDRAIL),
     ]
+
+
+def test_execution_codec_context_is_opt_in_on_the_existing_surface() -> None:
+    context = PluginContext()
+
+    async def legacy(_name: str, request: Json, next_call: Any) -> Json:
+        return await next_call.call(request)
+
+    async def contextual(_name: str, request: Json, _context: Any, next_call: Any) -> Json:
+        return await next_call.call(request)
+
+    context.register_llm_execution_intercept("legacy", legacy, priority=7)
+    context.register_llm_execution_intercept_with_context("contextual", contextual, priority=7)
+
+    legacy_registration, contextual_registration = context._handlers.registrations
+    assert legacy_registration.surface == pb.LLM_EXECUTION_INTERCEPT
+    assert contextual_registration.surface == legacy_registration.surface
+    assert contextual_registration.priority == legacy_registration.priority
+    assert not legacy_registration.llm_execution_codec_context
+    assert contextual_registration.llm_execution_codec_context
+
+
+async def test_contextual_execution_callback_handles_old_and_new_hosts() -> None:
+    seen: list[bool] = []
+
+    class ContextualExecutionPlugin(WorkerPlugin):
+        plugin_id = "tests.contextual_execution"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            async def execution(name: str, request: Json, context: Any, next_call: Any) -> Json:
+                del name
+                seen.append(context.available)
+                if context.available:
+                    assert context.request_codec_identity == plugin_api.LlmCodecIdentity("builtin", "openai_chat")
+                    assert context.response_codec_identity == plugin_api.LlmCodecIdentity("builtin", "openai_chat")
+                    assert context.request_codec is not None
+                    assert context.response_codec is not None
+                    await context.request_codec.decode(request)
+                result = await next_call.call(request)
+                if context.available:
+                    await context.response_codec.decode(result)
+                return result
+
+            ctx.register_llm_execution_intercept_with_context("execution", execution)
+
+    host = RecordingHostStub()
+    service = _service(ContextualExecutionPlugin(), host)
+    register = await _register(service)
+    assert register.registrations[0].llm_execution_codec_context
+
+    new_context = pb.LlmExecutionCodecContext(
+        request=pb.LlmSanitizeRequestContext(
+            codec=pb.LlmCodecIdentity(kind=pb.LLM_CODEC_KIND_BUILTIN, id="openai_chat"),
+            codec_capability_id="request-capability",
+        ),
+        response=pb.LlmSanitizeResponseContext(
+            codec=pb.LlmCodecIdentity(kind=pb.LLM_CODEC_KIND_BUILTIN, id="openai_chat"),
+            codec_capability_id="response-capability",
+        ),
+    )
+    for execution_context in [None, new_context]:
+        payload = _llm_payload(request={"content": {"model": "gpt-test"}})
+        if execution_context is not None:
+            payload.execution_codec_context.CopyFrom(execution_context)
+        result = await _invoke_json_async(
+            service,
+            "execution",
+            pb.LLM_EXECUTION_INTERCEPT,
+            payload=payload,
+        )
+        assert "next_llm" in result
+
+    assert seen == [False, True]
+    codec_capabilities = [
+        request.codec_capability_id
+        for request in host.requests
+        if isinstance(request, (pb.LlmCodecDecodeRequest, pb.LlmCodecDecodeResponse))
+    ]
+    assert codec_capabilities == ["request-capability", "response-capability"]
 
 
 async def test_llm_sanitizers_receive_codec_context_and_can_omit_payloads() -> None:
