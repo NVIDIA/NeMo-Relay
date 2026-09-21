@@ -1115,6 +1115,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
 
     let otel = OpenTelemetrySectionConfig {
         enabled: true,
+        file_sinks: Vec::new(),
         endpoints: vec![OpenTelemetryEndpointConfig {
             otel_type: OpenTelemetryType::Full,
             endpoint: "http://localhost:4318/v1/traces".to_string(),
@@ -1534,6 +1535,13 @@ fn build_otel_config_carries_resource_metadata_promotion_prefixes() {
 
 #[test]
 fn validate_opentelemetry_section_reports_empty_and_malformed_endpoints() {
+    // `validate_opentelemetry_section` reads the automatic-OTLP environment,
+    // where a set `OTEL_EXPORTER_OTLP_*` endpoint suppresses the empty-section
+    // diagnostic this asserts on. The mutex serializes it against the tests
+    // that set those variables.
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let policy = ConfigPolicy::default();
     let mut diagnostics = Vec::new();
     validate_opentelemetry_section(
@@ -1541,6 +1549,7 @@ fn validate_opentelemetry_section_reports_empty_and_malformed_endpoints() {
         &policy,
         &OpenTelemetrySectionConfig {
             enabled: true,
+            file_sinks: Vec::new(),
             endpoints: Vec::new(),
             logs: None,
             metrics: None,
@@ -1566,6 +1575,7 @@ fn validate_opentelemetry_section_reports_empty_and_malformed_endpoints() {
         &policy,
         &OpenTelemetrySectionConfig {
             enabled: true,
+            file_sinks: Vec::new(),
             endpoints: vec![endpoint],
             logs: None,
             metrics: None,
@@ -1595,6 +1605,7 @@ fn validate_opentelemetry_section_reports_empty_and_malformed_endpoints() {
         &policy,
         &OpenTelemetrySectionConfig {
             enabled: true,
+            file_sinks: Vec::new(),
             endpoints: vec![endpoint],
             logs: None,
             metrics: None,
@@ -1704,6 +1715,7 @@ fn opentelemetry_registration_rejects_an_empty_endpoint_list() {
     let error = register_opentelemetry(
         OpenTelemetrySectionConfig {
             enabled: true,
+            file_sinks: Vec::new(),
             endpoints: Vec::new(),
             logs: None,
             metrics: None,
@@ -2335,6 +2347,25 @@ fn disabled_opentelemetry_does_not_resolve_header_env() {
 
 #[cfg(feature = "schema")]
 #[test]
+fn the_file_sink_schema_advertises_the_overwrite_default() {
+    let schema = serde_json::to_value(schemars::schema_for!(OpenTelemetryFileSinkConfig)).unwrap();
+
+    // The ATOF event sink defaults to `append`; a trace file sink does not, and
+    // a generated schema that says otherwise misleads every editor reading it.
+    assert!(schema_property_has_enum(
+        &schema,
+        "mode",
+        &["append", "overwrite"]
+    ));
+    assert!(schema_property_has_default(
+        &schema,
+        "mode",
+        json!("overwrite")
+    ));
+}
+
+#[cfg(feature = "schema")]
+#[test]
 fn schema_contains_every_supported_observability_option() {
     let schema = observability_config_schema();
     for field in [
@@ -2538,6 +2569,46 @@ fn duplicate_component_is_rejected_as_singleton() {
             .diagnostics
             .iter()
             .any(|diag| diag.code == "plugin.duplicate_component")
+    );
+}
+
+#[test]
+fn a_file_sinks_section_is_a_recognized_opentelemetry_field() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    reset_runtime();
+
+    // The JSON-level field check is separate from the typed validation, so a
+    // new section has to be added to its allow-list or every config carrying
+    // one is rejected outright.
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
+        "opentelemetry": {
+            "enabled": true,
+            "file_sinks": [{
+                "output_directory": "/var/log/nemo-relay",
+                "filename": "trace.jsonl",
+                "bogus": true,
+            }],
+        }
+    })));
+
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("file_sinks")),
+        "file_sinks should be recognized: {:?}",
+        report.diagnostics
+    );
+    // Its own keys are still checked, as an endpoint's are.
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("file_sinks[0].bogus")),
+        "expected the unknown sink key to be reported: {:?}",
+        report.diagnostics
     );
 }
 
@@ -5985,6 +6056,14 @@ fn s3_remote_storage_uploads_to_a_custom_http_endpoint() {
 
 #[test]
 fn observability_private_editor_and_validation_helpers_cover_edge_configs() {
+    // `validate_opentelemetry_section` reads the automatic-OTLP environment,
+    // where a set `OTEL_EXPORTER_OTLP_*` endpoint suppresses the empty-section
+    // diagnostic this asserts on. The mutex serializes it against the tests
+    // that set those variables.
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
     assert_eq!(
         default_atof_file_sink_editor_value(),
         json!({
@@ -6042,5 +6121,736 @@ fn atif_filename_helpers_cover_metadata_resolution_and_rejection_paths() {
             Some(&json!({"agent": "not-an-object"})),
         )
         .is_err()
+    );
+}
+
+// --- OpenTelemetry file sinks ----------------------------------------------
+
+fn file_sink_section(output_directory: &Path) -> OpenTelemetryFileSinkConfig {
+    OpenTelemetryFileSinkConfig {
+        otel_type: OpenTelemetryType::Full,
+        output_directory: output_directory.to_path_buf(),
+        filename: Some("trace.jsonl".to_string()),
+        format: OtlpFileFormat::JsonLines,
+        mode: default_otlp_file_sink_mode(),
+        mark_projection: MarkProjection::default(),
+        mark_exclude_names: default_mark_exclude_names(),
+        attribute_mappings: Vec::new(),
+        promote_metadata_prefixes: Vec::new(),
+        promote_resource_metadata_prefixes: Vec::new(),
+        resource_attributes: HashMap::new(),
+        service_name: default_otel_service_name(),
+        service_namespace: None,
+        service_version: None,
+        instrumentation_scope: default_otel_instrumentation_scope(),
+        max_queue_size: None,
+        max_export_batch_size: None,
+        scheduled_delay_millis: None,
+        completed_span_context_ttl_millis: None,
+    }
+}
+
+#[test]
+fn a_file_sink_section_parses_with_only_an_output_directory() {
+    let section: OpenTelemetryFileSinkConfig =
+        toml::from_str("output_directory = \"/tmp/relay-traces\"").unwrap();
+
+    assert_eq!(section.format, OtlpFileFormat::JsonLines);
+    assert_eq!(section.mode, "overwrite");
+    assert_eq!(section.otel_type, OpenTelemetryType::Full);
+    assert!(section.filename.is_none());
+}
+
+#[test]
+fn a_file_sink_section_parses_the_proto_format() {
+    let section: OpenTelemetryFileSinkConfig =
+        toml::from_str("output_directory = \"/tmp/relay-traces\"\nformat = \"proto\"").unwrap();
+
+    assert_eq!(section.format, OtlpFileFormat::Proto);
+}
+
+#[test]
+fn a_file_sink_config_resolves_its_path_under_the_output_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = build_otel_file_config(0, file_sink_section(directory.path())).unwrap();
+
+    let settings = config.sink();
+    assert_eq!(settings.path, directory.path().join("trace.jsonl"));
+    assert_eq!(settings.output_directory, directory.path());
+    assert!(!settings.append, "overwrite mode must not append");
+}
+
+#[test]
+fn a_file_sink_without_a_filename_names_the_file_after_its_format() {
+    let directory = tempfile::tempdir().unwrap();
+    for (format, extension) in [
+        (OtlpFileFormat::JsonLines, ".jsonl"),
+        (OtlpFileFormat::Proto, ".otlp.pb"),
+    ] {
+        let mut section = file_sink_section(directory.path());
+        section.filename = None;
+        section.format = format;
+        let config = build_otel_file_config(0, section).unwrap();
+
+        let settings = config.sink();
+        let path = settings.path.display().to_string();
+        assert!(
+            path.ends_with(extension),
+            "unexpected default filename {path}"
+        );
+    }
+}
+
+#[test]
+fn a_file_sink_rejects_a_blank_output_directory() {
+    let mut section = file_sink_section(Path::new(""));
+    section.filename = None;
+    let error = build_otel_file_config(3, section).unwrap_err();
+
+    assert!(error.to_string().contains("file_sinks[3].output_directory"));
+}
+
+#[test]
+fn a_file_sink_rejects_an_unknown_mode() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut section = file_sink_section(directory.path());
+    section.mode = "truncate".to_string();
+    let error = build_otel_file_config(1, section).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("must be 'append' or 'overwrite'")
+    );
+}
+
+#[test]
+fn a_file_sink_accepts_append_mode() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut section = file_sink_section(directory.path());
+    section.mode = "append".to_string();
+    let config = build_otel_file_config(0, section).unwrap();
+
+    let settings = config.sink();
+    assert!(settings.append);
+}
+
+#[test]
+fn a_file_sink_rejects_a_filename_that_leaves_its_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    for filename in ["../escape.jsonl", "nested/trace.jsonl", "/absolute.jsonl"] {
+        let mut section = file_sink_section(directory.path());
+        section.filename = Some(filename.to_string());
+        let error = build_otel_file_config(2, section).unwrap_err();
+
+        assert!(
+            error.to_string().contains("single path component"),
+            "{filename} should be rejected, got {error}"
+        );
+    }
+}
+
+#[test]
+fn a_file_sink_rejects_a_blank_or_padded_filename() {
+    let directory = tempfile::tempdir().unwrap();
+    for filename in ["", "   ", " trace.jsonl"] {
+        let mut section = file_sink_section(directory.path());
+        section.filename = Some(filename.to_string());
+        let error = build_otel_file_config(0, section).unwrap_err();
+
+        assert!(error.to_string().contains("nonblank and unpadded"));
+    }
+}
+
+#[test]
+fn a_file_sink_rejects_a_whitespace_only_output_directory() {
+    let mut section = file_sink_section(Path::new(" "));
+
+    // `OtlpFileSinkSettings::from_parts` trims the value, so a whitespace-only
+    // directory the plugin accepted would be rejected by every binding, and
+    // Relay would otherwise create a directory named " ".
+    let error = build_otel_file_config(0, section.clone()).unwrap_err();
+    assert!(error.to_string().contains("nonblank path"), "{error}");
+
+    section.filename = Some("trace.jsonl".to_string());
+    let mut diagnostics = Vec::new();
+    validate_opentelemetry_section(
+        &mut diagnostics,
+        &ConfigPolicy::default(),
+        &OpenTelemetrySectionConfig {
+            enabled: true,
+            file_sinks: vec![section],
+            endpoints: Vec::new(),
+            logs: None,
+            metrics: None,
+        },
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref() == Some("file_sinks[0].output_directory")
+        }),
+        "expected a static diagnostic: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn a_file_sink_rejects_a_filename_that_is_a_directory_reference() {
+    let directory = tempfile::tempdir().unwrap();
+    for filename in [".", ".."] {
+        let mut section = file_sink_section(directory.path());
+        section.filename = Some(filename.to_string());
+
+        // Rejected as configuration rather than reaching the confinement check,
+        // which reports an internal failure instead of a bad setting.
+        let error = build_otel_file_config(0, section).unwrap_err();
+        assert!(
+            error.to_string().contains("single path component"),
+            "unexpected error for {filename:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn colliding_file_sink_paths_are_rejected_however_the_directory_is_spelled() {
+    // Validation never touches the filesystem, so neither directory is created.
+    let relative = PathBuf::from("relay-collision-traces");
+    let absolute = std::env::current_dir().unwrap().join(&relative);
+    let mut first = file_sink_section(&relative);
+    first.filename = Some("trace.jsonl".to_string());
+    let mut second = file_sink_section(&absolute);
+    second.filename = Some("trace.jsonl".to_string());
+
+    // A relative path and its absolute equivalent compare as different keys, so
+    // an unnormalized check would accept both and open one file twice.
+    let error = validate_distinct_opentelemetry_file_sinks(&[first, second]).unwrap_err();
+
+    assert!(
+        error.to_string().contains("write the same path"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn a_file_sink_rejects_zero_and_inverted_batch_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    type MutateFileSink = Box<dyn Fn(&mut OpenTelemetryFileSinkConfig)>;
+    let cases: Vec<(MutateFileSink, &str)> = vec![
+        (Box::new(|s| s.max_queue_size = Some(0)), "max_queue_size"),
+        (
+            Box::new(|s| s.max_export_batch_size = Some(0)),
+            "max_export_batch_size",
+        ),
+        (
+            Box::new(|s| s.scheduled_delay_millis = Some(0)),
+            "scheduled_delay_millis",
+        ),
+        (
+            Box::new(|s| s.completed_span_context_ttl_millis = Some(0)),
+            "completed_span_context_ttl_millis",
+        ),
+        (
+            Box::new(|s| {
+                s.max_queue_size = Some(1);
+                s.max_export_batch_size = Some(2);
+            }),
+            "must be less than or equal to max_queue_size",
+        ),
+    ];
+    for (mutate, expected) in cases {
+        let mut section = file_sink_section(directory.path());
+        mutate(&mut section);
+        let error = build_otel_file_config(0, section).unwrap_err();
+        assert!(error.to_string().contains(expected), "got {error}");
+    }
+}
+
+#[test]
+fn two_file_sinks_writing_one_path_are_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let sinks = vec![
+        file_sink_section(directory.path()),
+        file_sink_section(directory.path()),
+    ];
+    let error = validate_distinct_opentelemetry_file_sinks(&sinks).unwrap_err();
+
+    assert!(error.to_string().contains("write the same path"));
+}
+
+#[test]
+fn file_sinks_writing_distinct_paths_are_accepted() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut second = file_sink_section(directory.path());
+    second.filename = Some("other.jsonl".to_string());
+    let sinks = vec![file_sink_section(directory.path()), second];
+
+    validate_distinct_opentelemetry_file_sinks(&sinks).unwrap();
+}
+
+#[test]
+fn a_file_sink_config_builds_a_subscriber_and_opens_its_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = build_otel_file_config(0, file_sink_section(directory.path())).unwrap();
+
+    // Endpoint validation must not apply: this destination has no endpoint.
+    let subscriber =
+        crate::observability::otel::OpenTelemetrySubscriber::new_file_sink(config).unwrap();
+    assert!(directory.path().join("trace.jsonl").is_file());
+    subscriber.shutdown().unwrap();
+}
+
+#[test]
+fn opentelemetry_registration_accepts_a_section_with_only_file_sinks() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let directory = tempfile::tempdir().unwrap();
+    let mut context = PluginRegistrationContext::new();
+
+    register_opentelemetry(
+        OpenTelemetrySectionConfig {
+            enabled: true,
+            file_sinks: vec![file_sink_section(directory.path())],
+            endpoints: Vec::new(),
+            logs: None,
+            metrics: None,
+        },
+        &mut context,
+    )
+    .unwrap();
+
+    assert!(directory.path().join("trace.jsonl").is_file());
+    crate::plugin::rollback_registrations(&mut context.into_registrations());
+}
+
+#[test]
+fn a_failed_signal_leaves_an_overwrite_file_sink_untouched() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("trace.jsonl");
+    std::fs::write(&path, b"earlier\n").unwrap();
+    let mut context = PluginRegistrationContext::new();
+
+    // A warning policy lets an invalid severity reach registration. An
+    // overwrite sink truncates as it opens, so it must not be opened until
+    // every signal has been built.
+    let error = register_opentelemetry(
+        OpenTelemetrySectionConfig {
+            enabled: true,
+            file_sinks: vec![file_sink_section(directory.path())],
+            endpoints: Vec::new(),
+            logs: Some(OpenTelemetryLogSectionConfig {
+                enabled: true,
+                endpoints: Some(vec![test_signal_endpoint()]),
+                minimum_severity: "notice".to_string(),
+                ..Default::default()
+            }),
+            metrics: None,
+        },
+        &mut context,
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, PluginError::InvalidConfig(_)), "{error}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "earlier\n");
+    crate::plugin::rollback_registrations(&mut context.into_registrations());
+}
+
+#[test]
+fn opentelemetry_registration_rejects_an_empty_endpoint_and_file_sink_list() {
+    let mut context = PluginRegistrationContext::new();
+    let error = register_opentelemetry(
+        OpenTelemetrySectionConfig {
+            enabled: true,
+            file_sinks: Vec::new(),
+            endpoints: Vec::new(),
+            logs: None,
+            metrics: None,
+        },
+        &mut context,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("one file sink"));
+}
+
+#[test]
+fn file_sinks_are_offered_by_the_config_editor() {
+    let schema = OpenTelemetrySectionConfig::editor_schema();
+    let file_sinks = schema.field("file_sinks").expect("file_sinks editor field");
+    assert_eq!(file_sinks.kind, EditorFieldKind::List);
+
+    let item_schema = (file_sinks
+        .list_item
+        .expect("file_sinks list metadata")
+        .schema
+        .expect("file_sinks item schema"))();
+    let format = item_schema.field("format").expect("format editor field");
+    assert_eq!(format.enum_values, &["json_lines", "proto"]);
+    assert!(
+        item_schema.field("endpoint").is_none(),
+        "a file sink has no endpoint to configure"
+    );
+    assert!(
+        !item_schema
+            .field("output_directory")
+            .expect("output_directory editor field")
+            .optional,
+        "a file sink cannot default its output directory"
+    );
+}
+
+#[test]
+fn the_file_sink_editor_default_is_a_valid_section() {
+    let default = default_opentelemetry_file_sink_editor_value();
+    let section: OpenTelemetryFileSinkConfig = serde_json::from_value(default).unwrap();
+
+    assert_eq!(section.format, OtlpFileFormat::JsonLines);
+    assert_eq!(section.mode, "overwrite");
+}
+
+#[test]
+fn validate_opentelemetry_section_accepts_a_file_sink_as_the_only_destination() {
+    let directory = tempfile::tempdir().unwrap();
+    let policy = ConfigPolicy::default();
+    let mut diagnostics = Vec::new();
+
+    validate_opentelemetry_section(
+        &mut diagnostics,
+        &policy,
+        &OpenTelemetrySectionConfig {
+            enabled: true,
+            file_sinks: vec![file_sink_section(directory.path())],
+            endpoints: Vec::new(),
+            logs: None,
+            metrics: None,
+        },
+    );
+
+    // Static validation runs before activation, so a section it rejects never
+    // reaches `register_opentelemetry` at all.
+    assert!(
+        diagnostics.is_empty(),
+        "a file sink is a destination: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn validate_opentelemetry_section_reports_malformed_file_sinks() {
+    let directory = tempfile::tempdir().unwrap();
+    let policy = ConfigPolicy::default();
+    let mut blank_directory = file_sink_section(directory.path());
+    blank_directory.output_directory = PathBuf::new();
+    let mut bad_mode = file_sink_section(directory.path());
+    bad_mode.mode = "truncate".to_string();
+    let mut diagnostics = Vec::new();
+
+    validate_opentelemetry_section(
+        &mut diagnostics,
+        &policy,
+        &OpenTelemetrySectionConfig {
+            enabled: true,
+            file_sinks: vec![blank_directory, bad_mode],
+            endpoints: Vec::new(),
+            logs: None,
+            metrics: None,
+        },
+    );
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("file_sinks[0].output_directory")
+    }));
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.field.as_deref() == Some("file_sinks[1].mode"))
+    );
+}
+
+#[test]
+fn a_default_file_sink_service_name_is_left_to_sdk_resource_detection() {
+    let directory = tempfile::tempdir().unwrap();
+    let section = file_sink_section(directory.path());
+
+    // The endpoint path leaves the default unset so OTEL_SERVICE_NAME and
+    // OTEL_RESOURCE_ATTRIBUTES can supply it. A file sink and an endpoint in
+    // the same section would otherwise carry different resources.
+    let config = build_otel_file_config(0, section).unwrap();
+    assert_eq!(config.service_name(), None);
+
+    let mut named = file_sink_section(directory.path());
+    named.service_name = "relay-configured-service".to_string();
+    assert_eq!(
+        build_otel_file_config(0, named).unwrap().service_name(),
+        Some("relay-configured-service"),
+    );
+}
+
+#[test]
+fn validate_opentelemetry_section_names_the_batch_field_that_failed() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut section = file_sink_section(directory.path());
+    section.scheduled_delay_millis = Some(0);
+    let mut diagnostics = Vec::new();
+
+    validate_opentelemetry_section(
+        &mut diagnostics,
+        &ConfigPolicy::default(),
+        &OpenTelemetrySectionConfig {
+            enabled: true,
+            file_sinks: vec![section],
+            endpoints: Vec::new(),
+            logs: None,
+            metrics: None,
+        },
+    );
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref() == Some("file_sinks[0].scheduled_delay_millis")
+        }),
+        "the failing field should be named: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn validate_opentelemetry_section_reports_file_sink_mappings_and_prefixes() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut section = file_sink_section(directory.path());
+    section.attribute_mappings = vec![OtlpAttributeMapping {
+        key: String::new(),
+        alias: "alias".to_string(),
+    }];
+    section.promote_metadata_prefixes = vec![String::new()];
+    section.promote_resource_metadata_prefixes = vec![String::new()];
+    let mut diagnostics = Vec::new();
+
+    validate_opentelemetry_section(
+        &mut diagnostics,
+        &ConfigPolicy::default(),
+        &OpenTelemetrySectionConfig {
+            enabled: true,
+            file_sinks: vec![section],
+            endpoints: Vec::new(),
+            logs: None,
+            metrics: None,
+        },
+    );
+
+    // These otherwise fail only at activation, where the sink is skipped with a
+    // warning instead of failing configuration.
+    for field in [
+        "file_sinks[0].attribute_mappings",
+        "file_sinks[0].promote_metadata_prefixes",
+        "file_sinks[0].promote_resource_metadata_prefixes",
+    ] {
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.field.as_deref() == Some(field)),
+            "expected a diagnostic for {field}: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
+fn validate_opentelemetry_section_reports_colliding_file_sink_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut diagnostics = Vec::new();
+
+    validate_opentelemetry_section(
+        &mut diagnostics,
+        &ConfigPolicy::default(),
+        &OpenTelemetrySectionConfig {
+            enabled: true,
+            file_sinks: vec![
+                file_sink_section(directory.path()),
+                file_sink_section(directory.path()),
+            ],
+            endpoints: Vec::new(),
+            logs: None,
+            metrics: None,
+        },
+    );
+
+    // A collision fails the whole section at activation, so it is reported
+    // statically as well, like a colliding pair of endpoints.
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "observability.unsafe_otel_destination_collision"
+                && diagnostic.field.as_deref() == Some("file_sinks")
+        }),
+        "expected a collision diagnostic: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn a_file_sink_applies_every_optional_setting() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let directory = tempfile::tempdir().unwrap();
+    let mut section = file_sink_section(directory.path());
+    section.max_queue_size = Some(4096);
+    section.max_export_batch_size = Some(512);
+    section.scheduled_delay_millis = Some(1000);
+    section.completed_span_context_ttl_millis = Some(30_000);
+    section.service_namespace = Some("agents".to_string());
+    section.service_version = Some("1.2.3".to_string());
+    section
+        .resource_attributes
+        .insert("deployment.environment".to_string(), "test".to_string());
+
+    let config = build_otel_file_config(0, section).unwrap();
+
+    assert_eq!(
+        config.batch_overrides(),
+        (Some(4096), Some(512), Some(Duration::from_millis(1000)))
+    );
+    assert_eq!(
+        config.completed_span_context_ttl(),
+        Duration::from_millis(30_000)
+    );
+    crate::observability::otel::OpenTelemetrySubscriber::new_file_sink(config)
+        .unwrap()
+        .shutdown()
+        .unwrap();
+}
+
+#[test]
+fn an_invalid_file_sink_is_skipped_while_the_others_register() {
+    // Registration touches the global subscriber registry.
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let directory = tempfile::tempdir().unwrap();
+    let mut broken = file_sink_section(directory.path());
+    broken.mode = "truncate".to_string();
+    broken.filename = Some("broken.jsonl".to_string());
+    let mut working = file_sink_section(directory.path());
+    working.filename = Some("working.jsonl".to_string());
+
+    let mut context = PluginRegistrationContext::new();
+    register_opentelemetry(
+        OpenTelemetrySectionConfig {
+            enabled: true,
+            file_sinks: vec![broken, working],
+            endpoints: Vec::new(),
+            logs: None,
+            metrics: None,
+        },
+        &mut context,
+    )
+    .unwrap();
+
+    // One bad sink does not stop delivery to the rest.
+    assert!(!directory.path().join("broken.jsonl").exists());
+    assert!(directory.path().join("working.jsonl").is_file());
+    crate::plugin::rollback_registrations(&mut context.into_registrations());
+}
+
+#[test]
+fn file_sinks_without_filenames_collide_on_the_generated_name() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut first = file_sink_section(directory.path());
+    first.filename = None;
+    let mut second = file_sink_section(directory.path());
+    second.filename = None;
+
+    // Both fall back to the same format-derived default.
+    let error = validate_distinct_opentelemetry_file_sinks(&[first, second]).unwrap_err();
+
+    assert!(error.to_string().contains("write the same path"));
+}
+
+#[test]
+fn file_sinks_register_even_when_the_environment_configures_automatic_signals() {
+    const CHILD_MARKER: &str = "NEMO_RELAY_TEST_FILE_SINK_AUTOMATIC_CHILD";
+    if std::env::var(CHILD_MARKER).is_ok() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut context = PluginRegistrationContext::new();
+        register_opentelemetry(
+            OpenTelemetrySectionConfig {
+                enabled: true,
+                file_sinks: vec![file_sink_section(directory.path())],
+                endpoints: Vec::new(),
+                logs: None,
+                metrics: None,
+            },
+            &mut context,
+        )
+        .unwrap();
+        // A section carrying only file sinks is not empty, so an automatic
+        // endpoint from the environment must not displace it.
+        assert!(!opentelemetry_section_is_empty(
+            &OpenTelemetrySectionConfig {
+                enabled: true,
+                file_sinks: vec![file_sink_section(directory.path())],
+                endpoints: Vec::new(),
+                logs: None,
+                metrics: None,
+            }
+        ));
+        assert!(directory.path().join("trace.jsonl").is_file());
+        crate::plugin::rollback_registrations(&mut context.into_registrations());
+        return;
+    }
+
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "--nocapture", "--test-threads", "1"])
+        .arg("observability::plugin_component::tests::file_sinks_register_even_when_the_environment_configures_automatic_signals")
+        .env(CHILD_MARKER, "1")
+        .env("OTEL_EXPORTER_OTLP_ENDPOINT", "https://collector.example:4318")
+        .output()
+        .unwrap();
+    let summary = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "child run failed: {}\n{summary}",
+        output.status
+    );
+    // An exact filter that no longer matches leaves libtest exiting
+    // successfully, so the child has to report that it ran the test.
+    assert!(
+        summary.contains("1 passed"),
+        "child ran no test:\n{summary}"
+    );
+}
+
+#[test]
+fn validate_opentelemetry_section_reports_file_sink_filename_and_batch_errors() {
+    let directory = tempfile::tempdir().unwrap();
+    let policy = ConfigPolicy::default();
+    let mut bad_filename = file_sink_section(directory.path());
+    bad_filename.filename = Some("../escape.jsonl".to_string());
+    let mut bad_batch = file_sink_section(directory.path());
+    bad_batch.filename = Some("second.jsonl".to_string());
+    bad_batch.max_queue_size = Some(0);
+    let mut diagnostics = Vec::new();
+
+    validate_opentelemetry_section(
+        &mut diagnostics,
+        &policy,
+        &OpenTelemetrySectionConfig {
+            enabled: true,
+            file_sinks: vec![bad_filename, bad_batch],
+            endpoints: Vec::new(),
+            logs: None,
+            metrics: None,
+        },
+    );
+
+    // Reported before activation, as the endpoint path already does, instead of
+    // only as a skipped-sink warning once the plugin starts.
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.field.as_deref() == Some("file_sinks[0].filename"))
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.field.as_deref() == Some("file_sinks[1].max_queue_size"))
     );
 }

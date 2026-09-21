@@ -499,6 +499,125 @@ pub struct PyOpenTelemetryConfig {
     pub(crate) promote_resource_metadata_prefixes: Vec<String>,
 }
 
+/// Configuration for an OpenTelemetry subscriber writing OTLP to a local file.
+///
+/// Example:
+/// ```python
+/// config = OpenTelemetryFileSinkConfig("full", "/tmp/relay-traces")
+/// ```
+#[pyclass(name = "OpenTelemetryFileSinkConfig", skip_from_py_object)]
+#[derive(Clone)]
+pub(crate) struct PyOtlpFileSink {
+    #[pyo3(get, set, name = "type")]
+    pub(crate) otel_type: String,
+    #[pyo3(get, set)]
+    pub(crate) service_name: String,
+    #[pyo3(get, set)]
+    pub(crate) service_namespace: Option<String>,
+    #[pyo3(get, set)]
+    pub(crate) service_version: Option<String>,
+    #[pyo3(get, set)]
+    pub(crate) instrumentation_scope: String,
+    #[pyo3(get, set)]
+    pub(crate) output_directory: String,
+    #[pyo3(get, set)]
+    pub(crate) filename: Option<String>,
+    #[pyo3(get, set)]
+    pub(crate) format: String,
+    #[pyo3(get, set)]
+    pub(crate) mode: String,
+    pub(crate) resource_attributes: HashMap<String, String>,
+}
+
+#[pymethods]
+impl PyOtlpFileSink {
+    #[new]
+    #[pyo3(signature = (otel_type, output_directory, filename=None, format="json_lines".to_string(), mode="overwrite".to_string()))]
+    pub(crate) fn new(
+        otel_type: String,
+        output_directory: String,
+        filename: Option<String>,
+        format: String,
+        mode: String,
+    ) -> Self {
+        Self {
+            otel_type,
+            service_name: "unknown_service".to_string(),
+            service_namespace: None,
+            service_version: None,
+            instrumentation_scope: "opentelemetry".to_string(),
+            output_directory,
+            filename,
+            format,
+            mode,
+            resource_attributes: HashMap::new(),
+        }
+    }
+
+    /// Add an OpenTelemetry resource attribute.
+    pub(crate) fn set_resource_attribute(&mut self, key: String, value: String) {
+        self.resource_attributes.insert(key, value);
+    }
+
+    pub(crate) fn __repr__(&self) -> String {
+        format!(
+            "<OpenTelemetryFileSinkConfig output_directory={:?} format={:?}>",
+            self.output_directory, self.format
+        )
+    }
+}
+
+impl PyOtlpFileSink {
+    pub(crate) fn to_rust_config(
+        &self,
+    ) -> PyResult<nemo_relay::observability::otel::OpenTelemetryFileSinkConfig> {
+        let otel_type = parse_py_otel_type(&self.otel_type)?;
+        let mut config = nemo_relay::observability::otel::OpenTelemetryFileSinkConfig::new(
+            otel_type,
+            self.to_settings()?,
+        )
+        .with_instrumentation_scope(self.instrumentation_scope.clone());
+        // The untouched default stays unset so the SDK can detect it from
+        // OTEL_SERVICE_NAME, matching the plugin configuration path.
+        if self.service_name != "unknown_service" {
+            config = config.with_service_name(self.service_name.clone());
+        }
+        if let Some(namespace) = &self.service_namespace {
+            config = config.with_service_namespace(namespace.clone());
+        }
+        if let Some(version) = &self.service_version {
+            config = config.with_service_version(version.clone());
+        }
+        for (key, value) in &self.resource_attributes {
+            config = config.with_resource_attribute(key.clone(), value.clone());
+        }
+        Ok(config)
+    }
+}
+
+fn parse_py_otel_type(value: &str) -> PyResult<nemo_relay::observability::OpenTelemetryType> {
+    match value {
+        "full" => Ok(nemo_relay::observability::OpenTelemetryType::Full),
+        "gen_ai" => Ok(nemo_relay::observability::OpenTelemetryType::GenAi),
+        "openinference" => Ok(nemo_relay::observability::OpenTelemetryType::OpenInference),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "type must be 'full', 'gen_ai', or 'openinference', got {other:?}"
+        ))),
+    }
+}
+
+impl PyOtlpFileSink {
+    fn to_settings(&self) -> PyResult<nemo_relay::observability::otel::OtlpFileSinkSettings> {
+        nemo_relay::observability::otel::OtlpFileSinkSettings::from_parts(
+            &self.output_directory,
+            self.filename.as_deref(),
+            Some(self.format.as_str()),
+            Some(self.mode.as_str()),
+        )
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+    }
+}
+
 impl PyOpenTelemetryConfig {
     pub(crate) fn to_rust_config(
         &self,
@@ -520,12 +639,13 @@ impl PyOpenTelemetryConfig {
             self.endpoint.clone(),
         )
         .with_transport(transport)
-        .with_service_name(self.service_name.clone())
-        .with_instrumentation_scope(self.instrumentation_scope.clone())
-        .with_timeout(Duration::from_millis(self.timeout_millis))
-        .with_completed_span_context_ttl(Duration::from_millis(
-            self.completed_span_context_ttl_millis,
-        ));
+        .with_timeout(Duration::from_millis(self.timeout_millis));
+        config = config
+            .with_service_name(self.service_name.clone())
+            .with_instrumentation_scope(self.instrumentation_scope.clone())
+            .with_completed_span_context_ttl(Duration::from_millis(
+                self.completed_span_context_ttl_millis,
+            ));
 
         if let Some(namespace) = &self.service_namespace {
             config = config.with_service_namespace(namespace.clone());
@@ -690,7 +810,25 @@ pub struct PyOpenTelemetrySubscriber {
 #[pymethods]
 impl PyOpenTelemetrySubscriber {
     #[new]
-    pub(crate) fn new(config: PyRef<'_, PyOpenTelemetryConfig>) -> PyResult<Self> {
+    pub(crate) fn new(config: &Bound<'_, PyAny>) -> PyResult<Self> {
+        if let Ok(file_sink) = config.extract::<PyRef<'_, PyOtlpFileSink>>() {
+            let rust_config = file_sink.to_rust_config()?;
+            let inner = nemo_relay::observability::otel::OpenTelemetrySubscriber::new_file_sink(
+                rust_config,
+            )
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            return Ok(Self {
+                inner,
+                owned_runtime: None,
+            });
+        }
+        let config = config
+            .extract::<PyRef<'_, PyOpenTelemetryConfig>>()
+            .map_err(|_| {
+                pyo3::exceptions::PyTypeError::new_err(
+                    "config must be an OpenTelemetryConfig or OpenTelemetryFileSinkConfig",
+                )
+            })?;
         let rust_config = config.to_rust_config()?;
         let needs_owned_runtime = config.transport == "grpc" && Handle::try_current().is_err();
         if needs_owned_runtime {

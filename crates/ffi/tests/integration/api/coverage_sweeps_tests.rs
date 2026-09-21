@@ -1954,3 +1954,99 @@ fn test_ffi_typed_otel_signal_options_from_integration_binary() {
         );
     }
 }
+
+/// Drives the file-sink entry point from the integration binary as well as the
+/// unit one.
+///
+/// Both binaries compile `api/observability.rs`, and the merged coverage report
+/// follows the integration mapping. A path exercised only by the unit tests
+/// therefore reads as unreached.
+#[test]
+fn test_ffi_otel_file_sink_subscriber_create_covers_success_and_rejection() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    let directory = tempfile::tempdir().unwrap();
+    let output_directory = cstring(&directory.path().display().to_string());
+    let otel_type = cstring("full");
+    let filename = cstring("ffi-integration-trace.otlp.pb");
+    let format = cstring("proto");
+    let mode = cstring("append");
+    let resource_attributes = cstring(r#"{"deployment.environment":"test"}"#);
+    let service_name = cstring("ffi-integration-file-sink");
+    let service_namespace = cstring("agents");
+    let service_version = cstring("1.2.3");
+    let instrumentation_scope = cstring("ffi-integration-scope");
+
+    unsafe {
+        let mut subscriber = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_subscriber_create_file_sink(
+                otel_type.as_ptr(),
+                output_directory.as_ptr(),
+                filename.as_ptr(),
+                format.as_ptr(),
+                mode.as_ptr(),
+                resource_attributes.as_ptr(),
+                service_name.as_ptr(),
+                service_namespace.as_ptr(),
+                service_version.as_ptr(),
+                instrumentation_scope.as_ptr(),
+                &mut subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert!(
+            directory
+                .path()
+                .join("ffi-integration-trace.otlp.pb")
+                .is_file()
+        );
+        assert_status!(
+            nemo_relay_otel_subscriber_shutdown(subscriber),
+            NemoRelayStatus::Ok
+        );
+        types::nemo_relay_otel_subscriber_free(subscriber);
+
+        // A null `out` is rejected before anything is parsed.
+        assert_status!(
+            nemo_relay_otel_subscriber_create_file_sink(
+                otel_type.as_ptr(),
+                output_directory.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null_mut(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
+
+        let mut rejected = ptr::null_mut();
+        for (directory_arg, filename_arg) in [
+            (cstring(""), cstring("trace.jsonl")),
+            (output_directory.clone(), cstring("../escape.jsonl")),
+        ] {
+            assert_status!(
+                nemo_relay_otel_subscriber_create_file_sink(
+                    otel_type.as_ptr(),
+                    directory_arg.as_ptr(),
+                    filename_arg.as_ptr(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    &mut rejected,
+                ),
+                NemoRelayStatus::InvalidArg
+            );
+        }
+    }
+}

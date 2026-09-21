@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use nemo_relay_types::api::event::{
     AttributeValue, BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, FiniteF64,
-    LogSeverity, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope, MetricKind,
-    MetricMeasurement, MetricValue, MetricValueType, PendingMarkSpec, ScopeCategory, ScopeEvent,
-    llm_attributes_to_strings,
+    LogSeverity, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricAttributes,
+    MetricEnvelope, MetricKind, MetricMeasurement, MetricValue, MetricValueType, PendingMarkSpec,
+    ScopeCategory, ScopeEvent, llm_attributes_to_strings,
 };
 use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay_types::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
@@ -794,4 +794,102 @@ fn annotated_response_text_reads_provider_native_text_and_refusal() {
         };
         assert_eq!(response.response_text(), Some(expected));
     }
+}
+
+#[test]
+fn metric_enums_and_validation_errors_render_their_canonical_text() {
+    // `Display` is what reaches a log line or a diagnostic, and it has to agree
+    // with the wire value rather than the Rust variant name.
+    for (severity, text) in [
+        (LogSeverity::Trace, "trace"),
+        (LogSeverity::Debug, "debug"),
+        (LogSeverity::Info, "info"),
+        (LogSeverity::Warn, "warn"),
+        (LogSeverity::Error, "error"),
+    ] {
+        assert_eq!(severity.to_string(), text);
+    }
+    for (kind, text) in [
+        (MetricKind::Counter, "counter"),
+        (MetricKind::UpDownCounter, "up_down_counter"),
+        (MetricKind::Gauge, "gauge"),
+        (MetricKind::Histogram, "histogram"),
+    ] {
+        assert_eq!(kind.as_str(), text);
+        assert_eq!(kind.to_string(), text);
+    }
+    for (value_type, text) in [
+        (MetricValueType::U64, "u64"),
+        (MetricValueType::I64, "i64"),
+        (MetricValueType::F64, "f64"),
+    ] {
+        assert_eq!(value_type.as_str(), text);
+        assert_eq!(value_type.to_string(), text);
+    }
+
+    let mut invalid = measurement(MetricKind::Gauge, MetricValueType::I64, json!(1));
+    invalid.name = String::new();
+    let error = MetricEnvelope {
+        measurements: vec![invalid],
+    }
+    .validate()
+    .expect_err("a blank metric name should be rejected");
+    // `message()` is the detail a caller surfaces without the wrapping Display.
+    assert!(!error.message().is_empty());
+    assert!(error.to_string().contains(error.message()));
+}
+
+#[test]
+fn metric_attribute_arrays_reject_mixed_and_nested_values() {
+    // One array per primitive type, each with a trailing element of the wrong
+    // type, plus an array of arrays: an exporter cannot represent either.
+    for attributes in [
+        json!({"mixed": ["one", 2]}),
+        json!({"mixed": [true, "two"]}),
+        json!({"mixed": [1, "two"]}),
+        json!({"mixed": [1.5, "two"]}),
+        json!({"nested": [["inner"]]}),
+    ] {
+        let mut measurement = measurement(MetricKind::Gauge, MetricValueType::I64, json!(1));
+        measurement.attributes = Some(attributes.clone());
+        let error = MetricEnvelope {
+            measurements: vec![measurement],
+        }
+        .validate()
+        .expect_err("expected {attributes} to be rejected");
+        assert!(
+            error.message().contains("attribute arrays"),
+            "unexpected message for {attributes}: {error}"
+        );
+    }
+
+    let mut valid = measurement(MetricKind::Gauge, MetricValueType::I64, json!(1));
+    valid.attributes = Some(json!({"strings": ["a", "b"], "floats": [1.5, 2.5]}));
+    MetricEnvelope {
+        measurements: vec![valid],
+    }
+    .validate()
+    .expect("uniform primitive arrays should be accepted");
+}
+
+#[test]
+fn metric_attributes_insert_replaces_by_key_in_sorted_order() {
+    // The map is ordered so an exporter emits attributes deterministically.
+    let mut attributes = MetricAttributes::default();
+    attributes.insert("zeta".into(), AttributeValue::I64(2));
+    attributes.insert("alpha".into(), AttributeValue::String("first".into()));
+    attributes.insert("zeta".into(), AttributeValue::I64(3));
+
+    assert!(!attributes.is_empty());
+    assert_eq!(
+        attributes
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("alpha", AttributeValue::String("first".into())),
+            ("zeta", AttributeValue::I64(3)),
+        ],
+    );
+    assert!(MetricAttributes::default().is_empty());
 }

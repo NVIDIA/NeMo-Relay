@@ -94,14 +94,14 @@ fn provider_errors_identify_their_telemetry_signal() {
 fn default_trace_config_leaves_service_name_to_sdk_resource_detection() {
     let config = OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4318");
     assert!(
-        configured_resource_attributes(&config)
+        configured_resource_attributes(&TraceConfig::Endpoint(config.clone()))
             .iter()
             .all(|attribute| attribute.key.as_str() != "service.name")
     );
 
     let configured = config.with_service_name("relay-configured-service");
     assert!(
-        configured_resource_attributes(&configured)
+        configured_resource_attributes(&TraceConfig::Endpoint(configured.clone()))
             .iter()
             .any(|attribute| {
                 attribute.key.as_str() == "service.name"
@@ -1546,39 +1546,43 @@ fn config_defaults_and_builder_overrides_are_applied() {
 }
 
 fn assert_config_builder_overrides(config: &OpenTelemetryConfig) {
-    assert_eq!(config.transport, OtlpTransport::HttpBinary);
-    assert_eq!(config.endpoint, "http://localhost:4318/v1/traces");
+    let settings = config;
+    assert_eq!(settings.transport, OtlpTransport::HttpBinary);
+    assert_eq!(settings.endpoint, "http://localhost:4318/v1/traces");
     assert_eq!(
-        config.headers.get("authorization"),
+        settings.headers.get("authorization"),
         Some(&"Bearer token".into())
     );
     assert_eq!(
-        config.header_env.get("x-api-key"),
+        settings.header_env.get("x-api-key"),
         Some(&"NEMO_RELAY_TEST_API_KEY".into())
     );
     assert_eq!(
-        config.resource_attributes.get("deployment.environment"),
+        config
+            .shared
+            .resource_attributes
+            .get("deployment.environment"),
         Some(&"test".into())
     );
-    assert_eq!(config.service_name.as_deref(), Some("demo-agent"));
-    assert_eq!(config.service_namespace.as_deref(), Some("agents"));
-    assert_eq!(config.service_version.as_deref(), Some("1.2.3"));
-    assert_eq!(config.instrumentation_scope, "demo-scope");
-    assert_eq!(config.mark_projection, MarkProjection::Tool);
-    assert_eq!(config.mark_exclude_names, vec!["notification"]);
-    assert_eq!(config.attribute_mappings.len(), 1);
+    assert_eq!(config.shared.service_name.as_deref(), Some("demo-agent"));
+    assert_eq!(config.shared.service_namespace.as_deref(), Some("agents"));
+    assert_eq!(config.shared.service_version.as_deref(), Some("1.2.3"));
+    assert_eq!(config.shared.instrumentation_scope, "demo-scope");
+    assert_eq!(config.shared.mark_projection, MarkProjection::Tool);
+    assert_eq!(config.shared.mark_exclude_names, vec!["notification"]);
+    assert_eq!(config.shared.attribute_mappings.len(), 1);
     assert_eq!(config.timeout, Duration::from_millis(1250));
 }
 
 fn assert_config_defaults(defaults: &OpenTelemetryConfig) {
     assert_eq!(defaults.transport, OtlpTransport::HttpBinary);
-    assert_eq!(defaults.service_name, None);
-    assert_eq!(defaults.instrumentation_scope, "opentelemetry");
-    assert_eq!(defaults.mark_projection, MarkProjection::Inherit);
-    assert_eq!(defaults.mark_exclude_names, vec!["llm.chunk"]);
+    assert_eq!(defaults.shared.service_name, None);
+    assert_eq!(defaults.shared.instrumentation_scope, "opentelemetry");
+    assert_eq!(defaults.shared.mark_projection, MarkProjection::Inherit);
+    assert_eq!(defaults.shared.mark_exclude_names, vec!["llm.chunk"]);
     assert_eq!(defaults.timeout, Duration::from_secs(3));
     assert!(defaults.headers.is_empty());
-    assert!(defaults.resource_attributes.is_empty());
+    assert!(defaults.shared.resource_attributes.is_empty());
 }
 
 #[test]
@@ -4538,11 +4542,9 @@ fn http_trace_exports_do_not_follow_redirects() {
                 write!(stream, "HTTP/1.1 {status} Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
                 request
             });
-            let mut config =
-                OpenTelemetryConfig::new(otel_type, endpoint).with_timeout(Duration::from_secs(1));
-            config
-                .headers
-                .insert("x-collector-key".into(), "test-secret".into());
+            let config = OpenTelemetryConfig::new(otel_type, endpoint)
+                .with_timeout(Duration::from_secs(1))
+                .with_header("x-collector-key", "test-secret");
             let subscriber = OpenTelemetrySubscriber::new(config).unwrap();
             let callback = subscriber.subscriber();
             let uuid = Uuid::now_v7();
@@ -6395,4 +6397,89 @@ fn grpc_metadata_and_runtime_builder_paths_succeed() {
     };
     provider.force_flush().ok();
     provider.shutdown().ok();
+}
+
+#[test]
+fn delivery_identity_sanitizes_endpoints_and_preserves_file_paths() {
+    let endpoint = TraceConfig::Endpoint(OpenTelemetryConfig::new(
+        OpenTelemetryType::Full,
+        "https://user:secret@collector.example:4318/v1/traces?token=abc",
+    ));
+    // An endpoint keeps scheme, host and port only: no credentials, no query.
+    let identity = endpoint.delivery_identity();
+    assert_eq!(identity, "https://collector.example:4318");
+    assert!(!identity.contains("secret"));
+    assert!(!identity.contains("token"));
+
+    let sink = OtlpFileSinkSettings {
+        output_directory: PathBuf::from("/var/log/nemo-relay"),
+        path: PathBuf::from("/var/log/nemo-relay/trace.jsonl"),
+        format: crate::observability::otel_file::OtlpFileFormat::JsonLines,
+        append: false,
+    };
+    // A path is not a URL; sanitizing it as one would report
+    // "an invalid OTLP endpoint" and hide which destination failed.
+    let file = TraceConfig::File(OpenTelemetryFileSinkConfig::new(
+        OpenTelemetryType::Full,
+        sink,
+    ));
+    assert_eq!(file.delivery_identity(), "/var/log/nemo-relay/trace.jsonl");
+}
+
+#[test]
+fn promoted_root_resources_share_one_file_sink_stream() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("trace.jsonl");
+    let sink = OtlpFileSinkSettings {
+        output_directory: directory.path().to_path_buf(),
+        path: path.clone(),
+        format: crate::observability::otel_file::OtlpFileFormat::JsonLines,
+        append: false,
+    };
+
+    let subscriber = OpenTelemetrySubscriber::new_file_sink(
+        OpenTelemetryFileSinkConfig::new(OpenTelemetryType::Full, sink)
+            .with_promote_resource_metadata_prefixes(["tenant."]),
+    )
+    .unwrap();
+    let callback = subscriber.subscriber();
+    // Two roots with different promoted resources: each opens its own pipeline,
+    // and both write the one file the sink configured.
+    for tenant in ["first-tenant", "second-tenant"] {
+        let root = Uuid::now_v7();
+        callback(&make_start_event_with_metadata(
+            root,
+            None,
+            tenant,
+            json!({"tenant.id": tenant}),
+        ));
+        callback(&make_end_event(root, None, tenant, ScopeType::Agent, None));
+    }
+    subscriber.force_flush().unwrap();
+
+    let contents = std::fs::read_to_string(&path).unwrap();
+    let mut tenants = BTreeSet::new();
+    for line in contents.lines() {
+        // Decoded with serde_json rather than the exporter's own encoder: a
+        // truncated or interleaved stream fails here.
+        let request: Json = serde_json::from_str(line).expect("every record decodes");
+        for resource_spans in request["resourceSpans"].as_array().unwrap() {
+            for attribute in resource_spans["resource"]["attributes"].as_array().unwrap() {
+                if attribute["key"] == "tenant.id" {
+                    tenants.insert(
+                        attribute["value"]["stringValue"]
+                            .as_str()
+                            .unwrap()
+                            .to_string(),
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(
+        tenants,
+        BTreeSet::from(["first-tenant".to_string(), "second-tenant".to_string()]),
+        "both promoted resources should survive in {contents}"
+    );
 }

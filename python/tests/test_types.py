@@ -26,6 +26,7 @@ from nemo_relay import (
     MetricTemporality,
     MetricValueType,
     OpenTelemetryConfig,
+    OpenTelemetryFileSinkConfig,
     OpenTelemetryLogConfig,
     OpenTelemetryLogSubscriber,
     OpenTelemetryMetricConfig,
@@ -802,6 +803,160 @@ class TestOpenTelemetryTypes:
         assert config.promote_metadata_prefixes == ["nv."]
         assert config.promote_resource_metadata_prefixes == ["deployment."]
         assert "OpenTelemetryConfig" in repr(config)
+
+    def test_file_sink_config_writes_a_trace_file(self, tmp_path) -> None:
+        config = OpenTelemetryFileSinkConfig("full", str(tmp_path), "py-trace.jsonl")
+
+        subscriber = OpenTelemetrySubscriber(config)
+        try:
+            assert (tmp_path / "py-trace.jsonl").is_file()
+        finally:
+            subscriber.shutdown()
+
+    @pytest.mark.parametrize("fmt", ["json_lines", "proto"])
+    def test_file_sink_exports_a_projected_scope(self, tmp_path, fmt: str) -> None:
+        filename = "py-export.jsonl" if fmt == "json_lines" else "py-export.otlp.pb"
+        subscriber = OpenTelemetrySubscriber(OpenTelemetryFileSinkConfig("full", str(tmp_path), filename, format=fmt))
+        subscriber_name = f"py_otel_file_sink_{uuid4().hex}"
+        subscriber.register(subscriber_name)
+        try:
+            handle = scope.push("py-file-sink-agent", ScopeType.Agent)
+            scope.pop(handle)
+            subscribers.flush()
+        finally:
+            subscriber.deregister(subscriber_name)
+            subscriber.shutdown()
+
+        payload = (tmp_path / filename).read_bytes()
+        assert b"py-file-sink-agent" in payload
+        if fmt == "json_lines":
+            # One record per line, decoded without the exporter's own encoder.
+            lines = payload.decode().splitlines()
+            assert len(lines) == 1
+            assert json.loads(lines[0])["resourceSpans"]
+        else:
+            # A length-delimited frame: a big-endian byte count, then the body.
+            length = int.from_bytes(payload[:4], "big")
+            assert length == len(payload) - 4
+
+    def test_file_sink_append_mode_preserves_earlier_records(self, tmp_path) -> None:
+        path = tmp_path / "py-append.jsonl"
+        path.write_bytes(b'{"resourceSpans":[]}\n')
+        subscriber = OpenTelemetrySubscriber(
+            OpenTelemetryFileSinkConfig("full", str(tmp_path), path.name, mode="append")
+        )
+        subscriber_name = f"py_otel_file_sink_append_{uuid4().hex}"
+        subscriber.register(subscriber_name)
+        try:
+            handle = scope.push("py-append-agent", ScopeType.Agent)
+            scope.pop(handle)
+            subscribers.flush()
+        finally:
+            subscriber.deregister(subscriber_name)
+            subscriber.shutdown()
+
+        lines = path.read_text().splitlines()
+        assert len(lines) == 2
+        assert json.loads(lines[0])["resourceSpans"] == []
+        assert "py-append-agent" in lines[1]
+
+    def test_file_sink_defaults_name_the_file_after_the_format(self, tmp_path) -> None:
+        subscriber = OpenTelemetrySubscriber(OpenTelemetryFileSinkConfig("full", str(tmp_path), format="proto"))
+        try:
+            assert (tmp_path / "nemo-relay-otlp.otlp.pb").is_file()
+        finally:
+            subscriber.shutdown()
+
+    @pytest.mark.parametrize(
+        ("kwargs", "expected"),
+        [
+            ({"format": "yaml"}, "format must be"),
+            ({"mode": "truncate"}, "mode must be"),
+            ({"filename": "../escape.jsonl"}, "single path component"),
+        ],
+    )
+    def test_file_sink_rejects_invalid_inputs(self, tmp_path, kwargs, expected) -> None:
+        config = OpenTelemetryFileSinkConfig("full", str(tmp_path), **kwargs)
+
+        with pytest.raises(ValueError, match=expected):
+            OpenTelemetrySubscriber(config)
+
+    def test_file_sink_applies_every_optional_setting(self, tmp_path) -> None:
+        config = OpenTelemetryFileSinkConfig("full", str(tmp_path), "full.jsonl", mode="append")
+        config.service_name = "py-file-sink"
+        config.service_namespace = "agents"
+        config.service_version = "1.2.3"
+        config.instrumentation_scope = "py-scope"
+        config.set_resource_attribute("deployment.environment", "test")
+
+        assert config.service_namespace == "agents"
+        assert config.service_version == "1.2.3"
+        assert config.mode == "append"
+        assert "OpenTelemetryFileSinkConfig" in repr(config)
+
+        subscriber = OpenTelemetrySubscriber(config)
+        subscriber_name = f"py_otel_file_sink_full_{uuid4().hex}"
+        subscriber.register(subscriber_name)
+        try:
+            handle = scope.push("py-optional-agent", ScopeType.Agent)
+            scope.pop(handle)
+            subscribers.flush()
+        finally:
+            subscriber.deregister(subscriber_name)
+            subscriber.shutdown()
+
+        # Every configured setting has to survive the trip through PyO3 into the
+        # exported resource, not merely be readable back off the config object.
+        record = json.loads((tmp_path / "full.jsonl").read_text().splitlines()[0])
+        resource = record["resourceSpans"][0]["resource"]["attributes"]
+        attributes = {entry["key"]: entry["value"]["stringValue"] for entry in resource}
+        assert attributes["service.name"] == "py-file-sink"
+        assert attributes["service.namespace"] == "agents"
+        assert attributes["service.version"] == "1.2.3"
+        assert attributes["deployment.environment"] == "test"
+        assert record["resourceSpans"][0]["scopeSpans"][0]["scope"]["name"] == "py-scope"
+
+    def test_file_sink_leaves_an_untouched_service_name_to_the_sdk(self, tmp_path) -> None:
+        # An untouched default must not be sent as a configured value, or it
+        # would shadow OTEL_SERVICE_NAME on a file sink while an endpoint in the
+        # same configuration honours it.
+        subscriber = OpenTelemetrySubscriber(OpenTelemetryFileSinkConfig("full", str(tmp_path), "sdk-default.jsonl"))
+        subscriber_name = f"py_otel_file_sink_default_{uuid4().hex}"
+        subscriber.register(subscriber_name)
+        try:
+            handle = scope.push("py-default-agent", ScopeType.Agent)
+            scope.pop(handle)
+            subscribers.flush()
+        finally:
+            subscriber.deregister(subscriber_name)
+            subscriber.shutdown()
+
+        record = json.loads((tmp_path / "sdk-default.jsonl").read_text().splitlines()[0])
+        resource = record["resourceSpans"][0]["resource"]["attributes"]
+        assert any(entry["key"] == "service.name" for entry in resource)
+
+    def test_file_sink_rejects_an_unknown_projection_type(self, tmp_path) -> None:
+        config = OpenTelemetryFileSinkConfig("unsupported", str(tmp_path))
+
+        with pytest.raises(ValueError, match="type must be"):
+            OpenTelemetrySubscriber(config)
+
+    def test_file_sink_rejects_a_blank_output_directory(self) -> None:
+        config = OpenTelemetryFileSinkConfig("full", "   ")
+
+        with pytest.raises(ValueError, match="output_directory"):
+            OpenTelemetrySubscriber(config)
+
+    def test_file_sink_has_no_endpoint_only_attributes(self, tmp_path) -> None:
+        config = OpenTelemetryFileSinkConfig("full", str(tmp_path))
+
+        # The options are absent from the type rather than rejected at runtime.
+        for attribute in ("endpoint", "transport", "timeout_millis", "set_header"):
+            assert not hasattr(config, attribute)
+
+    def test_subscriber_rejects_an_unrelated_object(self) -> None:
+        with pytest.raises(TypeError, match="OpenTelemetryConfig"):
+            OpenTelemetrySubscriber(object())
 
     def test_config_rejects_invalid_map_values(self) -> None:
         config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")

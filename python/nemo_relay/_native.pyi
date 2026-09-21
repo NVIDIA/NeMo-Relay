@@ -1221,6 +1221,40 @@ class OpenTelemetryConfig:
         """Set one OpenTelemetry resource attribute key/value pair."""
         ...
 
+class OpenTelemetryFileSinkConfig:
+    """Configuration for a subscriber that writes OTLP to a local file.
+
+    Description:
+        Carries no endpoint, transport, headers, or timeout: a file
+        destination has no use for them. ``json_lines`` is the OpenTelemetry
+        file-exporter specification's serialization; ``proto`` writes each
+        record length-delimited.
+    """
+
+    type: Literal["full", "gen_ai", "openinference"]
+    output_directory: str
+    filename: Optional[str]
+    format: Literal["json_lines", "proto"]
+    mode: Literal["append", "overwrite"]
+    service_name: str
+    service_namespace: Optional[str]
+    service_version: Optional[str]
+    instrumentation_scope: str
+
+    def __init__(
+        self,
+        otel_type: Literal["full", "gen_ai", "openinference"],
+        output_directory: str,
+        filename: Optional[str] = None,
+        format: Literal["json_lines", "proto"] = "json_lines",
+        mode: Literal["append", "overwrite"] = "overwrite",
+    ) -> None:
+        """Create a file sink config."""
+        ...
+    def set_resource_attribute(self, key: str, value: str) -> None:
+        """Add an OpenTelemetry resource attribute."""
+        ...
+
 class OpenTelemetrySubscriber:
     """OpenTelemetry-backed NeMo Relay event subscriber.
 

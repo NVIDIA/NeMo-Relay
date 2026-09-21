@@ -551,7 +551,15 @@ func assertClosedHandleErrorPaths(t *testing.T) {
 		})
 	}()
 
-	exporter, err := NewAtofExporter(NewAtofExporterConfig())
+	// The default sink writes to the working directory, which for `go test` is
+	// the package directory: without an explicit directory this leaves a
+	// timestamped event file behind in the repository.
+	config := NewAtofExporterConfig()
+	config.Sink = AtofFileSinkConfig{
+		OutputDirectory: t.TempDir(),
+		Mode:            AtofExporterModeAppend,
+	}
+	exporter, err := NewAtofExporter(config)
 	if err != nil {
 		t.Fatalf("NewAtofExporter failed: %v", err)
 	}

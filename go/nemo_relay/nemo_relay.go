@@ -288,6 +288,7 @@ extern int32_t nemo_relay_otel_subscriber_create_with_projection_options(const c
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v2(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, void**);
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v3(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, uint64_t, void**);
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v4(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, uint64_t, void**);
+extern int32_t nemo_relay_otel_subscriber_create_file_sink(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, void**);
 extern int32_t nemo_relay_otel_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_subscriber_force_flush(const void*);
@@ -2663,6 +2664,107 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 		cAttributeMappingsJSON,
 		cPromoteMetadataPrefixesJSON,
 		C.uint64_t(*config.CompletedSpanContextTTL/time.Millisecond),
+		&ptr,
+	)
+	if err := checkStatus(status); err != nil {
+		return nil, err
+	}
+	return &OpenTelemetrySubscriber{ptr: ptr}, nil
+}
+
+// OpenTelemetryFileSinkFormat selects the on-disk encoding for a file sink.
+type OpenTelemetryFileSinkFormat string
+
+const (
+	// OpenTelemetryFileSinkFormatJSONLines writes one OTLP/JSON-encoded
+	// ExportTraceServiceRequest per line, the serialization described by the
+	// OpenTelemetry Protocol File Exporter specification.
+	OpenTelemetryFileSinkFormatJSONLines OpenTelemetryFileSinkFormat = "json_lines"
+	// OpenTelemetryFileSinkFormatProto writes each request length-delimited.
+	OpenTelemetryFileSinkFormatProto OpenTelemetryFileSinkFormat = "proto"
+)
+
+// OpenTelemetryFileSinkMode selects how an existing output file is opened.
+type OpenTelemetryFileSinkMode string
+
+const (
+	// OpenTelemetryFileSinkModeOverwrite truncates an existing file.
+	OpenTelemetryFileSinkModeOverwrite OpenTelemetryFileSinkMode = "overwrite"
+	// OpenTelemetryFileSinkModeAppend appends to an existing file.
+	OpenTelemetryFileSinkModeAppend OpenTelemetryFileSinkMode = "append"
+)
+
+// OpenTelemetryFileSinkConfig configures a subscriber that writes OTLP to a
+// local file instead of exporting it to a collector. It carries no endpoint,
+// transport, headers, or timeout: those apply only to a network destination.
+type OpenTelemetryFileSinkConfig struct {
+	Type                 OpenTelemetryType
+	OutputDirectory      string
+	Filename             string
+	Format               OpenTelemetryFileSinkFormat
+	Mode                 OpenTelemetryFileSinkMode
+	ResourceAttributes   map[string]string
+	ServiceName          string
+	ServiceNamespace     string
+	ServiceVersion       string
+	InstrumentationScope string
+}
+
+// NewOpenTelemetryFileSinkSubscriber creates a subscriber that writes projected
+// spans to a local file.
+func NewOpenTelemetryFileSinkSubscriber(config OpenTelemetryFileSinkConfig) (*OpenTelemetrySubscriber, error) {
+	if config.Type == "" {
+		config.Type = OpenTelemetryTypeFull
+	}
+	if config.InstrumentationScope == "" {
+		config.InstrumentationScope = "opentelemetry"
+	}
+	// A nil map marshals to null, which the FFI boundary rejects.
+	if config.ResourceAttributes == nil {
+		config.ResourceAttributes = map[string]string{}
+	}
+
+	cType := C.CString(string(config.Type))
+	defer C.free(unsafe.Pointer(cType))
+	cOutputDirectory := C.CString(config.OutputDirectory)
+	defer C.free(unsafe.Pointer(cOutputDirectory))
+	cFilename := optionalCString(config.Filename)
+	defer C.free(unsafe.Pointer(cFilename))
+	cFormat := optionalCString(string(config.Format))
+	defer C.free(unsafe.Pointer(cFormat))
+	cMode := optionalCString(string(config.Mode))
+	defer C.free(unsafe.Pointer(cMode))
+
+	resourceAttrsJSON, err := jsonMarshal(config.ResourceAttributes)
+	if err != nil {
+		return nil, err
+	}
+	cResourceAttrsJSON := C.CString(string(resourceAttrsJSON))
+	defer C.free(unsafe.Pointer(cResourceAttrsJSON))
+
+	// An omitted service name is passed as NULL so the core leaves it unset and
+	// the SDK can detect it, matching the plugin configuration path.
+	cServiceName := optionalCString(config.ServiceName)
+	defer C.free(unsafe.Pointer(cServiceName))
+	cServiceNamespace := optionalCString(config.ServiceNamespace)
+	defer C.free(unsafe.Pointer(cServiceNamespace))
+	cServiceVersion := optionalCString(config.ServiceVersion)
+	defer C.free(unsafe.Pointer(cServiceVersion))
+	cInstrumentationScope := C.CString(config.InstrumentationScope)
+	defer C.free(unsafe.Pointer(cInstrumentationScope))
+
+	var ptr unsafe.Pointer
+	status := C.nemo_relay_otel_subscriber_create_file_sink(
+		cType,
+		cOutputDirectory,
+		cFilename,
+		cFormat,
+		cMode,
+		cResourceAttrsJSON,
+		cServiceName,
+		cServiceNamespace,
+		cServiceVersion,
+		cInstrumentationScope,
 		&ptr,
 	)
 	if err := checkStatus(status); err != nil {
