@@ -519,7 +519,7 @@ fn assert_atif_message_value(value: &serde_json::Value) {
         return;
     }
     if let Some(parts) = value.as_array()
-        && parts.iter().all(is_atif_content_part)
+        && parts.iter().all(is_canonical_atif_content_part)
     {
         return;
     }
@@ -531,7 +531,7 @@ fn assert_atif_observation_content_value(value: &serde_json::Value) {
         return;
     }
     if let Some(parts) = value.as_array()
-        && parts.iter().all(is_atif_content_part)
+        && parts.iter().all(is_canonical_atif_content_part)
     {
         return;
     }
@@ -546,31 +546,36 @@ fn assert_structured_observation_result_extra(
     assert_eq!(result.extra.as_ref().unwrap()["tool_result"], expected);
 }
 
-fn is_atif_content_part(part: &serde_json::Value) -> bool {
+fn is_canonical_atif_content_part(part: &serde_json::Value) -> bool {
     let Some(object) = part.as_object() else {
         return false;
     };
     match object.get("type").and_then(serde_json::Value::as_str) {
-        Some("text") => object
-            .get("text")
-            .and_then(serde_json::Value::as_str)
-            .is_some(),
-        Some("image") => is_atif_image_source(object.get("source")),
+        Some("text") => {
+            object.len() == 2
+                && object
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+        }
+        Some("image") => object.len() == 2 && is_canonical_atif_image_source(object.get("source")),
         _ => false,
     }
 }
 
-fn is_atif_image_source(value: Option<&serde_json::Value>) -> bool {
+fn is_canonical_atif_image_source(value: Option<&serde_json::Value>) -> bool {
     let Some(source) = value.and_then(serde_json::Value::as_object) else {
         return false;
     };
-    matches!(
-        source.get("media_type").and_then(serde_json::Value::as_str),
-        Some("image/jpeg" | "image/png" | "image/gif" | "image/webp")
-    ) && source
-        .get("path")
-        .and_then(serde_json::Value::as_str)
-        .is_some()
+    source.len() == 2
+        && matches!(
+            source.get("media_type").and_then(serde_json::Value::as_str),
+            Some("image/jpeg" | "image/png" | "image/gif" | "image/webp")
+        )
+        && source
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .is_some()
 }
 
 #[test]
@@ -3178,6 +3183,131 @@ fn test_exporter_annotated_multimodal_request_falls_back_to_raw() {
         message.contains("image_url"),
         "multimodal content preserved: {message}"
     );
+}
+
+#[test]
+fn test_exporter_canonicalizes_anthropic_content_parts_and_preserves_raw_request() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let request_content = json!({
+        "model": "claude-sonnet-4",
+        "max_tokens": 128,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Read this file"},
+                {
+                    "type": "text",
+                    "text": "Return its contents",
+                    "cache_control": {"type": "ephemeral"},
+                    "provider_metadata": {"future": true}
+                }
+            ]
+        }]
+    });
+    let annotated = AnthropicMessagesCodec
+        .decode(&LlmRequest {
+            headers: serde_json::Map::new(),
+            content: request_content.clone(),
+        })
+        .unwrap();
+
+    let start = event_builder(Uuid::now_v7(), EventType::Start)
+        .name("claude-sonnet-4")
+        .scope_type(ScopeType::Llm)
+        .input(request_content.clone())
+        .annotated_request(annotated)
+        .build();
+    exporter.state.lock().unwrap().events.push(start);
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+
+    let step = &trajectory.steps[0];
+    assert_eq!(
+        step.message,
+        json!([
+            {"type": "text", "text": "Read this file"},
+            {"type": "text", "text": "Return its contents"}
+        ])
+    );
+    let extra: AtifStepExtra = serde_json::from_value(step.extra.clone().unwrap()).unwrap();
+    assert_eq!(extra.llm_request, Some(request_content));
+}
+
+#[test]
+fn test_exporter_canonicalizes_tool_content_parts_and_preserves_raw_result() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let tool_uuid = Uuid::now_v7();
+    let raw_content = json!([
+        {
+            "type": "text",
+            "text": "screenshot captured",
+            "cache_control": {"type": "ephemeral"}
+        },
+        {
+            "type": "image",
+            "source": {
+                "media_type": "image/png",
+                "path": "artifacts/screenshot.png",
+                "provider_metadata": "source metadata"
+            },
+            "provider_metadata": "part metadata"
+        }
+    ]);
+
+    let end = event_builder(tool_uuid, EventType::End)
+        .name("screenshot")
+        .scope_type(ScopeType::Tool)
+        .output(raw_content.clone())
+        .tool_call_id("call_123")
+        .build();
+    exporter.state.lock().unwrap().events.push(end);
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+
+    let result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
+    assert_eq!(
+        result.content,
+        Some(json!([
+            {"type": "text", "text": "screenshot captured"},
+            {
+                "type": "image",
+                "source": {
+                    "media_type": "image/png",
+                    "path": "artifacts/screenshot.png"
+                }
+            }
+        ]))
+    );
+    assert_eq!(result.extra.as_ref().unwrap()["tool_result"], raw_content);
+}
+
+#[test]
+fn test_exporter_keeps_anthropic_base64_tool_image_out_of_atif_content() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let raw_content = json!([{
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": "iVBORw0KGgo="
+        }
+    }]);
+    let end = event_builder(Uuid::now_v7(), EventType::End)
+        .name("screenshot")
+        .scope_type(ScopeType::Tool)
+        .output(raw_content.clone())
+        .tool_call_id("call_123")
+        .build();
+    exporter.state.lock().unwrap().events.push(end);
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+
+    let result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
+    assert_eq!(result.content, None);
+    assert_eq!(result.extra.as_ref().unwrap()["tool_result"], raw_content);
 }
 
 #[test]
@@ -6651,8 +6781,39 @@ fn assert_provider_response_edge_shapes() {
         json!([{"type": "text"}]),
         json!([{"type": "image", "source": {"media_type": "text/plain"}}]),
     ] {
-        assert!(!is_atif_content_parts(&invalid_parts));
+        assert!(!is_canonical_atif_content_parts(&invalid_parts));
     }
+
+    let provider_text = json!([{
+        "type": "text",
+        "text": "hello",
+        "source": {"path": "ignored"},
+        "cache_control": {"type": "ephemeral"},
+        "provider_metadata": true
+    }]);
+    assert!(!is_canonical_atif_content_parts(&provider_text));
+    assert_eq!(
+        canonicalize_atif_content_parts(&provider_text),
+        Some(json!([{"type": "text", "text": "hello"}]))
+    );
+
+    let anthropic_base64_image = json!([{
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": "iVBORw0KGgo="
+        }
+    }]);
+    assert_eq!(
+        canonicalize_atif_content_parts(&anthropic_base64_image),
+        None
+    );
+    let base64_fallback = atif_content_value(&anthropic_base64_image);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(base64_fallback.as_str().unwrap()).unwrap(),
+        anthropic_base64_image
+    );
     assert_eq!(
         openai_responses_output_message(&json!({"output_text": "direct"})),
         Some(json!("direct"))
@@ -6816,7 +6977,7 @@ fn assert_tool_argument_and_metric_edge_shapes() {
 
 #[test]
 fn atif_projection_helpers_cover_absent_and_fallback_values() {
-    assert!(!is_atif_image_source(None));
+    assert_eq!(canonicalize_atif_image_source(None), None);
     assert_eq!(
         extract_user_messages(&json!({"messages": [{"content": "implicit user"}]})),
         json!("implicit user")

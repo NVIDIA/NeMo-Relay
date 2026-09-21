@@ -528,7 +528,8 @@ fn empty_message() -> Json {
 fn atif_content_value(value: &Json) -> Json {
     match value {
         Json::String(_) => value.clone(),
-        Json::Array(_) if is_atif_content_parts(value) => value.clone(),
+        Json::Array(_) => canonicalize_atif_content_parts(value)
+            .unwrap_or_else(|| Json::String(json_to_string(value))),
         Json::Null => empty_message(),
         _ => Json::String(json_to_string(value)),
     }
@@ -569,7 +570,7 @@ fn anthropic_messages_content_message(output: &Json, content: &Json) -> Option<J
 fn observation_content_value(value: &Json) -> Option<Json> {
     match value {
         Json::String(_) => Some(value.clone()),
-        Json::Array(_) if is_atif_content_parts(value) => Some(value.clone()),
+        Json::Array(_) => canonicalize_atif_content_parts(value),
         _ => None,
     }
 }
@@ -590,35 +591,57 @@ fn observation_extra(event: &Event, output: Option<&Json>) -> Json {
 fn observation_tool_result_extra(value: &Json) -> Option<Json> {
     match value {
         Json::Null | Json::String(_) => None,
-        Json::Array(_) if is_atif_content_parts(value) => None,
+        Json::Array(_) if is_canonical_atif_content_parts(value) => None,
         _ => Some(value.clone()),
     }
 }
 
-fn is_atif_content_parts(value: &Json) -> bool {
-    let Some(parts) = value.as_array() else {
-        return false;
-    };
-    parts.iter().all(|part| {
-        let Some(object) = part.as_object() else {
-            return false;
-        };
-        match object.get("type").and_then(Json::as_str) {
-            Some("text") => object.get("text").and_then(Json::as_str).is_some(),
-            Some("image") => is_atif_image_source(object.get("source")),
-            _ => false,
-        }
-    })
+/// Project provider content blocks onto the exact ATIF v1.7 content-part schema.
+///
+/// Provider-only fields stay available in the full request, response, or tool
+/// result stored under the corresponding ATIF `extra` extension point.
+fn canonicalize_atif_content_parts(value: &Json) -> Option<Json> {
+    let parts = value.as_array()?;
+    parts
+        .iter()
+        .map(canonicalize_atif_content_part)
+        .collect::<Option<Vec<_>>>()
+        .map(Json::Array)
 }
 
-fn is_atif_image_source(value: Option<&Json>) -> bool {
-    let Some(source) = value.and_then(Json::as_object) else {
-        return false;
-    };
-    matches!(
-        source.get("media_type").and_then(Json::as_str),
-        Some("image/jpeg" | "image/png" | "image/gif" | "image/webp")
-    ) && source.get("path").and_then(Json::as_str).is_some()
+fn canonicalize_atif_content_part(part: &Json) -> Option<Json> {
+    let object = part.as_object()?;
+    match object.get("type").and_then(Json::as_str) {
+        Some("text") => {
+            let text = object.get("text").and_then(Json::as_str)?;
+            Some(serde_json::json!({"type": "text", "text": text}))
+        }
+        Some("image") => {
+            let source = canonicalize_atif_image_source(object.get("source"))?;
+            Some(serde_json::json!({"type": "image", "source": source}))
+        }
+        _ => None,
+    }
+}
+
+fn canonicalize_atif_image_source(value: Option<&Json>) -> Option<Json> {
+    let source = value?.as_object()?;
+    let media_type = source.get("media_type").and_then(Json::as_str)?;
+    if !matches!(
+        media_type,
+        "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+    ) {
+        return None;
+    }
+    let path = source.get("path").and_then(Json::as_str)?;
+    Some(serde_json::json!({
+        "media_type": media_type,
+        "path": path,
+    }))
+}
+
+fn is_canonical_atif_content_parts(value: &Json) -> bool {
+    canonicalize_atif_content_parts(value).is_some_and(|canonical| canonical == *value)
 }
 
 fn json_to_string(value: &Json) -> String {
@@ -1154,7 +1177,7 @@ fn openai_responses_input_content_message(content: &Json) -> Option<Json> {
             collect_openai_responses_content_text(content_parts, "text", &mut text_parts);
         }
         return match text_parts.as_slice() {
-            [] => is_atif_content_parts(content).then(|| content.clone()),
+            [] => canonicalize_atif_content_parts(content),
             [text] => Some(Json::String(text.clone())),
             _ => Some(Json::String(text_parts.join("\n"))),
         };
