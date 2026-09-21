@@ -239,7 +239,9 @@ For explicit log and metric endpoints, the Python plugin helper
 `OpenTelemetrySignalEndpointConfig` and the Node.js plugin helper
 `openTelemetrySignalEndpoint` accept `promote_resource_metadata_prefixes`.
 The Go plugin helper `ObservabilityOpenTelemetrySignalEndpointConfig` exposes
-`PromoteResourceMetadataPrefixes`. Omit the setting to keep promotion disabled.
+`PromoteResourceMetadataPrefixes`. The Go trace endpoint helper
+`ObservabilityOpenTelemetryEndpointConfig` exposes the same field, which derived
+log and metric endpoints inherit. Omit the setting to keep promotion disabled.
 These plugin settings also apply when endpoints are configured through TOML or
 JSON. The Python, Node.js, and Go direct log and metric subscriber APIs do not
 expose this option.
@@ -259,6 +261,23 @@ This preserves delivery but omits the promoted resource distinction, so metric
 measurements that differ only by that resource can be aggregated together.
 The limit is fixed, applies independently to each log and metric endpoint, and
 does not cap trace pipelines or total process memory.
+
+Each log or metric endpoint tracks at most **4,096 active resource scopes**,
+including nested scopes. Once full, it keeps existing routes and declines new
+scope starts with `otel.resource_metadata_active_scope_limit`; marks attached
+to those untracked scopes use the base resource. Ending a tracked scope frees a
+slot for a subsequent scope start. Active routes are not evicted by age, so
+long-running scopes retain their identity. Missing end events can occupy slots
+until the subscriber is replaced, but cannot grow this active-route map beyond
+the limit. This limit does not bound completed-route caches, trace correlation
+state, or total process memory.
+
+Completed resource routes expire before processing an event beyond the TTL;
+events exactly at the boundary remain linked. Logs use
+`opentelemetry.logs.completed_span_context_ttl_millis` (default: 60 seconds).
+Metrics use a fixed 60-second resource-route TTL. Expiration is driven by event
+timestamps and runs when another event arrives, rather than on a background
+timer.
 
 Relay records bounded runtime diagnostics for this setting. A rejected value
 produces `otel.resource_metadata_promotion_value_unsupported.<metadata-key>`.
@@ -353,7 +372,8 @@ with the completed-scope rate, TTL, and number of configured trace endpoints.
 
 OTLP logs use the same TTL-based completed-scope lineage behavior. Configure
 `opentelemetry.logs.completed_span_context_ttl_millis` independently when log
-export is enabled. Metrics do not retain completed-scope parent context. Do not
+export is enabled. Metrics retain completed resource routes for 60 seconds when
+resource promotion is enabled, but do not retain trace-correlation context. Do not
 rely on a closed scope handle for long-running follow-up work; emit the mark
 before closing the scope or use an active/new scope instead.
 

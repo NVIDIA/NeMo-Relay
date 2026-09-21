@@ -352,12 +352,7 @@ struct MetricRouter {
 
 impl MetricRouter {
     fn route(&self, event: &Event) -> MetricProcessorHandle {
-        let inherited_route = self
-            .lineage
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .existing_route(event);
-        let root_route = inherited_route.or_else(|| {
+        let root_route = || {
             promoted_signal_resource_attributes(
                 event,
                 &self.config.promote_resource_metadata_prefixes,
@@ -398,12 +393,17 @@ impl MetricRouter {
                     }
                 }
             })
-        });
+        };
         let route = self
             .lineage
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .process(event, root_route, DEFAULT_COMPLETED_SPAN_CONTEXT_TTL);
+            .process(
+                event,
+                DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
+                &self.runtime_diagnostics,
+                root_route,
+            );
         route
             .and_then(|key| {
                 self.dynamic_pipelines

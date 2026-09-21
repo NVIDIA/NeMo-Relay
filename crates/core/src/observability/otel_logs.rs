@@ -348,11 +348,7 @@ impl OpenTelemetryLogSubscriber {
         let callback_delivery_diagnostics = Arc::clone(&delivery_diagnostics);
         let callback_runtime_diagnostics = runtime_diagnostics.clone();
         let subscriber: EventSubscriberFn = Arc::new(move |event| {
-            let inherited_route = callback_resource_lineage
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .existing_route(event);
-            let root_route = inherited_route.or_else(|| {
+            let root_route = || {
                 promoted_signal_resource_attributes(
                     event,
                     &callback_config.promote_resource_metadata_prefixes,
@@ -392,11 +388,16 @@ impl OpenTelemetryLogSubscriber {
                         }
                     }
                 })
-            });
+            };
             let route = callback_resource_lineage
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .process(event, root_route, completed_span_context_ttl);
+                .process(
+                    event,
+                    completed_span_context_ttl,
+                    &callback_runtime_diagnostics,
+                    root_route,
+                );
             let routed_logger = route.and_then(|key| {
                 callback_dynamic_pipelines
                     .lock()

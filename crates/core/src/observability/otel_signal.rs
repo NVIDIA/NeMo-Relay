@@ -33,6 +33,9 @@ use super::{MetadataPromotionIssue, promote_event_metadata_attributes};
 // per-endpoint log/metric budget conservative; the base provider is not counted.
 pub(super) const MAX_DYNAMIC_SIGNAL_PIPELINES: usize = 16;
 
+// Bound active UUID retention without expiring legitimate long-running scopes.
+pub(super) const MAX_ACTIVE_RESOURCE_SCOPES: usize = 4_096;
+
 const MAX_RUNTIME_DIAGNOSTICS: usize = 32;
 const MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS: usize = 1_024;
 pub(super) const TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS: [&str; 3] = [
@@ -680,17 +683,42 @@ impl<T: Clone> SignalResourceLineage<T> {
         }
     }
 
+    /// Expire completed routes before lookup and admit new active routes only
+    /// within the budget. Root provider creation runs only for admitted starts
+    /// that do not inherit a route; existing active scopes are never evicted.
     pub(super) fn process(
         &mut self,
         event: &Event,
-        root_route: Option<T>,
         completed_context_ttl: Duration,
+        diagnostics: &SignalRuntimeDiagnostics,
+        root_route: impl FnOnce() -> Option<T>,
     ) -> Option<T> {
         self.expire_completed(*event.timestamp(), completed_context_ttl);
         match event.scope_category() {
             Some(ScopeCategory::Start) => {
+                if let Some(route) = self.active.get(&event.uuid()) {
+                    return Some(route.clone());
+                }
                 self.remove_completed(event.uuid());
-                let route = self.parent_route(event).or(root_route);
+                if self.active.len() >= MAX_ACTIVE_RESOURCE_SCOPES {
+                    let message = format!(
+                        "OpenTelemetry active resource scope limit of {MAX_ACTIVE_RESOURCE_SCOPES} reached; new scopes use the configured base resource until capacity is available"
+                    );
+                    let count = diagnostics.record(
+                        "otel.resource_metadata_active_scope_limit",
+                        message.clone(),
+                        1,
+                    );
+                    if should_relog_runtime_diagnostic(count) {
+                        log::warn!(
+                            target: "nemo_relay.observability",
+                            event = "otel_resource_metadata_active_scope_limit";
+                            "{message}"
+                        );
+                    }
+                    return None;
+                }
+                let route = self.parent_route(event).or_else(root_route);
                 if let Some(route) = route.clone() {
                     self.active.insert(event.uuid(), route);
                 }
@@ -703,17 +731,8 @@ impl<T: Clone> SignalResourceLineage<T> {
                 }
                 route
             }
-            None => self.parent_route(event).or(root_route),
+            None => self.parent_route(event),
         }
-    }
-
-    pub(super) fn existing_route(&self, event: &Event) -> Option<T> {
-        if event.scope_category() == Some(ScopeCategory::End)
-            && let Some(route) = self.active.get(&event.uuid())
-        {
-            return Some(route.clone());
-        }
-        self.parent_route(event)
     }
 
     fn parent_route(&self, event: &Event) -> Option<T> {
@@ -770,3 +789,7 @@ impl<T: Clone> SignalResourceLineage<T> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/observability/otel_signal_tests.rs"]
+mod tests;

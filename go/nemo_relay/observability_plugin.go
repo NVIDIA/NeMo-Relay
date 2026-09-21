@@ -89,6 +89,8 @@ type ObservabilityOpenTelemetryEndpointConfig struct {
 	MaxExportBatchSize            *uint64                `json:"max_export_batch_size,omitempty"`
 	ScheduledDelayMillis          *uint64                `json:"scheduled_delay_millis,omitempty"`
 	CompletedSpanContextTTLMillis *uint64                `json:"completed_span_context_ttl_millis,omitempty"`
+	// PromoteResourceMetadataPrefixes selects root-scope metadata for trace resources and derived signals.
+	PromoteResourceMetadataPrefixes []string `json:"promote_resource_metadata_prefixes,omitempty"`
 }
 
 // ObservabilityAtofConfig configures filesystem-backed raw ATOF JSONL export.
