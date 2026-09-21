@@ -3170,6 +3170,7 @@ fn gen_ai_projection_emits_normalized_response_attributes() {
                         total_tokens: Some(21),
                         cache_read_tokens: Some(5),
                         cache_write_tokens: Some(3),
+                        uncached_input_tokens: None,
                         cost: None,
                     }),
                     ..empty_annotated_response()
@@ -5515,6 +5516,7 @@ fn assert_otel_catalog_cost_branches() {
                             total_tokens: Some(1_500),
                             cache_read_tokens: Some(200),
                             cache_write_tokens: None,
+                            uncached_input_tokens: None,
                             cost: None,
                         }),
                         ..empty_annotated_response()
@@ -5554,6 +5556,7 @@ fn assert_otel_catalog_cost_branches() {
                             total_tokens: Some(1_500),
                             cache_read_tokens: Some(200),
                             cache_write_tokens: None,
+                            uncached_input_tokens: None,
                             cost: None,
                         }),
                         ..empty_annotated_response()
@@ -5594,6 +5597,7 @@ fn assert_otel_catalog_cost_branches() {
                             total_tokens: Some(1_500),
                             cache_read_tokens: Some(200),
                             cache_write_tokens: Some(10),
+                            uncached_input_tokens: None,
                             cost: None,
                         }),
                         ..empty_annotated_response()

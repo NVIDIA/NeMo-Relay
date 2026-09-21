@@ -736,6 +736,7 @@ fn test_event_wrappers_cover_remaining_methods() {
                     total_tokens: Some(3),
                     cache_read_tokens: None,
                     cache_write_tokens: None,
+                    uncached_input_tokens: None,
                     cost: None,
                 }),
                 api_specific: Some(ApiSpecificResponse::Custom {
@@ -1645,6 +1646,7 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
                         total_tokens: Some(5),
                         cache_read_tokens: Some(1),
                         cache_write_tokens: None,
+                        uncached_input_tokens: None,
                         cost: Some(CostEstimate {
                             total: Some(0.000_001),
                             currency: "USD".into(),
@@ -1959,6 +1961,7 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                     total_tokens: Some(5),
                     cache_read_tokens: Some(1),
                     cache_write_tokens: None,
+                    uncached_input_tokens: None,
                     cost: None,
                 }),
                 api_specific: Some(ApiSpecificResponse::Custom {

@@ -807,6 +807,14 @@ metadata promotion cannot be used to add an unsupported GenAI attribute.
 
 </StickySearchableTable>
 
+Usage is recorded per model request. Relay's normalized response usage retains
+an optional `uncached_input_tokens` count only when the provider's response
+contract proves it. The standard GenAI export deliberately does not add a
+nonstandard uncached field: consumers can use the total
+`gen_ai.usage.input_tokens` with the separately reported cache-read and
+cache-write counts. An omitted cache or uncached count means unavailable, not
+zero.
+
 For managed streaming LLM calls, the end span also includes
 `gen_ai.response.time_to_first_chunk` in seconds. Relay measures from the
 start of managed stream execution until the first provider protocol chunk is

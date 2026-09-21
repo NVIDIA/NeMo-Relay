@@ -361,6 +361,7 @@ fn test_response_usage_parity() {
         total_tokens: Some(1500),
         cache_read_tokens: Some(200),
         cache_write_tokens: None,
+        uncached_input_tokens: None,
         cost: None,
     };
     assert_eq!(chat.usage, Some(expected.clone()));
