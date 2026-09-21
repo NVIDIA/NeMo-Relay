@@ -2017,6 +2017,17 @@ impl Session {
         }
     }
 
+    /// Preserve trusted launched-agent identity on hook-provided scope-end metadata.
+    ///
+    /// Synthetic closes have no hook boundary, so they retain `None` and the
+    /// scope's opening metadata instead.
+    fn trusted_boundary_metadata(&self, metadata: Option<Value>) -> Option<Value> {
+        metadata.map(|mut metadata| {
+            self.insert_agent_version(&mut metadata);
+            metadata
+        })
+    }
+
     // Tool hook payloads do not consistently repeat the harness session id.
     // Mirror the stable managed identity onto each tool event so external
     // consumers can correlate it without reconstructing the parent scope tree.
@@ -2259,6 +2270,7 @@ impl Session {
         let Some(scope) = self.agent_scope.take() else {
             return Ok(None);
         };
+        let boundary_metadata = self.trusted_boundary_metadata(boundary_metadata);
         let subscriber_delivery = pop_scope_with_subscriber_delivery(
             PopScopeParams::builder()
                 .handle_uuid(&scope.uuid)
@@ -2278,6 +2290,7 @@ impl Session {
             return Ok(None);
         };
         self.gateway_request_turn_open = false;
+        let boundary_metadata = self.trusted_boundary_metadata(boundary_metadata);
         let subscriber_delivery = pop_scope_with_subscriber_delivery(
             PopScopeParams::builder()
                 .handle_uuid(&scope.uuid)
@@ -2681,11 +2694,13 @@ impl Session {
         } else {
             self.ensure_turn_started(event_payload.metadata.clone())?;
         }
+        let mut metadata = event_payload.metadata;
+        self.insert_agent_version(&mut metadata);
         emit_mark_event(
             EmitMarkEventParams::builder()
                 .name(name)
                 .data(event_payload.payload)
-                .metadata(event_payload.metadata)
+                .metadata(metadata)
                 .build(),
         )?;
         Ok(())

@@ -131,7 +131,6 @@ impl PricingResolveCommand {
             completion_tokens: self.completion_tokens,
             cache_read_tokens: self.cache_read_tokens,
             cache_write_tokens: self.cache_write_tokens,
-            uncached_input_tokens: None,
         }
     }
 }

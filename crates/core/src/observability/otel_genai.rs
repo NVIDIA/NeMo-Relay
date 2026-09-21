@@ -47,7 +47,12 @@ fn has_gen_ai_semantics(event: &Event) -> bool {
 
 fn is_agent_turn(event: &Event) -> bool {
     event.scope_type() == Some(ScopeType::Custom)
-        && semantic_string(event, "nemo_relay_scope_role").as_deref() == Some("turn")
+        && event
+            .metadata()
+            .and_then(Json::as_object)
+            .and_then(|metadata| metadata.get("nemo_relay_scope_role"))
+            .and_then(Json::as_str)
+            == Some("turn")
 }
 
 pub(super) fn span_name(event: &Event) -> String {

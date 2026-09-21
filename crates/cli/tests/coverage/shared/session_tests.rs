@@ -1605,10 +1605,14 @@ fn agent_version_follows_launched_harness_across_session_metadata_paths() {
             session.scope_metadata(metadata.clone()),
             session.event_identity_metadata(metadata.clone()),
             session.merge_llm_identity_metadata(metadata.clone(), Some("conversation")),
+            session
+                .trusted_boundary_metadata(Some(metadata.clone()))
+                .expect("hook boundary metadata"),
         ] {
             assert_eq!(result["agent_version"], version);
             assert_eq!(result["custom"], "kept");
         }
+        assert_eq!(session.trusted_boundary_metadata(None), None);
         assert_eq!(session.scope_metadata(Value::Null)["team"], "test");
 
         // Neither an unrelated harness nor an unwrapped session inherits this version.

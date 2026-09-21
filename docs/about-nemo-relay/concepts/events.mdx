@@ -87,8 +87,9 @@ subscriber work.
 
 ### Coding-Agent Identity Metadata
 
-Wrapped CLI launches through `nemo-relay claude` and `nemo-relay codex` retain
-the harness executable version from Relay's compatibility probe. Relay adds
+Wrapped CLI launches through `nemo-relay claude`, `nemo-relay codex`, and
+`nemo-relay pi` retain the harness executable version from Relay's
+compatibility probe. Relay adds
 `agent_version` alongside `agent_kind` to session scope and LLM metadata, and
 to tool identity metadata. The value identifies the harness version, not the
 Relay or model version.

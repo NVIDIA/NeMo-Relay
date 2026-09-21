@@ -2471,6 +2471,22 @@ fn gen_ai_projection_classifies_marked_turn_roots_as_internal_agent_invocations(
     assert_eq!(attributes["gen_ai.conversation.id"], "conversation-1");
     assert!(!attributes.contains_key("gen_ai.agent.name"));
 
+    let mut payload_marked_turn = make_start_event(
+        Uuid::now_v7(),
+        None,
+        "claude-code-turn",
+        ScopeType::Custom,
+        None,
+    );
+    if let Event::Scope(scope) = &mut payload_marked_turn {
+        scope.base.data = Some(json!({"nemo_relay_scope_role": "turn"}));
+    }
+    assert_eq!(
+        crate::observability::otel_genai::span_name(&payload_marked_turn),
+        "claude-code-turn"
+    );
+    assert!(crate::observability::otel_genai::start_attributes(&payload_marked_turn).is_empty());
+
     let mut named_turn = make_start_event(
         Uuid::now_v7(),
         None,
