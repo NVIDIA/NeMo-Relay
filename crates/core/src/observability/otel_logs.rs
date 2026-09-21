@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 use crate::api::event::{ATOF_VERSION, Event, LOG_SEVERITY_METADATA_KEY, LogSeverity};
 use crate::api::runtime::EventSubscriberFn;
+use crate::api::runtime::scope_stack::w3c_span_context;
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use crate::observability::{relay_span_id, relay_trace_id};
 use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
@@ -721,14 +722,22 @@ impl ScopeLineage {
             .unwrap_or_else(|| {
                 relay_trace_id(event.propagation_root_uuid().unwrap_or(event.uuid()))
             });
+        let trace_flags = parent
+            .as_ref()
+            .map(SpanContext::trace_flags)
+            .unwrap_or(TraceFlags::SAMPLED);
+        let trace_state = parent
+            .as_ref()
+            .map(|context| context.trace_state().clone())
+            .unwrap_or_default();
         self.active.insert(
             event.uuid(),
             SpanContext::new(
                 trace_id,
                 relay_span_id(event.uuid()),
-                TraceFlags::SAMPLED,
+                trace_flags,
                 false,
-                TraceState::default(),
+                trace_state,
             ),
         );
     }
@@ -750,6 +759,12 @@ impl ScopeLineage {
         }
         if event.propagation_parent_uuid() != Some(parent_uuid) {
             return None;
+        }
+        if let Some(context) = w3c_span_context(
+            event.propagation_traceparent(),
+            event.propagation_tracestate(),
+        ) {
+            return Some(context);
         }
         event.propagation_root_uuid().map(|root_uuid| {
             SpanContext::new(

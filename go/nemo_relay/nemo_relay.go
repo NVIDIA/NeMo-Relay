@@ -256,6 +256,7 @@ extern int32_t nemo_relay_capture_rootless_propagation_context_json(char** out);
 extern int32_t nemo_relay_capture_propagation_context_with_root_json(const char* root_uuid, char** out);
 extern int32_t nemo_relay_capture_traceparent(char** out);
 extern int32_t nemo_relay_propagation_context_to_traceparent(const char* context_json, char** out);
+extern int32_t nemo_relay_propagation_context_normalize_json(const char* context_json, char** out);
 extern int32_t nemo_relay_scope_stack_create_from_propagation_json(const char* context_json, FfiScopeStack** out);
 extern int32_t nemo_relay_scope_stack_set_thread(const FfiScopeStack* stack);
 extern int32_t nemo_relay_scope_stack_capture_thread(FfiThreadScopeStackBinding** out);
@@ -1997,19 +1998,18 @@ type ScopeStack struct {
 // PropagationContext is the versioned, transport-neutral causal context used
 // to continue Relay work in another process.
 type PropagationContext struct {
-	Version    uint16  `json:"version"`
-	RootUUID   *string `json:"root_uuid,omitempty"`
-	ParentUUID string  `json:"parent_uuid"`
+	Version     uint16  `json:"version"`
+	RootUUID    *string `json:"root_uuid,omitempty"`
+	ParentUUID  string  `json:"parent_uuid"`
+	Traceparent *string `json:"traceparent,omitempty"`
+	Tracestate  *string `json:"tracestate,omitempty"`
 }
 
 // ToJSON serializes a validated propagation context for application-managed transport.
 func (context PropagationContext) ToJSON() (string, error) {
-	if err := validatePropagationContext(context); err != nil {
-		return "", err
-	}
 	// PropagationContext has only JSON-native fields, so marshaling cannot fail.
 	payload, _ := json.Marshal(context)
-	return string(payload), nil
+	return normalizePropagationContextJSON(string(payload))
 }
 
 // ToTraceparent converts a rooted propagation context to a W3C traceparent value.
@@ -2030,14 +2030,26 @@ func (context PropagationContext) ToTraceparent() (string, error) {
 
 // PropagationContextFromJSON deserializes and validates a transport context.
 func PropagationContextFromJSON(value string) (PropagationContext, error) {
+	value, err := normalizePropagationContextJSON(value)
+	if err != nil {
+		return PropagationContext{}, err
+	}
 	var context PropagationContext
 	if err := json.Unmarshal([]byte(value), &context); err != nil {
 		return PropagationContext{}, err
 	}
-	if err := validatePropagationContext(context); err != nil {
-		return PropagationContext{}, err
-	}
 	return context, nil
+}
+
+func normalizePropagationContextJSON(value string) (string, error) {
+	payload := C.CString(value)
+	defer C.free(unsafe.Pointer(payload))
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_propagation_context_normalize_json(payload, &out)); err != nil {
+		return "", err
+	}
+	defer C.nemo_relay_string_free(out)
+	return C.GoString(out), nil
 }
 
 func validatePropagationContext(context PropagationContext) error {

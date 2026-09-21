@@ -283,6 +283,22 @@ fn propagation_context_json_round_trips_through_the_ffi() {
     assert_eq!(context["version"], 1);
     assert_eq!(context["root_uuid"], root_uuid);
 
+    let w3c_payload = CString::new(format!(
+        r#"{{"version":1,"root_uuid":"{root_uuid}","parent_uuid":"018f13f0-7c1a-7a80-8000-000000000002","traceparent":"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01","tracestate":"vendor=value"}}"#
+    ))
+    .unwrap();
+    let mut w3c_stack = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            crate::api::nemo_relay_scope_stack_create_from_propagation_json(
+                w3c_payload.as_ptr(),
+                &mut w3c_stack,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    unsafe { nemo_relay_scope_stack_free(w3c_stack) };
+
     let payload = CString::new(context.to_string()).unwrap();
     let mut stack = ptr::null_mut();
     assert_eq!(

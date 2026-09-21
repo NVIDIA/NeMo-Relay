@@ -3026,6 +3026,18 @@ NemoRelayStatus nemo_relay_capture_traceparent(char **out);
 NemoRelayStatus nemo_relay_propagation_context_to_traceparent(const char *context_json, char **out);
 
 /**
+ * Validate and canonicalize propagation-context JSON for transport.
+ *
+ * Invalid W3C headers are discarded while valid Relay causal UUIDs are retained.
+ * The returned JSON must be freed with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `context_json` must point to a valid NUL-terminated C string and `out` must
+ * be a valid, writable pointer to a C-string output slot.
+ */
+NemoRelayStatus nemo_relay_propagation_context_normalize_json(const char *context_json, char **out);
+
+/**
  * Create an isolated scope stack from propagation-context JSON.
  *
  * # Safety

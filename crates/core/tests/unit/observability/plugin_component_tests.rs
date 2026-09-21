@@ -3169,6 +3169,8 @@ fn atif_propagation_root_session_id_flows_through_plugin_e2e() {
         version: PropagationContext::VERSION,
         root_uuid: Some(request_id),
         parent_uuid: parent_id,
+        traceparent: None,
+        tracestate: None,
     })
     .unwrap();
     set_thread_scope_stack(stack);

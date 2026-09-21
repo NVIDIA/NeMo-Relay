@@ -187,9 +187,13 @@ under `.localhost`, `127.0.0.0/8`, and `::1` are equivalent. Relay does not use
 DNS resolution for this comparison, and query strings remain significant.
 Relay propagation continues the Relay-derived trace across the import boundary
 by default. Use `capture_rootless_propagation_context()` only when a receiver
-must start a new OpenTelemetry trace. Carry W3C `traceparent` and
-`tracestate` alongside Relay propagation when an integration also needs to
-preserve upstream OpenTelemetry sampling or vendor state.
+must start a new Relay-derived OpenTelemetry trace when no W3C parent is
+available. Valid W3C headers are always emitted and take precedence for
+OpenTelemetry parentage. `PropagationContext` JSON also carries
+optional W3C `traceparent` and `tracestate` fields, so an integration transports
+one payload when it must preserve upstream OpenTelemetry sampling or vendor
+state. Relay validates the pair through the W3C propagator; malformed values
+are warned about and ignored while Relay propagation continues.
 
 ## `plugins.toml` Example
 

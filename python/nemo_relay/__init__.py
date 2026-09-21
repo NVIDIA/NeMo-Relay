@@ -324,6 +324,14 @@ _propagation_root_var: contextvars.ContextVar[str | None] = contextvars.ContextV
     "propagation_root",
     default=None,
 )
+_propagation_traceparent_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "propagation_traceparent",
+    default=None,
+)
+_propagation_tracestate_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "propagation_tracestate",
+    default=None,
+)
 
 
 def get_scope_stack() -> ScopeStack:
@@ -503,7 +511,12 @@ def capture_propagation_context() -> PropagationContext:
     """
     get_scope_stack()
     if parent_uuid := _propagation_parent_var.get():
-        return PropagationContext(parent_uuid, _propagation_root_var.get())
+        return PropagationContext(
+            parent_uuid,
+            _propagation_root_var.get(),
+            traceparent=_propagation_traceparent_var.get(),
+            tracestate=_propagation_tracestate_var.get(),
+        )
     return _capture_propagation_context()
 
 
@@ -629,13 +642,22 @@ def use_scope_stack(stack: ScopeStack) -> Iterator[ScopeStack]:
     token = _scope_stack_var.set(stack)
     _sync_thread_scope_stack(stack)
     try:
-        root_uuid = _capture_traceparent().split("-")[1]
+        propagation = _capture_propagation_context()
+        root_uuid = propagation.root_uuid
+        traceparent = propagation.traceparent
+        tracestate = propagation.tracestate
     except RuntimeError:
         root_uuid = None
+        traceparent = None
+        tracestate = None
     root_token = _propagation_root_var.set(root_uuid)
+    traceparent_token = _propagation_traceparent_var.set(traceparent)
+    tracestate_token = _propagation_tracestate_var.set(tracestate)
     try:
         yield stack
     finally:
+        _propagation_tracestate_var.reset(tracestate_token)
+        _propagation_traceparent_var.reset(traceparent_token)
         _propagation_root_var.reset(root_token)
         _scope_stack_var.reset(token)
         _restore_thread_scope_stack(previous_native_stack)
