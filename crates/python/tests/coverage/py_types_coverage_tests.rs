@@ -989,6 +989,71 @@ async def next_item(stream):
     });
 }
 
+fn assert_python_propagation_context_w3c_support(py: Python<'_>, module: &Bound<'_, PyModule>) {
+    let propagation_kwargs = PyDict::new(py);
+    propagation_kwargs
+        .set_item(
+            "traceparent",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        )
+        .unwrap();
+    propagation_kwargs
+        .set_item("tracestate", "vendor=value")
+        .unwrap();
+    let propagation = module
+        .getattr("PropagationContext")
+        .unwrap()
+        .call(
+            ("00112233-4455-6677-8899-aabbccddeeff",),
+            Some(&propagation_kwargs),
+        )
+        .unwrap();
+    assert_eq!(
+        propagation
+            .getattr("traceparent")
+            .unwrap()
+            .extract::<String>()
+            .unwrap(),
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    );
+    assert_eq!(
+        propagation
+            .getattr("tracestate")
+            .unwrap()
+            .extract::<String>()
+            .unwrap(),
+        "vendor=value"
+    );
+    assert!(
+        propagation
+            .call_method0("to_json")
+            .unwrap()
+            .extract::<String>()
+            .unwrap()
+            .contains("traceparent")
+    );
+
+    let invalid_propagation_kwargs = PyDict::new(py);
+    invalid_propagation_kwargs
+        .set_item("tracestate", "vendor=value")
+        .unwrap();
+    let invalid_propagation = module
+        .getattr("PropagationContext")
+        .unwrap()
+        .call(
+            ("00112233-4455-6677-8899-aabbccddeeff",),
+            Some(&invalid_propagation_kwargs),
+        )
+        .unwrap();
+    assert!(
+        invalid_propagation
+            .getattr("traceparent")
+            .unwrap()
+            .is_none()
+    );
+    assert!(invalid_propagation.getattr("tracestate").unwrap().is_none());
+}
+
 #[test]
 fn test_python_side_core_type_constructors_cover_exposed_entrypoints() {
     let _python = crate::test_support::init_python_test();
@@ -1073,6 +1138,8 @@ fn test_python_side_core_type_constructors_cover_exposed_entrypoints() {
                 .extract::<bool>()
                 .unwrap()
         );
+
+        assert_python_propagation_context_w3c_support(py, &module);
 
         let scope_type = module
             .getattr("ScopeType")

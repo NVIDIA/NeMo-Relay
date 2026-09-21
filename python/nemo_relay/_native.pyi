@@ -1595,7 +1595,7 @@ class PropagationContext:
         """Serialize this context to the Relay JSON wire format."""
         ...
     def to_traceparent(self) -> str:
-        """Convert this rooted context to a W3C traceparent value."""
+        """Convert this context to a W3C traceparent value."""
         ...
     @staticmethod
     def from_json(value: str) -> PropagationContext:

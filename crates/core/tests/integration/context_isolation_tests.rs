@@ -6,9 +6,10 @@
 use std::sync::Arc;
 
 use nemo_relay::api::runtime::{
-    PropagationContext, ScopeStack, TASK_SCOPE_STACK, capture_rootless_propagation_context,
-    capture_traceparent, create_scope_stack, create_scope_stack_from_propagation,
-    current_scope_stack, fork_scope_stack, propagate_scope_to_thread, scope_stack_active,
+    PropagationContext, ScopeStack, TASK_SCOPE_STACK, ThreadScopeStackBinding,
+    capture_rootless_propagation_context, capture_thread_scope_stack, capture_traceparent,
+    create_scope_stack, create_scope_stack_from_propagation, current_scope_stack, fork_scope_stack,
+    propagate_scope_to_thread, restore_thread_scope_stack, scope_stack_active,
     set_thread_scope_stack, sync_thread_scope_stack, task_scope_push, task_scope_remove,
     task_scope_top, with_scope_stack,
 };
@@ -17,6 +18,14 @@ use nemo_relay::api::scope::{
 };
 use nemo_relay::error::FlowError;
 use uuid::Uuid;
+
+struct RestoreThreadScopeStackGuard(ThreadScopeStackBinding);
+
+impl Drop for RestoreThreadScopeStackGuard {
+    fn drop(&mut self) {
+        restore_thread_scope_stack(self.0.clone());
+    }
+}
 
 /// Two ScopeStackHandles push different scopes → verify independent.
 #[test]
@@ -182,6 +191,22 @@ fn propagation_context_preserves_valid_w3c_headers_and_discards_invalid_ones() {
     .unwrap();
     assert_eq!(invalid.traceparent, None);
     assert_eq!(invalid.tracestate, None);
+
+    let tracestate_only = PropagationContext::from_json(&format!(
+        r#"{{"version":1,"parent_uuid":"{}","tracestate":"vendor=value"}}"#,
+        Uuid::now_v7(),
+    ))
+    .unwrap();
+    assert_eq!(tracestate_only.traceparent, None);
+    assert_eq!(tracestate_only.tracestate, None);
+
+    let invalid_tracestate = PropagationContext::from_json(&format!(
+        r#"{{"version":1,"parent_uuid":"{}","traceparent":"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01","tracestate":"invalid state"}}"#,
+        Uuid::now_v7(),
+    ))
+    .unwrap();
+    assert_eq!(invalid_tracestate.traceparent, None);
+    assert_eq!(invalid_tracestate.tracestate, None);
 }
 
 #[test]
@@ -202,9 +227,26 @@ fn propagation_context_to_traceparent_advances_an_imported_w3c_parent() {
 }
 
 #[test]
+fn propagation_context_to_traceparent_keeps_an_already_derived_w3c_child() {
+    let parent_uuid = Uuid::from_u128(0x00112233445566778899aabbccddeeff);
+    let context = PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: None,
+        parent_uuid,
+        traceparent: Some("00-4bf92f3577b34da6a3ce929d0e0e4736-8899aabbccddeeff-01".to_string()),
+        tracestate: None,
+    };
+
+    assert_eq!(
+        context.to_traceparent().unwrap(),
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-8899aabbccddeeff-01"
+    );
+}
+
+#[test]
 fn rootless_w3c_context_still_emits_the_upstream_traceparent() {
     let parent_uuid = Uuid::from_u128(0x00112233445566778899aabbccddeeff);
-    let _restore_guard = nemo_relay::api::runtime::capture_thread_scope_stack();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
     set_thread_scope_stack(
         create_scope_stack_from_propagation(&PropagationContext {
             version: PropagationContext::VERSION,
@@ -234,7 +276,7 @@ fn rootless_w3c_context_still_emits_the_upstream_traceparent() {
 #[test]
 fn capture_with_root_preserves_imported_w3c_context() {
     let parent_uuid = Uuid::now_v7();
-    let _restore_guard = nemo_relay::api::runtime::capture_thread_scope_stack();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
     set_thread_scope_stack(
         create_scope_stack_from_propagation(&PropagationContext {
             version: PropagationContext::VERSION,

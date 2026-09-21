@@ -145,7 +145,7 @@ impl PropagationContext {
 
     /// Discard invalid W3C headers while retaining valid Relay identifiers.
     pub fn normalized(mut self) -> Self {
-        let (traceparent, tracestate) =
+        let (traceparent, tracestate, _) =
             normalize_w3c_headers(self.traceparent.as_deref(), self.tracestate.as_deref());
         self.traceparent = traceparent;
         self.tracestate = tracestate;
@@ -157,12 +157,12 @@ impl PropagationContext {
 pub(crate) fn normalize_w3c_headers(
     traceparent: Option<&str>,
     tracestate: Option<&str>,
-) -> (Option<String>, Option<String>) {
+) -> (Option<String>, Option<String>, Option<SpanContext>) {
     let Some(traceparent) = traceparent else {
         if tracestate.is_some() {
             log::warn!(target: "nemo_relay.runtime", event = "invalid_w3c_trace_context"; "Ignoring tracestate without traceparent");
         }
-        return (None, None);
+        return (None, None, None);
     };
     let mut carrier = HashMap::from([("traceparent".to_string(), traceparent.to_string())]);
     if let Some(tracestate) = tracestate {
@@ -172,38 +172,31 @@ pub(crate) fn normalize_w3c_headers(
             .is_err()
         {
             log::warn!(target: "nemo_relay.runtime", event = "invalid_w3c_trace_context"; "Ignoring invalid W3C trace context");
-            return (None, None);
+            return (None, None, None);
         }
     }
     let context = TraceContextPropagator::new().extract(&carrier);
     if !context.span().span_context().is_valid() {
         log::warn!(target: "nemo_relay.runtime", event = "invalid_w3c_trace_context"; "Ignoring invalid W3C trace context");
-        return (None, None);
+        return (None, None, None);
     }
     let mut canonical = HashMap::new();
     TraceContextPropagator::new().inject_context(&context, &mut canonical);
     let tracestate = canonical
         .remove("tracestate")
         .filter(|value| !value.is_empty());
-    (canonical.remove("traceparent"), tracestate)
+    (
+        canonical.remove("traceparent"),
+        tracestate,
+        Some(context.span().span_context().clone()),
+    )
 }
 
 pub(crate) fn w3c_span_context(
     traceparent: Option<&str>,
     tracestate: Option<&str>,
 ) -> Option<SpanContext> {
-    let (traceparent, tracestate) = normalize_w3c_headers(traceparent, tracestate);
-    let traceparent = traceparent?;
-    let mut carrier = HashMap::from([("traceparent".to_string(), traceparent)]);
-    if let Some(tracestate) = tracestate {
-        carrier.insert("tracestate".to_string(), tracestate);
-    }
-    let context = TraceContextPropagator::new().extract(&carrier);
-    context
-        .span()
-        .span_context()
-        .is_valid()
-        .then(|| context.span().span_context().clone())
+    normalize_w3c_headers(traceparent, tracestate).2
 }
 
 impl ScopeStack {
