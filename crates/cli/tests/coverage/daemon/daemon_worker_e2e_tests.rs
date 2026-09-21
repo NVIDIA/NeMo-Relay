@@ -1509,9 +1509,9 @@ async fn assert_pass_through_causal(protocol: TestProtocol, provider: ProviderKi
             .expect("generic OpenAI responses URI");
         request.headers_mut().insert(
             AUTHORIZATION,
-            HeaderValue::from_static("Bearer at-caller-controlled-token"),
+            HeaderValue::from_static("Bearer opaque-caller-controlled-token"),
         );
-        "Bearer at-caller-controlled-token"
+        "Bearer opaque-caller-controlled-token"
     } else {
         "Bearer caller-provider-token"
     };
