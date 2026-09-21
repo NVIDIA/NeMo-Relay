@@ -1024,14 +1024,19 @@ fn assert_python_propagation_context_w3c_support(py: Python<'_>, module: &Bound<
             .unwrap(),
         "vendor=value"
     );
-    assert!(
-        propagation
+    let serialized: serde_json::Value = serde_json::from_str(
+        &propagation
             .call_method0("to_json")
             .unwrap()
             .extract::<String>()
-            .unwrap()
-            .contains("traceparent")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        serialized["traceparent"],
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
     );
+    assert_eq!(serialized["tracestate"], "vendor=value");
 
     let invalid_propagation_kwargs = PyDict::new(py);
     invalid_propagation_kwargs
