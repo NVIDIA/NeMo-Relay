@@ -69,9 +69,9 @@ pub(crate) fn daemon_gateway_start(
 
 /// Resolves the provider destination for an authenticated daemon delivery.
 ///
-/// The explicit ChatGPT-shaped Responses path retains the personal gateway's Codex alignment
-/// behavior for compatibility. Other paths honor Pi's validated named-upstream header; a bearer
-/// token alone never selects a different authority.
+/// Codex ChatGPT OAuth retains the personal gateway's alignment behavior on every OpenAI route.
+/// Other paths honor Pi's validated named-upstream header; a bearer token alone never selects a
+/// different authority.
 pub(crate) fn daemon_provider_upstream_url(
     headers: &HeaderMap,
     path_and_query: &str,
@@ -83,12 +83,6 @@ pub(crate) fn daemon_provider_upstream_url(
     let Some(provider) = ProviderRoute::from_path(path) else {
         return Ok(None);
     };
-    if path == "/backend-api/codex/responses"
-        && let Some(destination) =
-            gateway_upstream_url_override(provider, headers, path_and_query, true, config)
-    {
-        return Ok(Some(destination));
-    }
     match client_named_upstream_url(provider, headers, path_and_query, true) {
         crate::agents::pi::alignment::NamedUpstream::Named(destination) => {
             if !crate::provider_auth::has_provider_credential(headers) {
@@ -101,9 +95,10 @@ pub(crate) fn daemon_provider_upstream_url(
         crate::agents::pi::alignment::NamedUpstream::Rejected(reason) => {
             Err(CliError::InvalidPayload(reason.to_owned()))
         }
-        crate::agents::pi::alignment::NamedUpstream::Absent => {
-            Ok(Some(provider.upstream_url(config, path_and_query)))
-        }
+        crate::agents::pi::alignment::NamedUpstream::Absent => Ok(Some(
+            gateway_upstream_url_override(provider, headers, path_and_query, true, config)
+                .unwrap_or_else(|| provider.upstream_url(config, path_and_query)),
+        )),
     }
 }
 

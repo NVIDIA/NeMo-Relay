@@ -444,7 +444,12 @@ and [settings reference](https://code.claude.com/docs/en/settings).
 
 The launch environment must contain both `NEMO_RELAY_CLIENT_TOKEN` and the matching
 `ANTHROPIC_CUSTOM_HEADERS`. Check `/mcp` after startup and verify that Relay hooks
-are enabled. Keep normal Claude provider authentication in place.
+are enabled. Managed Claude model routing requires an Anthropic API key or an
+administrator-configured Anthropic-compatible gateway credential. Claude.ai OAuth
+is not supported with `ANTHROPIC_BASE_URL`: Claude Code refreshes that session
+against its native service rather than an Anthropic-compatible gateway. Do not set
+the managed base URL for a Claude.ai OAuth-only deployment; preserve native routing
+until Anthropic provides a supported OAuth gateway contract.
 
 ### Pi
 
@@ -511,9 +516,17 @@ does not add a managed daemon route.
 
 ### Codex Responses Compatibility
 
-Both the personal gateway and managed daemon accept Codex's ChatGPT-shaped
-`POST /backend-api/codex/responses` path and canonicalize it to the ordinary
-upstream Responses path. A WebSocket upgrade probe sent with `GET` to that
-path, `/responses`, or `/v1/responses` receives `426 Upgrade Required`, which
-causes clients that support the fallback to use HTTP streaming. An ordinary
-GET remains `405 Method Not Allowed`.
+Both the personal gateway and managed daemon recognize Codex ChatGPT OAuth on
+OpenAI routes, including the managed provider's `/v1/responses` and `/v1/models`
+requests. When no administrator OpenAI credential is configured, Relay preserves
+the OAuth credential and sends the request to the native ChatGPT Codex backend.
+When `openai_auth_header` or `OPENAI_API_KEY` is configured for the daemon, Relay
+removes the ChatGPT OAuth credential, injects that replacement credential, and
+uses the administrator's configured OpenAI-compatible upstream instead.
+
+The daemon also accepts Codex's ChatGPT-shaped
+`POST /backend-api/codex/responses` path and canonicalizes it to the ordinary
+Responses route. A WebSocket upgrade probe sent with `GET` to that path,
+`/responses`, or `/v1/responses` receives `426 Upgrade Required`, which causes
+clients that support the fallback to use HTTP streaming. An ordinary GET remains
+`405 Method Not Allowed`.
