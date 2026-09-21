@@ -3721,6 +3721,7 @@ fn validate_opentelemetry_signal_fields(
         "header_env",
         "header_file",
         "resource_attributes",
+        "promote_resource_metadata_prefixes",
         "service_name",
         "service_namespace",
         "service_version",
@@ -3735,6 +3736,7 @@ fn validate_opentelemetry_signal_fields(
             "max_queue_size",
             "max_export_batch_size",
             "scheduled_delay_millis",
+            "completed_span_context_ttl_millis",
         ][..],
         "metrics" => &[
             "enabled",

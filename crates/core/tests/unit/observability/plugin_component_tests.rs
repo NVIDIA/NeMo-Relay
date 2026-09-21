@@ -431,6 +431,37 @@ fn signal_endpoint_lists_preserve_omitted_and_explicit_empty_shapes() {
 }
 
 #[test]
+fn signal_resource_promotion_is_accepted_with_strict_unknown_field_policy() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    for signal in ["logs", "metrics"] {
+        let mut value = json!({
+            "version": 4,
+            "policy": {"unknown_field": "error"},
+            "opentelemetry": {
+                "enabled": true,
+                signal: {
+                    "enabled": true,
+                    "endpoints": [{
+                        "endpoint": format!("https://collector.example/v1/{signal}"),
+                        "promote_resource_metadata_prefixes": ["deployment."]
+                    }]
+                }
+            }
+        });
+        if signal == "logs" {
+            value["opentelemetry"][signal]["completed_span_context_ttl_millis"] = json!(60_000);
+        }
+        let config = plugin_config(value);
+        let report = test_validate_static_plugin_config(&config);
+        assert!(
+            report.diagnostics.is_empty(),
+            "{signal}: {:?}",
+            report.diagnostics
+        );
+    }
+}
+
+#[test]
 fn observability_v3_remains_trace_only_and_v4_accepts_signal_sections() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     let trace_only = plugin_config(json!({

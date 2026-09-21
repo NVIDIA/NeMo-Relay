@@ -40,6 +40,8 @@ type ObservabilityOpenTelemetrySignalEndpointConfig struct {
 	ServiceVersion       string            `json:"service_version,omitempty"`
 	InstrumentationScope string            `json:"instrumentation_scope,omitempty"`
 	TimeoutMillis        uint64            `json:"timeout_millis,omitempty"`
+	// PromoteResourceMetadataPrefixes selects root-scope metadata for resource attributes.
+	PromoteResourceMetadataPrefixes []string `json:"promote_resource_metadata_prefixes,omitempty"`
 }
 
 // ObservabilityOpenTelemetryLogConfig configures the plugin's OTLP log pipeline.

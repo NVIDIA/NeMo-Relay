@@ -235,6 +235,15 @@ metadata changes do not modify it. Derived log and metric endpoints inherit the
 trace endpoint's prefixes. The prefixes and supported value types match
 `promote_metadata_prefixes`.
 
+For explicit log and metric endpoints, the Python plugin helper
+`OpenTelemetrySignalEndpointConfig` and the Node.js plugin helper
+`openTelemetrySignalEndpoint` accept `promote_resource_metadata_prefixes`.
+The Go plugin helper `ObservabilityOpenTelemetrySignalEndpointConfig` exposes
+`PromoteResourceMetadataPrefixes`. Omit the setting to keep promotion disabled.
+These plugin settings also apply when endpoints are configured through TOML or
+JSON. The Python, Node.js, and Go direct log and metric subscriber APIs do not
+expose this option.
+
 Configured `service_name`, `service_namespace`, `service_version`, and explicit
 `resource_attributes` take precedence over promoted metadata with the same key.
 Each distinct effective resource creates a retained OTLP provider pipeline for
