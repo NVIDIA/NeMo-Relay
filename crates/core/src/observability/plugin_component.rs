@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 use uuid::Uuid;
 
+use super::otel_file::OtlpFileFormat;
 use super::private_file::atomic_private_write;
 use crate::api::event::{Event, LogSeverity, ScopeCategory, ValidatedMetricMeasurement};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack, global_context};
@@ -55,8 +56,11 @@ use crate::observability::atof::{
     AtofSinkConfig as CoreAtofSinkConfig, AtofStreamSinkConfig,
 };
 use crate::observability::otel::{
-    OpenTelemetryConfig as CoreOpenTelemetryConfig, OpenTelemetrySubscriber, OtlpTransport,
-    resolve_http_trace_endpoint,
+    OpenTelemetryConfig as CoreOpenTelemetryConfig,
+    OpenTelemetryFileSinkConfig as CoreOpenTelemetryFileSinkConfig, OpenTelemetrySubscriber,
+    OtlpFileSinkSettings, OtlpTransport, absolute_otlp_file_sink_directory,
+    otlp_file_sink_directory_is_blank, resolve_http_trace_endpoint,
+    validate_otlp_file_sink_filename,
 };
 use crate::observability::otel_logs::{
     OpenTelemetryLogConfig as CoreOpenTelemetryLogConfig, OpenTelemetryLogSubscriber,
@@ -81,6 +85,7 @@ use crate::plugin::{
     register_builtin_plugin,
 };
 use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
+use chrono::Utc;
 
 /// The plugin kind registered by the core crate.
 pub const OBSERVABILITY_PLUGIN_KIND: &str = "observability";
@@ -182,6 +187,9 @@ pub struct OpenTelemetrySectionConfig {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub endpoints: Vec<OpenTelemetryEndpointConfig>,
+    /// Local file destinations that receive the same projected spans.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_sinks: Vec<OpenTelemetryFileSinkConfig>,
     /// Optional OTLP log pipeline sourced from non-metric marks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logs: Option<OpenTelemetryLogSectionConfig>,
@@ -382,6 +390,80 @@ pub struct OpenTelemetryEndpointConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_export_batch_size: Option<usize>,
     /// Maximum delay before exporting a non-full batch, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_delay_millis: Option<u64>,
+    /// How long completed scopes retain trace context for late marks, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_span_context_ttl_millis: Option<u64>,
+}
+
+/// One local file destination for projected OTLP spans.
+///
+/// A file sink writes the same `ExportTraceServiceRequest` an OTLP endpoint
+/// would receive, so a consumer that reads trajectories as artifacts needs no
+/// collector. It shares the projection and batching settings with
+/// [`OpenTelemetryEndpointConfig`] and drops the fields that only a network
+/// destination has: endpoint, transport, headers, and timeout.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct OpenTelemetryFileSinkConfig {
+    /// Semantic projection written to this file.
+    #[serde(rename = "type", default)]
+    pub otel_type: OpenTelemetryType,
+    /// Directory containing the output file.
+    pub output_directory: PathBuf,
+    /// Output filename. Defaults to a timestamped name for the chosen format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    /// On-disk encoding: `json_lines` or `proto`.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "otlp_file_format_schema"))]
+    pub format: OtlpFileFormat,
+    /// File open mode: `append` or `overwrite`.
+    #[serde(default = "default_otlp_file_sink_mode")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "otlp_file_sink_mode_schema")
+    )]
+    pub mode: String,
+    /// Representation used for point-in-time marks.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "mark_projection_schema"))]
+    pub mark_projection: MarkProjection,
+    /// Mark names excluded from tool projection.
+    #[serde(default = "default_mark_exclude_names")]
+    pub mark_exclude_names: Vec<String>,
+    /// Projected attributes copied to aliases.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attribute_mappings: Vec<OtlpAttributeMapping>,
+    /// Literal Event metadata prefixes copied to top-level OTLP attributes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub promote_metadata_prefixes: Vec<String>,
+    /// Literal root-scope Event metadata prefixes copied to OTLP resource attributes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub promote_resource_metadata_prefixes: Vec<String>,
+    /// Extra resource attributes.
+    #[serde(default)]
+    pub resource_attributes: HashMap<String, String>,
+    /// `service.name` resource attribute.
+    #[serde(default = "default_otel_service_name")]
+    pub service_name: String,
+    /// Optional `service.namespace` resource attribute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_namespace: Option<String>,
+    /// Optional `service.version` resource attribute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_version: Option<String>,
+    /// Instrumentation scope name.
+    #[serde(default = "default_otel_instrumentation_scope")]
+    pub instrumentation_scope: String,
+    /// Maximum completed spans buffered before the sink drops new spans.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_queue_size: Option<usize>,
+    /// Maximum spans written in one batch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_export_batch_size: Option<usize>,
+    /// Maximum delay before writing a non-full batch, in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scheduled_delay_millis: Option<u64>,
     /// How long completed scopes retain trace context for late marks, in milliseconds.
@@ -670,6 +752,7 @@ crate::editor_config! {
     impl OpenTelemetrySectionConfig {
         enabled => { label: "enabled", kind: Boolean },
         endpoints => { label: "traces", kind: List, name: "traces", list: &OPENTELEMETRY_ENDPOINT_LIST },
+        file_sinks => { label: "file_sinks", kind: List, list: &OPENTELEMETRY_FILE_SINK_LIST },
         logs => {
             label: "logs",
             kind: Section,
@@ -840,6 +923,84 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
     }
 }
 
+impl EditorConfig for OpenTelemetryFileSinkConfig {
+    fn editor_schema() -> &'static EditorSchema {
+        static SCHEMA: EditorSchema = EditorSchema {
+            fields: &[
+                otel_editor_field(
+                    "type",
+                    EditorFieldKind::Enum,
+                    &["full", "gen_ai", "openinference"],
+                    false,
+                ),
+                otel_editor_field("output_directory", EditorFieldKind::String, &[], false),
+                otel_editor_field("filename", EditorFieldKind::String, &[], true),
+                otel_editor_field(
+                    "format",
+                    EditorFieldKind::Enum,
+                    &["json_lines", "proto"],
+                    false,
+                ),
+                otel_editor_field(
+                    "mode",
+                    EditorFieldKind::Enum,
+                    &["append", "overwrite"],
+                    false,
+                ),
+                otel_editor_field(
+                    "mark_projection",
+                    EditorFieldKind::Enum,
+                    &["inherit", "event", "tool"],
+                    false,
+                ),
+                otel_list_editor_field(
+                    "mark_exclude_names",
+                    false,
+                    &crate::config_editor::STRING_LIST_ITEM,
+                ),
+                otel_editor_field("attribute_mappings", EditorFieldKind::List, &[], false),
+                otel_editor_field(
+                    "promote_metadata_prefixes",
+                    EditorFieldKind::List,
+                    &[],
+                    true,
+                ),
+                otel_editor_field(
+                    "promote_resource_metadata_prefixes",
+                    EditorFieldKind::List,
+                    &[],
+                    true,
+                ),
+                otel_editor_field("service_name", EditorFieldKind::String, &[], false),
+                otel_editor_field("service_namespace", EditorFieldKind::String, &[], true),
+                otel_editor_field("service_version", EditorFieldKind::String, &[], true),
+                otel_editor_field("instrumentation_scope", EditorFieldKind::String, &[], false),
+                otel_editor_field("max_queue_size", EditorFieldKind::Integer, &[], true),
+                otel_editor_field("max_export_batch_size", EditorFieldKind::Integer, &[], true),
+                otel_editor_field(
+                    "scheduled_delay_millis",
+                    EditorFieldKind::Integer,
+                    &[],
+                    true,
+                ),
+                otel_editor_field(
+                    "completed_span_context_ttl_millis",
+                    EditorFieldKind::Integer,
+                    &[],
+                    true,
+                ),
+                otel_editor_field(
+                    "resource_attributes",
+                    EditorFieldKind::StringMap,
+                    &[],
+                    false,
+                ),
+            ],
+        };
+        &SCHEMA
+    }
+}
+
 impl EditorConfig for OpenTelemetrySignalEndpointConfig {
     fn editor_schema() -> &'static EditorSchema {
         static SCHEMA: EditorSchema = EditorSchema {
@@ -896,6 +1057,26 @@ static OPENTELEMETRY_ENDPOINT_LIST: EditorListItemSpec = EditorListItemSpec {
     kind: EditorFieldKind::Section,
     schema: Some(<OpenTelemetryEndpointConfig as EditorConfig>::editor_schema),
     default: Some(default_opentelemetry_endpoint_editor_value),
+    tagged_union: None,
+    list_item: None,
+};
+
+fn default_opentelemetry_file_sink_editor_value() -> Json {
+    serde_json::json!({
+        "type": "full",
+        "output_directory": "",
+        "format": "json_lines",
+        "mode": "overwrite",
+        "service_name": "unknown_service",
+        "instrumentation_scope": "opentelemetry",
+        "resource_attributes": {},
+    })
+}
+
+static OPENTELEMETRY_FILE_SINK_LIST: EditorListItemSpec = EditorListItemSpec {
+    kind: EditorFieldKind::Section,
+    schema: Some(<OpenTelemetryFileSinkConfig as EditorConfig>::editor_schema),
+    default: Some(default_opentelemetry_file_sink_editor_value),
     tagged_union: None,
     list_item: None,
 };
@@ -1134,6 +1315,15 @@ fn atof_mode_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemar
     string_enum_schema(generator, &["append", "overwrite"], Some("append"))
 }
 
+/// A trace file sink defaults to `overwrite`, unlike the ATOF event sink: a run
+/// that reuses a filename should not read as one trajectory appended to another.
+#[cfg(feature = "schema")]
+fn otlp_file_sink_mode_schema(
+    generator: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    string_enum_schema(generator, &["append", "overwrite"], Some("overwrite"))
+}
+
 #[cfg(feature = "schema")]
 fn atof_endpoint_transport_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
@@ -1150,6 +1340,13 @@ fn otlp_transport_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
     string_enum_schema(generator, &["http_binary", "grpc"], Some("http_binary"))
+}
+
+#[cfg(feature = "schema")]
+fn otlp_file_format_schema(
+    generator: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    string_enum_schema(generator, &["json_lines", "proto"], Some("json_lines"))
 }
 
 #[cfg(feature = "schema")]
@@ -1243,6 +1440,7 @@ fn register_observability(
 
 fn opentelemetry_section_is_empty(section: &OpenTelemetrySectionConfig) -> bool {
     section.endpoints.is_empty()
+        && section.file_sinks.is_empty()
         && !section.logs.as_ref().is_some_and(|logs| logs.enabled)
         && !section
             .metrics
@@ -1550,19 +1748,21 @@ fn register_opentelemetry(
 ) -> PluginResult<()> {
     let OpenTelemetrySectionConfig {
         endpoints,
+        file_sinks,
         logs,
         metrics,
         ..
     } = section;
     let logs = logs.filter(|section| section.enabled);
     let metrics = metrics.filter(|section| section.enabled);
-    if endpoints.is_empty() && logs.is_none() && metrics.is_none() {
+    if endpoints.is_empty() && file_sinks.is_empty() && logs.is_none() && metrics.is_none() {
         return Err(PluginError::InvalidConfig(
-            "enabled OpenTelemetry section requires at least one endpoint or an enabled log/metric signal"
+            "enabled OpenTelemetry section requires at least one endpoint, one file sink, or an enabled log/metric signal"
                 .to_string(),
         ));
     }
     validate_distinct_opentelemetry_destinations(&endpoints)?;
+    validate_distinct_opentelemetry_file_sinks(&file_sinks)?;
     let log_resolution = logs
         .as_ref()
         .map(|section| resolve_signal_endpoints("logs", section.endpoints.as_ref(), &endpoints))
@@ -1577,7 +1777,10 @@ fn register_opentelemetry(
     if let Some(resolution) = &metric_resolution {
         warn_skipped_signal_endpoints("metrics", &resolution.endpoints);
     }
-    let trace_subscribers = build_opentelemetry_subscribers(endpoints)?;
+    let mut trace_subscribers = build_opentelemetry_subscribers(endpoints)?;
+    // Signals are built before the file sinks: an overwrite-mode sink truncates
+    // its file as it opens, and a signal that fails registration would leave
+    // that file empty behind it.
     let signal_subscribers = build_opentelemetry_signal_subscribers(
         logs,
         log_resolution,
@@ -1585,6 +1788,12 @@ fn register_opentelemetry(
         metric_resolution,
         &trace_subscribers,
     )?;
+    // File sinks join the trace fan-out: they receive the same projected spans
+    // an endpoint would, so logs and metrics derive from endpoints only.
+    let file_sink_subscribers =
+        build_opentelemetry_file_sink_subscribers(file_sinks, trace_subscribers.len())?;
+    trace_subscribers.extend(file_sink_subscribers);
+    let trace_subscribers = trace_subscribers;
     let log_subscribers = signal_subscribers.logs;
     let metric_subscribers = signal_subscribers.metrics;
     if !has_active_opentelemetry_resource(&trace_subscribers)
@@ -2061,6 +2270,44 @@ fn build_opentelemetry_subscribers(
                 );
                 subscribers.push(IndexedOpenTelemetryResource {
                     index,
+                    value: OpenTelemetryResource::Skipped(error.to_string()),
+                });
+            }
+        }
+    }
+    Ok(subscribers)
+}
+
+fn build_opentelemetry_file_sink_subscribers(
+    file_sinks: Vec<OpenTelemetryFileSinkConfig>,
+    index_offset: usize,
+) -> PluginResult<Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetrySubscriber>>>> {
+    let mut subscribers = Vec::with_capacity(file_sinks.len());
+    for (index, file_sink) in file_sinks.into_iter().enumerate() {
+        let subscriber = build_otel_file_config(index, file_sink).and_then(|config| {
+            OpenTelemetrySubscriber::new_for_plugin_file_sink(config, index)
+                .map_err(observability_registration_error)
+        });
+        // Offset so a file sink and an endpoint never share a fan-out index.
+        // The diagnostic keeps the unoffset index, which is the `file_sinks`
+        // slot the user wrote.
+        let fanout_index = index_offset + index;
+        match subscriber {
+            Ok(value) => subscribers.push(IndexedOpenTelemetryResource {
+                index: fanout_index,
+                value: OpenTelemetryResource::Active(Arc::new(value)),
+            }),
+            Err(error) => {
+                log::warn!(
+                    target: "nemo_relay.plugin",
+                    event = "opentelemetry_file_sink_skipped",
+                    plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+                    resource_kind = "otlp_file_sink",
+                    resource_index = index;
+                    "OpenTelemetry file sink was skipped during activation; delivery continues to valid destinations: {error}"
+                );
+                subscribers.push(IndexedOpenTelemetryResource {
+                    index: fanout_index,
                     value: OpenTelemetryResource::Skipped(error.to_string()),
                 });
             }
@@ -3585,6 +3832,133 @@ fn build_otel_config(
     Ok(config)
 }
 
+fn build_otel_file_config(
+    index: usize,
+    section: OpenTelemetryFileSinkConfig,
+) -> PluginResult<CoreOpenTelemetryFileSinkConfig> {
+    if otlp_file_sink_directory_is_blank(&section.output_directory) {
+        return Err(PluginError::InvalidConfig(format!(
+            "OpenTelemetry file_sinks[{index}].output_directory must be a nonblank path"
+        )));
+    }
+    let append = match section.mode.as_str() {
+        "append" => true,
+        "overwrite" => false,
+        other => {
+            return Err(PluginError::InvalidConfig(format!(
+                "OpenTelemetry file_sinks[{index}].mode must be 'append' or 'overwrite', got {other:?}"
+            )));
+        }
+    };
+    validate_otel_file_sink_batch_config(index, &section).map_err(|(_, error)| error)?;
+    let filename = match section.filename {
+        Some(filename) => {
+            validate_otel_file_sink_filename(index, &filename)?;
+            filename
+        }
+        None => default_otlp_file_sink_filename(section.format),
+    };
+
+    let settings = OtlpFileSinkSettings {
+        path: section.output_directory.join(&filename),
+        output_directory: section.output_directory,
+        format: section.format,
+        append,
+    };
+    let mut config = CoreOpenTelemetryFileSinkConfig::new(section.otel_type, settings)
+        .with_instrumentation_scope(section.instrumentation_scope)
+        .with_mark_projection(section.mark_projection)
+        .with_mark_exclude_names(section.mark_exclude_names)
+        .with_attribute_mappings(section.attribute_mappings)
+        .with_promote_metadata_prefixes(section.promote_metadata_prefixes)
+        .with_promote_resource_metadata_prefixes(section.promote_resource_metadata_prefixes);
+    if section.service_name != default_otel_service_name() {
+        config = config.with_service_name(section.service_name);
+    }
+    if let Some(max_queue_size) = section.max_queue_size {
+        config = config.with_max_queue_size(max_queue_size);
+    }
+    if let Some(max_export_batch_size) = section.max_export_batch_size {
+        config = config.with_max_export_batch_size(max_export_batch_size);
+    }
+    if let Some(scheduled_delay_millis) = section.scheduled_delay_millis {
+        config = config.with_scheduled_delay(Duration::from_millis(scheduled_delay_millis));
+    }
+    if let Some(completed_span_context_ttl_millis) = section.completed_span_context_ttl_millis {
+        config = config.with_completed_span_context_ttl(Duration::from_millis(
+            completed_span_context_ttl_millis,
+        ));
+    }
+    if let Some(namespace) = section.service_namespace {
+        config = config.with_service_namespace(namespace);
+    }
+    if let Some(version) = section.service_version {
+        config = config.with_service_version(version);
+    }
+    for (key, value) in section.resource_attributes {
+        config = config.with_resource_attribute(key, value);
+    }
+    Ok(config)
+}
+
+/// Rejects a filename that would escape `output_directory`.
+///
+/// The exporter confines its writes as well, but a path component here is a
+/// configuration mistake worth naming rather than an I/O error at export time.
+fn validate_otel_file_sink_filename(index: usize, filename: &str) -> PluginResult<()> {
+    // One validator for every surface: a filename the bindings accept through
+    // `OtlpFileSinkSettings::from_parts` must reach the same file here.
+    validate_otlp_file_sink_filename(filename).map_err(|message| {
+        PluginError::InvalidConfig(format!(
+            "OpenTelemetry file_sinks[{index}].filename {message}"
+        ))
+    })
+}
+
+/// Returns the offending field alongside the error, so a static diagnostic can
+/// name the setting that failed rather than always naming `max_queue_size`.
+fn validate_otel_file_sink_batch_config(
+    index: usize,
+    section: &OpenTelemetryFileSinkConfig,
+) -> std::result::Result<(), (&'static str, PluginError)> {
+    for (field, value) in [
+        (
+            "max_queue_size",
+            section.max_queue_size.map(|value| value as u64),
+        ),
+        (
+            "max_export_batch_size",
+            section.max_export_batch_size.map(|value| value as u64),
+        ),
+        ("scheduled_delay_millis", section.scheduled_delay_millis),
+        (
+            "completed_span_context_ttl_millis",
+            section.completed_span_context_ttl_millis,
+        ),
+    ] {
+        if value == Some(0) {
+            return Err((
+                field,
+                PluginError::InvalidConfig(format!(
+                    "OpenTelemetry file_sinks[{index}].{field} must be greater than 0"
+                )),
+            ));
+        }
+    }
+    if matches!(
+        (section.max_export_batch_size, section.max_queue_size),
+        (Some(batch), Some(queue)) if batch > queue
+    ) {
+        return Err((
+            "max_export_batch_size",
+            PluginError::InvalidConfig(format!(
+                "OpenTelemetry file_sinks[{index}].max_export_batch_size must be less than or equal to max_queue_size"
+            )),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_otel_batch_config(
     index: usize,
     section: &OpenTelemetryEndpointConfig,
@@ -3794,6 +4168,7 @@ fn validate_observability_section_fields(
             "enabled",
             "traces",
             "endpoints",
+            "file_sinks",
             "logs",
             "metrics",
             "mark_projection",
@@ -3815,6 +4190,7 @@ fn validate_observability_section_fields(
     );
     if let Some(opentelemetry) = plugin_config.get("opentelemetry").and_then(Json::as_object) {
         validate_opentelemetry_endpoint_fields(diagnostics, policy, opentelemetry);
+        validate_opentelemetry_file_sink_fields(diagnostics, policy, opentelemetry);
         validate_opentelemetry_signal_fields(diagnostics, policy, opentelemetry, "logs");
         validate_opentelemetry_signal_fields(diagnostics, policy, opentelemetry, "metrics");
         for legacy_field in [
@@ -3992,6 +4368,60 @@ fn validate_opentelemetry_endpoint_fields(
     }
 }
 
+/// Reports unknown keys inside each `file_sinks` entry.
+///
+/// A file sink drops the endpoint-only settings, so its own list is checked
+/// rather than reusing the endpoint one: `endpoint` or `headers` on a file sink
+/// is a mistake worth naming.
+fn validate_opentelemetry_file_sink_fields(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    opentelemetry: &Map<String, Json>,
+) {
+    const ALLOWED: &[&str] = &[
+        "type",
+        "output_directory",
+        "filename",
+        "format",
+        "mode",
+        "mark_projection",
+        "mark_exclude_names",
+        "attribute_mappings",
+        "promote_metadata_prefixes",
+        "promote_resource_metadata_prefixes",
+        "resource_attributes",
+        "service_name",
+        "service_namespace",
+        "service_version",
+        "instrumentation_scope",
+        "max_queue_size",
+        "max_export_batch_size",
+        "scheduled_delay_millis",
+        "completed_span_context_ttl_millis",
+    ];
+    let Some(file_sinks) = opentelemetry.get("file_sinks").and_then(Json::as_array) else {
+        return;
+    };
+    for (index, file_sink) in file_sinks.iter().enumerate() {
+        let Some(file_sink) = file_sink.as_object() else {
+            continue;
+        };
+        for field in file_sink
+            .keys()
+            .filter(|field| !ALLOWED.contains(&field.as_str()))
+        {
+            push_policy_diag(
+                diagnostics,
+                policy.unknown_field,
+                "observability.unknown_field",
+                Some("opentelemetry".to_string()),
+                Some(format!("file_sinks[{index}].{field}")),
+                format!("unknown OpenTelemetry file sink field {field:?}"),
+            );
+        }
+    }
+}
+
 fn validate_observability_section_values(
     diagnostics: &mut Vec<ConfigDiagnostic>,
     config: &ObservabilityConfig,
@@ -4090,6 +4520,108 @@ fn validate_atif_storage_support(
 ) {
 }
 
+/// Reports the file-sink settings that would otherwise fail only at activation.
+fn validate_opentelemetry_file_sinks(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    section: &OpenTelemetrySectionConfig,
+) {
+    for (index, file_sink) in section.file_sinks.iter().enumerate() {
+        if otlp_file_sink_directory_is_blank(&file_sink.output_directory) {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("opentelemetry".to_string()),
+                Some(format!("file_sinks[{index}].output_directory")),
+                "OpenTelemetry file sink output_directory must be a nonblank path".to_string(),
+            );
+        }
+        if !matches!(file_sink.mode.as_str(), "append" | "overwrite") {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("opentelemetry".to_string()),
+                Some(format!("file_sinks[{index}].mode")),
+                format!(
+                    "OpenTelemetry file sink mode must be 'append' or 'overwrite', got {:?}",
+                    file_sink.mode
+                ),
+            );
+        }
+        // Reported here as well as at activation, so a malformed sink surfaces
+        // as a configuration diagnostic rather than only as a skipped-sink
+        // warning, matching how endpoints are validated.
+        if let Some(Err(error)) = file_sink
+            .filename
+            .as_ref()
+            .map(|filename| validate_otel_file_sink_filename(index, filename))
+        {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("opentelemetry".to_string()),
+                Some(format!("file_sinks[{index}].filename")),
+                error.to_string(),
+            );
+        }
+        if let Err((field, error)) = validate_otel_file_sink_batch_config(index, file_sink) {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("opentelemetry".to_string()),
+                Some(format!("file_sinks[{index}].{field}")),
+                error.to_string(),
+            );
+        }
+        if let Err(error) = validate_attribute_mappings(&file_sink.attribute_mappings) {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("opentelemetry".to_string()),
+                Some(format!("file_sinks[{index}].attribute_mappings")),
+                error,
+            );
+        }
+        for (field, prefixes) in [
+            (
+                "promote_metadata_prefixes",
+                &file_sink.promote_metadata_prefixes,
+            ),
+            (
+                "promote_resource_metadata_prefixes",
+                &file_sink.promote_resource_metadata_prefixes,
+            ),
+        ] {
+            if let Err(error) = validate_metadata_promotion_prefixes(prefixes) {
+                push_policy_diag(
+                    diagnostics,
+                    policy.unsupported_value,
+                    "observability.unsupported_value",
+                    Some("opentelemetry".to_string()),
+                    Some(format!("file_sinks[{index}].{field}")),
+                    error,
+                );
+            }
+        }
+    }
+    // Two sinks on one path fail the whole section at activation, so the same
+    // collision is reported statically rather than only once the plugin starts.
+    if let Err(error) = validate_distinct_opentelemetry_file_sinks(&section.file_sinks) {
+        diagnostics.push(ConfigDiagnostic {
+            level: DiagnosticLevel::Error,
+            code: "observability.unsafe_otel_destination_collision".to_string(),
+            component: Some("opentelemetry".to_string()),
+            field: Some("file_sinks".to_string()),
+            message: error.to_string(),
+        });
+    }
+}
+
 fn validate_opentelemetry_section(
     diagnostics: &mut Vec<ConfigDiagnostic>,
     policy: &ConfigPolicy,
@@ -4102,6 +4634,7 @@ fn validate_opentelemetry_section(
             .is_some_and(|signal| signal.enabled);
     if section.enabled
         && section.endpoints.is_empty()
+        && section.file_sinks.is_empty()
         && !has_enabled_signal
         && automatic_otlp_signals().is_none()
     {
@@ -4111,10 +4644,11 @@ fn validate_opentelemetry_section(
             "observability.unsupported_value",
             Some("opentelemetry".to_string()),
             Some("endpoints".to_string()),
-            "enabled OpenTelemetry section requires at least one endpoint or an enabled log/metric signal"
+            "enabled OpenTelemetry section requires at least one endpoint, one file sink, or an enabled log/metric signal"
                 .to_string(),
         );
     }
+    validate_opentelemetry_file_sinks(diagnostics, policy, section);
     for (index, endpoint) in section.endpoints.iter().enumerate() {
         if endpoint.endpoint.trim().is_empty() {
             push_policy_diag(
@@ -4547,6 +5081,37 @@ fn validate_distinct_opentelemetry_destinations(
         .next()
     {
         return Err(PluginError::InvalidConfig(error.message));
+    }
+    Ok(())
+}
+
+/// Rejects two file sinks writing the same path.
+///
+/// Two exporters appending to one file interleave their records; two
+/// overwriting it race. Either way the trace that survives is not the one
+/// either sink was configured to produce.
+fn validate_distinct_opentelemetry_file_sinks(
+    file_sinks: &[OpenTelemetryFileSinkConfig],
+) -> PluginResult<()> {
+    let mut seen: HashMap<PathBuf, usize> = HashMap::new();
+    for (index, file_sink) in file_sinks.iter().enumerate() {
+        // An omitted filename is compared as a marker rather than a generated
+        // name: the default carries a timestamp, so generating one per sink
+        // would let two defaulting sinks miss each other across a second
+        // boundary and still collide at activation.
+        let filename = file_sink
+            .filename
+            .clone()
+            .unwrap_or_else(|| format!("<default>.{}", file_sink.format.extension()));
+        // Compared absolute: `PathBuf` equality is component-wise, so
+        // "./traces" and "traces" would miss each other here and then open the
+        // same file with two independent offsets.
+        let path = absolute_otlp_file_sink_directory(&file_sink.output_directory).join(filename);
+        if let Some(other_index) = seen.insert(path.clone(), index) {
+            return Err(PluginError::InvalidConfig(format!(
+                "OpenTelemetry file_sinks[{other_index}] and file_sinks[{index}] write the same path {path:?}; each sink requires its own file"
+            )));
+        }
     }
     Ok(())
 }
@@ -5487,6 +6052,18 @@ fn default_atif_filename_template() -> String {
 
 fn default_otlp_transport() -> String {
     "http_binary".to_string()
+}
+
+fn default_otlp_file_sink_mode() -> String {
+    "overwrite".to_string()
+}
+
+fn default_otlp_file_sink_filename(format: OtlpFileFormat) -> String {
+    format!(
+        "nemo-relay-otlp-{}.{}",
+        Utc::now().format("%Y-%m-%d-%H.%M.%S"),
+        format.extension()
+    )
 }
 
 fn default_otel_service_name() -> String {

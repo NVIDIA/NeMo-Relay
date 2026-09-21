@@ -1978,6 +1978,7 @@ dependencies = [
  "pythonize",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-stream",
  "uuid",
