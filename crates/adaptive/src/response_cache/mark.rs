@@ -41,6 +41,8 @@ impl CacheMarkStatus {
 /// Stable reason for a response-cache bypass or fail-open decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CacheReason {
+    /// Anthropic server-side compaction changes response and continuation semantics.
+    AnthropicCompaction,
     /// The canonical JSON encoder could not derive a fingerprint.
     CanonicalizationFailed,
     /// An old cached error result must not be replayed.
@@ -72,6 +74,7 @@ pub(crate) enum CacheReason {
 impl CacheReason {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            Self::AnthropicCompaction => "anthropic_compaction",
             Self::CanonicalizationFailed => "canonicalization_failed",
             Self::CachedError => "cached_error",
             Self::NondeterministicTemperature => "nondeterministic_temperature",

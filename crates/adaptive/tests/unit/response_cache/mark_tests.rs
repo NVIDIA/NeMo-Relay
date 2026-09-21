@@ -31,6 +31,10 @@ fn cache_mark_labels_have_stable_telemetry_values() {
     assert_eq!(black_box(CacheMarkStatus::Hit).as_str(), "hit");
     assert_eq!(black_box(CacheMarkStatus::Miss).as_str(), "miss");
     assert_eq!(
+        black_box(CacheReason::AnthropicCompaction).as_str(),
+        "anthropic_compaction"
+    );
+    assert_eq!(
         black_box(CacheReason::CanonicalizationFailed).as_str(),
         "canonicalization_failed"
     );
