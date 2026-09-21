@@ -1040,6 +1040,168 @@ fn log_and_metric_resources_promote_root_metadata_and_inherit_to_child_marks() {
 }
 
 #[test]
+fn resource_pipeline_limit_reuses_existing_keys_and_exports_overflow_on_base() {
+    let logs_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let logs_endpoint = format!("http://{}", logs_listener.local_addr().unwrap());
+    let logs_requests = capture_requests(logs_listener, 3);
+    let logs = OpenTelemetryLogSubscriber::new(
+        OpenTelemetryLogConfig::new(logs_endpoint)
+            .with_scheduled_delay(Duration::from_secs(60))
+            .with_promote_resource_metadata_prefixes(["deployment."]),
+    )
+    .unwrap();
+    let metrics_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let metrics_endpoint = format!("http://{}", metrics_listener.local_addr().unwrap());
+    // Each populated meter exports once on flush and once on shutdown.
+    let metrics_requests = capture_requests(metrics_listener, 6);
+    let metrics = OpenTelemetryMetricSubscriber::new(
+        OpenTelemetryMetricConfig::new(metrics_endpoint)
+            .with_export_interval(Duration::from_secs(60))
+            .with_promote_resource_metadata_prefixes(["deployment."]),
+    )
+    .unwrap();
+    let callbacks = [logs.subscriber(), metrics.subscriber()];
+    let mut marked_scopes = Vec::new();
+    // Fill through the exact limit, reuse key zero at capacity, then reject two
+    // distinct new keys. The last admitted resource must remain usable too.
+    for index in (0..MAX_DYNAMIC_SIGNAL_PIPELINES).chain([
+        0,
+        MAX_DYNAMIC_SIGNAL_PIPELINES,
+        MAX_DYNAMIC_SIGNAL_PIPELINES + 1,
+    ]) {
+        let uuid = uuid::Uuid::now_v7();
+        let start = Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .uuid(uuid)
+                .name("root")
+                .metadata(json!({"deployment.region": index.to_string()}))
+                .build(),
+            ScopeCategory::Start,
+            Vec::new(),
+            ScopeType::Agent.into(),
+            None,
+        ));
+        for callback in &callbacks {
+            callback(&start);
+        }
+        if index >= MAX_DYNAMIC_SIGNAL_PIPELINES - 1 || index == 0 {
+            // Keep only the second scope with key zero to verify reuse.
+            if index == 0 {
+                marked_scopes.retain(|(key, _)| *key != 0);
+            }
+            marked_scopes.push((index, uuid));
+        }
+    }
+    assert_eq!(
+        metrics.inner.dynamic_pipelines.lock().unwrap().len(),
+        MAX_DYNAMIC_SIGNAL_PIPELINES
+    );
+    for diagnostics in [logs.runtime_diagnostics(), metrics.runtime_diagnostics()] {
+        assert_eq!(
+            diagnostics
+                .get("otel.resource_metadata_pipeline_limit")
+                .unwrap()
+                .count,
+            2
+        );
+        assert!(
+            diagnostics
+                .get("otel.resource_metadata_pipeline_build_failed")
+                .is_none()
+        );
+    }
+    for (_, uuid) in marked_scopes {
+        let log = Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .parent_uuid(uuid)
+                .name("limited.log")
+                .build(),
+            None,
+            None,
+        ));
+        logs.subscriber()(&log);
+        let metric = Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .parent_uuid(uuid)
+                .name("metric.record")
+                .data(json!({"measurements": [{
+                    "name": "limited.counter", "kind": "counter", "value_type": "u64", "value": 1
+                }]}))
+                .data_schema(
+                    DataSchema::builder()
+                        .name(METRIC_DATA_SCHEMA_NAME)
+                        .version(METRIC_DATA_SCHEMA_VERSION)
+                        .build(),
+                )
+                .build(),
+            None,
+            None,
+        ));
+        metrics.subscriber()(&metric);
+    }
+    logs.force_flush().unwrap();
+    metrics.force_flush().unwrap();
+    let mut log_counts = HashMap::new();
+    let mut metric_counts = HashMap::new();
+    for _ in 0..3 {
+        let request = logs_requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        let decoded = ExportLogsServiceRequest::decode(request.body.as_slice()).unwrap();
+        for resource in decoded.resource_logs {
+            let key =
+                otlp_string_attribute(&resource.resource.unwrap().attributes, "deployment.region")
+                    .map(str::to_string);
+            let count: usize = resource
+                .scope_logs
+                .iter()
+                .map(|scope| scope.log_records.len())
+                .sum();
+            *log_counts.entry(key).or_insert(0) += count;
+        }
+        let request = metrics_requests
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        let decoded = ExportMetricsServiceRequest::decode(request.body.as_slice()).unwrap();
+        for resource in decoded.resource_metrics {
+            let key =
+                otlp_string_attribute(&resource.resource.unwrap().attributes, "deployment.region")
+                    .map(str::to_string);
+            for metric in resource
+                .scope_metrics
+                .iter()
+                .flat_map(|scope| &scope.metrics)
+            {
+                use opentelemetry_proto::tonic::metrics::v1::{
+                    metric::Data, number_data_point::Value,
+                };
+                let Some(Data::Sum(sum)) = &metric.data else {
+                    panic!("expected counter sum")
+                };
+                for point in &sum.data_points {
+                    let Some(Value::AsInt(count)) = point.value else {
+                        panic!("expected integer counter")
+                    };
+                    *metric_counts.entry(key.clone()).or_insert(0) += count as usize;
+                }
+            }
+        }
+    }
+    let expected = HashMap::from([
+        (None, 2),
+        (Some("0".to_string()), 1),
+        (Some((MAX_DYNAMIC_SIGNAL_PIPELINES - 1).to_string()), 1),
+    ]);
+    assert_eq!(log_counts, expected);
+    assert_eq!(metric_counts, expected);
+    logs.shutdown().unwrap();
+    metrics.shutdown().unwrap();
+    for _ in 0..3 {
+        metrics_requests
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+    }
+}
+
+#[test]
 fn http_log_and_metric_exporters_do_not_follow_redirects_without_headers() {
     for signal in ["logs", "metrics"] {
         let destination = TcpListener::bind("127.0.0.1:0").unwrap();

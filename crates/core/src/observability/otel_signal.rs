@@ -29,6 +29,10 @@ use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 use super::otel::{OpenTelemetryError, Result};
 use super::{MetadataPromotionIssue, promote_event_metadata_attributes};
 
+// Each dynamic pipeline owns a runtime worker and a supervising thread. Keep the
+// per-endpoint log/metric budget conservative; the base provider is not counted.
+pub(super) const MAX_DYNAMIC_SIGNAL_PIPELINES: usize = 16;
+
 const MAX_RUNTIME_DIAGNOSTICS: usize = 32;
 const MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS: usize = 1_024;
 pub(super) const TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS: [&str; 3] = [
@@ -180,6 +184,21 @@ impl SignalRuntimeDiagnostics {
 
 pub(super) fn should_relog_runtime_diagnostic(count: u64) -> bool {
     count.is_power_of_two()
+}
+
+/// Report capacity fallback without including high-cardinality resource keys.
+pub(super) fn record_resource_pipeline_limit(diagnostics: &SignalRuntimeDiagnostics, signal: &str) {
+    let message = format!(
+        "OpenTelemetry {signal} resource pipeline limit of {MAX_DYNAMIC_SIGNAL_PIPELINES} reached; new resources use the configured base resource"
+    );
+    let count = diagnostics.record("otel.resource_metadata_pipeline_limit", message.clone(), 1);
+    if should_relog_runtime_diagnostic(count) {
+        log::warn!(
+            target: "nemo_relay.observability",
+            event = "otel_resource_metadata_pipeline_limit";
+            "{message}"
+        );
+    }
 }
 
 /// Retry a batch-processor control message while the data queue is transiently full.

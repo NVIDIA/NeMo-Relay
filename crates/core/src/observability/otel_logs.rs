@@ -40,12 +40,12 @@ use super::otel::{
     normalize_shutdown_result,
 };
 use super::otel_signal::{
-    MetricMarkClassification, SignalExporterRuntime, SignalResourceLineage,
-    SignalRuntimeDiagnostics, build_grpc_metadata, build_in_owned_runtime, classify_metric_mark,
-    promoted_signal_resource_attributes, reject_signal_header_environment, resolve_header_env,
-    resolve_http_signal_endpoint, retry_batch_processor_channel_full,
-    should_relog_runtime_diagnostic, signal_resource, telemetry_resource, validate_signal_headers,
-    validate_telemetry_sdk_resource_attributes,
+    MAX_DYNAMIC_SIGNAL_PIPELINES, MetricMarkClassification, SignalExporterRuntime,
+    SignalResourceLineage, SignalRuntimeDiagnostics, build_grpc_metadata, build_in_owned_runtime,
+    classify_metric_mark, promoted_signal_resource_attributes, record_resource_pipeline_limit,
+    reject_signal_header_environment, resolve_header_env, resolve_http_signal_endpoint,
+    retry_batch_processor_channel_full, should_relog_runtime_diagnostic, signal_resource,
+    telemetry_resource, validate_signal_headers, validate_telemetry_sdk_resource_attributes,
 };
 use super::{OpenTelemetryRuntimeDiagnostics, validate_metadata_promotion_prefixes};
 
@@ -371,7 +371,8 @@ impl OpenTelemetryLogSubscriber {
                         Arc::clone(&callback_delivery_diagnostics),
                         &key,
                     ) {
-                        Ok(()) => Some(key),
+                        Ok(true) => Some(key),
+                        Ok(false) => None,
                         Err(error) => {
                             let count = callback_runtime_diagnostics.record(
                                 "otel.resource_metadata_pipeline_build_failed",
@@ -613,6 +614,7 @@ fn build_log_provider(
         .build())
 }
 
+/// Return false at capacity so callers route through the configured base provider.
 fn ensure_dynamic_log_pipeline(
     pipelines: &Mutex<HashMap<String, DynamicLogPipeline>>,
     config: &OpenTelemetryLogConfig,
@@ -620,12 +622,16 @@ fn ensure_dynamic_log_pipeline(
     attributes: Vec<KeyValue>,
     diagnostics: Arc<LogDeliveryDiagnostics>,
     key: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let mut pipelines = pipelines
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if pipelines.contains_key(key) {
-        return Ok(());
+        return Ok(true);
+    }
+    if pipelines.len() >= MAX_DYNAMIC_SIGNAL_PIPELINES {
+        record_resource_pipeline_limit(&diagnostics.runtime_diagnostics, "logs");
+        return Ok(false);
     }
     let config = config.clone();
     let (provider, runtime) = build_in_owned_runtime("nemo-relay-otlp-logs-resource", move || {
@@ -640,7 +646,7 @@ fn ensure_dynamic_log_pipeline(
             _runtime: runtime,
         },
     );
-    Ok(())
+    Ok(true)
 }
 
 #[derive(Debug)]

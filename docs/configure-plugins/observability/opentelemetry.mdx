@@ -251,7 +251,16 @@ each enabled signal, so use only controlled, low-cardinality values such as
 deployment, region, client version, or environment identity. Do not promote
 request, tenant, or user identifiers.
 
-Relay records two bounded runtime diagnostics for this setting. A rejected value
+Each log or metric endpoint retains at most **16 dynamic resource pipelines**,
+plus its configured base provider. Existing resource keys continue to reuse
+their pipelines at the limit; pipelines are not evicted. Additional resource
+keys use the base resource and produce `otel.resource_metadata_pipeline_limit`.
+This preserves delivery but omits the promoted resource distinction, so metric
+measurements that differ only by that resource can be aggregated together.
+The limit is fixed, applies independently to each log and metric endpoint, and
+does not cap trace pipelines or total process memory.
+
+Relay records bounded runtime diagnostics for this setting. A rejected value
 produces `otel.resource_metadata_promotion_value_unsupported.<metadata-key>`.
 A failed resource-pipeline construction produces
 `otel.resource_metadata_pipeline_build_failed`; Relay then exports the affected
