@@ -445,6 +445,130 @@ fn stateful_conversation_and_default_store_bypass() {
 }
 
 #[test]
+fn anthropic_compaction_requests_bypass_the_cache() {
+    let config = cache_all_config();
+    let messages_request = |extra: Json| {
+        let mut body = json!({
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "temperature": 0.0
+        });
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        request(body)
+    };
+
+    let threshold = messages_request(json!({
+        "context_management": {"edits": [{"type": "compact_20260112"}]}
+    }));
+    let legacy = messages_request(json!({
+        "context_management": {"edits": [{"type": "compact"}]}
+    }));
+    let mixed_edits = messages_request(json!({
+        "context_management": {"edits": [
+            {"type": "clear_tool_uses_20250919"},
+            {"type": "compact_20260112"}
+        ]}
+    }));
+    let malformed_context_management = messages_request(json!({"context_management": null}));
+    let missing_edits = messages_request(json!({"context_management": {}}));
+    let invalid_edits = messages_request(json!({
+        "context_management": {"edits": null}
+    }));
+    let incomplete_edit = messages_request(json!({
+        "context_management": {"edits": [{}]}
+    }));
+    let on_demand = messages_request(json!({"compaction": {"type": "summarize"}}));
+    let malformed_on_demand = messages_request(json!({"compaction": null}));
+    let continuation = request(json!({
+        "model": "claude-haiku-4-5",
+        "messages": [{"role": "assistant", "content": [{"type": "compaction"}]}],
+        "temperature": 0.0
+    }));
+    let mut beta = messages_request(json!({}));
+    beta.headers.insert(
+        "Anthropic-Beta".to_string(),
+        json!("other-2026-01-01, CoMpAcT-2026-01-12"),
+    );
+
+    for (name, request) in [
+        ("threshold edit", &threshold),
+        ("legacy edit", &legacy),
+        ("mixed edits", &mixed_edits),
+        (
+            "malformed context management",
+            &malformed_context_management,
+        ),
+        ("missing edits", &missing_edits),
+        ("invalid edits", &invalid_edits),
+        ("incomplete edit", &incomplete_edit),
+        ("on-demand compaction", &on_demand),
+        ("malformed on-demand compaction", &malformed_on_demand),
+        ("compaction continuation", &continuation),
+        ("compaction beta", &beta),
+    ] {
+        assert_eq!(
+            build_cache_key("demo-provider", request, &config),
+            KeyOutcome::Bypass(CacheReason::AnthropicCompaction),
+            "{name} must bypass even when the caller uses a logical provider name"
+        );
+    }
+}
+
+#[test]
+fn requests_without_anthropic_compaction_remain_cacheable() {
+    let config = cache_all_config();
+    let ordinary_messages = request(json!({
+        "model": "claude-haiku-4-5",
+        "messages": [{"role": "user", "content": "hello"}],
+        "temperature": 0.0
+    }));
+    let unrelated_context_edit = request(json!({
+        "model": "claude-haiku-4-5",
+        "messages": [{"role": "user", "content": "hello"}],
+        "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
+        "temperature": 0.0
+    }));
+    let empty_edits = request(json!({
+        "model": "claude-haiku-4-5",
+        "messages": [{"role": "user", "content": "hello"}],
+        "context_management": {"edits": []},
+        "temperature": 0.0
+    }));
+    let similarly_named_edit = request(json!({
+        "model": "claude-haiku-4-5",
+        "messages": [{"role": "user", "content": "hello"}],
+        "context_management": {"edits": [{"type": "compactness_check"}]},
+        "temperature": 0.0
+    }));
+    let responses_context_management = request(json!({
+        "model": "gpt-5",
+        "input": "hello",
+        "context_management": [{"type": "compaction", "compact_threshold": 1000}],
+        "compaction": null,
+        "store": false,
+        "temperature": 0.0
+    }));
+
+    for (provider, request) in [
+        ("demo-provider", &ordinary_messages),
+        ("anthropic.messages", &unrelated_context_edit),
+        ("anthropic.messages", &empty_edits),
+        ("anthropic.messages", &similarly_named_edit),
+        ("openai.responses", &responses_context_management),
+    ] {
+        assert!(
+            matches!(
+                build_cache_key(provider, request, &config),
+                KeyOutcome::Key(_)
+            ),
+            "request for {provider} must remain cacheable"
+        );
+    }
+}
+
+#[test]
 fn null_bodies_bypass_the_cache() {
     // The gateway parses unparseable upstream bodies to `null`; every such
     // request would share one key, so they are never cacheable.

@@ -301,6 +301,10 @@ Only complete, replayable LLM answers are stored:
   stored interaction (`previous_response_id`), or references server-side state
   (`conversation`, `container`). Their answers depend on state the cache key
   cannot see.
+- Anthropic Messages requests that use server-side compaction, carry a prior
+  compaction block, or send a compaction beta header run live. Relay does not
+  cache them because compaction changes continuation and streaming behavior
+  that response-cache replay does not yet preserve.
 - Streaming calls are cached too. On a miss the live chunks are forwarded to
   the consumer while being assembled into one aggregate response — the same
   shape a buffered call stores, so buffered and streaming calls share one
@@ -477,9 +481,9 @@ Tool marks use `surface = "tool"`. Unclassified tools that use the default
 policy and explicitly uncacheable tools emit a `bypass` mark with
 `reason = "uncacheable"` before Relay runs the tool.
 
-Other bypass reasons include `sampled`, `stateful_store`, and
-`stream_no_codec`. A failed cache-store operation produces a `miss` with
-`reason = "store_error"`.
+Other bypass reasons include `anthropic_compaction`, `sampled`,
+`stateful_store`, and `stream_no_codec`. A failed cache-store operation
+produces a `miss` with `reason = "store_error"`.
 
 Cache marks do not contain prompts, answers, or credentials. Treat `key_hash`
 as sensitive because an observer might identify an input by guessing and
