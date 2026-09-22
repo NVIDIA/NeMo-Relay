@@ -646,3 +646,131 @@ func EmitAgentEnd(t *testing.T, Label string, Handle *ScopeHandle) {
 func TrajectoryFilePath(Dir string, Handle *ScopeHandle) string {
 	return filepath.Join(Dir, TrajectoryFilenamePrefix+Handle.UUID()+".json")
 }
+
+func TestObservabilitySignalResourcePromotion(t *testing.T) {
+	for _, signal := range []string{"logs", "metrics"} {
+		for _, tc := range []struct {
+			name     string
+			prefixes []string
+			invalid  bool
+		}{
+			{name: "omitted"},
+			{name: "empty", prefixes: []string{}},
+			{name: "valid", prefixes: []string{"deployment.", "nv.client."}},
+			{name: "invalid", prefixes: []string{"nv.*"}, invalid: true},
+		} {
+			t.Run(signal+"/"+tc.name, func(t *testing.T) {
+				endpoint := NewObservabilityOpenTelemetrySignalEndpointConfig("http://localhost:4318/v1/" + signal)
+				endpoint.PromoteResourceMetadataPrefixes = tc.prefixes
+				payload, err := json.Marshal(endpoint)
+				requireNoError(t, err, "marshal signal endpoint")
+				var parsed map[string]json.RawMessage
+				requireNoError(t, json.Unmarshal(payload, &parsed), "decode signal endpoint")
+				value, present := parsed["promote_resource_metadata_prefixes"]
+				if len(tc.prefixes) == 0 {
+					if present {
+						t.Fatal("empty promotion prefixes must be omitted")
+					}
+				} else {
+					expected, err := json.Marshal(tc.prefixes)
+					requireNoError(t, err, "marshal prefixes")
+					if string(value) != string(expected) {
+						t.Fatalf("prefixes = %s, want %s", value, expected)
+					}
+				}
+				config := NewObservabilityConfig()
+				config.Policy = &ConfigPolicy{UnknownField: UnsupportedBehaviorError}
+				otel := NewObservabilityOpenTelemetryConfig()
+				otel.Enabled = true
+				if signal == "logs" {
+					logs := NewObservabilityOpenTelemetryLogConfig()
+					logs.Enabled = true
+					logs.Endpoints = ObservabilityOpenTelemetrySignalEndpoints(endpoint)
+					otel.Logs = &logs
+				} else {
+					metrics := NewObservabilityOpenTelemetryMetricConfig()
+					metrics.Enabled = true
+					metrics.Endpoints = ObservabilityOpenTelemetrySignalEndpoints(endpoint)
+					otel.Metrics = &metrics
+				}
+				config.OpenTelemetry = &otel
+				report, err := validateTestPluginConfig(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}})
+				requireNoError(t, err, "validate resource promotion")
+				if tc.invalid {
+					found := false
+					for _, diagnostic := range report.Diagnostics {
+						if diagnostic.Field != nil && *diagnostic.Field == "endpoints[0].promote_resource_metadata_prefixes" {
+							found = true
+						}
+					}
+					if !found {
+						t.Fatalf("missing invalid-prefix diagnostic: %#v", report.Diagnostics)
+					}
+				} else if len(report.Diagnostics) != 0 {
+					t.Fatalf("unexpected diagnostics: %#v", report.Diagnostics)
+				}
+			})
+		}
+	}
+}
+
+func TestObservabilityTraceResourcePromotion(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		prefixes []string
+		invalid  bool
+	}{
+		{name: "omitted"},
+		{name: "empty", prefixes: []string{}},
+		{name: "valid", prefixes: []string{"deployment.", "nv.client."}},
+		{name: "invalid", prefixes: []string{"nv.*"}, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			endpoint := NewObservabilityOpenTelemetryEndpointConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces")
+			endpoint.PromoteResourceMetadataPrefixes = tc.prefixes
+			payload, err := json.Marshal(endpoint)
+			requireNoError(t, err, "marshal trace endpoint")
+			var parsed map[string]json.RawMessage
+			requireNoError(t, json.Unmarshal(payload, &parsed), "decode trace endpoint")
+			value, present := parsed["promote_resource_metadata_prefixes"]
+			if len(tc.prefixes) == 0 {
+				if present {
+					t.Fatal("empty promotion prefixes must be omitted")
+				}
+			} else {
+				expected, err := json.Marshal(tc.prefixes)
+				requireNoError(t, err, "marshal prefixes")
+				if string(value) != string(expected) {
+					t.Fatalf("prefixes = %s, want %s", value, expected)
+				}
+			}
+			config := NewObservabilityConfig()
+			config.Policy = &ConfigPolicy{UnknownField: UnsupportedBehaviorError}
+			otel := NewObservabilityOpenTelemetryConfig()
+			otel.Enabled = true
+			otel.Endpoints = []ObservabilityOpenTelemetryEndpointConfig{endpoint}
+			// Omitted signal endpoints exercise the trace-derived configuration path.
+			logs := NewObservabilityOpenTelemetryLogConfig()
+			logs.Enabled = true
+			metrics := NewObservabilityOpenTelemetryMetricConfig()
+			metrics.Enabled = true
+			otel.Logs, otel.Metrics = &logs, &metrics
+			config.OpenTelemetry = &otel
+			report, err := validateTestPluginConfig(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}})
+			requireNoError(t, err, "validate trace resource promotion")
+			if tc.invalid {
+				found := false
+				for _, diagnostic := range report.Diagnostics {
+					if diagnostic.Field != nil && *diagnostic.Field == "endpoints[0].promote_resource_metadata_prefixes" {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("missing invalid-prefix diagnostic: %#v", report.Diagnostics)
+				}
+			} else if len(report.Diagnostics) != 0 {
+				t.Fatalf("unexpected diagnostics: %#v", report.Diagnostics)
+			}
+		})
+	}
+}

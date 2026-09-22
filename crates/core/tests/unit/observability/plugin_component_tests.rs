@@ -431,6 +431,37 @@ fn signal_endpoint_lists_preserve_omitted_and_explicit_empty_shapes() {
 }
 
 #[test]
+fn signal_resource_promotion_is_accepted_with_strict_unknown_field_policy() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    for signal in ["logs", "metrics"] {
+        let mut value = json!({
+            "version": 4,
+            "policy": {"unknown_field": "error"},
+            "opentelemetry": {
+                "enabled": true,
+                signal: {
+                    "enabled": true,
+                    "endpoints": [{
+                        "endpoint": format!("https://collector.example/v1/{signal}"),
+                        "promote_resource_metadata_prefixes": ["deployment."]
+                    }]
+                }
+            }
+        });
+        if signal == "logs" {
+            value["opentelemetry"][signal]["completed_span_context_ttl_millis"] = json!(60_000);
+        }
+        let config = plugin_config(value);
+        let report = test_validate_static_plugin_config(&config);
+        assert!(
+            report.diagnostics.is_empty(),
+            "{signal}: {:?}",
+            report.diagnostics
+        );
+    }
+}
+
+#[test]
 fn observability_v3_remains_trace_only_and_v4_accepts_signal_sections() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     let trace_only = plugin_config(json!({
@@ -549,6 +580,8 @@ fn signal_endpoint_resolution_derives_or_preserves_the_expected_destination() {
     trace
         .resource_attributes
         .insert("nv.project".to_string(), "observability-dev".to_string());
+    trace.promote_resource_metadata_prefixes =
+        vec!["nv.client.".to_string(), "nv.env.".to_string()];
 
     let logs = resolve_signal_endpoints("logs", None, std::slice::from_ref(&trace)).unwrap();
     assert_eq!(
@@ -566,6 +599,14 @@ fn signal_endpoint_resolution_derives_or_preserves_the_expected_destination() {
             .unwrap()
             .resource_attributes,
         trace.resource_attributes
+    );
+    assert_eq!(
+        logs.endpoints[0]
+            .value
+            .as_active()
+            .unwrap()
+            .promote_resource_metadata_prefixes,
+        trace.promote_resource_metadata_prefixes
     );
 
     let metrics = resolve_signal_endpoints("metrics", None, &[trace]).unwrap();
@@ -604,6 +645,7 @@ fn signal_endpoint_resolution_derives_or_preserves_the_expected_destination() {
         header_env: HashMap::new(),
         header_file: HashMap::new(),
         resource_attributes: HashMap::new(),
+        promote_resource_metadata_prefixes: Vec::new(),
         service_name: default_otel_service_name(),
         service_namespace: None,
         service_version: None,
@@ -660,6 +702,7 @@ fn signal_endpoint_resolution_rejects_explicit_wrong_signal_paths() {
         header_env: HashMap::new(),
         header_file: HashMap::new(),
         resource_attributes: HashMap::new(),
+        promote_resource_metadata_prefixes: Vec::new(),
         service_name: default_otel_service_name(),
         service_namespace: None,
         service_version: None,
@@ -1139,6 +1182,7 @@ fn test_signal_endpoint() -> OpenTelemetrySignalEndpointConfig {
         header_env: HashMap::new(),
         header_file: HashMap::new(),
         resource_attributes: HashMap::new(),
+        promote_resource_metadata_prefixes: Vec::new(),
         service_name: default_otel_service_name(),
         service_namespace: None,
         service_version: None,
@@ -4497,7 +4541,7 @@ fn opentelemetry_delivery_continues_after_an_endpoint_panics() {
         None,
     ));
 
-    deliver_opentelemetry_event(&callbacks, &[], &[], &AtomicU64::new(0), None, &event);
+    deliver_opentelemetry_event(&callbacks, &[], &[], &[], &AtomicU64::new(0), None, &event);
 
     assert!(delivered.load(std::sync::atomic::Ordering::SeqCst));
 }
@@ -4512,17 +4556,23 @@ fn opentelemetry_routes_stream_timing_to_metrics_without_losing_traces_or_logs()
     let trace_callbacks = counting_callbacks(&traced);
     let log_callbacks = counting_callbacks(&logged);
     let captured = Arc::clone(&metered);
-    let metric_callbacks: Vec<IndexedOpenTelemetryResource<MetricEventCallback>> =
+    let metric_observers: Vec<IndexedOpenTelemetryResource<EventSubscriberFn>> =
         vec![IndexedOpenTelemetryResource {
             index: 0,
-            value: OpenTelemetryResource::Active(Arc::new(move |_, measurements| {
-                assert_eq!(measurements.len(), 1);
+            value: OpenTelemetryResource::Active(Arc::new(move |event| {
+                let Some(measurement) =
+                    super::super::otel_metrics::gen_ai_stream_time_to_first_chunk_measurement(
+                        event,
+                    )
+                else {
+                    return;
+                };
                 assert_eq!(
-                    measurements[0].descriptor.name.as_str(),
+                    measurement.descriptor.name.as_str(),
                     "gen_ai.client.operation.time_to_first_chunk"
                 );
                 assert!(
-                    matches!(measurements[0].value, MetricValue::F64(value) if value.get() == 0.125)
+                    matches!(measurement.value, MetricValue::F64(value) if value.get() == 0.125)
                 );
                 captured.fetch_add(1, Ordering::Relaxed);
             })),
@@ -4549,7 +4599,8 @@ fn opentelemetry_routes_stream_timing_to_metrics_without_losing_traces_or_logs()
         deliver_opentelemetry_event(
             &trace_callbacks,
             &log_callbacks,
-            &metric_callbacks,
+            &metric_observers,
+            &[],
             &rejected,
             Some("opentelemetry.metrics"),
             &event,
@@ -4567,8 +4618,10 @@ fn opentelemetry_routes_marks_by_metric_schema() {
     let traced = Arc::new(AtomicUsize::new(0));
     let logged = Arc::new(AtomicUsize::new(0));
     let metered = Arc::new(AtomicUsize::new(0));
+    let metric_observed = Arc::new(AtomicUsize::new(0));
     let trace_callbacks = counting_callbacks(&traced);
     let log_callbacks = counting_callbacks(&logged);
+    let metric_observers = counting_callbacks(&metric_observed);
     let metered_for_callback = Arc::clone(&metered);
     let metric_callbacks: Vec<IndexedOpenTelemetryResource<MetricEventCallback>> =
         vec![IndexedOpenTelemetryResource {
@@ -4597,6 +4650,7 @@ fn opentelemetry_routes_marks_by_metric_schema() {
     deliver_opentelemetry_event(
         &trace_callbacks,
         &log_callbacks,
+        &metric_observers,
         &metric_callbacks,
         &rejected_metric_marks,
         Some("opentelemetry.metrics"),
@@ -4605,6 +4659,7 @@ fn opentelemetry_routes_marks_by_metric_schema() {
     assert_eq!(traced.load(Ordering::Relaxed), 1);
     assert_eq!(logged.load(Ordering::Relaxed), 1);
     assert_eq!(metered.load(Ordering::Relaxed), 0);
+    assert_eq!(metric_observed.load(Ordering::Relaxed), 1);
 
     let valid_metric = reserved_metric_mark(
         METRIC_DATA_SCHEMA_VERSION,
@@ -4621,6 +4676,7 @@ fn opentelemetry_routes_marks_by_metric_schema() {
     deliver_opentelemetry_event(
         &trace_callbacks,
         &log_callbacks,
+        &metric_observers,
         &metric_callbacks,
         &rejected_metric_marks,
         Some("opentelemetry.metrics"),
@@ -4629,6 +4685,7 @@ fn opentelemetry_routes_marks_by_metric_schema() {
     assert_eq!(traced.load(Ordering::Relaxed), 1);
     assert_eq!(logged.load(Ordering::Relaxed), 1);
     assert_eq!(metered.load(Ordering::Relaxed), 1);
+    assert_eq!(metric_observed.load(Ordering::Relaxed), 1);
     assert_eq!(rejected_metric_marks.load(Ordering::Relaxed), 0);
 
     for (version, data) in [
@@ -4639,6 +4696,7 @@ fn opentelemetry_routes_marks_by_metric_schema() {
         deliver_opentelemetry_event(
             &trace_callbacks,
             &log_callbacks,
+            &metric_observers,
             &metric_callbacks,
             &rejected_metric_marks,
             Some("opentelemetry.metrics"),
@@ -4648,6 +4706,7 @@ fn opentelemetry_routes_marks_by_metric_schema() {
     assert_eq!(traced.load(Ordering::Relaxed), 1);
     assert_eq!(logged.load(Ordering::Relaxed), 1);
     assert_eq!(metered.load(Ordering::Relaxed), 1);
+    assert_eq!(metric_observed.load(Ordering::Relaxed), 1);
     assert_eq!(rejected_metric_marks.load(Ordering::Relaxed), 2);
 }
 
@@ -4678,6 +4737,7 @@ fn non_metric_schema_marks_keep_trace_and_log_routing() {
     deliver_opentelemetry_event(
         &trace_callbacks,
         &log_callbacks,
+        &[],
         &metric_callbacks,
         &AtomicU64::new(0),
         Some("opentelemetry.metrics"),

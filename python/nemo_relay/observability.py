@@ -285,6 +285,7 @@ class OpenTelemetrySignalEndpointConfig:
     instrumentation_scope: str = "opentelemetry"
     timeout_millis: int = 3000
     header_file: dict[str, str] = field(default_factory=dict)
+    promote_resource_metadata_prefixes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> JsonObject:
         """Serialize this signal endpoint to the canonical plugin shape."""
@@ -296,6 +297,7 @@ class OpenTelemetrySignalEndpointConfig:
                 "header_env": self.header_env,
                 "header_file": self.header_file or None,
                 "resource_attributes": self.resource_attributes,
+                "promote_resource_metadata_prefixes": self.promote_resource_metadata_prefixes or None,
                 "service_name": self.service_name,
                 "service_namespace": self.service_namespace,
                 "service_version": self.service_version,
