@@ -13,20 +13,25 @@ upgrade actions as they are identified during the 0.10 development cycle.
 
 ### Update LLM Execution Intercepts
 
-Relay 0.10 adds `LlmExecutionContext` immediately before the continuation in
-every unary and streaming LLM execution-intercept callback. Update callbacks
-as follows:
+Relay 0.10 changes every unary and streaming LLM execution-intercept callback.
+Update callbacks as follows:
 
-| Surface | Relay 0.10 callback shape |
-|---|---|
-| Rust, Python, native plugin, Rust worker, Python worker | `(name, request, context, next)` |
-| Node.js, Go | `(request, context, next)` |
-| C | `(user_data, name, request, context, next, next_ctx)` |
+| Surface | Relay 0.9 | Relay 0.10 |
+|---|---|---|
+| Rust, Python unary, typed native plugin, Rust worker, Python worker | `(name, request, next)` | `(name, request, context, next)` |
+| Python language-binding streaming | `(request, next)` | `(name, request, context, next)` |
+| Node.js, Go | `(request, next)` | `(request, context, next)` |
+| C | `(user_data, request, next, next_ctx)` | `(user_data, name, request, context, next, next_ctx)` |
+| Raw native callback | `(..., name, request, next, ...)` | `(..., name, request, context, next, ...)` |
 
 The request direction reports the selected codec and exposes decode and encode
 operations when Relay resolved one. Unary execution also exposes response
 identity and decode. Streaming execution has no response codec because chunks
 are not complete provider responses.
+
+Codec access is invocation-scoped. Do not cache the context or a resolved codec:
+unary access expires when the callback settles, and streaming request access
+expires when the returned stream closes.
 
 This is a source and binary compatibility break for execution-intercept users:
 

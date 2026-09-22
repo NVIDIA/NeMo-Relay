@@ -206,7 +206,8 @@ pub struct NemoRelayLlmSanitizeResponseContext {
 ///
 /// `request_codec` is always present. `response_codec` is non-null for unary
 /// execution and null for streaming execution, where Relay has no completed
-/// response to decode.
+/// response to decode. Pointers reachable from this value are borrowed and
+/// valid only until the intercept callback returns.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NemoRelayLlmExecutionContext {

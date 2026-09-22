@@ -386,7 +386,8 @@ typedef NemoRelayStatus (*NemoRelayLlmRequestInterceptCb)(void *user_data,
  *
  * `request_codec` is always present. `response_codec` is non-null for unary
  * execution and null for streaming execution, where Relay has no completed
- * response to decode.
+ * response to decode. Pointers reachable from this value are borrowed and
+ * valid only until the intercept callback returns.
  */
 typedef struct NemoRelayLlmExecutionContext {
   /**
@@ -1501,14 +1502,15 @@ NemoRelayStatus nemo_relay_deregister_llm_request_intercept(const char *name);
 
 /**
  * Register an LLM execution intercept following the middleware chain pattern.
- * The callback receives `(request, next_fn, next_ctx)` — call
+ * The callback receives `(name, request, context, next_fn, next_ctx)` — call
  * `next_fn(request, next_ctx)` to invoke the next intercept or the original
  * LLM call, or skip calling it to short-circuit.
  *
  * # Parameters
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving request and a next function.
+ * - `exec_cb`: Middleware callback receiving the LLM name, request, codec
+ *   context, and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *
@@ -1531,14 +1533,17 @@ NemoRelayStatus nemo_relay_deregister_llm_execution_intercept(const char *name);
 
 /**
  * Register an LLM streaming execution intercept following the middleware chain
- * pattern. The callback receives `(request, next_fn, next_ctx)` — call
+ * pattern. The callback receives
+ * `(name, request, context, next_fn, next_ctx)` — call
  * `next_fn(request, next_ctx)` to invoke the next intercept or the original
- * streaming LLM call, or skip calling it to short-circuit.
+ * streaming LLM call, or skip calling it to short-circuit. The response codec
+ * in `context` is null because chunks are not complete provider responses.
  *
  * # Parameters
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving request and a next function.
+ * - `exec_cb`: Middleware callback receiving the LLM name, request, request
+ *   codec context, and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *
@@ -2884,13 +2889,15 @@ NemoRelayStatus nemo_relay_scope_deregister_llm_request_intercept(const char *sc
 
 /**
  * Register a scope-local LLM execution intercept following the middleware
- * chain pattern.
+ * chain pattern. The callback receives
+ * `(name, request, context, next_fn, next_ctx)`.
  *
  * # Parameters
  * - `scope_uuid`: UUID of the target scope (null-terminated C string).
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving request and a next function.
+ * - `exec_cb`: Middleware callback receiving the LLM name, request, codec
+ *   context, and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *
@@ -2915,13 +2922,16 @@ NemoRelayStatus nemo_relay_scope_deregister_llm_execution_intercept(const char *
 
 /**
  * Register a scope-local LLM streaming execution intercept following the
- * middleware chain pattern.
+ * middleware chain pattern. The callback receives
+ * `(name, request, context, next_fn, next_ctx)`. The response codec in
+ * `context` is null.
  *
  * # Parameters
  * - `scope_uuid`: UUID of the target scope (null-terminated C string).
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving request and a next function.
+ * - `exec_cb`: Middleware callback receiving the LLM name, request, request
+ *   codec context, and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *
