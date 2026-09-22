@@ -32,7 +32,7 @@ use serde_json::json;
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
-use super::lifecycle::{McpSessionId, ResolvedTarget, WorkerRequest, WorkerTarget};
+use super::lifecycle::{McpSessionId, ResolvedTarget, RouteStateKind, WorkerRequest, WorkerTarget};
 use super::registry::{
     ExpiredActivation, McpRegistration, RecoveryPermit, Registry, RegistryError, ReleaseAction,
     ResolveError, WorkerFailureAction,
@@ -259,9 +259,47 @@ fn router(state: Arc<DaemonState>) -> Router {
         .route_layer(from_fn_with_state(peers, limit_challenges));
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/_nemo-relay/v1/route/status", get(route_status))
         .merge(control)
         .fallback(public_proxy)
         .with_state(state)
+}
+
+async fn route_status(State(state): State<Arc<DaemonState>>) -> Response<Body> {
+    let routes = state
+        .registry
+        .status_snapshots()
+        .into_iter()
+        .map(|route| {
+            json!({
+                "state": route.state.as_str(),
+                "route_mode": if route.state == RouteStateKind::PassThrough {
+                    "pass_through"
+                } else if route.worker.is_some() {
+                    "worker"
+                } else {
+                    "pending"
+                },
+                "reference_count": route.reference_count,
+                "pass_through_kind": route.pass_through_kind,
+                "worker": route.worker.map(|worker| json!({
+                    "worker_id": worker.worker_id,
+                    "control_available": worker.control_available,
+                    "in_flight": worker.in_flight,
+                })),
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut response = Json(json!({
+        "status": "ok",
+        "instance_id": state.instance_id,
+        "routes": routes,
+    }))
+    .into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 async fn healthz(State(state): State<Arc<DaemonState>>) -> Response<Body> {

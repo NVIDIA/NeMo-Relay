@@ -53,6 +53,53 @@ async fn daemon_health_is_a_public_process_probe() {
 }
 
 #[tokio::test]
+async fn route_status_reports_credential_free_broker_state_without_authentication() {
+    let state = test_daemon_state(true, "", GatewayConfig::default());
+    let identity = MachineIdentity::generate().unwrap().identity;
+    state
+        .registry
+        .register_mcp(
+            McpRegistration {
+                fingerprint: identity.fingerprint(),
+                token_digest: TokenDigest::from_token(b"status-route-token"),
+                session_id: McpSessionId::new("status-mcp").unwrap(),
+                lease_expires_at_unix_ms: u64::MAX,
+            },
+            WorkerLaunch {
+                activation_id: "unused-status-activation".into(),
+                activation_token: SensitiveString::new("unused-status-secret").unwrap(),
+                deadline_unix_ms: u64::MAX,
+                bind_ip: Ipv4Addr::LOCALHOST,
+                port: 0,
+                advertise_address: None,
+            },
+        )
+        .unwrap();
+
+    let response = router(state)
+        .oneshot(
+            Request::get("/_nemo-relay/v1/route/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+    let status: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(status["status"], "ok");
+    assert_eq!(status["routes"][0]["state"], "pass_through");
+    assert_eq!(status["routes"][0]["route_mode"], "pass_through");
+    assert_eq!(status["routes"][0]["pass_through_kind"], "global");
+    assert_eq!(status["routes"][0]["reference_count"], 1);
+    assert!(status["routes"][0]["worker"].is_null());
+    let encoded = serde_json::to_string(&status).unwrap();
+    assert!(!encoded.contains("status-route-token"));
+    assert!(!encoded.contains("unused-status-secret"));
+}
+
+#[tokio::test]
 async fn shared_model_catalogs_disable_cache_reuse_between_credentials() {
     let provider = Router::new().route(
         "/v1/models",

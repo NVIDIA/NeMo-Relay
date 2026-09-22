@@ -733,6 +733,51 @@ impl Registry {
         }
     }
 
+    /// Returns credential-free snapshots of every route for operational status reporting.
+    pub(crate) fn status_snapshots(&self) -> Vec<RouteStatusSnapshot> {
+        let inner = self.read();
+        let mut snapshots = inner
+            .routes
+            .values()
+            .map(|route| {
+                let (worker, pass_through_kind) = match &route.state {
+                    RouteState::Ready { target }
+                    | RouteState::Draining { target, .. }
+                    | RouteState::Recovering {
+                        target: Some(target),
+                        ..
+                    } => (
+                        Some(WorkerStatusSnapshot {
+                            worker_id: target.worker_id().to_owned(),
+                            control_available: target.control_available(),
+                            in_flight: target.in_flight(),
+                        }),
+                        None,
+                    ),
+                    RouteState::PassThrough { permanent } => {
+                        (None, Some(if *permanent { "global" } else { "fail_open" }))
+                    }
+                    RouteState::Empty
+                    | RouteState::Activating { .. }
+                    | RouteState::Recovering { target: None, .. } => (None, None),
+                };
+                RouteStatusSnapshot {
+                    state: route.state.kind(),
+                    reference_count: route.refs.len(),
+                    worker,
+                    pass_through_kind,
+                }
+            })
+            .collect::<Vec<_>>();
+        snapshots.sort_by(|left, right| {
+            left.state
+                .as_str()
+                .cmp(right.state.as_str())
+                .then_with(|| left.worker_id().cmp(right.worker_id()))
+        });
+        snapshots
+    }
+
     /// Returns a credential-free route snapshot for status and tests.
     #[cfg(test)]
     pub(crate) fn snapshot(
@@ -1059,6 +1104,31 @@ pub(crate) struct RouteSnapshot {
     pub(crate) reference_count: usize,
     pub(crate) launch_owner: Option<McpSessionId>,
     pub(crate) endpoint: Option<String>,
+    pub(crate) in_flight: usize,
+}
+
+/// A credential-free route status snapshot safe for operational reporting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RouteStatusSnapshot {
+    pub(crate) state: RouteStateKind,
+    pub(crate) reference_count: usize,
+    pub(crate) worker: Option<WorkerStatusSnapshot>,
+    pub(crate) pass_through_kind: Option<&'static str>,
+}
+
+impl RouteStatusSnapshot {
+    fn worker_id(&self) -> &str {
+        self.worker
+            .as_ref()
+            .map_or("", |worker| worker.worker_id.as_str())
+    }
+}
+
+/// Last-known broker information for an assigned worker generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorkerStatusSnapshot {
+    pub(crate) worker_id: String,
+    pub(crate) control_available: bool,
     pub(crate) in_flight: usize,
 }
 
