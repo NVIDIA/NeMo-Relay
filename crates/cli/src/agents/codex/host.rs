@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
-use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value as TomlValue, value};
+use toml_edit::{
+    Array, DocumentMut, InlineTable, Item, Table, TableLike, Value as TomlValue, value,
+};
 
 use crate::agents::CodingAgent;
 use crate::configuration::{BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, RELAY_PLUGIN_ID};
@@ -1405,12 +1407,20 @@ fn restore_codex_config_from_backup(
 const CODEX_PROJECT_ENVIRONMENT_VARIABLE: &str = "OPENAI_PROJECT";
 
 fn install_codex_tool_environment_exclusion(doc: &mut DocumentMut) -> Result<(), String> {
-    let policy = ensure_table(doc, "shell_environment_policy");
+    if !doc.contains_key("shell_environment_policy") {
+        doc["shell_environment_policy"] = Item::Table(Table::new());
+    }
+    let policy = doc["shell_environment_policy"]
+        .as_table_like_mut()
+        .ok_or_else(|| {
+            "Codex shell_environment_policy must be a table before Relay can protect its authentication proof"
+                .to_string()
+        })?;
     if let Some(filters) = policy.get_mut("filters") {
-        let filters = filters.as_table_mut().ok_or_else(|| {
+        let filters = filters.as_table_like_mut().ok_or_else(|| {
             "Codex shell_environment_policy.filters must be a table before Relay can protect its authentication proof".to_string()
         })?;
-        filters[CODEX_PROJECT_ENVIRONMENT_VARIABLE] = value("exclude");
+        filters.insert(CODEX_PROJECT_ENVIRONMENT_VARIABLE, value("exclude"));
         return Ok(());
     }
 
@@ -1433,18 +1443,18 @@ fn install_codex_tool_environment_exclusion(doc: &mut DocumentMut) -> Result<(),
 fn restore_codex_tool_environment_exclusion(doc: &mut DocumentMut, backup: &DocumentMut) {
     let backup_policy = backup
         .get("shell_environment_policy")
-        .and_then(Item::as_table);
+        .and_then(Item::as_table_like);
     let backup_filter = backup_policy
         .and_then(|policy| policy.get("filters"))
-        .and_then(Item::as_table)
+        .and_then(Item::as_table_like)
         .and_then(|filters| filters.get(CODEX_PROJECT_ENVIRONMENT_VARIABLE))
         .cloned();
 
     if let Some(filters) = doc
         .get_mut("shell_environment_policy")
-        .and_then(Item::as_table_mut)
+        .and_then(Item::as_table_like_mut)
         .and_then(|policy| policy.get_mut("filters"))
-        .and_then(Item::as_table_mut)
+        .and_then(Item::as_table_like_mut)
         && filters
             .get(CODEX_PROJECT_ENVIRONMENT_VARIABLE)
             .and_then(Item::as_str)
@@ -1471,7 +1481,7 @@ fn restore_codex_tool_environment_exclusion(doc: &mut DocumentMut, backup: &Docu
     if !backup_excluded
         && let Some(excludes) = doc
             .get_mut("shell_environment_policy")
-            .and_then(Item::as_table_mut)
+            .and_then(Item::as_table_like_mut)
             .and_then(|policy| policy.get_mut("exclude"))
             .and_then(Item::as_array_mut)
     {
@@ -1485,7 +1495,7 @@ fn restore_codex_tool_environment_exclusion(doc: &mut DocumentMut, backup: &Docu
 
     let remove_exclude = doc
         .get("shell_environment_policy")
-        .and_then(Item::as_table)
+        .and_then(Item::as_table_like)
         .and_then(|policy| policy.get("exclude"))
         .and_then(Item::as_array)
         .is_some_and(Array::is_empty)
@@ -1493,11 +1503,18 @@ fn restore_codex_tool_environment_exclusion(doc: &mut DocumentMut, backup: &Docu
     if remove_exclude
         && let Some(policy) = doc
             .get_mut("shell_environment_policy")
-            .and_then(Item::as_table_mut)
+            .and_then(Item::as_table_like_mut)
     {
         policy.remove("exclude");
     }
-    remove_empty_table(doc, "shell_environment_policy");
+    let remove_policy = backup_policy.is_none()
+        && doc
+            .get("shell_environment_policy")
+            .and_then(Item::as_table_like)
+            .is_some_and(TableLike::is_empty);
+    if remove_policy {
+        doc.as_table_mut().remove("shell_environment_policy");
+    }
 }
 
 fn restore_plain_codex_base_url(

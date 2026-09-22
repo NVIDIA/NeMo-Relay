@@ -1539,6 +1539,64 @@ OPENAI_PROJECT = "include"
 }
 
 #[test]
+fn codex_install_preserves_inline_tool_environment_policy() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = r#"shell_environment_policy = { inherit = "all", exclude = ["AWS_*"] }
+"#;
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    let policy = installed["shell_environment_policy"]
+        .as_inline_table()
+        .unwrap();
+    assert_eq!(policy["inherit"].as_str(), Some("all"));
+    let excludes = policy["exclude"].as_array().unwrap();
+    assert!(excludes.iter().any(|value| value.as_str() == Some("AWS_*")));
+    assert!(
+        excludes
+            .iter()
+            .any(|value| value.as_str() == Some("OPENAI_PROJECT"))
+    );
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn codex_install_preserves_inline_tool_environment_filters() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = r#"shell_environment_policy = { inherit = "all", filters = { "AWS_*" = "exclude", OPENAI_PROJECT = "include" } }
+"#;
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    let policy = installed["shell_environment_policy"]
+        .as_inline_table()
+        .unwrap();
+    assert_eq!(policy["inherit"].as_str(), Some("all"));
+    let filters = policy["filters"].as_inline_table().unwrap();
+    assert_eq!(filters["AWS_*"].as_str(), Some("exclude"));
+    assert_eq!(filters["OPENAI_PROJECT"].as_str(), Some("exclude"));
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
 fn codex_uninstall_restores_multi_agent_v2_setting() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());
