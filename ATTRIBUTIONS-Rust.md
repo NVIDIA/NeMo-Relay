@@ -12632,10 +12632,8 @@ limitations under the License.
 
 **Repository URL**: https://github.com/allan2/dotenvy
 **License Type(s)**: MIT
-
 ### License: https://spdx.org/licenses/MIT.html
-
-```text
+```
 # The MIT License (MIT)
 
 Copyright (c) 2014 Santiago Lapresta and contributors
