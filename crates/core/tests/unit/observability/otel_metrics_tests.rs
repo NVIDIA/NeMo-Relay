@@ -460,6 +460,44 @@ fn metric_export_failure_logging_is_independent_of_diagnostic_capacity() {
 }
 
 #[test]
+fn metric_measurements_aggregate_across_sessions() {
+    let (mut processor, exporter, provider) = processor();
+    for _ in 0..2 {
+        let mut event = metric_event(
+            METRIC_DATA_SCHEMA_VERSION,
+            json!({"measurements": [{
+                "name": "example.session_tokens",
+                "kind": "counter",
+                "value_type": "u64",
+                "value": 3,
+                "attributes": {"model": "example-model"}
+            }]}),
+        );
+        event.set_propagation_root_uuid(Some(uuid::Uuid::now_v7()));
+        processor.process(&event);
+    }
+    provider.force_flush().unwrap();
+    assert_eq!(processor.rejected_marks, 0);
+    let batches = exporter.get_finished_metrics().unwrap();
+    let metric = batches
+        .iter()
+        .flat_map(|batch| batch.scope_metrics())
+        .flat_map(|scope| scope.metrics())
+        .find(|metric| metric.name() == "example.session_tokens")
+        .unwrap();
+    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+        panic!("counter must export as a u64 sum");
+    };
+    let points = sum.data_points().collect::<Vec<_>>();
+    assert_eq!(points.len(), 1);
+    assert_eq!(points[0].value(), 6);
+    assert_eq!(
+        points[0].attributes().collect::<Vec<_>>(),
+        vec![&KeyValue::new("model", "example-model")]
+    );
+}
+
+#[test]
 fn valid_envelope_records_counter_gauge_and_negative_histogram() {
     let (mut processor, exporter, provider) = processor();
     let mut counter = measurement(

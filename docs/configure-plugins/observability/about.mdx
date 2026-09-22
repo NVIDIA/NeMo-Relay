@@ -167,6 +167,10 @@ backend IDs also correlate across exporters. ATIF artifact filenames and storage
 keys remain based on the trajectory scope UUID. Logical coding-session values
 also remain available under `extra.nemo_relay`.
 
+OTLP metrics do not automatically add `nemo_relay.session.instance_id` to
+measurement attributes. Measurements with the same resource, instrumentation
+scope, and metric attributes can aggregate across sessions.
+
 ## Pages
 
 - [Observability Configuration](/configure-plugins/observability/configuration) documents the whole plugin
