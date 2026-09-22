@@ -13,11 +13,15 @@ included; no Cargo feature enables or disables it.
 ## Automatic OpenTelemetry Configuration
 
 When at least one nonblank OpenTelemetry OTLP endpoint environment variable is
-present, Relay automatically adds the matching `full` trace, log, and metric
-pipelines. This automatic exporter is additive: explicitly configured Relay
-endpoints continue to export independently. Relay delegates endpoint, protocol,
-timeout, compression, temporality, header parsing, and signal-specific
-precedence to its vendored OpenTelemetry Rust SDK.
+present, Relay automatically adds the matching `gen_ai` trace pipeline and log
+and metric pipelines. This automatic exporter is additive: explicitly configured Relay
+endpoints can export independently as long as process-global OTLP header
+variables are unset. Global OTLP headers cannot be isolated from configured
+endpoints, so Relay skips a configured endpoint that is initialized with those
+variables. Use that endpoint's `headers`, `header_env`, or `header_file`
+configuration instead. Relay delegates endpoint, protocol, timeout, compression,
+temporality, header parsing, and signal-specific precedence to its vendored
+OpenTelemetry Rust SDK.
 
 An explicit `opentelemetry` section with `enabled: false` is an opt-out: Relay
 does not create automatic OTLP exporters, even when endpoint environment
@@ -44,9 +48,9 @@ export OTEL_EXPORTER_OTLP_HEADERS='authorization=Bearer%20token'
 
 ### Environment-variable support
 
-`Automatic` means Relay creates the standard full trace, log, and metric
-pipelines after an endpoint activates that signal and delegates parsing to the
-OpenTelemetry Rust SDK/OTLP exporter.
+`Automatic` means Relay creates the standard `gen_ai` trace pipeline plus log
+and metric pipelines after an endpoint activates that signal and delegates
+parsing to the OpenTelemetry Rust SDK/OTLP exporter.
 `Relay endpoints` means a structured Relay endpoint keeps its existing explicit
 behavior; it does not inherit the setting.
 
@@ -129,8 +133,8 @@ cannot redirect telemetry or credentials to another destination.
 
 When independently configured Relay endpoints are active, do not set global
 OTLP header variables. The upstream OTLP builders read those process-global
-headers while each exporter is built, so Relay rejects that combination rather
-than risk sending one credential to multiple destinations.
+headers while each exporter is built, so Relay skips configured endpoints that
+encounter them rather than risk sending one credential to multiple destinations.
 </Warning>
 
 Relay classifies each sanitized event before OTLP signal fan-out:

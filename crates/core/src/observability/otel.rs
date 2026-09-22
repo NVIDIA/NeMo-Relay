@@ -334,6 +334,7 @@ impl OpenTelemetryConfig {
     /// exporter environment configuration.
     pub(crate) fn from_automatic_configuration() -> Self {
         Self {
+            otel_type: OpenTelemetryType::GenAi,
             endpoint: AUTOMATIC_OTLP_ENDPOINT_MARKER.to_string(),
             automatic: true,
             ..Self::default_values()
@@ -2675,6 +2676,19 @@ pub(super) fn to_system_time(timestamp: DateTime<Utc>) -> SystemTime {
         UNIX_EPOCH - Duration::new(seconds.unsigned_abs(), 0)
     } else {
         UNIX_EPOCH - Duration::new(seconds.unsigned_abs() - 1, 1_000_000_000 - nanos)
+    }
+}
+
+#[cfg(test)]
+mod automatic_configuration_tests {
+    use super::*;
+
+    #[test]
+    fn automatic_trace_configuration_uses_gen_ai_projection() {
+        assert_eq!(
+            OpenTelemetryConfig::from_automatic_configuration().otel_type,
+            OpenTelemetryType::GenAi
+        );
     }
 }
 
