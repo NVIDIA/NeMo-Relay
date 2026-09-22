@@ -14,6 +14,71 @@ in order.
 
 ## Upgrade to NeMo Relay 0.9
 
+### Update from NeMo Relay 0.9.0 to 0.9.1
+
+#### Move Primary Daemon Logging Settings
+
+<Warning title="Breaking Change">
+
+The primary `nemo-relay daemon` process no longer reads `[logging]` from its
+resolved `config.toml`.
+
+</Warning>
+
+Move the daemon service's logging settings to `[daemon.logging]`. Keep
+`[logging]` for user-space Relay processes, such as agent launches. CLI options
+and `NEMO_RELAY_LOG*` environment variables continue to take precedence for
+both.
+
+```toml
+[daemon.logging]
+level = "info"
+stderr_enabled = true
+stderr_format = "jsonl"
+```
+
+For source precedence and complete settings, refer to
+[Operational Logging](/reference/operational-logging#choose-a-configuration-source).
+
+#### Update OpenTelemetry Signal-Endpoint Struct Literals
+
+<Warning title="Rust and Go Source Compatibility">
+
+`OpenTelemetrySignalEndpointConfig` now includes
+`promote_resource_metadata_prefixes`. Rust callers that construct this public
+type with exhaustive struct literals must add the field. Go callers that use
+unkeyed configuration struct literals must switch to keyed literals.
+
+</Warning>
+
+Set `promote_resource_metadata_prefixes` to an empty list when you do not want
+log or metric resource promotion. TOML and JSON configuration remain backward
+compatible because an omitted field defaults to an empty list. Derived log and
+metric endpoints inherit the trace endpoint setting. For configuration,
+precedence, safety limits, and low-cardinality guidance, refer to
+[OpenTelemetry](/configure-plugins/observability/opentelemetry).
+
+#### Update the GenAI Cache-Write Attribute
+
+The GenAI projection replaces the obsolete development attribute
+`gen_ai.usage.cache_creation.input_tokens` with
+`gen_ai.usage.cache_write.input_tokens`. Update collector queries, dashboards,
+and alerts that use the old attribute name.
+
+The projection also no longer adds `nemo_relay.session.instance_id` to metric
+attributes. Update dashboards that group or filter on that per-session
+dimension; otherwise, identical measurements now aggregate into the same time
+series.
+
+#### Review Anthropic Response-Cache Expectations
+
+Anthropic Messages requests that use server-side compaction, include an earlier
+compaction block, or send a compaction beta header now bypass the response
+cache. No configuration change is required, but cache-hit rates can fall for
+those workloads. Monitor response-cache marks for the
+`anthropic_compaction` bypass reason. For details, refer to
+[LLM Eligibility and Limits](/configure-plugins/adaptive/response-cache#llm-eligibility-and-limits).
+
 ### Refresh Relay-Managed Coding-Agent Integrations
 
 After upgrading the CLI, refresh personal Relay-managed integrations before
