@@ -635,9 +635,21 @@ fn ensure_dynamic_log_pipeline(
         return Ok(false);
     }
     let config = config.clone();
+    // Each batch processor drains independently, so its delivery counters must
+    // not include records still queued in another resource's provider.
+    let provider_diagnostics = Arc::new(LogDeliveryDiagnostics::new(
+        diagnostics.endpoint.clone(),
+        diagnostics.runtime_diagnostics.clone(),
+    ));
+    let child_diagnostics = Arc::clone(&provider_diagnostics);
     let (provider, runtime) = build_in_owned_runtime("nemo-relay-otlp-logs-resource", move || {
-        build_log_provider(&config, diagnostics, Some(attributes))
+        build_log_provider(&config, provider_diagnostics, Some(attributes))
     })?;
+    diagnostics
+        .children
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push(child_diagnostics);
     let logger = provider.logger(instrumentation_scope.to_string());
     pipelines.insert(
         key.to_string(),
@@ -656,6 +668,7 @@ struct LogDeliveryDiagnostics {
     accepted: AtomicU64,
     export_failures: AtomicU64,
     reported_queue_drops: AtomicU64,
+    children: Mutex<Vec<Arc<LogDeliveryDiagnostics>>>,
     endpoint: String,
     runtime_diagnostics: SignalRuntimeDiagnostics,
 }
@@ -667,6 +680,7 @@ impl LogDeliveryDiagnostics {
             accepted: AtomicU64::new(0),
             export_failures: AtomicU64::new(0),
             reported_queue_drops: AtomicU64::new(0),
+            children: Mutex::new(Vec::new()),
             endpoint,
             runtime_diagnostics,
         }
@@ -714,9 +728,24 @@ impl LogDeliveryDiagnostics {
         dropped
     }
 
+    fn failure_counts(&self) -> (u64, u64) {
+        let mut dropped = self.record_queue_drops();
+        let mut failures = self.export_failures.load(Ordering::Relaxed);
+        for child in self
+            .children
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+        {
+            let (child_dropped, child_failures) = child.failure_counts();
+            dropped = dropped.saturating_add(child_dropped);
+            failures = failures.saturating_add(child_failures);
+        }
+        (dropped, failures)
+    }
+
     fn failure_summary(&self) -> Option<String> {
-        let dropped = self.record_queue_drops();
-        let export_failures = self.export_failures.load(Ordering::Relaxed);
+        let (dropped, export_failures) = self.failure_counts();
         (dropped > 0 || export_failures > 0).then(|| {
             format!("otel.logs_dropped ({dropped}), otel.logs_export_failed ({export_failures})")
         })

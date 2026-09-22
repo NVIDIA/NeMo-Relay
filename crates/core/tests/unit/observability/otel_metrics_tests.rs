@@ -1787,3 +1787,77 @@ async fn direct_grpc_subscribers_export_both_services_and_metadata() {
     .unwrap();
     server.abort();
 }
+
+#[test]
+fn resource_log_providers_drain_without_false_delivery_failures() {
+    for flush_first in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let requests = capture_requests(listener, 3);
+        let logs = OpenTelemetryLogSubscriber::new_for_plugin(
+            OpenTelemetryLogConfig::new(endpoint)
+                .with_scheduled_delay(Duration::from_secs(300))
+                .with_promote_resource_metadata_prefixes(["deployment."]),
+            0,
+        )
+        .unwrap();
+        for (resource, count) in [(None, 3), (Some("alpha"), 1), (Some("beta"), 2)] {
+            let root = uuid::Uuid::now_v7();
+            if let Some(resource) = resource {
+                logs.subscriber()(&Event::Scope(ScopeEvent::new(
+                    BaseEvent::builder()
+                        .uuid(root)
+                        .name("root")
+                        .metadata(json!({"deployment.region": resource}))
+                        .build(),
+                    ScopeCategory::Start,
+                    Vec::new(),
+                    ScopeType::Agent.into(),
+                    None,
+                )));
+            }
+            for _ in 0..count {
+                let builder = BaseEvent::builder()
+                    .name("pending.log")
+                    .parent_uuid_opt(resource.map(|_| root));
+                logs.subscriber()(&Event::Mark(MarkEvent::new(builder.build(), None, None)));
+            }
+        }
+        if flush_first {
+            logs.force_flush().unwrap();
+            assert!(
+                logs.runtime_diagnostics()
+                    .get("otel.logs_dropped")
+                    .is_none()
+            );
+        }
+        logs.shutdown().unwrap();
+        assert_eq!(logs.delivery_failure_summary(), None);
+        assert!(
+            logs.runtime_diagnostics()
+                .get("otel.logs_dropped")
+                .is_none()
+        );
+        let mut received = std::collections::HashMap::new();
+        for _ in 0..3 {
+            let request = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+            let decoded = ExportLogsServiceRequest::decode(request.body.as_slice()).unwrap();
+            for resource in decoded.resource_logs {
+                let key = otlp_string_attribute(
+                    &resource.resource.unwrap().attributes,
+                    "deployment.region",
+                )
+                .map(str::to_owned);
+                let count: usize = resource
+                    .scope_logs
+                    .iter()
+                    .map(|scope| scope.log_records.len())
+                    .sum();
+                *received.entry(key).or_insert(0) += count;
+            }
+        }
+        assert_eq!(received.get(&None), Some(&3));
+        assert_eq!(received.get(&Some("alpha".to_string())), Some(&1));
+        assert_eq!(received.get(&Some("beta".to_string())), Some(&2));
+    }
+}
