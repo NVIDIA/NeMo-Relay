@@ -2054,23 +2054,38 @@ fn chatgpt_jwt_routes_to_chatgpt_backend_when_no_api_key() {
 }
 
 #[test]
-fn daemon_generic_openai_paths_keep_the_administrator_upstream() {
+fn daemon_routes_chatgpt_oauth_on_all_openai_paths() {
     let mut headers = HeaderMap::new();
     headers.insert(
         "authorization",
-        HeaderValue::from_static("Bearer at-caller-controlled-token"),
+        HeaderValue::from_static("Bearer at-codex-oauth-token"),
     );
     let config = GatewayConfig {
         openai_base_url: "https://administrator.example/v1".into(),
         ..GatewayConfig::default()
     };
 
-    assert_eq!(
-        daemon_provider_upstream_url(&headers, "/responses?client=pi", &config)
-            .unwrap()
-            .as_deref(),
-        Some("https://administrator.example/v1/responses?client=pi")
-    );
+    for (path, expected) in [
+        (
+            "/responses?client=codex",
+            "https://chatgpt.com/backend-api/codex/responses?client=codex",
+        ),
+        (
+            "/v1/responses?client=codex",
+            "https://chatgpt.com/backend-api/codex/responses?client=codex",
+        ),
+        (
+            "/v1/models?client=codex",
+            "https://chatgpt.com/backend-api/codex/models?client=codex",
+        ),
+    ] {
+        assert_eq!(
+            daemon_provider_upstream_url(&headers, path, &config)
+                .unwrap()
+                .as_deref(),
+            Some(expected)
+        );
+    }
     assert_eq!(
         daemon_provider_upstream_url(
             &headers,
@@ -2081,6 +2096,30 @@ fn daemon_generic_openai_paths_keep_the_administrator_upstream() {
         .as_deref(),
         Some("https://chatgpt.com/backend-api/codex/responses?client=codex")
     );
+}
+
+#[test]
+fn daemon_replaces_chatgpt_oauth_with_administrator_credential() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+    );
+    let config = GatewayConfig {
+        openai_base_url: "https://administrator.example/v1".into(),
+        openai_auth_header: Some("Bearer administrator-token".into()),
+        ..GatewayConfig::default()
+    };
+
+    assert_eq!(
+        daemon_provider_upstream_url(&headers, "/v1/responses", &config)
+            .unwrap()
+            .as_deref(),
+        Some("https://administrator.example/v1/responses")
+    );
+    let forwarded = daemon_provider_forward_headers(&headers, "/v1/responses", &config)
+        .expect("provider route");
+    assert!(forwarded.get(http::header::AUTHORIZATION).is_none());
 }
 
 #[test]
@@ -2134,6 +2173,30 @@ fn authenticated_daemon_pi_route_uses_the_exact_named_provider_endpoint() {
     assert_eq!(
         forwarded.get(http::header::AUTHORIZATION),
         Some(&HeaderValue::from_static("Bearer caller-provider-token"))
+    );
+}
+
+#[test]
+fn daemon_named_upstream_precedes_chatgpt_oauth_inference() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+        HeaderValue::from_static("https://custom.example/inference/v1"),
+    );
+    headers.insert(
+        http::header::AUTHORIZATION,
+        HeaderValue::from_static("Bearer at-caller-controlled-token"),
+    );
+
+    assert_eq!(
+        daemon_provider_upstream_url(
+            &headers,
+            "/v1/responses?client=pi",
+            &GatewayConfig::default(),
+        )
+        .unwrap()
+        .as_deref(),
+        Some("https://custom.example/inference/v1/v1/responses?client=pi")
     );
 }
 

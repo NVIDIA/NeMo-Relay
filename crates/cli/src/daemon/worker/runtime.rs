@@ -710,6 +710,13 @@ async fn forward_to_provider(
         Ok(None) => route.upstream_url(&state.config, path_and_query),
         Err(error) => return error.into_response(),
     };
+    if let Some(aligned) = crate::gateway::daemon_provider_forward_headers(
+        request.headers(),
+        request.uri().path(),
+        &state.config,
+    ) {
+        *request.headers_mut() = aligned;
+    }
     if allow_environment_provider_auth {
         inject_provider_auth(request.headers_mut(), route, &state.config);
     }
