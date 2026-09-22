@@ -299,11 +299,15 @@ def _llm_execution_context(
     invocation: pb.LlmInvocation,
     runtime: "PluginRuntime",
     invocation_id: str,
+    *,
+    response_required: bool,
 ) -> LlmExecutionContext:
     if not invocation.HasField("execution_codec_context"):
         raise WorkerSdkError("malformed LLM execution codec context: execution context is missing")
     context = invocation.execution_codec_context
-    if not context.HasField("request") or not context.request.HasField("codec"):
+    if not context.HasField("request"):
+        raise WorkerSdkError("malformed LLM execution codec context: request context is missing")
+    if not context.request.HasField("codec"):
         raise WorkerSdkError("malformed LLM execution codec context: request codec identity is missing")
 
     request_id = context.request.codec_capability_id if context.request.HasField("codec_capability_id") else None
@@ -330,6 +334,8 @@ def _llm_execution_context(
             _capability_id=response_id,
             _invocation_id=invocation_id,
         )
+    elif response_required:
+        raise WorkerSdkError("malformed LLM execution codec context: response context is missing")
     return LlmExecutionContext(
         request_codec=request_context,
         response_codec=response_context,
@@ -2540,7 +2546,12 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
             handler = self._handler(self._handlers.llm_stream_executions, request.registration_name)
             payload = _require_payload(request, "llm")
             llm_request = _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA)
-            execution_context = _llm_execution_context(payload, self._runtime, request.invocation_id)
+            execution_context = _llm_execution_context(
+                payload,
+                self._runtime,
+                request.invocation_id,
+                response_required=False,
+            )
             next_call = LlmStreamNext(self._runtime, request.continuation_id)
             with _bind_invocation_scope(request):
                 stream = await _maybe_await(handler(payload.model_name, llm_request, execution_context, next_call))
@@ -2716,7 +2727,12 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 self._handler(self._handlers.llm_executions, request.registration_name)(
                     payload.model_name,
                     _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA),
-                    _llm_execution_context(payload, self._runtime, request.invocation_id),
+                    _llm_execution_context(
+                        payload,
+                        self._runtime,
+                        request.invocation_id,
+                        response_required=True,
+                    ),
                     LlmNext(self._runtime, request.continuation_id),
                 )
             )

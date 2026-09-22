@@ -2066,7 +2066,7 @@ impl PluginWorker for WorkerService {
             .ok_or_else(|| Status::not_found("stream execution handler not registered"))?;
         let payload = llm_payload(request.payload).map_err(status_from_sdk)?;
         let execution_context = payload
-            .execution_context(&self.runtime, &invocation_id)
+            .execution_context(&self.runtime, &invocation_id, false)
             .map_err(status_from_sdk)?;
         let request_value =
             required_json::<LlmRequest>(payload.request, "llm request").map_err(status_from_sdk)?;
@@ -2705,7 +2705,8 @@ impl WorkerService {
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = llm_payload(request.payload)?;
-        let execution_context = payload.execution_context(&self.runtime, &request.invocation_id)?;
+        let execution_context =
+            payload.execution_context(&self.runtime, &request.invocation_id, true)?;
         let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
         let handler = self.llm_execution(&request.registration_name)?;
         let next = LlmNext {
@@ -2909,6 +2910,7 @@ impl LlmPayload {
         &self,
         runtime: &PluginRuntime,
         invocation_id: &str,
+        response_required: bool,
     ) -> Result<LlmExecutionContext> {
         let context = require_execution_field(
             self.execution_codec_context.as_ref(),
@@ -2934,6 +2936,11 @@ impl LlmPayload {
                 })
             })
             .transpose()?;
+        if response_required && response_codec.is_none() {
+            return Err(WorkerSdkError::InvalidInput(
+                "malformed LLM execution codec context: response context is missing".into(),
+            ));
+        }
         Ok(LlmExecutionContext {
             request_codec: LlmSanitizeRequestContext {
                 codec: codec_identity_from_proto(Some(request_identity)),

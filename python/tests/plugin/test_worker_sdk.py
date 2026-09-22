@@ -1202,7 +1202,12 @@ def test_execution_context_distinguishes_absent_and_resolved_opaque_codecs() -> 
             response=pb.LlmSanitizeResponseContext(codec=pb.LlmCodecIdentity()),
         )
     )
-    absent = plugin_api._llm_execution_context(absent_invocation, runtime, "absent-invocation")
+    absent = plugin_api._llm_execution_context(
+        absent_invocation,
+        runtime,
+        "absent-invocation",
+        response_required=True,
+    )
     assert absent.request_codec.codec == plugin_api.LlmCodecIdentity("none")
     assert absent.request_codec.resolve_codec() is None
     assert absent.response_codec is not None
@@ -1221,12 +1226,71 @@ def test_execution_context_distinguishes_absent_and_resolved_opaque_codecs() -> 
             ),
         )
     )
-    opaque = plugin_api._llm_execution_context(opaque_invocation, runtime, "opaque-invocation")
+    opaque = plugin_api._llm_execution_context(
+        opaque_invocation,
+        runtime,
+        "opaque-invocation",
+        response_required=True,
+    )
     assert opaque.request_codec.codec == plugin_api.LlmCodecIdentity("opaque")
     assert opaque.request_codec.resolve_codec() is not None
     assert opaque.response_codec is not None
     assert opaque.response_codec.codec == plugin_api.LlmCodecIdentity("opaque")
     assert opaque.response_codec.resolve_codec() is not None
+
+
+@pytest.mark.parametrize(
+    ("invocation", "expected"),
+    [
+        (pb.LlmInvocation(), "execution context is missing"),
+        (
+            pb.LlmInvocation(execution_codec_context=pb.LlmExecutionCodecContext()),
+            "request context is missing",
+        ),
+        (
+            pb.LlmInvocation(
+                execution_codec_context=pb.LlmExecutionCodecContext(
+                    request=pb.LlmSanitizeRequestContext(),
+                )
+            ),
+            "request codec identity is missing",
+        ),
+        (
+            pb.LlmInvocation(
+                execution_codec_context=pb.LlmExecutionCodecContext(
+                    request=pb.LlmSanitizeRequestContext(codec=pb.LlmCodecIdentity()),
+                    response=pb.LlmSanitizeResponseContext(),
+                )
+            ),
+            "response codec identity is missing",
+        ),
+        (
+            pb.LlmInvocation(
+                execution_codec_context=pb.LlmExecutionCodecContext(
+                    request=pb.LlmSanitizeRequestContext(codec=pb.LlmCodecIdentity()),
+                )
+            ),
+            "response context is missing",
+        ),
+    ],
+)
+def test_execution_context_rejects_malformed_unary_contexts(
+    invocation: pb.LlmInvocation,
+    expected: str,
+) -> None:
+    runtime = PluginRuntime(
+        activation_id=ACTIVATION_ID,
+        auth_token=AUTH_TOKEN,
+        host_stub=RecordingHostStub(),
+    )
+
+    with pytest.raises(WorkerSdkError, match=expected):
+        plugin_api._llm_execution_context(
+            invocation,
+            runtime,
+            "invocation",
+            response_required=True,
+        )
 
 
 async def test_llm_sanitizers_receive_codec_context_and_can_omit_payloads() -> None:
