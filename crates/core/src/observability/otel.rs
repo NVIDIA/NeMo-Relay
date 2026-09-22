@@ -47,6 +47,7 @@ use super::{
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
+use crate::api::runtime::scope_stack::w3c_span_context;
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use crate::codec::response::CostEstimate;
@@ -2349,6 +2350,12 @@ impl OtelEventProcessor {
         };
         if event.propagation_parent_uuid() != Some(parent_uuid) {
             return Context::new();
+        }
+        if let Some(span_context) = w3c_span_context(
+            event.propagation_traceparent(),
+            event.propagation_tracestate(),
+        ) {
+            return Context::new().with_remote_span_context(span_context);
         }
         let Some(root_uuid) = event.propagation_root_uuid() else {
             return Context::new();

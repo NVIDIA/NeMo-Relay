@@ -284,17 +284,21 @@ explicit rootless context keeps it rootless until a local Agent scope establishe
 new trace. `capture_propagation_context_with_root()` still lets an application
 choose a stable run UUID explicitly.
 
-Relay context is distinct from W3C propagation. An integration may carry
-`traceparent` and `tracestate` alongside Relay's JSON context when it needs to
-preserve OpenTelemetry sampling or vendor state.
+Relay's JSON context can also carry optional W3C `traceparent` and
+`tracestate` fields. When a receiver imports a valid pair, its first local
+OpenTelemetry span is a child of the upstream span and preserves upstream
+sampling and vendor state; Relay UUID lineage remains unchanged. Invalid W3C
+fields are ignored with a runtime warning, without rejecting the Relay context.
 
 For outbound-only W3C propagation, use `capture_traceparent()` to obtain the
-current Relay traceparent directly, or convert a rooted `PropagationContext`
+current Relay traceparent directly, or convert a `PropagationContext`
 with `PropagationContext::to_traceparent` (and the equivalent binding methods).
-Rootless contexts cannot be converted because they intentionally start a new
-local OpenTelemetry trace. Managed LLM execution automatically adds one
-runtime-owned `traceparent` header to the provider request; a standalone
-request-intercept call adds it only when a real Relay trace context exists.
+When valid W3C context is present, Relay emits its W3C headers even for a
+rootless Relay context; rootless only starts a new Relay-derived OpenTelemetry
+trace when no W3C parent is available. Managed LLM execution automatically replaces both
+runtime-owned `traceparent` and `tracestate` headers on the provider request;
+a standalone request-intercept call adds the same pair only when a real Relay
+trace context exists.
 
 Use the binding's JSON helpers at the transport boundary: Rust
 `PropagationContext::to_json` and `PropagationContext::from_json`, Python

@@ -423,6 +423,45 @@ func TestPropagationContextJSONRoundTripAndValidation(t *testing.T) {
 	}
 }
 
+func TestPropagationContextPreservesW3CTraceContext(t *testing.T) {
+	rootUUID := propagationRootUUID
+	traceparent := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	tracestate := "vendor=value"
+	context := PropagationContext{
+		Version:     1,
+		RootUUID:    &rootUUID,
+		ParentUUID:  propagationParentUUID,
+		Traceparent: &traceparent,
+		Tracestate:  &tracestate,
+	}
+
+	payload, err := context.ToJSON()
+	if err != nil {
+		t.Fatalf("PropagationContext.ToJSON failed: %v", err)
+	}
+	decoded, err := PropagationContextFromJSON(payload)
+	if err != nil {
+		t.Fatalf("PropagationContextFromJSON failed: %v", err)
+	}
+	if decoded.Traceparent == nil || *decoded.Traceparent != traceparent {
+		t.Fatalf("expected traceparent %q, got %#v", traceparent, decoded.Traceparent)
+	}
+	if decoded.Tracestate == nil || *decoded.Tracestate != tracestate {
+		t.Fatalf("expected tracestate %q, got %#v", tracestate, decoded.Tracestate)
+	}
+
+	invalid, err := PropagationContextFromJSON(fmt.Sprintf(
+		`{"version":1,"parent_uuid":%q,"traceparent":"invalid","tracestate":"vendor=value"}`,
+		propagationParentUUID,
+	))
+	if err != nil {
+		t.Fatalf("invalid W3C context should retain Relay propagation: %v", err)
+	}
+	if invalid.Traceparent != nil || invalid.Tracestate != nil {
+		t.Fatalf("expected invalid W3C headers to be discarded, got %#v", invalid)
+	}
+}
+
 func TestNewScopeStackFromRootlessAndRootParentPropagation(t *testing.T) {
 	parentUUID := "018f13f0-7c1a-7a80-8000-000000000004"
 	for _, context := range []PropagationContext{

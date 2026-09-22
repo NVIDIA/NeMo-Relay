@@ -79,6 +79,16 @@ pub fn publication_context<T: Any + Send + Sync>() -> Option<Arc<T>> {
     current_publication_context()?.downcast().ok()
 }
 
+fn set_event_w3c_context(event: &mut Event, scope_stack: &ScopeStackHandle) {
+    let (traceparent, tracestate) = scope_stack
+        .read()
+        .ok()
+        .map(|stack| stack.event_w3c_headers())
+        .unwrap_or_default();
+    event.set_propagation_traceparent(traceparent);
+    event.set_propagation_tracestate(tracestate);
+}
+
 pub(crate) type EventTransformFn = Box<
     dyn FnOnce(Event) -> Pin<Box<dyn Future<Output = Event> + Send + 'static>> + Send + 'static,
 >;
@@ -528,6 +538,7 @@ mod native {
                 .ok()
                 .and_then(|stack| stack.event_propagation_parent_uuid()),
         );
+        set_event_w3c_context(&mut event, &scope_stack);
         let message = DispatcherMessage::Deliver {
             event: Box::new(event),
             transform: None,
@@ -566,6 +577,7 @@ mod native {
                 .ok()
                 .and_then(|stack| stack.event_propagation_parent_uuid()),
         );
+        set_event_w3c_context(&mut event, &scope_stack);
         let injectors = snapshot_event_metadata_injectors(&scope_stack);
         let message = DispatcherMessage::Deliver {
             event: Box::new(event),
@@ -607,6 +619,7 @@ mod native {
                 .ok()
                 .and_then(|stack| stack.event_propagation_parent_uuid()),
         );
+        set_event_w3c_context(&mut event, &scope_stack);
         let injectors = snapshot_event_metadata_injectors(&scope_stack);
         let (completion_tx, completion) = tokio::sync::oneshot::channel();
         let message = DispatcherMessage::Deliver {
@@ -652,6 +665,7 @@ mod native {
                 .ok()
                 .and_then(|stack| stack.event_propagation_parent_uuid()),
         );
+        set_event_w3c_context(&mut event, &scope_stack);
         let injectors = snapshot_event_metadata_injectors(&scope_stack);
         let message = DispatcherMessage::Deliver {
             event: Box::new(event),
@@ -689,6 +703,7 @@ mod native {
                 .ok()
                 .and_then(|stack| stack.event_propagation_parent_uuid()),
         );
+        set_event_w3c_context(&mut event, &scope_stack);
         let injectors = snapshot_event_metadata_injectors(&scope_stack);
         let message = DispatcherMessage::Deliver {
             event: Box::new(event),
@@ -1187,6 +1202,8 @@ mod native {
         let state = process_state();
         let propagation_root_uuid = event.propagation_root_uuid();
         let propagation_parent_uuid = event.propagation_parent_uuid();
+        let propagation_traceparent = event.propagation_traceparent().map(ToOwned::to_owned);
+        let propagation_tracestate = event.propagation_tracestate().map(ToOwned::to_owned);
         let (mut transformed, mut nested_publications) = match transform {
             Some(transform) => {
                 let runtime = match build_sanitizer_invocation_runtime() {
@@ -1232,6 +1249,8 @@ mod native {
         };
         transformed.set_propagation_root_uuid(propagation_root_uuid);
         transformed.set_propagation_parent_uuid(propagation_parent_uuid);
+        transformed.set_propagation_traceparent(propagation_traceparent);
+        transformed.set_propagation_tracestate(propagation_tracestate);
         let (injected, injector_publications) =
             inject_event_metadata_snapshot(transformed, injectors, publication_context.clone());
         nested_publications.extend(injector_publications);

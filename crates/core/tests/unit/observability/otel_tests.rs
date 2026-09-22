@@ -679,6 +679,8 @@ fn propagated_root_parent_projects_as_a_remote_otel_parent() {
         version: PropagationContext::VERSION,
         root_uuid: Some(root_uuid),
         parent_uuid,
+        traceparent: None,
+        tracestate: None,
     })
     .unwrap();
     set_thread_scope_stack(imported_stack);
@@ -699,6 +701,54 @@ fn propagated_root_parent_projects_as_a_remote_otel_parent() {
     assert!(span_context.is_remote());
     assert_eq!(span_context.trace_id(), relay_trace_id(root_uuid));
     assert_eq!(span_context.span_id(), relay_span_id(parent_uuid));
+}
+
+#[test]
+fn propagated_w3c_parent_projects_trace_flags_and_tracestate() {
+    let parent_uuid = Uuid::now_v7();
+    let mut event = make_start_event(
+        Uuid::now_v7(),
+        Some(parent_uuid),
+        "receiver-tool",
+        ScopeType::Tool,
+        None,
+    );
+    event.set_propagation_parent_uuid(Some(parent_uuid));
+    event.set_propagation_traceparent(Some(
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00".to_string(),
+    ));
+    event.set_propagation_tracestate(Some("vendor=value".to_string()));
+
+    for otel_type in [
+        OpenTelemetryType::Full,
+        OpenTelemetryType::GenAi,
+        OpenTelemetryType::OpenInference,
+    ] {
+        let processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+                make_provider().0,
+                "test".into(),
+                otel_type,
+                MarkProjection::default(),
+                default_mark_exclude_names(),
+                Vec::new(),
+                Vec::new(),
+                SignalRuntimeDiagnostics::new(None),
+            );
+        let span_context = processor
+            .parent_context(&event)
+            .span()
+            .span_context()
+            .clone();
+        assert!(span_context.is_remote());
+        assert_eq!(
+            span_context.trace_id().to_string(),
+            "4bf92f3577b34da6a3ce929d0e0e4736"
+        );
+        assert_eq!(span_context.span_id().to_string(), "00f067aa0ba902b7");
+        assert!(!span_context.is_sampled());
+        assert_eq!(span_context.trace_state().header(), "vendor=value");
+    }
 }
 
 #[test]
@@ -763,6 +813,8 @@ fn rootless_propagation_remains_rootless_when_forked() {
         version: PropagationContext::VERSION,
         root_uuid: None,
         parent_uuid,
+        traceparent: None,
+        tracestate: None,
     })
     .unwrap();
     set_thread_scope_stack(imported_stack);
@@ -821,6 +873,8 @@ fn default_propagation_context_preserves_the_imported_root() {
         version: PropagationContext::VERSION,
         root_uuid: Some(root_uuid),
         parent_uuid,
+        traceparent: None,
+        tracestate: None,
     })
     .unwrap();
     set_thread_scope_stack(imported_stack);

@@ -70,6 +70,28 @@ describe('Context isolation', () => {
     );
   });
 
+  it('preserves W3C trace context in the Relay transport payload', () => {
+    const context = {
+      version: 1,
+      rootUuid: '018f13f0-7c1a-7a80-8000-000000000001',
+      parentUuid: '018f13f0-7c1a-7a80-8000-000000000002',
+      traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+      tracestate: 'vendor=value',
+    };
+    assert.deepEqual(propagationContextFromJson(propagationContextToJson(context)), context);
+    const invalid = propagationContextFromJson(
+      JSON.stringify({
+        version: context.version,
+        root_uuid: context.rootUuid,
+        parent_uuid: context.parentUuid,
+        traceparent: 'invalid',
+        tracestate: context.tracestate,
+      }),
+    );
+    assert.equal(invalid.traceparent, undefined);
+    assert.equal(invalid.tracestate, undefined);
+  });
+
   it('captures a rooted context by default and supports explicit rootless capture', () => {
     const stack = createScopeStack();
     withScopeStack(stack, () => {
