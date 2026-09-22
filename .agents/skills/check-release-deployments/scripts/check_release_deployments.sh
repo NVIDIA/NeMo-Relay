@@ -53,7 +53,17 @@ print_result() { local status; status="$(request_status "$4")"; printf '| %s | `
 python_version="$(just --quiet semver-to-pep440 "$tag")"
 cargo_packages="$(just --quiet published-cargo-packages)"
 python_packages=(nemo-relay nemo-relay-plugin nemo-relay-cli-bin)
-node_packages=(nemo-relay-node nemo-relay-node-linux-x64-gnu nemo-relay-node-linux-arm64-gnu nemo-relay-node-linux-x64-musl nemo-relay-node-linux-arm64-musl nemo-relay-node-darwin-arm64 nemo-relay-node-win32-x64-msvc nemo-relay-node-win32-arm64-msvc nemo-relay-openclaw)
+python_executable="$(uv python find)"
+node_platforms="$("$python_executable" scripts/package-node-bin.py --print-platforms)"
+node_packages=(nemo-relay-node)
+while IFS=$'\t' read -r platform package; do
+    if [[ -z "$platform" || -z "$package" ]]; then
+        echo "Error: invalid platform entry from package-node-bin.py" >&2
+        exit 1
+    fi
+    node_packages+=("$package")
+done <<<"$node_platforms"
+node_packages+=(nemo-relay-openclaw)
 print_pipeline
 printf '\n## Package Deployments\n\n| Ecosystem | Package | Version | Status |\n| --- | --- | --- | --- |\n'
 if "$check_cargo"; then while IFS= read -r package; do print_result Cargo "$package" "$tag" "https://crates.io/api/v1/crates/${package}/${tag}"; done <<<"$cargo_packages"; else printf '| Cargo | — | — | skipped: publication workflow failed |\n'; fi
