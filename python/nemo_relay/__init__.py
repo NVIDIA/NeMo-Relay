@@ -502,6 +502,19 @@ def create_scope_stack() -> ScopeStack:
     return _create_scope_stack()
 
 
+def _callback_propagation_context(root_uuid: str | None) -> PropagationContext | None:
+    """Return the native callback context when a managed invocation is active."""
+    parent_uuid = _propagation_parent_var.get()
+    if parent_uuid is None:
+        return None
+    return PropagationContext(
+        parent_uuid,
+        root_uuid,
+        traceparent=_propagation_traceparent_var.get(),
+        tracestate=_propagation_tracestate_var.get(),
+    )
+
+
 def capture_propagation_context() -> PropagationContext:
     """Capture the current Relay causal parent for application-managed transport.
 
@@ -510,13 +523,8 @@ def capture_propagation_context() -> PropagationContext:
         identities for propagation to another execution boundary.
     """
     get_scope_stack()
-    if parent_uuid := _propagation_parent_var.get():
-        return PropagationContext(
-            parent_uuid,
-            _propagation_root_var.get(),
-            traceparent=_propagation_traceparent_var.get(),
-            tracestate=_propagation_tracestate_var.get(),
-        )
+    if context := _callback_propagation_context(_propagation_root_var.get()):
+        return context
     return _capture_propagation_context()
 
 
@@ -528,8 +536,8 @@ def capture_rootless_propagation_context() -> PropagationContext:
             session propagation when it is installed in another scope stack.
     """
     get_scope_stack()
-    if parent_uuid := _propagation_parent_var.get():
-        return PropagationContext(parent_uuid)
+    if context := _callback_propagation_context(None):
+        return context
     return _capture_rootless_propagation_context()
 
 
@@ -545,8 +553,8 @@ def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationC
         root identities.
     """
     get_scope_stack()
-    if parent_uuid := _propagation_parent_var.get():
-        return PropagationContext(parent_uuid, root_uuid)
+    if context := _callback_propagation_context(root_uuid):
+        return context
     return _capture_propagation_context_with_root(root_uuid)
 
 
@@ -557,9 +565,8 @@ def capture_traceparent() -> str:
         str: Encoded W3C traceparent value for the current Relay context.
     """
     get_scope_stack()
-    parent_uuid = _propagation_parent_var.get()
-    if parent_uuid:
-        return PropagationContext(parent_uuid, _propagation_root_var.get() or parent_uuid).to_traceparent()
+    if context := _callback_propagation_context(_propagation_root_var.get() or _propagation_parent_var.get()):
+        return context.to_traceparent()
     return _capture_traceparent()
 
 

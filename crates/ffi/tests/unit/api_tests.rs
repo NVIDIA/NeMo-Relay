@@ -313,10 +313,16 @@ fn propagation_context_json_round_trips_through_the_ffi() {
     assert!(!stack.is_null());
     unsafe { nemo_relay_scope_stack_free(stack) };
 
-    for invalid_context in [
-        "not-json",
-        r#"{\"version\":2,\"parent_uuid\":\"018f13f0-7c1a-7a80-8000-000000000002\"}"#,
-        r#"{\"version\":1,\"root_uuid\":\"00000000-0000-0000-0000-000000000000\",\"parent_uuid\":\"018f13f0-7c1a-7a80-8000-000000000002\"}"#,
+    for (invalid_context, expected_status) in [
+        ("not-json", NemoRelayStatus::InvalidJson),
+        (
+            r#"{"version":2,"parent_uuid":"018f13f0-7c1a-7a80-8000-000000000002"}"#,
+            NemoRelayStatus::InvalidArg,
+        ),
+        (
+            r#"{"version":1,"root_uuid":"00000000-0000-0000-0000-000000000000","parent_uuid":"018f13f0-7c1a-7a80-8000-000000000002"}"#,
+            NemoRelayStatus::InvalidArg,
+        ),
     ] {
         let payload = CString::new(invalid_context).unwrap();
         let mut rejected_stack = ptr::null_mut();
@@ -326,7 +332,7 @@ fn propagation_context_json_round_trips_through_the_ffi() {
                 &mut rejected_stack,
             )
         };
-        assert_ne!(status, NemoRelayStatus::Ok);
+        assert_eq!(status, expected_status);
         assert!(rejected_stack.is_null());
     }
 }

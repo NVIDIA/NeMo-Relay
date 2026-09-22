@@ -263,15 +263,23 @@ pub unsafe extern "C" fn nemo_relay_scope_stack_create_from_propagation_json(
         set_last_error("out pointer is null");
         return NemoRelayStatus::NullPointer;
     }
-    let context = match c_str_to_string(context_json) {
-        Ok(value) => match PropagationContext::from_json(&value) {
-            Ok(context) => context,
-            Err(error) => {
-                set_last_error(&format!("invalid propagation context JSON: {error}"));
-                return NemoRelayStatus::InvalidJson;
-            }
-        },
+    let value = match c_str_to_string(context_json) {
+        Ok(value) => value,
         Err(status) => return status,
+    };
+    let context: PropagationContext = match serde_json::from_str(&value) {
+        Ok(context) => context,
+        Err(error) => {
+            set_last_error(&format!("invalid propagation context JSON: {error}"));
+            return NemoRelayStatus::InvalidJson;
+        }
+    };
+    let context = match context.validate() {
+        Ok(()) => context.normalized(),
+        Err(error) => {
+            set_last_error(&error.to_string());
+            return NemoRelayStatus::from(&error);
+        }
     };
     match create_scope_stack_from_propagation(&context) {
         Ok(stack) => {
