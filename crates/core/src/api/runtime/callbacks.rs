@@ -493,12 +493,14 @@ pub type LlmExecutionNextFn =
 /// Wrap or replace non-streaming LLM execution.
 ///
 /// A non-streaming execution intercept receives the logical provider name, the
-/// current request, and the continuation representing the rest of the chain.
+/// current request, the invocation codec context, and the continuation
+/// representing the rest of the chain.
 ///
 /// # Parameters
 /// - First argument: Logical provider or model family name.
 /// - Second argument: Current LLM request.
-/// - Third argument: Continuation for the remaining execution chain.
+/// - Third argument: Request and unary-response codec context.
+/// - Fourth argument: Continuation for the remaining execution chain.
 ///
 /// # Returns
 /// A future resolving to the provider response JSON.
@@ -510,6 +512,7 @@ pub type LlmExecutionFn = Arc<
     dyn Fn(
             &str,
             LlmRequest,
+            super::llm_execution_context::LlmExecutionContext,
             LlmExecutionNextFn,
         ) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
         + Send
@@ -628,9 +631,7 @@ pub type LlmFinalizerFn = Box<dyn FnOnce() -> Json + Send>;
 /// # Returns
 /// A shared reference to a scope-local streaming execution registry.
 pub(crate) type LlmStreamExecutionRegistryRef<'a> = &'a crate::registry::SortedRegistry<
-    crate::api::registry::ExecutionIntercept<
-        super::llm_execution_context::ContextualLlmStreamExecutionFn,
-    >,
+    crate::api::registry::ExecutionIntercept<LlmStreamExecutionFn>,
 >;
 /// Slice of scope-local streaming execution registries.
 ///
@@ -670,11 +671,14 @@ pub type LlmStreamExecutionNextFn = Arc<
 ///
 /// A streaming execution intercept can observe or modify the request before
 /// invoking the continuation, and it can also replace the returned stream.
+/// Its execution context exposes the request codec but deliberately omits a
+/// response codec because Relay codecs decode complete responses, not chunks.
 ///
 /// # Parameters
 /// - First argument: Logical provider or model family name.
 /// - Second argument: Current LLM request.
-/// - Third argument: Continuation for the remaining streaming execution chain.
+/// - Third argument: Request codec context with no response direction.
+/// - Fourth argument: Continuation for the remaining streaming execution chain.
 ///
 /// # Returns
 /// A future resolving to a JSON chunk stream.
@@ -686,6 +690,7 @@ pub type LlmStreamExecutionFn = Arc<
     dyn Fn(
             &str,
             LlmRequest,
+            super::llm_execution_context::LlmExecutionContext,
             LlmStreamExecutionNextFn,
         ) -> Pin<Box<dyn Future<Output = Result<LlmJsonStream>> + Send>>
         + Send

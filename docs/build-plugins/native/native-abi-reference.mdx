@@ -23,7 +23,16 @@ extern "C" fn nemo_relay_register_plugin(
 ) -> NemoRelayStatus
 ```
 
-The current host negotiates ABI v6, then the frozen v5, v4, v3, and legacy v2 tables.
+The current host requires ABI v7. It does not fall back to v6 or earlier tables because
+v7 changes the LLM execution callback layouts; invoking a stale callback through the
+new layout would be unsafe. Rebuild every native plugin for Relay 0.10 and raise its
+`compat.relay` lower bound to `0.10.0`. The authored manifest label remains
+`compat.native_api = "1"`.
+
+ABI v7 adds directional request and unary-response codec context to raw, typed,
+and asynchronous LLM execution callbacks. The generic asynchronous middleware
+callback remains unchanged; ABI v7 appends an execution-specific unary registration,
+and the existing execution-specific stream callback gains the context parameter.
 ABI v6 adds a host-routed operational logging function. Native plugins pass a level, optional
 target, message, and optional JSON-object fields; Relay applies its operational logging policy
 and preserves those fields in structured JSONL output.
@@ -43,7 +52,9 @@ function signatures and field order are defined by the public
 | Frozen v1/v2 prefix | Version and struct-size negotiation; host version; string allocation, access, and release; thread-local error reporting; callback-scoped LLM request decode and encode plus response decode; subscriber, five tool, six LLM, and three event-sanitizer registrations; current scope, scope push and pop, mark emission, isolated stack creation and release, thread-stack set, capture, and restore, captured-binding release, active-stack inspection, and scoped binding. |
 | Frozen v3 extension | Completion resolve, reject, cancellation inspection, and release; one-shot completion-coupled continuation invocation; continuation release; generic async middleware registration; bounded output-stream push, finish, reject, cancellation inspection, and release; downstream stream invocation; stream-middleware registration; and repeated or concurrent unary continuation invocation with independent result callbacks. |
 | Frozen v4 extension | Completion-scoped LLM request decode and encode plus response decode; pull-based downstream LLM stream open, pull, cancel, and release; completion retain for typed codec facades; output-stream backpressure inspection; extended mark emission; runtime diagnostics; activation-owned runtime capability creation, retain, and release; global runtime-registration discovery; owned conditional middleware guardrail registration and deregistration; and activation-owned and runtime-discovered callback gate registration. The callback registration slots are appended after the original constant-reason slots. |
-| Current v5 extension | Context-carrying tool execution intercept registration. The callback receives one JSON object containing `tool_name`, `args`, and `tool_call_id`. |
+| v5 extension | Context-carrying tool execution intercept registration. The callback receives one JSON object containing `tool_name`, `args`, and `tool_call_id`. |
+| v6 extension | Host-routed operational logging with structured fields. |
+| Current v7 extension | Directional codec context for raw and typed LLM execution callbacks, an execution-specific asynchronous unary registration, context on the asynchronous stream-execution callback, and stream retain plus stream-scoped request decode and encode operations. |
 
 The prefix and descriptor layout are explicit. A plugin fills the descriptor with its
 stable kind, component multiplicity, opaque state, callbacks, and destructor. The host
@@ -151,7 +162,10 @@ or binding, and restoration.
 
 ## Async Completions and Continuations
 
-`PluginContext::register_async_middleware_raw` registers non-stream middleware that can
+`PluginContext::register_async_middleware_raw` registers non-stream middleware other
+than LLM execution. ABI v7 uses the execution-specific
+`plugin_context_register_async_llm_execution_intercept` entry for asynchronous unary
+LLM execution callbacks. Both paths can
 settle later. Return `Complete` only after resolving or rejecting the completion inside
 the callback. Return `Pending` only after retaining it. A retained completion must settle
 exactly once and then be released. Release every async `next` reference after its last
@@ -215,6 +229,19 @@ A successful null sanitizer result omits the observability payload and annotatio
 error also omits them and records the callback failure. Neither outcome changes the real
 request or application response. Never retain a raw handle or resolved typed facade
 after the sanitizer callback ends.
+
+LLM execution context uses the same identity and opaque codec operations. Its
+request direction is always present and may resolve request decode/encode. Unary
+execution also carries an optional response direction with response decode.
+Streaming execution sets the response direction to unavailable because the
+response codecs operate on completed provider responses, not individual chunks.
+Raw execution-context handles are borrowed for the owning callback. Typed unary
+facades retain their completion and typed streaming request facades retain their
+output stream, so they remain memory-safe while the callback future or returned
+stream owns them. Codec calls fail after the completion or stream settles. Raw
+plugins that need request codec access after an asynchronous stream callback
+returns must retain the stream and use the v7 stream-scoped decode and encode
+operations; release that stream reference after the last call.
 
 ## Unload Ordering
 

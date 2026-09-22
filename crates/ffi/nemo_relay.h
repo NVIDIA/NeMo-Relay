@@ -382,6 +382,24 @@ typedef NemoRelayStatus (*NemoRelayLlmRequestInterceptCb)(void *user_data,
                                                           char **out_outcome_json);
 
 /**
+ * Directional codec context supplied to an LLM execution intercept.
+ *
+ * `request_codec` is always present. `response_codec` is non-null for unary
+ * execution and null for streaming execution, where Relay has no completed
+ * response to decode.
+ */
+typedef struct NemoRelayLlmExecutionContext {
+  /**
+   * Active request codec identity and capability.
+   */
+  struct NemoRelayLlmSanitizeRequestContext request_codec;
+  /**
+   * Active unary-response codec context, or null for streaming execution.
+   */
+  const struct NemoRelayLlmSanitizeResponseContext *response_codec;
+} NemoRelayLlmExecutionContext;
+
+/**
  * Runtime-provided "next" callback for LLM execution middleware chain.
  * Takes a native JSON C string, returns a response JSON C string.
  * `next_ctx` is borrowed and valid only until the intercept callback returns;
@@ -393,10 +411,13 @@ typedef char *(*NemoRelayLlmExecNextFn)(const char *native_json, void *next_ctx)
 
 /**
  * Callback for LLM execution intercepts with middleware chain support.
- * Receives native JSON C string plus a `next` callback and its context.
+ * Receives the managed LLM call name, native JSON C string, execution context,
+ * plus a `next` callback and its context.
  */
 typedef char *(*NemoRelayLlmExecInterceptCb)(void *user_data,
+                                             const char *name,
                                              const char *native_json,
+                                             struct NemoRelayLlmExecutionContext context,
                                              NemoRelayLlmExecNextFn next_fn,
                                              void *next_ctx);
 

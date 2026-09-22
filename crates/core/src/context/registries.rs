@@ -14,9 +14,9 @@ use crate::api::registry::{
     runtime_registration_is_enabled,
 };
 use crate::api::runtime::{
-    ContextualLlmExecutionFn, ContextualLlmStreamExecutionFn, EventSanitizeFn, EventSubscriberFn,
-    LlmConditionalFn, LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
-    ToolConditionalFn, ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
+    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
+    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
+    ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::registry::SortedRegistry;
 
@@ -55,11 +55,10 @@ pub(crate) struct ScopeLocalRegistries {
     /// LLM request intercepts that can rewrite or annotate requests.
     pub(crate) llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptFn>>,
     /// Non-streaming LLM execution intercepts that wrap callback execution.
-    pub(crate) llm_execution_intercepts:
-        SortedRegistry<ExecutionIntercept<ContextualLlmExecutionFn>>,
+    pub(crate) llm_execution_intercepts: SortedRegistry<ExecutionIntercept<LlmExecutionFn>>,
     /// Streaming LLM execution intercepts that wrap stream-producing callbacks.
     pub(crate) llm_stream_execution_intercepts:
-        SortedRegistry<ExecutionIntercept<ContextualLlmStreamExecutionFn>>,
+        SortedRegistry<ExecutionIntercept<LlmStreamExecutionFn>>,
     /// Scope-local lifecycle subscribers visible while the owning scope is active.
     pub(crate) event_subscribers: HashMap<String, EventSubscriberFn>,
 }

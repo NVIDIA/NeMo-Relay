@@ -12,7 +12,7 @@ use crate::api::optimization::{
     LlmOptimizationRecorder, record_llm_optimization_contribution, scope_llm_optimization_recorder,
 };
 use crate::api::runtime::{
-    BuiltinLlmCodec, LlmCodecIdentity, LlmExecutionCodecContext, LlmExecutionNextFn,
+    BuiltinLlmCodec, LlmCodecIdentity, LlmExecutionContext, LlmExecutionNextFn,
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, MiddlewareContinuationLease,
     NemoRelayContextState,
 };
@@ -529,7 +529,6 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: RegistrationSurface::Subscriber as i32,
                 priority: 0,
                 break_chain: false,
-                llm_execution_codec_context: false,
             }],
             error: None,
             conditional_middleware_guardrails: Vec::new(),
@@ -546,7 +545,6 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: 999,
                 priority: 0,
                 break_chain: false,
-                llm_execution_codec_context: false,
             }],
             error: None,
             conditional_middleware_guardrails: Vec::new(),
@@ -567,7 +565,6 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: RegistrationSurface::Unspecified as i32,
                 priority: 0,
                 break_chain: false,
-                llm_execution_codec_context: false,
             }],
             error: None,
             conditional_middleware_guardrails: Vec::new(),
@@ -578,27 +575,6 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
         unspecified
             .to_string()
             .contains("unspecified registration surface")
-    );
-
-    let incompatible_codec_context = validate_registration_plan(
-        "fixture_worker",
-        &RegisterResponse {
-            registrations: vec![Registration {
-                local_name: "subscriber".into(),
-                surface: RegistrationSurface::Subscriber as i32,
-                priority: 0,
-                break_chain: false,
-                llm_execution_codec_context: true,
-            }],
-            error: None,
-            conditional_middleware_guardrails: Vec::new(),
-        },
-    )
-    .expect_err("codec context must be limited to LLM execution surfaces");
-    assert!(
-        incompatible_codec_context
-            .to_string()
-            .contains("incompatible surface")
     );
 
     let cases = [
@@ -1239,7 +1215,7 @@ async fn llm_worker_codec_capabilities_are_active_only_during_sanitizer_invocati
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn llm_worker_execution_codec_context_is_opt_in_and_ephemeral() {
+async fn llm_worker_execution_codec_context_is_required_and_ephemeral() {
     enable_operational_logs();
     let host_state = shared_worker_host_state();
     let seen = Arc::new(Mutex::new(None::<ExecutionCodecCapabilities>));
@@ -1247,26 +1223,16 @@ async fn llm_worker_execution_codec_context_is_opt_in_and_ephemeral() {
         let host_state = Arc::clone(&host_state);
         let seen = Arc::clone(&seen);
         move |request| {
-            let registration_name = request.registration_name.clone();
-            if registration_name == "legacy" {
-                let Some(invoke_request_payload::Payload::Llm(invocation)) = request.payload else {
-                    panic!("LLM execution must receive an LLM invocation");
-                };
-                assert!(invocation.sanitize_context.is_none());
-                assert!(invocation.execution_codec_context.is_none());
-            } else {
-                let (request_id, response_id, invocation_id) =
-                    execution_codec_capabilities(request);
-                let response_id = response_id.expect("response capability must be present");
-                let state = host_state.lock().unwrap().clone().unwrap();
-                state
-                    .request_codec(&request_id, &invocation_id)
-                    .expect("request capability resolves during callback");
-                state
-                    .response_codec(&response_id, &invocation_id)
-                    .expect("response capability resolves during callback");
-                *seen.lock().unwrap() = Some((request_id, Some(response_id), invocation_id));
-            }
+            let (request_id, response_id, invocation_id) = execution_codec_capabilities(request);
+            let response_id = response_id.expect("response capability must be present");
+            let state = host_state.lock().unwrap().clone().unwrap();
+            state
+                .request_codec(&request_id, &invocation_id)
+                .expect("request capability resolves during callback");
+            state
+                .response_codec(&response_id, &invocation_id)
+                .expect("response capability resolves during callback");
+            *seen.lock().unwrap() = Some((request_id, Some(response_id), invocation_id));
             InvokeResponse {
                 result: Some(InvokeResult::Json(JsonResult {
                     value: Some(json_envelope(JSON_SCHEMA, &json!({"ok": true})).unwrap()),
@@ -1281,22 +1247,10 @@ async fn llm_worker_execution_codec_context_is_opt_in_and_ephemeral() {
     let next: LlmExecutionNextFn = Arc::new(|_| Box::pin(async { Ok(json!({"unused": true})) }));
     callback
         .invoke_llm_execution(
-            "legacy",
-            "model",
-            valid_llm_request(),
-            None,
-            Arc::clone(&next),
-        )
-        .await
-        .unwrap();
-    assert!(seen.lock().unwrap().is_none());
-
-    callback
-        .invoke_llm_execution(
             "context",
             "model",
             valid_llm_request(),
-            Some(openai_execution_codec_context()),
+            openai_execution_codec_context(),
             next,
         )
         .await
@@ -1342,7 +1296,7 @@ async fn cancelling_worker_execution_expires_context_and_continuation_state() {
                 "cancel-context-execution",
                 "model",
                 valid_llm_request(),
-                Some(openai_execution_codec_context()),
+                openai_execution_codec_context(),
                 Arc::new(|request| Box::pin(async move { Ok(request.content) })),
             )
             .await
@@ -1424,7 +1378,7 @@ async fn llm_worker_stream_codec_context_is_request_only_and_expires_at_eof() {
             "context-stream",
             "model",
             valid_llm_request(),
-            Some(openai_execution_codec_context()),
+            openai_stream_execution_codec_context(),
             Arc::new(|_request| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
         )
         .await
@@ -1528,7 +1482,7 @@ async fn callback_stream_transport_error_surfaces_to_host_stream() {
             "stream_transport_error",
             "model",
             valid_llm_request(),
-            None,
+            openai_stream_execution_codec_context(),
             Arc::new(|_request| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
         )
         .await
@@ -1582,7 +1536,7 @@ async fn callback_stream_stops_when_host_receiver_is_dropped() {
             "stream_receiver_drop",
             "model",
             valid_llm_request(),
-            None,
+            openai_stream_execution_codec_context(),
             Arc::new(|_request| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
         )
         .await
@@ -1776,7 +1730,7 @@ async fn continuation_bearing_worker_callback_allows_slow_next() {
                 "slow-next",
                 "model",
                 valid_llm_request(),
-                None,
+                openai_execution_codec_context(),
                 Arc::new(|_| Box::pin(async { Ok(json!({"slow": "completed"})) })),
             )
             .await
@@ -1843,7 +1797,7 @@ async fn continuation_bearing_worker_stream_allows_slow_next() {
                 "slow-stream-next",
                 "model",
                 valid_llm_request(),
-                None,
+                openai_stream_execution_codec_context(),
                 Arc::new(|_| {
                     Box::pin(async {
                         Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
@@ -3021,16 +2975,16 @@ async fn host_runtime_service_reports_poisoned_internal_locks() {
         "failed sanitizer codec setup must remove its invocation scope stack"
     );
 
-    let context = LlmExecutionCodecContext::new(
+    let context = LlmExecutionContext::new(
         LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
-        LlmSanitizeResponseContext::for_response_codec(Some(codec)),
+        Some(LlmSanitizeResponseContext::for_response_codec(Some(codec))),
     );
     let error = callback
         .invoke_llm_execution(
             "poisoned-codec-context",
             "model",
             valid_llm_request(),
-            Some(context),
+            context,
             Arc::new(|request| Box::pin(async move { Ok(request.content) })),
         )
         .await
@@ -3436,15 +3390,23 @@ fn shared_worker_host_state() -> SharedWorkerHostState {
     Arc::new(Mutex::new(None))
 }
 
-fn openai_execution_codec_context() -> LlmExecutionCodecContext {
+fn openai_execution_codec_context() -> LlmExecutionContext {
     let codec = Arc::new(OpenAIChatCodec);
-    LlmExecutionCodecContext::new(
+    LlmExecutionContext::new(
         LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
-        LlmSanitizeResponseContext::for_response_codec(Some(codec)),
+        Some(LlmSanitizeResponseContext::for_response_codec(Some(codec))),
+    )
+}
+
+fn openai_stream_execution_codec_context() -> LlmExecutionContext {
+    LlmExecutionContext::new(
+        LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(OpenAIChatCodec))),
+        None,
     )
 }
 
 fn execution_codec_capabilities(request: InvokeRequest) -> ExecutionCodecCapabilities {
+    let surface = RegistrationSurface::try_from(request.surface).expect("registration surface");
     let invocation_id = request.invocation_id;
     let Some(invoke_request_payload::Payload::Llm(invocation)) = request.payload else {
         panic!("LLM execution must receive an LLM invocation");
@@ -3452,19 +3414,33 @@ fn execution_codec_capabilities(request: InvokeRequest) -> ExecutionCodecCapabil
     assert!(invocation.sanitize_context.is_none());
     let context = invocation
         .execution_codec_context
-        .expect("opted-in execution must receive codec context");
+        .expect("execution must receive codec context");
     let request_context = context.request.expect("request codec context");
-    let response_context = context.response.expect("response codec context");
-    for identity in [request_context.codec, response_context.codec] {
-        let identity = identity.expect("codec identity");
-        assert_eq!(identity.kind, LlmCodecKind::Builtin as i32);
-        assert_eq!(identity.id.as_deref(), Some("openai_chat"));
-    }
+    let request_identity = request_context.codec.expect("request codec identity");
+    assert_eq!(request_identity.kind, LlmCodecKind::Builtin as i32);
+    assert_eq!(request_identity.id.as_deref(), Some("openai_chat"));
+    let response_capability_id = match surface {
+        RegistrationSurface::LlmExecutionIntercept => {
+            let response_context = context.response.expect("unary response codec context");
+            let response_identity = response_context.codec.expect("response codec identity");
+            assert_eq!(response_identity.kind, LlmCodecKind::Builtin as i32);
+            assert_eq!(response_identity.id.as_deref(), Some("openai_chat"));
+            response_context.codec_capability_id
+        }
+        RegistrationSurface::LlmStreamExecutionIntercept => {
+            assert!(
+                context.response.is_none(),
+                "stream execution must not receive response codec context"
+            );
+            None
+        }
+        other => panic!("unexpected execution surface: {other:?}"),
+    };
     (
         request_context
             .codec_capability_id
             .expect("request capability must be present"),
-        response_context.codec_capability_id,
+        response_capability_id,
         invocation_id,
     )
 }
@@ -3709,7 +3685,6 @@ fn registration(surface: RegistrationSurface, local_name: &str) -> Registration 
         surface: surface as i32,
         priority: 0,
         break_chain: false,
-        llm_execution_codec_context: false,
     }
 }
 
@@ -3798,7 +3773,7 @@ async fn pending_worker_stream_with_codec_context(name: &str) -> WorkerStreamLif
             name,
             "model",
             valid_llm_request(),
-            Some(openai_execution_codec_context()),
+            openai_stream_execution_codec_context(),
             Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
         )
         .await

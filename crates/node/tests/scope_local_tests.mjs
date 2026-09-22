@@ -569,7 +569,7 @@ describe('Scope-local auto-cleanup on scope pop', () => {
 
   it('scope-local llm execution intercept is cleaned up when scope is popped', async () => {
     const scope = pushScope('sl_cleanup_llm_exec', ScopeType.Agent, null, null);
-    scopeRegisterLlmExecutionIntercept(scope.uuid, 'sl_cleanup_llm_exec_int', 10, async (request, next) => {
+    scopeRegisterLlmExecutionIntercept(scope.uuid, 'sl_cleanup_llm_exec_int', 10, async (request, _context, next) => {
       const updated = {
         ...request,
         content: {
@@ -606,7 +606,7 @@ describe('Scope-local auto-cleanup on scope pop', () => {
       scope.uuid,
       'sl_cleanup_llm_stream_exec_int',
       10,
-      async (request, next) => {
+      async (request, _context, next) => {
         const updated = {
           ...request,
           content: {
@@ -925,7 +925,7 @@ describe('Priority merge of global and scope-local middleware', () => {
   });
 
   it('scope-local llm execution intercept and global intercept merge', async () => {
-    lib.registerLlmExecutionIntercept('sl_llm_merge_global_exec', 5, async (request, next) => {
+    lib.registerLlmExecutionIntercept('sl_llm_merge_global_exec', 5, async (request, _context, next) => {
       const result = await next({
         ...request,
         content: {
@@ -940,7 +940,7 @@ describe('Priority merge of global and scope-local middleware', () => {
     });
 
     const scope = pushScope('sl_llm_merge_exec_scope', ScopeType.Agent, null, null);
-    scopeRegisterLlmExecutionIntercept(scope.uuid, 'sl_llm_merge_local_exec', 15, async (request, next) => {
+    scopeRegisterLlmExecutionIntercept(scope.uuid, 'sl_llm_merge_local_exec', 15, async (request, _context, next) => {
       const result = await next({
         ...request,
         content: {
@@ -1059,7 +1059,9 @@ describe('Scope-local LLM intercepts', () => {
 
   it('register and deregister scope-local llm execution intercept', () => {
     const scope = pushScope('sl_llm_exec_int_scope', ScopeType.Agent, null, null);
-    scopeRegisterLlmExecutionIntercept(scope.uuid, 'sl_llm_exec_int', 10, async (request, next) => next(request));
+    scopeRegisterLlmExecutionIntercept(scope.uuid, 'sl_llm_exec_int', 10, async (request, _context, next) =>
+      next(request),
+    );
     const removed = scopeDeregisterLlmExecutionIntercept(scope.uuid, 'sl_llm_exec_int');
     assert.equal(removed, true);
     popScope(scope);
@@ -1067,7 +1069,7 @@ describe('Scope-local LLM intercepts', () => {
 
   it('scope-local llm execution intercept composes with next', async () => {
     const scope = pushScope('sl_llm_exec_compose_scope', ScopeType.Agent, null, null);
-    scopeRegisterLlmExecutionIntercept(scope.uuid, 'sl_llm_exec_compose', 10, async (request, next) => {
+    scopeRegisterLlmExecutionIntercept(scope.uuid, 'sl_llm_exec_compose', 10, async (request, _context, next) => {
       const result = await next({
         ...request,
         content: {
@@ -1106,7 +1108,7 @@ describe('Scope-local LLM intercepts', () => {
 
   it('scope-local llm execution intercept rejects invalid next request payloads', async () => {
     const scope = pushScope('sl_llm_exec_invalid_scope', ScopeType.Agent, null, null);
-    scopeRegisterLlmExecutionIntercept(scope.uuid, 'sl_llm_exec_invalid', 10, async (_request, next) => {
+    scopeRegisterLlmExecutionIntercept(scope.uuid, 'sl_llm_exec_invalid', 10, async (_request, _context, next) => {
       const downstream = await next({
         headers: 1,
         content: {
@@ -1144,7 +1146,7 @@ describe('Scope-local LLM intercepts', () => {
 
   it('register and deregister scope-local llm stream execution intercept', () => {
     const scope = pushScope('sl_llm_stream_int_scope', ScopeType.Agent, null, null);
-    scopeRegisterLlmStreamExecutionIntercept(scope.uuid, 'sl_llm_stream_int', 10, async (request, next) =>
+    scopeRegisterLlmStreamExecutionIntercept(scope.uuid, 'sl_llm_stream_int', 10, async (request, _context, next) =>
       next(request),
     );
     const removed = scopeDeregisterLlmStreamExecutionIntercept(scope.uuid, 'sl_llm_stream_int');
@@ -1154,19 +1156,24 @@ describe('Scope-local LLM intercepts', () => {
 
   it('scope-local llm stream execution intercept composes with next', async () => {
     const scope = pushScope('sl_llm_stream_compose_scope', ScopeType.Agent, null, null);
-    scopeRegisterLlmStreamExecutionIntercept(scope.uuid, 'sl_llm_stream_compose', 10, async (request, next) => {
-      const downstream = await next({
-        ...request,
-        content: {
-          ...request.content,
-          touchedByScopeStream: true,
-        },
-      });
-      return (async function* () {
-        yield* downstream;
-        yield { wrappedByScopeStream: true };
-      })();
-    });
+    scopeRegisterLlmStreamExecutionIntercept(
+      scope.uuid,
+      'sl_llm_stream_compose',
+      10,
+      async (request, _context, next) => {
+        const downstream = await next({
+          ...request,
+          content: {
+            ...request.content,
+            touchedByScopeStream: true,
+          },
+        });
+        return (async function* () {
+          yield* downstream;
+          yield { wrappedByScopeStream: true };
+        })();
+      },
+    );
 
     try {
       const stream = await llmStreamCallExecute(
@@ -1205,14 +1212,19 @@ describe('Scope-local LLM intercepts', () => {
 
   it('scope-local llm stream execution intercept rejects invalid next request payloads', async () => {
     const scope = pushScope('sl_llm_stream_invalid_scope', ScopeType.Agent, null, null);
-    scopeRegisterLlmStreamExecutionIntercept(scope.uuid, 'sl_llm_stream_invalid', 10, async (_request, next) => {
-      return next({
-        headers: 1,
-        content: {
-          model: 'broken',
-        },
-      });
-    });
+    scopeRegisterLlmStreamExecutionIntercept(
+      scope.uuid,
+      'sl_llm_stream_invalid',
+      10,
+      async (_request, _context, next) => {
+        return next({
+          headers: 1,
+          content: {
+            model: 'broken',
+          },
+        });
+      },
+    );
 
     try {
       await assert.rejects(
@@ -1244,11 +1256,11 @@ describe('Scope-local LLM intercepts', () => {
 
   it('duplicate scope-local llm stream execution intercept fails', () => {
     const scope = pushScope('sl_llm_stream_dup_scope', ScopeType.Agent, null, null);
-    scopeRegisterLlmStreamExecutionIntercept(scope.uuid, 'sl_llm_stream_dup', 10, async (request, next) =>
+    scopeRegisterLlmStreamExecutionIntercept(scope.uuid, 'sl_llm_stream_dup', 10, async (request, _context, next) =>
       next(request),
     );
     assert.throws(() => {
-      scopeRegisterLlmStreamExecutionIntercept(scope.uuid, 'sl_llm_stream_dup', 20, async (request, next) =>
+      scopeRegisterLlmStreamExecutionIntercept(scope.uuid, 'sl_llm_stream_dup', 20, async (request, _context, next) =>
         next(request),
       );
     });
@@ -1402,10 +1414,12 @@ describe('Scope-local subscriber receives events', () => {
         })),
       () => scopeDeregisterLlmRequestIntercept('not-a-uuid', 'bad_llm_int'),
       () =>
-        scopeRegisterLlmExecutionIntercept('not-a-uuid', 'bad_llm_exec', 10, async (request, next) => next(request)),
+        scopeRegisterLlmExecutionIntercept('not-a-uuid', 'bad_llm_exec', 10, async (request, _context, next) =>
+          next(request),
+        ),
       () => scopeDeregisterLlmExecutionIntercept('not-a-uuid', 'bad_llm_exec'),
       () =>
-        scopeRegisterLlmStreamExecutionIntercept('not-a-uuid', 'bad_llm_stream', 10, async (request, next) =>
+        scopeRegisterLlmStreamExecutionIntercept('not-a-uuid', 'bad_llm_stream', 10, async (request, _context, next) =>
           next(request),
         ),
       () => scopeDeregisterLlmStreamExecutionIntercept('not-a-uuid', 'bad_llm_stream'),

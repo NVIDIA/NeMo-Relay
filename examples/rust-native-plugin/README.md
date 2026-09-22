@@ -11,6 +11,11 @@ helpers live in separate source modules. Together they register the subscriber,
 all three event sanitizers, five tool surfaces, and six LLM surfaces exposed by
 the current typed 0.10.0 SDK.
 
+Relay 0.10 uses native ABI v7. Every LLM execution callback receives directional codec
+context before its continuation; streaming execution exposes request codec operations
+but no response decoder. The manifest continues to declare `native_api = "1"`, and its
+Relay lower bound is `0.10.0` because older compiled callback layouts are rejected.
+
 Run the focused tests and build the shared library from this directory. The
 configuration tests isolate validation and schema contracts. The lifecycle test
 builds a fresh `cdylib`, materializes a digest-checked manifest, activates the

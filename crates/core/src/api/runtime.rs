@@ -25,10 +25,7 @@ pub use continuation_context::MiddlewareContinuationContext;
 #[cfg(test)]
 pub(crate) use continuation_context::MiddlewareContinuationLease;
 pub use global::global_context;
-pub(crate) use llm_execution_context::{
-    ContextualLlmExecutionFn, ContextualLlmStreamExecutionFn, LlmExecutionCodecContext,
-    adapt_llm_execution_fn, adapt_llm_stream_execution_fn,
-};
+pub use llm_execution_context::LlmExecutionContext;
 pub(crate) use scope_stack::capture_trace_context;
 pub use scope_stack::{
     PropagationContext, ScopeStack, ScopeStackHandle, TASK_SCOPE_STACK, ThreadScopeStackBinding,

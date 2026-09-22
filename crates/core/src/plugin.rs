@@ -41,18 +41,12 @@ use crate::api::registry::{
     register_tool_request_intercept, register_tool_sanitize_request_guardrail,
     register_tool_sanitize_response_guardrail,
 };
-#[cfg(feature = "worker-grpc")]
-use crate::api::registry::{
-    register_contextual_llm_execution_intercept, register_contextual_llm_stream_execution_intercept,
-};
 use crate::api::runtime::{
     ConditionalMiddlewareGuardrailFn, EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn,
     LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
     LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn, ToolExecutionFn,
     ToolInterceptFn, ToolSanitizeFn,
 };
-#[cfg(feature = "worker-grpc")]
-use crate::api::runtime::{ContextualLlmExecutionFn, ContextualLlmStreamExecutionFn};
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 
@@ -892,25 +886,6 @@ impl PluginRegistrationContext {
         )
     }
 
-    /// Registers an internal context-aware LLM execution intercept and records
-    /// its rollback closure.
-    #[cfg(feature = "worker-grpc")]
-    pub(crate) fn register_contextual_llm_execution_intercept(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: ContextualLlmExecutionFn,
-    ) -> Result<()> {
-        self.register_execution_intercept(
-            name,
-            priority,
-            callback,
-            "llm execution intercept",
-            register_contextual_llm_execution_intercept,
-            deregister_llm_execution_intercept,
-        )
-    }
-
     /// Registers an LLM stream execution intercept and records its rollback closure.
     pub fn register_llm_stream_execution_intercept(
         &mut self,
@@ -924,25 +899,6 @@ impl PluginRegistrationContext {
             callback,
             "llm stream execution intercept",
             register_llm_stream_execution_intercept,
-            deregister_llm_stream_execution_intercept,
-        )
-    }
-
-    /// Registers an internal context-aware streaming LLM execution intercept
-    /// and records its rollback closure.
-    #[cfg(feature = "worker-grpc")]
-    pub(crate) fn register_contextual_llm_stream_execution_intercept(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: ContextualLlmStreamExecutionFn,
-    ) -> Result<()> {
-        self.register_execution_intercept(
-            name,
-            priority,
-            callback,
-            "llm stream execution intercept",
-            register_contextual_llm_stream_execution_intercept,
             deregister_llm_stream_execution_intercept,
         )
     }

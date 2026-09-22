@@ -10,6 +10,11 @@ guide. It validates the shared documentation configuration, registers every
 safe `grpc-v1` surface, exercises continuations and lazy streams, uses
 invocation-scoped codecs, and demonstrates marks and scope-stack cleanup.
 
+The worker targets Relay 0.10 while retaining the `grpc-v1` protocol name. Unary and
+streaming LLM execution callbacks receive directional codec context before their
+continuation. Streaming deliberately has no response codec because chunks are not
+complete provider responses.
+
 Run `cargo test` and `cargo build` from this directory. The configuration and
 schema tests are order-independent. The lifecycle test builds a fresh worker,
 materializes a digest-checked manifest, activates it through `grpc-v1`, runs

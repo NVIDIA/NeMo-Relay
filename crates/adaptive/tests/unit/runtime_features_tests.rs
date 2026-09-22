@@ -211,7 +211,7 @@ fn assert_llm_execution_intercept_registered(name: &str) {
         register_llm_execution_intercept(
             name,
             i32::MAX,
-            Arc::new(|_name, request, next| next(request)),
+            Arc::new(|_name, request, _context, next| next(request)),
         ),
         name,
     );
@@ -221,7 +221,7 @@ fn assert_llm_execution_intercept_absent(name: &str) {
     register_llm_execution_intercept(
         name,
         i32::MAX,
-        Arc::new(|_name, request, next| next(request)),
+        Arc::new(|_name, request, _context, next| next(request)),
     )
     .unwrap();
     deregister_llm_execution_intercept(name).unwrap();
@@ -232,7 +232,7 @@ fn assert_llm_stream_execution_intercept_registered(name: &str) {
         register_llm_stream_execution_intercept(
             name,
             i32::MAX,
-            Arc::new(|_name, request, next| next(request)),
+            Arc::new(|_name, request, _context, next| next(request)),
         ),
         name,
     );
@@ -242,7 +242,7 @@ fn assert_llm_stream_execution_intercept_absent(name: &str) {
     register_llm_stream_execution_intercept(
         name,
         i32::MAX,
-        Arc::new(|_name, request, next| next(request)),
+        Arc::new(|_name, request, _context, next| next(request)),
     )
     .unwrap();
     deregister_llm_stream_execution_intercept(name).unwrap();
@@ -807,13 +807,13 @@ async fn registration_context_registers_all_supported_callback_types() {
     ctx.register_llm_execution_intercept(
         "adaptive_test_execution",
         6,
-        Arc::new(|_name, request, _next| Box::pin(async move { Ok(request.content) })),
+        Arc::new(|_name, request, _context, _next| Box::pin(async move { Ok(request.content) })),
     )
     .unwrap();
     ctx.register_llm_stream_execution_intercept(
         "adaptive_test_stream",
         7,
-        Arc::new(|_name, request, _next| {
+        Arc::new(|_name, request, _context, _next| {
             Box::pin(async move {
                 Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
                     request.content
@@ -1017,7 +1017,7 @@ async fn acg_feature_reports_execution_registration_conflicts() {
     register_llm_execution_intercept(
         &execution_name,
         1,
-        Arc::new(|_name, request, next| next(request)),
+        Arc::new(|_name, request, _context, next| next(request)),
     )
     .unwrap();
 
@@ -1146,8 +1146,12 @@ async fn response_cache_feature_cleans_up_when_llm_registration_conflicts() {
         Uuid::now_v7(),
     );
     let name = feature.name.clone();
-    register_llm_execution_intercept(&name, 1, Arc::new(|_name, request, next| next(request)))
-        .unwrap();
+    register_llm_execution_intercept(
+        &name,
+        1,
+        Arc::new(|_name, request, _context, next| next(request)),
+    )
+    .unwrap();
 
     let error = {
         let mut ctx = RegistrationContext::new(&mut runtime);
@@ -1180,7 +1184,7 @@ async fn response_cache_feature_cleans_up_when_stream_registration_conflicts() {
     register_llm_stream_execution_intercept(
         &stream_name,
         1,
-        Arc::new(|_name, request, next| next(request)),
+        Arc::new(|_name, request, _context, next| next(request)),
     )
     .unwrap();
 

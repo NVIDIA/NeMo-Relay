@@ -8,26 +8,14 @@ use nemo_relay_worker_proto::v1::{
     GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, HandshakeRequest, HealthRequest,
     InvokeRequest, JsonEnvelope, JsonValue, LlmCodecIdentity, LlmCodecKind,
     LlmExecutionCodecContext, LlmInvocation, LlmSanitizeRequestContext, LlmSanitizeResponseContext,
-    RegisterConditionalMiddlewareGuardrailRequest, Registration, RegistrationSurface,
-    RuntimeDiagnostic, ScopeType, ToolExecutionResult as ProtoToolExecutionResult, invoke_request,
+    RegisterConditionalMiddlewareGuardrailRequest, RegistrationSurface, RuntimeDiagnostic,
+    ScopeType, ToolExecutionResult as ProtoToolExecutionResult, invoke_request,
 };
 use nemo_relay_worker_proto::{
     WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
 };
 use prost::Message;
 use serde_json::json;
-
-#[derive(Clone, PartialEq, Message)]
-struct LegacyRegistration {
-    #[prost(string, tag = "1")]
-    local_name: String,
-    #[prost(int32, tag = "2")]
-    surface: i32,
-    #[prost(int32, tag = "3")]
-    priority: i32,
-    #[prost(bool, tag = "4")]
-    break_chain: bool,
-}
 
 #[derive(Clone, PartialEq, Message)]
 struct LegacyLlmInvocation {
@@ -168,31 +156,9 @@ fn request_field_numbers_are_stable() {
 }
 
 #[test]
-fn execution_codec_context_fields_are_additive_and_stable() {
-    let legacy_registration = LegacyRegistration {
-        local_name: "legacy".into(),
-        surface: RegistrationSurface::LlmExecutionIntercept as i32,
-        priority: 7,
-        break_chain: false,
-    };
-    let decoded_by_new_host = Registration::decode(legacy_registration.encode_to_vec().as_slice())
-        .expect("new host must decode a legacy registration");
-    assert_eq!(decoded_by_new_host.local_name, "legacy");
-    assert!(!decoded_by_new_host.llm_execution_codec_context);
-
-    let contextual_registration = Registration {
-        llm_execution_codec_context: true,
-        ..Default::default()
-    };
-    assert_eq!(contextual_registration.encode_to_vec(), b"\x30\x01");
-    let decoded_by_legacy_host =
-        LegacyRegistration::decode(contextual_registration.encode_to_vec().as_slice())
-            .expect("legacy host must ignore the additive registration field");
-    assert_eq!(decoded_by_legacy_host, LegacyRegistration::default());
-
+fn execution_codec_context_invocation_field_is_additive_and_stable() {
     let legacy_invocation = LegacyLlmInvocation {
         model_name: "legacy-model".into(),
-        ..Default::default()
     };
     let decoded_by_new_worker = LlmInvocation::decode(legacy_invocation.encode_to_vec().as_slice())
         .expect("new worker must decode a legacy invocation");

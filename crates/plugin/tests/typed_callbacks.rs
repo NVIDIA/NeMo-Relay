@@ -26,17 +26,20 @@ use nemo_relay_plugin::{
     LlmJsonAsyncStream, LlmJsonStream, LlmNext, LlmRequest, LlmRequestInterceptOutcome, LlmStream,
     LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement, MetricValueType,
     NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE,
-    NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY, NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT,
-    NativeExecutorConfig, NativePlugin, NemoRelayNativeAsyncCallbackState,
-    NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncLlmStreamOpenCb,
+    NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY, NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING,
+    NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT, NativeExecutorConfig, NativePlugin,
+    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
+    NemoRelayNativeAsyncLlmExecutionCb, NemoRelayNativeAsyncLlmStreamOpenCb,
     NemoRelayNativeAsyncLlmStreamPullCb, NemoRelayNativeAsyncMiddlewareCb,
     NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncNextResultCb,
     NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
     NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeConditionalMiddlewareCb,
     NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
     NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4,
-    NemoRelayNativeHostApiV5, NemoRelayNativeHostApiV6, NemoRelayNativeLlmAsyncStream,
-    NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
+    NemoRelayNativeHostApiV5, NemoRelayNativeHostApiV6, NemoRelayNativeHostApiV7,
+    NemoRelayNativeLlmAsyncStream, NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb,
+    NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmExecutionContext,
+    NemoRelayNativeLlmExecutionRequestContext, NemoRelayNativeLlmExecutionResponseContext,
     NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestInterceptCb,
     NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
     NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
@@ -337,6 +340,22 @@ impl RegisteredAsync {
     }
 }
 
+struct RegisteredAsyncLlmExecution {
+    name: String,
+    priority: i32,
+    cb: NemoRelayNativeAsyncLlmExecutionCb,
+    user_data: usize,
+    free_fn: NemoRelayNativeFreeFn,
+}
+
+impl RegisteredAsyncLlmExecution {
+    unsafe fn free(self) {
+        if let Some(free_fn) = self.free_fn {
+            unsafe { free_fn(self.user_data as *mut c_void) };
+        }
+    }
+}
+
 struct RegisteredAsyncStream {
     name: String,
     priority: i32,
@@ -391,6 +410,7 @@ impl_captured_registration!(
     RegisteredLlmStreamExecution,
     RegisteredLlmRequestIntercept,
     RegisteredAsync,
+    RegisteredAsyncLlmExecution,
     RegisteredAsyncStream,
 );
 
@@ -455,6 +475,8 @@ static LLM_STREAM_EXECUTION_REGISTRATION: Mutex<Option<RegisteredLlmStreamExecut
 static LLM_REQUEST_INTERCEPT_REGISTRATION: Mutex<Option<RegisteredLlmRequestIntercept>> =
     Mutex::new(None);
 static ASYNC_REGISTRATIONS: Mutex<Vec<RegisteredAsync>> = Mutex::new(Vec::new());
+static ASYNC_LLM_EXECUTION_REGISTRATION: Mutex<Option<RegisteredAsyncLlmExecution>> =
+    Mutex::new(None);
 static ASYNC_STREAM_REGISTRATION: Mutex<Option<RegisteredAsyncStream>> = Mutex::new(None);
 static ASYNC_PUSH_BACKPRESSURE: AtomicUsize = AtomicUsize::new(0);
 static ASYNC_COMPLETION_RETAINS: AtomicUsize = AtomicUsize::new(0);
@@ -466,7 +488,7 @@ static UNAVAILABLE_CONTEXT_GATE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn native_abi_struct_sizes_are_self_describing() {
-    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 6);
+    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 7);
     assert_eq!(
         size_of::<NemoRelayNativeHostApiV1>(),
         test_host().struct_size
@@ -541,6 +563,7 @@ fn assert_native_abi_platform_layout() {
     assert_type_layout::<NemoRelayNativeHostApiV6>(8, 616);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV6, v5), 0);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV6, log), 608);
+    assert_native_abi_v7_layout(8, 648, 616, 624, 632, 640);
     assert_type_layout::<NemoRelayNativePluginV1>(8, 56);
     assert_eq!(plugin_offsets(), [0, 8, 16, 24, 32, 40, 48]);
     assert_type_layout::<NemoRelayNativeLlmStreamV1>(8, 40);
@@ -601,6 +624,10 @@ fn assert_native_abi_platform_layout() {
         ),
         296
     );
+    assert_type_layout::<NemoRelayNativeHostApiV6>(4, 304);
+    assert_eq!(offset_of!(NemoRelayNativeHostApiV6, v5), 0);
+    assert_eq!(offset_of!(NemoRelayNativeHostApiV6, log), 300);
+    assert_native_abi_v7_layout(4, 320, 304, 308, 312, 316);
     assert_type_layout::<NemoRelayNativePluginV1>(4, 28);
     assert_eq!(plugin_offsets(), [0, 4, 8, 12, 16, 20, 24]);
     assert_type_layout::<NemoRelayNativeLlmStreamV1>(4, 20);
@@ -610,6 +637,43 @@ fn assert_native_abi_platform_layout() {
 fn assert_type_layout<T>(expected_alignment: usize, expected_size: usize) {
     assert_eq!(align_of::<T>(), expected_alignment);
     assert_eq!(size_of::<T>(), expected_size);
+}
+
+fn assert_native_abi_v7_layout(
+    expected_alignment: usize,
+    expected_size: usize,
+    registration_offset: usize,
+    retain_offset: usize,
+    decode_offset: usize,
+    encode_offset: usize,
+) {
+    assert_type_layout::<NemoRelayNativeHostApiV7>(expected_alignment, expected_size);
+    assert_eq!(offset_of!(NemoRelayNativeHostApiV7, v6), 0);
+    assert_eq!(
+        offset_of!(
+            NemoRelayNativeHostApiV7,
+            plugin_context_register_async_llm_execution_intercept
+        ),
+        registration_offset
+    );
+    assert_eq!(
+        offset_of!(NemoRelayNativeHostApiV7, async_stream_retain),
+        retain_offset
+    );
+    assert_eq!(
+        offset_of!(
+            NemoRelayNativeHostApiV7,
+            async_stream_llm_request_codec_decode
+        ),
+        decode_offset
+    );
+    assert_eq!(
+        offset_of!(
+            NemoRelayNativeHostApiV7,
+            async_stream_llm_request_codec_encode
+        ),
+        encode_offset
+    );
 }
 
 #[test]
@@ -672,6 +736,22 @@ fn native_abi_v6_logging_extension_is_append_only() {
     assert_eq!(
         offset_of!(NemoRelayNativeHostApiV6, log),
         size_of::<NemoRelayNativeHostApiV5>()
+    );
+}
+
+#[test]
+fn native_abi_v7_execution_context_extension_preserves_the_host_table() {
+    assert_eq!(offset_of!(NemoRelayNativeHostApiV7, v6), 0);
+    assert_eq!(
+        offset_of!(
+            NemoRelayNativeHostApiV7,
+            plugin_context_register_async_llm_execution_intercept
+        ),
+        size_of::<NemoRelayNativeHostApiV6>()
+    );
+    assert_eq!(
+        offset_of!(NemoRelayNativeHostApiV7, async_stream_retain),
+        size_of::<NemoRelayNativeHostApiV6>() + size_of::<usize>()
     );
 }
 
@@ -1038,6 +1118,7 @@ unsafe extern "C" fn passthrough_llm_execution_cb(
     _user_data: *mut c_void,
     _name: *const NemoRelayNativeString,
     _request_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmExecutionContext,
     _next_fn: nemo_relay_plugin::NemoRelayNativeLlmNextFn,
     _next_ctx: *mut c_void,
     _out_json: *mut *mut NemoRelayNativeString,
@@ -1049,6 +1130,7 @@ unsafe extern "C" fn passthrough_llm_stream_execution_cb(
     _user_data: *mut c_void,
     _name: *const NemoRelayNativeString,
     _request_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmExecutionContext,
     _next_fn: nemo_relay_plugin::NemoRelayNativeLlmStreamNextFn,
     _next_ctx: *mut c_void,
     _out_stream: *mut NemoRelayNativeLlmStreamV1,
@@ -1068,6 +1150,7 @@ unsafe extern "C" fn pending_async_middleware_cb(
 unsafe extern "C" fn pending_async_stream_middleware_cb(
     _user_data: *mut c_void,
     _invocation_json: *const NemoRelayNativeString,
+    _context: *const NemoRelayNativeLlmExecutionContext,
     _next: *const NemoRelayNativeAsyncNext,
     _stream: *const NemoRelayNativeAsyncStream,
 ) -> u32 {
@@ -1863,6 +1946,8 @@ struct MockAsyncOutput {
     events: Mutex<Vec<MockOutputEvent>>,
     events_cv: Condvar,
     cancelled: AtomicBool,
+    settled: AtomicBool,
+    retains: AtomicUsize,
     releases: AtomicUsize,
 }
 
@@ -1872,6 +1957,8 @@ impl MockAsyncOutput {
             events: Mutex::new(Vec::new()),
             events_cv: Condvar::new(),
             cancelled: AtomicBool::new(false),
+            settled: AtomicBool::new(false),
+            retains: AtomicUsize::new(0),
             releases: AtomicUsize::new(0),
         }
     }
@@ -2082,6 +2169,38 @@ unsafe extern "C" fn capture_register_async_middleware(
     NemoRelayStatus::Ok
 }
 
+unsafe extern "C" fn capture_register_async_llm_execution(
+    _ctx: *mut NemoRelayNativePluginContext,
+    name: *const NemoRelayNativeString,
+    priority: i32,
+    cb: NemoRelayNativeAsyncLlmExecutionCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> NemoRelayStatus {
+    let status = *REGISTRATION_STATUS.lock().unwrap();
+    if status != NemoRelayStatus::Ok {
+        if let Some(free_fn) = free_fn {
+            unsafe { free_fn(user_data) };
+        }
+        return status;
+    }
+    let name = match required_host_string(&test_host(), name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    replace_registration(
+        &ASYNC_LLM_EXECUTION_REGISTRATION,
+        RegisteredAsyncLlmExecution {
+            name,
+            priority,
+            cb,
+            user_data: user_data as usize,
+            free_fn,
+        },
+    );
+    NemoRelayStatus::Ok
+}
+
 unsafe extern "C" fn capture_async_stream_push(
     stream: *const NemoRelayNativeAsyncStream,
     chunk_json: *const NemoRelayNativeString,
@@ -2115,6 +2234,7 @@ unsafe extern "C" fn capture_async_stream_finish(
         return NemoRelayStatus::NullPointer;
     }
     let stream = unsafe { &*stream.cast::<MockAsyncOutput>() };
+    stream.settled.store(true, Ordering::SeqCst);
     stream
         .events
         .lock()
@@ -2132,6 +2252,7 @@ unsafe extern "C" fn capture_async_stream_reject(
         return NemoRelayStatus::NullPointer;
     }
     let stream = unsafe { &*stream.cast::<MockAsyncOutput>() };
+    stream.settled.store(true, Ordering::SeqCst);
     let message = read_host_string(&test_host(), message).unwrap();
     stream
         .events
@@ -2163,6 +2284,53 @@ unsafe extern "C" fn capture_async_stream_release(stream: *const NemoRelayNative
             .releases
             .fetch_add(1, Ordering::SeqCst);
     }
+}
+
+unsafe extern "C" fn capture_async_stream_retain(
+    stream: *const NemoRelayNativeAsyncStream,
+) -> NemoRelayStatus {
+    if stream.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { &*stream.cast::<MockAsyncOutput>() }
+        .retains
+        .fetch_add(1, Ordering::SeqCst);
+    NemoRelayStatus::Ok
+}
+
+fn mock_async_stream_is_active(stream: *const NemoRelayNativeAsyncStream) -> bool {
+    let Some(stream) = (unsafe { stream.cast::<MockAsyncOutput>().as_ref() }) else {
+        return false;
+    };
+    !stream.cancelled.load(Ordering::SeqCst) && !stream.settled.load(Ordering::SeqCst)
+}
+
+unsafe extern "C" fn capture_async_stream_request_decode(
+    stream: *const NemoRelayNativeAsyncStream,
+    _request_json: *const NemoRelayNativeString,
+    out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    if !mock_async_stream_is_active(stream) {
+        return NemoRelayStatus::InvalidArg;
+    }
+    write_json(&test_host(), &json!({}), out)
+}
+
+unsafe extern "C" fn capture_async_stream_request_encode(
+    stream: *const NemoRelayNativeAsyncStream,
+    _annotated_json: *const NemoRelayNativeString,
+    original_json: *const NemoRelayNativeString,
+    out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    if !mock_async_stream_is_active(stream) {
+        return NemoRelayStatus::InvalidArg;
+    }
+    if out.is_null() || original_json.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    let original = read_host_string(&test_host(), original_json).unwrap();
+    let value = serde_json::from_str(&original).unwrap();
+    write_json(&test_host(), &value, out)
 }
 
 unsafe extern "C" fn unavailable_async_next_stream(
@@ -2240,19 +2408,37 @@ unsafe extern "C" fn capture_async_next_result(
 }
 
 unsafe extern "C" fn capture_async_request_decode(
-    _completion: *const NemoRelayNativeAsyncCompletion,
+    completion: *const NemoRelayNativeAsyncCompletion,
     _request_json: *const NemoRelayNativeString,
     out: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
+    if completion.is_null()
+        || unsafe { &*completion.cast::<MockAsyncCompletion>() }
+            .settled
+            .lock()
+            .unwrap()
+            .is_some()
+    {
+        return NemoRelayStatus::InvalidArg;
+    }
     write_json(&test_host(), &json!({}), out)
 }
 
 unsafe extern "C" fn capture_async_request_encode(
-    _completion: *const NemoRelayNativeAsyncCompletion,
+    completion: *const NemoRelayNativeAsyncCompletion,
     _annotated_json: *const NemoRelayNativeString,
     original_json: *const NemoRelayNativeString,
     out: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
+    if completion.is_null()
+        || unsafe { &*completion.cast::<MockAsyncCompletion>() }
+            .settled
+            .lock()
+            .unwrap()
+            .is_some()
+    {
+        return NemoRelayStatus::InvalidArg;
+    }
     if out.is_null() || original_json.is_null() {
         return NemoRelayStatus::NullPointer;
     }
@@ -2262,10 +2448,19 @@ unsafe extern "C" fn capture_async_request_encode(
 }
 
 unsafe extern "C" fn capture_async_response_decode(
-    _completion: *const NemoRelayNativeAsyncCompletion,
+    completion: *const NemoRelayNativeAsyncCompletion,
     _response_json: *const NemoRelayNativeString,
     out: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
+    if completion.is_null()
+        || unsafe { &*completion.cast::<MockAsyncCompletion>() }
+            .settled
+            .lock()
+            .unwrap()
+            .is_some()
+    {
+        return NemoRelayStatus::InvalidArg;
+    }
     write_json(&test_host(), &json!({}), out)
 }
 
@@ -2830,11 +3025,24 @@ unsafe extern "C" fn capture_plugin_log(
 
 fn test_host_v6() -> NemoRelayNativeHostApiV6 {
     let mut v5 = test_host_v5();
-    v5.v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
+    v5.v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING;
     v5.v4.v3.v1.struct_size = size_of::<NemoRelayNativeHostApiV6>();
     NemoRelayNativeHostApiV6 {
         v5,
         log: capture_plugin_log,
+    }
+}
+
+fn test_host_v7() -> NemoRelayNativeHostApiV7 {
+    let mut v6 = test_host_v6();
+    v6.v5.v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
+    v6.v5.v4.v3.v1.struct_size = size_of::<NemoRelayNativeHostApiV7>();
+    NemoRelayNativeHostApiV7 {
+        v6,
+        plugin_context_register_async_llm_execution_intercept: capture_register_async_llm_execution,
+        async_stream_retain: capture_async_stream_retain,
+        async_stream_llm_request_codec_decode: capture_async_stream_request_decode,
+        async_stream_llm_request_codec_encode: capture_async_stream_request_encode,
     }
 }
 
@@ -2886,6 +3094,66 @@ fn invoke_async_registration(
     result
 }
 
+fn invoke_async_llm_execution_registration(
+    host: &NemoRelayNativeHostApiV4,
+    registration: &RegisteredAsyncLlmExecution,
+    invocation: Json,
+    next: &MockAsyncNext,
+) -> std::result::Result<Json, String> {
+    let completion = MockAsyncCompletion::new();
+    let invocation = json_host_string(&host.v3.v1, invocation);
+    let execution_context = TestExecutionContext::new(true);
+    let state = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            invocation,
+            execution_context.as_ptr(),
+            next.raw(),
+            completion.raw(),
+        )
+    };
+    unsafe { (host.v3.v1.string_free)(invocation) };
+    assert_eq!(
+        NemoRelayNativeAsyncCallbackState::try_from(state),
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
+    );
+    let result = completion.wait();
+    completion.wait_for_release();
+    assert!(completion.releases.load(Ordering::SeqCst) >= 1);
+    result
+}
+
+struct TestExecutionContext {
+    response: Option<Box<NemoRelayNativeLlmExecutionResponseContext>>,
+    context: NemoRelayNativeLlmExecutionContext,
+}
+
+impl TestExecutionContext {
+    fn new(unary: bool) -> Self {
+        let request_codec = NonNull::<NemoRelayNativeLlmRequestCodec>::dangling().as_ptr();
+        let response = unary.then(|| {
+            Box::new(NemoRelayNativeLlmExecutionResponseContext {
+                codec_kind: NemoRelayNativeLlmCodecKind::Opaque,
+                codec_id: ptr::null(),
+                codec: NonNull::<NemoRelayNativeLlmResponseCodec>::dangling().as_ptr(),
+            })
+        });
+        let context = NemoRelayNativeLlmExecutionContext {
+            request_codec: NemoRelayNativeLlmExecutionRequestContext {
+                codec_kind: NemoRelayNativeLlmCodecKind::Opaque,
+                codec_id: ptr::null(),
+                codec: request_codec,
+            },
+            response_codec: response.as_deref().map_or(ptr::null(), ptr::from_ref),
+        };
+        Self { response, context }
+    }
+
+    fn as_ptr(&self) -> *const NemoRelayNativeLlmExecutionContext {
+        ptr::from_ref(&self.context)
+    }
+}
+
 fn begin_test() -> MutexGuard<'static, ()> {
     let guard = TEST_LOCK
         .lock()
@@ -2903,6 +3171,7 @@ fn reset_state() {
     for registration in ASYNC_REGISTRATIONS.lock().unwrap().drain(..) {
         unsafe { registration.free() };
     }
+    clear_registration(&ASYNC_LLM_EXECUTION_REGISTRATION);
     clear_registration(&ASYNC_STREAM_REGISTRATION);
     clear_registration(&SUBSCRIBER_REGISTRATION);
     clear_registration(&EVENT_SANITIZE_REGISTRATION);
@@ -4139,8 +4408,9 @@ fn typed_subscriber_registration_decodes_events() {
 #[allow(clippy::cognitive_complexity)] // One table-style test deliberately exercises every surface.
 fn typed_async_middleware_registers_and_round_trips_every_surface() {
     let _guard = begin_test();
-    let host = test_host_v4();
-    let mut ctx = test_context(&host.v3.v1);
+    let host = test_host_v7();
+    let host_v4 = &host.v6.v5.v4;
+    let mut ctx = test_context(&host.v6.v5.v4.v3.v1);
 
     ctx.register_mark_sanitize_guardrail("mark-async", 1, |_event, mut fields| async move {
         tokio::time::sleep(Duration::from_millis(1)).await;
@@ -4244,13 +4514,21 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
     ctx.register_llm_execution_intercept(
         "llm-execution-async",
         13,
-        |_name, request, next| async move { next.call(request).await },
+        |_name, request, context, next| async move {
+            assert_eq!(context.request_codec().codec, LlmCodecIdentity::Opaque);
+            assert!(context.request_codec().resolve_codec().is_some());
+            assert!(context.response_codec().is_some());
+            next.call(request).await
+        },
     )
     .unwrap();
     ctx.register_llm_stream_execution_intercept(
         "llm-stream-async",
         14,
-        |_name, request, next| async move {
+        |_name, request, context, next| async move {
+            assert_eq!(context.request_codec().codec, LlmCodecIdentity::Opaque);
+            assert!(context.request_codec().resolve_codec().is_some());
+            assert!(context.response_codec().is_none());
             let stream = next.call(request).await?;
             let transformed = stream.map(|item| item.map(|chunk| json!({ "wrapped": chunk })));
             Ok(Box::pin(transformed) as LlmJsonAsyncStream)
@@ -4278,7 +4556,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
             )
         })
         .collect::<Vec<_>>();
-    assert_eq!(metadata.len(), 14);
+    assert_eq!(metadata.len(), 13);
     assert_eq!(metadata[0].1, "mark-async");
     assert_eq!(metadata[0].2, 1);
     assert_eq!(
@@ -4291,6 +4569,14 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         NemoRelayNativeAsyncMiddlewareKind::LlmRequestIntercept
     );
     assert!(metadata[11].3);
+    {
+        let registration = ASYNC_LLM_EXECUTION_REGISTRATION.lock().unwrap();
+        let registration = registration.as_ref().unwrap();
+        assert_eq!(
+            (registration.name.as_str(), registration.priority),
+            ("llm-execution-async", 13)
+        );
+    }
     {
         let stream_registration = ASYNC_STREAM_REGISTRATION.lock().unwrap();
         let stream_registration = stream_registration.as_ref().unwrap();
@@ -4313,7 +4599,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
     let metadata_registration =
         take_async_registration(NemoRelayNativeAsyncMiddlewareKind::EventMetadataInjector);
     let result = invoke_async_registration(
-        &host,
+        host_v4,
         &metadata_registration,
         json!({ "event": event }),
         None,
@@ -4329,7 +4615,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
     ] {
         let registration = take_async_registration(kind);
         let result = invoke_async_registration(
-            &host,
+            host_v4,
             &registration,
             json!({ "event": event, "fields": { "data": { "visible": true } } }),
             None,
@@ -4349,7 +4635,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
     ] {
         let registration = take_async_registration(kind);
         let result = invoke_async_registration(
-            &host,
+            host_v4,
             &registration,
             json!({ "name": "calculator", "value": { "x": 1 } }),
             None,
@@ -4363,7 +4649,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         take_async_registration(NemoRelayNativeAsyncMiddlewareKind::ToolConditionalExecution);
     assert_eq!(
         invoke_async_registration(
-            &host,
+            host_v4,
             &registration,
             json!({ "name": "calculator", "value": {} }),
             None,
@@ -4390,7 +4676,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
     let registration =
         take_async_registration(NemoRelayNativeAsyncMiddlewareKind::ToolExecutionIntercept);
     let outcome = invoke_async_registration(
-        &host,
+        host_v4,
         &registration,
         json!({
             "name": "calculator",
@@ -4409,7 +4695,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         take_async_registration(NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeRequest);
     assert_eq!(
         invoke_async_registration(
-            &host,
+            host_v4,
             &registration,
             json!({
                 "request": request,
@@ -4427,7 +4713,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         take_async_registration(NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeResponse);
     assert_eq!(
         invoke_async_registration(
-            &host,
+            host_v4,
             &registration,
             json!({
                 "response": { "answer": 42 },
@@ -4445,7 +4731,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         take_async_registration(NemoRelayNativeAsyncMiddlewareKind::LlmConditionalExecution);
     assert_eq!(
         invoke_async_registration(
-            &host,
+            host_v4,
             &registration,
             json!({ "request": test_llm_request() }),
             None
@@ -4458,7 +4744,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
     let registration =
         take_async_registration(NemoRelayNativeAsyncMiddlewareKind::LlmRequestIntercept);
     let result = invoke_async_registration(
-        &host,
+        host_v4,
         &registration,
         json!({ "name": "provider", "request": test_llm_request(), "annotated": null }),
         None,
@@ -4467,14 +4753,17 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
     assert_eq!(result["request"]["headers"]["x-tested"], true);
     unsafe { registration.free() };
 
-    let registration =
-        take_async_registration(NemoRelayNativeAsyncMiddlewareKind::LlmExecutionIntercept);
+    let registration = ASYNC_LLM_EXECUTION_REGISTRATION
+        .lock()
+        .unwrap()
+        .take()
+        .unwrap();
     assert_eq!(
-        invoke_async_registration(
-            &host,
+        invoke_async_llm_execution_registration(
+            host_v4,
             &registration,
             json!({ "name": "provider", "request": test_llm_request() }),
-            Some(&next),
+            &next,
         )
         .unwrap()["content"],
         json!({ "prompt": "hello" })
@@ -4485,18 +4774,20 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
     let output = MockAsyncOutput::new();
     ASYNC_PUSH_BACKPRESSURE.store(2, Ordering::SeqCst);
     let invocation = json_host_string(
-        &host.v3.v1,
+        &host_v4.v3.v1,
         json!({ "name": "provider", "request": test_llm_request() }),
     );
+    let execution_context = TestExecutionContext::new(false);
     let state = unsafe {
         (stream_registration.cb)(
             stream_registration.user_data as *mut c_void,
             invocation,
+            execution_context.as_ptr(),
             next.raw(),
             output.raw(),
         )
     };
-    unsafe { (host.v3.v1.string_free)(invocation) };
+    unsafe { (host_v4.v3.v1.string_free)(invocation) };
     assert_eq!(
         NemoRelayNativeAsyncCallbackState::try_from(state),
         Ok(NemoRelayNativeAsyncCallbackState::Pending)
@@ -4510,7 +4801,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         ]
     );
     output.wait_for_release();
-    assert_eq!(output.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(output.releases.load(Ordering::SeqCst), 2);
     assert_eq!(pull_stream.releases.load(Ordering::SeqCst), 1);
     assert_eq!(next.releases.load(Ordering::SeqCst), 3);
     unsafe { stream_registration.free() };
@@ -4519,6 +4810,168 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
     assert!(SCOPE_STACK_BINDING_RESTORES.load(Ordering::SeqCst) > 0);
     assert!(SCOPE_STACK_BINDING_FREES.load(Ordering::SeqCst) > 0);
     assert_eq!(live_host_strings(), 0);
+}
+
+#[test]
+fn typed_async_unary_execution_codecs_expire_after_completion_settles() {
+    let _guard = begin_test();
+    let host = test_host_v7();
+    let host_v4 = &host.v6.v5.v4;
+    let mut ctx = test_context(&host_v4.v3.v1);
+    let (context_tx, context_rx) = std::sync::mpsc::sync_channel(1);
+    ctx.register_llm_execution_intercept(
+        "retain-unary-context",
+        0,
+        move |_name, _request, context, _next| {
+            context_tx.send(context).unwrap();
+            async move { Ok(json!({"answer": 42})) }
+        },
+    )
+    .unwrap();
+
+    let registration = ASYNC_LLM_EXECUTION_REGISTRATION
+        .lock()
+        .unwrap()
+        .take()
+        .unwrap();
+    let completion = MockAsyncCompletion::new();
+    let next = MockAsyncNext {
+        calls: AtomicUsize::new(0),
+        releases: AtomicUsize::new(0),
+        pull_stream: ptr::null(),
+    };
+    let invocation = json_host_string(
+        &host_v4.v3.v1,
+        json!({"name": "provider", "request": test_llm_request()}),
+    );
+    let execution_context = TestExecutionContext::new(true);
+    let state = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            invocation,
+            execution_context.as_ptr(),
+            next.raw(),
+            completion.raw(),
+        )
+    };
+    unsafe { (host_v4.v3.v1.string_free)(invocation) };
+    assert_eq!(
+        NemoRelayNativeAsyncCallbackState::try_from(state),
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
+    );
+    assert_eq!(completion.wait().unwrap(), json!({"answer": 42}));
+    completion.wait_for_release();
+
+    let context = context_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(ASYNC_COMPLETION_RETAINS.load(Ordering::SeqCst), 2);
+    assert!(
+        context
+            .request_codec()
+            .resolve_codec()
+            .unwrap()
+            .decode(&test_llm_request())
+            .is_err()
+    );
+    assert!(
+        context
+            .response_codec()
+            .unwrap()
+            .resolve_codec()
+            .unwrap()
+            .decode(&json!({"answer": 42}))
+            .is_err()
+    );
+    drop(context);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while completion.releases.load(Ordering::SeqCst) < 3 {
+        assert!(
+            Instant::now() < deadline,
+            "retained codec facades were not released"
+        );
+        std::thread::yield_now();
+    }
+    assert_eq!(next.releases.load(Ordering::SeqCst), 1);
+    unsafe { registration.free() };
+}
+
+#[test]
+fn typed_async_stream_execution_codec_expires_after_stream_finishes() {
+    let _guard = begin_test();
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
+    let mut ctx = test_context(host_v1);
+    let (context_tx, context_rx) = std::sync::mpsc::sync_channel(1);
+    ctx.register_llm_stream_execution_intercept(
+        "retain-stream-context",
+        0,
+        move |_name, _request, context, _next| {
+            context_tx.send(context).unwrap();
+            async move {
+                Ok(
+                    Box::pin(futures::stream::iter(vec![Ok(json!({"chunk": 1}))]))
+                        as LlmJsonAsyncStream,
+                )
+            }
+        },
+    )
+    .unwrap();
+
+    let registration = ASYNC_STREAM_REGISTRATION.lock().unwrap().take().unwrap();
+    let output = MockAsyncOutput::new();
+    let next = MockAsyncNext {
+        calls: AtomicUsize::new(0),
+        releases: AtomicUsize::new(0),
+        pull_stream: ptr::null(),
+    };
+    let invocation = json_host_string(
+        host_v1,
+        json!({"name": "provider", "request": test_llm_request()}),
+    );
+    let execution_context = TestExecutionContext::new(false);
+    let state = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            invocation,
+            execution_context.as_ptr(),
+            next.raw(),
+            output.raw(),
+        )
+    };
+    unsafe { (host_v1.string_free)(invocation) };
+    assert_eq!(
+        NemoRelayNativeAsyncCallbackState::try_from(state),
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
+    );
+    assert_eq!(
+        output.wait_terminal(),
+        vec![
+            MockOutputEvent::Chunk(json!({"chunk": 1})),
+            MockOutputEvent::Finished,
+        ]
+    );
+
+    let context = context_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(output.retains.load(Ordering::SeqCst), 1);
+    assert!(context.response_codec().is_none());
+    assert!(
+        context
+            .request_codec()
+            .resolve_codec()
+            .unwrap()
+            .decode(&test_llm_request())
+            .is_err()
+    );
+    drop(context);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while output.releases.load(Ordering::SeqCst) < 2 {
+        assert!(
+            Instant::now() < deadline,
+            "retained stream codec facade was not released"
+        );
+        std::thread::yield_now();
+    }
+    assert_eq!(next.releases.load(Ordering::SeqCst), 1);
+    unsafe { registration.free() };
 }
 
 #[test]
@@ -4651,8 +5104,8 @@ fn typed_async_llm_sanitize_context_rejects_unknown_builtin_identity() {
 #[test]
 fn typed_async_registration_failure_rolls_back_callback_state() {
     let _guard = begin_test();
-    let host = test_host_v4();
-    let mut ctx = test_context(&host.v3.v1);
+    let host = test_host_v7();
+    let mut ctx = test_context(&host.v6.v5.v4.v3.v1);
     *REGISTRATION_STATUS.lock().unwrap() = NemoRelayStatus::InvalidArg;
 
     let unary_drops = Arc::new(AtomicUsize::new(0));
@@ -4670,7 +5123,7 @@ fn typed_async_registration_failure_rolls_back_callback_state() {
     let result = ctx.register_llm_stream_execution_intercept(
         "rejected-stream",
         0,
-        move |_name, _request, _next| {
+        move |_name, _request, _context, _next| {
             let _ = &stream_probe;
             async move { Ok(Box::pin(futures::stream::empty()) as LlmJsonAsyncStream) }
         },
@@ -4748,8 +5201,9 @@ fn typed_async_callbacks_isolate_errors_panics_and_invalid_input() {
 #[test]
 fn typed_async_continuations_are_concurrent_and_executor_owned() {
     let _guard = begin_test();
-    let host = test_host_v4();
-    let mut ctx = test_context(&host.v3.v1);
+    let host = test_host_v7();
+    let host_v4 = &host.v6.v5.v4;
+    let mut ctx = test_context(&host_v4.v3.v1);
     ctx.register_tool_execution_intercept("concurrent", 0, |context, next| async move {
         assert_eq!(context.tool_name, "tool");
         assert_eq!(context.tool_call_id, None);
@@ -4779,7 +5233,7 @@ fn typed_async_continuations_are_concurrent_and_executor_owned() {
     let registration =
         take_async_registration(NemoRelayNativeAsyncMiddlewareKind::ToolExecutionIntercept);
     let result = invoke_async_registration(
-        &host,
+        host_v4,
         &registration,
         json!({ "name": "tool", "value": {} }),
         Some(&next),
@@ -4804,7 +5258,7 @@ fn typed_async_continuations_are_concurrent_and_executor_owned() {
     ctx.register_llm_stream_execution_intercept(
         "stream-open-error",
         0,
-        |_name, request, next| async move { next.call(request).await },
+        |_name, request, _context, next| async move { next.call(request).await },
     )
     .unwrap();
     let registration = ASYNC_STREAM_REGISTRATION.lock().unwrap().take().unwrap();
@@ -4815,18 +5269,20 @@ fn typed_async_continuations_are_concurrent_and_executor_owned() {
         pull_stream: ptr::null(),
     };
     let invocation = json_host_string(
-        &host.v3.v1,
+        &host_v4.v3.v1,
         json!({ "name": "provider", "request": test_llm_request() }),
     );
+    let execution_context = TestExecutionContext::new(false);
     unsafe {
         (registration.cb)(
             registration.user_data as *mut c_void,
             invocation,
+            execution_context.as_ptr(),
             next.raw(),
             output.raw(),
         )
     };
-    unsafe { (host.v3.v1.string_free)(invocation) };
+    unsafe { (host_v4.v3.v1.string_free)(invocation) };
     assert_eq!(
         output.wait_terminal(),
         vec![MockOutputEvent::Rejected(
@@ -4834,7 +5290,7 @@ fn typed_async_continuations_are_concurrent_and_executor_owned() {
         )]
     );
     output.wait_for_release();
-    assert_eq!(output.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(output.releases.load(Ordering::SeqCst), 2);
     assert_eq!(next.releases.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };
 }
@@ -5064,12 +5520,13 @@ fn typed_async_executor_drop_inside_tokio_runtime_drains_accepted_tasks() {
 #[test]
 fn typed_async_stream_cancellation_while_polling_releases_output() {
     let _guard = begin_test();
-    let host = test_host_v4();
-    let mut ctx = test_context(&host.v3.v1);
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
+    let mut ctx = test_context(host_v1);
     let started = Arc::new(AtomicBool::new(false));
     ctx.register_llm_stream_execution_intercept("cancel-poll", 0, {
         let started = Arc::clone(&started);
-        move |_name, _request, _next| {
+        move |_name, _request, _context, _next| {
             let started = Arc::clone(&started);
             async move {
                 Ok(Box::pin(futures::stream::poll_fn(move |_| {
@@ -5088,18 +5545,20 @@ fn typed_async_stream_cancellation_while_polling_releases_output() {
         pull_stream: ptr::null(),
     };
     let invocation = json_host_string(
-        &host.v3.v1,
+        host_v1,
         json!({ "name": "provider", "request": test_llm_request() }),
     );
+    let execution_context = TestExecutionContext::new(false);
     unsafe {
         (registration.cb)(
             registration.user_data as *mut c_void,
             invocation,
+            execution_context.as_ptr(),
             next.raw(),
             output.raw(),
         )
     };
-    unsafe { (host.v3.v1.string_free)(invocation) };
+    unsafe { (host_v1.string_free)(invocation) };
     let deadline = Instant::now() + Duration::from_secs(5);
     while !started.load(Ordering::SeqCst) {
         assert!(Instant::now() < deadline, "returned stream was not polled");
@@ -5114,12 +5573,13 @@ fn typed_async_stream_cancellation_while_polling_releases_output() {
 #[test]
 fn typed_async_stream_restores_callback_scope_while_polling_returned_stream() {
     let _guard = begin_test();
-    let host = test_host_v4();
-    let mut ctx = test_context(&host.v3.v1);
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
+    let mut ctx = test_context(host_v1);
     ctx.register_llm_stream_execution_intercept(
         "stream-scope",
         0,
-        |_name, _request, _next| async move {
+        |_name, _request, _context, _next| async move {
             Ok(Box::pin(futures::stream::iter([Ok(json!({ "chunk": 1 }))])) as LlmJsonAsyncStream)
         },
     )
@@ -5132,18 +5592,20 @@ fn typed_async_stream_restores_callback_scope_while_polling_returned_stream() {
         pull_stream: ptr::null(),
     };
     let invocation = json_host_string(
-        &host.v3.v1,
+        host_v1,
         json!({ "name": "provider", "request": test_llm_request() }),
     );
+    let execution_context = TestExecutionContext::new(false);
     unsafe {
         (registration.cb)(
             registration.user_data as *mut c_void,
             invocation,
+            execution_context.as_ptr(),
             next.raw(),
             output.raw(),
         )
     };
-    unsafe { (host.v3.v1.string_free)(invocation) };
+    unsafe { (host_v1.string_free)(invocation) };
     assert_eq!(
         output.wait_terminal(),
         vec![
@@ -5159,12 +5621,13 @@ fn typed_async_stream_restores_callback_scope_while_polling_returned_stream() {
 #[test]
 fn typed_async_stream_rejects_item_errors_and_releases_output() {
     let _guard = begin_test();
-    let host = test_host_v4();
-    let mut ctx = test_context(&host.v3.v1);
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
+    let mut ctx = test_context(host_v1);
     ctx.register_llm_stream_execution_intercept(
         "stream-error",
         0,
-        |_name, _request, _next| async move {
+        |_name, _request, _context, _next| async move {
             Ok(Box::pin(futures::stream::iter(vec![
                 Ok(json!({ "chunk": 1 })),
                 Err("stream item failed".into()),
@@ -5180,18 +5643,20 @@ fn typed_async_stream_rejects_item_errors_and_releases_output() {
         pull_stream: ptr::null(),
     };
     let invocation = json_host_string(
-        &host.v3.v1,
+        host_v1,
         json!({ "name": "provider", "request": test_llm_request() }),
     );
+    let execution_context = TestExecutionContext::new(false);
     unsafe {
         (registration.cb)(
             registration.user_data as *mut c_void,
             invocation,
+            execution_context.as_ptr(),
             next.raw(),
             output.raw(),
         )
     };
-    unsafe { (host.v3.v1.string_free)(invocation) };
+    unsafe { (host_v1.string_free)(invocation) };
     assert_eq!(
         output.wait_terminal(),
         vec![
@@ -5200,7 +5665,7 @@ fn typed_async_stream_rejects_item_errors_and_releases_output() {
         ]
     );
     output.wait_for_release();
-    assert_eq!(output.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(output.releases.load(Ordering::SeqCst), 2);
     assert_eq!(next.releases.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };
 }
@@ -5208,12 +5673,13 @@ fn typed_async_stream_rejects_item_errors_and_releases_output() {
 #[test]
 fn typed_async_stream_rejects_poll_panics_and_releases_output() {
     let _guard = begin_test();
-    let host = test_host_v4();
-    let mut ctx = test_context(&host.v3.v1);
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
+    let mut ctx = test_context(host_v1);
     ctx.register_llm_stream_execution_intercept(
         "stream-panic",
         0,
-        |_name, _request, _next| async move {
+        |_name, _request, _context, _next| async move {
             let mut polled = false;
             Ok(Box::pin(futures::stream::poll_fn(move |_| {
                 if polled {
@@ -5233,18 +5699,20 @@ fn typed_async_stream_rejects_poll_panics_and_releases_output() {
         pull_stream: ptr::null(),
     };
     let invocation = json_host_string(
-        &host.v3.v1,
+        host_v1,
         json!({ "name": "provider", "request": test_llm_request() }),
     );
+    let execution_context = TestExecutionContext::new(false);
     unsafe {
         (registration.cb)(
             registration.user_data as *mut c_void,
             invocation,
+            execution_context.as_ptr(),
             next.raw(),
             output.raw(),
         )
     };
-    unsafe { (host.v3.v1.string_free)(invocation) };
+    unsafe { (host_v1.string_free)(invocation) };
     assert_eq!(
         output.wait_terminal(),
         vec![
@@ -5253,7 +5721,7 @@ fn typed_async_stream_rejects_poll_panics_and_releases_output() {
         ]
     );
     output.wait_for_release();
-    assert_eq!(output.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(output.releases.load(Ordering::SeqCst), 2);
     assert_eq!(next.releases.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };
 }
@@ -5261,12 +5729,13 @@ fn typed_async_stream_rejects_poll_panics_and_releases_output() {
 #[test]
 fn typed_async_stream_propagates_downstream_pull_errors() {
     let _guard = begin_test();
-    let host = test_host_v4();
-    let mut ctx = test_context(&host.v3.v1);
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
+    let mut ctx = test_context(host_v1);
     ctx.register_llm_stream_execution_intercept(
         "stream-downstream-error",
         0,
-        |_name, request, next| async move { next.call(request).await },
+        |_name, request, _context, next| async move { next.call(request).await },
     )
     .unwrap();
     let registration = ASYNC_STREAM_REGISTRATION.lock().unwrap().take().unwrap();
@@ -5282,24 +5751,26 @@ fn typed_async_stream_propagates_downstream_pull_errors() {
         pull_stream: pull_stream.raw(),
     };
     let invocation = json_host_string(
-        &host.v3.v1,
+        host_v1,
         json!({ "name": "provider", "request": test_llm_request() }),
     );
+    let execution_context = TestExecutionContext::new(false);
     unsafe {
         (registration.cb)(
             registration.user_data as *mut c_void,
             invocation,
+            execution_context.as_ptr(),
             next.raw(),
             output.raw(),
         )
     };
-    unsafe { (host.v3.v1.string_free)(invocation) };
+    unsafe { (host_v1.string_free)(invocation) };
     assert_eq!(
         output.wait_terminal(),
         vec![MockOutputEvent::Rejected("downstream pull failed".into())]
     );
     output.wait_for_release();
-    assert_eq!(output.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(output.releases.load(Ordering::SeqCst), 2);
     assert_eq!(pull_stream.releases.load(Ordering::SeqCst), 1);
     assert_eq!(next.releases.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };
@@ -5308,12 +5779,13 @@ fn typed_async_stream_propagates_downstream_pull_errors() {
 #[test]
 fn typed_async_stream_rejects_missing_continuation() {
     let _guard = begin_test();
-    let host = test_host_v4();
-    let mut ctx = test_context(&host.v3.v1);
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
+    let mut ctx = test_context(host_v1);
     ctx.register_llm_stream_execution_intercept(
         "stream-null-next",
         0,
-        |_name, _request, _next| async move {
+        |_name, _request, _context, _next| async move {
             panic!("stream callback must not run without a continuation")
         },
     )
@@ -5321,18 +5793,20 @@ fn typed_async_stream_rejects_missing_continuation() {
     let registration = ASYNC_STREAM_REGISTRATION.lock().unwrap().take().unwrap();
     let output = MockAsyncOutput::new();
     let invocation = json_host_string(
-        &host.v3.v1,
+        host_v1,
         json!({ "name": "provider", "request": test_llm_request() }),
     );
+    let execution_context = TestExecutionContext::new(false);
     let state = unsafe {
         (registration.cb)(
             registration.user_data as *mut c_void,
             invocation,
+            execution_context.as_ptr(),
             ptr::null(),
             output.raw(),
         )
     };
-    unsafe { (host.v3.v1.string_free)(invocation) };
+    unsafe { (host_v1.string_free)(invocation) };
     assert_eq!(
         NemoRelayNativeAsyncCallbackState::try_from(state),
         Ok(NemoRelayNativeAsyncCallbackState::Pending)
@@ -5437,8 +5911,8 @@ fn raw_event_sanitize_registrations_cover_every_surface() {
 #[test]
 fn raw_callback_registrations_preserve_every_middleware_shape() {
     let _guard = begin_test();
-    let host = test_host_v5();
-    let mut ctx = test_context(&host.v4.v3.v1);
+    let host = test_host_v7();
+    let mut ctx = test_context(&host.v6.v5.v4.v3.v1);
 
     unsafe {
         assert_eq!(
@@ -5578,10 +6052,10 @@ fn raw_callback_registrations_preserve_every_middleware_shape() {
 }
 
 #[test]
-fn raw_async_callback_registrations_use_the_v3_extension_tables() {
+fn raw_async_callback_registrations_use_the_versioned_extension_tables() {
     let _guard = begin_test();
-    let host = test_host_v4();
-    let mut ctx = test_context(&host.v3.v1);
+    let host = test_host_v7();
+    let mut ctx = test_context(&host.v6.v5.v4.v3.v1);
 
     assert_eq!(
         unsafe {
@@ -5778,10 +6252,7 @@ impl NativePlugin for RegisteringPlugin {
         ctx: &mut PluginContext<'_>,
     ) -> nemo_relay_plugin::Result<()> {
         assert_eq!(plugin_config.get("enabled"), Some(&json!(true)));
-        assert_eq!(
-            ctx.host_api().abi_version,
-            NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT
-        );
+        assert_eq!(ctx.host_api().abi_version, NEMO_RELAY_NATIVE_ABI_VERSION);
         assert!(ctx.runtime().scope_stack_active());
         ctx.register_subscriber("registered", |_event: &Event| {})?;
         let status = unsafe {
@@ -6139,8 +6610,8 @@ fn exported_plugin_default_validate_returns_empty_diagnostics() {
 #[test]
 fn exported_plugin_register_installs_callbacks_and_propagates_errors() {
     let _guard = begin_test();
-    let host = test_host_v5();
-    let host_v1 = &host.v4.v3.v1;
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
 
     let mut plugin = NemoRelayNativePluginV1::default();
     assert_eq!(
@@ -6261,14 +6732,13 @@ fn exported_entry_symbol_validates_args_before_constructor() {
 }
 
 #[test]
-fn exported_entry_symbol_accepts_supported_prior_host_versions() {
+fn exported_entry_symbol_rejects_prior_host_versions() {
     let _guard = begin_test();
     CONSTRUCTOR_CALLS.store(0, Ordering::SeqCst);
 
     for abi_version in [
         NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
         NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE,
-        NEMO_RELAY_NATIVE_ABI_VERSION,
     ] {
         let mut host = test_host();
         host.abi_version = abi_version;
@@ -6276,12 +6746,20 @@ fn exported_entry_symbol_accepts_supported_prior_host_versions() {
 
         assert_eq!(
             unsafe { constructor_counting_entry(&host, &mut plugin) },
-            NemoRelayStatus::Ok
+            NemoRelayStatus::InvalidArg
         );
-        unsafe { drop_exported_plugin(&host, plugin) };
     }
 
-    assert_eq!(CONSTRUCTOR_CALLS.load(Ordering::SeqCst), 3);
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
+    let mut plugin = NemoRelayNativePluginV1::default();
+    assert_eq!(
+        unsafe { constructor_counting_entry(host_v1, &mut plugin) },
+        NemoRelayStatus::Ok
+    );
+    unsafe { drop_exported_plugin(host_v1, plugin) };
+
+    assert_eq!(CONSTRUCTOR_CALLS.load(Ordering::SeqCst), 1);
 }
 
 #[test]

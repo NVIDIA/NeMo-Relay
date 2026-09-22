@@ -2656,10 +2656,20 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             })
         );
 
+        let intercept_name = cstring("ffi-intercept");
         let request = cstring(r#"{"headers":{},"content":{"model":"ffi-model","messages":[]}}"#);
         let llm_intercept_json = take_string(llm_exec_intercept_cb(
             ptr::null_mut(),
+            intercept_name.as_ptr(),
             request.as_ptr(),
+            NemoRelayLlmExecutionContext {
+                request_codec: NemoRelayLlmSanitizeRequestContext {
+                    codec_kind: NemoRelayLlmSanitizeCodecKind::None,
+                    codec_id: ptr::null(),
+                    codec: ptr::null(),
+                },
+                response_codec: ptr::null(),
+            },
             llm_next_passthrough,
             ptr::null_mut(),
         ))

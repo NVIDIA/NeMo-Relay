@@ -56,7 +56,9 @@ artifact solves a concrete operational problem.
 Native Rust plugins suit reusable middleware whose callback latency or throughput is
 important enough to justify platform-specific binaries and full in-process trust. A
 native plugin uses manifest compatibility `compat.native_api = "1"`; the current SDK
-negotiates C host-table ABI v5 and retains frozen v4, v3, and v2 host-table compatibility.
+uses C host-table ABI v7. Relay 0.10 intentionally rejects older compiled callback
+layouts, so native plugins must rebuild for this release even though the authored
+manifest label remains `native_api = "1"`.
 Those are different version axes, as the [Native ABI Reference](/build-plugins/native/native-abi-reference)
 explains.
 
@@ -72,6 +74,15 @@ callback and its continuation return a `ToolExecutionResult`: the application pa
 same pair plus Relay-owned pending marks. Native and worker plugins built for an earlier
 release must rebuild for this contract. Workers retain the `grpc-v1` name and protobuf
 package; their tool-result fields, not their protocol identity, changed.
+
+Relay 0.10 makes codec context part of every LLM execution callback in language
+bindings, native plugins, and worker SDKs. This is a source break. Native and worker
+plugins must rebuild and constrain `compat.relay` to `>=0.10.0`; their authored
+`native_api = "1"` and `grpc-v1` labels do not change.
+
+The codec capability belongs to that execution callback. Unary capabilities expire when
+the callback settles; streaming request capabilities remain valid until the returned
+stream completes or closes. Retaining a codec object does not extend either lifetime.
 
 ## Match Behavior to a Plugin
 

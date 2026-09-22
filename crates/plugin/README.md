@@ -32,7 +32,7 @@ the dynamic-library boundary on the stable C-compatible ABI.
 | `PluginContext` | Installs component-owned subscribers, guardrails, intercepts, continuations, and streams. |
 | `PluginRuntime` | Emits marks and manages Relay-owned scopes and scope stacks through typed host helpers. |
 | `nemo_relay_plugin!` | Exports the one versioned native entry point used by the loader. |
-| Native ABI v5 | Keeps C-compatible host and plugin tables behind the safe Rust interface while the host retains frozen v4, v3, and v2 tables for previously compiled plugins. |
+| Native ABI v7 | Keeps C-compatible host and plugin tables behind the safe Rust interface. ABI v7 adds directional codec context to LLM execution callbacks and intentionally rejects plugins compiled with an older callback layout. |
 | Typed async middleware | Drives guardrails, sanitizers, and intercepts on a per-component SDK-owned Tokio executor. Subscribers and raw ABI registrations remain synchronous. |
 | Async continuations and streams | `ToolNext`, `LlmNext`, and `LlmStreamNext` support repeated or concurrent downstream calls. Streaming LLM continuations use a pull-based host handle. |
 | Tool results | `ToolNext` returns `ToolExecutionResult`, which keeps an application result and optional annotation together. |
@@ -84,7 +84,8 @@ Build the `cdylib`, describe its entry symbol and compatibility in a
 `relay-plugin.toml` manifest, then register it through the Relay CLI. Refer to the
 complete example for platform-specific artifact and manifest setup.
 
-Typed async plugins require `compat.relay = ">=0.8.0,<1.0"`. Relay creates one
+Native plugins built with the 0.10 SDK require
+`compat.relay = ">=0.10.0,<1.0"`. Relay creates one
 SDK-owned Tokio executor for each configured plugin component. It defaults to
 two workers: enough for modest concurrent async I/O without broadly
 oversubscribing the host. Increase the count only when measured I/O concurrency
@@ -100,8 +101,15 @@ Relay 0.9 advances the C host-table ABI to v5 for `ToolExecutionContext`; the ho
 the frozen v4 table for previously compiled plugins. Plugins that register a
 context-aware tool execution intercept must rebuild and set
 `compat.relay = ">=0.9.0,<1.0"`; the required registration is unavailable in the v4 host
-table. Typed async plugins that do not use this registration may retain
-`compat.relay = ">=0.8.0,<1.0"`.
+table. Under Relay 0.9, typed async plugins that did not use this registration
+could retain `compat.relay = ">=0.8.0,<1.0"`.
+
+Relay 0.10 advances the internal table to ABI v7 and makes
+`LlmExecutionContext` part of every unary and streaming LLM execution callback.
+Because this changes callback layouts, the 0.10 host rejects every native plugin
+compiled against an older table. Rebuild the plugin with the 0.10 SDK and set
+`compat.relay = ">=0.10.0,<1.0"`. The authored manifest contract remains
+`compat.native_api = "1"`.
 
 Set a plugin-wide default in Rust, then let the component's TOML configuration
 override it:

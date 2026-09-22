@@ -25,10 +25,11 @@ use std::sync::Arc;
 use libc::c_char;
 use nemo_relay::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity,
-    LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
-    LlmSanitizeRequestContext, LlmSanitizeRequestFn, LlmSanitizeResponseContext,
-    LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionContext,
-    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    LlmConditionalFn, LlmExecutionContext, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream,
+    LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
+    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionContext, ToolExecutionFn,
+    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
@@ -179,6 +180,7 @@ pub enum NemoRelayLlmSanitizeCodecKind {
 /// Codec identity supplied to an LLM sanitizer. `codec_id` is null for
 /// `None` and `Opaque`, and is valid only for the duration of the callback.
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct NemoRelayLlmSanitizeRequestContext {
     /// Kind of active codec identity.
     pub codec_kind: NemoRelayLlmSanitizeCodecKind,
@@ -190,6 +192,7 @@ pub struct NemoRelayLlmSanitizeRequestContext {
 
 /// Directional codec context supplied to an LLM response sanitizer.
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct NemoRelayLlmSanitizeResponseContext {
     /// Kind of active codec identity.
     pub codec_kind: NemoRelayLlmSanitizeCodecKind,
@@ -197,6 +200,20 @@ pub struct NemoRelayLlmSanitizeResponseContext {
     pub codec_id: *const c_char,
     /// Borrowed response codec capability, or null when no codec is active.
     pub codec: *const crate::types::FfiLlmSanitizeResponseCodec,
+}
+
+/// Directional codec context supplied to an LLM execution intercept.
+///
+/// `request_codec` is always present. `response_codec` is non-null for unary
+/// execution and null for streaming execution, where Relay has no completed
+/// response to decode.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NemoRelayLlmExecutionContext {
+    /// Active request codec identity and capability.
+    pub request_codec: NemoRelayLlmSanitizeRequestContext,
+    /// Active unary-response codec context, or null for streaming execution.
+    pub response_codec: *const NemoRelayLlmSanitizeResponseContext,
 }
 
 /// LLM request sanitizer. It receives the request first and its codec context
@@ -241,10 +258,13 @@ pub type NemoRelayLlmExecNextFn =
     unsafe extern "C" fn(native_json: *const c_char, next_ctx: *mut libc::c_void) -> *mut c_char;
 
 /// Callback for LLM execution intercepts with middleware chain support.
-/// Receives native JSON C string plus a `next` callback and its context.
+/// Receives the managed LLM call name, native JSON C string, execution context,
+/// plus a `next` callback and its context.
 pub type NemoRelayLlmExecInterceptCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
+    name: *const c_char,
     native_json: *const c_char,
+    context: NemoRelayLlmExecutionContext,
     next_fn: NemoRelayLlmExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char;
@@ -588,24 +608,20 @@ async fn call_tool_exec_intercept_cb(
     }
 }
 
-/// Wrap a C LLM execution intercept callback into an `Arc<dyn Fn(LlmRequest, LlmExecutionNextFn) -> ...>`.
+/// Wrap a C LLM execution intercept callback.
 pub fn wrap_llm_exec_intercept_fn(
     cb: NemoRelayLlmExecInterceptCb,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
-) -> Arc<
-    dyn Fn(
-            &str,
-            LlmRequest,
-            LlmExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
-        + Send
-        + Sync,
-> {
+) -> LlmExecutionFn {
     let ud = make_user_data(user_data, free_fn);
     Arc::new(
-        move |_name: &str, request: LlmRequest, next: LlmExecutionNextFn| {
+        move |name: &str,
+              request: LlmRequest,
+              context: LlmExecutionContext,
+              next: LlmExecutionNextFn| {
             let ud = ud.clone();
+            let c_name = CString::new(name).unwrap_or_default();
             Box::pin(async move {
                 let next_box = Box::new(next);
                 let next_ctx = Box::into_raw(next_box) as *mut libc::c_void;
@@ -645,7 +661,24 @@ pub fn wrap_llm_exec_intercept_fn(
                 let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
                 let c_request = json_to_c_string(&request_json);
                 clear_last_error();
-                let result_ptr = unsafe { cb(ud.ptr, c_request, llm_next_trampoline, next_ctx) };
+                let result_ptr =
+                    match with_ffi_llm_execution_context(&context, |ffi_context| unsafe {
+                        cb(
+                            ud.ptr,
+                            c_name.as_ptr(),
+                            c_request,
+                            ffi_context,
+                            llm_next_trampoline,
+                            next_ctx,
+                        )
+                    }) {
+                        Ok(result) => result,
+                        Err(error) => {
+                            unsafe { drop(Box::from_raw(next_ctx as *mut LlmExecutionNextFn)) };
+                            unsafe { nemo_relay_string_free_internal(c_request) };
+                            return Err(error);
+                        }
+                    };
                 unsafe { drop(Box::from_raw(next_ctx as *mut LlmExecutionNextFn)) };
                 unsafe { nemo_relay_string_free_internal(c_request) };
                 let result =
@@ -664,19 +697,15 @@ pub fn wrap_llm_stream_exec_intercept_fn(
     cb: NemoRelayLlmExecInterceptCb,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
-) -> Arc<
-    dyn Fn(
-            &str,
-            LlmRequest,
-            LlmStreamExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = Result<LlmJsonStream>> + Send>>
-        + Send
-        + Sync,
-> {
+) -> LlmStreamExecutionFn {
     let ud = make_user_data(user_data, free_fn);
     Arc::new(
-        move |_name: &str, request: LlmRequest, next: LlmStreamExecutionNextFn| {
+        move |name: &str,
+              request: LlmRequest,
+              context: LlmExecutionContext,
+              next: LlmStreamExecutionNextFn| {
             let ud = ud.clone();
+            let c_name = CString::new(name).unwrap_or_default();
             Box::pin(async move {
                 let next_box = Box::new(next);
                 let next_ctx = Box::into_raw(next_box) as *mut libc::c_void;
@@ -722,7 +751,25 @@ pub fn wrap_llm_stream_exec_intercept_fn(
                 let c_request = json_to_c_string(&request_json);
                 clear_last_error();
                 let result_ptr =
-                    unsafe { cb(ud.ptr, c_request, llm_stream_next_trampoline, next_ctx) };
+                    match with_ffi_llm_execution_context(&context, |ffi_context| unsafe {
+                        cb(
+                            ud.ptr,
+                            c_name.as_ptr(),
+                            c_request,
+                            ffi_context,
+                            llm_stream_next_trampoline,
+                            next_ctx,
+                        )
+                    }) {
+                        Ok(result) => result,
+                        Err(error) => {
+                            unsafe {
+                                drop(Box::from_raw(next_ctx as *mut LlmStreamExecutionNextFn))
+                            };
+                            unsafe { nemo_relay_string_free_internal(c_request) };
+                            return Err(error);
+                        }
+                    };
                 unsafe { drop(Box::from_raw(next_ctx as *mut LlmStreamExecutionNextFn)) };
                 unsafe { nemo_relay_string_free_internal(c_request) };
                 let result = json_result_from_ptr(
@@ -941,6 +988,54 @@ fn ffi_codec_identity(
         ),
         LlmCodecIdentity::Opaque => (NemoRelayLlmSanitizeCodecKind::Opaque, None),
     })
+}
+
+fn with_ffi_llm_execution_context<T>(
+    context: &LlmExecutionContext,
+    callback: impl FnOnce(NemoRelayLlmExecutionContext) -> T,
+) -> Result<T> {
+    let request_context = context.request_codec();
+    let (request_kind, request_id) = ffi_codec_identity(request_context.codec())?;
+    let request_codec = request_context
+        .resolve_codec()
+        .map(crate::types::FfiLlmSanitizeRequestCodec);
+    let response_context = context.response_codec();
+    let (response_kind, response_id, response_codec) = match response_context {
+        Some(context) => {
+            let (kind, id) = ffi_codec_identity(context.codec())?;
+            let codec = context
+                .resolve_codec()
+                .map(crate::types::FfiLlmSanitizeResponseCodec);
+            (Some(kind), id, codec)
+        }
+        None => (None, None, None),
+    };
+    let request = NemoRelayLlmSanitizeRequestContext {
+        codec_kind: request_kind,
+        codec_id: request_id
+            .as_ref()
+            .map_or(std::ptr::null(), |name| name.as_ptr()),
+        codec: request_codec
+            .as_ref()
+            .map_or(std::ptr::null(), std::ptr::from_ref),
+    };
+    let response = response_kind.map(|codec_kind| NemoRelayLlmSanitizeResponseContext {
+        codec_kind,
+        codec_id: response_id
+            .as_ref()
+            .map_or(std::ptr::null(), |name| name.as_ptr()),
+        codec: response_codec
+            .as_ref()
+            .map_or(std::ptr::null(), std::ptr::from_ref),
+    });
+    // Identity strings and opaque codec wrappers stay in this stack frame for
+    // the complete callback. Foreign code must not retain any of their pointers.
+    Ok(callback(NemoRelayLlmExecutionContext {
+        request_codec: request,
+        response_codec: response
+            .as_ref()
+            .map_or(std::ptr::null(), std::ptr::from_ref),
+    }))
 }
 
 /// Wrap a C LLM conditional callback into a Rust closure.

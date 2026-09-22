@@ -18,6 +18,13 @@ SDK worker, regenerate custom protobuf bindings, and declare `compat.relay` begi
 `0.8.0`. The protocol remains named `grpc-v1`; this is a changed tool-result contract,
 not a new protocol family.
 
+Relay 0.10 adds `LlmExecutionContext` before the continuation in every unary and
+streaming LLM execution callback. Rebuild every SDK worker, regenerate custom
+protobuf bindings, and use a `compat.relay` lower bound of `0.10.0`. The request
+direction can expose decode/encode operations; unary callbacks can also decode
+the complete response. Streaming callbacks do not receive a response codec.
+The protocol remains named `grpc-v1`.
+
 Workers can add a data schema, log severity, and semantic category to a mark, emit validated metric
 measurements, and read the current host-level runtime diagnostics. These diagnostics are
 ordered by code and are not attributed to a particular plugin.

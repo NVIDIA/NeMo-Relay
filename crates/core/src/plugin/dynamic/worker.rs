@@ -83,7 +83,7 @@ use crate::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
 use crate::api::runtime::{
-    EventMetadataInjectorFn, EventSanitizeFn, LlmCodecIdentity, LlmExecutionCodecContext,
+    EventMetadataInjectorFn, EventSanitizeFn, LlmCodecIdentity, LlmExecutionContext,
     LlmExecutionNextFn, LlmJsonStream, LlmSanitizeRequestContext, LlmSanitizeResponseContext,
     LlmStreamExecutionNextFn, LlmStreamInner, MiddlewareContinuationContext, ToolExecutionContext,
     ToolExecutionNextFn, current_scope_stack, with_scope_stack,
@@ -106,7 +106,7 @@ use super::{
     DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
     DynamicPluginTeardownOutcome, WorkerRuntime, deregister_tracked_registrations_checked,
     validate_annotated_request_consumer_compatibility, validate_dynamic_plugin_relay_compatibility,
-    validate_tool_execution_context_compatibility,
+    validate_llm_execution_context_compatibility, validate_tool_execution_context_compatibility,
 };
 
 const JSON_SCHEMA: &str = "nemo.relay.Json@1";
@@ -1133,6 +1133,17 @@ impl WorkerPluginInstance {
         }) {
             validate_tool_execution_context_compatibility(&self.relay_compat, &self.plugin_kind)?;
         }
+        if registrations.iter().any(|registration| {
+            RegistrationSurface::try_from(registration.surface).is_ok_and(|surface| {
+                matches!(
+                    surface,
+                    RegistrationSurface::LlmExecutionIntercept
+                        | RegistrationSurface::LlmStreamExecutionIntercept
+                )
+            })
+        }) {
+            validate_llm_execution_context_compatibility(&self.relay_compat, &self.plugin_kind)?;
+        }
         let initial_gates = register.conditional_middleware_guardrails;
         for gate in initial_gates {
             let kinds = gate
@@ -1413,7 +1424,6 @@ impl WorkerPluginInstance {
     ) -> crate::plugin::Result<()> {
         let name = registration.local_name.as_str();
         let priority = registration.priority;
-        let include_codec_context = registration.llm_execution_codec_context;
         let instance = Arc::new(self.clone_for_callback());
         let callback_name = name.to_owned();
         match surface {
@@ -1476,29 +1486,28 @@ impl WorkerPluginInstance {
                     })
                 }),
             ),
-            RegistrationSurface::LlmExecutionIntercept => ctx
-                .register_contextual_llm_execution_intercept(
-                    name,
-                    priority,
-                    Arc::new(move |model_name, request, context, next| {
-                        let instance = instance.clone();
-                        let callback_name = callback_name.clone();
-                        let model_name = model_name.to_owned();
-                        Box::pin(async move {
-                            instance
-                                .invoke_llm_execution(
-                                    &callback_name,
-                                    &model_name,
-                                    request,
-                                    include_codec_context.then_some(context),
-                                    next,
-                                )
-                                .await
-                        })
-                    }),
-                ),
+            RegistrationSurface::LlmExecutionIntercept => ctx.register_llm_execution_intercept(
+                name,
+                priority,
+                Arc::new(move |model_name, request, context, next| {
+                    let instance = instance.clone();
+                    let callback_name = callback_name.clone();
+                    let model_name = model_name.to_owned();
+                    Box::pin(async move {
+                        instance
+                            .invoke_llm_execution(
+                                &callback_name,
+                                &model_name,
+                                request,
+                                context,
+                                next,
+                            )
+                            .await
+                    })
+                }),
+            ),
             RegistrationSurface::LlmStreamExecutionIntercept => ctx
-                .register_contextual_llm_stream_execution_intercept(
+                .register_llm_stream_execution_intercept(
                     name,
                     priority,
                     Arc::new(move |model_name, request, context, next| {
@@ -1511,7 +1520,7 @@ impl WorkerPluginInstance {
                                     &callback_name,
                                     &model_name,
                                     request,
-                                    include_codec_context.then_some(context),
+                                    context,
                                     next,
                                 )
                                 .await
@@ -2038,7 +2047,7 @@ impl WorkerPluginCallback {
         registration_name: &str,
         model_name: &str,
         request: LlmRequest,
-        execution_context: Option<LlmExecutionCodecContext>,
+        execution_context: LlmExecutionContext,
         next: LlmExecutionNextFn,
     ) -> FlowResult<Json> {
         let continuation_id = self
@@ -2055,13 +2064,9 @@ impl WorkerPluginCallback {
                 None,
             )),
         );
-        let codec_capabilities = execution_context
-            .as_ref()
-            .map(|context| self.attach_llm_execution_codec_context(&mut invoke, context, true))
-            .transpose();
-        let _codec_capabilities = self
-            .cleanup_after_setup_error(&invoke, codec_capabilities)?
-            .unwrap_or_default();
+        let codec_capabilities =
+            self.attach_llm_execution_codec_context(&mut invoke, &execution_context);
+        let _codec_capabilities = self.cleanup_after_setup_error(&invoke, codec_capabilities)?;
         json_from_invoke_response(self.invoke_async(invoke).await?)
     }
 
@@ -2070,7 +2075,7 @@ impl WorkerPluginCallback {
         registration_name: &str,
         model_name: &str,
         request: LlmRequest,
-        execution_context: Option<LlmExecutionCodecContext>,
+        execution_context: LlmExecutionContext,
         next: LlmStreamExecutionNextFn,
     ) -> FlowResult<LlmJsonStream> {
         let continuation_id = self
@@ -2087,13 +2092,9 @@ impl WorkerPluginCallback {
                 None,
             )),
         );
-        let codec_capabilities = execution_context
-            .as_ref()
-            .map(|context| self.attach_llm_execution_codec_context(&mut invoke, context, false))
-            .transpose();
-        let codec_capabilities = self
-            .cleanup_after_setup_error(&invoke, codec_capabilities)?
-            .unwrap_or_default();
+        let codec_capabilities =
+            self.attach_llm_execution_codec_context(&mut invoke, &execution_context);
+        let codec_capabilities = self.cleanup_after_setup_error(&invoke, codec_capabilities)?;
         let mut client = self.client.clone();
         let mut guard = WorkerInvocationGuard::new(self, &invoke);
         let (tx, rx) = mpsc::channel(16);
@@ -2172,16 +2173,15 @@ impl WorkerPluginCallback {
     fn attach_llm_execution_codec_context(
         &self,
         invoke: &mut InvokeRequest,
-        context: &LlmExecutionCodecContext,
-        include_response_capability: bool,
+        context: &LlmExecutionContext,
     ) -> FlowResult<Vec<WorkerCodecCapabilityGuard>> {
         let mut guards = Vec::with_capacity(2);
 
         let mut request = ProtoLlmSanitizeRequestContext {
-            codec: Some(codec_identity_to_proto(context.request().codec())),
+            codec: Some(codec_identity_to_proto(context.request_codec().codec())),
             codec_capability_id: None,
         };
-        if let Some(codec) = context.request().resolve_codec() {
+        if let Some(codec) = context.request_codec().resolve_codec() {
             let capability = self
                 .host_state
                 .issue_request_codec(&invoke.invocation_id, codec)?;
@@ -2189,24 +2189,30 @@ impl WorkerPluginCallback {
             guards.push(capability);
         }
 
-        let mut response = ProtoLlmSanitizeResponseContext {
-            codec: Some(codec_identity_to_proto(context.response().codec())),
-            codec_capability_id: None,
-        };
-        if include_response_capability && let Some(codec) = context.response().resolve_codec() {
-            let capability = self
-                .host_state
-                .issue_response_codec(&invoke.invocation_id, codec)?;
-            response.codec_capability_id = Some(capability.id().into());
-            guards.push(capability);
-        }
+        let response = context
+            .response_codec()
+            .map(|response_context| -> FlowResult<_> {
+                let mut response = ProtoLlmSanitizeResponseContext {
+                    codec: Some(codec_identity_to_proto(response_context.codec())),
+                    codec_capability_id: None,
+                };
+                if let Some(codec) = response_context.resolve_codec() {
+                    let capability = self
+                        .host_state
+                        .issue_response_codec(&invoke.invocation_id, codec)?;
+                    response.codec_capability_id = Some(capability.id().into());
+                    guards.push(capability);
+                }
+                Ok(response)
+            })
+            .transpose()?;
 
         let Some(invoke_request_payload::Payload::Llm(llm)) = invoke.payload.as_mut() else {
             unreachable!("LLM execution invocation must have an LLM payload");
         };
         llm.execution_codec_context = Some(Box::new(ProtoLlmExecutionCodecContext {
             request: Some(request),
-            response: Some(response),
+            response,
         }));
         Ok(guards)
     }
@@ -4106,18 +4112,6 @@ fn validate_registration_plan(
         if surface == RegistrationSurface::Unspecified {
             return Err(PluginError::RegistrationFailed(format!(
                 "worker plugin '{plugin_id}' returned unspecified registration surface"
-            )));
-        }
-        if registration.llm_execution_codec_context
-            && !matches!(
-                surface,
-                RegistrationSurface::LlmExecutionIntercept
-                    | RegistrationSurface::LlmStreamExecutionIntercept
-            )
-        {
-            return Err(PluginError::RegistrationFailed(format!(
-                "worker plugin '{plugin_id}' requested LLM execution codec context for incompatible surface {}",
-                surface.as_str_name()
             )));
         }
     }
