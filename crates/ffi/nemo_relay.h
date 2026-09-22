@@ -663,6 +663,20 @@ NemoRelayStatus nemo_relay_initialize_default_logging(void);
 NemoRelayStatus nemo_relay_shutdown_default_logging(void);
 
 /**
+ * Emits a structured operational log record for language bindings.
+ *
+ * # Safety
+ *
+ * `level`, `target`, and `message` must be non-null pointers to valid,
+ * NUL-terminated UTF-8 strings. When non-null, `fields_json` must meet the
+ * same requirements and contain a JSON object.
+ */
+NemoRelayStatus nemo_relay_log(const char *level,
+                               const char *target,
+                               const char *message,
+                               const char *fields_json);
+
+/**
  * Run the registered tool request intercept chain on the given arguments.
  *
  * This helper applies only the request-intercept middleware and does not emit
@@ -3010,6 +3024,18 @@ NemoRelayStatus nemo_relay_capture_traceparent(char **out);
  * be a valid, writable pointer to a C-string output slot.
  */
 NemoRelayStatus nemo_relay_propagation_context_to_traceparent(const char *context_json, char **out);
+
+/**
+ * Validate and canonicalize propagation-context JSON for transport.
+ *
+ * Invalid W3C headers are discarded while valid Relay causal UUIDs are retained.
+ * The returned JSON must be freed with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `context_json` must point to a valid NUL-terminated C string and `out` must
+ * be a valid, writable pointer to a C-string output slot.
+ */
+NemoRelayStatus nemo_relay_propagation_context_normalize_json(const char *context_json, char **out);
 
 /**
  * Create an isolated scope stack from propagation-context JSON.

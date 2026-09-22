@@ -91,6 +91,26 @@ fn provider_errors_identify_their_telemetry_signal() {
 }
 
 #[test]
+fn default_trace_config_leaves_service_name_to_sdk_resource_detection() {
+    let config = OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4318");
+    assert!(
+        configured_resource_attributes(&config)
+            .iter()
+            .all(|attribute| attribute.key.as_str() != "service.name")
+    );
+
+    let configured = config.with_service_name("relay-configured-service");
+    assert!(
+        configured_resource_attributes(&configured)
+            .iter()
+            .any(|attribute| {
+                attribute.key.as_str() == "service.name"
+                    && attribute.value.as_str() == "relay-configured-service"
+            })
+    );
+}
+
+#[test]
 fn shutdown_is_idempotent_for_all_otlp_subscribers() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
 
@@ -659,6 +679,8 @@ fn propagated_root_parent_projects_as_a_remote_otel_parent() {
         version: PropagationContext::VERSION,
         root_uuid: Some(root_uuid),
         parent_uuid,
+        traceparent: None,
+        tracestate: None,
     })
     .unwrap();
     set_thread_scope_stack(imported_stack);
@@ -679,6 +701,54 @@ fn propagated_root_parent_projects_as_a_remote_otel_parent() {
     assert!(span_context.is_remote());
     assert_eq!(span_context.trace_id(), relay_trace_id(root_uuid));
     assert_eq!(span_context.span_id(), relay_span_id(parent_uuid));
+}
+
+#[test]
+fn propagated_w3c_parent_projects_trace_flags_and_tracestate() {
+    let parent_uuid = Uuid::now_v7();
+    let mut event = make_start_event(
+        Uuid::now_v7(),
+        Some(parent_uuid),
+        "receiver-tool",
+        ScopeType::Tool,
+        None,
+    );
+    event.set_propagation_parent_uuid(Some(parent_uuid));
+    event.set_propagation_traceparent(Some(
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00".to_string(),
+    ));
+    event.set_propagation_tracestate(Some("vendor=value".to_string()));
+
+    for otel_type in [
+        OpenTelemetryType::Full,
+        OpenTelemetryType::GenAi,
+        OpenTelemetryType::OpenInference,
+    ] {
+        let processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+                make_provider().0,
+                "test".into(),
+                otel_type,
+                MarkProjection::default(),
+                default_mark_exclude_names(),
+                Vec::new(),
+                Vec::new(),
+                SignalRuntimeDiagnostics::new(None),
+            );
+        let span_context = processor
+            .parent_context(&event)
+            .span()
+            .span_context()
+            .clone();
+        assert!(span_context.is_remote());
+        assert_eq!(
+            span_context.trace_id().to_string(),
+            "4bf92f3577b34da6a3ce929d0e0e4736"
+        );
+        assert_eq!(span_context.span_id().to_string(), "00f067aa0ba902b7");
+        assert!(!span_context.is_sampled());
+        assert_eq!(span_context.trace_state().header(), "vendor=value");
+    }
 }
 
 #[test]
@@ -743,6 +813,8 @@ fn rootless_propagation_remains_rootless_when_forked() {
         version: PropagationContext::VERSION,
         root_uuid: None,
         parent_uuid,
+        traceparent: None,
+        tracestate: None,
     })
     .unwrap();
     set_thread_scope_stack(imported_stack);
@@ -801,6 +873,8 @@ fn default_propagation_context_preserves_the_imported_root() {
         version: PropagationContext::VERSION,
         root_uuid: Some(root_uuid),
         parent_uuid,
+        traceparent: None,
+        tracestate: None,
     })
     .unwrap();
     set_thread_scope_stack(imported_stack);
@@ -1486,7 +1560,7 @@ fn assert_config_builder_overrides(config: &OpenTelemetryConfig) {
         config.resource_attributes.get("deployment.environment"),
         Some(&"test".into())
     );
-    assert_eq!(config.service_name, "demo-agent");
+    assert_eq!(config.service_name.as_deref(), Some("demo-agent"));
     assert_eq!(config.service_namespace.as_deref(), Some("agents"));
     assert_eq!(config.service_version.as_deref(), Some("1.2.3"));
     assert_eq!(config.instrumentation_scope, "demo-scope");
@@ -1498,7 +1572,7 @@ fn assert_config_builder_overrides(config: &OpenTelemetryConfig) {
 
 fn assert_config_defaults(defaults: &OpenTelemetryConfig) {
     assert_eq!(defaults.transport, OtlpTransport::HttpBinary);
-    assert_eq!(defaults.service_name, "unknown_service");
+    assert_eq!(defaults.service_name, None);
     assert_eq!(defaults.instrumentation_scope, "opentelemetry");
     assert_eq!(defaults.mark_projection, MarkProjection::Inherit);
     assert_eq!(defaults.mark_exclude_names, vec!["llm.chunk"]);
@@ -2487,6 +2561,7 @@ fn gen_ai_projection_emits_only_span_specific_attributes() {
             ScopeType::Tool,
             "search",
             [
+                "gen_ai.conversation.id",
                 "gen_ai.operation.name",
                 "gen_ai.tool.call.arguments",
                 "gen_ai.tool.call.id",
@@ -2537,7 +2612,10 @@ fn gen_ai_projection_emits_only_span_specific_attributes() {
         assert_eq!(actual, expected.iter().copied().collect());
         assert!(attributes.iter().all(|attribute| {
             attribute.key.as_str() != "gen_ai.conversation.id"
-                || matches!(scope_type, ScopeType::Agent | ScopeType::Llm)
+                || matches!(
+                    scope_type,
+                    ScopeType::Agent | ScopeType::Llm | ScopeType::Tool
+                )
         }));
         if scope_type == ScopeType::Retriever {
             let top_k = attributes
@@ -2604,7 +2682,7 @@ fn all_trace_projections_require_protected_remote_transport() {
 }
 
 #[test]
-fn gen_ai_tool_content_is_captured_by_default_and_object_shaped() {
+fn gen_ai_tool_content_is_captured_by_default_and_preserves_json() {
     use crate::observability::otel_genai::{end_attributes, start_attributes};
     for (payload, expected) in [
         (
@@ -2615,13 +2693,14 @@ fn gen_ai_tool_content_is_captured_by_default_and_object_shaped() {
             json!("{\"query\":\"sanitized\"}"),
             Some(json!({"query": "sanitized"})),
         ),
+        (json!("\"serialized text\""), Some(json!("serialized text"))),
         (json!({}), Some(json!({}))),
-        (json!("plain text"), None),
-        (json!("[1,2]"), None),
-        (json!([1, 2]), None),
+        (json!("plain text"), Some(json!("plain text"))),
+        (json!("[1,2]"), Some(json!([1, 2]))),
+        (json!([1, 2]), Some(json!([1, 2]))),
         (json!(null), None),
-        (json!(false), None),
-        (json!(42), None),
+        (json!(false), Some(json!(false))),
+        (json!(42), Some(json!(42))),
     ] {
         let start = make_start_event(
             Uuid::now_v7(),
@@ -5779,6 +5858,10 @@ fn trace_export_failures_are_diagnosed_until_a_later_export_recovers() {
 #[test]
 fn trace_endpoint_log_identity_redacts_and_validates_urls() {
     for (endpoint, expected) in [
+        (
+            AUTOMATIC_OTLP_ENDPOINT_MARKER,
+            "the environment-configured OTLP endpoint",
+        ),
         ("not a URL", "an invalid OTLP endpoint"),
         ("ftp://collector.example/secret", "an invalid OTLP endpoint"),
         (

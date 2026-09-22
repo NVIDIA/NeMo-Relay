@@ -5102,6 +5102,13 @@ async fn test_llm_request_intercept_transforms() {
 
     let result = llm_request_intercepts("test_llm", request).await.unwrap();
     assert_eq!(result.request.headers["x-intercepted"], true);
+    assert!(
+        !result
+            .request
+            .headers
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case("traceparent"))
+    );
 
     // Cleanup
     deregister_llm_request_intercept("llm_req_i").unwrap();

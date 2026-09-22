@@ -121,6 +121,9 @@ fn cache_bypass_reason(request: &LlmRequest, config: &ResponseCacheConfig) -> Op
     if request.content.is_null() {
         return Some(CacheReason::UnparseableBody);
     }
+    if anthropic_compaction_requested(request) {
+        return Some(CacheReason::AnthropicCompaction);
+    }
     if let Some(reason) = request
         .content
         .as_object()
@@ -131,6 +134,70 @@ fn cache_bypass_reason(request: &LlmRequest, config: &ResponseCacheConfig) -> Op
     (!config.cache_nondeterministic
         && request_temperature(&request.content).is_none_or(|temperature| temperature > 0.0))
     .then_some(CacheReason::NondeterministicTemperature)
+}
+
+/// Returns true when an Anthropic Messages request can use server-side
+/// compaction or resumes from a compaction block. The response cache cannot
+/// faithfully replay those streams or partition all compaction beta behavior,
+/// so both lookup and storage must be skipped.
+fn anthropic_compaction_requested(request: &LlmRequest) -> bool {
+    let Some(object) = request.content.as_object() else {
+        return false;
+    };
+    let messages = object.get("messages").and_then(Json::as_array);
+    if messages.is_some()
+        && (anthropic_context_management_requests_compaction(object)
+            || object.contains_key("compaction"))
+    {
+        return true;
+    }
+    if request.headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("anthropic-beta")
+            && value.as_str().is_some_and(|value| {
+                value
+                    .split(',')
+                    .any(|beta| beta.trim().to_ascii_lowercase().starts_with("compact-"))
+            })
+    }) {
+        return true;
+    }
+    messages.is_some_and(|messages| {
+        messages.iter().any(|message| {
+            message
+                .get("content")
+                .and_then(Json::as_array)
+                .is_some_and(|blocks| {
+                    blocks
+                        .iter()
+                        .any(|block| block.get("type").and_then(Json::as_str) == Some("compaction"))
+                })
+        })
+    })
+}
+
+/// Treat an incomplete context-management declaration as unsafe because it can
+/// be a partially constructed compaction request. Known non-compaction edits
+/// remain cacheable.
+fn anthropic_context_management_requests_compaction(object: &Map<String, Json>) -> bool {
+    let Some(context_management) = object.get("context_management") else {
+        return false;
+    };
+    let Some(context_management) = context_management.as_object() else {
+        return true;
+    };
+    let Some(edits) = context_management.get("edits") else {
+        return true;
+    };
+    let Some(edits) = edits.as_array() else {
+        return true;
+    };
+
+    edits.iter().any(|edit| {
+        edit.as_object()
+            .and_then(|edit| edit.get("type"))
+            .and_then(Json::as_str)
+            .is_none_or(|edit_type| edit_type == "compact" || edit_type.starts_with("compact_"))
+    })
 }
 
 fn stateful_request_bypass_reason(object: &Map<String, Json>) -> Option<CacheReason> {

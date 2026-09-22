@@ -1898,7 +1898,7 @@ fn observability_component_helpers_cover_disabled_and_default_paths() {
             "kind": OBSERVABILITY_PLUGIN_KIND,
             "enabled": true,
             "config": {
-                "version": 3,
+                "version": 4,
                 "atof": { "enabled": true },
                 "opentelemetry": {
                     "enabled": true,
@@ -2614,7 +2614,7 @@ async fn collect_observability_probes_atof_streaming_endpoint() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 3,
+                    "version": 4,
                     "atof": {
                         "enabled": true,
                         "sinks": [{
@@ -2699,7 +2699,7 @@ async fn collect_observability_rejects_websocket_endpoint_http_scheme() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 3,
+                    "version": 4,
                     "atof": {
                         "enabled": true,
                         "sinks": [{

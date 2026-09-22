@@ -57,7 +57,8 @@ use chrono::{DateTime, Utc};
 use libloading::{Library, Symbol};
 use nemo_relay_plugin::{
     NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
-    NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL, NemoRelayNativeAsyncCallbackState,
+    NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL,
+    NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT, NemoRelayNativeAsyncCallbackState,
     NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncLlmStreamOpenCb,
     NemoRelayNativeAsyncLlmStreamPullCb, NemoRelayNativeAsyncMiddlewareCb,
     NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncNextResultCb,
@@ -65,12 +66,13 @@ use nemo_relay_plugin::{
     NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeConditionalMiddlewareCb,
     NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
     NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4,
-    NemoRelayNativeHostApiV5, NemoRelayNativeLlmAsyncStream, NemoRelayNativeLlmCodecKind,
-    NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCodec,
-    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
-    NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeRequestContext,
-    NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmSanitizeResponseContext,
-    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
+    NemoRelayNativeHostApiV5, NemoRelayNativeHostApiV6, NemoRelayNativeLlmAsyncStream,
+    NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
+    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestInterceptCb,
+    NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
+    NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
+    NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
+    NemoRelayNativeLlmStreamV1, NemoRelayNativeLogLevel, NemoRelayNativePluginContext,
     NemoRelayNativePluginEntry, NemoRelayNativePluginRuntime, NemoRelayNativePluginV1,
     NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
     NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
@@ -409,9 +411,13 @@ fn load_one_native_plugin(
                 ))
             })?;
         let mut status = entry(native_host_api(), &mut plugin);
-        // Older SDKs reject newer tables. Negotiate from the current v5 table
-        // through separately frozen v4, v3, and v2 tables so their struct sizes and
+        // Older SDKs reject newer tables. Negotiate from the current v6 table
+        // through separately frozen v5, v4, v3, and v2 tables so their struct sizes and
         // function pointers do not change as the current ABI grows.
+        if status == NemoRelayStatus::InvalidArg {
+            drop_native_plugin_descriptor(&mut plugin);
+            status = entry(native_host_api_v5(), &mut plugin);
+        }
         if status == NemoRelayStatus::InvalidArg {
             drop_native_plugin_descriptor(&mut plugin);
             status = entry(native_host_api_v4(), &mut plugin);
@@ -866,6 +872,11 @@ unsafe extern "C" fn native_llm_response_codec_decode(
 }
 
 fn native_host_api() -> *const NemoRelayNativeHostApiV1 {
+    static HOST_API: OnceLock<NemoRelayNativeHostApiV6> = OnceLock::new();
+    &HOST_API.get_or_init(build_native_host_api_v6).v5.v4.v3.v1 as *const NemoRelayNativeHostApiV1
+}
+
+fn native_host_api_v5() -> *const NemoRelayNativeHostApiV1 {
     static HOST_API: OnceLock<NemoRelayNativeHostApiV5> = OnceLock::new();
     &HOST_API.get_or_init(build_native_host_api_v5).v4.v3.v1 as *const NemoRelayNativeHostApiV1
 }
@@ -1007,12 +1018,22 @@ fn build_native_host_api_v4() -> NemoRelayNativeHostApiV4 {
 
 fn build_native_host_api_v5() -> NemoRelayNativeHostApiV5 {
     let mut v4 = build_native_host_api_v4();
-    v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
+    v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT;
     v4.v3.v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV5>();
     NemoRelayNativeHostApiV5 {
         v4,
         plugin_context_register_tool_execution_intercept:
             native_plugin_context_register_tool_execution_intercept_v5,
+    }
+}
+
+fn build_native_host_api_v6() -> NemoRelayNativeHostApiV6 {
+    let mut v5 = build_native_host_api_v5();
+    v5.v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
+    v5.v4.v3.v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV6>();
+    NemoRelayNativeHostApiV6 {
+        v5,
+        log: native_log,
     }
 }
 
@@ -1322,6 +1343,79 @@ unsafe extern "C" fn native_emit_mark(
     ) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_flow_error(err),
+    }
+}
+
+unsafe extern "C" fn native_log(
+    level: NemoRelayNativeLogLevel,
+    target: *const NemoRelayNativeString,
+    message: *const NemoRelayNativeString,
+    fields_json: *const NemoRelayNativeString,
+) -> NemoRelayStatus {
+    clear_native_last_error();
+    let target = match read_name(target) {
+        Ok(target) => target,
+        Err(status) => return status,
+    };
+    let message = match read_name(message) {
+        Ok(message) => message,
+        Err(status) => return status,
+    };
+    let fields = match optional_json_from_native_string(fields_json, "plugin log fields") {
+        Ok(None) => Map::new(),
+        Ok(Some(Json::Object(fields))) => fields,
+        Ok(Some(_)) => {
+            set_native_last_error("plugin log fields must be a JSON object");
+            return NemoRelayStatus::InvalidJson;
+        }
+        Err(status) => return status,
+    };
+    if target.len() > 256
+        || target
+            .bytes()
+            .any(|byte| byte == 0 || byte.is_ascii_control())
+    {
+        set_native_last_error("invalid plugin log target");
+        return NemoRelayStatus::InvalidArg;
+    }
+    let level = match level {
+        NemoRelayNativeLogLevel::Error => log::Level::Error,
+        NemoRelayNativeLogLevel::Warn => log::Level::Warn,
+        NemoRelayNativeLogLevel::Info => log::Level::Info,
+        NemoRelayNativeLogLevel::Debug => log::Level::Debug,
+        NemoRelayNativeLogLevel::Trace => log::Level::Trace,
+    };
+    let target = if target.is_empty() {
+        "nemo_relay.plugin.native".into()
+    } else {
+        format!("nemo_relay.plugin.native.{target}")
+    };
+    let fields = NativeLogFields(fields);
+    let args = format_args!("{message}");
+    let record = log::Record::builder()
+        .args(args)
+        .level(level)
+        .target(&target)
+        .key_values(&fields)
+        .build();
+    log::logger().log(&record);
+    NemoRelayStatus::Ok
+}
+
+struct NativeLogFields(Map<String, Json>);
+
+impl log::kv::Source for NativeLogFields {
+    fn visit<'kvs>(
+        &'kvs self,
+        visitor: &mut dyn log::kv::VisitSource<'kvs>,
+    ) -> Result<(), log::kv::Error> {
+        for (key, value) in &self.0 {
+            visitor.visit_pair(
+                log::kv::Key::from_str(key),
+                log::kv::Value::from_serde(value),
+            )?;
+        }
+        Ok(())
     }
 }
 

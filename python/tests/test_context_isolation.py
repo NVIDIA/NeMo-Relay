@@ -88,6 +88,32 @@ def test_propagation_context_json_round_trip_and_validation() -> None:
         nemo_relay.PropagationContext.from_json(f'{{"version":2,"parent_uuid":"{uuid.uuid4()}"}}')
 
 
+def test_propagation_context_preserves_w3c_trace_context() -> None:
+    context = nemo_relay.PropagationContext(
+        str(uuid.uuid4()),
+        str(uuid.uuid4()),
+        traceparent="00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        tracestate="vendor=value",
+    )
+    decoded = nemo_relay.PropagationContext.from_json(context.to_json())
+    assert decoded.traceparent == context.traceparent
+    assert decoded.tracestate == context.tracestate
+
+    invalid = nemo_relay.PropagationContext.from_json(
+        f'{{"version":1,"parent_uuid":"{uuid.uuid4()}","traceparent":"invalid","tracestate":"vendor=value"}}'
+    )
+    assert invalid.traceparent is None
+    assert invalid.tracestate is None
+
+    constructed_invalid = nemo_relay.PropagationContext(
+        str(uuid.uuid4()),
+        traceparent="invalid",
+        tracestate="vendor=value",
+    )
+    assert constructed_invalid.traceparent is None
+    assert constructed_invalid.tracestate is None
+
+
 def test_rootless_and_root_parent_propagation_contexts_install_current_handle() -> None:
     parent_uuid = str(uuid.uuid4())
     rootless_stack = nemo_relay.create_scope_stack_from_propagation(nemo_relay.PropagationContext(parent_uuid))

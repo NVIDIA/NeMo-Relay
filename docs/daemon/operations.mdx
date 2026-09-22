@@ -95,10 +95,9 @@ before selecting middleware that rewrites responses.
 | MCP and worker | Harness MCP stderr capture; worker stderr is inherited from MCP |
 | Plugins | Destination configured in the client system `plugins.toml` |
 
-Use `[logging] level = "info"` and `stderr_format = "jsonl"` from
+Use `[daemon.logging] level = "info"` and `stderr_format = "jsonl"` from
 [Configuration](/daemon/configuration#system-configuration). Personal logging
-overrides can affect stderr capture; check the effective logging configuration
-if worker ready events are missing. Managed MCP and hook commands do not read
+configuration does not affect primary daemon stderr capture. Managed MCP and hook commands do not read
 ambient logging files. To capture their info messages, pass `NEMO_RELAY_LOG=info`
 and `NEMO_RELAY_LOG_STDERR_FORMAT=jsonl` through the harness or dispatcher to
 those processes. Otherwise, use the harness MCP status view; the optional

@@ -6,7 +6,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -14,7 +14,6 @@ use opentelemetry::KeyValue;
 use opentelemetry_sdk::{
     Resource,
     error::{OTelSdkError, OTelSdkResult},
-    resource::TelemetryResourceDetector,
 };
 use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
 
@@ -48,12 +47,10 @@ pub(super) fn validate_telemetry_sdk_resource_attributes(
     Ok(())
 }
 
-/// Build Relay's OTLP resource with only SDK-provided telemetry identity.
+/// Build Relay's OTLP resource, including the SDK's standard environment
+/// detectors before applying Relay-owned attributes.
 pub(super) fn telemetry_resource(attributes: impl IntoIterator<Item = KeyValue>) -> Resource {
-    Resource::builder_empty()
-        .with_detector(Box::new(TelemetryResourceDetector))
-        .with_attributes(attributes)
-        .build()
+    Resource::builder().with_attributes(attributes).build()
 }
 
 /// A bounded aggregate describing an OpenTelemetry runtime problem.
@@ -460,6 +457,74 @@ pub(super) fn reject_signal_header_environment(signal_variable: &'static str) ->
     Ok(())
 }
 
+/// Return the nonblank endpoint that the OTLP builder selects for one signal.
+///
+/// Signal-specific settings take precedence over the generic endpoint, matching
+/// the upstream OTLP exporter's environment resolution. Relay only uses this
+/// value for transport safety checks; the builder still owns URL derivation.
+pub(super) fn automatic_signal_endpoint(signal_variable: &str) -> Option<String> {
+    [signal_variable, "OTEL_EXPORTER_OTLP_ENDPOINT"]
+        .into_iter()
+        .find_map(|variable| {
+            std::env::var(variable)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+}
+
+/// Return whether an automatic OTLP exporter will attach environment headers.
+pub(super) fn automatic_signal_headers_configured(signal_variable: &str) -> bool {
+    [signal_variable, "OTEL_EXPORTER_OTLP_HEADERS"]
+        .into_iter()
+        .any(|variable| std::env::var(variable).is_ok_and(|value| !value.trim().is_empty()))
+}
+
+/// Whether an automatic exporter should preserve Relay's HTTP/protobuf default.
+///
+/// A nonblank protocol setting is left entirely to the OTLP builder, including
+/// its signal-specific precedence and invalid-value handling.
+pub(super) fn automatic_protocol_is_unset(signal_variable: &str) -> bool {
+    [signal_variable, "OTEL_EXPORTER_OTLP_PROTOCOL"]
+        .into_iter()
+        .all(|variable| std::env::var(variable).map_or(true, |value| value.trim().is_empty()))
+}
+
+/// Return whether the upstream protocol resolution will select gRPC.
+///
+/// The OTLP builder does not expose its resolved transport. Relay needs this
+/// narrow check solely to attach its no-redirect HTTP client when HTTP is
+/// selected. Invalid values deliberately fall through so the builder keeps
+/// its documented fallback behavior.
+pub(super) fn automatic_protocol_is_grpc(signal_variable: &str) -> bool {
+    [signal_variable, "OTEL_EXPORTER_OTLP_PROTOCOL"]
+        .into_iter()
+        .find_map(|variable| match std::env::var(variable).ok().as_deref() {
+            Some("grpc") => Some(true),
+            Some("http/protobuf" | "http/json") => Some(false),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+/// Build the shared HTTP client used by automatically configured exporters.
+///
+/// Its redirect policy is Relay-owned transport safety. Deliberately leave
+/// its timeout unset so the OTLP builder remains authoritative for the
+/// `OTEL_EXPORTER_OTLP*_TIMEOUT` environment variables.
+pub(super) fn automatic_otlp_http_client() -> Result<reqwest::Client> {
+    static CLIENT: OnceLock<std::result::Result<reqwest::Client, String>> = OnceLock::new();
+
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|error| error.to_string())
+        })
+        .clone()
+        .map_err(OpenTelemetryError::ExporterBuild)
+}
+
 pub(super) fn resolve_http_signal_endpoint<'a>(endpoint: &'a str, signal: &str) -> Cow<'a, str> {
     let Ok(mut parsed) = reqwest::Url::parse(endpoint) else {
         return Cow::Borrowed(endpoint);
@@ -519,12 +584,15 @@ pub(super) fn record_signal_runtime_diagnostic(
 }
 
 pub(super) fn signal_resource(
-    service_name: &str,
+    service_name: Option<&str>,
     service_namespace: Option<&str>,
     service_version: Option<&str>,
     resource_attributes: &HashMap<String, String>,
 ) -> Resource {
-    let mut attributes = vec![KeyValue::new("service.name", service_name.to_string())];
+    let mut attributes = Vec::new();
+    if let Some(service_name) = service_name {
+        attributes.push(KeyValue::new("service.name", service_name.to_string()));
+    }
     if let Some(namespace) = service_namespace {
         attributes.push(KeyValue::new("service.namespace", namespace.to_string()));
     }
@@ -537,4 +605,45 @@ pub(super) fn signal_resource(
             .map(|(key, value)| KeyValue::new(key.clone(), value.clone())),
     );
     telemetry_resource(attributes)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    use super::automatic_otlp_http_client;
+
+    #[test]
+    fn automatic_http_client_does_not_follow_redirects() {
+        let _guard = crate::observability::test_mutex().lock().unwrap();
+        let destination = TcpListener::bind("127.0.0.1:0").unwrap();
+        destination.set_nonblocking(true).unwrap();
+        let location = format!("http://{}/leak", destination.local_addr().unwrap());
+        let redirector = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", redirector.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut stream, _) = redirector.accept().unwrap();
+            let mut buffer = [0; 4_096];
+            assert!(stream.read(&mut buffer).unwrap() > 0);
+            write!(
+                stream,
+                "HTTP/1.1 307 Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+        });
+
+        let client = automatic_otlp_http_client().unwrap();
+        let response = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(client.get(endpoint).send())
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+        server.join().unwrap();
+        assert!(
+            matches!(destination.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "redirect destination must not receive a connection"
+        );
+    }
 }

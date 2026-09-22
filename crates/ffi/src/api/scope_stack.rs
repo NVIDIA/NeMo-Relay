@@ -211,6 +211,43 @@ pub unsafe extern "C" fn nemo_relay_propagation_context_to_traceparent(
     }
 }
 
+/// Validate and canonicalize propagation-context JSON for transport.
+///
+/// Invalid W3C headers are discarded while valid Relay causal UUIDs are retained.
+/// The returned JSON must be freed with `nemo_relay_string_free`.
+///
+/// # Safety
+/// `context_json` must point to a valid NUL-terminated C string and `out` must
+/// be a valid, writable pointer to a C-string output slot.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_propagation_context_normalize_json(
+    context_json: *const c_char,
+    out: *mut *mut c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let value = match c_str_to_string(context_json) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    match PropagationContext::from_json(&value).and_then(|context| {
+        serde_json::to_value(context)
+            .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))
+    }) {
+        Ok(context) => {
+            unsafe { *out = json_to_c_string(&context) };
+            NemoRelayStatus::Ok
+        }
+        Err(error) => {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::from(&error)
+        }
+    }
+}
+
 /// Create an isolated scope stack from propagation-context JSON.
 ///
 /// # Safety
@@ -226,15 +263,23 @@ pub unsafe extern "C" fn nemo_relay_scope_stack_create_from_propagation_json(
         set_last_error("out pointer is null");
         return NemoRelayStatus::NullPointer;
     }
-    let context = match c_str_to_string(context_json) {
-        Ok(value) => match serde_json::from_str::<PropagationContext>(&value) {
-            Ok(context) => context,
-            Err(error) => {
-                set_last_error(&format!("invalid propagation context JSON: {error}"));
-                return NemoRelayStatus::InvalidJson;
-            }
-        },
+    let value = match c_str_to_string(context_json) {
+        Ok(value) => value,
         Err(status) => return status,
+    };
+    let context: PropagationContext = match serde_json::from_str(&value) {
+        Ok(context) => context,
+        Err(error) => {
+            set_last_error(&format!("invalid propagation context JSON: {error}"));
+            return NemoRelayStatus::InvalidJson;
+        }
+    };
+    let context = match context.validate() {
+        Ok(()) => context.normalized(),
+        Err(error) => {
+            set_last_error(&error.to_string());
+            return NemoRelayStatus::from(&error);
+        }
     };
     match create_scope_stack_from_propagation(&context) {
         Ok(stack) => {

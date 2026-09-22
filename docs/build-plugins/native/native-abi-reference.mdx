@@ -23,7 +23,10 @@ extern "C" fn nemo_relay_register_plugin(
 ) -> NemoRelayStatus
 ```
 
-The current host negotiates ABI v5, then the frozen v4, v3, and legacy v2 tables.
+The current host negotiates ABI v6, then the frozen v5, v4, v3, and legacy v2 tables.
+ABI v6 adds a host-routed operational logging function. Native plugins pass a level, optional
+target, message, and optional JSON-object fields; Relay applies its operational logging policy
+and preserves those fields in structured JSONL output.
 ABI v4 extends the complete v3 prefix with completion-scoped
 [codecs](/about-nemo-relay/concepts/codecs) and
 pull-based downstream LLM streams, plus an activation-owned runtime capability for

@@ -43,6 +43,8 @@ Repository = "https://github.com/NVIDIA/NeMo-Relay"
 
 [dependency-groups]
 dev = [
+    # Transitive dependency of optional integrations; keep it at a patched release.
+    "anyio>=4.14.2",
     "beautifulsoup4>=4.14,<5",
     "ipython~=8.20",
     "maturin[zig]>=1.0,<2.0; sys_platform == 'linux'",
@@ -51,6 +53,8 @@ dev = [
     "pre-commit~=4.0",
     "pylic>=5.0.1",
     "ruff~=0.11",
+    # Transitive dependency of beautifulsoup4; keep it at a patched release.
+    "soupsieve>=2.9.0",
     "ty>=0.0.1a7",
     "uv~=0.11.0",
 ]
@@ -68,7 +72,7 @@ test = [
 
 [project.optional-dependencies]
 cli = [
-    "nemo-relay-cli-bin==0.9.0",
+    "nemo-relay-cli-bin==0.10.0",
 ]
 
 langchain = [

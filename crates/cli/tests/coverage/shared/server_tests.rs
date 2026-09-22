@@ -481,7 +481,7 @@ fn startup_status_reports_bound_gateway_and_exporters() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 3,
+                    "version": 4,
                     "opentelemetry": {
                         "enabled": true,
                         "endpoints": [{
@@ -621,6 +621,97 @@ async fn codex_hook_keeps_codex_response_shape() {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body, json!({}));
+}
+
+#[tokio::test]
+async fn codex_permission_request_without_tool_call_id_requires_one_matching_active_tool() {
+    let app = router(test_config());
+    macro_rules! send_codex_hook {
+        ($payload:expr) => {{
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/hooks/codex")
+                        .header("content-type", "application/json")
+                        .body(Body::from($payload.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            serde_json::from_slice::<Value>(
+                &response.into_body().collect().await.unwrap().to_bytes(),
+            )
+            .unwrap()
+        }};
+    }
+
+    let permission = |session_id, command| {
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "shell",
+            "tool_input": {"cmd": command}
+        })
+    };
+    let pre_tool = |session_id, command| {
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "PreToolUse",
+            "tool_name": "shell",
+            "tool_input": {"cmd": command}
+        })
+    };
+
+    let single_match = "codex-permission-single-match";
+    for payload in [
+        json!({"session_id": single_match, "hook_event_name": "SessionStart"}),
+        pre_tool(single_match, "pwd"),
+        permission(single_match, "pwd"),
+    ] {
+        assert_eq!(send_codex_hook!(payload), json!({}));
+    }
+
+    let no_match = "codex-permission-no-match";
+    assert_eq!(
+        send_codex_hook!(json!({"session_id": no_match, "hook_event_name": "SessionStart"})),
+        json!({})
+    );
+    assert_eq!(send_codex_hook!(pre_tool(no_match, "pwd")), json!({}));
+    assert_eq!(
+        send_codex_hook!(permission(no_match, "whoami"))["decision"],
+        json!("deny")
+    );
+
+    let ambiguous = "codex-permission-ambiguous";
+    assert_eq!(
+        send_codex_hook!(json!({"session_id": ambiguous, "hook_event_name": "SessionStart"})),
+        json!({})
+    );
+    assert_eq!(send_codex_hook!(pre_tool(ambiguous, "pwd")), json!({}));
+    assert_eq!(send_codex_hook!(pre_tool(ambiguous, "pwd")), json!({}));
+    assert_eq!(
+        send_codex_hook!(permission(ambiguous, "pwd"))["decision"],
+        json!("deny")
+    );
+
+    let session_one = "codex-permission-session-one";
+    let session_two = "codex-permission-session-two";
+    assert_eq!(
+        send_codex_hook!(json!({"session_id": session_one, "hook_event_name": "SessionStart"})),
+        json!({})
+    );
+    assert_eq!(
+        send_codex_hook!(json!({"session_id": session_two, "hook_event_name": "SessionStart"})),
+        json!({})
+    );
+    assert_eq!(send_codex_hook!(pre_tool(session_two, "pwd")), json!({}));
+    assert_eq!(
+        send_codex_hook!(permission(session_one, "pwd"))["decision"],
+        json!("deny")
+    );
 }
 
 #[tokio::test]
@@ -1422,7 +1513,7 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 3,
+                    "version": 4,
                     "atof": {
                         "enabled": true,
                         "sinks": [{
@@ -1539,7 +1630,7 @@ async fn terminal_hook_responses_wait_for_their_atif_snapshot() {
             "kind": "observability",
             "enabled": true,
             "config": {
-                "version": 3,
+                "version": 4,
                 "atif": {
                     "enabled": true,
                     "output_directory": atif_dir,
@@ -1699,7 +1790,7 @@ async fn serve_listener_observability_plugin_records_supported_agent_hooks() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 3,
+                    "version": 4,
                     "atof": {
                         "enabled": true,
                         "sinks": [{
@@ -1911,7 +2002,7 @@ async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 3,
+                    "version": 4,
                     "atof": {
                         "enabled": true,
                         "sinks": [{
@@ -2098,7 +2189,7 @@ async fn serve_listener_records_codex_stop_atof_contract() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 3,
+                    "version": 4,
                     "atof": {
                         "enabled": true,
                         "sinks": [{
@@ -2554,7 +2645,7 @@ async fn serve_listener_rejects_invalid_plugin_config() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 3,
+                    "version": 4,
                     "atof": {
                         "enabled": true,
                         "sinks": [{

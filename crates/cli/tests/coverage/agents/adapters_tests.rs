@@ -625,16 +625,18 @@ fn permission_requests_keep_hook_marks_and_require_exact_tool_identity() {
     assert_eq!(codex_permission.arguments, json!({"cmd": "pwd"}));
     assert_eq!(codex_permission.agent_kind, AgentKind::Codex);
 
-    let missing_id = codex::adapt(
+    let codex_without_id = codex::adapt(
         json!({
             "session_id": "codex-session",
             "hook_event_name": "PermissionRequest",
             "tool_name": "shell",
-            "arguments": {"cmd": "pwd"}
+            "tool_input": {"cmd": "pwd"}
         }),
         &HeaderMap::new(),
     );
-    assert!(missing_id.permission.unwrap().is_err());
+    let codex_without_id = codex_without_id.permission.unwrap().unwrap();
+    assert_eq!(codex_without_id.tool_call_id, "");
+    assert_eq!(codex_without_id.arguments, json!({"cmd": "pwd"}));
 }
 
 #[test]

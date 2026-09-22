@@ -19,6 +19,10 @@ drifts.
 - `set_node_package_versions` updates the Node binding, OpenClaw plugin, PI
   extension, their workspace lockfile entries, and project-owned npm dependency
   pins.
+- `set_example_package_versions` updates exact Rust and Python SDK pins and
+  refreshes their checked lockfiles without upgrading third-party packages.
+  Before the Node package is published, its checked example links the local
+  workspace package so its lockfile remains installable.
 - `set_python_package_version` preserves the root package's dynamic Cargo
   version, keeps the PyO3 crate on the workspace version, updates the CLI binary
   package, and aligns the root CLI extra pin.

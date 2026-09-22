@@ -33,9 +33,10 @@ use nemo_relay::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmConditionalFn,
     LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext,
     LlmSanitizeRequestFn, LlmSanitizeResponseContext, LlmSanitizeResponseFn,
-    LlmStreamExecutionNextFn, LlmStreamInner, MiddlewareContinuationContext, ScopeStackHandle,
-    ToolConditionalFn, ToolExecutionContext, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
-    capture_propagation_context, capture_traceparent, current_scope_stack,
+    LlmStreamExecutionNextFn, LlmStreamInner, MiddlewareContinuationContext, PropagationContext,
+    ScopeStackHandle, ToolConditionalFn, ToolExecutionContext, ToolExecutionNextFn,
+    ToolInterceptFn, ToolSanitizeFn, capture_propagation_context, capture_traceparent,
+    current_scope_stack,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::exceptions::PyRuntimeError;
@@ -490,6 +491,23 @@ fn copy_publication_invocation_with_buffer<'py>(
     Ok((invocation_context, task_locals))
 }
 
+fn callback_propagation_context() -> FlowResult<PropagationContext> {
+    let mut context = capture_propagation_context()?;
+    if context.traceparent.is_some() {
+        context.traceparent = Some(context.to_traceparent()?);
+    } else {
+        context.root_uuid = capture_traceparent()
+            .ok()
+            .and_then(|traceparent| {
+                traceparent
+                    .get(3..35)
+                    .and_then(|trace_id| uuid::Uuid::parse_str(trace_id).ok())
+            })
+            .or(Some(context.parent_uuid));
+    }
+    Ok(context)
+}
+
 fn copy_middleware_invocation<'py>(
     py: Python<'py>,
     fallback_task_locals: Option<TaskLocals>,
@@ -508,27 +526,33 @@ fn copy_middleware_invocation<'py>(
             (None, None)
         };
     if let Some(context) = invocation_context.as_ref() {
-        let parent_var = py
-            .import("nemo_relay")
-            .and_then(|module| module.getattr("_propagation_parent_var"));
-        if let Ok(parent_var) = parent_var {
-            let propagation_context = capture_propagation_context()
+        let nemo_relay = py.import("nemo_relay")?;
+        if let Ok(parent_var) = nemo_relay.getattr("_propagation_parent_var") {
+            let propagation_context = callback_propagation_context()
                 .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-            let propagation_parent_uuid = propagation_context.parent_uuid.to_string();
-            context.call_method1("run", (parent_var.getattr("set")?, propagation_parent_uuid))?;
-            let root_var = py
-                .import("nemo_relay")
-                .and_then(|module| module.getattr("_propagation_root_var"))?;
-            let root_uuid = context.call_method1("run", (root_var.getattr("get")?,))?;
-            if root_uuid.is_none()
-                && let Ok(traceparent) = capture_traceparent()
-            {
-                let propagation_root_uuid = traceparent
-                    .get(3..35)
-                    .and_then(|value| uuid::Uuid::parse_str(value).ok())
-                    .ok_or_else(|| PyRuntimeError::new_err("invalid Relay traceparent"))?
-                    .to_string();
-                context.call_method1("run", (root_var.getattr("set")?, propagation_root_uuid))?;
+            context.call_method1(
+                "run",
+                (
+                    parent_var.getattr("set")?,
+                    propagation_context.parent_uuid.to_string(),
+                ),
+            )?;
+            for (name, value) in [
+                (
+                    "_propagation_root_var",
+                    propagation_context.root_uuid.map(|uuid| uuid.to_string()),
+                ),
+                (
+                    "_propagation_traceparent_var",
+                    propagation_context.traceparent,
+                ),
+                (
+                    "_propagation_tracestate_var",
+                    propagation_context.tracestate,
+                ),
+            ] {
+                let variable = nemo_relay.getattr(name)?;
+                context.call_method1("run", (variable.getattr("set")?, value))?;
             }
         }
     }

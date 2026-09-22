@@ -86,6 +86,7 @@ Use the source that matches how Relay is launched:
 | Run the Relay CLI with temporary settings | `--log-*` options |
 | Configure a language binding or CLI process | `NEMO_RELAY_LOG*` environment variables |
 | Reuse logging settings across runs | `[logging]` in TOML |
+| Configure the primary daemon service | `[daemon.logging]` in TOML |
 | Embed Relay in a Rust application | `LoggingConfig` and `LoggingRuntime` |
 
 For CLI processes, Relay selects one source in this order:
@@ -94,6 +95,10 @@ For CLI processes, Relay selects one source in this order:
 2. `NEMO_RELAY_LOG*` environment variables
 3. `[logging]` in the resolved Relay `config.toml`
 4. Built-in defaults
+
+For the primary `nemo-relay daemon` service, step 3 instead reads
+`[daemon.logging]`. It does not inherit `[logging]`; explicit CLI and
+environment sources retain the same precedence.
 
 Sources are selected rather than merged. Python, Node.js, and Go install a
 process-lifetime `LoggingRuntime` when the binding loads, using environment
@@ -161,6 +166,108 @@ teardown. Go applications that configure file sinks must call
 `nemo_relay.ShutdownLogging` before `main` returns; defer it near the start of
 `main` so it runs after other Relay cleanup.
 
+## Emit records from language bindings
+
+Python and Node.js can emit application records into Relay's configured
+operational sinks. Pass a level (`error`, `warn`, `info`, `debug`, or `trace`),
+a message, optional JSON-object fields, and an optional subsystem target.
+
+The target is not a full Relay target: use a subsystem such as
+`payments.client`. Relay prefixes it with the binding namespace. Omitting it
+uses `nemo_relay.python` or `nemo_relay.node`.
+
+<Tabs>
+<Tab title="Rust" language="rust">
+
+```rust
+log::trace!(target: "payments.client"; "checking cache");
+log::debug!(target: "payments.client", key = key; "cache key prepared");
+log::info!(target: "payments.client", event = "cache_miss", attempt = 2; "cache lookup missed");
+log::warn!(target: "payments.client", retry_after_ms = 100; "cache temporarily unavailable");
+log::error!(target: "payments.client", error = %error; "cache request failed");
+```
+
+</Tab>
+<Tab title="Python" language="python">
+
+```python
+nemo_relay.trace("checking cache", target="payments.client")
+nemo_relay.debug("cache key prepared", target="payments.client", fields={"key": key})
+nemo_relay.info("cache lookup missed", target="payments.client", fields={"event": "cache_miss", "attempt": 2})
+nemo_relay.warn("cache temporarily unavailable", target="payments.client", fields={"retry_after_ms": 100})
+nemo_relay.error("cache request failed", target="payments.client", fields={"error": str(error)})
+```
+
+</Tab>
+<Tab title="Node.js" language="node">
+
+```javascript
+relay.trace("checking cache", "payments.client");
+relay.debug("cache key prepared", "payments.client", { key });
+relay.info("cache lookup missed", "payments.client", { event: "cache_miss", attempt: 2 });
+relay.warn("cache temporarily unavailable", "payments.client", { retry_after_ms: 100 });
+relay.error("cache request failed", "payments.client", { error: String(error) });
+```
+
+</Tab>
+</Tabs>
+
+Relay preserves nested values in JSONL. These APIs do not replace Python's root
+logger or Node's `console`.
+
+## Emit records from plugins
+
+Plugin records are sent to the Relay host, which applies its configured level
+filter and sinks. Plugin targets are subsystem names: Relay adds a native or
+worker-plugin namespace. Use structured fields rather than encoding data into
+the message.
+
+<Tabs>
+<Tab title="Rust Native" language="rust">
+
+```rust
+use nemo_relay_plugin::{relay_debug, relay_error, relay_info, relay_trace, relay_warn};
+use serde_json::json;
+
+relay_trace!(runtime, target: "payments.client", "checking cache")?;
+relay_debug!(runtime, target: "payments.client", fields: json!({"key": key}), "cache key prepared")?;
+relay_info!(runtime, target: "payments.client", fields: json!({"event": "cache_miss", "attempt": 2}), "cache lookup missed")?;
+relay_warn!(runtime, target: "payments.client", fields: json!({"retry_after_ms": 100}), "cache temporarily unavailable")?;
+relay_error!(runtime, target: "payments.client", fields: json!({"error": error.to_string()}), "cache request failed")?;
+```
+
+</Tab>
+<Tab title="Rust gRPC" language="rust">
+
+```rust
+use serde_json::{Map, json};
+
+let fields = Map::from_iter([("event".into(), json!("cache_miss")), ("attempt".into(), json!(2))]);
+runtime.trace("payments.client", "checking cache", None).await?;
+runtime.debug("payments.client", "cache key prepared", Some(&fields)).await?;
+runtime.info("payments.client", "cache lookup missed", Some(&fields)).await?;
+runtime.warn("payments.client", "cache temporarily unavailable", Some(&fields)).await?;
+runtime.error("payments.client", "cache request failed", Some(&fields)).await?;
+```
+
+</Tab>
+<Tab title="Python gRPC" language="python">
+
+```python
+await runtime.trace("checking cache", target="payments.client")
+await runtime.debug("cache key prepared", target="payments.client", fields={"key": key})
+await runtime.info("cache lookup missed", target="payments.client", fields={"event": "cache_miss", "attempt": 2})
+await runtime.warn("cache temporarily unavailable", target="payments.client", fields={"retry_after_ms": 100})
+await runtime.error("cache request failed", target="payments.client", fields={"error": str(error)})
+```
+
+</Tab>
+</Tabs>
+
+Rust native plugins require a host with native ABI v6 or newer. The worker
+`Log` operation is additive to `grpc-v1`; a worker must use a host that exposes
+that operation.
+
 ## TOML Configuration
 
 Logging settings use a `[logging]` table:
@@ -196,6 +303,20 @@ order: system, then explicit-or-user. For matching paths, higher-layer
 fields recursively overlay lower-layer fields, producing one effective sink.
 Path aliases such as `relay.log` and `./relay.log` resolve to one sink, using
 the higher-layer spelling and settings.
+
+The primary daemon uses the identical schema under `[daemon.logging]`. Its
+configuration follows the normal explicit-or-user then system layering, with
+the system layer taking precedence:
+
+```toml
+[daemon.logging]
+level = "info"
+stderr_format = "jsonl"
+
+[[daemon.logging.sinks]]
+path = "/var/log/nemo-relay/daemon.jsonl"
+format = "jsonl"
+```
 
 ## Rust Library API
 

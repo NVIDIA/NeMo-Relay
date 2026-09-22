@@ -30,8 +30,9 @@ use super::header_file::{
 };
 use super::otel_signal::{
     MetricMarkClassification, SignalRuntimeDiagnostics, TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS,
-    classify_metric_mark, resolve_header_env, retry_batch_processor_channel_full,
-    should_relog_runtime_diagnostic, telemetry_resource,
+    automatic_otlp_http_client, automatic_protocol_is_grpc, automatic_protocol_is_unset,
+    automatic_signal_endpoint, classify_metric_mark, resolve_header_env,
+    retry_batch_processor_channel_full, should_relog_runtime_diagnostic, telemetry_resource,
     validate_telemetry_sdk_resource_attributes,
 };
 use super::{
@@ -46,6 +47,7 @@ use super::{
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
+use crate::api::runtime::scope_stack::w3c_span_context;
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use crate::codec::response::CostEstimate;
@@ -72,6 +74,8 @@ use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
 
 /// Default period for attaching late marks to a completed scope's trace span.
 pub const DEFAULT_COMPLETED_SPAN_CONTEXT_TTL: Duration = Duration::from_secs(60);
+
+const AUTOMATIC_OTLP_ENDPOINT_MARKER: &str = "<environment>";
 
 use opentelemetry_otlp::WithTonicConfig;
 use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
@@ -218,6 +222,9 @@ pub fn resolve_http_trace_endpoint(endpoint: &str) -> Cow<'_, str> {
 /// distinguish independently configured collectors without exposing a token
 /// embedded in a URL.
 fn trace_endpoint_log_identity(endpoint: &str) -> String {
+    if endpoint == AUTOMATIC_OTLP_ENDPOINT_MARKER {
+        return "the environment-configured OTLP endpoint".to_string();
+    }
     let Ok(endpoint) = reqwest::Url::parse(endpoint) else {
         return "an invalid OTLP endpoint".to_string();
     };
@@ -268,7 +275,7 @@ pub struct OpenTelemetryConfig {
     header_env: HashMap<String, String>,
     header_file: HeaderFiles,
     resource_attributes: HashMap<String, String>,
-    service_name: String,
+    service_name: Option<String>,
     service_namespace: Option<String>,
     service_version: Option<String>,
     instrumentation_scope: String,
@@ -283,6 +290,7 @@ pub struct OpenTelemetryConfig {
     max_export_batch_size: Option<usize>,
     scheduled_delay: Option<Duration>,
     completed_span_context_ttl: Duration,
+    automatic: bool,
 }
 
 impl OpenTelemetryConfig {
@@ -294,7 +302,7 @@ impl OpenTelemetryConfig {
             header_env: HashMap::new(),
             header_file: HashMap::new(),
             resource_attributes: HashMap::new(),
-            service_name: "unknown_service".to_string(),
+            service_name: None,
             service_namespace: None,
             service_version: None,
             instrumentation_scope: "opentelemetry".to_string(),
@@ -309,6 +317,7 @@ impl OpenTelemetryConfig {
             max_export_batch_size: None,
             scheduled_delay: None,
             completed_span_context_ttl: DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
+            automatic: false,
         }
     }
 
@@ -321,11 +330,21 @@ impl OpenTelemetryConfig {
         }
     }
 
+    /// Creates the Relay trace projection from OpenTelemetry SDK and OTLP
+    /// exporter environment configuration.
+    pub(crate) fn from_automatic_configuration() -> Self {
+        Self {
+            endpoint: AUTOMATIC_OTLP_ENDPOINT_MARKER.to_string(),
+            automatic: true,
+            ..Self::default_values()
+        }
+    }
+
     /// Creates an HTTP OTLP config for the given service name.
     #[cfg(test)]
     pub(crate) fn http_binary(service_name: impl Into<String>) -> Self {
         Self {
-            service_name: service_name.into(),
+            service_name: Some(service_name.into()),
             transport: OtlpTransport::HttpBinary,
             ..Self::default_values()
         }
@@ -335,7 +354,7 @@ impl OpenTelemetryConfig {
     #[cfg(test)]
     pub(crate) fn grpc(service_name: impl Into<String>) -> Self {
         Self {
-            service_name: service_name.into(),
+            service_name: Some(service_name.into()),
             transport: OtlpTransport::Grpc,
             ..Self::default_values()
         }
@@ -355,7 +374,7 @@ impl OpenTelemetryConfig {
 
     /// Sets the `service.name` resource attribute.
     pub fn with_service_name(mut self, service_name: impl Into<String>) -> Self {
-        self.service_name = service_name.into();
+        self.service_name = Some(service_name.into());
         self
     }
 
@@ -622,16 +641,33 @@ impl OpenTelemetrySubscriber {
         )
     }
 
+    pub(crate) fn new_from_automatic_configuration_for_plugin() -> Result<Self> {
+        Self::new_with_runtime_diagnostics(
+            OpenTelemetryConfig::from_automatic_configuration(),
+            Some("opentelemetry.automatic.traces".to_string()),
+        )
+    }
+
     fn new_with_runtime_diagnostics(
         mut config: OpenTelemetryConfig,
         diagnostic_field: Option<String>,
     ) -> Result<Self> {
-        if config.endpoint.trim().is_empty() {
+        if !config.automatic && config.endpoint.trim().is_empty() {
             return Err(OpenTelemetryError::ExporterBuild(
                 "endpoint must be a nonblank string".to_string(),
             ));
         }
-        validate_trace_endpoint(&config.endpoint)?;
+        if config.automatic {
+            let endpoint = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+                .ok_or_else(|| {
+                    OpenTelemetryError::ExporterBuild(
+                        "automatic trace exporter requires a nonblank OTLP endpoint".to_string(),
+                    )
+                })?;
+            validate_trace_endpoint(&endpoint)?;
+        } else {
+            validate_trace_endpoint(&config.endpoint)?;
+        }
         if config.completed_span_context_ttl.is_zero() {
             return Err(OpenTelemetryError::ExporterBuild(
                 "completed_span_context_ttl must be greater than 0".to_string(),
@@ -643,13 +679,15 @@ impl OpenTelemetrySubscriber {
             .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
         validate_metadata_promotion_prefixes(&config.promote_resource_metadata_prefixes)
             .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
-        validate_telemetry_sdk_resource_attributes(&config.resource_attributes)?;
-        reject_global_header_environment()?;
-        validate_headers(&config.headers)?;
-        validate_header_files(&config.headers, &config.header_env, &config.header_file)
-            .map_err(OpenTelemetryError::ExporterBuild)?;
-        config.headers = resolve_header_env(&config.headers, &config.header_env)?;
-        validate_headers(&config.headers)?;
+        if !config.automatic {
+            validate_telemetry_sdk_resource_attributes(&config.resource_attributes)?;
+            reject_global_header_environment()?;
+            validate_headers(&config.headers)?;
+            validate_header_files(&config.headers, &config.header_env, &config.header_file)
+                .map_err(OpenTelemetryError::ExporterBuild)?;
+            config.headers = resolve_header_env(&config.headers, &config.header_env)?;
+            validate_headers(&config.headers)?;
+        }
         let runtime_diagnostics = SignalRuntimeDiagnostics::new(diagnostic_field);
         let (provider, runtime) =
             build_owned_tracer_provider(config.clone(), runtime_diagnostics.clone())?;
@@ -1083,51 +1121,74 @@ fn build_tracer_provider_with_resource(
     runtime_diagnostics: SignalRuntimeDiagnostics,
     resource_attributes: Vec<KeyValue>,
 ) -> Result<SdkTracerProvider> {
-    let exporter = match config.transport {
-        OtlpTransport::HttpBinary => {
-            let client = reqwest::Client::builder()
-                .timeout(config.timeout)
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
-            let mut builder = OtlpSpanExporter::builder()
+    let exporter = if config.automatic {
+        let builder = OtlpSpanExporter::builder();
+        if automatic_protocol_is_unset("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") {
+            builder
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
-                .with_timeout(config.timeout);
-            if !config.header_file.is_empty() {
-                builder = builder.with_http_client(HeaderFileHttpClient::new(
-                    client,
-                    HeaderFileResolver::new(config.header_file.clone()),
-                ));
-            } else {
-                builder = builder.with_http_client(client);
-            }
-            builder =
-                builder.with_endpoint(resolve_http_trace_endpoint(&config.endpoint).into_owned());
-            if !config.headers.is_empty() {
-                builder = builder.with_headers(config.headers.clone());
-            }
-            builder
+                .with_http_client(automatic_otlp_http_client()?)
                 .build()
-                .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()))?
-        }
-        OtlpTransport::Grpc => {
-            let mut builder = OtlpSpanExporter::builder()
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
+        } else if automatic_protocol_is_grpc("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") {
+            builder
                 .with_tonic()
-                .with_protocol(Protocol::Grpc)
-                .with_timeout(config.timeout);
-            builder = builder.with_endpoint(config.endpoint.clone());
-            if !config.headers.is_empty() {
-                builder = builder.with_metadata(build_grpc_metadata(&config.headers)?);
-            }
-            if !config.header_file.is_empty() {
-                builder = builder.with_interceptor(HeaderFileInterceptor::new(
-                    HeaderFileResolver::new(config.header_file.clone()),
-                ));
-            }
-            builder
                 .build()
-                .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()))?
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
+        } else {
+            builder
+                .with_http()
+                .with_http_client(automatic_otlp_http_client()?)
+                .build()
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
+        }
+    } else {
+        match config.transport {
+            OtlpTransport::HttpBinary => {
+                let client = reqwest::Client::builder()
+                    .timeout(config.timeout)
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
+                let mut builder = OtlpSpanExporter::builder()
+                    .with_http()
+                    .with_protocol(Protocol::HttpBinary)
+                    .with_timeout(config.timeout);
+                if !config.header_file.is_empty() {
+                    builder = builder.with_http_client(HeaderFileHttpClient::new(
+                        client,
+                        HeaderFileResolver::new(config.header_file.clone()),
+                    ));
+                } else {
+                    builder = builder.with_http_client(client);
+                }
+                builder = builder
+                    .with_endpoint(resolve_http_trace_endpoint(&config.endpoint).into_owned());
+                if !config.headers.is_empty() {
+                    builder = builder.with_headers(config.headers.clone());
+                }
+                builder
+                    .build()
+                    .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()))?
+            }
+            OtlpTransport::Grpc => {
+                let mut builder = OtlpSpanExporter::builder()
+                    .with_tonic()
+                    .with_protocol(Protocol::Grpc)
+                    .with_timeout(config.timeout);
+                builder = builder.with_endpoint(config.endpoint.clone());
+                if !config.headers.is_empty() {
+                    builder = builder.with_metadata(build_grpc_metadata(&config.headers)?);
+                }
+                if !config.header_file.is_empty() {
+                    builder = builder.with_interceptor(HeaderFileInterceptor::new(
+                        HeaderFileResolver::new(config.header_file.clone()),
+                    ));
+                }
+                builder
+                    .build()
+                    .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()))?
+            }
         }
     };
 
@@ -1141,6 +1202,9 @@ fn build_tracer_provider_with_resource(
         .with_max_attributes_per_event(u32::MAX);
 
     let mut batch_config = BatchConfigBuilder::default();
+    // Relay's diagnostic processor serializes export diagnostics, so retain
+    // its single-export execution model instead of inheriting this setting.
+    batch_config = batch_config.with_max_concurrent_exports(1);
     if let Some(max_queue_size) = config.max_queue_size {
         batch_config = batch_config.with_max_queue_size(max_queue_size);
     }
@@ -1161,7 +1225,13 @@ fn build_tracer_provider_with_resource(
 }
 
 fn configured_resource_attributes(config: &OpenTelemetryConfig) -> Vec<KeyValue> {
-    let mut attributes = vec![KeyValue::new("service.name", config.service_name.clone())];
+    if config.automatic {
+        return Vec::new();
+    }
+    let mut attributes = Vec::new();
+    if let Some(service_name) = &config.service_name {
+        attributes.push(KeyValue::new("service.name", service_name.clone()));
+    }
     if let Some(namespace) = &config.service_namespace {
         attributes.push(KeyValue::new("service.namespace", namespace.clone()));
     }
@@ -2280,6 +2350,12 @@ impl OtelEventProcessor {
         };
         if event.propagation_parent_uuid() != Some(parent_uuid) {
             return Context::new();
+        }
+        if let Some(span_context) = w3c_span_context(
+            event.propagation_traceparent(),
+            event.propagation_tracestate(),
+        ) {
+            return Context::new().with_remote_span_context(span_context);
         }
         let Some(root_uuid) = event.propagation_root_uuid() else {
             return Context::new();

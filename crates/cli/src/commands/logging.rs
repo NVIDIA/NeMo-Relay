@@ -54,6 +54,18 @@ impl LoggingArgs {
         crate::configuration::resolve_logging_config(explicit_config)
     }
 
+    /// Selects daemon-only configuration after preserving any explicit process-level override.
+    pub(super) fn resolve_daemon(
+        &self,
+        explicit_config: Option<&Path>,
+    ) -> Result<LoggingConfig, CliError> {
+        if let Some(config) = self.resolve_explicit()? {
+            return Ok(config);
+        }
+
+        crate::configuration::resolve_daemon_logging_config(explicit_config)
+    }
+
     /// Resolves direct logging settings without consulting Relay configuration files discovered
     /// from the environment. Commands that repair or remove Relay state use this so malformed
     /// ambient configuration cannot block the operation.

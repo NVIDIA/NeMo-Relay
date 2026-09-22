@@ -23,6 +23,7 @@ use crate::plugin::{
     test_initialize_plugin_host_exact, test_validate_static_plugin_config,
 };
 use serde_json::json;
+use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -38,6 +39,38 @@ struct RestoreThreadScopeStackGuard(ThreadScopeStackBinding);
 impl Drop for RestoreThreadScopeStackGuard {
     fn drop(&mut self) {
         restore_thread_scope_stack(self.0.clone());
+    }
+}
+
+/// Restores test-mutated environment variables, including during unwinding.
+struct EnvironmentGuard(Vec<(String, Option<OsString>)>);
+
+impl EnvironmentGuard {
+    fn capture(variables: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        Self(
+            variables
+                .into_iter()
+                .map(|variable| {
+                    let variable = variable.as_ref().to_string();
+                    let value = std::env::var_os(&variable);
+                    (variable, value)
+                })
+                .collect(),
+        )
+    }
+}
+
+impl Drop for EnvironmentGuard {
+    fn drop(&mut self) {
+        // SAFETY: the observability mutex serializes test-only environment changes.
+        unsafe {
+            for (variable, value) in &self.0 {
+                match value {
+                    Some(value) => std::env::set_var(variable, value),
+                    None => std::env::remove_var(variable),
+                }
+            }
+        }
     }
 }
 
@@ -72,6 +105,241 @@ fn temp_dir(prefix: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("nemo-relay-{prefix}-{id}"));
     fs::create_dir_all(&path).unwrap();
     path.canonicalize().unwrap()
+}
+
+#[test]
+fn automatic_otel_requires_an_endpoint_and_limits_signals_to_endpoint_scope() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
+    let trace_endpoint = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT";
+    let log_endpoint = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT";
+    let metric_endpoint = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT";
+    let header = "OTEL_EXPORTER_OTLP_HEADERS";
+    let traces = "OTEL_TRACES_EXPORTER";
+    let disabled = "OTEL_SDK_DISABLED";
+    let _environment = EnvironmentGuard::capture([
+        endpoint,
+        trace_endpoint,
+        log_endpoint,
+        metric_endpoint,
+        header,
+        traces,
+        disabled,
+    ]);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::remove_var(endpoint);
+        std::env::remove_var(trace_endpoint);
+        std::env::remove_var(log_endpoint);
+        std::env::remove_var(metric_endpoint);
+        std::env::remove_var(disabled);
+        std::env::set_var(header, "authorization=token");
+    }
+    assert_eq!(automatic_otlp_signals(), None);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::set_var(trace_endpoint, "http://127.0.0.1:4318/v1/traces") };
+    assert_eq!(
+        automatic_otlp_signals(),
+        Some(AutomaticOtlpSignals {
+            traces: true,
+            logs: false,
+            metrics: false,
+        })
+    );
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::remove_var(trace_endpoint);
+        std::env::set_var(endpoint, "http://127.0.0.1:4318");
+        std::env::set_var(traces, "none");
+    }
+    assert_eq!(
+        automatic_otlp_signals(),
+        Some(AutomaticOtlpSignals {
+            traces: true,
+            logs: true,
+            metrics: true,
+        })
+    );
+    assert!(!environment_signal_enabled(traces));
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::set_var(traces, "console") };
+    assert!(!environment_signal_enabled(traces));
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::set_var(disabled, "TRUE") };
+    assert_eq!(automatic_otlp_signals(), None);
+}
+
+#[test]
+fn automatic_otel_defaults_to_http_protobuf_without_protocol_configuration() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let generic = "OTEL_EXPORTER_OTLP_PROTOCOL";
+    let traces = "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL";
+    let _environment = EnvironmentGuard::capture([generic, traces]);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::remove_var(generic);
+        std::env::remove_var(traces);
+    }
+    assert!(crate::observability::otel_signal::automatic_protocol_is_unset(traces));
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::set_var(generic, "grpc") };
+    assert!(!crate::observability::otel_signal::automatic_protocol_is_unset(traces));
+    assert!(crate::observability::otel_signal::automatic_protocol_is_grpc(traces));
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::set_var(traces, "http/json") };
+    assert!(!crate::observability::otel_signal::automatic_protocol_is_grpc(traces));
+
+    // An unrecognized signal setting falls through to the generic upstream setting.
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::set_var(traces, "invalid") };
+    assert!(crate::observability::otel_signal::automatic_protocol_is_grpc(traces));
+}
+
+#[test]
+fn automatic_otel_subscribers_accept_global_otlp_headers() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
+    let headers = "OTEL_EXPORTER_OTLP_HEADERS";
+    let _environment = EnvironmentGuard::capture([endpoint, headers]);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var(endpoint, "http://127.0.0.1:4318");
+        std::env::set_var(headers, "authorization=Bearer%20environment-token");
+    }
+
+    let traces = OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin()
+        .expect("automatic trace exporter should accept global headers");
+    let logs = OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin()
+        .expect("automatic log exporter should accept global headers");
+    let metrics = OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin()
+        .expect("automatic metric exporter should accept global headers");
+    drop((traces, logs, metrics));
+}
+
+#[test]
+fn automatic_otel_headers_require_protected_log_and_metric_endpoints() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
+    let headers = "OTEL_EXPORTER_OTLP_HEADERS";
+    let _environment = EnvironmentGuard::capture([endpoint, headers]);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var(endpoint, "http://collector.example:4318");
+        std::env::set_var(headers, "authorization=Bearer%20environment-token");
+    }
+
+    let logs = OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin();
+    assert!(logs.is_err());
+    let metrics = OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin();
+    assert!(metrics.is_err());
+}
+
+#[test]
+fn automatic_otel_skips_an_invalid_trace_endpoint_without_blocking_other_signals() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
+    let headers = "OTEL_EXPORTER_OTLP_HEADERS";
+    let _environment = EnvironmentGuard::capture([endpoint, headers]);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var(endpoint, "http://collector.example:4318");
+        std::env::remove_var(headers);
+    }
+
+    let config = plugin_config(json!({"version": 4}));
+    futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+
+    let state = global_context();
+    assert_eq!(state.read().unwrap().event_subscribers.len(), 1);
+    crate::plugin::test_close_plugin_host().unwrap();
+}
+
+#[test]
+fn automatic_otel_exporter_is_added_to_configured_relay_endpoints() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
+    let _environment = EnvironmentGuard::capture([endpoint]);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::set_var(endpoint, "http://127.0.0.1:4318") };
+
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{
+                "type": "full",
+                "endpoint": "http://127.0.0.1:4319"
+            }]
+        }
+    }));
+    futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+
+    let state = global_context();
+    let state = state.read().unwrap();
+    assert_eq!(state.event_subscribers.len(), 2);
+    drop(state);
+    crate::plugin::test_close_plugin_host().unwrap();
+}
+
+#[test]
+fn disabled_opentelemetry_section_suppresses_automatic_exporters() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
+    let _environment = EnvironmentGuard::capture([endpoint]);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::set_var(endpoint, "http://127.0.0.1:4318") };
+
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {"enabled": false}
+    }));
+    futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+
+    let state = global_context();
+    assert!(state.read().unwrap().event_subscribers.is_empty());
+    crate::plugin::test_close_plugin_host().unwrap();
+}
+
+#[test]
+fn enabled_empty_opentelemetry_section_allows_automatic_exporters() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
+    let disabled = "OTEL_SDK_DISABLED";
+    let _environment = EnvironmentGuard::capture([endpoint, disabled]);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var(endpoint, "http://127.0.0.1:4318");
+        std::env::remove_var(disabled);
+    }
+    assert!(automatic_otlp_signals().is_some());
+
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {"enabled": true}
+    }));
+    futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+
+    let state = global_context();
+    assert_eq!(state.read().unwrap().event_subscribers.len(), 1);
+    crate::plugin::test_close_plugin_host().unwrap();
 }
 
 #[cfg(feature = "atof-streaming")]
@@ -431,9 +699,9 @@ fn signal_endpoint_lists_preserve_omitted_and_explicit_empty_shapes() {
 }
 
 #[test]
-fn observability_v3_remains_trace_only_and_v4_accepts_signal_sections() {
+fn observability_v3_is_rejected_and_v4_accepts_signal_sections() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
-    let trace_only = plugin_config(json!({
+    let version_three = plugin_config(json!({
         "version": 3,
         "opentelemetry": {
             "enabled": true,
@@ -443,42 +711,11 @@ fn observability_v3_remains_trace_only_and_v4_accepts_signal_sections() {
             }]
         }
     }));
-    assert!(!test_validate_static_plugin_config(&trace_only).has_errors());
-
-    let version_three_logs = plugin_config(json!({
-        "version": 3,
-        "opentelemetry": {
-            "enabled": true,
-            "endpoints": [{
-                "type": "gen_ai",
-                "endpoint": "https://collector.example/v1/traces"
-            }],
-            "logs": {"enabled": false}
-        }
-    }));
-    let report = test_validate_static_plugin_config(&version_three_logs);
+    let report = test_validate_static_plugin_config(&version_three);
     assert!(report.has_errors());
     assert!(report.diagnostics.iter().any(|diagnostic| {
-        diagnostic.field.as_deref() == Some("logs")
-            && diagnostic.message.contains("version 3 is trace-only")
-    }));
-
-    let version_three_metrics = plugin_config(json!({
-        "version": 3,
-        "opentelemetry": {
-            "enabled": true,
-            "endpoints": [{
-                "type": "gen_ai",
-                "endpoint": "https://collector.example/v1/traces"
-            }],
-            "metrics": {"enabled": false}
-        }
-    }));
-    let report = test_validate_static_plugin_config(&version_three_metrics);
-    assert!(report.has_errors());
-    assert!(report.diagnostics.iter().any(|diagnostic| {
-        diagnostic.field.as_deref() == Some("metrics")
-            && diagnostic.message.contains("version 3 is trace-only")
+        diagnostic.field.as_deref() == Some("version")
+            && diagnostic.message.contains("use version 4")
     }));
 
     let version_four = plugin_config(json!({
@@ -1347,7 +1584,7 @@ fn invalid_batch_config_identifies_the_endpoint_during_activation() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
     let config = plugin_config(json!({
-        "version": 3,
+        "version": 4,
         "opentelemetry": {
             "enabled": true,
             "endpoints": [
@@ -1396,7 +1633,7 @@ fn all_invalid_trace_batch_configs_still_block_activation() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
     let config = plugin_config(json!({
-        "version": 3,
+        "version": 4,
         "opentelemetry": {
             "enabled": true,
             "endpoints": [{
@@ -2932,6 +3169,8 @@ fn atif_propagation_root_session_id_flows_through_plugin_e2e() {
         version: PropagationContext::VERSION,
         root_uuid: Some(request_id),
         parent_uuid: parent_id,
+        traceparent: None,
+        tracestate: None,
     })
     .unwrap();
     set_thread_scope_stack(stack);

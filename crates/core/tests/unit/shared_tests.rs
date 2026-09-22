@@ -23,6 +23,46 @@ use crate::error::Result;
 
 struct SharedTestCodec;
 
+#[test]
+fn inject_trace_context_replaces_trace_headers_as_a_pair() {
+    let mut request = LlmRequest {
+        headers: Map::from_iter([
+            ("TraceParent".to_string(), json!("stale-parent")),
+            ("TRACESTATE".to_string(), json!("stale-state")),
+            ("other".to_string(), json!("kept")),
+        ]),
+        content: json!({}),
+    };
+    inject_trace_context_value(
+        &mut request,
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string(),
+        Some("vendor=value".to_string()),
+    );
+    assert_eq!(
+        request.headers.get("traceparent"),
+        Some(&json!(
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+        ))
+    );
+    assert_eq!(
+        request.headers.get("tracestate"),
+        Some(&json!("vendor=value"))
+    );
+    assert_eq!(request.headers.get("other"), Some(&json!("kept")));
+
+    inject_trace_context_value(
+        &mut request,
+        "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01".to_string(),
+        None,
+    );
+    assert!(
+        !request
+            .headers
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case("tracestate"))
+    );
+}
+
 impl LlmCodec for SharedTestCodec {
     fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
         Ok(AnnotatedLlmRequest {

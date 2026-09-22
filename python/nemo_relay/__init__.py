@@ -149,12 +149,41 @@ from nemo_relay._native import create_scope_stack as _create_scope_stack
 from nemo_relay._native import (
     create_scope_stack_from_propagation as _create_scope_stack_from_propagation,
 )
+from nemo_relay._native import (
+    log as _log,
+)
 from nemo_relay._native import restore_thread_scope_stack as _restore_thread_scope_stack
 from nemo_relay._native import scope_stack_active as _native_scope_stack_active
 from nemo_relay._native import set_thread_scope_stack as _set_thread_scope_stack
 from nemo_relay._native import sync_thread_scope_stack as _sync_thread_scope_stack
 
 atexit.register(_shutdown_default_logging)
+
+
+def log(level: str, message: str, *, target: str = "", fields: "JsonObject | None" = None) -> None:
+    """Emit a structured operational record through Relay."""
+    return _log(level, message, target, fields)
+
+
+def trace(message: str, *, target: str = "", fields: "JsonObject | None" = None) -> None:
+    return log("trace", message, target=target, fields=fields)
+
+
+def debug(message: str, *, target: str = "", fields: "JsonObject | None" = None) -> None:
+    return log("debug", message, target=target, fields=fields)
+
+
+def info(message: str, *, target: str = "", fields: "JsonObject | None" = None) -> None:
+    return log("info", message, target=target, fields=fields)
+
+
+def warn(message: str, *, target: str = "", fields: "JsonObject | None" = None) -> None:
+    return log("warn", message, target=target, fields=fields)
+
+
+def error(message: str, *, target: str = "", fields: "JsonObject | None" = None) -> None:
+    return log("error", message, target=target, fields=fields)
+
 
 #: Scalar JSON leaf values accepted in NeMo Relay payloads. This alias has no
 #: runtime behavior; it exists to document and type JSON-compatible public API
@@ -293,6 +322,14 @@ _propagation_parent_var: contextvars.ContextVar[str | None] = contextvars.Contex
 )
 _propagation_root_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "propagation_root",
+    default=None,
+)
+_propagation_traceparent_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "propagation_traceparent",
+    default=None,
+)
+_propagation_tracestate_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "propagation_tracestate",
     default=None,
 )
 
@@ -465,6 +502,19 @@ def create_scope_stack() -> ScopeStack:
     return _create_scope_stack()
 
 
+def _callback_propagation_context(root_uuid: str | None) -> PropagationContext | None:
+    """Return the native callback context when a managed invocation is active."""
+    parent_uuid = _propagation_parent_var.get()
+    if parent_uuid is None:
+        return None
+    return PropagationContext(
+        parent_uuid,
+        root_uuid,
+        traceparent=_propagation_traceparent_var.get(),
+        tracestate=_propagation_tracestate_var.get(),
+    )
+
+
 def capture_propagation_context() -> PropagationContext:
     """Capture the current Relay causal parent for application-managed transport.
 
@@ -473,8 +523,8 @@ def capture_propagation_context() -> PropagationContext:
         identities for propagation to another execution boundary.
     """
     get_scope_stack()
-    if parent_uuid := _propagation_parent_var.get():
-        return PropagationContext(parent_uuid, _propagation_root_var.get())
+    if context := _callback_propagation_context(_propagation_root_var.get()):
+        return context
     return _capture_propagation_context()
 
 
@@ -486,8 +536,8 @@ def capture_rootless_propagation_context() -> PropagationContext:
             session propagation when it is installed in another scope stack.
     """
     get_scope_stack()
-    if parent_uuid := _propagation_parent_var.get():
-        return PropagationContext(parent_uuid)
+    if context := _callback_propagation_context(None):
+        return context
     return _capture_rootless_propagation_context()
 
 
@@ -503,8 +553,8 @@ def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationC
         root identities.
     """
     get_scope_stack()
-    if parent_uuid := _propagation_parent_var.get():
-        return PropagationContext(parent_uuid, root_uuid)
+    if context := _callback_propagation_context(root_uuid):
+        return context
     return _capture_propagation_context_with_root(root_uuid)
 
 
@@ -515,9 +565,8 @@ def capture_traceparent() -> str:
         str: Encoded W3C traceparent value for the current Relay context.
     """
     get_scope_stack()
-    parent_uuid = _propagation_parent_var.get()
-    if parent_uuid:
-        return PropagationContext(parent_uuid, _propagation_root_var.get() or parent_uuid).to_traceparent()
+    if context := _callback_propagation_context(_propagation_root_var.get() or _propagation_parent_var.get()):
+        return context.to_traceparent()
     return _capture_traceparent()
 
 
@@ -600,13 +649,22 @@ def use_scope_stack(stack: ScopeStack) -> Iterator[ScopeStack]:
     token = _scope_stack_var.set(stack)
     _sync_thread_scope_stack(stack)
     try:
-        root_uuid = _capture_traceparent().split("-")[1]
+        propagation = _capture_propagation_context()
+        root_uuid = propagation.root_uuid
+        traceparent = propagation.traceparent
+        tracestate = propagation.tracestate
     except RuntimeError:
         root_uuid = None
+        traceparent = None
+        tracestate = None
     root_token = _propagation_root_var.set(root_uuid)
+    traceparent_token = _propagation_traceparent_var.set(traceparent)
+    tracestate_token = _propagation_tracestate_var.set(tracestate)
     try:
         yield stack
     finally:
+        _propagation_tracestate_var.reset(tracestate_token)
+        _propagation_traceparent_var.reset(traceparent_token)
         _propagation_root_var.reset(root_token)
         _scope_stack_var.reset(token)
         _restore_thread_scope_stack(previous_native_stack)

@@ -1564,6 +1564,72 @@ class PluginRuntime:
         self._host_stub = host_stub
         self._conditional_middleware_callbacks: dict[str, ConditionalMiddlewareCallback] = {}
 
+    async def log(
+        self,
+        level: str,
+        message: str,
+        *,
+        target: str = "",
+        fields: Mapping[str, Json] | None = None,
+    ) -> None:
+        """Emit one operational log record through Relay's configured sinks.
+
+        Args:
+            level: One of ``error``, ``warn``, ``info``, ``debug``, or ``trace``.
+            message: Human-readable log message.
+            target: Optional plugin subsystem name.
+            fields: Optional structured JSON attributes retained by Relay's log formatter.
+
+        Raises:
+            ValueError: ``level`` is not supported.
+            WorkerSdkError: The host rejects the authenticated log request.
+        """
+        levels = {
+            "error": pb.LOG_LEVEL_ERROR,
+            "warn": pb.LOG_LEVEL_WARN,
+            "warning": pb.LOG_LEVEL_WARN,
+            "info": pb.LOG_LEVEL_INFO,
+            "debug": pb.LOG_LEVEL_DEBUG,
+            "trace": pb.LOG_LEVEL_TRACE,
+        }
+        try:
+            wire_level = levels[level.lower()]
+        except (AttributeError, KeyError) as exc:
+            raise ValueError(f"invalid plugin log level: {level!r}") from exc
+        if fields is not None and not isinstance(fields, Mapping):
+            raise TypeError("fields must be a mapping or None")
+        response = await self._host_stub.Log(
+            pb.LogRequest(
+                activation_id=self._activation_id,
+                auth_token=self._auth_token,
+                level=wire_level,
+                target=target,
+                message=message,
+                fields=_json_value(dict(fields)) if fields is not None else None,
+            )
+        )
+        _ack_to_result(response)
+
+    async def trace(self, message: str, *, target: str = "", fields: Mapping[str, Json] | None = None) -> None:
+        """Emit a trace-level operational log record through Relay."""
+        await self.log("trace", message, target=target, fields=fields)
+
+    async def debug(self, message: str, *, target: str = "", fields: Mapping[str, Json] | None = None) -> None:
+        """Emit a debug-level operational log record through Relay."""
+        await self.log("debug", message, target=target, fields=fields)
+
+    async def info(self, message: str, *, target: str = "", fields: Mapping[str, Json] | None = None) -> None:
+        """Emit an info-level operational log record through Relay."""
+        await self.log("info", message, target=target, fields=fields)
+
+    async def warn(self, message: str, *, target: str = "", fields: Mapping[str, Json] | None = None) -> None:
+        """Emit a warn-level operational log record through Relay."""
+        await self.log("warn", message, target=target, fields=fields)
+
+    async def error(self, message: str, *, target: str = "", fields: Mapping[str, Json] | None = None) -> None:
+        """Emit an error-level operational log record through Relay."""
+        await self.log("error", message, target=target, fields=fields)
+
     async def list_runtime_registrations(
         self, kinds: Iterable[RuntimeRegistrationKind] | None = None
     ) -> list[RuntimeRegistrationIdentity]:

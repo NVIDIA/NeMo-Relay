@@ -633,10 +633,12 @@ fn assert_native_digest_edges() {
 
 fn assert_native_host_api_versions() {
     let current = native_host_api();
+    let frozen_v5 = native_host_api_v5();
     let frozen_v4 = native_host_api_v4();
     let frozen_v3 = native_host_api_v3();
     let legacy = native_host_api_v2();
     assert!(!current.is_null());
+    assert!(!frozen_v5.is_null());
     assert!(!frozen_v4.is_null());
     assert!(!frozen_v3.is_null());
     assert!(!legacy.is_null());
@@ -645,6 +647,10 @@ fn assert_native_host_api_versions() {
         NEMO_RELAY_NATIVE_ABI_VERSION
     );
     assert_eq!(unsafe { (*frozen_v3).abi_version }, 3);
+    assert_eq!(
+        unsafe { (*frozen_v5).abi_version },
+        NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT
+    );
     assert_eq!(
         unsafe { (*frozen_v4).abi_version },
         NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL
@@ -655,6 +661,10 @@ fn assert_native_host_api_versions() {
     );
     assert_eq!(
         unsafe { (*current).struct_size },
+        std::mem::size_of::<NemoRelayNativeHostApiV6>()
+    );
+    assert_eq!(
+        unsafe { (*frozen_v5).struct_size },
         std::mem::size_of::<NemoRelayNativeHostApiV5>()
     );
     assert_eq!(
@@ -669,6 +679,7 @@ fn assert_native_host_api_versions() {
         unsafe { (*legacy).struct_size },
         std::mem::size_of::<NemoRelayNativeHostApiV1>()
     );
+    assert_native_host_api_v6_layout();
     assert_native_host_api_v5_layout();
     assert_native_host_api_v4_layout();
 }
@@ -772,6 +783,23 @@ fn assert_native_host_api_v5_layout() {
             ),
             296
         );
+    }
+}
+
+fn assert_native_host_api_v6_layout() {
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV6>(), 8);
+        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV6>(), 616);
+        assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV6, v5), 0);
+        assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV6, log), 608);
+    }
+    #[cfg(target_pointer_width = "32")]
+    {
+        assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV6>(), 4);
+        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV6>(), 304);
+        assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV6, v5), 0);
+        assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV6, log), 300);
     }
 }
 
@@ -1779,7 +1807,7 @@ fn assert_native_json_output_and_host_api() {
     assert_eq!(host_api.abi_version, NEMO_RELAY_NATIVE_ABI_VERSION);
     assert_eq!(
         host_api.struct_size,
-        std::mem::size_of::<NemoRelayNativeHostApiV5>()
+        std::mem::size_of::<NemoRelayNativeHostApiV6>()
     );
 }
 

@@ -508,6 +508,40 @@ fn non_metric_mark_maps_structured_body_attributes_and_scope_context() {
 }
 
 #[test]
+fn log_projection_preserves_imported_w3c_trace_identity_and_sampling_flag() {
+    let (mut processor, exporter, provider) = processor(LogSeverity::Info);
+    let upstream_parent = Uuid::now_v7();
+    let local_scope = Uuid::now_v7();
+    let mut imported = scope_with_parent(local_scope, Some(upstream_parent), ScopeCategory::Start);
+    imported.set_propagation_parent_uuid(Some(upstream_parent));
+    imported.set_propagation_traceparent(Some(
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00".to_string(),
+    ));
+    imported.set_propagation_tracestate(Some("vendor=value".to_string()));
+    processor.process(&imported);
+    processor.process(&mark(
+        Some(local_scope),
+        "relay.w3c-context",
+        None,
+        None,
+        None,
+    ));
+    provider.force_flush().unwrap();
+
+    let logs = exporter.get_emitted_logs().unwrap();
+    let context = logs[0]
+        .record
+        .trace_context()
+        .expect("imported W3C context should be attached to the log record");
+    assert_eq!(
+        context.trace_id.to_string(),
+        "4bf92f3577b34da6a3ce929d0e0e4736"
+    );
+    assert_eq!(context.span_id, relay_span_id(local_scope));
+    assert_eq!(context.trace_flags, Some(TraceFlags::default()));
+}
+
+#[test]
 fn mark_projection_preserves_category_profile_schema_and_json_scalars() {
     let (mut processor, exporter, provider) = processor(LogSeverity::Trace);
     let event = Event::Mark(MarkEvent::new(

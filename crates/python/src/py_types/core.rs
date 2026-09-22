@@ -225,8 +225,14 @@ pub struct PyPropagationContext {
 #[pymethods]
 impl PyPropagationContext {
     #[new]
-    #[pyo3(signature = (parent_uuid, root_uuid=None, version=1))]
-    fn new(parent_uuid: &str, root_uuid: Option<&str>, version: u16) -> PyResult<Self> {
+    #[pyo3(signature = (parent_uuid, root_uuid=None, version=1, traceparent=None, tracestate=None))]
+    fn new(
+        parent_uuid: &str,
+        root_uuid: Option<&str>,
+        version: u16,
+        traceparent: Option<String>,
+        tracestate: Option<String>,
+    ) -> PyResult<Self> {
         let context = PropagationContext {
             version,
             root_uuid: root_uuid
@@ -235,11 +241,15 @@ impl PyPropagationContext {
                 .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?,
             parent_uuid: uuid::Uuid::parse_str(parent_uuid)
                 .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?,
+            traceparent,
+            tracestate,
         };
         context
             .validate()
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-        Ok(Self { inner: context })
+        Ok(Self {
+            inner: context.normalized(),
+        })
     }
 
     #[getter]
@@ -257,6 +267,16 @@ impl PyPropagationContext {
         self.inner.parent_uuid.to_string()
     }
 
+    #[getter]
+    fn traceparent(&self) -> Option<String> {
+        self.inner.traceparent.clone()
+    }
+
+    #[getter]
+    fn tracestate(&self) -> Option<String> {
+        self.inner.tracestate.clone()
+    }
+
     /// Serialize this context to the Relay JSON wire format.
     fn to_json(&self) -> PyResult<String> {
         self.inner
@@ -264,7 +284,7 @@ impl PyPropagationContext {
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
     }
 
-    /// Convert this rooted context to a W3C ``traceparent`` value.
+    /// Convert this context to a W3C ``traceparent`` value.
     fn to_traceparent(&self) -> PyResult<String> {
         self.inner
             .to_traceparent()

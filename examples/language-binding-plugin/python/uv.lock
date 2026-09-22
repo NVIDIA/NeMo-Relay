@@ -48,6 +48,7 @@ provides-extras = ["cli", "deepagents", "langchain", "langchain-nvidia", "langgr
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "anyio", specifier = ">=4.14.2" },
     { name = "beautifulsoup4", specifier = ">=4.14,<5" },
     { name = "ipython", specifier = "~=8.20" },
     { name = "maturin", marker = "sys_platform != 'linux'", specifier = ">=1.0,<2.0" },
@@ -56,6 +57,7 @@ dev = [
     { name = "pre-commit", specifier = "~=4.0" },
     { name = "pylic", specifier = ">=5.0.1" },
     { name = "ruff", specifier = "~=0.11" },
+    { name = "soupsieve", specifier = ">=2.9.0" },
     { name = "ty", specifier = ">=0.0.1a7" },
     { name = "uv", specifier = "~=0.11.0" },
 ]

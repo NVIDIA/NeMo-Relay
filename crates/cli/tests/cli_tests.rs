@@ -4245,16 +4245,16 @@ command = "mise --bare exec -- claude"
         diagnostic["fields"]["diagnostic_code"],
         "claude_relay_hook_integrity_at_risk"
     );
-    assert_eq!(diagnostic["fields"]["safe_mode_signal"], "true");
-    assert_eq!(diagnostic["fields"]["bare_mode_signal"], "false");
+    assert_eq!(diagnostic["fields"]["safe_mode_signal"], true);
+    assert_eq!(diagnostic["fields"]["bare_mode_signal"], false);
     assert_eq!(diagnostic["fields"]["model_routing"], "configured");
     assert_eq!(diagnostic["fields"]["hook_integrity"], "at_risk");
-    assert_eq!(diagnostic["fields"]["command_modified"], "false");
+    assert_eq!(diagnostic["fields"]["command_modified"], false);
     assert_eq!(
         diagnostic["fields"]["action"],
         "remove_hook_disabling_claude_mode_if_hook_integrity_is_required"
     );
-    assert_eq!(diagnostic["fields"]["arguments_redacted"], "true");
+    assert_eq!(diagnostic["fields"]["arguments_redacted"], true);
     assert!(!diagnostic.to_string().contains("private prompt sentinel"));
 }
 

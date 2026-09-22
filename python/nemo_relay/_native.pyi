@@ -62,6 +62,7 @@ def list_runtime_registrations(kinds: set[str] | None = None) -> list[_RuntimeRe
     ...
 
 def _shutdown_default_logging() -> None: ...
+def log(level: str, message: str, target: str = "", fields: _JsonObject | None = None) -> None: ...
 
 class _EventSanitizeFields(TypedDict):
     data: _Json | None
@@ -1572,18 +1573,29 @@ def create_scope_stack() -> ScopeStack:
 
 class PropagationContext:
     """Transport-neutral Relay causal context."""
-    def __init__(self, parent_uuid: str, root_uuid: str | None = None, version: int = 1) -> None: ...
+    def __init__(
+        self,
+        parent_uuid: str,
+        root_uuid: str | None = None,
+        version: int = 1,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
+    ) -> None: ...
     @property
     def version(self) -> int: ...
     @property
     def root_uuid(self) -> str | None: ...
     @property
     def parent_uuid(self) -> str: ...
+    @property
+    def traceparent(self) -> str | None: ...
+    @property
+    def tracestate(self) -> str | None: ...
     def to_json(self) -> str:
         """Serialize this context to the Relay JSON wire format."""
         ...
     def to_traceparent(self) -> str:
-        """Convert this rooted context to a W3C traceparent value."""
+        """Convert this context to a W3C traceparent value."""
         ...
     @staticmethod
     def from_json(value: str) -> PropagationContext:

@@ -53,6 +53,7 @@ extern int32_t nemo_relay_list_runtime_registrations(const char* kinds_json, cha
 // Core API
 extern int32_t nemo_relay_initialize_default_logging(void);
 extern int32_t nemo_relay_shutdown_default_logging(void);
+extern int32_t nemo_relay_log(const char*, const char*, const char*, const char*);
 extern int32_t nemo_relay_get_handle(FfiScopeHandle** out);
 extern int32_t nemo_relay_push_scope(const char* name, int32_t scope_type, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* input_json, const int64_t* timestamp_unix_micros, FfiScopeHandle** out);
 extern int32_t nemo_relay_pop_scope(const FfiScopeHandle* handle, const char* output_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
@@ -255,6 +256,7 @@ extern int32_t nemo_relay_capture_rootless_propagation_context_json(char** out);
 extern int32_t nemo_relay_capture_propagation_context_with_root_json(const char* root_uuid, char** out);
 extern int32_t nemo_relay_capture_traceparent(char** out);
 extern int32_t nemo_relay_propagation_context_to_traceparent(const char* context_json, char** out);
+extern int32_t nemo_relay_propagation_context_normalize_json(const char* context_json, char** out);
 extern int32_t nemo_relay_scope_stack_create_from_propagation_json(const char* context_json, FfiScopeStack** out);
 extern int32_t nemo_relay_scope_stack_set_thread(const FfiScopeStack* stack);
 extern int32_t nemo_relay_scope_stack_capture_thread(FfiThreadScopeStackBinding** out);
@@ -355,6 +357,43 @@ func init() {
 // Callers that configure file sinks should defer ShutdownLogging from main.
 func ShutdownLogging() error {
 	return checkStatus(C.nemo_relay_shutdown_default_logging())
+}
+
+// Log emits a structured operational record through Relay's configured sinks.
+func Log(level, target, message string, fields map[string]any) error {
+	if fields == nil {
+		levelC, targetC, messageC := C.CString(level), C.CString(target), C.CString(message)
+		defer C.free(unsafe.Pointer(levelC))
+		defer C.free(unsafe.Pointer(targetC))
+		defer C.free(unsafe.Pointer(messageC))
+		return checkStatus(C.nemo_relay_log(levelC, targetC, messageC, nil))
+	}
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	levelC, targetC, messageC, fieldsC := C.CString(level), C.CString(target), C.CString(message), C.CString(string(encoded))
+	defer C.free(unsafe.Pointer(levelC))
+	defer C.free(unsafe.Pointer(targetC))
+	defer C.free(unsafe.Pointer(messageC))
+	defer C.free(unsafe.Pointer(fieldsC))
+	return checkStatus(C.nemo_relay_log(levelC, targetC, messageC, fieldsC))
+}
+
+func Trace(target, message string, fields map[string]any) error {
+	return Log("trace", target, message, fields)
+}
+func Debug(target, message string, fields map[string]any) error {
+	return Log("debug", target, message, fields)
+}
+func Info(target, message string, fields map[string]any) error {
+	return Log("info", target, message, fields)
+}
+func Warn(target, message string, fields map[string]any) error {
+	return Log("warn", target, message, fields)
+}
+func Error(target, message string, fields map[string]any) error {
+	return Log("error", target, message, fields)
 }
 
 func checkedValue[T any](status int32, value T) (T, error) {
@@ -1959,19 +1998,18 @@ type ScopeStack struct {
 // PropagationContext is the versioned, transport-neutral causal context used
 // to continue Relay work in another process.
 type PropagationContext struct {
-	Version    uint16  `json:"version"`
-	RootUUID   *string `json:"root_uuid,omitempty"`
-	ParentUUID string  `json:"parent_uuid"`
+	Version     uint16  `json:"version"`
+	RootUUID    *string `json:"root_uuid,omitempty"`
+	ParentUUID  string  `json:"parent_uuid"`
+	Traceparent *string `json:"traceparent,omitempty"`
+	Tracestate  *string `json:"tracestate,omitempty"`
 }
 
 // ToJSON serializes a validated propagation context for application-managed transport.
 func (context PropagationContext) ToJSON() (string, error) {
-	if err := validatePropagationContext(context); err != nil {
-		return "", err
-	}
 	// PropagationContext has only JSON-native fields, so marshaling cannot fail.
 	payload, _ := json.Marshal(context)
-	return string(payload), nil
+	return normalizePropagationContextJSON(string(payload))
 }
 
 // ToTraceparent converts a rooted propagation context to a W3C traceparent value.
@@ -1992,14 +2030,26 @@ func (context PropagationContext) ToTraceparent() (string, error) {
 
 // PropagationContextFromJSON deserializes and validates a transport context.
 func PropagationContextFromJSON(value string) (PropagationContext, error) {
+	value, err := normalizePropagationContextJSON(value)
+	if err != nil {
+		return PropagationContext{}, err
+	}
 	var context PropagationContext
 	if err := json.Unmarshal([]byte(value), &context); err != nil {
 		return PropagationContext{}, err
 	}
-	if err := validatePropagationContext(context); err != nil {
-		return PropagationContext{}, err
-	}
 	return context, nil
+}
+
+func normalizePropagationContextJSON(value string) (string, error) {
+	payload := C.CString(value)
+	defer C.free(unsafe.Pointer(payload))
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_propagation_context_normalize_json(payload, &out)); err != nil {
+		return "", err
+	}
+	defer C.nemo_relay_string_free(out)
+	return C.GoString(out), nil
 }
 
 func validatePropagationContext(context PropagationContext) error {
