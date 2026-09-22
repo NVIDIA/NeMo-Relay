@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{ConnectInfo, State};
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER};
+use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::IntoResponse;
@@ -137,6 +137,7 @@ struct DaemonState {
     identity: MachineIdentity,
     descriptor: crate::daemon::common::protocol::ComponentDescriptor,
     instance_id: String,
+    pass_through: bool,
     public_origin: String,
     config: GatewayConfig,
     upstream: PooledClient,
@@ -169,6 +170,7 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
         identity: load_or_create_daemon_identity()?,
         descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
         instance_id: uuid::Uuid::now_v7().to_string(),
+        pass_through: options.pass_through,
         public_origin,
         config: resolved.gateway,
         upstream: pooled_client().map_err(|error| CliError::Launch(error.to_string()))?,
@@ -256,9 +258,28 @@ fn router(state: Arc<DaemonState>) -> Router {
         )
         .route_layer(from_fn_with_state(peers, limit_challenges));
     Router::new()
+        .route("/healthz", get(healthz))
         .merge(control)
         .fallback(public_proxy)
         .with_state(state)
+}
+
+async fn healthz(State(state): State<Arc<DaemonState>>) -> Response<Body> {
+    let mut response = (
+        StatusCode::OK,
+        Json(json!({
+            "status": "ok",
+            "service": "nemo-relay-daemon",
+            "version": env!("CARGO_PKG_VERSION"),
+            "instance_id": state.instance_id,
+            "deployment_mode": if state.pass_through { "pass_through" } else { "managed" },
+        })),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 async fn limit_challenges(

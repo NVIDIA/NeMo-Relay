@@ -134,10 +134,11 @@ own token to MCP and hook processes. The worker runs as that user, not as the
 
 ## Verify and Operate
 
-Check the listener, then launch a configured harness and complete the
+Check daemon health and readiness, then launch a configured harness and complete the
 [worker-backed verification](/daemon/operations#verify-worker-backed-operation):
 
 ```bash
+curl -f http://127.0.0.1:47632/healthz
 ss -ltn 'sport = :47632'
 ```
 

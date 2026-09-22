@@ -23,6 +23,36 @@ use tower::ServiceExt as _;
 type CapturedProviderRequest = Arc<std::sync::Mutex<Option<(HeaderMap, bytes::Bytes)>>>;
 
 #[tokio::test]
+async fn daemon_health_is_a_public_process_probe() {
+    let state = test_daemon_state(false, "", GatewayConfig::default());
+    let app = router(Arc::clone(&state));
+
+    let health = app
+        .clone()
+        .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(health.status(), StatusCode::OK);
+    assert_eq!(health.headers()[CACHE_CONTROL], "no-store");
+    let health: serde_json::Value =
+        serde_json::from_slice(&health.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(health["status"], "ok");
+    assert_eq!(health["service"], "nemo-relay-daemon");
+    assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(health["instance_id"], "public-proxy-test-daemon");
+    assert_eq!(health["deployment_mode"], "managed");
+
+    let pass_through = router(test_daemon_state(true, "", GatewayConfig::default()))
+        .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let pass_through: serde_json::Value =
+        serde_json::from_slice(&pass_through.into_body().collect().await.unwrap().to_bytes())
+            .unwrap();
+    assert_eq!(pass_through["deployment_mode"], "pass_through");
+}
+
+#[tokio::test]
 async fn shared_model_catalogs_disable_cache_reuse_between_credentials() {
     let provider = Router::new().route(
         "/v1/models",
@@ -1066,6 +1096,7 @@ pub(super) fn test_daemon_state_at(
         registry: Registry::new(pass_through),
         descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
         instance_id: "public-proxy-test-daemon".into(),
+        pass_through,
         public_origin,
         config,
         upstream: pooled_client().expect("daemon client"),
