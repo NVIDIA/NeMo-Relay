@@ -160,8 +160,17 @@ pub(crate) async fn passthrough(
 ) -> Result<Response<Body>, CliError> {
     state.touch();
     let operational = OperationalContext::new_gateway(request.headers_mut());
-    let authorization = state.authorize_provider_request(request.headers_mut())?;
-    let mut prepared = match prepare_gateway_request(&state.config, request, authorization).await {
+    let request_path = request.uri().path().to_string();
+    let (authorization, provider_path) =
+        state.authorize_provider_request(request.headers_mut(), &request_path)?;
+    let mut prepared = match prepare_gateway_request(
+        &state.config,
+        request,
+        authorization,
+        &provider_path,
+    )
+    .await
+    {
         Ok(prepared) => prepared,
         Err(error) => {
             if matches!(error, CliError::PayloadTooLarge(_)) {
@@ -193,8 +202,17 @@ pub(crate) async fn images_generations(
 ) -> Result<Response<Body>, CliError> {
     state.touch();
     let operational = OperationalContext::new_gateway(request.headers_mut());
-    let authorization = state.authorize_provider_request(request.headers_mut())?;
-    let prepared = match prepare_gateway_request(&state.config, request, authorization).await {
+    let request_path = request.uri().path().to_string();
+    let (authorization, provider_path) =
+        state.authorize_provider_request(request.headers_mut(), &request_path)?;
+    let prepared = match prepare_gateway_request(
+        &state.config,
+        request,
+        authorization,
+        &provider_path,
+    )
+    .await
+    {
         Ok(prepared) => prepared,
         Err(error) => {
             if matches!(error, CliError::PayloadTooLarge(_)) {
@@ -1641,19 +1659,17 @@ pub(crate) async fn models(
     }
     let provider = ProviderRoute::OpenAiModels;
     let configured_auth_header = provider.configured_auth_header(&state.config);
-    let path_and_query = parts
-        .uri
-        .path_and_query()
-        .map(|p| p.as_str())
-        .unwrap_or(parts.uri.path());
-    let authorization = state.authorize_provider_request(&mut parts.headers)?;
+    let request_path = parts.uri.path().to_string();
+    let (authorization, provider_path) =
+        state.authorize_provider_request(&mut parts.headers, &request_path)?;
+    let path_and_query = request::provider_path_and_query(&provider_path, parts.uri.query());
     let mut allow_environment_provider_auth = authorization.allow_environment_provider_auth;
     parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
     let mut named_by_client = false;
     let agent_override = gateway_upstream_url_override(
         provider,
         &parts.headers,
-        path_and_query,
+        &path_and_query,
         allow_environment_provider_auth,
         &state.config,
     );
@@ -1662,7 +1678,7 @@ pub(crate) async fn models(
         None => match crate::gateway::routes::client_named_upstream_url(
             provider,
             &parts.headers,
-            path_and_query,
+            &path_and_query,
             authorization.source_credential.is_relay_proxy_credential(),
         ) {
             crate::agents::pi::alignment::NamedUpstream::Named(url) => {
@@ -1674,7 +1690,7 @@ pub(crate) async fn models(
                 return Err(CliError::InvalidPayload(reason.to_string()));
             }
             crate::agents::pi::alignment::NamedUpstream::Absent => {
-                provider.upstream_url(&state.config, path_and_query)
+                provider.upstream_url(&state.config, &path_and_query)
             }
         },
     };
