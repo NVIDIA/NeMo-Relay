@@ -13,7 +13,7 @@ The checker requires Bash, `curl`, `gh`, `jq`, `just`, and `uv`; it does not run
 on Windows. From the repository root, run:
 
 ```bash
-bash .agents/skills/check-release-deployments/scripts/check_release_deployments.sh <tag>
+.agents/skills/check-release-deployments/scripts/check_release_deployments.sh <tag>
 ```
 
 It validates Relay's raw-SemVer tag format, converts the version to PEP 440 for
