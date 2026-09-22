@@ -185,6 +185,97 @@ fn ready_worker_is_reused_and_request_guard_counts_in_flight() {
 }
 
 #[test]
+fn worker_status_snapshots_report_assigned_workers_in_worker_id_order() {
+    let registry = Registry::new(false);
+    let ready_fingerprint = fingerprint(40);
+    let ready_token = TokenDigest::from_token(b"ready-status-token");
+    registry
+        .register_mcp(
+            registration(ready_fingerprint, ready_token, "ready-mcp"),
+            launch("ready-activation"),
+        )
+        .unwrap();
+    registry
+        .mark_worker_ready(ready_fingerprint, "ready-activation", worker("worker-z"))
+        .unwrap();
+
+    let recovering_fingerprint = fingerprint(41);
+    registry
+        .restore_binding(
+            recovering_fingerprint,
+            TokenDigest::from_token(b"recovering-status-token"),
+        )
+        .unwrap();
+    registry
+        .begin_recovery(recovering_fingerprint, Some(worker("worker-m")), 15_000)
+        .unwrap();
+
+    let draining_fingerprint = fingerprint(42);
+    let draining_token = TokenDigest::from_token(b"draining-status-token");
+    registry
+        .register_mcp(
+            registration(draining_fingerprint, draining_token, "draining-mcp"),
+            launch("draining-activation"),
+        )
+        .unwrap();
+    registry
+        .mark_worker_ready(
+            draining_fingerprint,
+            "draining-activation",
+            worker("worker-a"),
+        )
+        .unwrap();
+    registry
+        .release_mcp(draining_fingerprint, &session("draining-mcp"), 15_000)
+        .unwrap();
+
+    let snapshots = registry.worker_status_snapshots();
+    assert_eq!(
+        snapshots
+            .iter()
+            .map(|snapshot| (snapshot.worker_id.as_str(), snapshot.state))
+            .collect::<Vec<_>>(),
+        vec![
+            ("worker-a", RouteStateKind::Draining),
+            ("worker-m", RouteStateKind::Recovering),
+            ("worker-z", RouteStateKind::Ready),
+        ]
+    );
+}
+
+#[test]
+fn worker_status_snapshots_omit_routes_without_assigned_workers() {
+    let registry = Registry::new(false);
+    let fallback_fingerprint = fingerprint(43);
+    registry
+        .register_mcp(
+            registration(
+                fallback_fingerprint,
+                TokenDigest::from_token(b"fallback-status-token"),
+                "fallback-mcp",
+            ),
+            launch("fallback-activation"),
+        )
+        .unwrap();
+    registry
+        .mark_activation_failed(fallback_fingerprint, "fallback-activation")
+        .unwrap();
+
+    let recovering_fingerprint = fingerprint(44);
+    registry
+        .restore_binding(
+            recovering_fingerprint,
+            TokenDigest::from_token(b"unassigned-recovery-token"),
+        )
+        .unwrap();
+    registry
+        .begin_recovery(recovering_fingerprint, None, 15_000)
+        .unwrap();
+
+    assert!(registry.worker_status_snapshots().is_empty());
+}
+
+#[test]
 fn token_and_fingerprint_bindings_cannot_be_reassigned() {
     let registry = Registry::new(false);
     let first_fingerprint = fingerprint(3);

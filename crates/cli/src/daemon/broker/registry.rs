@@ -733,6 +733,37 @@ impl Registry {
         }
     }
 
+    /// Returns credential-free snapshots of assigned workers for operational status reporting.
+    pub(crate) fn worker_status_snapshots(&self) -> Vec<WorkerStatusSnapshot> {
+        let inner = self.read();
+        let mut snapshots = inner
+            .routes
+            .values()
+            .filter_map(|route| {
+                let target = match &route.state {
+                    RouteState::Ready { target } | RouteState::Draining { target, .. } => target,
+                    RouteState::Recovering {
+                        target: Some(target),
+                        ..
+                    } => target,
+                    RouteState::Empty
+                    | RouteState::Activating { .. }
+                    | RouteState::PassThrough { .. }
+                    | RouteState::Recovering { target: None, .. } => return None,
+                };
+                Some(WorkerStatusSnapshot {
+                    worker_id: target.worker_id().to_owned(),
+                    state: route.state.kind(),
+                    reference_count: route.refs.len(),
+                    control_available: target.control_available(),
+                    in_flight: target.in_flight(),
+                })
+            })
+            .collect::<Vec<_>>();
+        snapshots.sort_by(|left, right| left.worker_id.cmp(&right.worker_id));
+        snapshots
+    }
+
     /// Returns a credential-free route snapshot for status and tests.
     #[cfg(test)]
     pub(crate) fn snapshot(
@@ -1059,6 +1090,16 @@ pub(crate) struct RouteSnapshot {
     pub(crate) reference_count: usize,
     pub(crate) launch_owner: Option<McpSessionId>,
     pub(crate) endpoint: Option<String>,
+    pub(crate) in_flight: usize,
+}
+
+/// Last-known broker information for an assigned worker generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorkerStatusSnapshot {
+    pub(crate) worker_id: String,
+    pub(crate) state: RouteStateKind,
+    pub(crate) reference_count: usize,
+    pub(crate) control_available: bool,
     pub(crate) in_flight: usize,
 }
 

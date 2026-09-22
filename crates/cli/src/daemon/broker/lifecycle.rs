@@ -200,6 +200,19 @@ pub(crate) enum RouteStateKind {
     Recovering,
 }
 
+impl RouteStateKind {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Activating => "activating",
+            Self::Ready => "ready",
+            Self::Draining => "draining",
+            Self::PassThrough => "pass_through",
+            Self::Recovering => "recovering",
+        }
+    }
+}
+
 /// Internal state for one fingerprint route.
 #[derive(Debug)]
 pub(crate) enum RouteState {
