@@ -1,0 +1,106 @@
+---
+title: "pi Quick Start"
+description: "Run one local pi task through NeMo Relay and write ATOF events."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Run one local pi task through NeMo Relay and write its agent, model, and tool
+lifecycle to a local ATOF event file.
+
+<Warning>
+The pi integration is a proof of concept verified against pi 0.84.x. pi can
+introduce breaking hook changes in minor releases.
+</Warning>
+
+## Prerequisites
+
+- pi 0.84.x, already configured with a model provider
+- NeMo Relay CLI 0.10.0 or newer
+
+Install the latest stable Relay CLI on Linux or macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
+```
+
+See [Installation](/getting-started/installation#cli) for Python and Windows
+installation paths.
+
+## Install the pi Extension
+
+pi hooks must originate inside the process, so install the Relay extension once
+and verify that pi can load it:
+
+```bash
+nemo-relay install pi
+nemo-relay doctor pi
+```
+
+## Select pi
+
+Save this file as `config.toml` in the directory where you will run the agent:
+
+```toml
+[agents.pi]
+command = "pi"
+```
+
+## Enable Observability
+
+Save this sibling file as `plugins.toml`:
+
+```toml
+version = 1
+
+[policy]
+unknown_component = "error"
+unknown_field = "error"
+unsupported_value = "error"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"
+```
+
+ATOF output can contain sensitive prompts, responses, tool arguments, and tool
+results. Protect `logs/events.jsonl` even when full payload export is disabled.
+
+## Run pi
+
+From the directory containing both files, run:
+
+```bash
+nemo-relay --config "$PWD/config.toml" pi -- -p "Inspect this repository and use one tool."
+```
+
+Relay starts a temporary local gateway and loads the installed extension for
+this run.
+
+## Verify the Events
+
+After the task exits, confirm that Relay wrote the local event stream:
+
+```bash
+test -s logs/events.jsonl
+tail -n 1 logs/events.jsonl | python3 -m json.tool
+```
+
+## Next Steps
+
+Use the full [pi guide](/nemo-relay-cli/pi) for extension trust, tool gating,
+model redirection, version compatibility, and known limitations.

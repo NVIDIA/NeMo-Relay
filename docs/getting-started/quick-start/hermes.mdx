@@ -1,0 +1,94 @@
+---
+title: "Hermes Quick Start"
+description: "Run one Hermes Agent turn with native NeMo Relay observability."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Run one Hermes Agent turn and write its session, model, and tool lifecycle to a
+local ATOF event file.
+
+Hermes includes NeMo Relay natively. Do not install the former Hermes Relay
+observability plugin or launch Hermes through the `nemo-relay` CLI.
+
+## Install and Configure Hermes
+
+Install Hermes on Linux, macOS, or WSL2:
+
+```bash
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+```
+
+Complete the normal Hermes setup with a working model provider before continuing.
+For other supported platforms, use the
+[Hermes installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation).
+
+## Enable Observability
+
+Save the following configuration as `plugins.toml` in the directory where you
+will start Hermes:
+
+```toml
+version = 1
+
+[policy]
+unknown_component = "error"
+unknown_field = "error"
+unsupported_value = "error"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"
+```
+
+Select that file in the shell that will start Hermes:
+
+```bash
+export HERMES_NEMO_RELAY_PLUGINS_TOML="$PWD/plugins.toml"
+```
+
+ATOF output can contain sensitive prompts, responses, tool arguments, and tool
+results. Protect `logs/events.jsonl` even when full payload export is disabled.
+
+## Run One Turn
+
+From the same directory, run a one-shot turn that should use a tool:
+
+```bash
+hermes chat --oneshot -q "Use the terminal tool to run pwd, then report the result."
+```
+
+Hermes closes the Relay session before this command exits, allowing queued
+observability records to finish writing.
+
+## Verify the Events
+
+```bash
+test -s logs/events.jsonl
+tail -n 1 logs/events.jsonl | python3 -m json.tool
+```
+
+The file should contain records for the Hermes session, model request, and
+terminal tool call.
+
+## Next Steps
+
+- Review the Hermes
+  [NeMo Relay migration note](https://hermes-agent.nousresearch.com/docs/user-guide/features/built-in-plugins#nemo-relay-native-integration-migration-note)
+  before updating an older Hermes installation.
+- Continue with [plugin configuration](/configure-plugins/plugin-configuration-files)
+  and the [ATOF exporter](/configure-plugins/observability/atof).
