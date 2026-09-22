@@ -1,5 +1,6 @@
 ---
 title: "OpenClaw Quick Start"
+sidebar-title: "OpenClaw"
 description: "Observe one OpenClaw agent turn with the NeMo Relay plugin and local ATOF output."
 position: 5
 ---
@@ -12,78 +13,84 @@ tool lifecycle to a local ATOF event file.
 ## Prerequisites
 
 - OpenClaw 2026.9.3 or newer
+- Node.js 24 or newer and npm
 - A configured OpenClaw agent and model provider
 - Permission to install plugins and restart the OpenClaw gateway
 
 ## Install the Plugin
 
-Install the matching NeMo Relay plugin and restart the gateway:
+Install and pin the verified NeMo Relay plugin. OpenClaw registers the plugin ID
+and adds it to an existing `plugins.allow` list automatically:
 
 ```bash
-openclaw plugins install npm:nemo-relay-openclaw@0.10.0
-openclaw gateway restart
+openclaw plugins install npm:nemo-relay-openclaw@0.9.1 --pin --accept-capabilities
 ```
+
+The plugin requires OpenClaw capability consent. The explicit flag grants and
+records that consent for the install.
 
 The npm package is named `nemo-relay-openclaw`; its OpenClaw plugin ID is
 `nemo-relay`.
 
 ## Enable Observability
 
-Add this entry to your OpenClaw configuration, merging it with any existing
-`plugins` settings:
+First, run `openclaw config file` to confirm which configuration file OpenClaw
+will update. Then save the following partial configuration as
+`relay-openclaw.patch.json5`. Replace `/absolute/path/to/relay-logs` with a
+writable absolute directory. On Windows, use forward slashes, for example
+`C:/Users/alice/.openclaw/nemo-relay-quickstart`.
 
-```json
+```json5
 {
-  "plugins": {
-    "allow": ["nemo-relay"],
-    "entries": {
+  plugins: {
+    entries: {
       "nemo-relay": {
-        "enabled": true,
-        "hooks": {
-          "allowConversationAccess": true
+        enabled: true,
+        hooks: {
+          allowConversationAccess: true,
         },
-        "config": {
-          "enabled": true,
-          "backend": "hooks",
-          "plugins": {
-            "version": 1,
-            "policy": {
-              "unknown_component": "error",
-              "unknown_field": "error",
-              "unsupported_value": "error"
+        config: {
+          enabled: true,
+          backend: "hooks",
+          plugins: {
+            version: 1,
+            policy: {
+              unknown_component: "error",
+              unknown_field: "error",
+              unsupported_value: "error",
             },
-            "components": [
+            components: [
               {
-                "kind": "observability",
-                "enabled": true,
-                "config": {
-                  "version": 4,
-                  "enable_full_payloads": false,
-                  "atof": {
-                    "enabled": true,
-                    "sinks": [
+                kind: "observability",
+                enabled: true,
+                config: {
+                  version: 4,
+                  enable_full_payloads: false,
+                  atof: {
+                    enabled: true,
+                    sinks: [
                       {
-                        "type": "file",
-                        "output_directory": "logs",
-                        "filename": "events.jsonl",
-                        "mode": "overwrite"
-                      }
-                    ]
-                  }
-                }
-              }
-            ]
+                        type: "file",
+                        output_directory: "/absolute/path/to/relay-logs",
+                        filename: "events.jsonl",
+                        mode: "overwrite",
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
           },
-          "capture": {
-            "includePrompts": false,
-            "includeResponses": false,
-            "stripToolArgs": true,
-            "stripToolResults": true
-          }
-        }
-      }
-    }
-  }
+          capture: {
+            includePrompts: false,
+            includeResponses: false,
+            stripToolArgs: true,
+            stripToolResults: true,
+          },
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -92,16 +99,20 @@ response, tool-argument, and tool-result content from OpenClaw's replay layer.
 Other event fields can still contain sensitive application data. Protect the
 output file and review the full capture controls before enabling richer payloads.
 
-Relative output paths resolve from the OpenClaw gateway's working directory.
-Use an absolute `output_directory` when the gateway runs as a service or its
-working directory is not stable.
-
-Restart after changing plugin configuration:
+Validate and apply the patch through OpenClaw instead of editing the complete
+configuration file:
 
 ```bash
+openclaw config patch --file ./relay-openclaw.patch.json5 --dry-run
+openclaw config patch --file ./relay-openclaw.patch.json5
 openclaw gateway restart
 openclaw plugins inspect nemo-relay --runtime --json
 ```
+
+Installing plugin code requires a gateway restart. A managed gateway can
+restart automatically; the explicit command is safe when you want to ensure
+the new package is loaded. Ordinary plugin configuration changes use OpenClaw's
+normal configuration reload behavior.
 
 ## Run One Turn
 
@@ -110,31 +121,39 @@ uses `main`:
 
 ```bash
 openclaw agents list
-openclaw agent --agent main --message "Inspect the workspace and use one tool."
+openclaw agent --agent main --message "Use one available tool to produce RELAY_QUICKSTART_TOOL_OK. Then include RELAY_QUICKSTART_RESPONSE_OK in your final response."
 ```
 
 ## Verify the Events
 
-Inspect the ATOF file from the gateway's working directory:
+Inspect the ATOF file in the absolute directory configured above:
 
+<Tabs>
+<Tab title="Unix shell">
 ```bash
-test -s logs/events.jsonl
-tail -n 1 logs/events.jsonl | python3 -m json.tool
+test -s /absolute/path/to/relay-logs/events.jsonl
+tail -n 1 /absolute/path/to/relay-logs/events.jsonl
+printf 'RELAY_QUICKSTART_EVENTS_OK\n'
 ```
+</Tab>
 
-Optionally, check the plugin's live status when your CLI is paired with
-admin-capable gateway access:
-
-```bash
-openclaw gateway call nemoRelay.status --json
+<Tab title="Windows PowerShell">
+```powershell
+$eventFile = "C:\absolute\path\to\relay-logs\events.jsonl"
+if ((Get-Item $eventFile).Length -eq 0) { throw "Relay event file is empty" }
+Get-Content $eventFile -Tail 1
+Write-Output "RELAY_QUICKSTART_EVENTS_OK"
 ```
+</Tab>
+</Tabs>
 
-The `nemoRelay.status` method requires the `operator.admin` scope. If your CLI
-does not have it, skip this check and use the full guide for token and device
-approval paths.
+The transcript should contain `RELAY_QUICKSTART_TOOL_OK`, the final response
+should contain `RELAY_QUICKSTART_RESPONSE_OK`, and the verification command
+should end with `RELAY_QUICKSTART_EVENTS_OK`.
 
-## Next Steps
+## For More Details
 
-Use the full [OpenClaw plugin guide](/supported-integrations/openclaw-plugin)
-for capture controls, replay fidelity, health reporting, security boundaries,
-and known limitations.
+For more details, refer to:
+
+- [NeMo Relay OpenClaw plugin guide](/supported-integrations/openclaw-plugin)
+- [OpenClaw plugin documentation](https://docs.openclaw.ai/tools/plugin)

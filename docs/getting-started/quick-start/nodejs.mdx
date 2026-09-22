@@ -1,5 +1,6 @@
 ---
 title: "Node.js Quick Start"
+sidebar-title: "Node.js"
 description: "Instrument one Node.js workflow and write its Relay events to a local ATOF file."
 position: 10
 ---
@@ -9,17 +10,22 @@ SPDX-License-Identifier: Apache-2.0 */}
 Instrument one scope, tool call, and LLM call with NeMo Relay, then verify the
 result in a local ATOF event file.
 
+## Prerequisites
+
+- Node.js 24 or newer
+- npm
+
 ## Install NeMo Relay
 
-From your Node.js project, install the published package:
+Create a project and install the verified published package. In an existing
+Node.js project, skip `npm init`.
 
 ```bash
-npm install nemo-relay-node@0.10.0
+mkdir relay-node-quickstart
+cd relay-node-quickstart
+npm init -y
+npm install --save-exact nemo-relay-node@0.9.1
 ```
-
-When working from a NeMo Relay source checkout instead, run
-`npm install --ignore-scripts` followed by
-`npm run build --workspace=nemo-relay-node`.
 
 ## Enable Observability
 
@@ -59,6 +65,7 @@ results. Protect `logs/events.jsonl` even when full payload export is disabled.
 Save this file as `quickstart.js` beside `plugins.toml`:
 
 ```js
+const fs = require("node:fs");
 const relay = require("nemo-relay-node");
 const plugin = require("nemo-relay-node/plugin");
 
@@ -70,9 +77,9 @@ async function main() {
       relay.event("initialized", handle, { binding: "node" }, null);
 
       const toolResult = await relay.toolCallExecute(
-        "search",
-        { query: "hello" },
-        (args) => ({ result: { echo: args.query } }),
+        "emit_marker",
+        { marker: "RELAY_QUICKSTART_TOOL_OK" },
+        (args) => ({ result: { marker: args.marker } }),
         handle,
         null,
         null,
@@ -81,8 +88,11 @@ async function main() {
 
       const llmResult = await relay.llmCallExecute(
         "demo-provider",
-        new relay.LlmRequest({}, { messages: [{ role: "user", content: "hi" }] }),
-        (request) => ({ ok: true, messages: request.content.messages }),
+        new relay.LlmRequest(
+          {},
+          { messages: [{ role: "user", content: "RELAY_QUICKSTART_RESPONSE_OK" }] },
+        ),
+        () => ({ content: "RELAY_QUICKSTART_RESPONSE_OK" }),
         handle,
         null,
         null,
@@ -90,14 +100,21 @@ async function main() {
         null,
       );
 
-      console.log(toolResult.result);
-      console.log(llmResult);
+      console.log(toolResult.result.marker);
+      console.log(llmResult.content);
     });
-
-    await relay.flushSubscribers();
   } finally {
-    await activation.close();
+    try {
+      await relay.flushSubscribers();
+    } finally {
+      await activation.close();
+    }
   }
+
+  const eventText = fs.readFileSync("logs/events.jsonl", "utf8").trim();
+  if (!eventText) throw new Error("Relay event file is empty");
+  JSON.parse(eventText.split(/\r?\n/).at(-1));
+  console.log("RELAY_QUICKSTART_EVENTS_OK");
 }
 
 main().catch((error) => {
@@ -114,19 +131,19 @@ node quickstart.js
 
 ## Verify the Events
 
-The program prints the synthetic tool and LLM results. Confirm that Relay also
-wrote lifecycle events:
+The program validates the event file and prints, in order:
 
-```bash
-test -s logs/events.jsonl
-tail -n 1 logs/events.jsonl | python3 -m json.tool
+```text
+RELAY_QUICKSTART_TOOL_OK
+RELAY_QUICKSTART_RESPONSE_OK
+RELAY_QUICKSTART_EVENTS_OK
 ```
 
-The file contains scope, tool, and LLM records in ATOF JSONL format.
+The event file contains scope, tool, and LLM records in ATOF JSONL format.
 
-## Next Steps
+## For More Details
 
-- Continue with [plugin configuration](/configure-plugins/plugin-configuration-files)
-  and the [ATOF exporter](/configure-plugins/observability/atof).
-- Learn the application APIs in [Instrument Application Code](/instrument-applications/code-examples)
-  and [Using Codecs](/integrate-into-frameworks/using-codecs).
+For more details, refer to:
+
+- [Installation](/getting-started/installation#nodejs)
+- [Instrument Application Code](/instrument-applications/code-examples)

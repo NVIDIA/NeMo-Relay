@@ -1,5 +1,6 @@
 ---
 title: "Claude Code Quick Start"
+sidebar-title: "Claude Code"
 description: "Run one local Claude Code session through NeMo Relay and write ATOF events."
 position: 2
 ---
@@ -12,16 +13,25 @@ and tool lifecycle to a local ATOF event file.
 ## Prerequisites
 
 - Claude Code 2.1.121 or newer, already authenticated
-- NeMo Relay CLI 0.10.0 or newer
+- A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
+- Permission to download the NeMo Relay 0.9.1 release
 
-Install the latest stable Relay CLI on Linux or macOS:
+Install the verified NeMo Relay CLI release:
 
+<Tabs>
+<Tab title="Unix shell">
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.9.1 sh
 ```
+</Tab>
 
-See [Installation](/getting-started/installation#cli) for Python and Windows
-installation paths.
+<Tab title="Windows PowerShell">
+```powershell
+$env:NEMO_RELAY_VERSION = '0.9.1'
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+</Tab>
+</Tabs>
 
 ## Select Claude Code
 
@@ -67,11 +77,21 @@ results. Protect `logs/events.jsonl` even when full payload export is disabled.
 
 ## Run Claude Code
 
-From the directory containing both files, run:
+From the directory containing both files, run the common validation prompt:
 
+<Tabs>
+<Tab title="Unix shell">
 ```bash
-nemo-relay --config "$PWD/config.toml" claude -- "Inspect this repository and use one tool."
+nemo-relay --config "$PWD/config.toml" claude -- "Use one available tool to produce RELAY_QUICKSTART_TOOL_OK. Then include RELAY_QUICKSTART_RESPONSE_OK in your final response."
 ```
+</Tab>
+
+<Tab title="Windows PowerShell">
+```powershell
+nemo-relay --config (Join-Path $PWD "config.toml") claude -- "Use one available tool to produce RELAY_QUICKSTART_TOOL_OK. Then include RELAY_QUICKSTART_RESPONSE_OK in your final response."
+```
+</Tab>
+</Tabs>
 
 Relay starts a temporary local gateway and injects Claude Code hooks for this
 run. It does not modify your persistent Claude Code plugin configuration.
@@ -80,12 +100,31 @@ run. It does not modify your persistent Claude Code plugin configuration.
 
 After the session exits, confirm that Relay wrote the local event stream:
 
+<Tabs>
+<Tab title="Unix shell">
 ```bash
 test -s logs/events.jsonl
-tail -n 1 logs/events.jsonl | python3 -m json.tool
+tail -n 1 logs/events.jsonl
+printf 'RELAY_QUICKSTART_EVENTS_OK\n'
 ```
+</Tab>
 
-## Next Steps
+<Tab title="Windows PowerShell">
+```powershell
+if ((Get-Item .\logs\events.jsonl).Length -eq 0) { throw "Relay event file is empty" }
+Get-Content .\logs\events.jsonl -Tail 1
+Write-Output "RELAY_QUICKSTART_EVENTS_OK"
+```
+</Tab>
+</Tabs>
 
-Use the full [Claude Code guide](/nemo-relay-cli/claude-code) for persistent
-installation, provider routing, captured events, and troubleshooting.
+The transcript should contain `RELAY_QUICKSTART_TOOL_OK`, the final response
+should contain `RELAY_QUICKSTART_RESPONSE_OK`, and the verification command
+should end with `RELAY_QUICKSTART_EVENTS_OK`.
+
+## For More Details
+
+For more details, refer to:
+
+- [Claude Code guide](/nemo-relay-cli/claude-code)
+- [Installation](/getting-started/installation#cli)

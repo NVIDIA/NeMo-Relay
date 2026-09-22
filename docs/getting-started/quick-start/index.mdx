@@ -1,5 +1,6 @@
 ---
 title: "Quick Start"
+sidebar-title: "Overview"
 description: "Choose the shortest NeMo Relay path for your agent, framework, or application."
 position: 5
 ---
@@ -8,7 +9,25 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Choose the host or framework you already use. Each quick start enables the
 built-in observability plugin, runs one representative workflow, and verifies
-local ATOF output in `logs/events.jsonl`.
+local ATOF output. Paths that install a Relay package or plugin pin the
+published 0.9.1 release; Hermes uses its native Relay integration.
+
+## What You Will Verify
+
+The agent and framework paths use a common validation contract:
+
+```text
+Use one available tool to produce RELAY_QUICKSTART_TOOL_OK. Then include RELAY_QUICKSTART_RESPONSE_OK in your final response.
+```
+
+- A tool or workflow produces `RELAY_QUICKSTART_TOOL_OK`.
+- The final response contains `RELAY_QUICKSTART_RESPONSE_OK`.
+- Relay writes valid JSONL and the example reports
+  `RELAY_QUICKSTART_EVENTS_OK`.
+
+The direct application paths produce the same markers without calling an
+external model. Each page includes all commands and configuration required for
+its first successful run.
 
 ## Agent Runtimes
 
@@ -73,6 +92,9 @@ Instrument one Rust scope, tool call, and model call.
 </Card>
 </CardGroup>
 
-After the first run succeeds, continue with [plugin configuration](/configure-plugins/plugin-configuration-files),
-[observability](/configure-plugins/observability/about), or the linked full
-integration guide for your chosen path.
+## For More Details
+
+For more details, refer to:
+
+- [Installation](/getting-started/installation)
+- [Observability](/configure-plugins/observability/about)

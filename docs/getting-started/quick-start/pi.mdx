@@ -1,5 +1,6 @@
 ---
 title: "pi Quick Start"
+sidebar-title: "pi"
 description: "Run one local pi task through NeMo Relay and write ATOF events."
 position: 4
 ---
@@ -10,23 +11,37 @@ Run one local pi task through NeMo Relay and write its agent, model, and tool
 lifecycle to a local ATOF event file.
 
 <Warning>
-The pi integration is a proof of concept verified against pi 0.84.x. pi can
-introduce breaking hook changes in minor releases.
+The pi integration is a proof of concept verified against pi 0.84.0. pi can
+introduce breaking hook changes in minor releases, so this quick start installs
+that exact version.
 </Warning>
 
 ## Prerequisites
 
-- pi 0.84.x, already configured with a model provider
-- NeMo Relay CLI 0.10.0 or newer
+- Node.js 24 or newer
+- npm and a configured model provider
+- A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
 
-Install the latest stable Relay CLI on Linux or macOS:
+Install the verified pi and NeMo Relay releases:
 
+<Tabs>
+<Tab title="Unix shell">
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
+npm install --global @earendil-works/pi-coding-agent@0.84.0
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.9.1 sh
 ```
+</Tab>
 
-See [Installation](/getting-started/installation#cli) for Python and Windows
-installation paths.
+<Tab title="Windows PowerShell">
+```powershell
+npm install --global @earendil-works/pi-coding-agent@0.84.0
+$env:NEMO_RELAY_VERSION = '0.9.1'
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+</Tab>
+</Tabs>
+
+Confirm that `pi --version` reports `0.84.0` before continuing.
 
 ## Install the pi Extension
 
@@ -82,11 +97,21 @@ results. Protect `logs/events.jsonl` even when full payload export is disabled.
 
 ## Run pi
 
-From the directory containing both files, run:
+From the directory containing both files, run the common validation prompt:
 
+<Tabs>
+<Tab title="Unix shell">
 ```bash
-nemo-relay --config "$PWD/config.toml" pi -- -p "Inspect this repository and use one tool."
+nemo-relay --config "$PWD/config.toml" pi -- -p "Use one available tool to produce RELAY_QUICKSTART_TOOL_OK. Then include RELAY_QUICKSTART_RESPONSE_OK in your final response."
 ```
+</Tab>
+
+<Tab title="Windows PowerShell">
+```powershell
+nemo-relay --config (Join-Path $PWD "config.toml") pi -- -p "Use one available tool to produce RELAY_QUICKSTART_TOOL_OK. Then include RELAY_QUICKSTART_RESPONSE_OK in your final response."
+```
+</Tab>
+</Tabs>
 
 Relay starts a temporary local gateway and loads the installed extension for
 this run.
@@ -95,12 +120,31 @@ this run.
 
 After the task exits, confirm that Relay wrote the local event stream:
 
+<Tabs>
+<Tab title="Unix shell">
 ```bash
 test -s logs/events.jsonl
-tail -n 1 logs/events.jsonl | python3 -m json.tool
+tail -n 1 logs/events.jsonl
+printf 'RELAY_QUICKSTART_EVENTS_OK\n'
 ```
+</Tab>
 
-## Next Steps
+<Tab title="Windows PowerShell">
+```powershell
+if ((Get-Item .\logs\events.jsonl).Length -eq 0) { throw "Relay event file is empty" }
+Get-Content .\logs\events.jsonl -Tail 1
+Write-Output "RELAY_QUICKSTART_EVENTS_OK"
+```
+</Tab>
+</Tabs>
 
-Use the full [pi guide](/nemo-relay-cli/pi) for extension trust, tool gating,
-model redirection, version compatibility, and known limitations.
+The transcript should contain `RELAY_QUICKSTART_TOOL_OK`, the final response
+should contain `RELAY_QUICKSTART_RESPONSE_OK`, and the verification command
+should end with `RELAY_QUICKSTART_EVENTS_OK`.
+
+## For More Details
+
+For more details, refer to:
+
+- [NeMo Relay pi guide](/nemo-relay-cli/pi)
+- [pi documentation and source](https://github.com/earendil-works/pi)

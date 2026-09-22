@@ -1,23 +1,57 @@
 ---
 title: "Deep Agents Quick Start"
+sidebar-title: "Deep Agents"
 description: "Run one Deep Agents workflow with NeMo Relay observability."
 position: 8
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Run one Deep Agents workflow and write its model and agent lifecycle to a local
-ATOF event file.
+Run one Deep Agents workflow and write its agent, model, and tool lifecycle to
+a local ATOF event file.
+
+## Prerequisites
+
+- Python 3.11 or newer
+- `uv`
+- An [NVIDIA API key](https://build.nvidia.com/settings/api-keys)
 
 ## Install the Integration
 
-From your Python project, install NeMo Relay with the Deep Agents and NVIDIA
-model provider extras:
+Create a project and install the verified NeMo Relay release with the Deep
+Agents and NVIDIA model provider extras. In an existing `uv` project, skip
+`uv init`.
 
 ```bash
-uv add "nemo-relay[deepagents,langchain-nvidia]"
+mkdir relay-deep-agents-quickstart
+cd relay-deep-agents-quickstart
+uv init
+uv add "nemo-relay[deepagents,langchain-nvidia]==0.9.1"
+```
+
+Set your NVIDIA API key for the current shell:
+
+<Tabs>
+<Tab title="Unix shell">
+```bash
 export NVIDIA_API_KEY="your-api-key"
 ```
+</Tab>
+
+<Tab title="Windows PowerShell">
+```powershell
+$env:NVIDIA_API_KEY = "your-api-key"
+```
+</Tab>
+</Tabs>
+
+This example uses
+[`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning/playground)
+through the NVIDIA model provider. As in
+[OpenShell inference routing](https://docs.nvidia.com/openshell/sandboxes/inference-routing),
+the provider reads `NVIDIA_API_KEY` and selects an explicit NVIDIA model. In the
+LangChain string, the first `nvidia:` selects the provider; the remaining
+`nvidia/...` value is the model ID.
 
 ## Enable Observability
 
@@ -58,41 +92,63 @@ Save this file as `quickstart.py` beside `plugins.toml`:
 
 ```python
 import asyncio
+import json
+from pathlib import Path
 
 import nemo_relay
 from deepagents import create_deep_agent
+from langchain_core.tools import tool
 from nemo_relay.integrations.deepagents import (
     NemoRelayDeepAgentsCallbackHandler,
     add_nemo_relay_integration,
 )
 
 
+@tool
+def emit_marker() -> str:
+    """Return the quick-start validation marker."""
+    return "RELAY_QUICKSTART_TOOL_OK"
+
+
 agent = create_deep_agent(
     **add_nemo_relay_integration(
         model="nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
-        tools=[],
+        tools=[emit_marker],
         name="main-agent",
+        system_prompt="Use the available tool exactly once. Keep the final answer brief.",
     )
 )
 
 
 async def main() -> None:
     async with nemo_relay.plugin.activate({}, "plugins.toml"):
-        with nemo_relay.scope.scope("deepagents-request", nemo_relay.ScopeType.Agent):
-            result = await agent.ainvoke(
-                {
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": "Summarize why agent observability matters.",
-                        }
-                    ]
-                },
-                config={"callbacks": [NemoRelayDeepAgentsCallbackHandler()]},
-            )
+        try:
+            with nemo_relay.scope.scope("deepagents-request", nemo_relay.ScopeType.Agent):
+                result = await agent.ainvoke(
+                    {
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Use one available tool to produce "
+                                    "RELAY_QUICKSTART_TOOL_OK. Then include "
+                                    "RELAY_QUICKSTART_RESPONSE_OK in your final response."
+                                ),
+                            }
+                        ]
+                    },
+                    config={"callbacks": [NemoRelayDeepAgentsCallbackHandler()]},
+                )
 
-        print(result["messages"][-1].content)
-        await nemo_relay.subscribers.flush_async()
+            print(result["messages"][-1].content)
+        finally:
+            await nemo_relay.subscribers.flush_async()
+
+    event_file = Path("logs/events.jsonl")
+    if not event_file.is_file() or event_file.stat().st_size == 0:
+        raise RuntimeError("Relay event file is missing or empty")
+    json.loads(event_file.read_text().splitlines()[-1])
+    print("RELAY_QUICKSTART_EVENTS_OK")
 
 
 asyncio.run(main())
@@ -106,18 +162,14 @@ uv run python quickstart.py
 
 ## Verify the Events
 
-The program prints the agent's answer. Confirm that Relay also wrote events:
+The tool result in the transcript should be `RELAY_QUICKSTART_TOOL_OK`, the final
+response should contain `RELAY_QUICKSTART_RESPONSE_OK`, and the program should
+end with `RELAY_QUICKSTART_EVENTS_OK`. The event file contains the top-level
+agent, model, tool, and Deep Agents lifecycle.
 
-```bash
-test -s logs/events.jsonl
-tail -n 1 logs/events.jsonl | python3 -m json.tool
-```
+## For More Details
 
-The file should contain the top-level agent, model, and Deep Agents lifecycle.
+For more details, refer to:
 
-## Next Steps
-
-- Use the full [Deep Agents integration guide](/supported-integrations/deepagents)
-  for skills, subagents, human-in-the-loop marks, and remote boundaries.
-- Continue with [plugin configuration](/configure-plugins/plugin-configuration-files)
-  and the [ATOF exporter](/configure-plugins/observability/atof).
+- [Deep Agents integration guide](/supported-integrations/deepagents)
+- [ATOF exporter](/configure-plugins/observability/atof)

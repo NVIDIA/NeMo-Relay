@@ -1,5 +1,6 @@
 ---
 title: "Rust Quick Start"
+sidebar-title: "Rust"
 description: "Instrument one Rust workflow and write its Relay events to a local ATOF file."
 position: 11
 ---
@@ -9,23 +10,21 @@ SPDX-License-Identifier: Apache-2.0 */}
 Instrument one scope, tool call, and LLM call with NeMo Relay, then verify the
 result in a local ATOF event file.
 
+## Prerequisites
+
+- Rust 1.86 or newer
+- Cargo
+
 ## Install NeMo Relay
 
-Add the published crates to a Rust project:
+Create a project and add the verified published crate:
 
 ```bash
-cargo add nemo-relay@0.10.0
+cargo new relay-rust-quickstart
+cd relay-rust-quickstart
+cargo add "nemo-relay@=0.9.1"
 cargo add serde_json
 cargo add tokio --features macros,rt-multi-thread
-```
-
-When working from a NeMo Relay source checkout instead, use a path dependency:
-
-```toml
-[dependencies]
-nemo-relay = { path = "../NeMo-Relay/crates/core" }
-serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 ## Enable Observability
@@ -75,6 +74,8 @@ use nemo_relay::api::tool::{tool_call_execute, ToolCallExecuteParams, ToolExecut
 use nemo_relay::plugin::dynamic::initialize;
 use nemo_relay::plugin::PluginConfig;
 use serde_json::json;
+use std::fs;
+use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -88,45 +89,69 @@ async fn run_workflow() -> Result<(), Box<dyn std::error::Error>> {
             .build(),
     )?;
 
-    scope::event(
-        EmitMarkEventParams::builder()
-            .name("initialized")
-            .parent(&handle)
-            .data(json!({"ok": true}))
-            .build(),
-    )?;
+    let workflow_result: Result<(), Box<dyn std::error::Error>> = async {
+        scope::event(
+            EmitMarkEventParams::builder()
+                .name("initialized")
+                .parent(&handle)
+                .data(json!({"ok": true}))
+                .build(),
+        )?;
 
-    let tool_result = tool_call_execute(
-        ToolCallExecuteParams::builder()
-            .name("search")
-            .args(json!({"query": "hello"}))
-            .func(Arc::new(|args| Box::pin(async move {
-                Ok(ToolExecutionResult::new(json!({"echo": args["query"]})))
-            })))
-            .parent(handle.clone())
-            .build(),
-    )
-    .await?;
+        let tool_result = tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("emit_marker")
+                .args(json!({"marker": "RELAY_QUICKSTART_TOOL_OK"}))
+                .func(Arc::new(|args| Box::pin(async move {
+                    Ok(ToolExecutionResult::new(json!({"marker": args["marker"]})))
+                })))
+                .parent(handle.clone())
+                .build(),
+        )
+        .await?;
 
-    let llm_result = llm_call_execute(
-        LlmCallExecuteParams::builder()
-            .name("demo-provider")
-            .request(LlmRequest {
-                headers: Default::default(),
-                content: json!({"messages": [{"role": "user", "content": "hi"}]}),
-            })
-            .func(Arc::new(|request| Box::pin(async move {
-                Ok(json!({"messages": request.content["messages"], "ok": true}))
-            })))
-            .parent(handle.clone())
-            .model_name("demo-model")
-            .build(),
-    )
-    .await?;
+        let llm_result = llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("demo-provider")
+                .request(LlmRequest {
+                    headers: Default::default(),
+                    content: json!({
+                        "messages": [{
+                            "role": "user",
+                            "content": "RELAY_QUICKSTART_RESPONSE_OK"
+                        }]
+                    }),
+                })
+                .func(Arc::new(|_| Box::pin(async move {
+                    Ok(json!({"content": "RELAY_QUICKSTART_RESPONSE_OK"}))
+                })))
+                .parent(handle.clone())
+                .model_name("demo-model")
+                .build(),
+        )
+        .await?;
 
-    println!("{}", tool_result.result);
-    println!("{llm_result}");
-    scope::pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())?;
+        println!(
+            "{}",
+            tool_result.result["marker"]
+                .as_str()
+                .ok_or_else(|| io::Error::other("tool marker is missing"))?
+        );
+        println!(
+            "{}",
+            llm_result["content"]
+                .as_str()
+                .ok_or_else(|| io::Error::other("response marker is missing"))?
+        );
+        Ok(())
+    }
+    .await;
+
+    let pop_result = scope::pop_scope(
+        PopScopeParams::builder().handle_uuid(&handle.uuid).build(),
+    );
+    workflow_result?;
+    pop_result?;
     Ok(())
 }
 
@@ -139,9 +164,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     let work_result = run_workflow().await;
-    flush_subscribers()?;
-    activation.close()?;
-    work_result
+    let flush_result = flush_subscribers();
+    let close_result = activation.close();
+    work_result?;
+    flush_result?;
+    close_result?;
+
+    let event_text = fs::read_to_string("logs/events.jsonl")?;
+    let last_event = event_text
+        .lines()
+        .last()
+        .ok_or_else(|| io::Error::other("Relay event file is empty"))?;
+    serde_json::from_str::<serde_json::Value>(last_event)?;
+    println!("RELAY_QUICKSTART_EVENTS_OK");
+    Ok(())
 }
 ```
 
@@ -153,20 +189,19 @@ cargo run
 
 ## Verify the Events
 
-The program prints the synthetic tool and LLM results. Confirm that Relay also
-wrote lifecycle events:
+The program validates the event file and prints, in order:
 
-```bash
-test -s logs/events.jsonl
-tail -n 1 logs/events.jsonl | python3 -m json.tool
+```text
+RELAY_QUICKSTART_TOOL_OK
+RELAY_QUICKSTART_RESPONSE_OK
+RELAY_QUICKSTART_EVENTS_OK
 ```
 
-The file contains scope, tool, and LLM records in ATOF JSONL format.
+The event file contains scope, tool, and LLM records in ATOF JSONL format.
 
-## Next Steps
+## For More Details
 
-- Continue with [plugin configuration](/configure-plugins/plugin-configuration-files)
-  and the [ATOF exporter](/configure-plugins/observability/atof).
-- Learn the runtime model in [Scopes](/about-nemo-relay/concepts/scopes),
-  [Middleware](/about-nemo-relay/concepts/middleware), and
-  [Plugins](/about-nemo-relay/concepts/plugins).
+For more details, refer to:
+
+- [Installation](/getting-started/installation#rust)
+- [Instrument Application Code](/instrument-applications/code-examples)

@@ -1,5 +1,6 @@
 ---
 title: "Hermes Quick Start"
+sidebar-title: "Hermes"
 description: "Run one Hermes Agent turn with native NeMo Relay observability."
 position: 1
 ---
@@ -13,6 +14,12 @@ Hermes Agent 0.18.2 or newer includes NeMo Relay natively. Do not install the
 former Hermes Relay observability plugin or launch Hermes through the
 `nemo-relay` CLI.
 
+## Prerequisites
+
+- Linux, macOS, or Windows Subsystem for Linux 2 (WSL2)
+- A configured Hermes model provider
+- Permission to install Hermes in your user environment
+
 ## Install and Configure Hermes
 
 Install Hermes on Linux, macOS, or WSL2:
@@ -21,9 +28,8 @@ Install Hermes on Linux, macOS, or WSL2:
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 ```
 
-Complete the normal Hermes setup with a working model provider before continuing.
-For other supported platforms, use the
-[Hermes installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation).
+Complete the setup prompts and confirm that `hermes` can use your model
+provider before continuing.
 
 ## Enable Observability
 
@@ -67,10 +73,10 @@ results. Protect `logs/events.jsonl` even when full payload export is disabled.
 
 ## Run One Turn
 
-From the same directory, run a one-shot turn that should use a tool:
+From the same directory, run a one-shot turn with the common validation prompt:
 
 ```bash
-hermes chat --oneshot -q "Use the terminal tool to run pwd, then report the result."
+hermes chat --oneshot -q "Use one available tool to produce RELAY_QUICKSTART_TOOL_OK. Then include RELAY_QUICKSTART_RESPONSE_OK in your final response."
 ```
 
 Hermes closes the Relay session before this command exits, allowing queued
@@ -80,16 +86,18 @@ observability records to finish writing.
 
 ```bash
 test -s logs/events.jsonl
-tail -n 1 logs/events.jsonl | python3 -m json.tool
+tail -n 1 logs/events.jsonl
+printf 'RELAY_QUICKSTART_EVENTS_OK\n'
 ```
 
-The file should contain records for the Hermes session, model request, and
-terminal tool call.
+The transcript should contain `RELAY_QUICKSTART_TOOL_OK`, and the final response
+should contain `RELAY_QUICKSTART_RESPONSE_OK`. The verification commands should
+print one JSON object from the Hermes session, model request, or tool lifecycle,
+then `RELAY_QUICKSTART_EVENTS_OK`.
 
-## Next Steps
+## For More Details
 
-- Review the Hermes
-  [NeMo Relay migration note](https://hermes-agent.nousresearch.com/docs/user-guide/features/built-in-plugins#nemo-relay-native-integration-migration-note)
-  before updating an older Hermes installation.
-- Continue with [plugin configuration](/configure-plugins/plugin-configuration-files)
-  and the [ATOF exporter](/configure-plugins/observability/atof).
+For more details, refer to:
+
+- [Hermes installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation)
+- [ATOF exporter](/configure-plugins/observability/atof)

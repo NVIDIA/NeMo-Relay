@@ -1,5 +1,6 @@
 ---
 title: "Python Quick Start"
+sidebar-title: "Python"
 description: "Instrument one Python workflow and write its Relay events to a local ATOF file."
 position: 9
 ---
@@ -9,16 +10,22 @@ SPDX-License-Identifier: Apache-2.0 */}
 Instrument one scope, tool call, and LLM call with NeMo Relay, then verify the
 result in a local ATOF event file.
 
+## Prerequisites
+
+- Python 3.11 or newer
+- `uv`
+
 ## Install NeMo Relay
 
-From your Python project, install the published package:
+Create a project and install the verified published package. In an existing
+`uv` project, skip `uv init`.
 
 ```bash
-uv add nemo-relay==0.10.0
+mkdir relay-python-quickstart
+cd relay-python-quickstart
+uv init
+uv add nemo-relay==0.9.1
 ```
-
-When working from a NeMo Relay source checkout instead, run `uv sync` and use
-that checkout's environment.
 
 ## Enable Observability
 
@@ -59,6 +66,8 @@ Save this file as `quickstart.py` beside `plugins.toml`:
 
 ```python
 import asyncio
+import json
+from pathlib import Path
 from typing import TypedDict
 
 import nemo_relay
@@ -69,34 +78,54 @@ class SearchArgs(TypedDict):
 
 
 async def search(args: SearchArgs) -> nemo_relay.ToolExecutionResult[dict[str, str]]:
-    return nemo_relay.ToolExecutionResult({"echo": args["query"]})
+    return nemo_relay.ToolExecutionResult({"marker": args["query"]})
 
 
 async def model(request: nemo_relay.LLMRequest) -> dict[str, object]:
-    return {"messages": request.content["messages"], "ok": True}
+    return {"content": "RELAY_QUICKSTART_RESPONSE_OK"}
 
 
 async def main() -> None:
     async with nemo_relay.plugin.activate({}, "plugins.toml"):
-        with nemo_relay.scope.scope("demo-agent", nemo_relay.ScopeType.Agent) as handle:
-            nemo_relay.scope.event("initialized", handle=handle, data={"binding": "python"})
+        try:
+            with nemo_relay.scope.scope("demo-agent", nemo_relay.ScopeType.Agent) as handle:
+                nemo_relay.scope.event(
+                    "initialized", handle=handle, data={"binding": "python"}
+                )
 
-            tool_result = await nemo_relay.tools.execute(
-                "search", {"query": "hello"}, search, handle=handle
-            )
-            llm_result = await nemo_relay.llm.execute(
-                "demo-provider",
-                nemo_relay.LLMRequest(
-                    {}, {"messages": [{"role": "user", "content": "hi"}]}
-                ),
-                model,
-                handle=handle,
-            )
+                tool_result = await nemo_relay.tools.execute(
+                    "emit_marker",
+                    {"query": "RELAY_QUICKSTART_TOOL_OK"},
+                    search,
+                    handle=handle,
+                )
+                llm_result = await nemo_relay.llm.execute(
+                    "demo-provider",
+                    nemo_relay.LLMRequest(
+                        {},
+                        {
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": "RELAY_QUICKSTART_RESPONSE_OK",
+                                }
+                            ]
+                        },
+                    ),
+                    model,
+                    handle=handle,
+                )
 
-            print(tool_result.result)
-            print(llm_result)
+                print(tool_result.result["marker"])
+                print(llm_result["content"])
+        finally:
+            await nemo_relay.subscribers.flush_async()
 
-        await nemo_relay.subscribers.flush_async()
+    event_file = Path("logs/events.jsonl")
+    if not event_file.is_file() or event_file.stat().st_size == 0:
+        raise RuntimeError("Relay event file is missing or empty")
+    json.loads(event_file.read_text().splitlines()[-1])
+    print("RELAY_QUICKSTART_EVENTS_OK")
 
 
 asyncio.run(main())
@@ -110,23 +139,19 @@ uv run python quickstart.py
 
 ## Verify the Events
 
-The program prints the synthetic tool and LLM results. Confirm that Relay also
-wrote lifecycle events:
+The program validates the event file and prints, in order:
 
-```bash
-test -s logs/events.jsonl
-tail -n 1 logs/events.jsonl | python3 -m json.tool
+```text
+RELAY_QUICKSTART_TOOL_OK
+RELAY_QUICKSTART_RESPONSE_OK
+RELAY_QUICKSTART_EVENTS_OK
 ```
 
-The file contains scope, tool, and LLM records in ATOF JSONL format.
+The event file contains scope, tool, and LLM records in ATOF JSONL format.
 
-## Next Steps
+## For More Details
 
-- Continue with [plugin configuration](/configure-plugins/plugin-configuration-files)
-  and the [ATOF exporter](/configure-plugins/observability/atof).
-- Framework users can continue with the [LangChain](/getting-started/quick-start/langchain),
-  [LangGraph](/getting-started/quick-start/langgraph), or
-  [Deep Agents](/getting-started/quick-start/deep-agents) quick start.
-- Learn the runtime model in [Scopes](/about-nemo-relay/concepts/scopes),
-  [Middleware](/about-nemo-relay/concepts/middleware), and
-  [Plugins](/about-nemo-relay/concepts/plugins).
+For more details, refer to:
+
+- [Installation](/getting-started/installation#python)
+- [Instrument Application Code](/instrument-applications/code-examples)
