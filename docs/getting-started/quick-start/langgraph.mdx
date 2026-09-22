@@ -1,0 +1,118 @@
+---
+title: "LangGraph Quick Start"
+description: "Run one LangGraph workflow with NeMo Relay observability."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Run one credential-free LangGraph workflow and write its lifecycle to a local
+ATOF event file.
+
+## Install the Integration
+
+From your Python project, install NeMo Relay with the LangGraph extra:
+
+```bash
+uv add "nemo-relay[langgraph]"
+```
+
+## Enable Observability
+
+Save the following configuration as `plugins.toml` in your project directory:
+
+```toml
+version = 1
+
+[policy]
+unknown_component = "error"
+unknown_field = "error"
+unsupported_value = "error"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"
+```
+
+ATOF output can contain sensitive prompts, responses, tool arguments, and tool
+results. Protect `logs/events.jsonl` even when full payload export is disabled.
+
+## Run One Workflow
+
+Save this file as `quickstart.py` beside `plugins.toml`:
+
+```python
+import asyncio
+from typing_extensions import TypedDict
+
+import nemo_relay
+from langgraph.graph import END, START, StateGraph
+from nemo_relay.integrations.langgraph import NemoRelayCallbackHandler
+
+
+class State(TypedDict):
+    value: int
+
+
+def increment(state: State) -> State:
+    return {"value": state["value"] + 1}
+
+
+builder = StateGraph(State)
+builder.add_node("increment", increment)
+builder.add_edge(START, "increment")
+builder.add_edge("increment", END)
+graph = builder.compile()
+
+
+async def main() -> None:
+    async with nemo_relay.plugin.activate({}, "plugins.toml"):
+        with nemo_relay.scope.scope("langgraph-request", nemo_relay.ScopeType.Agent):
+            result = await graph.ainvoke(
+                {"value": 1},
+                config={"callbacks": [NemoRelayCallbackHandler()]},
+            )
+
+        print(result)
+        await nemo_relay.subscribers.flush_async()
+
+
+asyncio.run(main())
+```
+
+Run it from the project directory:
+
+```bash
+uv run python quickstart.py
+```
+
+## Verify the Events
+
+The program prints `{'value': 2}`. Confirm that Relay also wrote events:
+
+```bash
+test -s logs/events.jsonl
+tail -n 1 logs/events.jsonl | python3 -m json.tool
+```
+
+The file should contain the LangGraph workflow lifecycle.
+
+## Next Steps
+
+- Use the full [LangGraph integration guide](/supported-integrations/langgraph)
+  for managed `ToolNode` calls and nested LangChain agents.
+- Continue with [plugin configuration](/configure-plugins/plugin-configuration-files)
+  and the [ATOF exporter](/configure-plugins/observability/atof).

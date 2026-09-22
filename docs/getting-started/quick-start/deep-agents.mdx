@@ -1,0 +1,123 @@
+---
+title: "Deep Agents Quick Start"
+description: "Run one Deep Agents workflow with NeMo Relay observability."
+position: 8
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Run one Deep Agents workflow and write its model and agent lifecycle to a local
+ATOF event file.
+
+## Install the Integration
+
+From your Python project, install NeMo Relay with the Deep Agents and NVIDIA
+model provider extras:
+
+```bash
+uv add "nemo-relay[deepagents,langchain-nvidia]"
+export NVIDIA_API_KEY="your-api-key"
+```
+
+## Enable Observability
+
+Save the following configuration as `plugins.toml` in your project directory:
+
+```toml
+version = 1
+
+[policy]
+unknown_component = "error"
+unknown_field = "error"
+unsupported_value = "error"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"
+```
+
+ATOF output can contain sensitive prompts, responses, tool arguments, and tool
+results. Protect `logs/events.jsonl` even when full payload export is disabled.
+
+## Run One Agent Turn
+
+Save this file as `quickstart.py` beside `plugins.toml`:
+
+```python
+import asyncio
+
+import nemo_relay
+from deepagents import create_deep_agent
+from nemo_relay.integrations.deepagents import (
+    NemoRelayDeepAgentsCallbackHandler,
+    add_nemo_relay_integration,
+)
+
+
+agent = create_deep_agent(
+    **add_nemo_relay_integration(
+        model="nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        tools=[],
+        name="main-agent",
+    )
+)
+
+
+async def main() -> None:
+    async with nemo_relay.plugin.activate({}, "plugins.toml"):
+        with nemo_relay.scope.scope("deepagents-request", nemo_relay.ScopeType.Agent):
+            result = await agent.ainvoke(
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Summarize why agent observability matters.",
+                        }
+                    ]
+                },
+                config={"callbacks": [NemoRelayDeepAgentsCallbackHandler()]},
+            )
+
+        print(result["messages"][-1].content)
+        await nemo_relay.subscribers.flush_async()
+
+
+asyncio.run(main())
+```
+
+Run it from the project directory:
+
+```bash
+uv run python quickstart.py
+```
+
+## Verify the Events
+
+The program prints the agent's answer. Confirm that Relay also wrote events:
+
+```bash
+test -s logs/events.jsonl
+tail -n 1 logs/events.jsonl | python3 -m json.tool
+```
+
+The file should contain the top-level agent, model, and Deep Agents lifecycle.
+
+## Next Steps
+
+- Use the full [Deep Agents integration guide](/supported-integrations/deepagents)
+  for skills, subagents, human-in-the-loop marks, and remote boundaries.
+- Continue with [plugin configuration](/configure-plugins/plugin-configuration-files)
+  and the [ATOF exporter](/configure-plugins/observability/atof).

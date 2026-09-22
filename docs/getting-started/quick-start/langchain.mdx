@@ -1,0 +1,126 @@
+---
+title: "LangChain Quick Start"
+description: "Run one LangChain agent with NeMo Relay observability."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Run one LangChain agent and write its model and tool lifecycle to a local ATOF
+event file.
+
+## Install the Integration
+
+From your Python project, install NeMo Relay with the LangChain and NVIDIA model
+provider extras:
+
+```bash
+uv add "nemo-relay[langchain,langchain-nvidia]"
+export NVIDIA_API_KEY="your-api-key"
+```
+
+## Enable Observability
+
+Save the following configuration as `plugins.toml` in your project directory:
+
+```toml
+version = 1
+
+[policy]
+unknown_component = "error"
+unknown_field = "error"
+unsupported_value = "error"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"
+```
+
+ATOF output can contain sensitive prompts, responses, tool arguments, and tool
+results. Protect `logs/events.jsonl` even when full payload export is disabled.
+
+## Run One Agent Turn
+
+Save this file as `quickstart.py` beside `plugins.toml`:
+
+```python
+import asyncio
+
+import nemo_relay
+from langchain.agents import create_agent
+from langchain_core.tools import tool
+from nemo_relay.integrations.langchain import NemoRelayCallbackHandler, NemoRelayMiddleware
+
+
+@tool
+def get_weather(location: str) -> str:
+    """Get the current weather for a location."""
+    return f"The weather in {location} is sunny and 72 degrees."
+
+
+agent = create_agent(
+    model="nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    tools=[get_weather],
+    middleware=[NemoRelayMiddleware()],
+    system_prompt="Use tools when relevant. Keep the final answer brief.",
+)
+
+
+async def main() -> None:
+    async with nemo_relay.plugin.activate({}, "plugins.toml"):
+        with nemo_relay.scope.scope("langchain-request", nemo_relay.ScopeType.Agent):
+            result = await agent.ainvoke(
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "What is the weather in San Francisco?",
+                        }
+                    ]
+                },
+                config={"callbacks": [NemoRelayCallbackHandler()]},
+            )
+
+        print(result["messages"][-1].content)
+        await nemo_relay.subscribers.flush_async()
+
+
+asyncio.run(main())
+```
+
+Run it from the project directory:
+
+```bash
+uv run python quickstart.py
+```
+
+## Verify the Events
+
+The program prints the agent's answer. Confirm that Relay also wrote events:
+
+```bash
+test -s logs/events.jsonl
+tail -n 1 logs/events.jsonl | python3 -m json.tool
+```
+
+The file should contain the LangChain agent, model, and tool lifecycle.
+
+## Next Steps
+
+- Use the full [LangChain integration guide](/supported-integrations/langchain)
+  for provider behavior and middleware details.
+- Continue with [plugin configuration](/configure-plugins/plugin-configuration-files)
+  and the [ATOF exporter](/configure-plugins/observability/atof).
