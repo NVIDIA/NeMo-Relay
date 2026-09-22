@@ -1,0 +1,215 @@
+---
+title: "Windows Deployment"
+description: "Run a daemon with Task Scheduler or a WinSW Windows service."
+position: 4
+---
+
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use Windows PowerShell 5.1 or newer and a supported Windows Relay binary. A user
+scheduled task starts at login. A system task or Windows service starts at boot.
+Choose only one method for `127.0.0.1:47632`.
+
+## Prepare the Computer
+
+Install a verified binary using [Installation](/getting-started/installation).
+Open an administrator PowerShell window and copy it to a fixed path:
+
+```powershell
+New-Item -ItemType Directory -Force 'C:\ProgramData\NVIDIA\NeMoRelay' | Out-Null
+icacls 'C:\ProgramData\NVIDIA\NeMoRelay' /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX'
+Copy-Item (Get-Command nemo-relay.exe).Source 'C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay.exe'
+& 'C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay.exe' daemon --help
+```
+
+Use `C:/ProgramData/NVIDIA/NeMoRelay/nemo-relay.exe` as the dispatcher in the Windows
+managed bundle. Forward slashes keep generated hooks compatible with Git Bash.
+Dispatcher paths cannot contain spaces, so do not move it under `Program Files`. The ACL
+above grants ordinary users read and execute access, but no write access. Complete
+[Configuration and Managed Clients](/daemon/configuration), using
+`http://127.0.0.1:47632`. System plugin configuration belongs in
+`C:\ProgramData\nemo-relay`, including for user tasks.
+
+Keep the executable, task scripts, and system configuration writable only by
+administrators and SYSTEM. Do not give ordinary users write access to
+`C:\ProgramData\NVIDIA\NeMoRelay`. A system task must never launch code from
+a user's Downloads or AppData directory.
+
+## Create the Task Launcher
+
+Save the following administrator-owned script as
+`C:\ProgramData\NVIDIA\NeMoRelay\Start-Daemon.ps1`. It works for both task
+scopes. The parameters select separate private state and log directories.
+
+```powershell
+param(
+    [Parameter(Mandatory=$true)][string]$StateRoot,
+    [Parameter(Mandatory=$true)][string]$LogRoot
+)
+$ErrorActionPreference = 'Stop'
+New-Item -ItemType Directory -Force $StateRoot, $LogRoot | Out-Null
+$env:XDG_CONFIG_HOME = $StateRoot
+Remove-Item Env:NEMO_RELAY_CLIENT_TOKEN -ErrorAction SilentlyContinue
+foreach ($RelayLogName in @('daemon.out.log', 'daemon.err.log')) {
+    $RelayLogPath = Join-Path $LogRoot $RelayLogName
+    if ((Test-Path $RelayLogPath) -and (Get-Item $RelayLogPath).Length -gt 10MB) {
+        Move-Item $RelayLogPath "$RelayLogPath.previous" -Force
+    }
+}
+$RelayProcess = Start-Process -FilePath 'C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay.exe' -ArgumentList @('daemon', '--bind', '127.0.0.1', '--port', '47632') -NoNewWindow -Wait -PassThru -RedirectStandardOutput (Join-Path $LogRoot 'daemon.out.log') -RedirectStandardError (Join-Path $LogRoot 'daemon.err.log')
+exit $RelayProcess.ExitCode
+```
+
+The script rotates large logs at startup only and replaces smaller logs on restart. Monitor disk usage or use the WinSW service
+below for continuous rotation. Follow your organization's script-signing policy;
+the task uses `RemoteSigned`, which does not override domain execution policy.
+
+## User Scheduled Task
+
+Run these commands in the target user's PowerShell window. The task uses that
+user's interactive token and stops being useful when that user logs out.
+
+```powershell
+$RelayUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+$RelayRoot = Join-Path $env:LOCALAPPDATA 'nemo-relay-daemon'
+New-Item -ItemType Directory -Force $RelayRoot | Out-Null
+icacls $RelayRoot /inheritance:r /grant:r "${RelayUser}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
+$RelayArgs = '-NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "C:\ProgramData\NVIDIA\NeMoRelay\Start-Daemon.ps1" -StateRoot "{0}\config" -LogRoot "{0}\logs"' -f $RelayRoot
+$RelayAction = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument $RelayArgs
+$RelayTrigger = New-ScheduledTaskTrigger -AtLogOn -User $RelayUser
+$RelayPrincipal = New-ScheduledTaskPrincipal -UserId $RelayUser -LogonType Interactive -RunLevel Limited
+$RelaySettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName 'NeMoRelay-Daemon-User' -Action $RelayAction -Trigger $RelayTrigger -Principal $RelayPrincipal -Settings $RelaySettings
+Start-ScheduledTask -TaskName 'NeMoRelay-Daemon-User'
+```
+
+Use a distinct task name and port if several users install their own tasks.
+The example name is for one user deployment. For one endpoint shared by all users,
+use the system task instead.
+
+State is under `%LOCALAPPDATA%\nemo-relay-daemon\config\nemo-relay\daemon`.
+Logs are under `%LOCALAPPDATA%\nemo-relay-daemon\logs\daemon.err.log`.
+
+## System Scheduled Task
+
+Use an elevated PowerShell window. This example uses the built-in SYSTEM account
+and a separate private state directory. No account password is stored in the task.
+
+```powershell
+$RelayRoot = 'C:\ProgramData\NVIDIA\NeMoRelayDaemon'
+New-Item -ItemType Directory -Force $RelayRoot | Out-Null
+icacls $RelayRoot /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
+$RelayArgs = '-NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "C:\ProgramData\NVIDIA\NeMoRelay\Start-Daemon.ps1" -StateRoot "C:\ProgramData\NVIDIA\NeMoRelayDaemon\config" -LogRoot "C:\ProgramData\NVIDIA\NeMoRelayDaemon\logs"'
+$RelayAction = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument $RelayArgs
+$RelayTrigger = New-ScheduledTaskTrigger -AtStartup
+$RelayPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+$RelaySettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName 'NeMoRelay-Daemon-System' -Action $RelayAction -Trigger $RelayTrigger -Principal $RelayPrincipal -Settings $RelaySettings
+Start-ScheduledTask -TaskName 'NeMoRelay-Daemon-System'
+```
+
+An execution limit of zero prevents Task Scheduler from applying its normal
+runtime limit. The task retries a failed process three times, one minute apart.
+After repeated failures, fix the cause and start it again. See Microsoft's
+[task settings reference](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasksettingsset)
+for these settings.
+
+## Windows Service with WinSW
+
+Relay does not implement the Windows Service Control Manager protocol directly.
+Use [WinSW](https://winsw.github.io/) as a wrapper; pointing `sc.exe create`
+directly at `nemo-relay.exe` is not a working service setup.
+
+Use the [WinSW 2.12.0 release](https://github.com/winsw/winsw/releases/tag/v2.12.0)
+for this example. Obtain the wrapper through your approved software channel and
+verify the downloaded artifact against that channel's approved digest. The
+native x64 wrapper example targets x64 Windows; an ARM64 Relay installation
+needs a separately validated compatible wrapper/runtime combination. Task
+Scheduler avoids that additional dependency.
+
+Place the wrapper at `C:\ProgramData\NVIDIA\NeMoRelay\NeMoRelayService.exe`.
+Create the private `C:\ProgramData\NVIDIA\NeMoRelayDaemon` directory and ACLs
+from the system-task steps, without registering the task. Create its `config`
+and `logs` subdirectories. Save the adjacent `NeMoRelayService.xml`:
+
+```xml
+<service>
+  <id>NeMoRelayDaemon</id>
+  <name>NeMo Relay Daemon</name>
+  <description>Shared local NeMo Relay daemon</description>
+  <executable>C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay.exe</executable>
+  <arguments>daemon --bind 127.0.0.1 --port 47632</arguments>
+  <workingdirectory>C:\ProgramData\NVIDIA\NeMoRelayDaemon</workingdirectory>
+  <env name="XDG_CONFIG_HOME" value="C:\ProgramData\NVIDIA\NeMoRelayDaemon\config" />
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="10 sec" />
+  <stoptimeout>150 sec</stoptimeout>
+  <logpath>C:\ProgramData\NVIDIA\NeMoRelayDaemon\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>
+```
+
+WinSW defaults to LocalSystem when no service account is configured. Keep all
+wrapper and executable files administrator-owned. The XML contains no client
+token. In an elevated PowerShell window:
+
+```powershell
+New-Item -ItemType Directory -Force 'C:\ProgramData\NVIDIA\NeMoRelayDaemon\config', 'C:\ProgramData\NVIDIA\NeMoRelayDaemon\logs' | Out-Null
+& 'C:\ProgramData\NVIDIA\NeMoRelay\NeMoRelayService.exe' install
+& 'C:\ProgramData\NVIDIA\NeMoRelay\NeMoRelayService.exe' start
+& 'C:\ProgramData\NVIDIA\NeMoRelay\NeMoRelayService.exe' status
+Get-Service NeMoRelayDaemon
+```
+
+Inspect `NeMoRelayService.out.log` and `NeMoRelayService.err.log` under the log
+directory. Startup failures can also appear in the Windows Application event log.
+
+## Verify and Maintain
+
+For tasks, inspect the matching task and its log:
+
+```powershell
+Get-ScheduledTask -TaskName 'NeMoRelay-Daemon-User'
+Get-ScheduledTaskInfo -TaskName 'NeMoRelay-Daemon-User'
+Get-Content "$env:LOCALAPPDATA\nemo-relay-daemon\logs\daemon.err.log" -Tail 50
+Get-NetTCPConnection -LocalPort 47632 -State Listen
+```
+
+For the system task, substitute `NeMoRelay-Daemon-System` and
+`C:\ProgramData\NVIDIA\NeMoRelayDaemon\logs\daemon.err.log`.
+A running task's last result may be `0x41301`, meaning it is still running.
+Check the listening process and then perform
+[worker-backed verification](/daemon/operations#verify-worker-backed-operation).
+Test a planned sign-out/sign-in or reboot before rollout.
+
+Close harness sessions before stopping a task or service. Task termination and
+service-wrapper shutdown can interrupt streams; do not treat the timeout as a
+guarantee of graceful draining. For a task restart, use `Stop-ScheduledTask`,
+confirm the listener has closed, then `Start-ScheduledTask`. If a child process
+remains, identify its executable and owner before stopping that specific process.
+For WinSW, use its `stop` and `start` commands. Follow
+[Upgrade and Roll Back](/daemon/operations#upgrade-and-roll-back) when replacing
+the binary, which Windows can keep locked while it is running.
+
+## Remove the Task or Service
+
+For the selected task:
+
+```powershell
+Stop-ScheduledTask -TaskName 'NeMoRelay-Daemon-User'
+Unregister-ScheduledTask -TaskName 'NeMoRelay-Daemon-User' -Confirm:$false
+```
+
+Substitute the system task name when applicable. For WinSW:
+
+```powershell
+& 'C:\ProgramData\NVIDIA\NeMoRelay\NeMoRelayService.exe' stop
+& 'C:\ProgramData\NVIDIA\NeMoRelay\NeMoRelayService.exe' uninstall
+```
+
+Confirm the port is closed. Preserve the identity directory for rollback and
+remove shared binaries and managed artifacts only when no other client uses them.

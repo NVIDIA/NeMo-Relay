@@ -1,0 +1,257 @@
+---
+title: "Observe and Sanitize"
+description: "Register native subscribers and observability-only sanitizers."
+position: 22
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+The example's `observe` feature group installs an Event metadata injector, subscriber, mark sanitizer,
+scope-start sanitizer, scope-end sanitizer, tool request and response sanitizers, and LLM
+request and response sanitizers. The group is enabled independently and receives the
+configured `tag` and `redact_keys`, so operators can see exactly which behavior one
+setting controls.
+
+## Register the Observation Surfaces
+
+The function returns immediately when observation is disabled, so a report for that
+configuration cannot claim registrations that do not exist. One helper implements the
+shared event-field transformation, but each event surface is registered separately.
+
+```rust
+pub(crate) fn register(
+    context: &mut PluginContext<'_>,
+    config: &ExampleConfig,
+    runtime: &PluginRuntime,
+) -> nemo_relay_plugin::Result<()> {
+    if !config.observe.enabled {
+        return Ok(());
+    }
+
+    context.register_subscriber("documentation_subscriber", {
+        let runtime = runtime.clone();
+        let tag = config.tag.clone();
+        move |event| subscriber_mark(&runtime, &tag, event)
+    })?;
+
+    let sanitize =
+        |fields: EventSanitizeFields, tag: String, keys: Vec<String>| async move {
+            sanitize_event_fields(fields, &tag, &keys)
+        };
+    context.register_mark_sanitize_guardrail("documentation_mark_sanitizer", 10, {
+        let tag = config.tag.clone();
+        let keys = config.observe.redact_keys.clone();
+        move |_event, fields| sanitize(fields, tag.clone(), keys.clone())
+    })?;
+    context.register_scope_sanitize_start_guardrail(
+        "documentation_scope_start_sanitizer",
+        10,
+        {
+            let tag = config.tag.clone();
+            let keys = config.observe.redact_keys.clone();
+            move |_event, fields| sanitize(fields, tag.clone(), keys.clone())
+        },
+    )?;
+    context.register_scope_sanitize_end_guardrail(
+        "documentation_scope_end_sanitizer",
+        10,
+        {
+            let tag = config.tag.clone();
+            let keys = config.observe.redact_keys.clone();
+            move |_event, fields| sanitize(fields, tag.clone(), keys.clone())
+        },
+    )?;
+    context.register_tool_sanitize_request_guardrail(
+        "documentation_tool_request_sanitizer",
+        10,
+        {
+            let keys = config.observe.redact_keys.clone();
+            move |_name, value| {
+                let keys = keys.clone();
+                async move { Ok(redact_json(value, &keys)) }
+            }
+        },
+    )?;
+    context.register_tool_sanitize_response_guardrail(
+        "documentation_tool_response_sanitizer",
+        10,
+        {
+            let keys = config.observe.redact_keys.clone();
+            move |_name, value| {
+                let keys = keys.clone();
+                async move { Ok(redact_json(value, &keys)) }
+            }
+        },
+    )?;
+    // The LLM sanitizer registrations are shown under "Use codecs for model payloads."
+    Ok(())
+}
+```
+
+The local name is unique only within this component. The closure clones owned strings
+and arrays into each async callback; it never borrows the component configuration after
+`register` returns.
+
+## Inject Event Metadata
+
+Register a component-owned callback to propose metadata for every Event while the
+plugin is active. The callback receives an immutable Event snapshot and returns flat
+key/value additions:
+
+```rust
+use std::collections::BTreeMap;
+
+use nemo_relay_plugin::Json;
+
+context.register_event_metadata_injector(
+    "documentation_event_metadata_injector",
+    5,
+    |_event| async move {
+        Ok(BTreeMap::from([(
+            "app.source".into(),
+            Json::String("plugin".into()),
+        )]))
+    },
+)?;
+```
+
+Relay validates and merges accepted additions before Event sanitizers run. A callback
+error omits that callback's additions without dropping the Event. Clearing the plugin
+component removes the registration.
+
+## Keep Real Values Separate from Event Values
+
+A sanitizer returns the fields Relay should publish. It never changes the request that
+the real callback receives or the response that the application receives. To prove that
+distinction, place a configured `secret` field in a managed tool request, observe the
+redacted start event, and confirm that the tool callback still receives the original
+value.
+
+Event sanitizers receive an immutable event together with mutable copies of `data`,
+`category_profile`, and `metadata`. The example walks those JSON values recursively,
+replaces keys listed by `observe.redact_keys`, and adds the documentation tag to the
+returned metadata. It registers all three event-specific callbacks because mark,
+scope-start, and scope-end are separate public surfaces.
+
+```rust
+fn sanitize_event_fields(
+    mut fields: EventSanitizeFields,
+    tag: &str,
+    redact_keys: &[String],
+) -> nemo_relay_plugin::Result<EventSanitizeFields> {
+    fields.data = fields.data.map(|value| redact_json(value, redact_keys));
+    fields.metadata = Some(tagged_metadata(fields.metadata, tag, redact_keys));
+    if let Some(profile) = fields.category_profile.take() {
+        let value = serde_json::to_value(profile)
+            .map_err(|error| error.to_string())?;
+        fields.category_profile = Some(
+            serde_json::from_value(redact_json(value, redact_keys))
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    Ok(fields)
+}
+
+fn redact_json(value: Json, redact_keys: &[String]) -> Json {
+    match value {
+        Json::Object(mut object) => {
+            for (key, value) in &mut object {
+                if redact_keys.iter().any(|candidate| candidate == key) {
+                    *value = Json::String("[REDACTED]".into());
+                } else {
+                    *value = redact_json(value.take(), redact_keys);
+                }
+            }
+            Json::Object(object)
+        }
+        Json::Array(values) => Json::Array(
+            values.into_iter()
+                .map(|value| redact_json(value, redact_keys))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+```
+
+The subscriber observes the sanitized event stream and emits no recursive event for an
+event already created by the example. Because native subscribers are synchronous, it
+does only bounded local work. Network export or other asynchronous I/O belongs in typed
+middleware or a purpose-built exporter with its own queue and shutdown behavior.
+
+## Use Codecs for Model Payloads
+
+LLM sanitizers receive a request or response plus a structured context. For requests,
+the example resolves the directional codec when one is available, redacts the normalized
+annotation, and encodes it back onto the original envelope before applying its raw JSON
+fallback. Response codecs expose decode but not a symmetric response encoder, so the
+response sanitizer resolves and decodes the active codec for normalized inspection,
+then returns a redacted provider envelope. When the codec is absent or opaque, both
+callbacks redact the original JSON safely. Returning no payload omits that request or
+response from observability; it does not block the model call.
+
+The codec facade is valid only for the callback lifetime. It can remain in the typed
+future across an `await`, because the SDK owns that lifetime, but it must not be cached in
+plugin-global state or used by later invocations.
+
+```rust
+context.register_llm_sanitize_request_guardrail(
+    "documentation_llm_request_sanitizer",
+    10,
+    {
+        let redact_keys = config.observe.redact_keys.clone();
+        move |mut request, codec_context| {
+            let redact_keys = redact_keys.clone();
+            async move {
+                if let Some(codec) = codec_context.resolve_codec() {
+                    let annotated = codec.decode(&request)?;
+                    let annotated = serde_json::to_value(annotated)
+                        .map(|value| redact_json(value, &redact_keys))
+                        .and_then(serde_json::from_value)
+                        .map_err(|error| error.to_string())?;
+                    request = codec.encode(&annotated, &request)?;
+                }
+                request.content = redact_json(request.content, &redact_keys);
+                Ok(Some(request))
+            }
+        }
+    },
+)?;
+
+context.register_llm_sanitize_response_guardrail(
+    "documentation_llm_response_sanitizer",
+    10,
+    {
+        let redact_keys = config.observe.redact_keys.clone();
+        move |response, codec_context| {
+            let redact_keys = redact_keys.clone();
+            async move {
+                if let Some(codec) = codec_context.resolve_codec() {
+                    let _annotated = codec.decode(&response)?;
+                }
+                Ok(Some(redact_json(response, &redact_keys)))
+            }
+        }
+    },
+)?;
+```
+
+## Verify Observation Behavior
+
+Use the following procedure to verify all nine observation registrations without
+confusing observability changes with execution changes:
+
+1. Activate the example with `observe.enabled = true`, `redact_keys = ["secret"]`, and
+   the remaining feature groups disabled.
+2. Emit a mark and open and close a scope whose data, category profile, and metadata each
+   contain a `secret` key. Capture the subscriber output.
+3. Execute a tool request and an LLM request and response containing the same key. Use a
+   built-in codec for the model call and repeat once without a codec.
+4. Assert that every emitted observability field is redacted and tagged while the tool
+   callback, model callback, and application result still contain their original real
+   values.
+5. Clear the component and emit another mark. Confirm that neither sanitization nor the
+   example subscriber runs.
+
+Success means all nine observation registrations produce observable evidence, codec
+and fallback paths both redact safely, and no sanitizer accidentally changes execution.

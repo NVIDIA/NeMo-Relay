@@ -1,0 +1,162 @@
+---
+title: "Architecture and Startup"
+description: "See how coding harnesses, MCP clients, workers, and the daemon communicate."
+position: 2
+---
+
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+On narrow screens, scroll diagrams horizontally to read every label.
+
+## Process Roles
+
+The harness launches `nemo-relay daemon mcp` as a Model Context Protocol (MCP)
+process over standard input and output. This MCP connection keeps a reference
+open with the daemon. It provides no tools. The daemon's **broker** decides
+whether the user-machine route needs a new worker or can share an existing one.
+
+The MCP process starts a worker on the **client computer** only when the broker
+instructs it to. The worker loads the administrator's system configuration and
+plugins. Install the daemon as a service; do not install MCP or workers as services.
+
+<div role="region" aria-label="Process communication diagram" tabIndex={0} style={{ overflowX: "auto" }}>
+<div style={{ minWidth: "800px" }}>
+
+```mermaid
+flowchart TD
+    H["Coding harness<br/>Codex, Claude Code, or Pi"]
+    M["MCP lifecycle client"]
+    F["Short-lived hook forwarder"]
+    D["Daemon and route broker"]
+    W["Worker for one machine-user"]
+    P["Model provider"]
+    H -. "launch and MCP stdio" .-> M
+    H -. "launch with hook payload" .-> F
+    M <-->|"WebSocket lifecycle and control"| D
+    M -. "launch with protected grant" .-> W
+    W <-->|"WebSocket lifecycle and control"| D
+    H -->|"model requests"| D
+    F -->|"hook requests"| D
+    D -->|"authenticated requests"| W
+    W -->|"model requests"| P
+    D -->|"model requests in pass-through"| P
+```
+
+</div>
+</div>
+
+Dotted arrows show process startup. Solid arrows show communication; responses
+return along the request path. Model streams travel back through the worker and
+daemon to the harness. Hook responses return through the hook forwarder.
+The harness and hook forwarder do not contact a worker directly.
+
+MCP and worker processes each open a persistent WebSocket control session to the
+daemon. The daemon pushes route decisions and drain commands on those sessions.
+Model and hook traffic use separate HTTP connections.
+
+## Local Deployment
+
+<div role="region" aria-label="Local deployment diagram" tabIndex={0} style={{ overflowX: "auto" }}>
+<div style={{ minWidth: "760px" }}>
+
+```mermaid
+flowchart TD
+    subgraph PC["One computer"]
+        H["Harness and hook forwarder"]
+        M["MCP client"]
+        D["Daemon service<br/>127.0.0.1:47632"]
+        W["Per-user worker<br/>127.0.0.1:auto port"]
+        H -->|"HTTP requests"| D
+        H -. "launch" .-> M
+        M <-->|"WebSocket control"| D
+        M -. "launch" .-> W
+        W <-->|"WebSocket control"| D
+        D -->|"HTTP requests"| W
+    end
+    W -->|"HTTPS"| P["Model provider"]
+    D -->|"HTTPS in pass-through"| P
+```
+
+</div>
+</div>
+
+A system daemon has its own service identity. Each user's MCP and worker use that
+user's identity. Several harness sessions for the same identity share one worker.
+Different users do not share runtime state. The default worker port is assigned
+by the operating system; there is no worker service to enable at login.
+
+## Initialization Sequence
+
+<div role="region" aria-label="Initialization sequence diagram" tabIndex={0} style={{ overflowX: "auto" }}>
+<div style={{ minWidth: "1000px" }}>
+
+```mermaid
+sequenceDiagram
+    participant H as Harness
+    participant M as MCP client
+    participant D as Daemon
+    participant W as Worker
+    H->>M: Start with route credential in environment
+    M->>D: Request challenge and verify daemon identity
+    D-->>M: Signed challenge
+    M->>D: Signed registration and credential binding
+    alt Route needs a worker
+        D-->>M: LaunchWorker and one-time grant
+        M->>W: Launch with grant through protected stdin
+        W->>D: Prove identity and grant, register endpoint
+        W->>D: Ready over control socket
+        D->>W: Probe HTTP readiness endpoint
+        W-->>D: Readiness confirmed
+        D-->>M: Route ready
+    else Another MCP is starting or draining a worker
+        D-->>M: WaitForWorker
+        D-->>M: Push next broker decision
+    else Worker is already ready
+        D-->>M: ReuseWorker
+    else Pass-through route
+        D-->>M: UsePassThrough
+    end
+    H->>M: MCP initialize
+    M-->>H: MCP initialized after route is ready
+    H->>D: Model or hook request with route credential
+    Note over M,D: MCP control socket stays open for the session
+```
+
+</div>
+</div>
+
+The harness may send its MCP initialize message earlier; Relay does not serve
+the MCP protocol until it has acquired a usable route. A waiting client follows
+later broker decisions before completing startup. If worker activation fails
+after authentication, the route can become pass-through. MCP readiness alone
+does not prove that a worker is running.
+
+## Shutdown and Recovery
+
+<div role="region" aria-label="Worker lifecycle diagram" tabIndex={0} style={{ overflowX: "auto" }}>
+<div style={{ minWidth: "600px" }}>
+
+```mermaid
+stateDiagram-v2
+    [*] --> Empty
+    Empty --> Activating: First MCP reference
+    Activating --> Ready: Worker ready
+    Activating --> PassThrough: Activation fails
+    Ready --> Recovering: Worker fails
+    Recovering --> Activating: One MCP relaunches
+    Ready --> Draining: Last MCP leaves
+    PassThrough --> Empty: Last MCP leaves
+    Draining --> Empty: Worker exits
+```
+
+</div>
+</div>
+
+The diagram shows the main transitions. Explicit `--pass-through` never launches
+a worker. A draining worker cannot be revived; new MCP clients wait for it to
+exit. Accepted requests have up to two minutes to finish. Workers also stop
+accepting new requests if they lose authenticated daemon control.
+
+See [Identity and Lifecycle](/daemon/reference#understand-broker-identity-and-lifecycle)
+for reconnect grace, remote keepalive timing, restart recovery, and all broker states.

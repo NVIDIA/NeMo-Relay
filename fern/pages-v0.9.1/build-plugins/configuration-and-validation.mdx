@@ -1,0 +1,229 @@
+---
+title: "Configuration and Validation"
+description: "Design portable plugin configuration and actionable validation diagnostics."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Plugin configuration is an operator contract. Keep it portable JSON, make each setting's
+effect clear, and reject ambiguous input before Relay changes the runtime. Provider
+clients, callbacks, file handles, and resolved secret values belong in implementation
+state rather than in the configuration document.
+
+The `runtime` group is independent of the request-policy group. When either runtime
+setting is enabled, the examples install a small tool-execution wrapper that emits marks
+or manages an isolated stack. Disabling request rewriting, including with
+`requests.break_chain`, does not suppress those runtime operations.
+
+## The Two Configuration Files Have Different Jobs
+
+| File | Purpose |
+|---|---|
+| `plugins.toml` | Runtime configuration. It contains component kinds, `enabled` state, component-local `config`, validation policy, and references to discoverable manifests. Relay can layer discovered files with binding-provided configuration. |
+| `relay-plugin.toml` | [Package manifest](/build-plugins/package-discoverable-plugins) for one discoverable native library or `grpc-v1` worker. It declares identity, compatibility, entrypoint, optional JSON Schema, and integrity metadata. It does not replace the component configuration in `plugins.toml`. |
+
+The binding APIs use the same canonical document shape as `plugins.toml`: a document
+version, `components`, and `policy`. Each component has a `kind`, an `enabled` flag, and a
+component-local JSON object. Keys stay `snake_case` in Rust, Python, Node.js, JSON, and
+TOML even though Node.js API method names use `camelCase`.
+
+The following configuration activates every shared feature group and the native-only
+executor control:
+
+```toml
+version = 1
+
+[[components]]
+kind = "documentation-plugin"
+enabled = true
+
+[components.config]
+tag = "documentation"
+
+[components.config.observe]
+enabled = true
+redact_keys = ["secret"]
+
+[components.config.requests]
+enabled = true
+mode = "enforce"
+blocked_tools = ["dangerous_tool"]
+blocked_models = ["restricted-model"]
+header_name = "x-nemo-relay-plugin"
+header_value = "documentation"
+priority = 20
+break_chain = false
+
+[components.config.execution]
+enabled = true
+priority = 30
+emit_pending_marks = true
+
+[components.config.runtime]
+emit_marks = true
+emit_isolated_scope = true
+
+# Include this group only for a native typed plugin.
+[components.config.executor]
+worker_threads = 2
+
+[policy]
+unknown_component = "error"
+unknown_field = "warn"
+unsupported_value = "error"
+```
+
+The top-level policy controls document validation that Relay owns. A custom plugin's
+`validate` hook is responsible for unknown fields, types, ranges, enums, and cross-field
+rules inside its own `config`. Built-in plugins can additionally receive host policy
+overrides. Do not assume the top-level `unknown_field` choice automatically inspects an
+arbitrary third-party JSON object; implement and test that behavior in the plugin.
+
+## Publish the Component Schema with the Package
+
+The following strict schema is used by the Python worker and native examples. The native
+example adds an `executor` object because only the
+[typed native SDK](/build-plugins/native/about) owns a Tokio executor.
+`additionalProperties: false` is repeated inside each object so a misspelled control fails
+at the exact nesting level where it appears.
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Documentation Plugin Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "tag": { "type": "string", "minLength": 1, "default": "documentation" },
+    "observe": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "redact_keys": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["secret"]
+        }
+      }
+    },
+    "requests": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "mode": {
+          "type": "string",
+          "enum": ["observe", "enforce"],
+          "default": "enforce"
+        },
+        "blocked_tools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["dangerous_tool"]
+        },
+        "blocked_models": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["restricted-model"]
+        },
+        "header_name": {
+          "type": "string",
+          "minLength": 1,
+          "default": "x-nemo-relay-plugin"
+        },
+        "header_value": {
+          "type": "string",
+          "minLength": 1,
+          "default": "documentation"
+        },
+        "priority": { "type": "integer", "default": 20 },
+        "break_chain": { "type": "boolean", "default": false }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "priority": { "type": "integer", "default": 30 },
+        "emit_pending_marks": { "type": "boolean", "default": true }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "emit_marks": { "type": "boolean", "default": true },
+        "emit_isolated_scope": { "type": "boolean", "default": true }
+      }
+    }
+  }
+}
+```
+
+Defaults in a schema describe the intended value to tools and readers; JSON Schema does
+not insert them into the component object. The implementation must merge the same
+defaults before it validates and registers behavior. Keeping one checked default value
+beside each typed configuration structure prevents the schema, validator, and runtime
+from silently interpreting omitted fields differently.
+
+The Rust worker intentionally uses a permissive schema with
+`additionalProperties: true`, then reports unknown keys from its validation hook as
+warnings. This demonstrates a warning-based migration policy. Do not copy the strict
+schema into that worker unless unknown keys should become activation errors; the schema
+and validator must express the same operator contract.
+
+## Write Diagnostics for the Operator
+
+Validation should be deterministic and free of registration or lasting I/O. A diagnostic
+contains a level, stable code, component identity when known, field path when known, and
+a sentence explaining how to correct the value. Use a warning when activation remains
+safe and the operator should review the choice. Use an error when the plugin cannot
+install the promised behavior.
+
+The following diagnostic identifies an unsupported request-policy value and tells the
+operator which field to correct:
+
+```json
+{
+  "level": "error",
+  "code": "documentation-plugin.unsupported_mode",
+  "component": "documentation-plugin",
+  "field": "requests.mode",
+  "message": "requests.mode must be either observe or enforce"
+}
+```
+
+A checked-in JSON Schema gives editors and package validation the same first line of
+defense, but it does not replace the validation hook. The hook still owns semantic rules
+such as requiring at least one blocked target in `enforce` mode, checking relationships
+between feature groups, or applying a deliberate unknown-field policy.
+
+Store secret references rather than secret values. A plugin can define environment
+variable names, credential-provider references, or another deployment-specific lookup
+in its schema, then resolve the secret during registration. Validation can confirm that
+the reference is well-formed without printing or persisting the resolved value in a
+diagnostic or runtime report.
+
+## Validate Before Activation
+
+Use the following sequence to prevent invalid configuration from changing runtime state:
+
+1. Construct the effective plugin document, including any discovered `plugins.toml`
+   layers that production startup uses.
+2. Call the binding or CLI validation path before initialization. Treat the returned
+   report as data and fail deployment when it contains error diagnostics.
+3. Test missing required fields, wrong types, unsupported enum values, unknown fields,
+   and invalid cross-field combinations. Repeat one invalid case with `enabled = false`;
+   disabled components are still validated.
+4. Initialize only after the effective report is acceptable, then inspect the activation
+   report separately. An unknown enabled kind can still prevent initialization when a
+   permissive policy reported it as a warning.
+5. Exercise one call for each enabled feature group so configuration controls are tied to
+   observable behavior.
+
+Success means invalid or disabled-invalid input produces stable diagnostics without any
+registration, while a valid document activates only the requested feature groups. The
+complete runtime discovery and layering rules remain in [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).

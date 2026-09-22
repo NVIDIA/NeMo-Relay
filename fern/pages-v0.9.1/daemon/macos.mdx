@@ -1,0 +1,193 @@
+---
+title: "macOS Deployment"
+description: "Run a local daemon with a user LaunchAgent or system LaunchDaemon."
+position: 5
+---
+
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use a LaunchAgent for a daemon that runs while one user is logged in. Use a
+LaunchDaemon for a shared daemon that starts at boot. These examples use the
+supported Apple Silicon binary and require administrator access for shared files.
+
+## Prepare the Mac
+
+Install a verified binary using [Installation](/getting-started/installation),
+then copy it to a fixed administrator-owned path:
+
+```bash
+sudo install -d -m 0755 /opt/nvidia/bin
+sudo install -m 0755 "$(command -v nemo-relay)" /opt/nvidia/bin/nemo-relay
+/opt/nvidia/bin/nemo-relay daemon --help
+```
+
+Complete [Configuration and Managed Clients](/daemon/configuration). Use
+`/opt/nvidia/bin/nemo-relay` as the dispatcher and `http://127.0.0.1:47632` as the
+bundle endpoint. Choose one of the two launchd jobs below.
+
+## User LaunchAgent
+
+Create directories as the target user:
+
+```bash
+mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs/NeMoRelay"
+mkdir -p "$HOME/.config/nemo-relay/daemon"
+chmod 700 "$HOME/.config/nemo-relay/daemon" "$HOME/Library/Logs/NeMoRelay"
+```
+
+Save the following as
+`~/Library/LaunchAgents/com.nvidia.nemo-relay.daemon.plist`.
+Replace `/Users/alex` with the user's absolute home path in all three locations.
+launchd does not expand `~` or shell variables inside a plist.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.nvidia.nemo-relay.daemon</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/nvidia/bin/nemo-relay</string><string>daemon</string>
+    <string>--bind</string><string>127.0.0.1</string>
+    <string>--port</string><string>47632</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>XDG_CONFIG_HOME</key><string>/Users/alex/.config</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>ExitTimeOut</key><integer>150</integer>
+  <key>Umask</key><integer>63</integer>
+  <key>StandardOutPath</key><string>/Users/alex/Library/Logs/NeMoRelay/daemon.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/alex/Library/Logs/NeMoRelay/daemon.err.log</string>
+</dict>
+</plist>
+```
+
+Load and inspect the job from that user's desktop login session:
+
+```bash
+chmod 644 "$HOME/Library/LaunchAgents/com.nvidia.nemo-relay.daemon.plist"
+plutil -lint "$HOME/Library/LaunchAgents/com.nvidia.nemo-relay.daemon.plist"
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.nvidia.nemo-relay.daemon.plist"
+launchctl print "gui/$(id -u)/com.nvidia.nemo-relay.daemon"
+tail -n 50 "$HOME/Library/Logs/NeMoRelay/daemon.err.log"
+```
+
+The job starts again at login. It is not a boot-time service for logged-out users.
+For multiple simultaneous user daemons, assign separate ports and bundles.
+
+## System LaunchDaemon
+
+Use a dedicated hidden service account called `_nemo-relay`. Check that the name
+is unused and select an unused numeric ID. The following example uses `499`;
+check both listings before using it and replace it if occupied:
+
+```bash
+dscl . -list /Users UniqueID
+dscl . -list /Groups PrimaryGroupID
+```
+
+As an administrator, create the account and its private home:
+
+```bash
+sudo dscl . -create /Groups/_nemo-relay
+sudo dscl . -create /Groups/_nemo-relay PrimaryGroupID 499
+sudo dscl . -create /Users/_nemo-relay
+sudo dscl . -create /Users/_nemo-relay UniqueID 499
+sudo dscl . -create /Users/_nemo-relay PrimaryGroupID 499
+sudo dscl . -create /Users/_nemo-relay UserShell /usr/bin/false
+sudo dscl . -create /Users/_nemo-relay NFSHomeDirectory /var/lib/nemo-relay
+sudo dscl . -create /Users/_nemo-relay IsHidden 1
+sudo dscl . -create /Users/_nemo-relay Password '*'
+sudo install -d -o _nemo-relay -g _nemo-relay -m 0700 /var/lib/nemo-relay
+sudo install -d -o _nemo-relay -g _nemo-relay -m 0700 /var/lib/nemo-relay/.config
+sudo install -d -o _nemo-relay -g _nemo-relay -m 0700 /Library/Logs/NeMoRelay
+```
+
+Save `/Library/LaunchDaemons/com.nvidia.nemo-relay.daemon.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.nvidia.nemo-relay.daemon</string>
+  <key>UserName</key><string>_nemo-relay</string>
+  <key>GroupName</key><string>_nemo-relay</string>
+  <key>WorkingDirectory</key><string>/var/lib/nemo-relay</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/nvidia/bin/nemo-relay</string><string>daemon</string>
+    <string>--bind</string><string>127.0.0.1</string>
+    <string>--port</string><string>47632</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>XDG_CONFIG_HOME</key><string>/var/lib/nemo-relay/.config</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>ExitTimeOut</key><integer>150</integer>
+  <key>Umask</key><integer>63</integer>
+  <key>StandardOutPath</key><string>/Library/Logs/NeMoRelay/daemon.out.log</string>
+  <key>StandardErrorPath</key><string>/Library/Logs/NeMoRelay/daemon.err.log</string>
+</dict>
+</plist>
+```
+
+Set ownership and start it:
+
+```bash
+sudo chown root:wheel /Library/LaunchDaemons/com.nvidia.nemo-relay.daemon.plist
+sudo chmod 644 /Library/LaunchDaemons/com.nvidia.nemo-relay.daemon.plist
+plutil -lint /Library/LaunchDaemons/com.nvidia.nemo-relay.daemon.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.nvidia.nemo-relay.daemon.plist
+sudo launchctl print system/com.nvidia.nemo-relay.daemon
+sudo tail -n 50 /Library/Logs/NeMoRelay/daemon.err.log
+```
+
+The service identity lives under `/var/lib/nemo-relay/.config/nemo-relay/daemon`.
+Keep it across upgrades. User workers still load `/etc/nemo-relay`, and their
+identities remain in each user's config directory.
+
+## Verify, Restart, and Remove
+
+Check the listener and complete [worker-backed verification](/daemon/operations#verify-worker-backed-operation):
+
+```bash
+lsof -nP -iTCP:47632 -sTCP:LISTEN
+```
+
+Restart after a binary update with the command for your job:
+
+```bash
+launchctl kickstart -k "gui/$(id -u)/com.nvidia.nemo-relay.daemon"
+# For the system job instead:
+sudo launchctl kickstart -k system/com.nvidia.nemo-relay.daemon
+```
+
+Close harness sessions before restarting. For plist changes, unload the job with
+`bootout`, then run its `bootstrap` command again. Test a planned logout/login
+or reboot. Configure your log rotation tool for the two log files; launchd's
+file redirection does not itself bound their size.
+
+To remove a user job:
+
+```bash
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.nvidia.nemo-relay.daemon.plist"
+rm "$HOME/Library/LaunchAgents/com.nvidia.nemo-relay.daemon.plist"
+```
+
+To remove a system job:
+
+```bash
+sudo launchctl bootout system /Library/LaunchDaemons/com.nvidia.nemo-relay.daemon.plist
+sudo rm /Library/LaunchDaemons/com.nvidia.nemo-relay.daemon.plist
+```
+
+Retain the identity directory and service account for rollback. Follow
+[Operations](/daemon/operations) for upgrades and complete removal.
+Apple's [launchd guide](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html)
+explains the LaunchAgent and LaunchDaemon file layout.

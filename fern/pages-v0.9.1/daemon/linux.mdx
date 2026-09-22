@@ -1,0 +1,185 @@
+---
+title: "Linux Deployment"
+description: "Run a local daemon with a user or system systemd service."
+position: 6
+---
+
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use this runbook on a Linux host with systemd. The commands use a Debian or Ubuntu
+service-account layout. Run the user steps as the intended user and the `sudo`
+steps as an administrator. For a server used by other computers, continue with
+[Remote Linux: Deploy the Daemon](/daemon/remote-server).
+
+## Prepare the Host
+
+Install a verified binary using [Installation](/getting-started/installation).
+Put it at the stable path used by the managed bundle:
+
+```bash
+sudo install -d -m 0755 /opt/nvidia/bin
+sudo install -m 0755 "$(command -v nemo-relay)" /opt/nvidia/bin/nemo-relay
+/opt/nvidia/bin/nemo-relay daemon --help
+```
+
+Complete [Configuration and Managed Clients](/daemon/configuration) on this
+computer. In these examples the bundle uses `/opt/nvidia/bin/nemo-relay` directly
+as its dispatcher and `http://127.0.0.1:47632` as its daemon address.
+Administrator-owned binaries and configuration must not be writable by users.
+
+Choose **one** of the following services. A user service stays tied to its user
+manager; a system service serves all local users independently of their logins.
+
+## User Service
+
+Create the unit directory and private identity-state directory:
+
+```bash
+mkdir -p "$HOME/.config/systemd/user" "$HOME/.config/nemo-relay/daemon"
+chmod 700 "$HOME/.config/nemo-relay/daemon"
+```
+
+Save this complete unit as `~/.config/systemd/user/nemo-relay-daemon.service`:
+
+```ini
+[Unit]
+Description=NeMo Relay local daemon
+
+[Service]
+Type=simple
+ExecStart=/opt/nvidia/bin/nemo-relay daemon --bind 127.0.0.1 --port 47632
+Environment=XDG_CONFIG_HOME=%h/.config
+WorkingDirectory=%h
+Restart=on-failure
+RestartSec=5
+UMask=0077
+TimeoutStopSec=150
+
+[Install]
+WantedBy=default.target
+```
+
+Start it now and at future user-manager starts:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now nemo-relay-daemon.service
+systemctl --user status nemo-relay-daemon.service
+journalctl --user -u nemo-relay-daemon.service -n 50 --no-pager
+```
+
+To keep this user manager running after logout and start it at boot, an
+administrator can enable [lingering](https://www.freedesktop.org/software/systemd/man/latest/loginctl.html):
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+Without lingering, do not promise availability before login or after logout.
+Multiple users running separate daemons must use different ports and matching
+bundles. For a shared endpoint, use the system service below.
+
+## System Service
+
+Create a dedicated account with a persistent home. The daemon stores its signing
+identity here; replacing the home can cause clients to reject its new identity.
+
+```bash
+sudo useradd --system --user-group --home-dir /var/lib/nemo-relay \
+  --create-home --shell /usr/sbin/nologin nemo-relay
+sudo chmod 700 /var/lib/nemo-relay
+sudo install -d -o nemo-relay -g nemo-relay -m 0700 /var/lib/nemo-relay/.config
+```
+
+If the account already exists, verify its home and ownership instead of creating
+it again. Save `/etc/systemd/system/nemo-relay-daemon.service`:
+
+```ini
+[Unit]
+Description=NeMo Relay shared local daemon
+After=network.target
+
+[Service]
+Type=simple
+User=nemo-relay
+Group=nemo-relay
+WorkingDirectory=/var/lib/nemo-relay
+Environment=XDG_CONFIG_HOME=/var/lib/nemo-relay/.config
+ExecStart=/opt/nvidia/bin/nemo-relay daemon --bind 127.0.0.1 --port 47632
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStopSec=150
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable the service:
+
+```bash
+sudo chmod 644 /etc/systemd/system/nemo-relay-daemon.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now nemo-relay-daemon.service
+sudo systemctl status nemo-relay-daemon.service
+sudo journalctl -u nemo-relay-daemon.service -n 50 --no-pager
+```
+
+The service needs no `NEMO_RELAY_CLIENT_TOKEN`. Each user's harness supplies its
+own token to MCP and hook processes. The worker runs as that user, not as the
+`nemo-relay` service account.
+
+## Verify and Operate
+
+Check the listener, then launch a configured harness and complete the
+[worker-backed verification](/daemon/operations#verify-worker-backed-operation):
+
+```bash
+ss -ltn 'sport = :47632'
+```
+
+The expected listener is `127.0.0.1:47632`. A listening socket proves only that a
+process has opened the port. Use the service journal to confirm that it is Relay.
+Worker messages appear in the harness's MCP stderr log, not the daemon journal.
+
+Use the matching restart command after a unit or binary update:
+
+```bash
+systemctl --user restart nemo-relay-daemon.service
+# For the system service instead:
+sudo systemctl restart nemo-relay-daemon.service
+```
+
+Run `daemon-reload` first if you edited the unit. Follow the shared
+[upgrade procedure](/daemon/operations#upgrade-and-roll-back) to drain sessions,
+keep identity state, and validate the unchanged bundle. Test logout/login for a
+user service and a planned reboot for a system service before rollout.
+
+## Remove the Service
+
+Close harness sessions first. For a user service:
+
+```bash
+systemctl --user disable --now nemo-relay-daemon.service
+rm "$HOME/.config/systemd/user/nemo-relay-daemon.service"
+systemctl --user daemon-reload
+```
+
+If you enabled lingering only for Relay, disable it with
+`sudo loginctl disable-linger "$USER"`. Other user services may still need it.
+
+For a system service:
+
+```bash
+sudo systemctl disable --now nemo-relay-daemon.service
+sudo rm /etc/systemd/system/nemo-relay-daemon.service
+sudo systemctl daemon-reload
+```
+
+Retain identity state for rollback. Remove the service account, binary, and
+managed artifacts only after confirming that no other deployment uses them.
+See [systemd service documentation](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)
+for unit behavior.

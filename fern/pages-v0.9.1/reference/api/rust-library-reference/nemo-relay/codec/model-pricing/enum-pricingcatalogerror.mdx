@@ -1,0 +1,151 @@
+---
+title: "Enum Pricing Catalog Error"
+sidebar-title: "PricingCatalogError"
+slug: "/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/enum-pricingcatalogerror"
+description: "Errors produced while parsing or validating a model pricing catalog."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum PricingCatalogError &#123;\n    Json(<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>),\n    DuplicateModelAlias &#123;\n        model: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    UnsupportedVersion &#123;\n        version: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    &#125;,\n    EmptyField &#123;\n        entry_index: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n        field: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    InvalidRate &#123;\n        entry_index: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n        field: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>,\n    &#125;,\n    FileRead &#123;\n        path: <a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.PathBuf.html\">PathBuf</a>,\n        source: <a href=\"https://doc.rust-lang.org/1.96.1/std/io/error/struct.Error.html\">Error</a>,\n    &#125;,\n    LockPoisoned(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n&#125;"}} /></pre>
+
+Errors produced while parsing or validating a model pricing catalog.
+
+## Variants
+
+### `Json(Error)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Json(<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>)"}} /></pre>
+
+The catalog was not valid JSON for the catalog schema.
+
+### `DuplicateModelAlias`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "DuplicateModelAlias"}} /></pre>
+
+Two entries or aliases normalize to the same model key.
+
+#### Fields
+
+### `model: String`
+
+Normalized model key that appeared more than once.
+
+### `UnsupportedVersion`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "UnsupportedVersion"}} /></pre>
+
+The catalog schema version is not supported by this Relay build.
+
+#### Fields
+
+### `version: u32`
+
+Version number from the catalog payload.
+
+### `EmptyField`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "EmptyField"}} /></pre>
+
+A required text field was empty.
+
+#### Fields
+
+### `entry_index: usize`
+
+Zero-based index of the invalid catalog entry.
+
+### `field: String`
+
+Name of the invalid field.
+
+### `InvalidRate`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidRate"}} /></pre>
+
+A price was negative or non-finite.
+
+#### Fields
+
+### `entry_index: usize`
+
+Zero-based index of the invalid catalog entry.
+
+### `field: String`
+
+Name of the invalid rate field.
+
+### `value: f64`
+
+Invalid field value.
+
+### `FileRead`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "FileRead"}} /></pre>
+
+A model pricing catalog file could not be read.
+
+#### Fields
+
+### `path: PathBuf`
+
+Catalog path.
+
+### `source: Error`
+
+Underlying I/O error.
+
+### `LockPoisoned(String)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "LockPoisoned(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+
+The active model pricing resolver lock was poisoned.
+
+## Trait Implementations
+
+### `impl Debug for PricingCatalogError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-pricingcatalogerror\">PricingCatalogError</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Display for PricingCatalogError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Display.html\">Display</a> for <a href=\"enum-pricingcatalogerror\">PricingCatalogError</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Display.html#tymethod.fmt\">fmt</a>(&amp;self, __formatter: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Error for PricingCatalogError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html\">Error</a> for <a href=\"enum-pricingcatalogerror\">PricingCatalogError</a>"}} /></pre>
+
+#### `source`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.source\">source</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;(dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html\">Error</a> + 'static)&gt;"}} /></pre>
+
+#### `description`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.description\">description</a>(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+#### `cause`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.cause\">cause</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html\">Error</a>&gt;"}} /></pre>
+
+#### `provide`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.provide\">provide</a>&lt;'a&gt;(&amp;'a self, request: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/error/struct.Request.html\">Request</a>&lt;'a&gt;)"}} /></pre>
+
+### `impl From< Error> for PricingCatalogError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>&gt; for <a href=\"enum-pricingcatalogerror\">PricingCatalogError</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(source: <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>) -&gt; Self"}} /></pre>
