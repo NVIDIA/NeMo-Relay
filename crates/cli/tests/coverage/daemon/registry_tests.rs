@@ -185,7 +185,7 @@ fn ready_worker_is_reused_and_request_guard_counts_in_flight() {
 }
 
 #[test]
-fn operational_status_snapshots_report_ready_and_fail_open_routes_without_credentials() {
+fn worker_status_snapshots_report_assigned_workers_and_omit_fail_open_routes() {
     let registry = Registry::new(false);
     let ready_fingerprint = fingerprint(40);
     let ready_token = TokenDigest::from_token(b"ready-status-token");
@@ -218,22 +218,13 @@ fn operational_status_snapshots_report_ready_and_fail_open_routes_without_creden
         .mark_activation_failed(fallback_fingerprint, "fallback-activation")
         .unwrap();
 
-    let snapshots = registry.status_snapshots();
-    assert_eq!(snapshots.len(), 2);
-    assert_eq!(snapshots[0].state, RouteStateKind::PassThrough);
-    assert_eq!(snapshots[0].pass_through_kind, Some("fail_open"));
+    let snapshots = registry.worker_status_snapshots();
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].worker_id, "status-worker");
+    assert_eq!(snapshots[0].state, RouteStateKind::Ready);
     assert_eq!(snapshots[0].reference_count, 1);
-    assert!(snapshots[0].worker.is_none());
-    assert_eq!(snapshots[1].state, RouteStateKind::Ready);
-    assert_eq!(snapshots[1].reference_count, 1);
-    assert_eq!(
-        snapshots[1].worker,
-        Some(WorkerStatusSnapshot {
-            worker_id: "status-worker".into(),
-            control_available: true,
-            in_flight: 0,
-        })
-    );
+    assert!(snapshots[0].control_available);
+    assert_eq!(snapshots[0].in_flight, 0);
 }
 
 #[test]

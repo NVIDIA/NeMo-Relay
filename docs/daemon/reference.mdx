@@ -60,26 +60,26 @@ worker, plugin, or telemetry health. Complete
 [worker-backed verification](/daemon/operations#verify-worker-backed-operation)
 before accepting a deployment.
 
-### Inspect Route and Worker Status
+### Inspect Worker Status
 
-The daemon exposes its current broker route snapshots for deployment diagnostics:
+The daemon exposes its current assigned workers for deployment diagnostics:
 
 ```bash
-curl -f http://127.0.0.1:47632/_nemo-relay/v1/route/status
+curl -f http://127.0.0.1:47632/_nemo_relay/v1/workers
+curl -f http://127.0.0.1:47632/_nemo_relay/v1/workers/status
+curl -f http://127.0.0.1:47632/_nemo_relay/v1/workers/<instance_uuid>/status
 ```
 
-The response reports each route's lifecycle state, route mode, MCP reference
-count, pass-through kind, and last-known worker ID, control availability, and
-in-flight request count when a worker is assigned. It never includes route
-credentials, fingerprints, worker endpoints, session IDs, activation IDs, or
-internal worker credentials. The snapshots are instantaneous broker state, not
-active worker liveness probes.
+The first endpoint lists worker instance UUIDs. The second returns one aggregate
+list of worker statuses, and the third returns one worker or `404` if that worker
+is not assigned. Status includes the broker lifecycle state, MCP reference count,
+control availability, and in-flight request count. Pass-through and activating
+routes have no assigned worker and are therefore omitted.
 
-<Warning>
-  This endpoint is temporarily unauthenticated. Bind the daemon to a trusted
-  interface and restrict network access until administrator authentication is
-  added.
-</Warning>
+These endpoints do not require authentication. They never include route
+credentials, fingerprints, worker endpoints, session IDs, activation IDs, or
+internal worker credentials. The values are instantaneous broker state, not
+active worker liveness probes, and include `Cache-Control: no-store`.
 
 Worker activation still requires the broker-issued, one-time grant delivered
 through the protected inherited channel. Knowing the daemon address alone

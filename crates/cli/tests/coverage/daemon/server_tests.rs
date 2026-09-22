@@ -53,9 +53,10 @@ async fn daemon_health_is_a_public_process_probe() {
 }
 
 #[tokio::test]
-async fn route_status_reports_credential_free_broker_state_without_authentication() {
-    let state = test_daemon_state(true, "", GatewayConfig::default());
+async fn worker_status_endpoints_list_aggregate_and_select_without_authentication() {
+    let state = test_daemon_state(false, "", GatewayConfig::default());
     let identity = MachineIdentity::generate().unwrap().identity;
+    let worker_id = "01a0cae5-0000-7000-8000-000000000001";
     state
         .registry
         .register_mcp(
@@ -66,8 +67,8 @@ async fn route_status_reports_credential_free_broker_state_without_authenticatio
                 lease_expires_at_unix_ms: u64::MAX,
             },
             WorkerLaunch {
-                activation_id: "unused-status-activation".into(),
-                activation_token: SensitiveString::new("unused-status-secret").unwrap(),
+                activation_id: "status-activation".into(),
+                activation_token: SensitiveString::new("status-secret").unwrap(),
                 deadline_unix_ms: u64::MAX,
                 bind_ip: Ipv4Addr::LOCALHOST,
                 port: 0,
@@ -75,10 +76,28 @@ async fn route_status_reports_credential_free_broker_state_without_authenticatio
             },
         )
         .unwrap();
+    state
+        .registry
+        .mark_worker_ready(
+            identity.fingerprint(),
+            "status-activation",
+            Arc::new(
+                WorkerTarget::with_client(
+                    worker_id,
+                    "http://127.0.0.1:41000",
+                    SensitiveString::new("internal-worker-secret").unwrap(),
+                    pooled_client().unwrap(),
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap();
 
-    let response = router(state)
+    let app = router(state);
+    let response = app
+        .clone()
         .oneshot(
-            Request::get("/_nemo-relay/v1/route/status")
+            Request::get("/_nemo_relay/v1/workers")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -86,17 +105,57 @@ async fn route_status_reports_credential_free_broker_state_without_authenticatio
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
-    let status: serde_json::Value =
+    let list: serde_json::Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    assert_eq!(status["status"], "ok");
-    assert_eq!(status["routes"][0]["state"], "pass_through");
-    assert_eq!(status["routes"][0]["route_mode"], "pass_through");
-    assert_eq!(status["routes"][0]["pass_through_kind"], "global");
-    assert_eq!(status["routes"][0]["reference_count"], 1);
-    assert!(status["routes"][0]["worker"].is_null());
-    let encoded = serde_json::to_string(&status).unwrap();
+    assert_eq!(list["workers"], json!([worker_id]));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get("/_nemo_relay/v1/workers/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let aggregate: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(aggregate["workers"][0]["worker_id"], worker_id);
+    assert_eq!(aggregate["workers"][0]["state"], "ready");
+    assert_eq!(aggregate["workers"][0]["reference_count"], 1);
+    assert_eq!(aggregate["workers"][0]["control_available"], true);
+    assert_eq!(aggregate["workers"][0]["in_flight"], 0);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/_nemo_relay/v1/workers/{worker_id}/status"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let individual: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(individual["worker"], aggregate["workers"][0]);
+
+    let missing = app
+        .oneshot(
+            Request::get("/_nemo_relay/v1/workers/00000000-0000-0000-0000-000000000000/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert_eq!(missing.headers()[CACHE_CONTROL], "no-store");
+
+    let encoded = serde_json::to_string(&aggregate).unwrap();
     assert!(!encoded.contains("status-route-token"));
-    assert!(!encoded.contains("unused-status-secret"));
+    assert!(!encoded.contains("status-secret"));
+    assert!(!encoded.contains("internal-worker-secret"));
+    assert!(!encoded.contains("127.0.0.1"));
 }
 
 #[tokio::test]
