@@ -115,14 +115,23 @@ openclaw agent --agent main --message "Inspect the workspace and use one tool."
 
 ## Verify the Events
 
-Check the plugin's live status, then inspect the ATOF file from the gateway's
-working directory:
+Inspect the ATOF file from the gateway's working directory:
 
 ```bash
-openclaw gateway call nemoRelay.status --json
 test -s logs/events.jsonl
 tail -n 1 logs/events.jsonl | python3 -m json.tool
 ```
+
+Optionally, check the plugin's live status when your CLI is paired with
+admin-capable gateway access:
+
+```bash
+openclaw gateway call nemoRelay.status --json
+```
+
+The `nemoRelay.status` method requires the `operator.admin` scope. If your CLI
+does not have it, skip this check and use the full guide for token and device
+approval paths.
 
 ## Next Steps
 
