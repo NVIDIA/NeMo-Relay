@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
-use toml_edit::{DocumentMut, InlineTable, Item, Table, Value as TomlValue, value};
+use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value as TomlValue, value};
 
 use crate::agents::CodingAgent;
 use crate::configuration::{BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, RELAY_PLUGIN_ID};
@@ -869,6 +869,7 @@ fn install_codex_config_inner(path: &Path, gateway_url: &str) -> Result<(), Stri
         };
     }
     super::environment::install(path, &client_token)?;
+    install_codex_tool_environment_exclusion(&mut doc)?;
     doc["openai_base_url"] = value(&openai_base_url);
     if doc
         .get("model_provider")
@@ -932,6 +933,7 @@ fn refresh_codex_config_backup(
     restore_managed_openai_base_url(&mut baseline, previous, gateway_url, Some(challenge));
     restore_codex_config_from_backup(&mut baseline, previous, provider_is_managed, false);
     restore_codex_client_proof_from_backup(&mut baseline, previous, Some(challenge));
+    restore_codex_tool_environment_exclusion(&mut baseline, previous);
     if let Some(provider) = preserved_provider {
         ensure_table(&mut baseline, "model_providers")
             .insert("nemo-relay-openai", Item::Table(provider));
@@ -1329,6 +1331,15 @@ fn uninstall_codex_config_inner(
         backup_doc.as_ref().unwrap_or(&empty_backup),
         challenge.as_ref(),
     );
+    if challenge
+        .as_ref()
+        .is_some_and(|key| super::environment::has_proof(path, key))
+    {
+        restore_codex_tool_environment_exclusion(
+            &mut doc,
+            backup_doc.as_ref().unwrap_or(&empty_backup),
+        );
+    }
 
     remove_empty_table(&mut doc, "model_providers");
     remove_empty_table(&mut doc, "features");
@@ -1389,6 +1400,104 @@ fn restore_codex_config_from_backup(
         restore_table_item_if_bool(doc, backup_doc, "features", "hooks", true);
     }
     restore_multi_agent_v2_enabled(doc, backup_doc);
+}
+
+const CODEX_PROJECT_ENVIRONMENT_VARIABLE: &str = "OPENAI_PROJECT";
+
+fn install_codex_tool_environment_exclusion(doc: &mut DocumentMut) -> Result<(), String> {
+    let policy = ensure_table(doc, "shell_environment_policy");
+    if let Some(filters) = policy.get_mut("filters") {
+        let filters = filters.as_table_mut().ok_or_else(|| {
+            "Codex shell_environment_policy.filters must be a table before Relay can protect its authentication proof".to_string()
+        })?;
+        filters[CODEX_PROJECT_ENVIRONMENT_VARIABLE] = value("exclude");
+        return Ok(());
+    }
+
+    let excludes = policy
+        .entry("exclude")
+        .or_insert_with(|| Item::Value(TomlValue::Array(Array::new())))
+        .as_array_mut()
+        .ok_or_else(|| {
+            "Codex shell_environment_policy.exclude must be an array before Relay can protect its authentication proof".to_string()
+        })?;
+    if !excludes
+        .iter()
+        .any(|entry| entry.as_str() == Some(CODEX_PROJECT_ENVIRONMENT_VARIABLE))
+    {
+        excludes.push(CODEX_PROJECT_ENVIRONMENT_VARIABLE);
+    }
+    Ok(())
+}
+
+fn restore_codex_tool_environment_exclusion(doc: &mut DocumentMut, backup: &DocumentMut) {
+    let backup_policy = backup
+        .get("shell_environment_policy")
+        .and_then(Item::as_table);
+    let backup_filter = backup_policy
+        .and_then(|policy| policy.get("filters"))
+        .and_then(Item::as_table)
+        .and_then(|filters| filters.get(CODEX_PROJECT_ENVIRONMENT_VARIABLE))
+        .cloned();
+
+    if let Some(filters) = doc
+        .get_mut("shell_environment_policy")
+        .and_then(Item::as_table_mut)
+        .and_then(|policy| policy.get_mut("filters"))
+        .and_then(Item::as_table_mut)
+        && filters
+            .get(CODEX_PROJECT_ENVIRONMENT_VARIABLE)
+            .and_then(Item::as_str)
+            == Some("exclude")
+    {
+        match backup_filter {
+            Some(item) => {
+                filters.insert(CODEX_PROJECT_ENVIRONMENT_VARIABLE, item);
+            }
+            None => {
+                filters.remove(CODEX_PROJECT_ENVIRONMENT_VARIABLE);
+            }
+        }
+    }
+
+    let backup_excluded = backup_policy
+        .and_then(|policy| policy.get("exclude"))
+        .and_then(Item::as_array)
+        .is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|entry| entry.as_str() == Some(CODEX_PROJECT_ENVIRONMENT_VARIABLE))
+        });
+    if !backup_excluded
+        && let Some(excludes) = doc
+            .get_mut("shell_environment_policy")
+            .and_then(Item::as_table_mut)
+            .and_then(|policy| policy.get_mut("exclude"))
+            .and_then(Item::as_array_mut)
+    {
+        let index = excludes
+            .iter()
+            .position(|entry| entry.as_str() == Some(CODEX_PROJECT_ENVIRONMENT_VARIABLE));
+        if let Some(index) = index {
+            excludes.remove(index);
+        }
+    }
+
+    let remove_exclude = doc
+        .get("shell_environment_policy")
+        .and_then(Item::as_table)
+        .and_then(|policy| policy.get("exclude"))
+        .and_then(Item::as_array)
+        .is_some_and(Array::is_empty)
+        && backup_policy.is_none_or(|policy| !policy.contains_key("exclude"));
+    if remove_exclude
+        && let Some(policy) = doc
+            .get_mut("shell_environment_policy")
+            .and_then(Item::as_table_mut)
+    {
+        policy.remove("exclude");
+    }
+    remove_empty_table(doc, "shell_environment_policy");
 }
 
 fn restore_plain_codex_base_url(
