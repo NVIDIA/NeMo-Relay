@@ -1,21 +1,17 @@
 ---
 title: "Rust Quick Start"
-description: ""
-position: 3
+description: "Instrument one Rust workflow and write its Relay events to a local ATOF file."
+position: 11
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-This quick start shows the smallest Rust workflow that emits scope, tool, and LLM events.
+Instrument one scope, tool call, and LLM call with NeMo Relay, then verify the
+result in a local ATOF event file.
 
-## Choose an Install Path
+## Install NeMo Relay
 
-Pick the installation path that matches whether you are using a published package or a
-local checkout.
-
-### Install from a Package Manager
-
-Use the published crates when you are consuming a release:
+Add the published crates to a Rust project:
 
 ```bash
 cargo add nemo-relay@0.10.0
@@ -23,16 +19,7 @@ cargo add serde_json
 cargo add tokio --features macros,rt-multi-thread
 ```
 
-Install the published NeMo Relay CLI separately when you need coding-agent hook
-and LLM gateway observability:
-
-```bash
-cargo install nemo-relay-cli@0.10.0
-```
-
-### Install from the Repository
-
-Use a path dependency when your application is consuming a local checkout:
+When working from a NeMo Relay source checkout instead, use a path dependency:
 
 ```toml
 [dependencies]
@@ -41,41 +28,57 @@ serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-- `nemo-relay` is the core Rust runtime surface.
-- `tokio` provides the async runtime used by the managed tool and LLM helpers in
-  this quick start.
-- `nemo-relay-adaptive` is a companion crate for adaptive runtime primitives and
-  Redis-backed learning components when you need adaptive behavior later, but it
-  is not required for this minimal direct-runtime example.
-- `nemo-relay-cli` is a binary crate. Use `cargo install nemo-relay-cli@0.10.0`
-  when you need the NeMo Relay CLI.
+## Enable Observability
 
-## Run One Scope, One Tool Call, and One LLM Call
+Save the following configuration as `plugins.toml` in your project directory:
 
-The example below creates a scope, records an initialization mark, runs one
-managed tool call, and runs one managed LLM call through the public Rust APIs.
-Place it in `src/main.rs` in the same Cargo project where you added the
-dependencies above, then run `cargo run`.
+```toml
+version = 1
+
+[policy]
+unknown_component = "error"
+unknown_field = "error"
+unsupported_value = "error"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"
+```
+
+ATOF output can contain sensitive prompts, responses, tool arguments, and tool
+results. Protect `logs/events.jsonl` even when full payload export is disabled.
+
+## Run an Instrumented Workflow
+
+Save this file as `src/main.rs` beside the project's `Cargo.toml`:
 
 ```rust
 use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
 use nemo_relay::api::scope::{
     self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
 };
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::api::subscriber::flush_subscribers;
 use nemo_relay::api::tool::{tool_call_execute, ToolCallExecuteParams, ToolExecutionResult};
+use nemo_relay::plugin::dynamic::initialize;
+use nemo_relay::plugin::PluginConfig;
 use serde_json::json;
+use std::path::PathBuf;
 use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    register_subscriber(
-        "quickstart-printer",
-        Arc::new(|event| {
-            println!("{} {}", event.kind(), event.name());
-        }),
-    )?;
-
+async fn run_workflow() -> Result<(), Box<dyn std::error::Error>> {
     let handle = scope::push_scope(
         PushScopeParams::builder()
             .name("demo-agent")
@@ -113,10 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 content: json!({"messages": [{"role": "user", "content": "hi"}]}),
             })
             .func(Arc::new(|request| Box::pin(async move {
-                Ok(json!({
-                    "messages": request.content["messages"],
-                    "ok": true
-                }))
+                Ok(json!({"messages": request.content["messages"], "ok": true}))
             })))
             .parent(handle.clone())
             .model_name("demo-model")
@@ -126,39 +126,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("{}", tool_result.result);
     println!("{llm_result}");
-
     scope::pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())?;
-    flush_subscribers()?;
-    let _ = deregister_subscriber("quickstart-printer")?;
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut activation = initialize(
+        PluginConfig::default(),
+        Some(PathBuf::from("plugins.toml")),
+    )
+    .await?;
+
+    let work_result = run_workflow().await;
+    flush_subscribers()?;
+    activation.close()?;
+    work_result
 }
 ```
 
-The managed tool callback returns `ToolExecutionResult`, and application code
-reads its `result` field. The optional `annotation` field carries opaque JSON
-metadata without changing the business result.
+Run it from the project directory so the relative output path resolves there:
 
-## What Success Looks Like
+```bash
+cargo run
+```
 
-You should see:
+## Verify the Events
 
-- Event lines for the root scope, managed tool and LLM lifecycles, plus the
-  `initialized` mark event
-- `{"echo":"hello"}` from the tool call's `result` field
-- A final object containing `ok: true` and the echoed message payload from the
-  LLM callback
+The program prints the synthetic tool and LLM results. Confirm that Relay also
+wrote lifecycle events:
 
-Native subscriber delivery is asynchronous, so flush before checking subscriber
-output. If you only see the returned JSON values and no event lines, the tool
-and LLM callbacks ran but you did not verify instrumentation.
+```bash
+test -s logs/events.jsonl
+tail -n 1 logs/events.jsonl | python3 -m json.tool
+```
 
-That tells you two things:
+The file contains scope, tool, and LLM records in ATOF JSONL format.
 
-- The direct Rust runtime APIs ran successfully.
-- Emitted events were observable through the subscriber system.
+## Next Steps
 
-## What to Learn Next
-
-Use these links to continue from the quick start into the core runtime concepts.
-
-- Use [Scopes](/about-nemo-relay/concepts/scopes), [Middleware](/about-nemo-relay/concepts/middleware), [Subscribers](/about-nemo-relay/concepts/subscribers), and [Plugins](/about-nemo-relay/concepts/plugins) for the runtime model.
+- Continue with [plugin configuration](/configure-plugins/plugin-configuration-files)
+  and the [ATOF exporter](/configure-plugins/observability/atof).
+- Learn the runtime model in [Scopes](/about-nemo-relay/concepts/scopes),
+  [Middleware](/about-nemo-relay/concepts/middleware), and
+  [Plugins](/about-nemo-relay/concepts/plugins).
