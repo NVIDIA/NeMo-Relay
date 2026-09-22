@@ -560,7 +560,7 @@ fn managed_worker_does_not_infer_upstream_authority_from_generic_bearer_tokens()
     let mut headers = HeaderMap::new();
     headers.insert(
         AUTHORIZATION,
-        HeaderValue::from_static("Bearer at-caller-controlled-token"),
+        HeaderValue::from_static("Bearer opaque-caller-controlled-token"),
     );
     let prepared = PreparedProviderRequest {
         method: Method::POST,

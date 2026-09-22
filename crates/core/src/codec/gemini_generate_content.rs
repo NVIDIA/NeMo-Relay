@@ -518,12 +518,16 @@ fn map_usage(meta: Option<RawUsageMetadata>, model: Option<&str>) -> (Option<Usa
         (None, Some(t)) => Some(t),
         (None, None) => None,
     };
+    let uncached_input_tokens = prompt
+        .zip(m.cached_content_token_count)
+        .and_then(|(total, cached)| total.checked_sub(cached));
     let usage_for_cost = Usage {
         prompt_tokens: prompt,
         completion_tokens: completion_for_cost,
         total_tokens: total,
         cache_read_tokens: m.cached_content_token_count,
         cache_write_tokens: None,
+        uncached_input_tokens,
         cost: None,
     };
     let cost = model
@@ -534,6 +538,7 @@ fn map_usage(meta: Option<RawUsageMetadata>, model: Option<&str>) -> (Option<Usa
         total_tokens: total,
         cache_read_tokens: m.cached_content_token_count,
         cache_write_tokens: None,
+        uncached_input_tokens,
         cost,
     };
     (Some(usage), thoughts_token_count)

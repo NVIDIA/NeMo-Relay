@@ -46,10 +46,12 @@ Each endpoint selects one fixed semantic projection:
 You can repeat a type or combine types. Each endpoint owns an independent exporter
 and can use a different endpoint.
 
-The `gen_ai` projection targets the
-[OpenTelemetry GenAI semantic-conventions v1.42-era snapshot](https://github.com/open-telemetry/semantic-conventions-genai/tree/43633a68ef8f8ed87a1d5eb205990311ca708bf1).
-Use that pinned snapshot when comparing emitted operation and attribute names
-with collector or backend schemas.
+The `gen_ai` projection keeps the
+[OpenTelemetry GenAI semantic-conventions v1.42-era snapshot](https://github.com/open-telemetry/semantic-conventions-genai/tree/43633a68ef8f8ed87a1d5eb205990311ca708bf1)
+as its core compatibility baseline. Relay also implements selected newer
+Development attributes. Refer to
+[GenAI Projection Attribute Support](#genai-projection-attribute-support) for
+the exact current inventory and its newer registry baseline.
 
 NeMo Relay uses the currently vendored OpenTelemetry Rust SDK (`0.32`). It
 deterministically derives
@@ -62,6 +64,13 @@ HTTP and HTTPS default ports are realized, repeated and trailing path slashes
 are normalized, and standardized loopback hosts such as `localhost`, names
 under `.localhost`, `127.0.0.0/8`, and `::1` are equivalent. Relay does not use
 DNS resolution for this comparison, and query strings remain significant.
+Log lineage follows the same root selection as traces. When a local parent was
+not observed by the exporters, the observed scope starts a trace using its own
+UUID; a propagation-root UUID alone does not establish an imported parent.
+Marks under that scope, including late marks within the completed-context retention
+window, use its trace identity. An explicit imported parent continues the propagated
+trace. Log-to-span joins require both exporters to observe the corresponding
+scope lifecycle.
 Relay propagation continues the Relay-derived trace across the import boundary
 by default. Use `capture_rootless_propagation_context()` only when a receiver
 must start a new OpenTelemetry trace. Carry W3C `traceparent` and
@@ -166,6 +175,12 @@ gRPC does not use HTTP redirects.
 | `promote_resource_metadata_prefixes` | `[]` | Literal prefixes that select root Scope-start metadata to copy to OTLP resource attributes. Each unique effective resource retains an exporter pipeline for the subscriber lifetime. |
 
 ## Event Metadata Promotion
+
+Wrapped CLI events can include trusted `agent_version` metadata. To export this
+generic field as a span attribute, include `"agent_version"` in
+`promote_metadata_prefixes`. Refer to
+[Coding-Agent Identity Metadata](/about-nemo-relay/concepts/events#coding-agent-identity-metadata)
+for its production and lifecycle semantics.
 
 Set `promote_metadata_prefixes` on a trace endpoint to copy selected keys from
 the final sanitized Event metadata into that endpoint's OpenTelemetry output.
@@ -745,6 +760,119 @@ instructions, messages, or response content is present. Redact sensitive
 content with an LLM or event sanitizer. Tool content is exported by default;
 retrieval payloads are not exported. Set top-level `enable_full_payloads = true` to retain complete
 sanitized LLM request history on every start span.
+
+### GenAI Projection Attribute Support
+
+This inventory follows the 72-attribute
+[OpenTelemetry GenAI registry snapshot](https://github.com/open-telemetry/semantic-conventions-genai/blob/5ca9052bc796ef1e497200b1d558fd87a201f335/docs/registry/attributes/gen-ai.md)
+used for the current Relay audit. Every listed upstream attribute is marked
+Development. This newer inventory includes attributes added or renamed after
+Relay's v1.42-era compatibility baseline.
+
+`Supported` means Relay's native GenAI projection emits the exact attribute on
+an applicable signal when an authoritative normalized or instrumentation source
+exists. It does not mean every integration supplies that optional source.
+`Partial` means Relay emits the attribute but cannot represent the complete
+upstream cardinality or value-shape contract. `Not supported` means the native
+projection does not emit it. The `gen_ai.*` namespace is reserved, so generic
+metadata promotion cannot be used to add an unsupported GenAI attribute.
+
+<StickySearchableTable placeholder="Search GenAI projection attributes...">
+
+| Projection Attribute | Support | Description and Notes |
+|---|---|---|
+| `gen_ai.agent.description` | Supported | Application-provided free-form agent description. Relay emits it on Agent scopes and marked CLI turns when canonical or recognized alias metadata supplies it. |
+| `gen_ai.agent.id` | Not supported | Stable identifier of a hosted GenAI agent resource. Relay does not yet distinguish hosted-agent create or client operations, and it does not substitute transient scope, session, subagent, or harness identifiers. |
+| `gen_ai.agent.name` | Supported | Application-provided human-readable agent name. Relay uses Agent scope identity and explicit applicable turn or tool metadata; marked turns omit it when no authoritative name exists. |
+| `gen_ai.agent.version` | Not supported | Version of a hosted GenAI agent. Relay does not yet classify hosted-agent operations. The generic `agent_version` captured by wrapped CLI launches identifies the harness executable and is intentionally not projected as this attribute. |
+| `gen_ai.conversation.compacted` | Not supported | Indicates that the effective context is a compacted view of an earlier conversation. Relay does not yet propagate positive compaction state into the later LLM operation; false must not be emitted. |
+| `gen_ai.conversation.id` | Supported | Stable conversation, session, or thread identifier. Relay projects the canonical key or recognized conversation, session, and thread aliases on applicable Agent, turn, LLM, and tool spans. |
+| `gen_ai.data_source.id` | Supported | Identifier of the GenAI data source. Relay projects it on retriever spans from the canonical key or recognized data-source aliases; prefer the GenAI system identifier over an external storage name. |
+| `gen_ai.embeddings.dimension.count` | Supported | Requested output embedding dimension count. Relay emits a positive integer on embedder spans from the canonical key or `dimensions`. |
+| `gen_ai.evaluation.explanation` | Not supported | Evaluator-provided explanation for an assigned score. The convention places it on a `gen_ai.evaluation.result` event; Relay has no corresponding standard event projection. |
+| `gen_ai.evaluation.name` | Not supported | Name of the evaluation metric. Relay has no `gen_ai.evaluation.result` event projection. |
+| `gen_ai.evaluation.score.label` | Not supported | Human-readable interpretation of an evaluation score. Relay has no `gen_ai.evaluation.result` event projection. |
+| `gen_ai.evaluation.score.value` | Not supported | Numeric evaluation score. Relay has no `gen_ai.evaluation.result` event projection. |
+| `gen_ai.input.messages` | Supported | Chat history supplied to the model. Relay serializes retained normalized and sanitized messages as schema-shaped JSON text. `enable_full_payloads` controls complete request-history retention, not whether present content can be projected. |
+| `gen_ai.memory.query.text` | Not supported | Search query used to retrieve memories. Relay has no standard memory-operation lifecycle or sensitive-content opt-in contract for this value. |
+| `gen_ai.memory.record.count` | Not supported | Number of memory records relevant to an operation. Relay has no normalized memory-result lifecycle. |
+| `gen_ai.memory.record.id` | Not supported | Unique memory-record identifier. Relay has no normalized memory-record identity contract. |
+| `gen_ai.memory.records` | Not supported | Memory records stored or retrieved by a memory operation. Relay has no memory lifecycle, normalized record shape, or sensitive-content opt-in contract. |
+| `gen_ai.memory.store.id` | Not supported | Unique identifier of a memory store. Relay has no standard memory scope or operation contract. |
+| `gen_ai.operation.name` | Supported | Name of the GenAI operation. Relay projects `invoke_agent`, `chat`, `generate_content`, `text_completion`, `execute_tool`, `embeddings`, or `retrieval` on the corresponding scopes and marked CLI turn roots. |
+| `gen_ai.output.messages` | Partial | Model output messages, with one message per returned choice or candidate. Relay currently normalizes and projects only one assistant candidate, so additional parallel generations are not retained. |
+| `gen_ai.output.type` | Supported | Output modality requested by the client. Exact canonical metadata wins; Relay otherwise derives `json`, `text`, or `speech` from supported OpenAI request shapes and omits ambiguous, multiple, or unsupported modalities. |
+| `gen_ai.prompt.name` | Not supported | Name that uniquely identifies a prompt template. Relay has no authoritative cross-provider prompt identity source. |
+| `gen_ai.prompt.variable.<name>` | Not supported | Runtime value supplied for a named prompt-template variable. Relay has no normalized variable map or explicit sensitive-content policy for these dynamic attributes. |
+| `gen_ai.prompt.version` | Not supported | Version of the prompt template. Relay has no authoritative cross-provider prompt-version source. |
+| `gen_ai.provider.name` | Supported | GenAI provider identified by the instrumentation. Relay uses explicit canonical or alias metadata, recognized routes and event names, or the normalized provider API; it can emit custom values such as `oci.genai`. |
+| `gen_ai.request.choice.count` | Supported | Requested number of candidate completions. Relay projects non-default OpenAI Chat `n` values; the default value of one is omitted. |
+| `gen_ai.request.encoding_formats` | Supported | Requested embedding encoding formats. Relay projects the canonical key or recognized singular and plural aliases on embedder spans. |
+| `gen_ai.request.frequency_penalty` | Supported | Request frequency-penalty setting. Relay projects it from normalized OpenAI Chat requests. |
+| `gen_ai.request.max_tokens` | Supported | Maximum number of tokens requested for generation. Relay projects the normalized request value. |
+| `gen_ai.request.model` | Supported | Name of the model targeted by the request. Relay projects normalized request or authoritative model metadata on applicable spans. |
+| `gen_ai.request.presence_penalty` | Supported | Request presence-penalty setting. Relay projects it from normalized OpenAI Chat requests. |
+| `gen_ai.request.previous_response.id` | Supported | Identifier of a prior response used as context for the current operation. Relay projects the normalized previous-response ID. This attribute is newer than the v1.42-era baseline. |
+| `gen_ai.request.reasoning.level` | Supported | Requested reasoning or thinking effort. Relay uses exact canonical metadata, OpenAI Chat `reasoning_effort`, or normalized reasoning `effort`. |
+| `gen_ai.request.seed` | Supported | Seed intended to make repeated requests more deterministic. Relay projects it from normalized OpenAI Chat requests. |
+| `gen_ai.request.stop_sequences` | Supported | Sequences that stop further token generation. Relay projects the normalized request list. |
+| `gen_ai.request.stream` | Supported | Indicates a streaming request. Relay emits only `true`; absence represents a non-streaming request as required by the convention. |
+| `gen_ai.request.stream_cursor` | Not supported | Cursor used to resume a streamed response after the last received event. Relay has no fetch or resume operation classification or normalized cursor source. |
+| `gen_ai.request.temperature` | Supported | Request temperature setting. Relay projects the normalized request value. |
+| `gen_ai.request.top_k` | Supported | Top-K sampling limit used during generation. Relay projects normalized Anthropic `top_k`; it does not misclassify OpenAI `top_logprobs` as this attribute. |
+| `gen_ai.request.top_p` | Supported | Request nucleus-sampling setting. Relay projects the normalized request value. |
+| `gen_ai.response.finish_reasons` | Partial | Ordered reasons that each returned generation stopped. Relay retains and emits one normalized finish reason, so it cannot represent multiple candidates or an expected generation that ended before producing a normal reason. |
+| `gen_ai.response.id` | Supported | Unique completion or response identifier. Relay projects the normalized response ID. |
+| `gen_ai.response.model` | Supported | Name of the model that generated the response. Relay projects normalized LLM response data or an authoritative embedder response source. |
+| `gen_ai.response.status` | Not supported | Provider-reported lifecycle status when a response is fetched or polled. Relay does not classify fetch or poll operations and intentionally does not copy ordinary inference status into this attribute. |
+| `gen_ai.response.time_to_first_chunk` | Supported | Seconds from managed request execution to the first received provider protocol chunk. This is not time to first text token. Relay omits it for non-streaming calls and streams with no chunk, and emits the companion standard histogram only when provider identity is known. |
+| `gen_ai.retrieval.documents` | Not supported | Documents returned by retrieval. Relay has no normalized document-result source or content policy; raw retrieval payloads are not exported by the GenAI projection. |
+| `gen_ai.retrieval.query.text` | Not supported | Query text used for retrieval. Relay has no explicit normalized query source or sensitive-content opt-in contract. |
+| `gen_ai.retrieval.top_k` | Supported | Maximum number of requested retrieval documents. Relay projects the canonical key or `top_k` on retriever spans. |
+| `gen_ai.system_instructions` | Supported | System instructions supplied separately from chat history. Relay serializes retained normalized and sanitized instructions as schema-shaped JSON text when present. |
+| `gen_ai.token.type` | Not supported | Token category used by the standard `gen_ai.client.token.usage` metric. It is not a span attribute, and Relay does not automatically emit that metric; custom typed metric marks can carry it independently. |
+| `gen_ai.tool.call.arguments` | Partial | Parameters passed to a tool call. Relay exports every non-null sanitized value as canonical JSON text. OpenTelemetry expects object-shaped data, so arrays and scalar values are preserved but do not satisfy the upstream schema. |
+| `gen_ai.tool.call.id` | Supported | Tool-call identifier. Relay prefers the typed call ID, then explicit instrumentation metadata, and never derives identity from argument or result payloads. |
+| `gen_ai.tool.call.result` | Partial | Successful result returned by a tool call. Relay omits failed results and exports every non-null sanitized value as canonical JSON text. OpenTelemetry expects object-shaped data, so arrays and scalar values do not satisfy the upstream schema. |
+| `gen_ai.tool.definitions` | Supported | Tool definitions available to the agent or model. Relay projects minimal schema-shaped definitions containing required `type` and `name` identities while omitting optional descriptions and parameter schemas. |
+| `gen_ai.tool.description` | Supported | Tool description. Relay emits nonblank explicit instrumentation metadata and never infers it from invocation arguments. |
+| `gen_ai.tool.name` | Supported | Name of the tool used by the agent. Relay uses explicit tool identity metadata or the tool scope name. |
+| `gen_ai.tool.type` | Supported | Type of tool used by the agent, such as `function`, `extension`, or `datastore`. Relay uses explicit metadata or source-backed harness defaults and preserves explicit refinements. |
+| `gen_ai.usage.audio.cache_read.input_tokens` | Not supported | Audio input tokens served from a provider cache. Relay's normalized usage contract has no audio and cache modality breakdown. |
+| `gen_ai.usage.audio.input_tokens` | Not supported | Audio input-token count. Relay's normalized usage contract has no audio modality breakdown. |
+| `gen_ai.usage.audio.output_tokens` | Not supported | Audio output-token count. Relay's normalized usage contract has no audio modality breakdown. |
+| `gen_ai.usage.cache_read.input_tokens` | Supported | Input tokens served from a provider-managed cache. Relay projects normalized cache-read usage and includes known provider cache accounting in the aggregate input count. |
+| `gen_ai.usage.cache_write.input_tokens` | Supported | Input tokens written to a provider-managed cache. Relay projects normalized cache-write usage. This newer spelling replaces `gen_ai.usage.cache_creation.input_tokens` from the v1.42-era registry snapshot. |
+| `gen_ai.usage.image.cache_read.input_tokens` | Not supported | Image input tokens served from a provider cache. Relay's normalized usage contract has no image and cache modality breakdown. |
+| `gen_ai.usage.image.input_tokens` | Not supported | Image input-token count. Relay's normalized usage contract has no image modality breakdown. |
+| `gen_ai.usage.image.output_tokens` | Not supported | Image output-token count. Relay's normalized usage contract has no image modality breakdown. |
+| `gen_ai.usage.input_tokens` | Supported | Total GenAI input-token count. Relay uses normalized usage and includes separately reported provider cache reads and writes when required to form the total. |
+| `gen_ai.usage.output_tokens` | Supported | Total GenAI output-token count. Relay projects normalized completion usage. |
+| `gen_ai.usage.reasoning.output_tokens` | Supported | Output tokens used for reasoning or extended thinking. Relay uses exact canonical metadata, OpenAI Responses reasoning details, or Gemini thought-token usage. |
+| `gen_ai.usage.text.cache_read.input_tokens` | Not supported | Text input tokens served from a provider cache. Relay's normalized usage contract has no text and cache modality breakdown. |
+| `gen_ai.usage.text.input_tokens` | Not supported | Text input-token count. Relay's normalized usage contract has no text modality breakdown. |
+| `gen_ai.usage.text.output_tokens` | Not supported | Text output-token count. Relay's normalized usage contract has no text modality breakdown. |
+| `gen_ai.workflow.name` | Not supported | Application-provided low-cardinality workflow name. Relay has no Workflow scope or `invoke_workflow` operation classification. |
+
+</StickySearchableTable>
+
+Usage is recorded per model request. Relay's normalized response usage retains
+an optional `uncached_input_tokens` count only when the provider's response
+contract proves it. The standard GenAI export deliberately does not add a
+nonstandard uncached field: consumers can use the total
+`gen_ai.usage.input_tokens` with the separately reported cache-read and
+cache-write counts. An omitted cache or uncached count means unavailable, not
+zero.
+
+For managed streaming LLM calls, the end span also includes
+`gen_ai.response.time_to_first_chunk` in seconds. Relay measures from the
+start of managed stream execution until the first provider protocol chunk is
+received; this is not a first-text-token measurement. The attribute is omitted
+for non-streaming calls and streams that never yield a chunk.
+
+The metric endpoint records the same sample as the standard
+`gen_ai.client.operation.time_to_first_chunk` `f64` histogram with unit `s`
+when Relay can determine the provider dimension.
 
 The `gen_ai` projection includes sanitized `gen_ai.tool.call.arguments` at tool
 start, `gen_ai.tool.call.result` on successful completion, and

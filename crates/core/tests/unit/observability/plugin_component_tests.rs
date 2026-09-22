@@ -4547,6 +4547,73 @@ fn opentelemetry_delivery_continues_after_an_endpoint_panics() {
 }
 
 #[test]
+fn opentelemetry_routes_stream_timing_to_metrics_without_losing_traces_or_logs() {
+    use crate::api::event::{CategoryProfile, MetricValue, ScopeCategory};
+
+    let traced = Arc::new(AtomicUsize::new(0));
+    let logged = Arc::new(AtomicUsize::new(0));
+    let metered = Arc::new(AtomicUsize::new(0));
+    let trace_callbacks = counting_callbacks(&traced);
+    let log_callbacks = counting_callbacks(&logged);
+    let captured = Arc::clone(&metered);
+    let metric_observers: Vec<IndexedOpenTelemetryResource<EventSubscriberFn>> =
+        vec![IndexedOpenTelemetryResource {
+            index: 0,
+            value: OpenTelemetryResource::Active(Arc::new(move |event| {
+                let Some(measurement) =
+                    super::super::otel_metrics::gen_ai_stream_time_to_first_chunk_measurement(
+                        event,
+                    )
+                else {
+                    return;
+                };
+                assert_eq!(
+                    measurement.descriptor.name.as_str(),
+                    "gen_ai.client.operation.time_to_first_chunk"
+                );
+                assert!(
+                    matches!(measurement.value, MetricValue::F64(value) if value.get() == 0.125)
+                );
+                captured.fetch_add(1, Ordering::Relaxed);
+            })),
+        }];
+    let rejected = AtomicU64::new(0);
+
+    for (category, name, timing) in [
+        (ScopeCategory::Start, "openai.chat.completions", None),
+        (ScopeCategory::End, "openai.chat.completions", Some(0.125)),
+        (ScopeCategory::End, "openai.chat.completions", None),
+        (ScopeCategory::End, "unknown-provider", Some(0.125)),
+    ] {
+        let event = Event::Scope(ScopeEvent::new(
+            BaseEvent::builder().name(name).build(),
+            category,
+            Vec::new(),
+            EventCategory::llm(),
+            Some(
+                CategoryProfile::builder()
+                    .time_to_first_chunk_opt(timing)
+                    .build(),
+            ),
+        ));
+        deliver_opentelemetry_event(
+            &trace_callbacks,
+            &log_callbacks,
+            &metric_observers,
+            &[],
+            &rejected,
+            Some("opentelemetry.metrics"),
+            &event,
+        );
+    }
+
+    assert_eq!(traced.load(Ordering::Relaxed), 4);
+    assert_eq!(logged.load(Ordering::Relaxed), 4);
+    assert_eq!(metered.load(Ordering::Relaxed), 1);
+    assert_eq!(rejected.load(Ordering::Relaxed), 0);
+}
+
+#[test]
 fn opentelemetry_routes_marks_by_metric_schema() {
     let traced = Arc::new(AtomicUsize::new(0));
     let logged = Arc::new(AtomicUsize::new(0));

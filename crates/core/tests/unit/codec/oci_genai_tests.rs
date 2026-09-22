@@ -808,6 +808,7 @@ fn test_usage_cached_tokens_mapped_to_cache_read() {
     assert_eq!(usage.prompt_tokens, Some(13));
     assert_eq!(usage.cache_read_tokens, Some(3));
     assert_eq!(usage.cache_write_tokens, None);
+    assert_eq!(usage.uncached_input_tokens, Some(10));
 }
 
 #[test]

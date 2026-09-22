@@ -712,6 +712,13 @@ async fn dispatch_unmanaged(
             .unwrap_or_else(|| route.upstream_url(config, &path_and_query))
             .parse::<Uri>()
             .map_err(|_| CliError::InvalidPayload("invalid provider destination".into()))?;
+    if let Some(aligned) = crate::gateway::daemon_provider_forward_headers(
+        request.headers(),
+        request.uri().path(),
+        config,
+    ) {
+        *request.headers_mut() = aligned;
+    }
     strip_internal_headers(request.headers_mut());
     if allow_environment_provider_auth {
         inject_provider_auth(request.headers_mut(), route, config);

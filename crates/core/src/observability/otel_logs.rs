@@ -831,9 +831,9 @@ impl ScopeLineage {
         let trace_id = parent
             .as_ref()
             .map(SpanContext::trace_id)
-            .unwrap_or_else(|| {
-                relay_trace_id(event.propagation_root_uuid().unwrap_or(event.uuid()))
-            });
+            // Match trace export: an unobserved local parent starts a new trace here.
+            // Imported propagation is already resolved by parent_context above.
+            .unwrap_or_else(|| relay_trace_id(event.uuid()));
         self.active.insert(
             event.uuid(),
             SpanContext::new(
