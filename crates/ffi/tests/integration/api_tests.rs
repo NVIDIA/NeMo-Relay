@@ -15,8 +15,9 @@ use serde_json::{Value as Json, json};
 use uuid::Uuid;
 
 use nemo_relay_ffi::callable::{
-    NemoRelayLlmExecNextFn, NemoRelayLlmSanitizeCodecKind, NemoRelayLlmSanitizeRequestContext,
-    NemoRelayLlmSanitizeResponseContext, NemoRelayToolExecNextFn,
+    NemoRelayLlmExecNextFn, NemoRelayLlmExecutionContext, NemoRelayLlmSanitizeCodecKind,
+    NemoRelayLlmSanitizeRequestContext, NemoRelayLlmSanitizeResponseContext,
+    NemoRelayToolExecNextFn,
 };
 use nemo_relay_ffi::convert::nemo_relay_string_free;
 use nemo_relay_ffi::error::{NemoRelayStatus, nemo_relay_last_error, set_last_error};
@@ -558,7 +559,9 @@ unsafe extern "C" fn codec_encode_cb(
 
 unsafe extern "C" fn llm_exec_intercept_cb(
     _user_data: *mut libc::c_void,
+    _name: *const c_char,
     native_json: *const c_char,
+    _context: NemoRelayLlmExecutionContext,
     next_fn: NemoRelayLlmExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char {

@@ -1,113 +1,200 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Invocation-scoped codec context for internal LLM execution adapters.
+//! Invocation-scoped codec context for LLM execution intercepts.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use super::callbacks::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
 use crate::api::llm::LlmRequest;
+use crate::codec::request::AnnotatedLlmRequest;
+use crate::codec::response::AnnotatedLlmResponse;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
-use crate::error::Result;
+use crate::error::{FlowError, Result};
 use crate::json::Json;
 
-use super::callbacks::{
-    LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionFn,
-    LlmStreamExecutionNextFn,
-};
-#[cfg(feature = "worker-grpc")]
-use super::callbacks::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
+const INACTIVE_EXECUTION_CODEC_ERROR: &str = "LLM execution codec capability is no longer active";
 
-/// Active request and response codecs for one managed LLM execution.
-///
-/// Public execution-interceptor callbacks remain unchanged. Relay adapts them
-/// into one private context-aware callback shape so language and process
-/// bridges receive the active codecs explicitly.
-///
-/// The context describes the codecs selected when the managed invocation was
-/// created. Execution interceptors may rewrite payloads within that codec's
-/// contract, but changing the provider wire format does not select a new codec.
-/// A subsequent decode or encode will reject an incompatible payload rather
-/// than silently infer another codec.
-#[derive(Clone)]
-pub(crate) struct LlmExecutionCodecContext {
-    #[cfg(feature = "worker-grpc")]
-    request: LlmSanitizeRequestContext,
-    #[cfg(feature = "worker-grpc")]
-    response: LlmSanitizeResponseContext,
+#[derive(Debug)]
+struct ExecutionCodecGate {
+    active: AtomicBool,
 }
 
-impl LlmExecutionCodecContext {
-    #[cfg(feature = "worker-grpc")]
-    pub(crate) fn new(
-        request: LlmSanitizeRequestContext,
-        response: LlmSanitizeResponseContext,
-    ) -> Self {
-        Self { request, response }
+impl ExecutionCodecGate {
+    fn new() -> Self {
+        Self {
+            active: AtomicBool::new(true),
+        }
     }
 
-    pub(crate) fn for_codecs(
+    fn ensure_active(&self) -> Result<()> {
+        if self.active.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err(FlowError::InvalidArgument(
+                INACTIVE_EXECUTION_CODEC_ERROR.into(),
+            ))
+        }
+    }
+
+    fn revoke(&self) {
+        self.active.store(false, Ordering::Release);
+    }
+}
+
+/// Revokes codec capabilities issued to one execution-intercept invocation.
+pub(crate) struct LlmExecutionCodecLeaseGuard {
+    gate: Arc<ExecutionCodecGate>,
+}
+
+impl Drop for LlmExecutionCodecLeaseGuard {
+    fn drop(&mut self) {
+        self.gate.revoke();
+    }
+}
+
+struct RevocableRequestCodec {
+    codec: Arc<dyn LlmCodec>,
+    gate: Arc<ExecutionCodecGate>,
+}
+
+impl LlmCodec for RevocableRequestCodec {
+    fn codec_identity(&self) -> super::LlmCodecIdentity {
+        self.codec.codec_identity()
+    }
+
+    fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
+        self.gate.ensure_active()?;
+        self.codec.decode(request)
+    }
+
+    fn encode(&self, annotated: &AnnotatedLlmRequest, original: &LlmRequest) -> Result<LlmRequest> {
+        self.gate.ensure_active()?;
+        self.codec.encode(annotated, original)
+    }
+}
+
+struct RevocableResponseCodec {
+    codec: Arc<dyn LlmResponseCodec>,
+    gate: Arc<ExecutionCodecGate>,
+}
+
+impl LlmResponseCodec for RevocableResponseCodec {
+    fn codec_identity(&self) -> super::LlmCodecIdentity {
+        self.codec.codec_identity()
+    }
+
+    fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
+        self.gate.ensure_active()?;
+        self.codec.decode_response(response)
+    }
+}
+
+/// Active request and response codec context for one managed LLM execution.
+///
+/// The request direction is always present and distinguishes an invocation
+/// with no request codec from an invocation with a built-in, runtime, or opaque
+/// codec. Unary execution also carries a response direction. Streaming
+/// execution deliberately leaves [`Self::response_codec`] unavailable because
+/// Relay's response codecs operate on complete provider responses rather than
+/// individual stream chunks.
+///
+/// The codecs are fixed when the managed invocation is created. Rewriting a
+/// payload does not select another codec; decoding or encoding an incompatible
+/// wire representation fails rather than inferring a different format.
+/// Resolved codec capabilities are valid only for the callback that received
+/// this context. Unary capabilities expire when that callback settles;
+/// streaming request capabilities remain valid until its returned stream ends
+/// or closes. Retained capabilities return [`FlowError::InvalidArgument`]
+/// after expiry.
+#[derive(Clone, Debug, Default)]
+pub struct LlmExecutionContext {
+    request_codec: LlmSanitizeRequestContext,
+    response_codec: Option<LlmSanitizeResponseContext>,
+}
+
+impl LlmExecutionContext {
+    /// Construct an execution context from its directional codec contexts.
+    #[must_use]
+    pub fn new(
+        request_codec: LlmSanitizeRequestContext,
+        response_codec: Option<LlmSanitizeResponseContext>,
+    ) -> Self {
+        Self {
+            request_codec,
+            response_codec,
+        }
+    }
+
+    /// Construct the context for a unary managed execution.
+    pub(crate) fn for_unary_codecs(
         request_codec: Option<Arc<dyn LlmCodec>>,
         response_codec: &Option<Arc<dyn LlmResponseCodec>>,
     ) -> Self {
-        #[cfg(feature = "worker-grpc")]
-        {
-            Self::new(
-                LlmSanitizeRequestContext::for_request_codec(request_codec),
-                LlmSanitizeResponseContext::for_response_codec(response_codec.clone()),
-            )
-        }
-        #[cfg(not(feature = "worker-grpc"))]
-        {
-            let _ = (request_codec, response_codec);
-            Self {}
-        }
+        Self::new(
+            LlmSanitizeRequestContext::for_request_codec(request_codec),
+            Some(LlmSanitizeResponseContext::for_response_codec(
+                response_codec.clone(),
+            )),
+        )
     }
 
-    #[cfg(feature = "worker-grpc")]
-    pub(crate) fn request(&self) -> &LlmSanitizeRequestContext {
-        &self.request
+    /// Construct the context for a streaming managed execution.
+    pub(crate) fn for_streaming_codec(request_codec: Option<Arc<dyn LlmCodec>>) -> Self {
+        Self::new(
+            LlmSanitizeRequestContext::for_request_codec(request_codec),
+            None,
+        )
     }
 
-    #[cfg(feature = "worker-grpc")]
-    pub(crate) fn response(&self) -> &LlmSanitizeResponseContext {
-        &self.response
+    /// Issue revocable codec facades for one execution-intercept invocation.
+    ///
+    /// The source context retains Relay's selected codecs, but callbacks only
+    /// receive the facades created here. Dropping the returned guard makes all
+    /// retained facade clones fail without exposing the underlying codec.
+    pub(crate) fn lease(&self) -> (Self, LlmExecutionCodecLeaseGuard) {
+        let gate = Arc::new(ExecutionCodecGate::new());
+        let request_codec = match self.request_codec.resolve_codec() {
+            Some(codec) => LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(
+                RevocableRequestCodec {
+                    codec,
+                    gate: Arc::clone(&gate),
+                },
+            ))),
+            None => LlmSanitizeRequestContext::with_identity(self.request_codec.codec().clone()),
+        };
+        let response_codec =
+            self.response_codec
+                .as_ref()
+                .map(|context| match context.resolve_codec() {
+                    Some(codec) => LlmSanitizeResponseContext::for_response_codec(Some(Arc::new(
+                        RevocableResponseCodec {
+                            codec,
+                            gate: Arc::clone(&gate),
+                        },
+                    ))),
+                    None => LlmSanitizeResponseContext::with_identity(context.codec().clone()),
+                });
+
+        (
+            Self::new(request_codec, response_codec),
+            LlmExecutionCodecLeaseGuard { gate },
+        )
     }
-}
 
-/// Private non-streaming execution callback used by Relay's registries.
-pub(crate) type ContextualLlmExecutionFn = Arc<
-    dyn Fn(
-            &str,
-            LlmRequest,
-            LlmExecutionCodecContext,
-            LlmExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
-        + Send
-        + Sync,
->;
+    /// Return the request-direction codec identity and revocable capability.
+    #[must_use]
+    pub fn request_codec(&self) -> &LlmSanitizeRequestContext {
+        &self.request_codec
+    }
 
-/// Private streaming execution callback used by Relay's registries.
-pub(crate) type ContextualLlmStreamExecutionFn = Arc<
-    dyn Fn(
-            &str,
-            LlmRequest,
-            LlmExecutionCodecContext,
-            LlmStreamExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = Result<LlmJsonStream>> + Send>>
-        + Send
-        + Sync,
->;
-
-/// Adapt the stable public callback into Relay's private context-aware shape.
-pub(crate) fn adapt_llm_execution_fn(callback: LlmExecutionFn) -> ContextualLlmExecutionFn {
-    Arc::new(move |name, request, _context, next| callback(name, request, next))
-}
-
-/// Adapt the stable public stream callback into Relay's private context-aware shape.
-pub(crate) fn adapt_llm_stream_execution_fn(
-    callback: LlmStreamExecutionFn,
-) -> ContextualLlmStreamExecutionFn {
-    Arc::new(move |name, request, _context, next| callback(name, request, next))
+    /// Return the unary response-direction codec identity and revocable capability.
+    ///
+    /// Streaming execution returns `None` because Relay does not expose a
+    /// completed-response codec for individual stream chunks.
+    #[must_use]
+    pub fn response_codec(&self) -> Option<&LlmSanitizeResponseContext> {
+        self.response_codec.as_ref()
+    }
 }

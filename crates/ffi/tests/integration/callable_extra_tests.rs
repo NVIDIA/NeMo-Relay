@@ -31,7 +31,9 @@ unsafe extern "C" fn tool_exec_intercept_null_next_cb(
 
 unsafe extern "C" fn llm_exec_intercept_null_next_cb(
     _user_data: *mut libc::c_void,
+    _name: *const c_char,
     _native_json: *const c_char,
+    _context: NemoRelayLlmExecutionContext,
     next_fn: NemoRelayLlmExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char {
@@ -207,7 +209,12 @@ fn test_callable_extra_trampoline_and_helper_paths() {
         })
     });
     let llm_err = runtime
-        .block_on(llm_intercept("llm", make_request(), llm_next))
+        .block_on(llm_intercept(
+            "llm",
+            make_request(),
+            nemo_relay::api::runtime::LlmExecutionContext::default(),
+            llm_next,
+        ))
         .unwrap_err();
     assert!(llm_err.to_string().contains("llm next failed"));
 
@@ -222,7 +229,12 @@ fn test_callable_extra_trampoline_and_helper_paths() {
         })
     });
     let mut empty_stream = runtime
-        .block_on(llm_stream_intercept("llm", make_request(), empty_next))
+        .block_on(llm_stream_intercept(
+            "llm",
+            make_request(),
+            nemo_relay::api::runtime::LlmExecutionContext::default(),
+            empty_next,
+        ))
         .unwrap();
     let empty_item = runtime
         .block_on(async { empty_stream.next().await })
@@ -233,7 +245,12 @@ fn test_callable_extra_trampoline_and_helper_paths() {
     let err_next: LlmStreamExecutionNextFn = Arc::new(|_request| {
         Box::pin(async move { Err(FlowError::Internal("stream next failed".into())) })
     });
-    let stream_err = match runtime.block_on(llm_stream_intercept("llm", make_request(), err_next)) {
+    let stream_err = match runtime.block_on(llm_stream_intercept(
+        "llm",
+        make_request(),
+        nemo_relay::api::runtime::LlmExecutionContext::default(),
+        err_next,
+    )) {
         Ok(_) => panic!("expected llm stream intercept error"),
         Err(err) => err,
     };

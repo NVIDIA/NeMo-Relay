@@ -260,18 +260,15 @@ class WorkerResponseCodec:
 
 @dataclass(frozen=True)
 class LlmExecutionContext:
-    """Invocation-scoped codec identities and operations for LLM execution middleware.
+    """Directional codec context for one LLM execution invocation.
 
     The identities describe the codecs selected when Relay created the managed
     invocation. Rewriting a request into another provider's wire format does
     not select a new codec; incompatible codec operations fail.
     """
 
-    available: bool
-    request_codec_identity: LlmCodecIdentity
-    response_codec_identity: LlmCodecIdentity
-    request_codec: WorkerRequestCodec | None = field(default=None, repr=False, compare=False)
-    response_codec: WorkerResponseCodec | None = field(default=None, repr=False, compare=False)
+    request_codec: LlmSanitizeRequestContext
+    response_codec: LlmSanitizeResponseContext | None
 
 
 def _llm_codec_identity(invocation: pb.LlmInvocation) -> LlmCodecIdentity:
@@ -304,33 +301,38 @@ def _llm_execution_context(
     invocation_id: str,
 ) -> LlmExecutionContext:
     if not invocation.HasField("execution_codec_context"):
-        return LlmExecutionContext(
-            available=False,
-            request_codec_identity=LlmCodecIdentity("none"),
-            response_codec_identity=LlmCodecIdentity("none"),
-        )
+        raise WorkerSdkError("malformed LLM execution codec context: execution context is missing")
     context = invocation.execution_codec_context
     if not context.HasField("request") or not context.request.HasField("codec"):
         raise WorkerSdkError("malformed LLM execution codec context: request codec identity is missing")
-    if not context.HasField("response") or not context.response.HasField("codec"):
-        raise WorkerSdkError("malformed LLM execution codec context: response codec identity is missing")
 
     request_id = context.request.codec_capability_id if context.request.HasField("codec_capability_id") else None
-    response_id = context.response.codec_capability_id if context.response.HasField("codec_capability_id") else None
-    request_identity = _codec_identity(
-        context.request.codec.kind,
-        context.request.codec.id if context.request.codec.HasField("id") else None,
+    request_context = LlmSanitizeRequestContext(
+        codec=_codec_identity(
+            context.request.codec.kind,
+            context.request.codec.id if context.request.codec.HasField("id") else None,
+        ),
+        _runtime=runtime,
+        _capability_id=request_id,
+        _invocation_id=invocation_id,
     )
-    response_identity = _codec_identity(
-        context.response.codec.kind,
-        context.response.codec.id if context.response.codec.HasField("id") else None,
-    )
+    response_context: LlmSanitizeResponseContext | None = None
+    if context.HasField("response"):
+        if not context.response.HasField("codec"):
+            raise WorkerSdkError("malformed LLM execution codec context: response codec identity is missing")
+        response_id = context.response.codec_capability_id if context.response.HasField("codec_capability_id") else None
+        response_context = LlmSanitizeResponseContext(
+            codec=_codec_identity(
+                context.response.codec.kind,
+                context.response.codec.id if context.response.codec.HasField("id") else None,
+            ),
+            _runtime=runtime,
+            _capability_id=response_id,
+            _invocation_id=invocation_id,
+        )
     return LlmExecutionContext(
-        available=True,
-        request_codec_identity=request_identity,
-        response_codec_identity=response_identity,
-        request_codec=(WorkerRequestCodec(runtime, request_id, invocation_id) if request_id else None),
-        response_codec=(WorkerResponseCodec(runtime, response_id, invocation_id) if response_id else None),
+        request_codec=request_context,
+        response_codec=response_context,
     )
 
 
@@ -1107,15 +1109,8 @@ LlmRequestCallback: TypeAlias = Callable[
     [str, LlmRequest, AnnotatedLlmRequest | None],
     LlmRequestInterceptOutcome | Awaitable[LlmRequestInterceptOutcome],
 ]
-LlmExecutionCallback: TypeAlias = Callable[[str, LlmRequest, "LlmNext"], Json | Awaitable[Json]]
-LlmExecutionWithContextCallback: TypeAlias = Callable[
-    [str, LlmRequest, LlmExecutionContext, "LlmNext"], Json | Awaitable[Json]
-]
+LlmExecutionCallback: TypeAlias = Callable[[str, LlmRequest, LlmExecutionContext, "LlmNext"], Json | Awaitable[Json]]
 LlmStreamExecutionCallback: TypeAlias = Callable[
-    [str, LlmRequest, "LlmStreamNext"],
-    Iterable[Json] | AsyncIterator[Json] | Awaitable[Iterable[Json] | AsyncIterator[Json]],
-]
-LlmStreamExecutionWithContextCallback: TypeAlias = Callable[
     [str, LlmRequest, LlmExecutionContext, "LlmStreamNext"],
     Iterable[Json] | AsyncIterator[Json] | Awaitable[Iterable[Json] | AsyncIterator[Json]],
 ]
@@ -1140,8 +1135,8 @@ class _Handlers:
     llm_sanitize_responses: dict[str, LlmSanitizeResponseCallback]
     llm_conditionals: dict[str, LlmConditionalCallback]
     llm_requests: dict[str, LlmRequestCallback]
-    llm_executions: dict[str, LlmExecutionWithContextCallback]
-    llm_stream_executions: dict[str, LlmStreamExecutionWithContextCallback]
+    llm_executions: dict[str, LlmExecutionCallback]
+    llm_stream_executions: dict[str, LlmStreamExecutionCallback]
 
     @classmethod
     def empty(cls) -> _Handlers:
@@ -1545,32 +1540,14 @@ class PluginContext:
 
         Args:
             name: Component-local registration name.
-            callback: Function receiving ``(model_name, request, next_call)``
-                and returning response JSON, directly or through an awaitable.
+            callback: Function receiving ``(model_name, request, context,
+                next_call)`` and returning response JSON, directly or through
+                an awaitable.
                 It can call :meth:`LlmNext.call` zero, one, or multiple times
                 while the invocation is active.
             priority: Execution order. Lower values run first.
         """
         self._push_registration(name, pb.LLM_EXECUTION_INTERCEPT, priority, False)
-        self._handlers.llm_executions[name] = lambda model, request, _context, next_call: callback(
-            model, request, next_call
-        )
-
-    def register_llm_execution_intercept_with_context(
-        self,
-        name: str,
-        callback: LlmExecutionWithContextCallback,
-        *,
-        priority: int = 0,
-    ) -> None:
-        """Register LLM execution middleware with invocation-scoped codecs."""
-        self._push_registration(
-            name,
-            pb.LLM_EXECUTION_INTERCEPT,
-            priority,
-            False,
-            llm_execution_codec_context=True,
-        )
         self._handlers.llm_executions[name] = callback
 
     def register_llm_stream_execution_intercept(
@@ -1584,12 +1561,13 @@ class PluginContext:
 
         Args:
             name: Component-local registration name.
-            callback: Function receiving ``(model_name, request, next_call)``.
-                Return an iterable, an async iterator, or an awaitable resolving
-                to either. Every yielded item must be JSON. Strings, byte
-                sequences, mappings, and scalar values are not valid streams.
-                The callback can call :meth:`LlmStreamNext.call` zero, one, or
-                multiple times while the invocation is active.
+            callback: Function receiving ``(model_name, request, context,
+                next_call)``. Return an iterable, an async iterator, or an
+                awaitable resolving to either. Every yielded item must be JSON.
+                Strings, byte sequences, mappings, and scalar values are not
+                valid streams. The callback can call
+                :meth:`LlmStreamNext.call` zero, one, or multiple times while
+                the invocation is active.
             priority: Execution order. Lower values run first.
 
         Streaming behavior:
@@ -1598,29 +1576,6 @@ class PluginContext:
             error.
         """
         self._push_registration(name, pb.LLM_STREAM_EXECUTION_INTERCEPT, priority, False)
-        self._handlers.llm_stream_executions[name] = lambda model, request, _context, next_call: callback(
-            model, request, next_call
-        )
-
-    def register_llm_stream_execution_intercept_with_context(
-        self,
-        name: str,
-        callback: LlmStreamExecutionWithContextCallback,
-        *,
-        priority: int = 0,
-    ) -> None:
-        """Register streaming middleware with request codec access.
-
-        The context identifies the response codec but does not expose a
-        response decoder because stream chunks are not complete responses.
-        """
-        self._push_registration(
-            name,
-            pb.LLM_STREAM_EXECUTION_INTERCEPT,
-            priority,
-            False,
-            llm_execution_codec_context=True,
-        )
         self._handlers.llm_stream_executions[name] = callback
 
     def _push_registration(
@@ -1629,8 +1584,6 @@ class PluginContext:
         surface: int,
         priority: int,
         break_chain: bool,
-        *,
-        llm_execution_codec_context: bool = False,
     ) -> None:
         if any(
             registration.local_name == name and registration.surface == surface
@@ -1643,7 +1596,6 @@ class PluginContext:
                 surface=surface,
                 priority=priority,
                 break_chain=break_chain,
-                llm_execution_codec_context=llm_execution_codec_context,
             )
         )
 

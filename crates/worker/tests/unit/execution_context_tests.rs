@@ -27,43 +27,32 @@ fn llm_payload(
 }
 
 #[test]
-fn context_registration_is_opt_in_without_a_new_surface() {
+fn execution_registration_uses_the_existing_surface() {
     let mut context = PluginContext::new();
-    context.register_llm_execution_intercept("legacy", 7, |_, _, _| async {
-        Ok(serde_json::json!({"legacy": true}))
-    });
-    context.register_llm_execution_intercept_with_context("context", 7, |_, _, _, _| async {
+    context.register_llm_execution_intercept("context", 7, |_, _, _, _| async {
         Ok(serde_json::json!({"context": true}))
     });
 
-    let legacy = &context.handlers.registrations[0];
-    let contextual = &context.handlers.registrations[1];
+    let registration = &context.handlers.registrations[0];
     assert_eq!(
-        legacy.surface,
+        registration.surface,
         RegistrationSurface::LlmExecutionIntercept as i32
     );
-    assert_eq!(contextual.surface, legacy.surface);
-    assert_eq!(contextual.priority, legacy.priority);
-    assert!(!legacy.llm_execution_codec_context);
-    assert!(contextual.llm_execution_codec_context);
+    assert_eq!(registration.priority, 7);
 }
 
 #[test]
-fn absent_execution_context_identifies_an_older_host() {
+fn absent_execution_context_is_a_release_mismatch() {
     let payload = llm_payload(None);
 
-    let context = payload
+    let error = payload
         .execution_context(&disconnected_runtime(), "invocation")
-        .unwrap();
-    assert!(!context.is_available());
-    assert_eq!(context.request_codec_identity(), &LlmCodecIdentity::None);
-    assert_eq!(context.response_codec_identity(), &LlmCodecIdentity::None);
-    assert!(context.request_codec().is_none());
-    assert!(context.response_codec().is_none());
+        .unwrap_err();
+    assert!(error.to_string().contains("execution context is missing"));
 }
 
 #[test]
-fn execution_context_from_a_new_host_preserves_identities_and_capabilities() {
+fn execution_context_preserves_directional_identities_and_capabilities() {
     let codec = nemo_relay_worker_proto::v1::LlmCodecIdentity {
         kind: LlmCodecKind::Builtin as i32,
         id: Some("openai_chat".into()),
@@ -84,15 +73,92 @@ fn execution_context_from_a_new_host_preserves_identities_and_capabilities() {
     let context = payload
         .execution_context(&disconnected_runtime(), "invocation")
         .unwrap();
-    assert!(context.is_available());
     assert_eq!(
-        context.request_codec_identity(),
+        &context.request_codec().codec,
         &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
     );
+    assert!(context.request_codec().resolve_codec().is_some());
+    let response = context.response_codec().expect("unary response context");
     assert_eq!(
-        context.response_codec_identity(),
+        &response.codec,
         &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
     );
-    assert!(context.request_codec().is_some());
-    assert!(context.response_codec().is_some());
+    assert!(response.resolve_codec().is_some());
+}
+
+#[test]
+fn execution_context_distinguishes_absent_and_resolved_opaque_codecs() {
+    let absent = llm_payload(Some(Box::new(
+        nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
+            request: Some(nemo_relay_worker_proto::v1::LlmSanitizeRequestContext {
+                codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
+                    kind: LlmCodecKind::Unspecified as i32,
+                    id: None,
+                }),
+                codec_capability_id: None,
+            }),
+            response: Some(nemo_relay_worker_proto::v1::LlmSanitizeResponseContext {
+                codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
+                    kind: LlmCodecKind::Unspecified as i32,
+                    id: None,
+                }),
+                codec_capability_id: None,
+            }),
+        },
+    )))
+    .execution_context(&disconnected_runtime(), "absent-invocation")
+    .unwrap();
+    assert_eq!(absent.request_codec().codec, LlmCodecIdentity::None);
+    assert!(absent.request_codec().resolve_codec().is_none());
+    let absent_response = absent.response_codec().expect("unary response direction");
+    assert_eq!(absent_response.codec, LlmCodecIdentity::None);
+    assert!(absent_response.resolve_codec().is_none());
+
+    let opaque = llm_payload(Some(Box::new(
+        nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
+            request: Some(nemo_relay_worker_proto::v1::LlmSanitizeRequestContext {
+                codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
+                    kind: LlmCodecKind::Opaque as i32,
+                    id: None,
+                }),
+                codec_capability_id: Some("opaque-request".into()),
+            }),
+            response: Some(nemo_relay_worker_proto::v1::LlmSanitizeResponseContext {
+                codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
+                    kind: LlmCodecKind::Opaque as i32,
+                    id: None,
+                }),
+                codec_capability_id: Some("opaque-response".into()),
+            }),
+        },
+    )))
+    .execution_context(&disconnected_runtime(), "opaque-invocation")
+    .unwrap();
+    assert_eq!(opaque.request_codec().codec, LlmCodecIdentity::Opaque);
+    assert!(opaque.request_codec().resolve_codec().is_some());
+    let opaque_response = opaque.response_codec().expect("unary response direction");
+    assert_eq!(opaque_response.codec, LlmCodecIdentity::Opaque);
+    assert!(opaque_response.resolve_codec().is_some());
+}
+
+#[test]
+fn streaming_execution_context_has_no_response_codec() {
+    let payload = llm_payload(Some(Box::new(
+        nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
+            request: Some(nemo_relay_worker_proto::v1::LlmSanitizeRequestContext {
+                codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
+                    kind: LlmCodecKind::Builtin as i32,
+                    id: Some("openai_chat".into()),
+                }),
+                codec_capability_id: Some("request-capability".into()),
+            }),
+            response: None,
+        },
+    )));
+
+    let context = payload
+        .execution_context(&disconnected_runtime(), "invocation")
+        .unwrap();
+    assert!(context.request_codec().resolve_codec().is_some());
+    assert!(context.response_codec().is_none());
 }

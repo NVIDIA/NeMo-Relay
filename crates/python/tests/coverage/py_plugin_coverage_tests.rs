@@ -374,10 +374,10 @@ def llm_conditional(request):
 def llm_request_intercept(name, request, annotated):
     return Outcome(request, annotated)
 
-async def llm_execution_intercept(name, request, next):
+async def llm_execution_intercept(name, request, context, next):
     return await next(request)
 
-async def llm_stream_execution_intercept(request, next):
+async def llm_stream_execution_intercept(name, request, context, next):
     return await next(request)
 
 def tool_request_intercept(name, value):
@@ -571,10 +571,10 @@ def llm_conditional(request):
 def llm_request_intercept(name, request, annotated):
     return Outcome(request, annotated)
 
-async def llm_execution_intercept(name, request, next):
+async def llm_execution_intercept(name, request, context, next):
     return await next(request)
 
-async def llm_stream_execution_intercept(request, next):
+async def llm_stream_execution_intercept(name, request, context, next):
     return await next(request)
 
 def tool_request_intercept(name, value):
@@ -776,10 +776,10 @@ def llm_conditional(request):
 def llm_request_intercept(name, request, annotated):
     return Outcome(request, annotated)
 
-async def llm_execution_intercept(name, request, next):
+async def llm_execution_intercept(name, request, context, next):
     return await next(request)
 
-async def llm_stream_execution_intercept(request, next):
+async def llm_stream_execution_intercept(name, request, context, next):
     return await next(request)
 
 def tool_request_intercept(name, value):

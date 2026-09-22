@@ -337,7 +337,9 @@ class DocumentationPlugin:
             context.register_tool_execution_intercept("runtime-events", 0, runtime_events)
 
         async def stream_request(
+            _name: str,
             _request: nemo_relay.LLMRequest,
+            _context: nemo_relay.LlmExecutionContext,
             next_call: Callable[[nemo_relay.LLMRequest], Awaitable[AsyncIterator[nemo_relay.Json]]],
         ) -> AsyncIterator[nemo_relay.Json]:
             async for chunk in await next_call(_request):
@@ -366,6 +368,7 @@ class DocumentationPlugin:
             async def llm_execution(
                 _name: str,
                 request: nemo_relay.LLMRequest,
+                _context: nemo_relay.LlmExecutionContext,
                 next_call: Callable[[nemo_relay.LLMRequest], Awaitable[nemo_relay.Json]],
             ) -> nemo_relay.Json:
                 return await next_call(request)

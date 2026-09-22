@@ -153,7 +153,13 @@ this common center.
 ```python
 from collections.abc import AsyncIterator, Awaitable, Callable
 
-from nemo_relay import AnnotatedLLMRequest, Json, LLMRequest, LLMRequestInterceptOutcome
+from nemo_relay import (
+    AnnotatedLLMRequest,
+    Json,
+    LLMRequest,
+    LLMRequestInterceptOutcome,
+    LlmExecutionContext,
+)
 
 settings = normalized_config(config)
 tag = settings["tag"]
@@ -199,8 +205,12 @@ context.register_llm_request_intercept(
 )
 
 async def stream_request(
-    request: LLMRequest, next_call: Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]]
+    _name: str,
+    request: LLMRequest,
+    context: LlmExecutionContext,
+    next_call: Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]],
 ) -> AsyncIterator[Json]:
+    assert context.response_codec is None
     async for chunk in await next_call(request):
         yield {**chunk, "plugin_stream": True}
 
@@ -251,7 +261,8 @@ context.registerLlmRequestIntercept(
 context.registerLlmStreamExecutionIntercept(
   'documentation-stream',
   execution.priority,
-  async function* (request, next) {
+  async function* (request, context, next) {
+    console.assert(context.responseCodec === null);
     for await (const chunk of await next(request)) {
       yield { ...chunk, plugin_stream: true };
     }
@@ -319,8 +330,9 @@ ctx.register_llm_request_intercept(
 ctx.register_llm_stream_execution_intercept(
     "documentation-stream",
     config.execution.priority,
-    Arc::new(move |_name, request, next| {
+    Arc::new(move |_name, request, context, next| {
         Box::pin(async move {
+            debug_assert!(context.response_codec().is_none());
             let downstream = next(request).await?;
             Ok(LlmJsonStream::new(downstream.map(|chunk| {
                 chunk.map(|mut value| {
@@ -336,6 +348,12 @@ ctx.register_llm_stream_execution_intercept(
 ```
 </Tab>
 </Tabs>
+
+Execution codec objects are scoped to the callback that received them. Unary
+capabilities expire when that callback settles. A streaming request capability remains
+usable while the returned stream is live and expires on completion, error, close, or
+drop. Retaining a codec object past that boundary produces an error; it does not extend
+the invocation lifetime.
 
 The LLM intercept returns the
 [complete outcome](/reference/llm-request-intercept-outcomes) rather than relying on

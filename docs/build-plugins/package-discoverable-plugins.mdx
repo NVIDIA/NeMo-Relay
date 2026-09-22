@@ -17,7 +17,7 @@ equivalent binding configuration.
 | Block | What It Controls |
 |---|---|
 | `[plugin]` | Stable package identity and plugin kind. |
-| `[compat]` | Supported Relay range plus the native manifest API or worker protocol contract. A typed native plugin that uses the 0.8 SDK should declare a Relay range beginning at 0.8.0. |
+| `[compat]` | Supported Relay range plus the native manifest API or worker protocol contract. A typed native plugin built with the current SDK must declare a Relay range beginning at 0.10.0. |
 | `[defaults]` and `[capabilities]` | Initial enabled state and the features the package declares, such as `plugin_native`, `plugin_worker`, and `config_schema`. |
 | `[config_schema]` | An optional JSON Schema path resolved relative to the manifest. Packages that use it also declare the `config_schema` capability. |
 | `[source]` | The artifact covered by integrity verification and, for managed Python workers, the package root used to create the environment. |
@@ -26,8 +26,8 @@ equivalent binding configuration.
 
 For native packages, `compat.native_api = "1"` is the authored manifest contract. It is
 not the [C host-table ABI number](/build-plugins/native/native-abi-reference). The
-current SDK requests ABI v5 and the host retains frozen v4, v3, and v2 compatibility
-for older compiled plugins. For workers, declare `compat.worker_protocol = "grpc-v1"`; the
+current SDK requires ABI v7, and Relay 0.10 rejects older compiled callback layouts.
+For workers, declare `compat.worker_protocol = "grpc-v1"`; the
 [handshake](/build-plugins/workers/grpc-v1-protocol) still negotiates the exact
 protocol, surfaces, authentication token, and lifecycle at startup.
 
@@ -48,7 +48,7 @@ id = "examples.python_grpc_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.9.0,<1.0"
+relay = ">=0.10.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -81,7 +81,7 @@ id = "examples.rust_native_policy"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.9.0,<1.0"
+relay = ">=0.10.0,<1.0"
 native_api = "1"
 
 [defaults]
@@ -113,7 +113,7 @@ id = "examples.rust_grpc_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.9.0,<1.0"
+relay = ">=0.10.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]

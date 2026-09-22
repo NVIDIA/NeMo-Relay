@@ -129,7 +129,7 @@ id = "examples.python_grpc_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.9.0,<1.0"
+relay = ">=0.10.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [capabilities]
@@ -150,8 +150,8 @@ runtime = "python"
 entrypoint = "nemo_relay_python_grpc_worker_example.worker:main"
 ```
 
-The manifest requires Relay 0.9 because this worker uses the context-aware tool execution
-callback contract. The protocol identifier remains `grpc-v1`. `ToolNext.call()` returns
+The manifest requires Relay 0.10 because this worker uses the context-aware tool execution
+contract and the `LlmExecutionContext` callback shape. The protocol identifier remains `grpc-v1`. `ToolNext.call()` returns
 `ToolExecutionResult`, whose `result` contains the application payload and whose optional
 `annotation` remains adjacent opaque metadata. See the
 [protocol reference](/build-plugins/workers/grpc-v1-protocol) for the complete boundary.

@@ -716,11 +716,47 @@ impl PromiseAwareFn {
         .await
     }
 
+    /// Call a spread JavaScript callback with builder-constructed arguments
+    /// followed by a middleware-style `next(arg)` callback.
+    pub async fn call_spread_with_arg0_and_json_next(
+        &self,
+        build_arg0: Arg0Builder,
+        next: JsonNextFn,
+    ) -> FlowResult<Json> {
+        self.call_inner(
+            PrimaryArg::Build(build_arg0),
+            CallMode::SPREAD,
+            Some(NextFn::Json(next)),
+        )
+        .await
+    }
+
     /// Call the JS function with a middleware-style `next(arg)` callback that
     /// resolves to a lazy downstream stream.
     pub async fn call_with_stream_next(
         &self,
         args: Json,
+        next: JsonStreamNextFn,
+    ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
+        self.call_with_stream_next_inner(PrimaryArg::Json(args), false, next)
+            .await
+    }
+
+    /// Call a spread JavaScript callback with builder-constructed arguments
+    /// followed by a middleware-style streaming `next(arg)` callback.
+    pub async fn call_spread_with_arg0_and_stream_next(
+        &self,
+        build_arg0: Arg0Builder,
+        next: JsonStreamNextFn,
+    ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
+        self.call_with_stream_next_inner(PrimaryArg::Build(build_arg0), true, next)
+            .await
+    }
+
+    async fn call_with_stream_next_inner(
+        &self,
+        arg0: PrimaryArg,
+        spread: bool,
         next: JsonStreamNextFn,
     ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
         let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
@@ -741,8 +777,8 @@ impl PromiseAwareFn {
             .ok_or_else(closed_tsfn_error)?;
         let status = tsfn.call(
             Ok(CallArgs {
-                arg0: PrimaryArg::Json(args),
-                spread: false,
+                arg0,
+                spread,
                 next: Some(NextFn::Stream(next)),
                 publication: false,
                 publication_context_id: publication_callback_context_id(),

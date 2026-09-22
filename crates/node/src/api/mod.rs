@@ -4142,9 +4142,9 @@ pub fn deregister_llm_request_intercept(name: String) -> Result<bool> {
 
 /// Register an LLM execution intercept following the middleware chain pattern.
 ///
-/// The `callable` receives the request and a `next` function. Call `next(request)` to
-/// invoke the next intercept or original implementation; skip calling `next` to
-/// short-circuit the chain. `next` may be called repeatedly or concurrently while
+/// The `callable` receives the request, codec context, and a `next` function. Call
+/// `next(request)` to invoke the next intercept or original implementation; skip calling
+/// `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while
 /// `callable` is pending; each call receives an isolated scope-stack branch, and
 /// unfinished or later calls reject after `callable` settles.
 #[napi]
@@ -4153,7 +4153,7 @@ pub fn register_llm_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(request: Json, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>"
+        ts_arg_type = "(request: Json, context: LlmExecutionContext, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -4181,7 +4181,9 @@ pub fn deregister_llm_execution_intercept(name: String) -> Result<bool> {
 
 /// Register a streaming LLM execution intercept following the middleware chain pattern.
 ///
-/// The `callable` receives the request and a `next` function. Call `next(request)` to
+/// The `callable` receives the request, request-codec context, and a `next` function. The
+/// response codec is `null` because streaming execution has no complete-response codec.
+/// Call `next(request)` to
 /// invoke the next intercept or original streaming implementation; in Node the
 /// returned promise resolves to a lazy `AsyncIterable`. Return it directly or wrap it
 /// `next` to short-circuit the chain. `next` may be called repeatedly or concurrently
@@ -4194,7 +4196,7 @@ pub fn register_llm_stream_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(request: Json, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>"
+        ts_arg_type = "(request: Json, context: LlmExecutionContext, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -4794,8 +4796,8 @@ pub fn scope_deregister_llm_request_intercept(scope_uuid: String, name: String) 
 
 /// Register a scope-local LLM execution intercept following the middleware chain pattern.
 ///
-/// The `callable` receives the request and a `next` function. Call `next(request)` to
-/// invoke the next intercept or original implementation; skip calling `next` to
+/// The `callable` receives the request, codec context, and a `next` function. Call
+/// `next(request)` to invoke the next intercept or original implementation; skip calling `next` to
 /// short-circuit the chain. `next` may be called repeatedly or concurrently while
 /// `callable` is pending; each call receives an isolated scope-stack branch, and
 /// unfinished or later calls reject after `callable` settles.
@@ -4806,7 +4808,7 @@ pub fn scope_register_llm_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(request: Json, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>"
+        ts_arg_type = "(request: Json, context: LlmExecutionContext, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -4839,7 +4841,9 @@ pub fn scope_deregister_llm_execution_intercept(scope_uuid: String, name: String
 
 /// Register a scope-local streaming LLM execution intercept following the middleware chain pattern.
 ///
-/// The `callable` receives the request and a `next` function. Call `next(request)` to
+/// The `callable` receives the request, request-codec context, and a `next` function. The
+/// response codec is `null` because streaming execution has no complete-response codec.
+/// Call `next(request)` to
 /// invoke the next intercept or original streaming implementation; in Node the
 /// returned promise resolves to a lazy `AsyncIterable`. Return it directly or wrap it
 /// `next` to short-circuit the chain. `next` may be called repeatedly or concurrently
@@ -4853,7 +4857,7 @@ pub fn scope_register_llm_stream_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(request: Json, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>"
+        ts_arg_type = "(request: Json, context: LlmExecutionContext, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>"
     )]
     callable: JsFunction,
 ) -> Result<()> {

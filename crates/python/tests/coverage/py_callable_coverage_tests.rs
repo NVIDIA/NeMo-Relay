@@ -126,7 +126,7 @@ def sync_tool_intercept(context, next):
 def sync_llm_exec(request):
     return {"model": request.content["model"], "mode": "sync"}
 
-def sync_llm_intercept(name, request, next):
+def sync_llm_intercept(name, request, context, next):
     return {"name": name, "model": request.content["model"], "mode": "sync"}
 
 def request_echo(name, request, annotated):
@@ -219,9 +219,17 @@ class RaisingResponseCodec:
                 Box::pin(async move { Ok(json!({"model": request.content["model"]})) })
             });
             assert_eq!(
-                llm_intercept("llm", make_request(), llm_next)
-                    .await
-                    .unwrap(),
+                llm_intercept(
+                    "llm",
+                    make_request(),
+                    nemo_relay::api::runtime::LlmExecutionContext::new(
+                        Default::default(),
+                        Some(Default::default()),
+                    ),
+                    llm_next,
+                )
+                .await
+                .unwrap(),
                 json!({"name": "llm", "model": "test-model", "mode": "sync"})
             );
         });

@@ -69,6 +69,9 @@ from nemo_relay._native import (
     LlmCodecIdentity as LlmCodecIdentity,
 )
 from nemo_relay._native import (
+    LlmExecutionContext as LlmExecutionContext,
+)
+from nemo_relay._native import (
     LLMHandle as LLMHandle,
 )
 from nemo_relay._native import (
@@ -342,25 +345,30 @@ Return:
     The complete canonical outcome passed to later middleware.
 """
 LlmExecutionIntercept: TypeAlias = Callable[
-    [str, LLMRequest, Callable[[LLMRequest], Awaitable[Json]]],
+    [str, LLMRequest, LlmExecutionContext, Callable[[LLMRequest], Awaitable[Json]]],
     Json | Awaitable[Json],
 ]
 """Execution intercept callback that wraps non-streaming LLM execution.
 
 Arguments:
-    The logical LLM name, current request, and next callable.
+    The logical LLM name, current request, execution context, and next callable.
 
 Return:
     A JSON-compatible response, either directly or as an awaitable.
 """
 LlmStreamExecutionIntercept: TypeAlias = Callable[
-    [LLMRequest, Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]]],
+    [
+        str,
+        LLMRequest,
+        LlmExecutionContext,
+        Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]],
+    ],
     AsyncIterator[Json] | Awaitable[AsyncIterator[Json]],
 ]
 """Execution intercept callback that wraps streaming LLM execution.
 
 Arguments:
-    The current request and next callable.
+    The logical LLM name, current request, execution context, and next callable.
 
 Return:
     An async iterator of JSON chunks, either directly or as an awaitable.

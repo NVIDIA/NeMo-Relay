@@ -8,10 +8,7 @@ use crate::api::runtime::{
     ConditionalMiddlewareGuardrailFn, EventMetadataInjectorFn, EventSanitizeFn, LlmConditionalFn,
     LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
     LlmStreamExecutionFn, ToolConditionalFn, ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
-    adapt_llm_execution_fn, adapt_llm_stream_execution_fn,
 };
-#[cfg(feature = "worker-grpc")]
-use crate::api::runtime::{ContextualLlmExecutionFn, ContextualLlmStreamExecutionFn};
 use crate::api::runtime::{current_scope_stack, global_context};
 use crate::api::shared::ensure_runtime_owner;
 use crate::error::{FlowError, Result};
@@ -335,15 +332,6 @@ pub(crate) type Intercept<F> = RegistryRecord<RequestIntercept<F>>;
 /// A priority-ordered execution intercept registration record.
 pub(crate) type ExecutionIntercept<F> = RegistryRecord<F>;
 
-macro_rules! adapt_execution_callable {
-    ($callable:expr) => {
-        $callable
-    };
-    ($callable:expr, $adapter:path) => {
-        $adapter($callable)
-    };
-}
-
 macro_rules! global_guardrail_registry_api {
     (
         $(#[$register_meta:meta])*
@@ -475,7 +463,6 @@ macro_rules! global_execution_registry_api {
         $deregister_name:ident,
         $field:ident,
         $fn_type:ty
-        $(, $adapter:path)?
     ) => {
         $(#[$register_meta])*
         ///
@@ -498,11 +485,7 @@ macro_rules! global_execution_registry_api {
                 .map_err(|error| FlowError::Internal(error.to_string()))?;
             state
                 .$field
-                .register(ExecutionIntercept::new(
-                    name,
-                    priority,
-                    adapt_execution_callable!(callable $(, $adapter)?),
-                ))
+                .register(ExecutionIntercept::new(name, priority, callable))
                 .map_err(FlowError::AlreadyExists)
         }
 
@@ -677,7 +660,6 @@ macro_rules! scope_execution_registry_api {
         $deregister_name:ident,
         $field:ident,
         $fn_type:ty
-        $(, $adapter:path)?
     ) => {
         $(#[$register_meta])*
         ///
@@ -708,11 +690,7 @@ macro_rules! scope_execution_registry_api {
                 .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
             registries
                 .$field
-                .register(ExecutionIntercept::new(
-                    name,
-                    priority,
-                    adapt_execution_callable!(callable $(, $adapter)?),
-                ))
+                .register(ExecutionIntercept::new(name, priority, callable))
                 .map_err(FlowError::AlreadyExists)
         }
 
@@ -898,8 +876,7 @@ global_execution_registry_api!(
     /// Deregister a global LLM execution intercept.
     deregister_llm_execution_intercept,
     llm_execution_intercepts,
-    LlmExecutionFn,
-    adapt_llm_execution_fn
+    LlmExecutionFn
 );
 global_execution_registry_api!(
     /// Register a global streaming LLM execution intercept.
@@ -909,47 +886,8 @@ global_execution_registry_api!(
     /// Deregister a global streaming LLM execution intercept.
     deregister_llm_stream_execution_intercept,
     llm_stream_execution_intercepts,
-    LlmStreamExecutionFn,
-    adapt_llm_stream_execution_fn
+    LlmStreamExecutionFn
 );
-
-/// Register a global non-streaming LLM execution intercept that receives
-/// Relay's private invocation context.
-#[cfg(feature = "worker-grpc")]
-pub(crate) fn register_contextual_llm_execution_intercept(
-    name: &str,
-    priority: i32,
-    callable: ContextualLlmExecutionFn,
-) -> Result<()> {
-    ensure_runtime_owner()?;
-    let context = global_context();
-    let mut state = context
-        .write()
-        .map_err(|error| FlowError::Internal(error.to_string()))?;
-    state
-        .llm_execution_intercepts
-        .register(ExecutionIntercept::new(name, priority, callable))
-        .map_err(FlowError::AlreadyExists)
-}
-
-/// Register a global streaming LLM execution intercept that receives Relay's
-/// private invocation context.
-#[cfg(feature = "worker-grpc")]
-pub(crate) fn register_contextual_llm_stream_execution_intercept(
-    name: &str,
-    priority: i32,
-    callable: ContextualLlmStreamExecutionFn,
-) -> Result<()> {
-    ensure_runtime_owner()?;
-    let context = global_context();
-    let mut state = context
-        .write()
-        .map_err(|error| FlowError::Internal(error.to_string()))?;
-    state
-        .llm_stream_execution_intercepts
-        .register(ExecutionIntercept::new(name, priority, callable))
-        .map_err(FlowError::AlreadyExists)
-}
 
 scope_guardrail_registry_api!(
     /// Register a scope-local mark event sanitizer.
@@ -1106,8 +1044,7 @@ scope_execution_registry_api!(
     /// Deregister a scope-local LLM execution intercept.
     scope_deregister_llm_execution_intercept,
     llm_execution_intercepts,
-    LlmExecutionFn,
-    adapt_llm_execution_fn
+    LlmExecutionFn
 );
 scope_execution_registry_api!(
     /// Register a scope-local streaming LLM execution intercept.
@@ -1117,6 +1054,5 @@ scope_execution_registry_api!(
     /// Deregister a scope-local streaming LLM execution intercept.
     scope_deregister_llm_stream_execution_intercept,
     llm_stream_execution_intercepts,
-    LlmStreamExecutionFn,
-    adapt_llm_stream_execution_fn
+    LlmStreamExecutionFn
 );

@@ -979,17 +979,18 @@ pub(super) fn register_remote_backend(
 
     if config.input || config.output {
         let llm_execution_runtime = Arc::clone(&runtime);
-        let llm_execution: LlmExecutionFn = Arc::new(move |_name, request, _next| {
+        let llm_execution: LlmExecutionFn = Arc::new(move |_name, request, _context, _next| {
             let runtime = Arc::clone(&llm_execution_runtime);
             Box::pin(async move { runtime.execute(request, false).await })
         });
         ctx.register_llm_execution_intercept("llm_remote_backend", config.priority, llm_execution)?;
 
         let llm_stream_runtime = Arc::clone(&runtime);
-        let llm_stream_execution: LlmStreamExecutionFn = Arc::new(move |_name, request, _next| {
-            let runtime = Arc::clone(&llm_stream_runtime);
-            Box::pin(async move { runtime.execute_stream(request).await })
-        });
+        let llm_stream_execution: LlmStreamExecutionFn =
+            Arc::new(move |_name, request, _context, _next| {
+                let runtime = Arc::clone(&llm_stream_runtime);
+                Box::pin(async move { runtime.execute_stream(request).await })
+            });
         ctx.register_llm_stream_execution_intercept(
             "llm_stream_remote_backend",
             config.priority,

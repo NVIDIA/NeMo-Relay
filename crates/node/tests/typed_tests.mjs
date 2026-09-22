@@ -618,7 +618,7 @@ describe('typedLlmExecute', () => {
     });
     let downstream;
     let providerSideEffects = 0;
-    registerLlmExecutionIntercept('typed_llm_abort_started_provider', 10, async (request, next) => {
+    registerLlmExecutionIntercept('typed_llm_abort_started_provider', 10, async (request, _context, next) => {
       downstream = next(request);
       downstream.catch(() => undefined);
       await started;

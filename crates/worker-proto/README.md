@@ -30,6 +30,13 @@ for earlier releases must regenerate their bindings, rebuild, and declare
 `compat.relay` beginning at `0.8.0`. `ToolNext` returns `ToolExecutionResultResponse`,
 and tool execution intercepts use structural `ToolExecutionInterceptOutcome` messages.
 
+Relay 0.10 adds directional execution codec context to `LlmInvocation` and makes
+that context required by the 0.10 worker SDK's unary and streaming LLM execution
+callbacks. The protobuf field is additive, but the SDK callback contract is a
+release-level source break. Rebuild workers, regenerate custom bindings, and use
+a `compat.relay` lower bound of `0.10.0`. The protocol identifier remains
+`grpc-v1`.
+
 ## Protocol Surface
 
 | Surface | Role |
@@ -41,6 +48,7 @@ and tool execution intercepts use structural `ToolExecutionInterceptOutcome` mes
 | Tool results | `ToolNext` returns `ToolExecutionResultResponse`, and `ToolExecutionInterceptResult` returns `ToolExecutionInterceptOutcome`. Both preserve the application result and optional annotation. Intercept outcomes also include ordered pending marks. These fields use lossless protobuf `JsonValue` wrappers rather than `google.protobuf.Value`. |
 | Mark options | `EmitMarkRequest.data_schema` carries a `nemo.relay.DataSchema@1` envelope, `severity` carries the log severity, and `category` carries an optional semantic mark category. Omitting these fields preserves legacy behavior. |
 | Runtime diagnostics | Authenticated `GetRuntimeDiagnostics` returns a bounded active-host `{ code, message, count }` snapshot. Older hosts return gRPC `UNIMPLEMENTED`. |
+| LLM execution codec context | `LlmInvocation.execution_codec_context` carries request identity and an invocation-scoped request capability. Unary execution also carries response identity and a response capability; streaming execution omits the response direction. |
 
 ## Installation
 

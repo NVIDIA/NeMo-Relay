@@ -1456,6 +1456,28 @@ fn worker_loader_rejects_manifest_that_admits_pre_zero_eight_relay() {
 }
 
 #[test]
+fn worker_llm_execution_context_requires_zero_ten_compatibility() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.blocking_lock();
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) =
+        write_manifest_with_relay(fixture.binary_path(), ">=0.9,<1.0");
+
+    let error = match load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: "fixture_worker".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
+        config: Map::new(),
+    }]) {
+        Ok(activation) => {
+            activation.clear();
+            panic!("an execution-context worker must exclude Relay 0.9");
+        }
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("excludes Relay 0.9"), "{error}");
+}
+
+#[test]
 fn invalid_worker_relay_requirement_reports_parse_error() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.blocking_lock();
     let missing_binary = std::env::temp_dir().join(format!("unused-worker-{}", Uuid::now_v7()));
@@ -2053,29 +2075,31 @@ class CodecContextProbe(WorkerPlugin):
         del config
 
         async def execute(_name, request, context, next_call):
-            if not context.available:
-                raise RuntimeError("execution codec context is unavailable")
-            if context.request_codec is None or context.response_codec is None:
-                raise RuntimeError("directional codec proxy is unavailable")
+            if context.response_codec is None:
+                raise RuntimeError("unary response codec context is unavailable")
+            request_codec = context.request_codec.resolve_codec()
+            response_codec = context.response_codec.resolve_codec()
+            if request_codec is None or response_codec is None:
+                raise RuntimeError("directional codec capability is unavailable")
 
-            annotated = await context.request_codec.decode(request)
+            annotated = await request_codec.decode(request)
             annotated["model"] = "worker-model"
-            encoded = await context.request_codec.encode(annotated, request)
+            encoded = await request_codec.encode(annotated, request)
             response = await next_call.call(encoded)
-            decoded = await context.response_codec.decode(response)
+            decoded = await response_codec.decode(response)
 
             result = dict(response)
             result["_codec_context_probe"] = {
-                "request_kind": context.request_codec_identity.kind,
-                "request_id": context.request_codec_identity.id,
-                "response_kind": context.response_codec_identity.kind,
-                "response_id": context.response_codec_identity.id,
+                "request_kind": context.request_codec.codec.kind,
+                "request_id": context.request_codec.codec.id,
+                "response_kind": context.response_codec.codec.kind,
+                "response_id": context.response_codec.codec.id,
                 "decoded_model": decoded.get("model"),
                 "decoded_message": decoded.get("message"),
             }
             return result
 
-        ctx.register_llm_execution_intercept_with_context("codec_context_probe", execute)
+        ctx.register_llm_execution_intercept("codec_context_probe", execute)
 
 
 async def main():

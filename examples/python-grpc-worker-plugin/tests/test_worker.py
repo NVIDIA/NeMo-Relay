@@ -27,7 +27,16 @@ if os.environ.get("NEMO_RELAY_SKIP_PYTHON_PLUGIN_TESTS") == "1":
 
 pytest.importorskip("grpc")
 
-from nemo_relay_plugin import PluginContext, PluginRuntime, ToolExecutionContext, ToolExecutionResult  # noqa: E402
+from nemo_relay_plugin import (  # noqa: E402
+    LlmCodecIdentity,
+    LlmExecutionContext,
+    LlmSanitizeRequestContext,
+    LlmSanitizeResponseContext,
+    PluginContext,
+    PluginRuntime,
+    ToolExecutionContext,
+    ToolExecutionResult,
+)
 
 EXAMPLE_ROOT = Path(__file__).parents[1]
 MODULE_NAME = "nemo_relay_python_grpc_worker_example.worker"
@@ -88,6 +97,12 @@ def callback(context: MagicMock, method: str, name: str | None = None) -> Any:
     return calls[0].args[1]
 
 
+def execution_context(*, streaming: bool = False) -> LlmExecutionContext:
+    request = LlmSanitizeRequestContext(LlmCodecIdentity("none"))
+    response = None if streaming else LlmSanitizeResponseContext(LlmCodecIdentity("none"))
+    return LlmExecutionContext(request_codec=request, response_codec=response)
+
+
 def test_manifest_digest_matches_worker_source() -> None:
     manifest = read_manifest()
     artifact = EXAMPLE_ROOT / manifest["source"]["artifact"]
@@ -99,7 +114,7 @@ def test_manifest_digest_matches_worker_source() -> None:
 def test_manifest_declares_current_worker_protocol() -> None:
     manifest = read_manifest()
 
-    assert manifest["compat"] == {"relay": ">=0.9.0,<1.0", "worker_protocol": "grpc-v1"}
+    assert manifest["compat"] == {"relay": ">=0.10.0,<1.0", "worker_protocol": "grpc-v1"}
 
 
 def test_schema_declares_only_supported_groups() -> None:
@@ -465,6 +480,7 @@ async def test_llm_execution_can_repeat_continuation(example: Any) -> None:
     result = await intercept(
         "allowed-model",
         {"headers": {}, "content": {"repeat_downstream": True}},
+        execution_context(),
         next_call,
     )
 
@@ -481,6 +497,7 @@ async def test_repeated_llm_continuation_ignores_the_second_failure(example: Any
     result = await intercept(
         "allowed-model",
         {"headers": {}, "content": {"repeat_downstream": True}},
+        execution_context(),
         next_call,
     )
 
@@ -499,7 +516,12 @@ async def test_stream_execution_transforms_chunks_lazily(example: Any) -> None:
     next_call = MagicMock()
     next_call.call.return_value = downstream()
 
-    stream = intercept("allowed-model", {"headers": {}, "content": {}}, next_call)
+    stream = intercept(
+        "allowed-model",
+        {"headers": {}, "content": {}},
+        execution_context(streaming=True),
+        next_call,
+    )
 
     assert [item async for item in stream] == [
         {"chunk": 1, "plugin_stream": True},

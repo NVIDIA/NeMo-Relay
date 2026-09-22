@@ -72,12 +72,9 @@ Public callback aliases:
     LlmSanitizeResponseCallback: LLM response sanitizer callback.
     LlmConditionalCallback: LLM execution guardrail callback.
     LlmRequestCallback: LLM request intercept callback.
-    LlmExecutionCallback: Unary LLM execution intercept callback.
-    LlmExecutionWithContextCallback: Unary LLM execution intercept callback
-        with codec context.
-    LlmStreamExecutionCallback: Streaming LLM execution intercept callback.
-    LlmStreamExecutionWithContextCallback: Streaming LLM execution intercept
-        callback with request codec context.
+    LlmExecutionCallback: Unary LLM execution intercept callback with codec context.
+    LlmStreamExecutionCallback: Streaming LLM execution intercept callback with
+        request codec context.
 
 Public authoring types:
     WorkerPlugin: Base validation and registration contract for a plugin.
@@ -108,7 +105,6 @@ from ._api import (
     LlmConditionalCallback,
     LlmExecutionCallback,
     LlmExecutionContext,
-    LlmExecutionWithContextCallback,
     LlmNext,
     LlmOptimizationContribution,
     LlmOptimizationDataSchema,
@@ -125,7 +121,6 @@ from ._api import (
     LlmSanitizeResponseCallback,
     LlmSanitizeResponseContext,
     LlmStreamExecutionCallback,
-    LlmStreamExecutionWithContextCallback,
     LlmStreamNext,
     LogSeverity,
     MetricKind,
@@ -174,7 +169,6 @@ __all__ = [
     "LlmCodecIdentity",
     "LlmExecutionCallback",
     "LlmExecutionContext",
-    "LlmExecutionWithContextCallback",
     "LogSeverity",
     "MetricKind",
     "MetricMeasurement",
@@ -196,7 +190,6 @@ __all__ = [
     "LlmSanitizeResponseCallback",
     "LlmStreamNext",
     "LlmStreamExecutionCallback",
-    "LlmStreamExecutionWithContextCallback",
     "PluginContext",
     "PluginRuntime",
     "RuntimeDiagnostic",

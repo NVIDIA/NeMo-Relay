@@ -676,8 +676,9 @@ def register_llm_execution(scope_handle: ScopeHandle, name: str, priority: int, 
             this scope is popped.
         name: Unique intercept name within the owning scope.
         priority: Execution order for the intercept. Lower values run first.
-        fn: Callable invoked as ``fn(name, request, next_call)`` that may call
-            ``next_call(request)`` to continue execution or short-circuit it.
+        fn: Callable invoked as ``fn(name, request, context, next_call)`` that
+            may inspect the active codecs, call ``next_call(request)`` to
+            continue execution, or short-circuit it.
 
     Returns:
         None: This function returns after the scope-local intercept is
@@ -721,9 +722,10 @@ def register_llm_stream_execution(
             this scope is popped.
         name: Unique intercept name within the owning scope.
         priority: Execution order for the intercept. Lower values run first.
-        fn: Callable invoked as ``fn(request, next_call)`` that returns an
-            async iterator of chunks, either by delegating to ``next_call`` or
-            by replacing the stream entirely.
+        fn: Callable invoked as ``fn(name, request, context, next_call)`` that
+            returns an async iterator of chunks. Streaming exposes the request
+            codec but no response codec. The callback may delegate to
+            ``next_call`` or replace the stream entirely.
 
     Returns:
         None: This function returns after the scope-local intercept is

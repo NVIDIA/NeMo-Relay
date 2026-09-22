@@ -11,7 +11,39 @@ upgrade actions as they are identified during the 0.10 development cycle.
 
 ## Upgrade to NeMo Relay 0.10
 
-No migration actions have been recorded for NeMo Relay 0.10 yet.
+### Update LLM Execution Intercepts
+
+Relay 0.10 adds `LlmExecutionContext` immediately before the continuation in
+every unary and streaming LLM execution-intercept callback. Update callbacks
+as follows:
+
+| Surface | Relay 0.10 callback shape |
+|---|---|
+| Rust, Python, native plugin, Rust worker, Python worker | `(name, request, context, next)` |
+| Node.js, Go | `(request, context, next)` |
+| C | `(user_data, name, request, context, next, next_ctx)` |
+
+The request direction reports the selected codec and exposes decode and encode
+operations when Relay resolved one. Unary execution also exposes response
+identity and decode. Streaming execution has no response codec because chunks
+are not complete provider responses.
+
+This is a source and binary compatibility break for execution-intercept users:
+
+- Recompile language-binding consumers that register an LLM execution
+  intercept and update their callback argument order.
+- Rebuild every native plugin against the 0.10 SDK. Native plugins continue to
+  declare `compat.native_api = "1"`, but must set `compat.relay` to
+  `">=0.10.0,<1.0"` or another range that excludes Relay 0.9. Relay 0.10 uses
+  internal native ABI v7 and rejects older compiled layouts.
+- Regenerate and rebuild gRPC workers that register an LLM execution intercept.
+  The protocol remains `grpc-v1`, but those workers must also exclude Relay 0.9
+  in `compat.relay`.
+
+LLM request intercepts and conditional middleware do not change. For the full
+context and lifetime contract, refer to [Build Plugins](/build-plugins/about),
+[Native ABI Reference](/build-plugins/native/native-abi-reference), and
+[gRPC-v1 Worker Protocol](/build-plugins/workers/grpc-v1-protocol).
 
 ## Related Release Information
 

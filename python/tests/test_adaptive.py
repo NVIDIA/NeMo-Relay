@@ -17,6 +17,7 @@ from nemo_relay import (
     AnnotatedLLMRequest,
     Json,
     JsonObject,
+    LlmExecutionContext,
     LLMRequest,
     LLMRequestInterceptOutcome,
     ScopeType,
@@ -310,7 +311,10 @@ class TestAdaptivePluginConfiguration:
                     return LLMRequestInterceptOutcome(LLMRequest(headers, request.content), annotated)
 
                 async def llm_exec_intercept(
-                    _name: str, request: LLMRequest, next_call: Callable[[LLMRequest], Awaitable[Json]]
+                    _name: str,
+                    request: LLMRequest,
+                    _context: LlmExecutionContext,
+                    next_call: Callable[[LLMRequest], Awaitable[Json]],
                 ) -> Json:
                     response = await next_call(request)
                     assert isinstance(response, dict)
@@ -318,7 +322,9 @@ class TestAdaptivePluginConfiguration:
                     return response
 
                 async def llm_stream_exec_intercept(
+                    _name: str,
                     request: LLMRequest,
+                    _context: LlmExecutionContext,
                     next_call: Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]],
                 ) -> AsyncIterator[Json]:
                     stream = await next_call(request)

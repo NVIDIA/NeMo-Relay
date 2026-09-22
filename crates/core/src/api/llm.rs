@@ -27,9 +27,9 @@ use crate::api::runtime::subscriber_dispatcher::{
     dispatch_sanitized_event, dispatch_transformed_event, register_pending_publication,
 };
 use crate::api::runtime::{
-    EventSubscriberFn, LlmCollectorFn, LlmExecutionCodecContext, LlmExecutionNextFn,
-    LlmFinalizerFn, LlmJsonStream, LlmSanitizeRequestContext, LlmSanitizeResponseContext,
-    LlmStreamExecutionNextFn, MiddlewareContinuationContext, with_active_event_uuid,
+    EventSubscriberFn, LlmCollectorFn, LlmExecutionContext, LlmExecutionNextFn, LlmFinalizerFn,
+    LlmJsonStream, LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
+    MiddlewareContinuationContext, with_active_event_uuid,
 };
 use crate::api::runtime::{ScopeStackHandle, capture_trace_context, current_scope_stack};
 use crate::api::scope::event;
@@ -1725,7 +1725,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     );
     let execution_name = name.clone();
     let event_uuid = handle.uuid;
-    let execution_context = LlmExecutionCodecContext::for_codecs(request_codec, &response_codec);
+    let execution_context = LlmExecutionContext::for_unary_codecs(request_codec, &response_codec);
     let execution = with_active_event_uuid(
         event_uuid,
         scope_llm_optimization_recorder(handle.optimization_recorder.clone(), async move {
@@ -1955,7 +1955,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
     );
     let execution_name = name.clone();
     let event_uuid = handle.uuid;
-    let execution_context = LlmExecutionCodecContext::for_codecs(request_codec, &response_codec);
+    let execution_context = LlmExecutionContext::for_streaming_codec(request_codec);
     let execution = with_active_event_uuid(
         event_uuid,
         scope_llm_optimization_recorder(handle.optimization_recorder.clone(), async move {

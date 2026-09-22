@@ -290,7 +290,7 @@ class ExamplePythonWorker(WorkerPlugin):
                 pending_marks=marks,
             )
 
-        async def llm_execution(_name: str, request: dict[str, Any], next_call: Any) -> Json:
+        async def llm_execution(_name: str, request: dict[str, Any], _context: Any, next_call: Any) -> Json:
             content = request.get("content")
             repeat = isinstance(content, dict) and content.get("repeat_downstream") is True
             if repeat:
@@ -305,6 +305,7 @@ class ExamplePythonWorker(WorkerPlugin):
         async def llm_stream_execution(
             _name: str,
             request: dict[str, Any],
+            _context: Any,
             next_call: Any,
         ) -> AsyncIterator[Json]:
             async for chunk in next_call.call(request):
