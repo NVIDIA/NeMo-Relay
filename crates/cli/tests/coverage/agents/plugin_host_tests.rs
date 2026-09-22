@@ -1430,6 +1430,102 @@ fn codex_install_switches_custom_provider_to_openai_and_restores_it() {
 }
 
 #[test]
+fn codex_install_migrates_managed_legacy_provider_and_restores_explicit_openai() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "model_provider = \"openai\"\n";
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let mut legacy = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    legacy["model_provider"] = toml_edit::value("nemo-relay-openai");
+    fs::write(&path, legacy.to_string()).unwrap();
+    fs::remove_file(path.with_file_name(".env")).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(installed["model_provider"].as_str(), Some("openai"));
+    assert!(
+        installed["model_providers"]
+            .as_table()
+            .unwrap()
+            .contains_key("nemo-relay-openai")
+    );
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn codex_install_migrates_managed_legacy_provider_and_restores_absent_selection() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "model = \"gpt-test\"\n";
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let mut legacy = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    legacy["model_provider"] = toml_edit::value("nemo-relay-openai");
+    fs::write(&path, legacy.to_string()).unwrap();
+    fs::remove_file(path.with_file_name(".env")).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(installed["model_provider"].as_str(), Some("openai"));
+    assert!(
+        installed["model_providers"]
+            .as_table()
+            .unwrap()
+            .contains_key("nemo-relay-openai")
+    );
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn codex_install_treats_unmanaged_legacy_alias_as_user_configuration() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = r#"model_provider = "nemo-relay-openai"
+
+[model_providers.nemo-relay-openai]
+name = "User Provider"
+base_url = "https://example.test/v1"
+wire_api = "responses"
+"#;
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(installed["model_provider"].as_str(), Some("openai"));
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
 fn codex_uninstall_preserves_a_user_url_with_matching_unverified_capability() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());

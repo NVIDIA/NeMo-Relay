@@ -877,7 +877,7 @@ fn install_codex_config_inner(path: &Path, gateway_url: &str) -> Result<(), Stri
         .get("model_provider")
         .and_then(Item::as_value)
         .and_then(TomlValue::as_str)
-        .is_some_and(|provider| provider != "openai" && provider != "nemo-relay-openai")
+        .is_some_and(|provider| provider != "openai")
     {
         doc["model_provider"] = value("openai");
     }
@@ -1390,7 +1390,7 @@ fn restore_codex_config_from_backup(
                 .get("model_provider")
                 .and_then(Item::as_value)
                 .and_then(TomlValue::as_str)
-                .is_some_and(|provider| provider != "openai");
+                != Some("openai");
         if top_level_item_is_str(doc, "model_provider", "nemo-relay-openai")
             || restore_openai_selection
         {
