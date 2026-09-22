@@ -332,7 +332,7 @@ impl nemo_relay::codec::traits::LlmResponseCodec for OpaqueExecutionCodec {
     }
 }
 
-unsafe extern "C" fn llm_exec_absent_context_cb(
+unsafe extern "C" fn llm_exec_codec_context_cb(
     _user_data: *mut libc::c_void,
     name: *const c_char,
     native_json: *const c_char,
@@ -340,42 +340,33 @@ unsafe extern "C" fn llm_exec_absent_context_cb(
     next_fn: NemoRelayLlmExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char {
+    let kind = context.request_codec.codec_kind;
+    let expected_name = match kind {
+        NemoRelayLlmSanitizeCodecKind::None => "ffi-none",
+        NemoRelayLlmSanitizeCodecKind::Opaque => "ffi-opaque",
+        other => panic!("unexpected execution codec kind: {other:?}"),
+    };
     assert_eq!(
         unsafe { CStr::from_ptr(name) }.to_str().unwrap(),
-        "ffi-none"
-    );
-    assert_eq!(
-        context.request_codec.codec_kind,
-        NemoRelayLlmSanitizeCodecKind::None
+        expected_name
     );
     assert!(context.request_codec.codec_id.is_null());
-    assert!(context.request_codec.codec.is_null());
+    assert_eq!(
+        context.request_codec.codec.is_null(),
+        kind == NemoRelayLlmSanitizeCodecKind::None
+    );
     assert!(!context.response_codec.is_null());
     let response = unsafe { &*context.response_codec };
-    assert_eq!(response.codec_kind, NemoRelayLlmSanitizeCodecKind::None);
+    assert_eq!(response.codec_kind, kind);
     assert!(response.codec_id.is_null());
-    assert!(response.codec.is_null());
-    unsafe { next_fn(native_json, next_ctx) }
-}
+    assert_eq!(
+        response.codec.is_null(),
+        kind == NemoRelayLlmSanitizeCodecKind::None
+    );
 
-unsafe extern "C" fn llm_exec_opaque_context_cb(
-    _user_data: *mut libc::c_void,
-    name: *const c_char,
-    native_json: *const c_char,
-    context: NemoRelayLlmExecutionContext,
-    next_fn: NemoRelayLlmExecNextFn,
-    next_ctx: *mut libc::c_void,
-) -> *mut c_char {
-    assert_eq!(
-        unsafe { CStr::from_ptr(name) }.to_str().unwrap(),
-        "ffi-opaque"
-    );
-    assert_eq!(
-        context.request_codec.codec_kind,
-        NemoRelayLlmSanitizeCodecKind::Opaque
-    );
-    assert!(context.request_codec.codec_id.is_null());
-    assert!(!context.request_codec.codec.is_null());
+    if kind == NemoRelayLlmSanitizeCodecKind::None {
+        return unsafe { next_fn(native_json, next_ctx) };
+    }
 
     let request: LlmRequest =
         serde_json::from_str(unsafe { CStr::from_ptr(native_json) }.to_str().unwrap()).unwrap();
@@ -402,11 +393,6 @@ unsafe extern "C" fn llm_exec_opaque_context_cb(
     unsafe { drop(Box::from_raw(encoded)) };
     assert!(!result.is_null());
 
-    assert!(!context.response_codec.is_null());
-    let response = unsafe { &*context.response_codec };
-    assert_eq!(response.codec_kind, NemoRelayLlmSanitizeCodecKind::Opaque);
-    assert!(response.codec_id.is_null());
-    assert!(!response.codec.is_null());
     let decoded_ptr = unsafe {
         crate::api::nemo_relay_llm_sanitize_response_codec_decode(response.codec, result)
     };
@@ -787,7 +773,7 @@ fn assert_llm_exec_callbacks(runtime: &tokio::runtime::Runtime) {
     assert_eq!(intercepted["intercepted"], json!(true));
 
     let absent_intercept =
-        wrap_llm_exec_intercept_fn(llm_exec_absent_context_cb, std::ptr::null_mut(), None);
+        wrap_llm_exec_intercept_fn(llm_exec_codec_context_cb, std::ptr::null_mut(), None);
     let absent_next: LlmExecutionNextFn =
         Arc::new(|request| Box::pin(async move { Ok(json!({"model": request.content["model"]})) }));
     let absent = runtime
@@ -804,7 +790,7 @@ fn assert_llm_exec_callbacks(runtime: &tokio::runtime::Runtime) {
     assert_eq!(absent["model"], json!("test-model"));
 
     let opaque_intercept =
-        wrap_llm_exec_intercept_fn(llm_exec_opaque_context_cb, std::ptr::null_mut(), None);
+        wrap_llm_exec_intercept_fn(llm_exec_codec_context_cb, std::ptr::null_mut(), None);
     let opaque_next: LlmExecutionNextFn = Arc::new(|request| {
         Box::pin(async move {
             assert_eq!(request.content["encoded"], json!(true));

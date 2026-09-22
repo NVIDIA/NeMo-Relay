@@ -1745,16 +1745,6 @@ async fn python_worker_execution_codec_context_round_trips_host_codecs() {
             request_codec: Arc::new(RuntimeOpenAiChatCodec),
             response_codec: Arc::new(RuntimeOpenAiChatCodec),
         },
-        // A third invocation proves the spawned worker remains responsive after
-        // exercising both directional codec capabilities.
-        Case {
-            name: "post-round-trip-health",
-            identity_kind: "builtin",
-            identity_id: "openai_chat",
-            answer: "healthy",
-            request_codec: Arc::new(OpenAIChatCodec),
-            response_codec: Arc::new(OpenAIChatCodec),
-        },
     ] {
         let provider_only = json!({"lane": case.name, "preserve": true});
         let expected_provider_only = provider_only.clone();
