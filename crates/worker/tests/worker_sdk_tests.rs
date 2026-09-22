@@ -1971,7 +1971,7 @@ impl WorkerPlugin for CancellationPlugin {
         let stream_started = self.stream_started.clone();
         let stream_cancelled = self.stream_cancelled.clone();
         let stream_cancelled_notified = self.stream_cancelled_notified.clone();
-        ctx.register_llm_stream_execution_intercept("cancel-stream", 0, move |_, _, _| {
+        ctx.register_llm_stream_execution_intercept("cancel-stream", 0, move |_, _, _, _| {
             let stream_started = stream_started.clone();
             let stream_cancelled = stream_cancelled.clone();
             let stream_cancelled_notified = stream_cancelled_notified.clone();
@@ -1987,7 +1987,7 @@ impl WorkerPlugin for CancellationPlugin {
 
         let stream_setup_started = self.stream_setup_started.clone();
         let stream_setup_cancelled = self.stream_setup_cancelled.clone();
-        ctx.register_llm_stream_execution_intercept("cancel-stream-setup", 0, move |_, _, _| {
+        ctx.register_llm_stream_execution_intercept("cancel-stream-setup", 0, move |_, _, _, _| {
             let stream_setup_started = stream_setup_started.clone();
             let stream_setup_cancelled = stream_setup_cancelled.clone();
             async move {
@@ -2367,7 +2367,7 @@ impl WorkerPlugin for SurfacePlugin {
         ctx.register_llm_execution_intercept(
             "llm-exec",
             1,
-            move |_, request, next: LlmNext| async move {
+            move |_, request, _context, next: LlmNext| async move {
                 let next_value = next.call(request).await?;
                 Ok(set_json_field(next_value, "phase", "llm_exec"))
             },
@@ -2377,7 +2377,7 @@ impl WorkerPlugin for SurfacePlugin {
         ctx.register_llm_stream_execution_intercept(
             "llm-stream",
             1,
-            move |_, request, next: LlmStreamNext| {
+            move |_, request, _context, next: LlmStreamNext| {
                 let runtime = stream_runtime.clone();
                 async move {
                     let next_stream = next.call(request).await?;
@@ -2385,15 +2385,17 @@ impl WorkerPlugin for SurfacePlugin {
                 }
             },
         );
-        ctx.register_llm_stream_execution_intercept("llm-stream-error", 1, |_, _, _| async {
+        ctx.register_llm_stream_execution_intercept("llm-stream-error", 1, |_, _, _, _| async {
             let stream: JsonStream = Box::pin(tokio_stream::iter(vec![Err(
                 WorkerSdkError::Callback("stream boom".into()),
             )]));
             Ok(stream)
         });
-        ctx.register_llm_stream_execution_intercept("llm-stream-open-error", 1, |_, _, _| async {
-            Err(WorkerSdkError::Callback("stream open boom".into()))
-        });
+        ctx.register_llm_stream_execution_intercept(
+            "llm-stream-open-error",
+            1,
+            |_, _, _, _| async { Err(WorkerSdkError::Callback("stream open boom".into())) },
+        );
         Ok(())
     }
 }
@@ -3121,6 +3123,7 @@ fn llm_invoke(
     annotated_request: Option<Json>,
     response: Option<Json>,
 ) -> InvokeRequest {
+    let execution_codec_context = execution_codec_context_for(surface);
     InvokeRequest {
         activation_id: ACTIVATION_ID.into(),
         invocation_id: "invoke-1".into(),
@@ -3138,8 +3141,29 @@ fn llm_invoke(
                 annotated_request: annotated_request.map(json_env),
                 response: response.map(json_env),
                 sanitize_context: None,
+                execution_codec_context,
             },
         )),
+    }
+}
+
+fn execution_codec_context_for(
+    surface: RegistrationSurface,
+) -> Option<Box<nemo_relay_worker_proto::v1::LlmExecutionCodecContext>> {
+    match surface {
+        RegistrationSurface::LlmExecutionIntercept => Some(Box::new(
+            nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
+                request: Some(empty_request_codec_context()),
+                response: Some(empty_response_codec_context()),
+            },
+        )),
+        RegistrationSurface::LlmStreamExecutionIntercept => Some(Box::new(
+            nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
+                request: Some(empty_request_codec_context()),
+                response: None,
+            },
+        )),
+        _ => None,
     }
 }
 
@@ -3162,8 +3186,29 @@ fn llm_invoke_without_request(
                 annotated_request: None,
                 response: None,
                 sanitize_context: None,
+                execution_codec_context: execution_codec_context_for(surface),
             },
         )),
+    }
+}
+
+fn empty_request_codec_context() -> nemo_relay_worker_proto::v1::LlmSanitizeRequestContext {
+    nemo_relay_worker_proto::v1::LlmSanitizeRequestContext {
+        codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
+            kind: nemo_relay_worker_proto::v1::LlmCodecKind::Unspecified as i32,
+            id: None,
+        }),
+        codec_capability_id: None,
+    }
+}
+
+fn empty_response_codec_context() -> nemo_relay_worker_proto::v1::LlmSanitizeResponseContext {
+    nemo_relay_worker_proto::v1::LlmSanitizeResponseContext {
+        codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
+            kind: nemo_relay_worker_proto::v1::LlmCodecKind::Unspecified as i32,
+            id: None,
+        }),
+        codec_capability_id: None,
     }
 }
 

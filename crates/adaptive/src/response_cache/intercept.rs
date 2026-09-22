@@ -115,7 +115,7 @@ pub(crate) fn make_intercept(
     config: Arc<ResponseCacheConfig>,
 ) -> LlmExecutionFn {
     Arc::new(
-        move |provider: &str, request: LlmRequest, next: LlmExecutionNextFn| {
+        move |provider: &str, request: LlmRequest, _context, next: LlmExecutionNextFn| {
             let store = Arc::clone(&store);
             let config = Arc::clone(&config);
             let provider = provider.to_string();
@@ -137,7 +137,7 @@ pub(crate) fn make_stream_intercept(
     config: Arc<ResponseCacheConfig>,
 ) -> LlmStreamExecutionFn {
     Arc::new(
-        move |provider: &str, request: LlmRequest, next: LlmStreamExecutionNextFn| {
+        move |provider: &str, request: LlmRequest, _context, next: LlmStreamExecutionNextFn| {
             let store = Arc::clone(&store);
             let config = Arc::clone(&config);
             let provider = provider.to_string();

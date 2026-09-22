@@ -7,6 +7,7 @@ import type {
   EventMetadata,
   EventSanitizeFields,
   Json,
+  LlmExecutionContext,
   LlmRequestInterceptOutcome,
   LlmSanitizeRequestContext,
   LlmSanitizeResponseContext,
@@ -21,6 +22,7 @@ export type {
   EventMetadataScalar,
   EventMetadataValue,
   LlmCodecIdentity,
+  LlmExecutionContext,
   LlmOptimizationContribution,
   LlmOptimizationDataSchema,
   LlmOptimizationModel,
@@ -238,7 +240,11 @@ export interface PluginContext {
   registerLlmExecutionIntercept(
     name: string,
     priority: number,
-    callback: (request: Json, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>,
+    callback: (
+      request: Json,
+      context: LlmExecutionContext,
+      next: (request: Json) => Json | Promise<Json>,
+    ) => Json | Promise<Json>,
   ): void;
   /**
    * Register an LLM streaming execution intercept for this component.
@@ -251,6 +257,7 @@ export interface PluginContext {
     priority: number,
     callback: (
       request: Json,
+      context: LlmExecutionContext,
       next: (request: Json) => Promise<AsyncIterable<Json>>,
     ) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>,
   ): void;

@@ -1191,7 +1191,7 @@ func assertScopeLocalLLMWrappersDeregister(t *testing.T, scopeUUID string, reque
 		&executionInterceptCalls,
 		func() error {
 			return ScopeRegisterLlmExecutionIntercept(scopeUUID, "llm_scope_exec_int", 1,
-				func(requestJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+				func(requestJSON json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 					executionInterceptCalls++
 					return next(requestJSON)
 				},
@@ -1207,7 +1207,7 @@ func assertScopeLocalLLMStreamWrapperDeregisters(t *testing.T, scopeUUID string,
 	t.Helper()
 
 	err := ScopeRegisterLlmStreamExecutionIntercept(scopeUUID, "llm_scope_stream_int", 1,
-		func(requestJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(requestJSON json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 			nextResult, err := next(requestJSON)
 			if err != nil {
 				return nil, err

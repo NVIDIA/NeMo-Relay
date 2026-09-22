@@ -66,7 +66,8 @@ or charging policy before they use this pattern.
 context.register_llm_execution_intercept(
     "documentation_llm_execution",
     config.execution.priority,
-    move |_name, request, next| async move {
+    move |_name, request, context, next| async move {
+        debug_assert!(context.response_codec().is_some());
         let repeat = request.content
             .get("repeat_downstream")
             .and_then(Json::as_bool)
@@ -108,7 +109,8 @@ output promptly.
 context.register_llm_stream_execution_intercept(
     "documentation_llm_stream_execution",
     config.execution.priority,
-    move |_name, request, next| async move {
+    move |_name, request, context, next| async move {
+        debug_assert!(context.response_codec().is_none());
         let stream = next.call(request).await?;
         let mapped: LlmJsonAsyncStream = Box::pin(stream.map(|chunk| {
             chunk.map(|chunk| match chunk {

@@ -325,6 +325,126 @@ class TestLLMGuardrails:
         assert request_codec_used is True
         assert response_codec_used is True
 
+    async def test_execution_context_exposes_codec_states_operations_and_lifetime(self) -> None:
+        class OpaqueCodec:
+            def __init__(self) -> None:
+                self.inner = OpenAIChatCodec()
+
+            def decode(self, request):
+                return self.inner.decode(request)
+
+            def encode(self, annotated, original):
+                return self.inner.encode(annotated, original)
+
+            def decode_response(self, response):
+                return self.inner.decode_response(response)
+
+        expected = {
+            "py_llm_execution_context_builtin": ("builtin", "openai_chat"),
+            "py_llm_execution_context_opaque": ("opaque", None),
+            "py_llm_execution_context_absent": ("none", None),
+        }
+        seen: list[str] = []
+        retained_codec = None
+
+        async def execution_intercept(name, request, context, next_call):
+            nonlocal retained_codec
+            seen.append(name)
+            expected_kind, expected_id = expected[name]
+            assert context.request_codec.codec.kind == expected_kind
+            assert context.response_codec is not None
+            assert context.response_codec.codec.kind == expected_kind
+
+            if expected_id is not None:
+                assert context.request_codec.codec.id == expected_id
+                assert context.response_codec.codec.id == expected_id
+
+            if expected_kind == "none":
+                assert context.request_codec.resolve_codec() is None
+                assert context.response_codec.resolve_codec() is None
+                return await next_call(request)
+
+            request_codec = context.request_codec.resolve_codec()
+            assert request_codec is not None
+            request = request_codec.encode(request_codec.decode(request), request)
+            retained_codec = retained_codec or request_codec
+
+            response = await next_call(request)
+            resolved_response_codec = context.response_codec.resolve_codec()
+            assert resolved_response_codec is not None
+            assert resolved_response_codec.decode_response(response).model == "test-model"
+            return response
+
+        response = {
+            "id": "chatcmpl-execution-context-matrix",
+            "model": "test-model",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}}],
+        }
+        intercepts.register_llm_execution("py_llm_execution_context_matrix", 1, execution_intercept)
+        try:
+            results = []
+            for name, codec in (
+                ("py_llm_execution_context_builtin", OpenAIChatCodec()),
+                ("py_llm_execution_context_opaque", OpaqueCodec()),
+                ("py_llm_execution_context_absent", None),
+            ):
+                codec_options = {} if codec is None else {"codec": codec, "response_codec": codec}
+                results.append(
+                    await llm.execute(
+                        name,
+                        make_request(),
+                        lambda _request: response,
+                        **codec_options,
+                    )
+                )
+        finally:
+            intercepts.deregister_llm_execution("py_llm_execution_context_matrix")
+
+        assert results == [response, response, response]
+        assert seen == list(expected)
+        assert retained_codec is not None
+        with pytest.raises(RuntimeError, match="LLM execution codec capability is no longer active"):
+            retained_codec.decode(make_request())
+
+    async def test_stream_execution_context_has_no_response_codec(self) -> None:
+        observed = False
+        retained_codec = None
+
+        async def execution_intercept(name, request, context, next_call):
+            nonlocal observed, retained_codec
+            assert name == "py_llm_stream_execution_context"
+            assert context.request_codec.codec.kind == "builtin"
+            retained_codec = context.request_codec.resolve_codec()
+            assert retained_codec is not None
+            assert context.response_codec is None
+            observed = True
+            return await next_call(request)
+
+        async def provider(_request):
+            yield {"token": "ok"}
+
+        codec = OpenAIChatCodec()
+        intercepts.register_llm_stream_execution("py_llm_stream_execution_context", 1, execution_intercept)
+        try:
+            stream = await llm.stream_execute(
+                "py_llm_stream_execution_context",
+                make_request(),
+                provider,
+                lambda _chunk: None,
+                lambda: {},
+                codec=codec,
+                response_codec=codec,
+            )
+            assert retained_codec is not None
+            assert retained_codec.decode(make_request()).model == "test-model"
+            assert [chunk async for chunk in stream] == [{"token": "ok"}]
+            with pytest.raises(RuntimeError, match="LLM execution codec capability is no longer active"):
+                retained_codec.decode(make_request())
+        finally:
+            intercepts.deregister_llm_stream_execution("py_llm_stream_execution_context")
+
+        assert observed
+
     def test_none_omits_payload_and_short_circuits_later_sanitizers(self) -> None:
         events = []
         later_called = False
@@ -604,12 +724,12 @@ class TestLLMIntercepts:
         intercepts.register_llm_execution(
             "py_llm_exec",
             1,
-            lambda name, request, next: {"intercepted": True},
+            lambda name, request, context, next: {"intercepted": True},
         )
         assert intercepts.deregister_llm_execution("py_llm_exec")
 
     def test_stream_execution_intercept(self) -> None:
-        def stream_fn(request, next):
+        def stream_fn(name, request, context, next):
             async def gen():
                 yield {"token": "test"}
 
@@ -636,7 +756,7 @@ class TestLLMInterceptsAsync:
         observed = []
         subscribers.register("py_llm_capture_traceparent", events.append)
 
-        async def execution_intercept(_name, request, next_handler):
+        async def execution_intercept(_name, request, _context, next_handler):
             observed.append((capture_propagation_context().parent_uuid, capture_traceparent()))
             return await next_handler(request)
 
@@ -663,7 +783,7 @@ class TestLLMInterceptsAsync:
         observed = []
         subscribers.register("py_llm_capture_propagated_trace_root", events.append)
 
-        async def execution_intercept(_name, request, next_handler):
+        async def execution_intercept(_name, request, _context, next_handler):
             observed.append(capture_traceparent())
             return await next_handler(request)
 
@@ -698,7 +818,7 @@ class TestLLMInterceptsAsync:
         observed = []
         subscribers.register("py_llm_capture_propagated_w3c", events.append)
 
-        async def execution_intercept(_name, request, next_handler):
+        async def execution_intercept(_name, request, _context, next_handler):
             context = capture_propagation_context()
             rootless = capture_rootless_propagation_context()
             explicit_root = capture_propagation_context_with_root(root_uuid)
@@ -738,7 +858,7 @@ class TestLLMInterceptsAsync:
         provider_calls: list[LLMRequest] = []
         events: list[Event] = []
 
-        async def middleware(_name, request, next):
+        async def middleware(_name, request, _context, next):
             started.set()
             try:
                 await release.wait()
@@ -779,7 +899,7 @@ class TestLLMInterceptsAsync:
         provider_calls: list[LLMRequest] = []
         events: list[Event] = []
 
-        async def middleware(request, next):
+        async def middleware(_name, request, _context, next):
             started.set()
             try:
                 await release.wait()
@@ -839,7 +959,7 @@ class TestLLMInterceptsAsync:
             observed.append(("request", request_id.get()))
             return LLMRequestInterceptOutcome(request, annotated)
 
-        def execution_intercept(_name, _request, _next):
+        def execution_intercept(_name, _request, _context, _next):
             observed.append(("execution", request_id.get()))
             return {"ok": True}
 
@@ -870,7 +990,7 @@ class TestLLMInterceptsAsync:
         request_id = contextvars.ContextVar("llm_stream_middleware_request_id", default="registration")
         observed: list[tuple[str, str]] = []
 
-        def middleware(request, next):
+        def middleware(_name, request, _context, next):
             observed.append(("callback", request_id.get()))
 
             async def generate():
@@ -939,7 +1059,7 @@ class TestLLMInterceptsAsync:
 
                 return close()
 
-        def middleware(_request, _next):
+        def middleware(_name, _request, _context, _next):
             observed.append(("callback", request_id.get()))
             return CustomIterator()
 
@@ -1079,7 +1199,7 @@ class TestLLMInterceptsAsync:
         intercepts.register_llm_execution(
             "py_llm_exec_rep",
             1,
-            lambda name, request, next: {"from_intercept": True},
+            lambda name, request, context, next: {"from_intercept": True},
         )
 
         def original_func(request):
@@ -1093,7 +1213,7 @@ class TestLLMInterceptsAsync:
         intercepts.deregister_llm_execution("py_llm_exec_rep")
 
     async def test_execution_intercept_can_await_next(self) -> None:
-        async def middleware(name, request, next):
+        async def middleware(name, request, context, next):
             updated = LLMRequest(request.headers, {**request.content, "model": "via-next"})
             result = await next(updated)
             result["from_intercept"] = True
@@ -1114,7 +1234,7 @@ class TestLLMInterceptsAsync:
         captured_next = None
         provider_calls = 0
 
-        async def middleware(_name, _request, next):
+        async def middleware(_name, _request, _context, next):
             nonlocal captured_next
             captured_next = next
             return {"source": "intercept"}
@@ -1137,7 +1257,7 @@ class TestLLMInterceptsAsync:
         assert provider_calls == 0
 
     async def test_stream_execution_intercept_can_await_next(self) -> None:
-        def middleware(request, next):
+        def middleware(_name, request, _context, next):
             async def gen():
                 updated = LLMRequest(request.headers, {**request.content, "prefix": "wrapped"})
                 stream = await next(updated)
@@ -1170,7 +1290,7 @@ class TestLLMInterceptsAsync:
         captured_next = None
         provider_calls = 0
 
-        async def middleware(_request, next):
+        async def middleware(_name, _request, _context, next):
             nonlocal captured_next
             captured_next = next
 
@@ -1203,7 +1323,7 @@ class TestLLMInterceptsAsync:
         assert provider_calls == 0
 
     async def test_stream_execution_intercept_async_function_is_supported(self) -> None:
-        def middleware(request, next):
+        def middleware(_name, request, _context, next):
             updated = LLMRequest(request.headers, {**request.content, "prefix": "async"})
 
             async def gen():
@@ -1412,7 +1532,7 @@ class TestLLMStreaming:
         intercepts.register_llm_stream_execution(
             "py_llm_stream_bad_iter",
             1,
-            cast(intercepts.LlmStreamExecutionIntercept, lambda request, next: object()),
+            cast(intercepts.LlmStreamExecutionIntercept, lambda name, request, context, next: object()),
         )
         try:
             stream = await llm.stream_execute(
@@ -1431,7 +1551,7 @@ class TestLLMStreaming:
         intercepts.register_llm_stream_execution(
             "py_llm_stream_direct_stop",
             1,
-            lambda request, next: _ImmediateStopAsyncIter(),
+            lambda name, request, context, next: _ImmediateStopAsyncIter(),
         )
         try:
             stream = await llm.stream_execute(
@@ -1452,7 +1572,7 @@ class TestLLMStreaming:
         intercepts.register_llm_stream_execution(
             "py_llm_stream_direct_error",
             1,
-            lambda request, next: _BrokenAsyncIter(),
+            lambda name, request, context, next: _BrokenAsyncIter(),
         )
         try:
             stream = await llm.stream_execute(
@@ -1471,7 +1591,7 @@ class TestLLMStreaming:
         events = []
         subscribers.register("py_llm_stream_intercept_failure_sub", events.append)
 
-        def failing_middleware(request, next) -> Never:
+        def failing_middleware(name, request, context, next) -> Never:
             raise ValueError("stream intercept boom")
 
         intercepts.register_llm_stream_execution(

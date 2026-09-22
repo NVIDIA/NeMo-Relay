@@ -12,8 +12,9 @@ use crate::api::optimization::{
     LlmOptimizationRecorder, record_llm_optimization_contribution, scope_llm_optimization_recorder,
 };
 use crate::api::runtime::{
-    BuiltinLlmCodec, LlmCodecIdentity, LlmSanitizeRequestContext, LlmSanitizeResponseContext,
-    MiddlewareContinuationLease, NemoRelayContextState,
+    BuiltinLlmCodec, LlmCodecIdentity, LlmExecutionContext, LlmExecutionNextFn,
+    LlmSanitizeRequestContext, LlmSanitizeResponseContext, MiddlewareContinuationLease,
+    NemoRelayContextState,
 };
 use crate::api::tool::ToolExecutionResult;
 use crate::codec::openai_chat::OpenAIChatCodec;
@@ -932,6 +933,10 @@ async fn llm_worker_sanitizers_forward_codec_context_and_omission() {
             else {
                 panic!("LLM sanitizer must receive an LLM invocation");
             };
+            assert!(
+                invocation.execution_codec_context.is_none(),
+                "sanitizers must not receive execution codec context"
+            );
             let codec = match invocation.sanitize_context.as_ref() {
                 Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(context)) => context.codec.as_ref(),
                 Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(context)) => context.codec.as_ref(),
@@ -1066,6 +1071,10 @@ async fn llm_worker_codec_capabilities_are_active_only_during_sanitizer_invocati
             else {
                 panic!("LLM sanitizer must receive an LLM invocation");
             };
+            assert!(
+                invocation.execution_codec_context.is_none(),
+                "sanitizers must not receive execution codec context"
+            );
             let state = host_state
                 .lock()
                 .unwrap()
@@ -1206,6 +1215,195 @@ async fn llm_worker_codec_capabilities_are_active_only_during_sanitizer_invocati
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn llm_worker_execution_codec_context_is_required_and_ephemeral() {
+    enable_operational_logs();
+    let host_state = shared_worker_host_state();
+    let seen = Arc::new(Mutex::new(None::<ExecutionCodecCapabilities>));
+    let (callback, _shutdown) = fake_callback_service({
+        let host_state = Arc::clone(&host_state);
+        let seen = Arc::clone(&seen);
+        move |request| {
+            let (request_id, response_id, invocation_id) = execution_codec_capabilities(request);
+            let response_id = response_id.expect("response capability must be present");
+            let state = host_state.lock().unwrap().clone().unwrap();
+            state
+                .request_codec(&request_id, &invocation_id)
+                .expect("request capability resolves during callback");
+            state
+                .response_codec(&response_id, &invocation_id)
+                .expect("response capability resolves during callback");
+            *seen.lock().unwrap() = Some((request_id, Some(response_id), invocation_id));
+            InvokeResponse {
+                result: Some(InvokeResult::Json(JsonResult {
+                    value: Some(json_envelope(JSON_SCHEMA, &json!({"ok": true})).unwrap()),
+                    error: None,
+                })),
+            }
+        }
+    })
+    .await;
+    *host_state.lock().unwrap() = Some(callback.host_state.clone());
+
+    let next: LlmExecutionNextFn = Arc::new(|_| Box::pin(async { Ok(json!({"unused": true})) }));
+    callback
+        .invoke_llm_execution(
+            "context",
+            "model",
+            valid_llm_request(),
+            openai_execution_codec_context(),
+            next,
+        )
+        .await
+        .unwrap();
+
+    let (request_id, response_id, invocation_id) = seen.lock().unwrap().take().unwrap();
+    assert_request_codec_expired(&callback.host_state, &request_id, &invocation_id);
+    assert_response_codec_expired(
+        &callback.host_state,
+        response_id.as_deref().unwrap(),
+        &invocation_id,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelling_worker_execution_expires_context_and_continuation_state() {
+    enable_operational_logs();
+    let (started_tx, started_rx) = oneshot::channel();
+    let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+    let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+        {
+            let started_tx = Arc::clone(&started_tx);
+            move |request| {
+                let started_tx = Arc::clone(&started_tx);
+                Box::pin(async move {
+                    let (request_id, response_id, invocation_id) =
+                        execution_codec_capabilities(request);
+                    if let Some(started) = started_tx.lock().unwrap().take() {
+                        let _ = started.send((request_id, response_id, invocation_id));
+                    }
+                    std::future::pending::<InvokeResponse>().await
+                })
+            }
+        },
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+
+    let callback_task = callback.clone();
+    let task = tokio::spawn(async move {
+        callback_task
+            .invoke_llm_execution(
+                "cancel-context-execution",
+                "model",
+                valid_llm_request(),
+                openai_execution_codec_context(),
+                Arc::new(|request| Box::pin(async move { Ok(request.content) })),
+            )
+            .await
+    });
+    let (request_id, response_id, invocation_id) =
+        tokio::time::timeout(std::time::Duration::from_secs(1), started_rx)
+            .await
+            .expect("worker execution must start")
+            .expect("worker execution must publish its capabilities");
+    let response_id = response_id.expect("response capability must be present");
+    callback
+        .host_state
+        .request_codec(&request_id, &invocation_id)
+        .expect("request capability must be active while the worker is pending");
+    callback
+        .host_state
+        .response_codec(&response_id, &invocation_id)
+        .expect("response capability must be active while the worker is pending");
+
+    task.abort();
+    let _ = task.await;
+
+    let cancellation = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+        .await
+        .expect("caller cancellation must reach the worker")
+        .expect("cancellation channel remains open");
+    assert_eq!(cancellation.invocation_id, invocation_id);
+    assert!(cancellation.reason.contains("host caller cancelled"));
+    assert_request_codec_expired(&callback.host_state, &request_id, &invocation_id);
+    assert_response_codec_expired(&callback.host_state, &response_id, &invocation_id);
+    assert!(callback.host_state.continuations.lock().unwrap().is_empty());
+    assert!(callback.host_state.scope_stacks.lock().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn llm_worker_stream_codec_context_is_request_only_and_expires_at_eof() {
+    enable_operational_logs();
+    let host_state = shared_worker_host_state();
+    let seen = Arc::new(Mutex::new(None::<(String, String)>));
+    let (chunk_tx, chunk_rx) = mpsc::channel(1);
+    let chunk_rx = Arc::new(Mutex::new(Some(chunk_rx)));
+    let (callback, _shutdown) = fake_callback_service_with_stream(
+        |_| InvokeResponse {
+            result: Some(InvokeResult::Empty(EmptyResult {})),
+        },
+        {
+            let host_state = Arc::clone(&host_state);
+            let seen = Arc::clone(&seen);
+            let chunk_rx = Arc::clone(&chunk_rx);
+            move |request| {
+                let (request_id, response_id, invocation_id) =
+                    execution_codec_capabilities(request);
+                assert!(
+                    response_id.is_none(),
+                    "stream must not expose a response decoder"
+                );
+                host_state
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .expect("host state")
+                    .request_codec(&request_id, &invocation_id)
+                    .expect("request capability resolves during stream invocation");
+                *seen.lock().unwrap() = Some((request_id, invocation_id));
+                let receiver = chunk_rx
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("test stream created once");
+                Box::pin(tokio_stream::wrappers::ReceiverStream::new(receiver)) as FakeInvokeStream
+            }
+        },
+    )
+    .await;
+    *host_state.lock().unwrap() = Some(callback.host_state.clone());
+
+    let mut stream = callback
+        .invoke_llm_stream_execution(
+            "context-stream",
+            "model",
+            valid_llm_request(),
+            openai_stream_execution_codec_context(),
+            Arc::new(|_request| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
+        )
+        .await
+        .expect("host stream");
+    let (request_id, invocation_id) = seen.lock().unwrap().clone().expect("stream context seen");
+    callback
+        .host_state
+        .request_codec(&request_id, &invocation_id)
+        .expect("request capability remains active while the stream is open");
+
+    chunk_tx
+        .send(Ok(StreamChunk {
+            item: Some(StreamItem::Value(
+                json_envelope(JSON_SCHEMA, &json!({"done": true})).unwrap(),
+            )),
+        }))
+        .await
+        .expect("stream chunk accepted");
+    drop(chunk_tx);
+    assert_eq!(stream.next().await.unwrap().unwrap(), json!({"done": true}));
+    assert!(stream.next().await.is_none());
+    assert_request_codec_expired(&callback.host_state, &request_id, &invocation_id);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn cancelling_worker_sanitizer_expires_codec_capability() {
     enable_operational_logs();
     let (started_tx, started_rx) = oneshot::channel();
@@ -1284,6 +1482,7 @@ async fn callback_stream_transport_error_surfaces_to_host_stream() {
             "stream_transport_error",
             "model",
             valid_llm_request(),
+            openai_stream_execution_codec_context(),
             Arc::new(|_request| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
         )
         .await
@@ -1337,6 +1536,7 @@ async fn callback_stream_stops_when_host_receiver_is_dropped() {
             "stream_receiver_drop",
             "model",
             valid_llm_request(),
+            openai_stream_execution_codec_context(),
             Arc::new(|_request| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
         )
         .await
@@ -1660,57 +1860,75 @@ fn invocation_cleanup_releases_host_state_locks_before_unwinding() {
 #[tokio::test(flavor = "multi_thread")]
 async fn dropping_host_stream_sends_explicit_worker_cancellation() {
     enable_operational_logs();
-    let (yield_tx, yield_rx) = oneshot::channel();
-    let yield_rx = Arc::new(Mutex::new(Some(yield_rx)));
-    let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
-        |_| {
-            Box::pin(async {
-                InvokeResponse {
-                    result: Some(InvokeResult::Empty(EmptyResult {})),
-                }
-            })
-        },
-        {
-            let yield_rx = yield_rx.clone();
-            move |_| {
-                let yield_rx = yield_rx
-                    .lock()
-                    .expect("yield lock")
-                    .take()
-                    .expect("stream should be created once");
-                Box::pin(SignalChunkThenPendingStream {
-                    yield_rx,
-                    dropped: None,
-                    yielded: false,
-                })
-            }
-        },
-    )
-    .await;
-    let mut stream = callback
-        .invoke_llm_stream_execution(
-            "cancel_stream",
-            "model",
-            valid_llm_request(),
-            Arc::new(|_request| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
-        )
-        .await
-        .expect("host stream should be returned");
-    yield_tx
+    let mut fixture = pending_worker_stream_with_codec_context("cancel_stream").await;
+    fixture
+        .yield_tx
+        .take()
+        .expect("yield signal sent once")
         .send(())
         .expect("worker stream yield signal should be delivered");
-    tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
-        .await
-        .expect("worker stream should yield before abandonment")
-        .expect("worker stream should yield before abandonment")
-        .expect("worker stream chunk should be valid");
-    drop(stream);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        fixture.stream.as_mut().unwrap().next(),
+    )
+    .await
+    .expect("worker stream should yield before abandonment")
+    .expect("worker stream should yield before abandonment")
+    .expect("worker stream chunk should be valid");
+    drop(fixture.stream.take());
 
-    let cancellation = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+    assert_worker_stream_cancelled_and_cleaned(&mut fixture).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn closing_worker_stream_waits_for_cancellation_and_codec_cleanup() {
+    enable_operational_logs();
+    let mut fixture = pending_worker_stream_with_codec_context("close_stream").await;
+
+    fixture
+        .stream
+        .as_mut()
+        .unwrap()
+        .close()
         .await
-        .expect("host should cancel abandoned stream")
-        .expect("cancellation channel should remain open");
-    assert!(cancellation.reason.contains("stopped consuming"));
+        .expect("explicit close must wait for worker stream cleanup");
+
+    assert_request_codec_expired(
+        &fixture.callback.host_state,
+        &fixture.request_id,
+        &fixture.invocation_id,
+    );
+    assert_worker_stream_cancelled_and_cleaned(&mut fixture).await;
+}
+
+#[tokio::test]
+async fn retrying_worker_stream_close_still_waits_after_the_first_future_is_cancelled() {
+    let (_stream_tx, stream_rx) = mpsc::channel(1);
+    let (completion_tx, completion_rx) = watch::channel(false);
+    let mut stream = WorkerForwardedLlmStream {
+        receiver: Some(tokio_stream::wrappers::ReceiverStream::new(stream_rx)),
+        completion: completion_rx,
+    };
+
+    // Creating close initiates shutdown by dropping the receiver. Cancelling
+    // that future must not consume the only observer of producer cleanup.
+    drop(Pin::new(&mut stream).close());
+
+    let mut retry = Pin::new(&mut stream).close();
+    tokio::select! {
+        biased;
+        result = retry.as_mut() => {
+            panic!("retry completed before producer cleanup: {result:?}");
+        }
+        _ = tokio::task::yield_now() => {}
+    }
+
+    completion_tx.send_replace(true);
+    retry.await.expect("retry must observe producer cleanup");
+    Pin::new(&mut stream)
+        .close()
+        .await
+        .expect("completed close remains idempotent");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2271,8 +2489,14 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
     let request_codec: Arc<dyn LlmCodec> = codec.clone();
     let response_codec: Arc<dyn LlmResponseCodec> = codec.clone();
     let invocation_id = "sanitize-invocation";
-    let request_capability = state.insert_request_codec(invocation_id, request_codec);
-    let response_capability = state.insert_response_codec(invocation_id, response_codec);
+    let request_capability_guard = state
+        .issue_request_codec(invocation_id, request_codec)
+        .unwrap();
+    let response_capability_guard = state
+        .issue_response_codec(invocation_id, response_codec)
+        .unwrap();
+    let request_capability = request_capability_guard.id().to_owned();
+    let response_capability = response_capability_guard.id().to_owned();
     let request = LlmRequest {
         headers: serde_json::Map::new(),
         content: json!({
@@ -2401,8 +2625,8 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
         .into_inner();
     assert!(decoded.error.is_none());
 
-    state.remove_codec(&request_capability);
-    state.remove_codec(&response_capability);
+    drop(request_capability_guard);
+    drop(response_capability_guard);
     let expired = service
         .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
             activation_id: ACTIVATION_ID.into(),
@@ -2490,6 +2714,75 @@ async fn host_runtime_service_reports_poisoned_internal_locks() {
         .await
         .expect_err("poisoned scope stack lock should fail");
     assert_eq!(drop_error.code(), tonic::Code::Internal);
+
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    poison_mutex({
+        let state = state.clone();
+        move || {
+            let _guard = state.codecs.lock().expect("codecs lock");
+            panic!("poison codecs");
+        }
+    });
+    let insert_error = match state.issue_request_codec("invocation", Arc::new(OpenAIChatCodec)) {
+        Ok(_) => panic!("poisoned codec lock should reject capability insertion"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        insert_error,
+        FlowError::Internal(message) if message.contains("codec lock poisoned")
+    ));
+
+    let (callback, _shutdown) = fake_callback_service(|_| InvokeResponse {
+        result: Some(InvokeResult::Empty(EmptyResult {})),
+    })
+    .await;
+    poison_mutex({
+        let state = callback.host_state.clone();
+        move || {
+            let _guard = state.codecs.lock().expect("codecs lock");
+            panic!("poison callback codecs");
+        }
+    });
+    let codec = Arc::new(OpenAIChatCodec);
+    let context = LlmExecutionContext::new(
+        LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
+        Some(LlmSanitizeResponseContext::for_response_codec(Some(codec))),
+    );
+    let error = callback
+        .invoke_llm_execution(
+            "poisoned-codec-context",
+            "model",
+            valid_llm_request(),
+            context,
+            Arc::new(|request| Box::pin(async move { Ok(request.content) })),
+        )
+        .await
+        .expect_err("poisoned codec setup must fail before invoking the worker");
+    assert!(matches!(
+        error,
+        FlowError::Internal(message) if message.contains("codec lock poisoned")
+    ));
+    assert!(
+        callback
+            .host_state
+            .continuations
+            .lock()
+            .expect("continuation lock")
+            .is_empty(),
+        "failed codec setup must remove its continuation"
+    );
+    assert!(
+        callback
+            .host_state
+            .scope_stacks
+            .lock()
+            .expect("scope stack lock")
+            .is_empty(),
+        "failed codec setup must remove its invocation scope stack"
+    );
 }
 
 #[test]
@@ -2862,6 +3155,98 @@ fn valid_llm_request() -> LlmRequest {
     }
 }
 
+type SharedWorkerHostState = Arc<Mutex<Option<Arc<WorkerHostRuntimeState>>>>;
+type ExecutionCodecCapabilities = (String, Option<String>, String);
+
+fn shared_worker_host_state() -> SharedWorkerHostState {
+    Arc::new(Mutex::new(None))
+}
+
+fn openai_execution_codec_context() -> LlmExecutionContext {
+    let codec = Arc::new(OpenAIChatCodec);
+    LlmExecutionContext::new(
+        LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
+        Some(LlmSanitizeResponseContext::for_response_codec(Some(codec))),
+    )
+}
+
+fn openai_stream_execution_codec_context() -> LlmExecutionContext {
+    LlmExecutionContext::new(
+        LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(OpenAIChatCodec))),
+        None,
+    )
+}
+
+fn execution_codec_capabilities(request: InvokeRequest) -> ExecutionCodecCapabilities {
+    let surface = RegistrationSurface::try_from(request.surface).expect("registration surface");
+    let invocation_id = request.invocation_id;
+    let Some(invoke_request_payload::Payload::Llm(invocation)) = request.payload else {
+        panic!("LLM execution must receive an LLM invocation");
+    };
+    assert!(invocation.sanitize_context.is_none());
+    let context = invocation
+        .execution_codec_context
+        .expect("execution must receive codec context");
+    let request_context = context.request.expect("request codec context");
+    let request_identity = request_context.codec.expect("request codec identity");
+    assert_eq!(request_identity.kind, LlmCodecKind::Builtin as i32);
+    assert_eq!(request_identity.id.as_deref(), Some("openai_chat"));
+    let response_capability_id = match surface {
+        RegistrationSurface::LlmExecutionIntercept => {
+            let response_context = context.response.expect("unary response codec context");
+            let response_identity = response_context.codec.expect("response codec identity");
+            assert_eq!(response_identity.kind, LlmCodecKind::Builtin as i32);
+            assert_eq!(response_identity.id.as_deref(), Some("openai_chat"));
+            response_context.codec_capability_id
+        }
+        RegistrationSurface::LlmStreamExecutionIntercept => {
+            assert!(
+                context.response.is_none(),
+                "stream execution must not receive response codec context"
+            );
+            None
+        }
+        other => panic!("unexpected execution surface: {other:?}"),
+    };
+    (
+        request_context
+            .codec_capability_id
+            .expect("request capability must be present"),
+        response_capability_id,
+        invocation_id,
+    )
+}
+
+fn assert_request_codec_expired(
+    state: &WorkerHostRuntimeState,
+    capability_id: &str,
+    invocation_id: &str,
+) {
+    assert_eq!(
+        state
+            .request_codec(capability_id, invocation_id)
+            .err()
+            .expect("request codec capability must be expired")
+            .code(),
+        tonic::Code::NotFound
+    );
+}
+
+fn assert_response_codec_expired(
+    state: &WorkerHostRuntimeState,
+    capability_id: &str,
+    invocation_id: &str,
+) {
+    assert_eq!(
+        state
+            .response_codec(capability_id, invocation_id)
+            .err()
+            .expect("response codec capability must be expired")
+            .code(),
+        tonic::Code::NotFound
+    );
+}
+
 async fn fake_callback_service(
     invoke: impl Fn(InvokeRequest) -> InvokeResponse + Send + Sync + 'static,
 ) -> (WorkerPluginCallback, oneshot::Sender<()>) {
@@ -2985,6 +3370,23 @@ async fn fake_worker_client_with_handlers(
     mpsc::UnboundedReceiver<CancelInvocationRequest>,
     Arc<AtomicUsize>,
 ) {
+    let invoke_stream = Arc::new(invoke_stream);
+    fake_worker_client_with_async_handlers(invoke, move |request| {
+        let invoke_stream = Arc::clone(&invoke_stream);
+        Box::pin(async move { invoke_stream(request) })
+    })
+    .await
+}
+
+async fn fake_worker_client_with_async_handlers(
+    invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
+    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStreamFuture + Send + Sync + 'static,
+) -> (
+    PluginWorkerClient<Channel>,
+    oneshot::Sender<()>,
+    mpsc::UnboundedReceiver<CancelInvocationRequest>,
+    Arc<AtomicUsize>,
+) {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .expect("fake worker listener should bind");
@@ -3034,7 +3436,7 @@ fn poison_mutex(f: impl FnOnce() + std::panic::UnwindSafe) {
 
 struct FakePluginWorker {
     invoke: Arc<dyn Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync>,
-    invoke_stream: Arc<dyn Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync>,
+    invoke_stream: Arc<dyn Fn(InvokeRequest) -> FakeInvokeStreamFuture + Send + Sync>,
     cancel_tx: mpsc::UnboundedSender<CancelInvocationRequest>,
     register_calls: Arc<AtomicUsize>,
 }
@@ -3042,6 +3444,116 @@ struct FakePluginWorker {
 type FakeInvokeFuture = Pin<Box<dyn Future<Output = InvokeResponse> + Send>>;
 type FakeInvokeStream =
     Pin<Box<dyn tokio_stream::Stream<Item = std::result::Result<StreamChunk, Status>> + Send>>;
+type FakeInvokeStreamFuture = Pin<Box<dyn Future<Output = FakeInvokeStream> + Send>>;
+
+struct WorkerStreamLifecycleFixture {
+    callback: WorkerPluginCallback,
+    stream: Option<LlmJsonStream>,
+    yield_tx: Option<oneshot::Sender<()>>,
+    cancel_rx: mpsc::UnboundedReceiver<CancelInvocationRequest>,
+    worker_stream_dropped_rx: Option<oneshot::Receiver<()>>,
+    request_id: String,
+    invocation_id: String,
+    _shutdown: oneshot::Sender<()>,
+}
+
+async fn pending_worker_stream_with_codec_context(name: &str) -> WorkerStreamLifecycleFixture {
+    let (context_tx, context_rx) = oneshot::channel();
+    let context_tx = Arc::new(Mutex::new(Some(context_tx)));
+    let (yield_tx, yield_rx) = oneshot::channel();
+    let yield_rx = Arc::new(Mutex::new(Some(yield_rx)));
+    let (worker_stream_dropped_tx, worker_stream_dropped_rx) = oneshot::channel();
+    let worker_stream_dropped_tx = Arc::new(Mutex::new(Some(worker_stream_dropped_tx)));
+    let (callback, shutdown, cancel_rx) = fake_callback_service_with_handlers(
+        |_| {
+            Box::pin(async {
+                InvokeResponse {
+                    result: Some(InvokeResult::Empty(EmptyResult {})),
+                }
+            })
+        },
+        {
+            let context_tx = Arc::clone(&context_tx);
+            let yield_rx = Arc::clone(&yield_rx);
+            let worker_stream_dropped_tx = Arc::clone(&worker_stream_dropped_tx);
+            move |request| {
+                let (request_id, response_id, invocation_id) =
+                    execution_codec_capabilities(request);
+                assert!(
+                    response_id.is_none(),
+                    "stream must not expose a response decoder"
+                );
+                context_tx
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("stream context sent once")
+                    .send((request_id, invocation_id))
+                    .expect("stream context receiver remains open");
+                Box::pin(SignalChunkThenPendingStream {
+                    yield_rx: yield_rx
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .expect("stream created once"),
+                    dropped: worker_stream_dropped_tx.lock().unwrap().take(),
+                    yielded: false,
+                }) as FakeInvokeStream
+            }
+        },
+    )
+    .await;
+    let stream = callback
+        .invoke_llm_stream_execution(
+            name,
+            "model",
+            valid_llm_request(),
+            openai_stream_execution_codec_context(),
+            Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
+        )
+        .await
+        .expect("host stream should be returned");
+    let (request_id, invocation_id) = context_rx.await.expect("worker must publish codec context");
+    callback
+        .host_state
+        .request_codec(&request_id, &invocation_id)
+        .expect("request capability remains active while the stream is open");
+    WorkerStreamLifecycleFixture {
+        callback,
+        stream: Some(stream),
+        yield_tx: Some(yield_tx),
+        cancel_rx,
+        worker_stream_dropped_rx: Some(worker_stream_dropped_rx),
+        request_id,
+        invocation_id,
+        _shutdown: shutdown,
+    }
+}
+
+async fn assert_worker_stream_cancelled_and_cleaned(fixture: &mut WorkerStreamLifecycleFixture) {
+    let cancellation =
+        tokio::time::timeout(std::time::Duration::from_secs(1), fixture.cancel_rx.recv())
+            .await
+            .expect("host must cancel the stopped worker stream")
+            .expect("cancellation channel remains open");
+    assert_eq!(cancellation.invocation_id, fixture.invocation_id);
+    assert!(cancellation.reason.contains("stopped consuming"));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        fixture
+            .worker_stream_dropped_rx
+            .take()
+            .expect("worker stream drop observed once"),
+    )
+    .await
+    .expect("worker stream must be dropped")
+    .expect("worker stream drop signal must be delivered");
+    assert_request_codec_expired(
+        &fixture.callback.host_state,
+        &fixture.request_id,
+        &fixture.invocation_id,
+    );
+}
 
 struct SignalChunkThenPendingStream {
     yield_rx: oneshot::Receiver<()>,
@@ -3155,9 +3667,9 @@ impl PluginWorker for FakePluginWorker {
         &self,
         request: Request<InvokeRequest>,
     ) -> std::result::Result<tonic::Response<Self::InvokeStreamStream>, tonic::Status> {
-        Ok(tonic::Response::new((self.invoke_stream)(
-            request.into_inner(),
-        )))
+        Ok(tonic::Response::new(
+            (self.invoke_stream)(request.into_inner()).await,
+        ))
     }
 
     async fn cancel_invocation(

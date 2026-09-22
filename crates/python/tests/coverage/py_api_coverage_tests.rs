@@ -393,7 +393,7 @@ async def llm_exec(request):
         }]
     }
 
-async def llm_exec_intercept(name, request, next):
+async def llm_exec_intercept(name, request, context, next):
     response = await next(request)
     response["from_intercept"] = True
     return response
@@ -404,7 +404,7 @@ def llm_stream_exec(request):
         yield {"delta": 2}
     return gen()
 
-async def llm_stream_intercept(request, next):
+async def llm_stream_intercept(name, request, context, next):
     stream = await next(request)
 
     async def gen():

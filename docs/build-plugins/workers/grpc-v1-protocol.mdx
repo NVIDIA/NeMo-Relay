@@ -16,6 +16,12 @@ changes the tool-result boundary to structural protobuf messages. Rebuild worker
 regenerate custom bindings, and declare `compat.relay` beginning at `0.8.0`; an earlier
 worker cannot decode the current `ToolNext` response or tool-execution outcome.
 
+Relay 0.10 retains those protocol identifiers and adds execution codec context to
+`LlmInvocation`. The field is protobuf-compatible, but the 0.10 Rust and Python
+SDKs intentionally change every LLM execution callback to receive
+`LlmExecutionContext` before its continuation. Rebuild workers, regenerate custom
+bindings, and declare `compat.relay` beginning at `0.10.0`.
+
 The protocol consists of the worker-facing service implemented by the plugin process
 and the host-runtime service implemented by Relay. These are the current service
 definitions, including cancellation, codecs, and streaming continuations:
@@ -130,7 +136,8 @@ An invocation names the activation, invocation, registration, surface, optional
 continuation, captured scope, and token. Its payload is exactly one event, tool
 invocation, LLM invocation, or conditional middleware invocation. LLM sanitizer
 invocations additionally carry codec identity and an opaque invocation-scoped codec
-capability.
+capability. LLM execution invocations carry separate request and unary-response codec
+context. Streaming execution carries only the request direction.
 
 For `EVENT_METADATA_INJECTOR`, Relay sends the immutable Event snapshot in
 `InvokeRequest.event`. The worker returns an `InvokeResponse.json` object containing
@@ -171,6 +178,12 @@ message LlmInvocation {
     LlmSanitizeRequestContext request_sanitize_context = 9;
     LlmSanitizeResponseContext response_sanitize_context = 10;
   }
+  LlmExecutionCodecContext execution_codec_context = 11;
+}
+
+message LlmExecutionCodecContext {
+  LlmSanitizeRequestContext request = 1;
+  LlmSanitizeResponseContext response = 2;
 }
 
 message ToolInvocation {
@@ -251,6 +264,13 @@ or `gemini_generate_content`; a runtime identity carries its registered ID. An o
 identity deliberately withholds an ID. The capability ID is optional and
 invocation-scoped. A worker must treat it as a secret and must not use it after the owner
 invocation ends.
+
+For an LLM execution invocation, `execution_codec_context.request` is required.
+Its identity is present even when no codec resolves, and its capability ID is
+present only when host codec operations are available. Unary execution also
+includes `response`; streaming execution omits it entirely because Relay's
+response codecs require a complete provider response. The worker SDK hides
+both opaque capability IDs behind `resolve_codec()` proxies.
 
 ## Host-Runtime Service
 

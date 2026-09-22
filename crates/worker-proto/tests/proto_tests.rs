@@ -6,15 +6,22 @@
 use nemo_relay_worker_proto::v1::{
     ConditionalMiddlewareGuardrailRegistration, ConditionalMiddlewareInvocation, EmitMarkRequest,
     GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, HandshakeRequest, HealthRequest,
-    InvokeRequest, JsonEnvelope, JsonValue, RegisterConditionalMiddlewareGuardrailRequest,
-    RegistrationSurface, RuntimeDiagnostic, ScopeType,
-    ToolExecutionResult as ProtoToolExecutionResult, invoke_request,
+    InvokeRequest, JsonEnvelope, JsonValue, LlmCodecIdentity, LlmCodecKind,
+    LlmExecutionCodecContext, LlmInvocation, LlmSanitizeRequestContext, LlmSanitizeResponseContext,
+    RegisterConditionalMiddlewareGuardrailRequest, RegistrationSurface, RuntimeDiagnostic,
+    ScopeType, ToolExecutionResult as ProtoToolExecutionResult, invoke_request,
 };
 use nemo_relay_worker_proto::{
     WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
 };
 use prost::Message;
 use serde_json::json;
+
+#[derive(Clone, PartialEq, Message)]
+struct LegacyLlmInvocation {
+    #[prost(string, tag = "1")]
+    model_name: String,
+}
 
 #[test]
 fn worker_protocol_identifier_is_stable() {
@@ -145,6 +152,44 @@ fn request_field_numbers_are_stable() {
     assert_eq!(
         conditional_invoke.encode_to_vec(),
         b"\x6a\x0b\x0a\x01\x28\x12\x06target".to_vec()
+    );
+}
+
+#[test]
+fn execution_codec_context_invocation_field_is_additive_and_stable() {
+    let legacy_invocation = LegacyLlmInvocation {
+        model_name: "legacy-model".into(),
+    };
+    let decoded_by_new_worker = LlmInvocation::decode(legacy_invocation.encode_to_vec().as_slice())
+        .expect("new worker must decode a legacy invocation");
+    assert_eq!(decoded_by_new_worker.model_name, "legacy-model");
+    assert!(decoded_by_new_worker.execution_codec_context.is_none());
+
+    let codec = LlmCodecIdentity {
+        kind: LlmCodecKind::Builtin as i32,
+        id: Some("openai_chat".into()),
+    };
+    let invocation = LlmInvocation {
+        execution_codec_context: Some(Box::new(LlmExecutionCodecContext {
+            request: Some(LlmSanitizeRequestContext {
+                codec: Some(codec.clone()),
+                codec_capability_id: Some("request".into()),
+            }),
+            response: Some(LlmSanitizeResponseContext {
+                codec: Some(codec),
+                codec_capability_id: Some("response".into()),
+            }),
+        })),
+        ..Default::default()
+    };
+    let encoded = invocation.encode_to_vec();
+    assert_eq!(encoded.first(), Some(&0x5a)); // Field 11, length-delimited.
+    let decoded_by_legacy_worker = LegacyLlmInvocation::decode(encoded.as_slice())
+        .expect("legacy worker must ignore the additive execution context");
+    assert_eq!(decoded_by_legacy_worker, LegacyLlmInvocation::default());
+    assert_eq!(
+        LlmInvocation::decode(encoded.as_slice()).unwrap(),
+        invocation
     );
 }
 

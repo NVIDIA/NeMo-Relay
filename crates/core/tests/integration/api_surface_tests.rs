@@ -1212,7 +1212,7 @@ fn assert_global_llm_registry() {
     register_llm_execution_intercept(
         "llm-execution",
         1,
-        Arc::new(|_name, request, _next| Box::pin(async move { Ok(request.content) })),
+        Arc::new(|_name, request, _context, _next| Box::pin(async move { Ok(request.content) })),
     )
     .unwrap();
     assert!(deregister_llm_execution_intercept("llm-execution").unwrap());
@@ -1220,7 +1220,7 @@ fn assert_global_llm_registry() {
     register_llm_stream_execution_intercept(
         "llm-stream",
         1,
-        Arc::new(|_name, request, _next| {
+        Arc::new(|_name, request, _context, _next| {
             Box::pin(async move {
                 Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
                     request.content
@@ -1479,7 +1479,7 @@ fn assert_scope_llm_registry(scope_uuid: &uuid::Uuid) {
         scope_uuid,
         "llm-execution",
         1,
-        Arc::new(|_name, request, _next| Box::pin(async move { Ok(request.content) })),
+        Arc::new(|_name, request, _context, _next| Box::pin(async move { Ok(request.content) })),
     )
     .unwrap();
     assert!(scope_deregister_llm_execution_intercept(scope_uuid, "llm-execution").unwrap());
@@ -1488,7 +1488,7 @@ fn assert_scope_llm_registry(scope_uuid: &uuid::Uuid) {
         scope_uuid,
         "llm-stream",
         1,
-        Arc::new(|_name, request, _next| {
+        Arc::new(|_name, request, _context, _next| {
             Box::pin(async move {
                 Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
                     request.content

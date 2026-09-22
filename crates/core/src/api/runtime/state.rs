@@ -32,17 +32,19 @@ use crate::api::registry::{
 };
 use crate::api::runtime::ScopeStackHandle;
 use crate::api::runtime::callbacks::{
-    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
-    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
-    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
-    LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs, LlmStreamInner, ToolConditionalFn,
-    ToolExecutionContext, ToolExecutionFn, ToolExecutionNextFn, ToolExecutionOutcomeNextFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
+    LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
+    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionNextFn,
+    LlmStreamExecutionRegistryRefs, LlmStreamInner, ToolConditionalFn, ToolExecutionContext,
+    ToolExecutionFn, ToolExecutionNextFn, ToolExecutionOutcomeNextFn, ToolInterceptFn,
+    ToolSanitizeFn,
 };
 use crate::api::runtime::continuation_context::{
     MiddlewareContinuationContext, MiddlewareContinuationGuard, MiddlewareContinuationLease,
 };
+use crate::api::runtime::llm_execution_context::LlmExecutionCodecLeaseGuard;
 use crate::api::runtime::subscriber_dispatcher;
+use crate::api::runtime::{LlmExecutionContext, LlmExecutionFn, LlmStreamExecutionFn};
 use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
 use crate::api::shared::snapshot_event_sanitizers;
 use crate::api::tool::ToolHandle;
@@ -65,6 +67,11 @@ use uuid::Uuid;
 struct ContinuationGuardedLlmStream {
     inner: LlmJsonStream,
     guard: Option<MiddlewareContinuationGuard>,
+}
+
+struct CodecGuardedLlmStream {
+    inner: LlmJsonStream,
+    guard: Option<LlmExecutionCodecLeaseGuard>,
 }
 
 struct ContextualizedLlmStream {
@@ -151,6 +158,45 @@ fn guard_stream_continuation(
     guard: MiddlewareContinuationGuard,
 ) -> LlmJsonStream {
     LlmJsonStream::from_closeable(ContinuationGuardedLlmStream {
+        inner: stream,
+        guard: Some(guard),
+    })
+}
+
+impl Stream for CodecGuardedLlmStream {
+    type Item = crate::error::Result<Json>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let result = Pin::new(&mut this.inner).poll_next(cx);
+        if matches!(&result, Poll::Ready(None) | Poll::Ready(Some(Err(_)))) {
+            this.guard.take();
+        }
+        result
+    }
+}
+
+impl LlmStreamInner for CodecGuardedLlmStream {
+    fn terminalize(self: Pin<&mut Self>) {
+        let this = self.get_mut();
+        this.guard.take();
+        this.inner.terminalize();
+    }
+
+    fn close(
+        self: Pin<&mut Self>,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            let this = self.get_mut();
+            let result = this.inner.close().await;
+            this.guard.take();
+            result
+        })
+    }
+}
+
+fn guard_stream_codec(stream: LlmJsonStream, guard: LlmExecutionCodecLeaseGuard) -> LlmJsonStream {
+    LlmJsonStream::from_closeable(CodecGuardedLlmStream {
         inner: stream,
         guard: Some(guard),
     })
@@ -1798,6 +1844,8 @@ impl NemoRelayContextState {
     ///   intercepts.
     /// - `scope_locals`: Scope-local execution intercept registries collected
     ///   from the active scope stack.
+    /// - `execution_context`: Invocation-scoped identities and capabilities for
+    ///   the request and response codecs selected by the managed call.
     ///
     /// # Returns
     /// A composed [`LlmExecutionNextFn`] that wraps `default_fn` in every
@@ -1807,6 +1855,7 @@ impl NemoRelayContextState {
         name: &str,
         default_fn: LlmExecutionNextFn,
         scope_locals: &[&SortedRegistry<ExecutionIntercept<LlmExecutionFn>>],
+        execution_context: LlmExecutionContext,
     ) -> LlmExecutionNextFn {
         let matching = merge_execution_intercept_callables(
             &self.llm_execution_intercepts,
@@ -1818,11 +1867,14 @@ impl NemoRelayContextState {
         for (callable, _) in matching.into_iter().rev() {
             let current_next = next.clone();
             let current_name = name.clone();
+            let current_context = execution_context.clone();
             next = Arc::new(move |request| {
                 let callable = callable.clone();
                 let current_next = current_next.clone();
                 let current_name = current_name.clone();
+                let current_context = current_context.clone();
                 Box::pin(async move {
+                    let (current_context, codec_guard) = current_context.lease();
                     let (continuation, continuation_guard) = MiddlewareContinuationLease::capture();
                     let raw_next: LlmExecutionNextFn = Arc::new(move |request| {
                         let invocation = continuation.begin();
@@ -1831,8 +1883,9 @@ impl NemoRelayContextState {
                             async move { invocation?.invoke(move || current_next(request)).await },
                         )
                     });
-                    let result = callable(&current_name, request, raw_next).await;
+                    let result = callable(&current_name, request, current_context, raw_next).await;
                     drop(continuation_guard);
+                    drop(codec_guard);
                     result
                 })
             });
@@ -1849,6 +1902,8 @@ impl NemoRelayContextState {
     ///   intercepts.
     /// - `scope_locals`: Scope-local execution intercept registries collected
     ///   from the active scope stack.
+    /// - `execution_context`: Invocation-scoped identities and capabilities for
+    ///   the request and response codecs selected by the managed call.
     ///
     /// # Returns
     /// A composed [`LlmStreamExecutionNextFn`] that wraps `default_fn` in every
@@ -1858,6 +1913,7 @@ impl NemoRelayContextState {
         name: &str,
         default_fn: LlmStreamExecutionNextFn,
         scope_locals: LlmStreamExecutionRegistryRefs<'_>,
+        execution_context: LlmExecutionContext,
     ) -> LlmStreamExecutionNextFn {
         let matching = merge_execution_intercept_callables(
             &self.llm_stream_execution_intercepts,
@@ -1869,11 +1925,14 @@ impl NemoRelayContextState {
         for (callable, _) in matching.into_iter().rev() {
             let current_next = next.clone();
             let current_name = name.clone();
+            let current_context = execution_context.clone();
             next = Arc::new(move |request| {
                 let callable = callable.clone();
                 let current_next = current_next.clone();
                 let current_name = current_name.clone();
+                let current_context = current_context.clone();
                 Box::pin(async move {
+                    let (current_context, codec_guard) = current_context.lease();
                     let (continuation, continuation_guard) = MiddlewareContinuationLease::capture();
                     let raw_next: LlmStreamExecutionNextFn = Arc::new(move |request| {
                         let invocation = continuation.begin();
@@ -1885,8 +1944,11 @@ impl NemoRelayContextState {
                             Ok(contextualize_stream(stream, context))
                         })
                     });
-                    let result = callable(&current_name, request, raw_next).await;
-                    result.map(|stream| guard_stream_continuation(stream, continuation_guard))
+                    let result = callable(&current_name, request, current_context, raw_next).await;
+                    result.map(|stream| {
+                        let stream = guard_stream_continuation(stream, continuation_guard);
+                        guard_stream_codec(stream, codec_guard)
+                    })
                 })
             });
         }

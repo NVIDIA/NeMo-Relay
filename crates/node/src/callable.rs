@@ -23,10 +23,11 @@ use napi::{Env, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
 use nemo_relay::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity,
-    LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
-    LlmSanitizeRequestContext, LlmSanitizeRequestFn, LlmSanitizeResponseContext,
-    LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionContext,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    LlmConditionalFn, LlmExecutionContext, LlmExecutionFn, LlmExecutionNextFn,
+    LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
+    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionContext, ToolExecutionNextFn,
+    ToolInterceptFn, ToolSanitizeFn,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -1162,6 +1163,45 @@ pub(crate) fn js_llm_sanitize_response_context_to_napi(
     Ok(js_object_to_unknown(env, object))
 }
 
+fn js_llm_execution_context_args(
+    request: LlmRequest,
+    context: LlmExecutionContext,
+) -> crate::promise_call::Arg0Builder {
+    Box::new(move |env| {
+        let mut args = env.create_array_with_length(2)?;
+        let request = serde_json::to_value(request)
+            .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        args.set_element(0, json_to_js_unknown(env, request)?)?;
+
+        let mut execution = env.create_object()?;
+        execution.set_named_property(
+            "requestCodec",
+            js_llm_sanitize_request_context_to_napi(
+                env,
+                js_llm_sanitize_request_context(context.request_codec()),
+            )?,
+        )?;
+        let response = match context.response_codec() {
+            Some(context) => js_llm_sanitize_response_context_to_napi(
+                env,
+                js_llm_sanitize_response_context(context),
+            )?,
+            None => {
+                let null = env.get_null()?;
+                unsafe { JsUnknown::from_raw_unchecked(env.raw(), null.raw()) }
+            }
+        };
+        execution.set_named_property("responseCodec", response)?;
+        args.set_element(1, js_object_to_unknown(env, execution))?;
+        Ok(js_object_to_unknown(env, args))
+    })
+}
+
+fn json_to_js_unknown(env: &Env, value: Json) -> napi::Result<JsUnknown> {
+    let raw = unsafe { Json::to_napi_value(env.raw(), value) }?;
+    Ok(unsafe { JsUnknown::from_raw_unchecked(env.raw(), raw) })
+}
+
 /// Wrap a JS function for LLM conditional guardrails: `(request: object) => string | null`.
 pub fn wrap_js_llm_conditional_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
@@ -1636,26 +1676,18 @@ async fn call_js_tool_exec_intercept(
     })
 }
 
-/// Wrap a JS function `(request, next) => result` for LLM execution intercept.
+/// Wrap a JS function `(request, context, next) => result` for LLM execution intercept.
 ///
 /// The JS callback receives the `LlmRequest` serialized as a plain JSON object
 /// and a real `next(request)` function that returns a Promise for the downstream
 /// result.
-pub fn wrap_js_llm_exec_intercept_fn(
-    func: Arc<PromiseAwareFn>,
-) -> Arc<
-    dyn Fn(
-            &str,
-            LlmRequest,
-            LlmExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
-        + Send
-        + Sync,
-> {
+pub fn wrap_js_llm_exec_intercept_fn(func: Arc<PromiseAwareFn>) -> LlmExecutionFn {
     Arc::new(
-        move |_name: &str, request: LlmRequest, next: LlmExecutionNextFn| {
+        move |_name: &str,
+              request: LlmRequest,
+              context: LlmExecutionContext,
+              next: LlmExecutionNextFn| {
             let func = func.clone();
-            let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
             let next_json: JsonNextFn = Arc::new(move |next_request_json| {
                 let next = next.clone();
                 Box::pin(async move {
@@ -1666,32 +1698,28 @@ pub fn wrap_js_llm_exec_intercept_fn(
                     next(next_request).await
                 })
             });
-            Box::pin(async move { func.call_with_json_next(req_json, next_json).await })
+            let args = js_llm_execution_context_args(request, context);
+            Box::pin(async move {
+                func.call_spread_with_arg0_and_json_next(args, next_json)
+                    .await
+            })
         },
     )
 }
 
-/// Wrap a JS function `(request, next) => result` for LLM stream execution intercept.
+/// Wrap a JS function `(request, context, next) => result` for LLM stream execution intercept.
 ///
 /// The JS callback receives the `LlmRequest` serialized as a plain JSON object
 /// and a real `next(request)` function whose Promise resolves to a lazy
 /// async iterable. The callback can return it directly or wrap it with an async
 /// generator without materializing the downstream stream.
-pub fn wrap_js_llm_stream_exec_intercept_fn(
-    func: Arc<PromiseAwareFn>,
-) -> Arc<
-    dyn Fn(
-            &str,
-            LlmRequest,
-            LlmStreamExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = Result<LlmJsonStream>> + Send>>
-        + Send
-        + Sync,
-> {
+pub fn wrap_js_llm_stream_exec_intercept_fn(func: Arc<PromiseAwareFn>) -> LlmStreamExecutionFn {
     Arc::new(
-        move |_name: &str, request: LlmRequest, next: LlmStreamExecutionNextFn| {
+        move |_name: &str,
+              request: LlmRequest,
+              context: LlmExecutionContext,
+              next: LlmStreamExecutionNextFn| {
             let func = func.clone();
-            let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
             let next_stream: JsonStreamNextFn = Arc::new(move |next_request_json| {
                 let next = next.clone();
                 Box::pin(async move {
@@ -1702,7 +1730,11 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
                     next(next_request).await
                 })
             });
-            Box::pin(async move { func.call_with_stream_next(req_json, next_stream).await })
+            let args = js_llm_execution_context_args(request, context);
+            Box::pin(async move {
+                func.call_spread_with_arg0_and_stream_next(args, next_stream)
+                    .await
+            })
         },
     )
 }

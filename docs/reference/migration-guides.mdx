@@ -11,7 +11,44 @@ upgrade actions as they are identified during the 0.10 development cycle.
 
 ## Upgrade to NeMo Relay 0.10
 
-No migration actions have been recorded for NeMo Relay 0.10 yet.
+### Update LLM Execution Intercepts
+
+Relay 0.10 changes every unary and streaming LLM execution-intercept callback.
+Update callbacks as follows:
+
+| Surface | Relay 0.9 | Relay 0.10 |
+|---|---|---|
+| Rust, Python unary, typed native plugin, Rust worker, Python worker | `(name, request, next)` | `(name, request, context, next)` |
+| Python language-binding streaming | `(request, next)` | `(name, request, context, next)` |
+| Node.js, Go | `(request, next)` | `(request, context, next)` |
+| C | `(user_data, request, next, next_ctx)` | `(user_data, name, request, context, next, next_ctx)` |
+| Raw native callback | `(..., name, request, next, ...)` | `(..., name, request, context, next, ...)` |
+
+The request direction reports the selected codec and exposes decode and encode
+operations when Relay resolved one. Unary execution also exposes response
+identity and decode. Streaming execution has no response codec because chunks
+are not complete provider responses.
+
+Codec access is invocation-scoped. Do not cache the context or a resolved codec:
+unary access expires when the callback settles, and streaming request access
+expires when the returned stream closes.
+
+This is a source and binary compatibility break for execution-intercept users:
+
+- Recompile language-binding consumers that register an LLM execution
+  intercept and update their callback argument order.
+- Rebuild every native plugin against the 0.10 SDK. Native plugins continue to
+  declare `compat.native_api = "1"`, but must set `compat.relay` to
+  `">=0.10.0,<1.0"` or another range that excludes Relay 0.9. Relay 0.10 uses
+  internal native ABI v7 and rejects older compiled layouts.
+- Regenerate and rebuild gRPC workers that register an LLM execution intercept.
+  The protocol remains `grpc-v1`, but those workers must also exclude Relay 0.9
+  in `compat.relay`.
+
+LLM request intercepts and conditional middleware do not change. For the full
+context and lifetime contract, refer to [Build Plugins](/build-plugins/about),
+[Native ABI Reference](/build-plugins/native/native-abi-reference), and
+[gRPC-v1 Worker Protocol](/build-plugins/workers/grpc-v1-protocol).
 
 ## Related Release Information
 

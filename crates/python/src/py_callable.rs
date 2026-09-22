@@ -31,12 +31,12 @@ use nemo_relay::api::runtime::subscriber_dispatcher::{
 };
 use nemo_relay::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmConditionalFn,
-    LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext,
-    LlmSanitizeRequestFn, LlmSanitizeResponseContext, LlmSanitizeResponseFn,
-    LlmStreamExecutionNextFn, LlmStreamInner, MiddlewareContinuationContext, PropagationContext,
-    ScopeStackHandle, ToolConditionalFn, ToolExecutionContext, ToolExecutionNextFn,
-    ToolInterceptFn, ToolSanitizeFn, capture_propagation_context, capture_traceparent,
-    current_scope_stack,
+    LlmExecutionContext, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
+    LlmSanitizeRequestContext, LlmSanitizeRequestFn, LlmSanitizeResponseContext,
+    LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn, LlmStreamInner,
+    MiddlewareContinuationContext, PropagationContext, ScopeStackHandle, ToolConditionalFn,
+    ToolExecutionContext, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    capture_propagation_context, capture_traceparent, current_scope_stack,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::exceptions::PyRuntimeError;
@@ -57,7 +57,7 @@ use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::convert::{json_to_py, py_to_json};
 use crate::py_types::{
     PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyLLMRequest, PyLLMRequestInterceptOutcome,
-    PyLlmSanitizeRequestContext, PyLlmSanitizeResponseContext, PyScopeStack,
+    PyLlmExecutionContext, PyLlmSanitizeRequestContext, PyLlmSanitizeResponseContext, PyScopeStack,
     PyToolExecutionContext, PyToolExecutionInterceptOutcome, PyToolExecutionResult,
     TOOL_EXECUTION_INTERCEPT_RESULT_ERROR,
 };
@@ -1290,22 +1290,15 @@ pub fn wrap_py_tool_exec_intercept_fn(
     )
 }
 
-/// Wrap a Python callable `(name, LlmRequest, next) -> dict` for LLM execution intercepts.
-pub fn wrap_py_llm_exec_intercept_fn(
-    py_fn: Py<PyAny>,
-) -> Arc<
-    dyn Fn(
-            &str,
-            LlmRequest,
-            LlmExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>>
-        + Send
-        + Sync,
-> {
+/// Wrap a Python callable `(name, request, context, next) -> dict` for LLM execution intercepts.
+pub fn wrap_py_llm_exec_intercept_fn(py_fn: Py<PyAny>) -> LlmExecutionFn {
     let py_fn = Arc::new(py_fn);
     let task_locals = capture_python_task_locals();
     Arc::new(
-        move |name: &str, request: LlmRequest, next: LlmExecutionNextFn| {
+        move |name: &str,
+              request: LlmRequest,
+              context: LlmExecutionContext,
+              next: LlmExecutionNextFn| {
             let py_fn = py_fn.clone();
             let name = name.to_string();
             let task_locals = task_locals_with_running_loop(task_locals.as_ref());
@@ -1315,6 +1308,7 @@ pub fn wrap_py_llm_exec_intercept_fn(
                         copy_middleware_invocation(py, task_locals)
                             .map_err(|error| FlowError::Internal(error.to_string()))?;
                     let py_req = PyLLMRequest { inner: request };
+                    let py_context = PyLlmExecutionContext { inner: context };
                     let py_next = PyLlmNextFn {
                         inner: next,
                         context: MiddlewareContinuationContext::capture(),
@@ -1331,10 +1325,13 @@ pub fn wrap_py_llm_exec_intercept_fn(
                         loop_affine_callback(py, py_fn.bind(py), task_locals.as_ref(), false)
                             .map_err(|error| FlowError::Internal(error.to_string()))?;
                     let result = match invocation_context.as_ref() {
-                        Some(context) => {
-                            context.call_method1("run", (callback.bind(py), &name, py_req, py_next))
-                        }
-                        None => callback.bind(py).call1((&name, py_req, py_next)),
+                        Some(context) => context.call_method1(
+                            "run",
+                            (callback.bind(py), &name, py_req, py_context, py_next),
+                        ),
+                        None => callback
+                            .bind(py)
+                            .call1((&name, py_req, py_context, py_next)),
                     }
                     .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
                     split_py_object_or_future_with_locals(
@@ -1354,28 +1351,22 @@ pub fn wrap_py_llm_exec_intercept_fn(
     )
 }
 
-/// Wrap a Python callable `(LlmRequest, next) -> AsyncIterator[Any]` for LLM
+/// Wrap a Python callable `(name, request, context, next) -> AsyncIterator[Any]` for LLM
 /// stream execution intercepts.
 ///
 /// The Python callable may return the async iterator directly or return an
 /// awaitable that resolves to one. The resulting iterator is drained on the
 /// Tokio runtime and forwarded into a Rust `Stream<Item = Result<Json>>`.
-pub fn wrap_py_llm_stream_exec_intercept_fn(
-    py_fn: Py<PyAny>,
-) -> Arc<
-    dyn Fn(
-            &str,
-            LlmRequest,
-            LlmStreamExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = FlowResult<LlmJsonStream>> + Send>>
-        + Send
-        + Sync,
-> {
+pub fn wrap_py_llm_stream_exec_intercept_fn(py_fn: Py<PyAny>) -> LlmStreamExecutionFn {
     let py_fn = Arc::new(py_fn);
     let task_locals = capture_python_task_locals();
     Arc::new(
-        move |_name: &str, request: LlmRequest, next: LlmStreamExecutionNextFn| {
+        move |name: &str,
+              request: LlmRequest,
+              context: LlmExecutionContext,
+              next: LlmStreamExecutionNextFn| {
             let py_fn = py_fn.clone();
+            let name = name.to_string();
             let task_locals = task_locals_with_running_loop(task_locals.as_ref());
             Box::pin(async move {
                 let (outcome, invocation_task_locals) = Python::attach(|py| {
@@ -1383,6 +1374,7 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                         copy_middleware_invocation(py, task_locals)
                             .map_err(|error| FlowError::Internal(error.to_string()))?;
                     let py_req = PyLLMRequest { inner: request };
+                    let py_context = PyLlmExecutionContext { inner: context };
                     let py_next = PyLlmStreamNextFn {
                         inner: next,
                         context: MiddlewareContinuationContext::capture(),
@@ -1399,10 +1391,13 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                         loop_affine_callback(py, py_fn.bind(py), task_locals.as_ref(), false)
                             .map_err(|error| FlowError::Internal(error.to_string()))?;
                     let result = match invocation_context.as_ref() {
-                        Some(context) => {
-                            context.call_method1("run", (callback.bind(py), py_req, py_next))
-                        }
-                        None => callback.bind(py).call1((py_req, py_next)),
+                        Some(context) => context.call_method1(
+                            "run",
+                            (callback.bind(py), &name, py_req, py_context, py_next),
+                        ),
+                        None => callback
+                            .bind(py)
+                            .call1((&name, py_req, py_context, py_next)),
                     }
                     .map_err(python_callback_error)?;
                     let outcome = split_py_object_or_future_with_locals(

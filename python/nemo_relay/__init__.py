@@ -101,6 +101,7 @@ from nemo_relay._native import (
     AtofStreamSinkConfig,
     LLMAttributes,
     LlmCodecIdentity,
+    LlmExecutionContext,
     LLMHandle,
     LLMRequest,
     LLMRequestInterceptOutcome,
@@ -281,17 +282,23 @@ LlmRequestIntercept: TypeAlias = Callable[
     LLMRequestInterceptOutcome | Awaitable[LLMRequestInterceptOutcome],
 ]
 #: Execution intercept callback that wraps non-streaming LLM execution. The
-#: callback receives the logical LLM name, request, and next callable. It may
+#: callback receives the logical LLM name, request, execution context, and next callable. It may
 #: await the next callable or return a replacement JSON-compatible response.
 LlmExecutionIntercept: TypeAlias = Callable[
-    [str, LLMRequest, Callable[[LLMRequest], Awaitable[Json]]],
+    [str, LLMRequest, LlmExecutionContext, Callable[[LLMRequest], Awaitable[Json]]],
     Json | Awaitable[Json],
 ]
 #: Execution intercept callback that wraps streaming LLM execution. The
-#: callback receives the current request and a next callable that returns an
-#: async iterator of chunks. It may return or await a replacement iterator.
+#: callback receives the logical LLM name, current request, execution context,
+#: and a next callable that returns an async iterator of chunks. It may return
+#: or await a replacement iterator.
 LlmStreamExecutionIntercept: TypeAlias = Callable[
-    [LLMRequest, Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]]],
+    [
+        str,
+        LLMRequest,
+        LlmExecutionContext,
+        Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]],
+    ],
     AsyncIterator[Json] | Awaitable[AsyncIterator[Json]],
 ]
 
@@ -807,6 +814,7 @@ __all__ = [
     "LlmSanitizeRequestGuardrail",
     "LlmSanitizeResponseGuardrail",
     "LlmCodecIdentity",
+    "LlmExecutionContext",
     "LlmSanitizeRequestContext",
     "LlmSanitizeResponseContext",
     "LlmSanitizeRequestCodec",

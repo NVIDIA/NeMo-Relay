@@ -198,14 +198,16 @@ describe('core plugins', () => {
           ...args,
           nodeToolPlugin: `priority:${pluginConfig.priority}`,
         }));
-        context.registerLlmExecutionIntercept('llmExec', 17, async (request, next) => {
+        context.registerLlmExecutionIntercept('llmExec', 17, async (request, _context, next) => {
           const result = await next(request);
           return {
             ...result,
             nodeLlmPlugin: `priority:${pluginConfig.priority}`,
           };
         });
-        context.registerLlmStreamExecutionIntercept('llmStreamExec', 17, async (request, next) => next(request));
+        context.registerLlmStreamExecutionIntercept('llmStreamExec', 17, async (request, _context, next) =>
+          next(request),
+        );
       },
     });
 

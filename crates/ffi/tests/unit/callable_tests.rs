@@ -259,10 +259,13 @@ unsafe extern "C" fn llm_exec_error_cb(
 
 unsafe extern "C" fn llm_exec_intercept_cb(
     _user_data: *mut libc::c_void,
+    name: *const c_char,
     native_json: *const c_char,
+    _context: NemoRelayLlmExecutionContext,
     next_fn: NemoRelayLlmExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char {
+    assert_eq!(unsafe { CStr::from_ptr(name) }.to_str().unwrap(), "llm");
     let result_ptr = unsafe { next_fn(native_json, next_ctx) };
     if result_ptr.is_null() {
         return std::ptr::null_mut();
@@ -276,10 +279,13 @@ unsafe extern "C" fn llm_exec_intercept_cb(
 
 unsafe extern "C" fn llm_exec_short_circuit_cb(
     _user_data: *mut libc::c_void,
+    name: *const c_char,
     native_json: *const c_char,
+    _context: NemoRelayLlmExecutionContext,
     _next_fn: NemoRelayLlmExecNextFn,
     _next_ctx: *mut libc::c_void,
 ) -> *mut c_char {
+    assert_eq!(unsafe { CStr::from_ptr(name) }.to_str().unwrap(), "llm");
     let request: Json =
         serde_json::from_str(unsafe { CStr::from_ptr(native_json) }.to_str().unwrap()).unwrap();
     let response = json!({
@@ -287,6 +293,115 @@ unsafe extern "C" fn llm_exec_short_circuit_cb(
         "intercepted": true,
     });
     CString::new(response.to_string()).unwrap().into_raw()
+}
+
+struct OpaqueExecutionCodec;
+
+impl nemo_relay::codec::traits::LlmCodec for OpaqueExecutionCodec {
+    fn decode(
+        &self,
+        request: &LlmRequest,
+    ) -> nemo_relay::error::Result<nemo_relay::codec::request::AnnotatedLlmRequest> {
+        Ok(nemo_relay::codec::request::AnnotatedLlmRequest {
+            model: request.content["model"].as_str().map(str::to_owned),
+            ..Default::default()
+        })
+    }
+
+    fn encode(
+        &self,
+        annotated: &nemo_relay::codec::request::AnnotatedLlmRequest,
+        original: &LlmRequest,
+    ) -> nemo_relay::error::Result<LlmRequest> {
+        let mut request = original.clone();
+        request.content["model"] = json!(annotated.model);
+        request.content["encoded"] = json!(true);
+        Ok(request)
+    }
+}
+
+impl nemo_relay::codec::traits::LlmResponseCodec for OpaqueExecutionCodec {
+    fn decode_response(
+        &self,
+        response: &Json,
+    ) -> nemo_relay::error::Result<nemo_relay::codec::response::AnnotatedLlmResponse> {
+        Ok(nemo_relay::codec::response::AnnotatedLlmResponse {
+            model: response["model"].as_str().map(str::to_owned),
+            ..Default::default()
+        })
+    }
+}
+
+unsafe extern "C" fn llm_exec_codec_context_cb(
+    _user_data: *mut libc::c_void,
+    name: *const c_char,
+    native_json: *const c_char,
+    context: NemoRelayLlmExecutionContext,
+    next_fn: NemoRelayLlmExecNextFn,
+    next_ctx: *mut libc::c_void,
+) -> *mut c_char {
+    let kind = context.request_codec.codec_kind;
+    let expected_name = match kind {
+        NemoRelayLlmSanitizeCodecKind::None => "ffi-none",
+        NemoRelayLlmSanitizeCodecKind::Opaque => "ffi-opaque",
+        other => panic!("unexpected execution codec kind: {other:?}"),
+    };
+    assert_eq!(
+        unsafe { CStr::from_ptr(name) }.to_str().unwrap(),
+        expected_name
+    );
+    assert!(context.request_codec.codec_id.is_null());
+    assert_eq!(
+        context.request_codec.codec.is_null(),
+        kind == NemoRelayLlmSanitizeCodecKind::None
+    );
+    assert!(!context.response_codec.is_null());
+    let response = unsafe { &*context.response_codec };
+    assert_eq!(response.codec_kind, kind);
+    assert!(response.codec_id.is_null());
+    assert_eq!(
+        response.codec.is_null(),
+        kind == NemoRelayLlmSanitizeCodecKind::None
+    );
+
+    if kind == NemoRelayLlmSanitizeCodecKind::None {
+        return unsafe { next_fn(native_json, next_ctx) };
+    }
+
+    let request: LlmRequest =
+        serde_json::from_str(unsafe { CStr::from_ptr(native_json) }.to_str().unwrap()).unwrap();
+    let request = FfiLLMRequest(request);
+    let annotated = unsafe {
+        crate::api::nemo_relay_llm_sanitize_request_codec_decode(
+            context.request_codec.codec,
+            std::ptr::from_ref(&request),
+        )
+    };
+    assert!(!annotated.is_null());
+    let encoded = unsafe {
+        crate::api::nemo_relay_llm_sanitize_request_codec_encode(
+            context.request_codec.codec,
+            annotated,
+            std::ptr::from_ref(&request),
+        )
+    };
+    unsafe { nemo_relay_string_free_internal(annotated) };
+    assert!(!encoded.is_null());
+    let encoded_json =
+        CString::new(serde_json::to_string(&unsafe { &*encoded }.0).unwrap()).unwrap();
+    let result = unsafe { next_fn(encoded_json.as_ptr(), next_ctx) };
+    unsafe { drop(Box::from_raw(encoded)) };
+    assert!(!result.is_null());
+
+    let decoded_ptr = unsafe {
+        crate::api::nemo_relay_llm_sanitize_response_codec_decode(response.codec, result)
+    };
+    assert!(!decoded_ptr.is_null());
+    let decoded: Json =
+        serde_json::from_str(unsafe { CStr::from_ptr(decoded_ptr) }.to_str().unwrap()).unwrap();
+    unsafe { nemo_relay_string_free_internal(decoded_ptr) };
+    assert_eq!(decoded["model"], json!("test-model"));
+    result
 }
 
 static COLLECTED_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -648,9 +763,62 @@ fn assert_llm_exec_callbacks(runtime: &tokio::runtime::Runtime) {
     let next: LlmExecutionNextFn =
         Arc::new(|request| Box::pin(async move { Ok(json!({"model": request.content["model"]})) }));
     let intercepted = runtime
-        .block_on(intercept("llm", make_request(), next))
+        .block_on(intercept(
+            "llm",
+            make_request(),
+            nemo_relay::api::runtime::LlmExecutionContext::default(),
+            next,
+        ))
         .unwrap();
     assert_eq!(intercepted["intercepted"], json!(true));
+
+    let absent_intercept =
+        wrap_llm_exec_intercept_fn(llm_exec_codec_context_cb, std::ptr::null_mut(), None);
+    let absent_next: LlmExecutionNextFn =
+        Arc::new(|request| Box::pin(async move { Ok(json!({"model": request.content["model"]})) }));
+    let absent = runtime
+        .block_on(absent_intercept(
+            "ffi-none",
+            make_request(),
+            nemo_relay::api::runtime::LlmExecutionContext::new(
+                Default::default(),
+                Some(Default::default()),
+            ),
+            absent_next,
+        ))
+        .unwrap();
+    assert_eq!(absent["model"], json!("test-model"));
+
+    let opaque_intercept =
+        wrap_llm_exec_intercept_fn(llm_exec_codec_context_cb, std::ptr::null_mut(), None);
+    let opaque_next: LlmExecutionNextFn = Arc::new(|request| {
+        Box::pin(async move {
+            assert_eq!(request.content["encoded"], json!(true));
+            Ok(json!({"model": request.content["model"]}))
+        })
+    });
+    let request_codec: Arc<dyn nemo_relay::codec::traits::LlmCodec> =
+        Arc::new(OpaqueExecutionCodec);
+    let response_codec: Arc<dyn nemo_relay::codec::traits::LlmResponseCodec> =
+        Arc::new(OpaqueExecutionCodec);
+    let opaque = runtime
+        .block_on(opaque_intercept(
+            "ffi-opaque",
+            make_request(),
+            nemo_relay::api::runtime::LlmExecutionContext::new(
+                nemo_relay::api::runtime::LlmSanitizeRequestContext::for_request_codec(Some(
+                    request_codec,
+                )),
+                Some(
+                    nemo_relay::api::runtime::LlmSanitizeResponseContext::for_response_codec(Some(
+                        response_codec,
+                    )),
+                ),
+            ),
+            opaque_next,
+        ))
+        .unwrap();
+    assert_eq!(opaque["model"], json!("test-model"));
 }
 
 fn assert_llm_stream_callbacks(runtime: &tokio::runtime::Runtime) {
@@ -669,7 +837,12 @@ fn assert_llm_stream_callbacks(runtime: &tokio::runtime::Runtime) {
         })
     });
     let mut intercepted_stream = runtime
-        .block_on(stream_intercept("llm", make_request(), next_stream))
+        .block_on(stream_intercept(
+            "llm",
+            make_request(),
+            nemo_relay::api::runtime::LlmExecutionContext::default(),
+            next_stream,
+        ))
         .unwrap();
     let first = runtime.block_on(async { intercepted_stream.next().await.unwrap().unwrap() });
     assert_eq!(first["intercepted"], json!(true));
@@ -689,6 +862,7 @@ fn assert_llm_stream_callbacks(runtime: &tokio::runtime::Runtime) {
         .block_on(stream_intercept_with_next(
             "llm",
             make_request(),
+            nemo_relay::api::runtime::LlmExecutionContext::default(),
             next_stream,
         ))
         .unwrap();

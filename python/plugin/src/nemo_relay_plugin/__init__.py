@@ -29,6 +29,8 @@ Public data types:
     LlmCodecIdentity: Typed discriminator for the active LLM codec.
     LlmSanitizeRequestContext: Per-call context supplied to an LLM request sanitizer.
     LlmSanitizeResponseContext: Per-call context supplied to an LLM response sanitizer.
+    LlmExecutionContext: Invocation-scoped codec context supplied to an LLM
+        execution intercept.
     WorkerRequestCodec: Invocation-scoped async proxy for an active request codec.
     WorkerResponseCodec: Invocation-scoped async proxy for an active response codec.
     AnnotatedLlmRequest: An annotated Relay LLM request represented as a JSON
@@ -70,8 +72,9 @@ Public callback aliases:
     LlmSanitizeResponseCallback: LLM response sanitizer callback.
     LlmConditionalCallback: LLM execution guardrail callback.
     LlmRequestCallback: LLM request intercept callback.
-    LlmExecutionCallback: Unary LLM execution intercept callback.
-    LlmStreamExecutionCallback: Streaming LLM execution intercept callback.
+    LlmExecutionCallback: Unary LLM execution intercept callback with codec context.
+    LlmStreamExecutionCallback: Streaming LLM execution intercept callback with
+        request codec context.
 
 Public authoring types:
     WorkerPlugin: Base validation and registration contract for a plugin.
@@ -101,6 +104,7 @@ from ._api import (
     LlmCodecIdentity,
     LlmConditionalCallback,
     LlmExecutionCallback,
+    LlmExecutionContext,
     LlmNext,
     LlmOptimizationContribution,
     LlmOptimizationDataSchema,
@@ -164,6 +168,7 @@ __all__ = [
     "LlmConditionalCallback",
     "LlmCodecIdentity",
     "LlmExecutionCallback",
+    "LlmExecutionContext",
     "LogSeverity",
     "MetricKind",
     "MetricMeasurement",

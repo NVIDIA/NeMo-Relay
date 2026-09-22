@@ -11,9 +11,10 @@ It validates the shared documentation configuration, registers every safe
 invocation-scoped codec proxies, transforms streams lazily, and cleans up marks,
 scopes, isolated stacks, and cancelled tasks.
 
-The worker targets the Relay 0.8 `grpc-v1` result contract. Its tool continuation returns
-`ToolExecutionResult`. Its execution intercept preserves the application result, carries
-the upstream annotation under worker metadata, and adds Relay-owned pending marks.
+The worker targets Relay 0.10 while retaining the `grpc-v1` protocol name. Its tool
+continuation returns `ToolExecutionResult`. Its LLM execution callbacks receive
+directional codec context before the continuation; unary execution can decode a complete
+response, while streaming execution exposes request codec operations only.
 
 Run the example's own test project from this directory:
 
