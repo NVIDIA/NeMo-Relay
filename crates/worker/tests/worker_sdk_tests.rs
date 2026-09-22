@@ -3271,21 +3271,7 @@ fn llm_invoke(
     annotated_request: Option<Json>,
     response: Option<Json>,
 ) -> InvokeRequest {
-    let execution_codec_context = match surface {
-        RegistrationSurface::LlmExecutionIntercept => Some(Box::new(
-            nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
-                request: Some(empty_request_codec_context()),
-                response: Some(empty_response_codec_context()),
-            },
-        )),
-        RegistrationSurface::LlmStreamExecutionIntercept => Some(Box::new(
-            nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
-                request: Some(empty_request_codec_context()),
-                response: None,
-            },
-        )),
-        _ => None,
-    };
+    let execution_codec_context = execution_codec_context_for(surface);
     InvokeRequest {
         activation_id: ACTIVATION_ID.into(),
         invocation_id: "invoke-1".into(),
@@ -3309,6 +3295,26 @@ fn llm_invoke(
     }
 }
 
+fn execution_codec_context_for(
+    surface: RegistrationSurface,
+) -> Option<Box<nemo_relay_worker_proto::v1::LlmExecutionCodecContext>> {
+    match surface {
+        RegistrationSurface::LlmExecutionIntercept => Some(Box::new(
+            nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
+                request: Some(empty_request_codec_context()),
+                response: Some(empty_response_codec_context()),
+            },
+        )),
+        RegistrationSurface::LlmStreamExecutionIntercept => Some(Box::new(
+            nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
+                request: Some(empty_request_codec_context()),
+                response: None,
+            },
+        )),
+        _ => None,
+    }
+}
+
 fn llm_invoke_without_request(
     registration_name: &str,
     surface: RegistrationSurface,
@@ -3328,7 +3334,7 @@ fn llm_invoke_without_request(
                 annotated_request: None,
                 response: None,
                 sanitize_context: None,
-                execution_codec_context: None,
+                execution_codec_context: execution_codec_context_for(surface),
             },
         )),
     }

@@ -2104,11 +2104,7 @@ impl WorkerPluginCallback {
             let _completion = WorkerStreamCompletionSignal(completion_tx);
             let _codec_capabilities = codec_capabilities;
             let result = tokio::select! {
-                // Stream setup can include awaiting the downstream provider through
-                // `next`, so the control-plane timeout must not cap it. Dropping the
-                // caller closes `rx`; the sibling branch then cancels the worker and
-                // releases the continuation and codec capabilities.
-                result = client.invoke_stream(worker_rpc_request(invoke)) => result,
+                result = worker_rpc(client.invoke_stream(worker_rpc_request(invoke))) => result,
                 _ = tx.closed() => {
                     guard.cancel("host stopped consuming the worker stream");
                     guard.finish();
@@ -2261,15 +2257,9 @@ impl WorkerPluginCallback {
     async fn invoke_async(&self, request: InvokeRequest) -> FlowResult<InvokeResponse> {
         let callback_name = request.registration_name.clone();
         let surface = request.surface;
-        // A continuation-bearing callback can legitimately include downstream
-        // provider latency. The caller still owns cancellation through the
-        // invocation guard, but the control-plane timeout must not cap `next`.
-        let result = if request.continuation_id.is_empty() {
-            self.invoke_async_with_timeout(request, WORKER_RPC_TIMEOUT)
-                .await
-        } else {
-            self.invoke_async_without_timeout(request).await
-        };
+        let result = self
+            .invoke_async_with_timeout(request, WORKER_RPC_TIMEOUT)
+            .await;
         if let Err(error) = &result {
             let surface_name = RegistrationSurface::try_from(surface)
                 .map(|surface| surface.as_str_name())
@@ -2284,19 +2274,6 @@ impl WorkerPluginCallback {
             );
         }
         result
-    }
-
-    async fn invoke_async_without_timeout(
-        &self,
-        request: InvokeRequest,
-    ) -> FlowResult<InvokeResponse> {
-        let mut guard = WorkerInvocationGuard::new(self, &request);
-        let mut client = self.client.clone();
-        let result = client.invoke(worker_rpc_request(request)).await;
-        guard.finish();
-        result
-            .map(|response| response.into_inner())
-            .map_err(|err| worker_status_to_flow("worker invoke failed", err))
     }
 
     async fn invoke_async_with_timeout(

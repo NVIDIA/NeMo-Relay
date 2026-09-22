@@ -46,9 +46,61 @@ fn absent_execution_context_is_a_release_mismatch() {
     let payload = llm_payload(None);
 
     let error = payload
-        .execution_context(&disconnected_runtime(), "invocation")
+        .execution_context(&disconnected_runtime(), "invocation", true)
         .unwrap_err();
     assert!(error.to_string().contains("execution context is missing"));
+}
+
+#[test]
+fn malformed_execution_context_fields_are_rejected() {
+    let request = || nemo_relay_worker_proto::v1::LlmSanitizeRequestContext {
+        codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity::default()),
+        codec_capability_id: None,
+    };
+    let response = || nemo_relay_worker_proto::v1::LlmSanitizeResponseContext {
+        codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity::default()),
+        codec_capability_id: None,
+    };
+    let cases = [
+        (
+            nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
+                request: None,
+                response: Some(response()),
+            },
+            "request context is missing",
+        ),
+        (
+            nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
+                request: Some(nemo_relay_worker_proto::v1::LlmSanitizeRequestContext::default()),
+                response: Some(response()),
+            },
+            "request codec identity is missing",
+        ),
+        (
+            nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
+                request: Some(request()),
+                response: Some(nemo_relay_worker_proto::v1::LlmSanitizeResponseContext::default()),
+            },
+            "response codec identity is missing",
+        ),
+        (
+            nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
+                request: Some(request()),
+                response: None,
+            },
+            "response context is missing",
+        ),
+    ];
+
+    for (context, expected) in cases {
+        let error = llm_payload(Some(Box::new(context)))
+            .execution_context(&disconnected_runtime(), "invocation", true)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(expected),
+            "expected '{expected}' in '{error}'"
+        );
+    }
 }
 
 #[test]
@@ -71,7 +123,7 @@ fn execution_context_preserves_directional_identities_and_capabilities() {
     )));
 
     let context = payload
-        .execution_context(&disconnected_runtime(), "invocation")
+        .execution_context(&disconnected_runtime(), "invocation", true)
         .unwrap();
     assert_eq!(
         &context.request_codec().codec,
@@ -106,7 +158,7 @@ fn execution_context_distinguishes_absent_and_resolved_opaque_codecs() {
             }),
         },
     )))
-    .execution_context(&disconnected_runtime(), "absent-invocation")
+    .execution_context(&disconnected_runtime(), "absent-invocation", true)
     .unwrap();
     assert_eq!(absent.request_codec().codec, LlmCodecIdentity::None);
     assert!(absent.request_codec().resolve_codec().is_none());
@@ -132,7 +184,7 @@ fn execution_context_distinguishes_absent_and_resolved_opaque_codecs() {
             }),
         },
     )))
-    .execution_context(&disconnected_runtime(), "opaque-invocation")
+    .execution_context(&disconnected_runtime(), "opaque-invocation", true)
     .unwrap();
     assert_eq!(opaque.request_codec().codec, LlmCodecIdentity::Opaque);
     assert!(opaque.request_codec().resolve_codec().is_some());
@@ -157,7 +209,7 @@ fn streaming_execution_context_has_no_response_codec() {
     )));
 
     let context = payload
-        .execution_context(&disconnected_runtime(), "invocation")
+        .execution_context(&disconnected_runtime(), "invocation", false)
         .unwrap();
     assert!(context.request_codec().resolve_codec().is_some());
     assert!(context.response_codec().is_none());
