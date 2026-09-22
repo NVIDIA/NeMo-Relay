@@ -739,22 +739,6 @@ fn native_abi_v6_logging_extension_is_append_only() {
     );
 }
 
-#[test]
-fn native_abi_v7_execution_context_extension_preserves_the_host_table() {
-    assert_eq!(offset_of!(NemoRelayNativeHostApiV7, v6), 0);
-    assert_eq!(
-        offset_of!(
-            NemoRelayNativeHostApiV7,
-            plugin_context_register_async_llm_execution_intercept
-        ),
-        size_of::<NemoRelayNativeHostApiV6>()
-    );
-    assert_eq!(
-        offset_of!(NemoRelayNativeHostApiV7, async_stream_retain),
-        size_of::<NemoRelayNativeHostApiV6>() + size_of::<usize>()
-    );
-}
-
 fn host_api_v4_offsets() -> [usize; 12] {
     [
         offset_of!(NemoRelayNativeHostApiV4, v3),

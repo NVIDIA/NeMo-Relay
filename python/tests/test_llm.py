@@ -325,50 +325,7 @@ class TestLLMGuardrails:
         assert request_codec_used is True
         assert response_codec_used is True
 
-    async def test_execution_intercept_receives_directional_codecs(self) -> None:
-        observed = False
-
-        async def execution_intercept(name, request, context, next_call):
-            nonlocal observed
-            assert name == "py_llm_execution_context"
-            assert context.request_codec.codec.kind == "builtin"
-            assert context.request_codec.codec.id == "openai_chat"
-            request_codec = context.request_codec.resolve_codec()
-            assert request_codec is not None
-            assert request_codec.decode(request).model == "test-model"
-
-            assert context.response_codec is not None
-            assert context.response_codec.codec.kind == "builtin"
-            assert context.response_codec.codec.id == "openai_chat"
-            response = await next_call(request)
-            response_codec = context.response_codec.resolve_codec()
-            assert response_codec is not None
-            assert response_codec.decode_response(response).model == "test-model"
-            observed = True
-            return response
-
-        codec = OpenAIChatCodec()
-        response = {
-            "id": "chatcmpl-execution-context",
-            "model": "test-model",
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}}],
-        }
-        intercepts.register_llm_execution("py_llm_execution_context", 1, execution_intercept)
-        try:
-            result = await llm.execute(
-                "py_llm_execution_context",
-                make_request(),
-                lambda _request: response,
-                codec=codec,
-                response_codec=codec,
-            )
-        finally:
-            intercepts.deregister_llm_execution("py_llm_execution_context")
-
-        assert result == response
-        assert observed
-
-    async def test_execution_intercept_distinguishes_absent_and_opaque_codecs(self) -> None:
+    async def test_execution_context_exposes_codec_states_operations_and_lifetime(self) -> None:
         class OpaqueCodec:
             def __init__(self) -> None:
                 self.inner = OpenAIChatCodec()
@@ -382,30 +339,40 @@ class TestLLMGuardrails:
             def decode_response(self, response):
                 return self.inner.decode_response(response)
 
-        seen = []
+        expected = {
+            "py_llm_execution_context_builtin": ("builtin", "openai_chat"),
+            "py_llm_execution_context_opaque": ("opaque", None),
+            "py_llm_execution_context_absent": ("none", None),
+        }
+        seen: list[str] = []
+        retained_codec = None
 
         async def execution_intercept(name, request, context, next_call):
+            nonlocal retained_codec
             seen.append(name)
-            if name == "py_llm_execution_context_absent":
-                assert context.request_codec.codec.kind == "none"
+            expected_kind, expected_id = expected[name]
+            assert context.request_codec.codec.kind == expected_kind
+            assert context.response_codec is not None
+            assert context.response_codec.codec.kind == expected_kind
+
+            if expected_id is not None:
+                assert context.request_codec.codec.id == expected_id
+                assert context.response_codec.codec.id == expected_id
+
+            if expected_kind == "none":
                 assert context.request_codec.resolve_codec() is None
-                assert context.response_codec is not None
-                assert context.response_codec.codec.kind == "none"
                 assert context.response_codec.resolve_codec() is None
                 return await next_call(request)
 
-            assert name == "py_llm_execution_context_opaque"
-            assert context.request_codec.codec.kind == "opaque"
             request_codec = context.request_codec.resolve_codec()
             assert request_codec is not None
-            encoded = request_codec.encode(request_codec.decode(request), request)
+            request = request_codec.encode(request_codec.decode(request), request)
+            retained_codec = retained_codec or request_codec
 
-            assert context.response_codec is not None
-            assert context.response_codec.codec.kind == "opaque"
-            response_codec = context.response_codec.resolve_codec()
-            assert response_codec is not None
-            response = await next_call(encoded)
-            assert response_codec.decode_response(response).model == "test-model"
+            response = await next_call(request)
+            resolved_response_codec = context.response_codec.resolve_codec()
+            assert resolved_response_codec is not None
+            assert resolved_response_codec.decode_response(response).model == "test-model"
             return response
 
         response = {
@@ -413,49 +380,28 @@ class TestLLMGuardrails:
             "model": "test-model",
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}}],
         }
-        codec = OpaqueCodec()
         intercepts.register_llm_execution("py_llm_execution_context_matrix", 1, execution_intercept)
         try:
-            absent = await llm.execute(
-                "py_llm_execution_context_absent",
-                make_request(),
-                lambda _request: response,
-            )
-            opaque = await llm.execute(
-                "py_llm_execution_context_opaque",
-                make_request(),
-                lambda _request: response,
-                codec=codec,
-                response_codec=codec,
-            )
+            results = []
+            for name, codec in (
+                ("py_llm_execution_context_builtin", OpenAIChatCodec()),
+                ("py_llm_execution_context_opaque", OpaqueCodec()),
+                ("py_llm_execution_context_absent", None),
+            ):
+                codec_options = {} if codec is None else {"codec": codec, "response_codec": codec}
+                results.append(
+                    await llm.execute(
+                        name,
+                        make_request(),
+                        lambda _request: response,
+                        **codec_options,
+                    )
+                )
         finally:
             intercepts.deregister_llm_execution("py_llm_execution_context_matrix")
 
-        assert absent == response
-        assert opaque == response
-        assert seen == ["py_llm_execution_context_absent", "py_llm_execution_context_opaque"]
-
-    async def test_execution_codec_capability_expires_when_callback_settles(self) -> None:
-        retained_codec = None
-
-        async def execution_intercept(_name, request, context, next_call):
-            nonlocal retained_codec
-            retained_codec = context.request_codec.resolve_codec()
-            assert retained_codec is not None
-            return await next_call(request)
-
-        codec = OpenAIChatCodec()
-        intercepts.register_llm_execution("py_llm_execution_codec_expiry", 1, execution_intercept)
-        try:
-            await llm.execute(
-                "py_llm_execution_codec_expiry",
-                make_request(),
-                lambda _request: {"ok": True},
-                codec=codec,
-            )
-        finally:
-            intercepts.deregister_llm_execution("py_llm_execution_codec_expiry")
-
+        assert results == [response, response, response]
+        assert seen == list(expected)
         assert retained_codec is not None
         with pytest.raises(RuntimeError, match="LLM execution codec capability is no longer active"):
             retained_codec.decode(make_request())

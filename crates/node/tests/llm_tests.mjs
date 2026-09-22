@@ -1391,31 +1391,41 @@ describe('LLM intercepts', () => {
     deregisterLlmExecutionIntercept('node_llm_exec_repl');
   });
 
-  it('execution intercept receives directional codec context', async () => {
+  it('execution context exposes codec states, operations, and callback lifetime', async () => {
     const codec = new lib.OpenAIChatCodec();
     const response = {
       id: 'chatcmpl-execution-context',
       model: 'test-model',
       choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
     };
-    let observed = false;
+    const observed = [];
+    let retainedCodec;
     registerLlmExecutionIntercept('node_llm_execution_context', 10, async (request, context, next) => {
+      observed.push(context.requestCodec.codec.kind);
+      assert.notEqual(context.responseCodec, null);
+
+      if (context.requestCodec.codec.kind === 'none') {
+        assert.equal(context.requestCodec.resolveCodec(), null);
+        assert.deepEqual(context.responseCodec.codec, { kind: 'none' });
+        assert.equal(context.responseCodec.resolveCodec(), null);
+        return next(request);
+      }
+
       assert.deepEqual(context.requestCodec.codec, { kind: 'opaque' });
       const requestCodec = context.requestCodec.resolveCodec();
       assert.notEqual(requestCodec, null);
       assert.equal(requestCodec.decode(request).model, 'test-model');
+      retainedCodec = requestCodec;
 
-      assert.notEqual(context.responseCodec, null);
       assert.deepEqual(context.responseCodec.codec, { kind: 'opaque' });
       const result = await next(request);
       const responseCodec = context.responseCodec.resolveCodec();
       assert.notEqual(responseCodec, null);
       assert.equal(responseCodec.decodeResponse(result).model, 'test-model');
-      observed = true;
       return result;
     });
     try {
-      const result = await llmCallExecute(
+      const opaque = await llmCallExecute(
         'node_llm_execution_context',
         makeNative(),
         () => response,
@@ -1428,67 +1438,23 @@ describe('LLM intercepts', () => {
         ({ annotated, original }) => codec.encode(annotated, original),
         codec.decodeResponse.bind(codec),
       );
-      assert.deepEqual(result, response);
-      assert.equal(observed, true);
+      const absent = await llmCallExecute(
+        'node_llm_execution_context_absent',
+        makeNative(),
+        () => response,
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(opaque, response);
+      assert.deepEqual(absent, response);
     } finally {
       deregisterLlmExecutionIntercept('node_llm_execution_context');
     }
-  });
 
-  it('execution intercept reports absent codecs without capabilities', async () => {
-    let observed = false;
-    registerLlmExecutionIntercept('node_llm_execution_context_absent', 10, async (request, context, next) => {
-      assert.deepEqual(context.requestCodec.codec, { kind: 'none' });
-      assert.equal(context.requestCodec.resolveCodec(), null);
-      assert.notEqual(context.responseCodec, null);
-      assert.deepEqual(context.responseCodec.codec, { kind: 'none' });
-      assert.equal(context.responseCodec.resolveCodec(), null);
-      observed = true;
-      return next(request);
-    });
-    try {
-      const response = await llmCallExecute(
-        'node_llm_execution_context_absent',
-        makeNative(),
-        () => ({ ok: true }),
-        null,
-        null,
-        null,
-        null,
-        null,
-      );
-      assert.deepEqual(response, { ok: true });
-      assert.equal(observed, true);
-    } finally {
-      deregisterLlmExecutionIntercept('node_llm_execution_context_absent');
-    }
-  });
-
-  it('execution codec capability expires when the callback settles', async () => {
-    const codec = new lib.OpenAIChatCodec();
-    let retainedCodec;
-    registerLlmExecutionIntercept('node_llm_execution_codec_expiry', 10, async (request, context, next) => {
-      retainedCodec = context.requestCodec.resolveCodec();
-      assert.notEqual(retainedCodec, null);
-      return next(request);
-    });
-    try {
-      await llmCallExecute(
-        'node_llm_execution_codec_expiry',
-        makeNative(),
-        () => ({ ok: true }),
-        null,
-        null,
-        null,
-        null,
-        null,
-        codec.decode.bind(codec),
-        ({ annotated, original }) => codec.encode(annotated, original),
-      );
-    } finally {
-      deregisterLlmExecutionIntercept('node_llm_execution_codec_expiry');
-    }
-
+    assert.deepEqual(observed, ['opaque', 'none']);
     assert.notEqual(retainedCodec, undefined);
     assert.throws(() => retainedCodec.decode(makeNative()), /LLM execution codec capability is no longer active/i);
   });

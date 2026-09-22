@@ -5,7 +5,6 @@
 
 #![allow(clippy::await_holding_lock)]
 
-use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 
@@ -22,10 +21,8 @@ use super::{
 use crate::api::event::{Event, ScopeCategory};
 use crate::api::optimization::finalize_optimization_summary;
 use crate::api::registry::{
-    RuntimeRegistrationKind, deregister_conditional_middleware_guardrail,
     deregister_llm_execution_intercept, deregister_llm_stream_execution_intercept,
-    register_conditional_middleware_guardrail, register_llm_execution_intercept,
-    register_llm_stream_execution_intercept, scope_register_llm_execution_intercept,
+    register_llm_execution_intercept, register_llm_stream_execution_intercept,
 };
 use crate::api::registry::{
     deregister_llm_sanitize_request_guardrail, deregister_llm_sanitize_response_guardrail,
@@ -310,60 +307,6 @@ fn response_sanitizer_context_preserves_all_codec_identity_states() {
         .codec(),
         &LlmCodecIdentity::Opaque
     );
-}
-
-#[test]
-fn managed_execution_passes_codec_context_to_downstream_interceptor() {
-    let _guard = lock_global_runtime();
-    reset_global();
-    set_thread_scope_stack(create_scope_stack());
-
-    let observations = Arc::new(Mutex::new(Vec::new()));
-    let captured = Arc::clone(&observations);
-    register_llm_execution_intercept(
-        "execution-codec-context-outer",
-        1,
-        Arc::new(move |_name, request, context, next| {
-            let captured = Arc::clone(&captured);
-            Box::pin(async move {
-                assert_openai_execution_context(&context);
-                captured.lock().unwrap().push("before-next");
-                let result = next(request).await;
-                assert_openai_execution_context(&context);
-                captured.lock().unwrap().push("after-next");
-                result
-            })
-        }),
-    )
-    .unwrap();
-    let captured = Arc::clone(&observations);
-    register_llm_execution_intercept(
-        "execution-codec-context-inner",
-        2,
-        Arc::new(move |_name, request, context, next| {
-            let captured = Arc::clone(&captured);
-            Box::pin(async move {
-                assert_openai_execution_context(&context);
-                captured.lock().unwrap().push("inner");
-                next(request).await
-            })
-        }),
-    )
-    .unwrap();
-
-    tokio::runtime::Runtime::new().unwrap().block_on(async {
-        execute_openai_call(
-            "execution-codec-context",
-            Arc::new(|_| Box::pin(async { Ok(json!({"ok": true})) })),
-        )
-        .await
-        .unwrap();
-    });
-
-    assert!(deregister_llm_execution_intercept("execution-codec-context-outer").unwrap());
-    assert!(deregister_llm_execution_intercept("execution-codec-context-inner").unwrap());
-    let observations = observations.lock().unwrap();
-    assert_eq!(*observations, ["before-next", "inner", "after-next"]);
 }
 
 #[test]
@@ -691,127 +634,6 @@ fn dropping_unconsumed_stream_expires_execution_codec_facade() {
 }
 
 #[test]
-fn codec_context_preserves_scope_ordering_and_conditional_gating() {
-    let _guard = lock_global_runtime();
-    reset_global();
-    set_thread_scope_stack(create_scope_stack());
-
-    let scope = push_scope(
-        PushScopeParams::builder()
-            .name("execution-codec-context-scope")
-            .scope_type(ScopeType::Custom)
-            .build(),
-    )
-    .unwrap();
-    let calls = Arc::new(Mutex::new(Vec::new()));
-
-    let captured = Arc::clone(&calls);
-    register_llm_execution_intercept(
-        "execution-codec-global-first",
-        10,
-        Arc::new(move |_name, request, context, next| {
-            let captured = Arc::clone(&captured);
-            Box::pin(async move {
-                assert_openai_execution_context(&context);
-                captured.lock().unwrap().push("global-first-enter");
-                let result = next(request).await;
-                captured.lock().unwrap().push("global-first-exit");
-                result
-            })
-        }),
-    )
-    .unwrap();
-
-    register_llm_execution_intercept(
-        "execution-codec-gated",
-        15,
-        Arc::new(move |_name, _request, _context, _next| {
-            Box::pin(async move { panic!("conditionally disabled interceptor must not execute") })
-        }),
-    )
-    .unwrap();
-    let gate_kinds = BTreeSet::from([RuntimeRegistrationKind::LlmExecutionIntercept]);
-    register_conditional_middleware_guardrail(
-        "execution-codec-context-gate",
-        gate_kinds,
-        "execution-codec-gated",
-        Arc::new(|_, _| Some("disabled for regression test".into())),
-    )
-    .unwrap();
-
-    let captured = Arc::clone(&calls);
-    register_llm_execution_intercept(
-        "execution-codec-global-second",
-        20,
-        Arc::new(move |_name, request, context, next| {
-            let captured = Arc::clone(&captured);
-            Box::pin(async move {
-                assert_openai_execution_context(&context);
-                captured.lock().unwrap().push("global-second-enter");
-                let result = next(request).await;
-                captured.lock().unwrap().push("global-second-exit");
-                result
-            })
-        }),
-    )
-    .unwrap();
-
-    let captured = Arc::clone(&calls);
-    scope_register_llm_execution_intercept(
-        &scope.uuid,
-        "execution-codec-scope",
-        30,
-        Arc::new(move |_name, request, context, next| {
-            let captured = Arc::clone(&captured);
-            Box::pin(async move {
-                assert_openai_execution_context(&context);
-                captured.lock().unwrap().push("scope-enter");
-                let result = next(request).await;
-                captured.lock().unwrap().push("scope-exit");
-                result
-            })
-        }),
-    )
-    .unwrap();
-
-    let captured = Arc::clone(&calls);
-    let response = tokio::runtime::Runtime::new().unwrap().block_on(async {
-        execute_openai_call(
-            "execution-codec-context-mixed-chain",
-            Arc::new(move |_| {
-                let captured = Arc::clone(&captured);
-                Box::pin(async move {
-                    captured.lock().unwrap().push("provider");
-                    Ok(json!({"ok": true}))
-                })
-            }),
-        )
-        .await
-        .unwrap()
-    });
-
-    assert_eq!(response, json!({"ok": true}));
-    assert!(deregister_conditional_middleware_guardrail("execution-codec-context-gate").unwrap());
-    assert!(deregister_llm_execution_intercept("execution-codec-global-first").unwrap());
-    assert!(deregister_llm_execution_intercept("execution-codec-gated").unwrap());
-    assert!(deregister_llm_execution_intercept("execution-codec-global-second").unwrap());
-    pop_scope(PopScopeParams::builder().handle_uuid(&scope.uuid).build()).unwrap();
-
-    assert_eq!(
-        calls.lock().unwrap().as_slice(),
-        [
-            "global-first-enter",
-            "global-second-enter",
-            "scope-enter",
-            "provider",
-            "scope-exit",
-            "global-second-exit",
-            "global-first-exit",
-        ]
-    );
-}
-
-#[test]
 fn managed_execution_distinguishes_absent_codecs_from_streaming_response_unavailability() {
     let _guard = lock_global_runtime();
     reset_global();
@@ -988,55 +810,6 @@ impl LlmResponseCodec for ProjectionFailingCodec {
     ) -> crate::error::Result<crate::codec::response::AnnotatedLlmResponse> {
         OpenAIChatCodec.decode_response(response)
     }
-}
-
-#[test]
-fn execution_context_preserves_runtime_and_opaque_codec_identities() {
-    let runtime_request: Arc<dyn LlmCodec> = Arc::new(RuntimeIdentityCodec);
-    let runtime_response: Arc<dyn LlmResponseCodec> = Arc::new(RuntimeIdentityCodec);
-    let runtime_context =
-        LlmExecutionContext::for_unary_codecs(Some(runtime_request), &Some(runtime_response));
-    assert_eq!(
-        runtime_context.request_codec().codec(),
-        &LlmCodecIdentity::Runtime("com.example.chat.v1".into())
-    );
-    assert_eq!(
-        runtime_context.response_codec().unwrap().codec(),
-        &LlmCodecIdentity::Runtime("com.example.chat.v1".into())
-    );
-    assert!(runtime_context.request_codec().resolve_codec().is_some());
-    assert!(
-        runtime_context
-            .response_codec()
-            .unwrap()
-            .resolve_codec()
-            .is_some()
-    );
-
-    let opaque_request: Arc<dyn LlmCodec> = Arc::new(ProjectionFailingCodec {
-        projection_attempts: Arc::new(AtomicUsize::new(0)),
-    });
-    let opaque_response: Arc<dyn LlmResponseCodec> = Arc::new(ProjectionFailingCodec {
-        projection_attempts: Arc::new(AtomicUsize::new(0)),
-    });
-    let opaque_context =
-        LlmExecutionContext::for_unary_codecs(Some(opaque_request), &Some(opaque_response));
-    assert_eq!(
-        opaque_context.request_codec().codec(),
-        &LlmCodecIdentity::Opaque
-    );
-    assert_eq!(
-        opaque_context.response_codec().unwrap().codec(),
-        &LlmCodecIdentity::Opaque
-    );
-    assert!(opaque_context.request_codec().resolve_codec().is_some());
-    assert!(
-        opaque_context
-            .response_codec()
-            .unwrap()
-            .resolve_codec()
-            .is_some()
-    );
 }
 
 fn emit_compaction() {

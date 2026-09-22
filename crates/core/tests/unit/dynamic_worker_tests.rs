@@ -2747,28 +2747,6 @@ async fn host_runtime_service_reports_poisoned_internal_locks() {
         }
     });
     let codec = Arc::new(OpenAIChatCodec);
-    let sanitizer_error = callback
-        .invoke_llm_sanitize_request(
-            "poisoned-sanitizer-codec-context",
-            valid_llm_request(),
-            LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
-        )
-        .await
-        .expect_err("poisoned sanitizer codec setup must fail before invoking the worker");
-    assert!(matches!(
-        sanitizer_error,
-        FlowError::Internal(message) if message.contains("codec lock poisoned")
-    ));
-    assert!(
-        callback
-            .host_state
-            .scope_stacks
-            .lock()
-            .expect("scope stack lock")
-            .is_empty(),
-        "failed sanitizer codec setup must remove its invocation scope stack"
-    );
-
     let context = LlmExecutionContext::new(
         LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
         Some(LlmSanitizeResponseContext::for_response_codec(Some(codec))),

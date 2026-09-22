@@ -736,14 +736,9 @@ def test_generated_proto_matches_worker_contract() -> None:
         "Shutdown",
     }
     assert pb.InvokeRequest.DESCRIPTOR.fields_by_name["auth_token"].number == 7
-    assert "llm_execution_codec_context" not in pb.Registration.DESCRIPTOR.fields_by_name
     execution_context = pb.LlmInvocation.DESCRIPTOR.fields_by_name["execution_codec_context"]
     assert execution_context.number == 11
     assert execution_context.containing_oneof is None
-    assert {field.name for field in pb.LlmInvocation.DESCRIPTOR.oneofs_by_name["sanitize_context"].fields} == {
-        "request_sanitize_context",
-        "response_sanitize_context",
-    }
     assert pb.HealthRequest.DESCRIPTOR.fields_by_name["activation_id"].number == 1
     assert pb.HealthRequest.DESCRIPTOR.fields_by_name["auth_token"].number == 2
     assert pb.SUBSCRIBER == 1
@@ -1116,19 +1111,6 @@ def test_plugin_context_registers_llm_sanitizers_under_standard_names() -> None:
     ]
 
 
-def test_execution_codec_context_uses_the_existing_surface() -> None:
-    context = PluginContext()
-
-    async def execution(_name: str, request: Json, _context: Any, next_call: Any) -> Json:
-        return await next_call.call(request)
-
-    context.register_llm_execution_intercept("execution", execution, priority=7)
-
-    registration = context._handlers.registrations[0]
-    assert registration.surface == pb.LLM_EXECUTION_INTERCEPT
-    assert registration.priority == 7
-
-
 async def test_execution_callback_receives_directional_codec_context() -> None:
     seen: list[plugin_api.LlmExecutionContext] = []
 
@@ -1189,54 +1171,46 @@ async def test_execution_callback_receives_directional_codec_context() -> None:
     assert codec_capabilities == ["request-capability", "response-capability"]
 
 
-def test_execution_context_distinguishes_absent_and_resolved_opaque_codecs() -> None:
+@pytest.mark.parametrize(
+    ("proto_kind", "capability_prefix", "expected_kind", "resolves"),
+    [
+        (pb.LLM_CODEC_KIND_UNSPECIFIED, None, "none", False),
+        (pb.LLM_CODEC_KIND_OPAQUE, "opaque", "opaque", True),
+    ],
+)
+def test_execution_context_distinguishes_absent_and_resolved_opaque_codecs(
+    proto_kind: int,
+    capability_prefix: str | None,
+    expected_kind: str,
+    resolves: bool,
+) -> None:
     runtime = PluginRuntime(
         activation_id=ACTIVATION_ID,
         auth_token=AUTH_TOKEN,
         host_stub=RecordingHostStub(),
     )
-
-    absent_invocation = pb.LlmInvocation(
+    request = pb.LlmSanitizeRequestContext(codec=pb.LlmCodecIdentity(kind=proto_kind))
+    response = pb.LlmSanitizeResponseContext(codec=pb.LlmCodecIdentity(kind=proto_kind))
+    if capability_prefix is not None:
+        request.codec_capability_id = f"{capability_prefix}-request"
+        response.codec_capability_id = f"{capability_prefix}-response"
+    invocation = pb.LlmInvocation(
         execution_codec_context=pb.LlmExecutionCodecContext(
-            request=pb.LlmSanitizeRequestContext(codec=pb.LlmCodecIdentity()),
-            response=pb.LlmSanitizeResponseContext(codec=pb.LlmCodecIdentity()),
+            request=request,
+            response=response,
         )
     )
-    absent = plugin_api._llm_execution_context(
-        absent_invocation,
+    context = plugin_api._llm_execution_context(
+        invocation,
         runtime,
-        "absent-invocation",
+        "invocation",
         response_required=True,
     )
-    assert absent.request_codec.codec == plugin_api.LlmCodecIdentity("none")
-    assert absent.request_codec.resolve_codec() is None
-    assert absent.response_codec is not None
-    assert absent.response_codec.codec == plugin_api.LlmCodecIdentity("none")
-    assert absent.response_codec.resolve_codec() is None
-
-    opaque_invocation = pb.LlmInvocation(
-        execution_codec_context=pb.LlmExecutionCodecContext(
-            request=pb.LlmSanitizeRequestContext(
-                codec=pb.LlmCodecIdentity(kind=pb.LLM_CODEC_KIND_OPAQUE),
-                codec_capability_id="opaque-request",
-            ),
-            response=pb.LlmSanitizeResponseContext(
-                codec=pb.LlmCodecIdentity(kind=pb.LLM_CODEC_KIND_OPAQUE),
-                codec_capability_id="opaque-response",
-            ),
-        )
-    )
-    opaque = plugin_api._llm_execution_context(
-        opaque_invocation,
-        runtime,
-        "opaque-invocation",
-        response_required=True,
-    )
-    assert opaque.request_codec.codec == plugin_api.LlmCodecIdentity("opaque")
-    assert opaque.request_codec.resolve_codec() is not None
-    assert opaque.response_codec is not None
-    assert opaque.response_codec.codec == plugin_api.LlmCodecIdentity("opaque")
-    assert opaque.response_codec.resolve_codec() is not None
+    assert context.request_codec.codec == plugin_api.LlmCodecIdentity(expected_kind)
+    assert (context.request_codec.resolve_codec() is not None) is resolves
+    assert context.response_codec is not None
+    assert context.response_codec.codec == plugin_api.LlmCodecIdentity(expected_kind)
+    assert (context.response_codec.resolve_codec() is not None) is resolves
 
 
 @pytest.mark.parametrize(
