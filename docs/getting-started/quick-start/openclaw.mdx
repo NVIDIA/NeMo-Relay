@@ -1,0 +1,131 @@
+---
+title: "OpenClaw Quick Start"
+description: "Observe one OpenClaw agent turn with the NeMo Relay plugin and local ATOF output."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Observe one gateway-backed OpenClaw agent turn and write its session, model, and
+tool lifecycle to a local ATOF event file.
+
+## Prerequisites
+
+- OpenClaw 2026.9.3 or newer
+- A configured OpenClaw agent and model provider
+- Permission to install plugins and restart the OpenClaw gateway
+
+## Install the Plugin
+
+Install the matching NeMo Relay plugin and restart the gateway:
+
+```bash
+openclaw plugins install npm:nemo-relay-openclaw@0.10.0
+openclaw gateway restart
+```
+
+The npm package is named `nemo-relay-openclaw`; its OpenClaw plugin ID is
+`nemo-relay`.
+
+## Enable Observability
+
+Add this entry to your OpenClaw configuration, merging it with any existing
+`plugins` settings:
+
+```json
+{
+  "plugins": {
+    "allow": ["nemo-relay"],
+    "entries": {
+      "nemo-relay": {
+        "enabled": true,
+        "hooks": {
+          "allowConversationAccess": true
+        },
+        "config": {
+          "enabled": true,
+          "backend": "hooks",
+          "plugins": {
+            "version": 1,
+            "policy": {
+              "unknown_component": "error",
+              "unknown_field": "error",
+              "unsupported_value": "error"
+            },
+            "components": [
+              {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                  "version": 4,
+                  "enable_full_payloads": false,
+                  "atof": {
+                    "enabled": true,
+                    "sinks": [
+                      {
+                        "type": "file",
+                        "output_directory": "logs",
+                        "filename": "events.jsonl",
+                        "mode": "overwrite"
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "capture": {
+            "includePrompts": false,
+            "includeResponses": false,
+            "stripToolArgs": true,
+            "stripToolResults": true
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+This starting configuration records lifecycle metadata while excluding prompt,
+response, tool-argument, and tool-result content from OpenClaw's replay layer.
+Other event fields can still contain sensitive application data. Protect the
+output file and review the full capture controls before enabling richer payloads.
+
+Relative output paths resolve from the OpenClaw gateway's working directory.
+Use an absolute `output_directory` when the gateway runs as a service or its
+working directory is not stable.
+
+Restart after changing plugin configuration:
+
+```bash
+openclaw gateway restart
+openclaw plugins inspect nemo-relay --runtime --json
+```
+
+## Run One Turn
+
+Use your configured agent ID. A standard single-agent installation normally
+uses `main`:
+
+```bash
+openclaw agents list
+openclaw agent --agent main --message "Inspect the workspace and use one tool."
+```
+
+## Verify the Events
+
+Check the plugin's live status, then inspect the ATOF file from the gateway's
+working directory:
+
+```bash
+openclaw gateway call nemoRelay.status --json
+test -s logs/events.jsonl
+tail -n 1 logs/events.jsonl | python3 -m json.tool
+```
+
+## Next Steps
+
+Use the full [OpenClaw plugin guide](/supported-integrations/openclaw-plugin)
+for capture controls, replay fidelity, health reporting, security boundaries,
+and known limitations.
