@@ -29,6 +29,8 @@ from nemo_relay import (
     ScopeEvent,
     ScopeType,
     capture_propagation_context,
+    capture_propagation_context_with_root,
+    capture_rootless_propagation_context,
     capture_traceparent,
     create_scope_stack_from_propagation,
     guardrails,
@@ -680,6 +682,54 @@ class TestLLMInterceptsAsync:
         finally:
             intercepts.deregister_llm_execution("py_llm_capture_propagated_trace_root")
             subscribers.deregister("py_llm_capture_propagated_trace_root")
+
+    async def test_execution_callback_preserves_imported_w3c_trace_context(self) -> None:
+        root_uuid = "018f13f0-7c1a-7a80-8000-000000000711"
+        parent_uuid = "018f13f0-7c1a-7a80-8000-000000000712"
+        stack = create_scope_stack_from_propagation(
+            PropagationContext(
+                parent_uuid,
+                root_uuid,
+                traceparent="00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00",
+                tracestate="vendor=value",
+            )
+        )
+        events = []
+        observed = []
+        subscribers.register("py_llm_capture_propagated_w3c", events.append)
+
+        async def execution_intercept(_name, request, next_handler):
+            context = capture_propagation_context()
+            rootless = capture_rootless_propagation_context()
+            explicit_root = capture_propagation_context_with_root(root_uuid)
+            observed.append(
+                (
+                    context.traceparent,
+                    context.tracestate,
+                    capture_traceparent(),
+                    rootless.traceparent,
+                    rootless.tracestate,
+                    explicit_root.traceparent,
+                    explicit_root.tracestate,
+                )
+            )
+            return await next_handler(request)
+
+        try:
+            intercepts.register_llm_execution("py_llm_capture_propagated_w3c", 10, execution_intercept)
+            with use_scope_stack(stack):
+                assert await llm.execute("py_llm_propagated_w3c", make_request(), lambda _request: {"ok": True}) == {
+                    "ok": True
+                }
+            await subscribers.flush_async()
+            start = _llm_event(events, "py_llm_propagated_w3c", "start")
+            expected = f"00-4bf92f3577b34da6a3ce929d0e0e4736-{start.uuid.replace('-', '')[-16:]}-00"
+            assert observed == [
+                (expected, "vendor=value", expected, expected, "vendor=value", expected, "vendor=value")
+            ]
+        finally:
+            intercepts.deregister_llm_execution("py_llm_capture_propagated_w3c")
+            subscribers.deregister("py_llm_capture_propagated_w3c")
 
     async def test_cancelling_execute_cancels_pending_execution_intercept(self) -> None:
         started = asyncio.Event()

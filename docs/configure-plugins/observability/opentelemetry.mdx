@@ -10,6 +10,133 @@ Use the `opentelemetry` section to configure independent OpenTelemetry Protocol
 (OTLP) trace, log, and metric pipelines. OpenTelemetry support is always
 included; no Cargo feature enables or disables it.
 
+## Automatic OpenTelemetry Configuration
+
+When at least one nonblank OpenTelemetry OTLP endpoint environment variable is
+present, Relay automatically adds the matching `gen_ai` trace pipeline and log
+and metric pipelines. This automatic exporter is additive: explicitly configured Relay
+endpoints can export independently as long as process-global OTLP header
+variables are unset. Global OTLP headers cannot be isolated from configured
+endpoints, so Relay skips a configured endpoint that is initialized with those
+variables. Use that endpoint's `headers`, `header_env`, or `header_file`
+configuration instead. Relay delegates endpoint, protocol, timeout, compression,
+temporality, header parsing, and signal-specific precedence to its vendored
+OpenTelemetry Rust SDK.
+
+An explicit `opentelemetry` section with `enabled: false` is an opt-out: Relay
+does not create automatic OTLP exporters, even when endpoint environment
+variables are present. `OTEL_SDK_DISABLED=true` also disables every Relay OTLP
+exporter. An enabled `opentelemetry` section without configured endpoints is
+compatible with automatic export.
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable all three signals, or set one or
+more signal-specific endpoint variables to enable only their matching signals:
+
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
+- `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`
+- `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`
+
+Resource, sampler, batch-processor, protocol, timeout, compression, header,
+and temporality settings refine an automatic exporter after an endpoint has
+enabled it; they never activate export by themselves. For example:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+export OTEL_SERVICE_NAME=relay-agent
+export OTEL_EXPORTER_OTLP_HEADERS='authorization=Bearer%20token'
+```
+
+### Environment-variable support
+
+`Automatic` means Relay creates the standard `gen_ai` trace pipeline plus log
+and metric pipelines after an endpoint activates that signal and delegates
+parsing to the OpenTelemetry Rust SDK/OTLP exporter.
+`Relay endpoints` means a structured Relay endpoint keeps its existing explicit
+behavior; it does not inherit the setting.
+
+<StickySearchableTable placeholder="Search OTEL environment variables...">
+
+| Variable | Support | Description and notes |
+|---|---|---|
+| `OTEL_SDK_DISABLED` | Yes, all Relay OTLP exporters | Case-insensitive `true` disables automatic and Relay-configured OTLP export. |
+| `OTEL_SERVICE_NAME` | Automatic and Relay endpoints | SDK resource detector sets `service.name`; does not activate export. A non-default Relay `service_name` overrides it. |
+| `OTEL_RESOURCE_ATTRIBUTES` | Automatic and Relay endpoints | SDK parses resource attributes; does not activate export. Explicit Relay resource attributes override colliding keys. |
+| `OTEL_TRACES_SAMPLER` | Automatic and Relay endpoints | SDK sampler selection; does not activate export. Relay retains deterministic trace IDs and unlimited sanitized payload attribute limits. |
+| `OTEL_TRACES_SAMPLER_ARG` | Automatic and Relay endpoints | SDK sampler argument; does not activate export. |
+| `OTEL_BSP_SCHEDULE_DELAY` | Automatic and Relay trace endpoints | SDK span batch delay; does not activate export. |
+| `OTEL_BSP_EXPORT_TIMEOUT` | Automatic | SDK span batch export timeout; does not activate export. |
+| `OTEL_BSP_MAX_QUEUE_SIZE` | Automatic and Relay trace endpoints | SDK span batch queue limit; does not activate export. |
+| `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` | Automatic and Relay trace endpoints | SDK span batch size; does not activate export. |
+| `OTEL_BSP_MAX_CONCURRENT_EXPORTS` | No | Relay's diagnostic span processor owns its execution model. |
+| `OTEL_BLRP_SCHEDULE_DELAY` | Automatic | SDK log-record batch delay; does not activate export. |
+| `OTEL_BLRP_EXPORT_TIMEOUT` | Automatic | SDK log-record batch export timeout; does not activate export. |
+| `OTEL_BLRP_MAX_QUEUE_SIZE` | Automatic | SDK log-record batch queue limit; does not activate export. |
+| `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE` | Automatic | SDK log-record batch size; does not activate export. |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Automatic | SDK periodic metric reader interval; does not activate export. |
+| `OTEL_METRIC_EXPORT_TIMEOUT` | Automatic | SDK periodic metric reader export timeout; does not activate export. |
+| `OTEL_TRACES_EXPORTER` | Automatic | With a trace endpoint, `otlp` enables traces and `none` disables them. Unsupported values warn and skip traces. |
+| `OTEL_LOGS_EXPORTER` | Automatic | With a log endpoint, `otlp` enables logs and `none` disables them. Unsupported values warn and skip logs. |
+| `OTEL_METRICS_EXPORTER` | Automatic | With a metric endpoint, `otlp` enables metrics and `none` disables them. Unsupported values warn and skip metrics. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Automatic | Nonblank generic endpoint activates traces, logs, and metrics. The exporter derives paths and honors signal-specific endpoint precedence. |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | Automatic | Generic protocol: `grpc`, `http/protobuf`, or `http/json`; all three transports are compiled in. Without this and a signal-specific protocol, Relay defaults to `http/protobuf`. |
+| `OTEL_EXPORTER_OTLP_TIMEOUT` | Automatic | Generic OTLP request timeout. |
+| `OTEL_EXPORTER_OTLP_COMPRESSION` | Automatic | Generic OTLP compression: `gzip` or `zstd`. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Automatic | Generic OTLP request headers, parsed by the upstream exporter. See the header safety warning below. |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Automatic | Nonblank trace endpoint activates only traces; overrides `OTEL_EXPORTER_OTLP_ENDPOINT`. |
+| `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | Automatic | Trace protocol; overrides `OTEL_EXPORTER_OTLP_PROTOCOL`. |
+| `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT` | Automatic | Trace timeout; overrides `OTEL_EXPORTER_OTLP_TIMEOUT`. |
+| `OTEL_EXPORTER_OTLP_TRACES_COMPRESSION` | Automatic | Trace compression; overrides `OTEL_EXPORTER_OTLP_COMPRESSION`. |
+| `OTEL_EXPORTER_OTLP_TRACES_HEADERS` | Automatic | Trace headers; overrides `OTEL_EXPORTER_OTLP_HEADERS`. |
+| `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Automatic | Nonblank log endpoint activates only logs; overrides `OTEL_EXPORTER_OTLP_ENDPOINT`. |
+| `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL` | Automatic | Log protocol; overrides `OTEL_EXPORTER_OTLP_PROTOCOL`. |
+| `OTEL_EXPORTER_OTLP_LOGS_TIMEOUT` | Automatic | Log timeout; overrides `OTEL_EXPORTER_OTLP_TIMEOUT`. |
+| `OTEL_EXPORTER_OTLP_LOGS_COMPRESSION` | Automatic | Log compression; overrides `OTEL_EXPORTER_OTLP_COMPRESSION`. |
+| `OTEL_EXPORTER_OTLP_LOGS_HEADERS` | Automatic | Log headers; overrides `OTEL_EXPORTER_OTLP_HEADERS`. |
+| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Automatic | Nonblank metric endpoint activates only metrics; overrides `OTEL_EXPORTER_OTLP_ENDPOINT`. |
+| `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` | Automatic | Metric protocol; overrides `OTEL_EXPORTER_OTLP_PROTOCOL`. |
+| `OTEL_EXPORTER_OTLP_METRICS_TIMEOUT` | Automatic | Metric timeout; overrides `OTEL_EXPORTER_OTLP_TIMEOUT`. |
+| `OTEL_EXPORTER_OTLP_METRICS_COMPRESSION` | Automatic | Metric compression; overrides `OTEL_EXPORTER_OTLP_COMPRESSION`. |
+| `OTEL_EXPORTER_OTLP_METRICS_HEADERS` | Automatic | Metric headers; overrides `OTEL_EXPORTER_OTLP_HEADERS`. |
+| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` | Automatic | SDK OTLP metric temporality preference. |
+| `OTEL_EXPORTER_OTLP_INSECURE`, `OTEL_EXPORTER_OTLP_TRACES_INSECURE`, `OTEL_EXPORTER_OTLP_LOGS_INSECURE`, `OTEL_EXPORTER_OTLP_METRICS_INSECURE` | No | Relay does not add insecure-transport environment handling; select the endpoint URL scheme explicitly. |
+| `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION` | No | Relay does not select an OTLP histogram aggregation through the environment. |
+| `OTEL_METRICS_EXEMPLAR_FILTER` | No | Relay does not configure metric exemplars through the environment. |
+| `OTEL_PROPAGATORS` | No | Relay does not own the process-global propagator. |
+| `OTEL_CONFIG_FILE` | No | Relay does not add declarative SDK configuration-file parsing. |
+| `OTEL_EXPERIMENTAL_CONFIG_FILE` | No | Relay does not add experimental declarative configuration-file parsing. |
+| `OTEL_ENTITIES` | No | Not supported by the pinned Rust SDK integration. |
+| `OTEL_LOG_LEVEL` | No | Relay does not configure the SDK's global internal logger. |
+| `OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT`, `OTEL_ATTRIBUTE_COUNT_LIMIT` | No | Relay preserves complete sanitized payloads rather than applying global attribute limits. |
+| `OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT`, `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT`, `OTEL_SPAN_EVENT_COUNT_LIMIT`, `OTEL_SPAN_LINK_COUNT_LIMIT` | No | Relay preserves its trace payload and lifecycle contract. |
+| `OTEL_EVENT_ATTRIBUTE_COUNT_LIMIT`, `OTEL_LINK_ATTRIBUTE_COUNT_LIMIT` | No | Relay preserves its trace payload and lifecycle contract. |
+| `OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT`, `OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT` | No | Relay preserves its log payload contract. |
+| `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY` | No | No OTLP certificate or client-key environment configuration is added. |
+| `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`, `OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY` | No | No trace-specific certificate or client-key environment configuration is added. |
+| `OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE`, `OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY` | No | No log-specific certificate or client-key environment configuration is added. |
+| `OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE`, `OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY` | No | No metric-specific certificate or client-key environment configuration is added. |
+
+</StickySearchableTable>
+
+<Warning>
+The automatic exporter is created in addition to Relay-configured endpoints.
+Process-global OTLP headers belong only to the automatic exporter; Relay never
+copies them to independently configured endpoints.
+
+Remote automatic trace endpoints must use HTTPS; plaintext HTTP is allowed
+only for localhost or a loopback IP address. Automatic log and metric headers
+have the same transport requirement, preventing credentials from being sent to
+remote plaintext endpoints.
+
+Automatic OTLP/HTTP exporters never follow redirects. This applies to traces,
+logs, and metrics, including when no headers are configured, so an endpoint
+cannot redirect telemetry or credentials to another destination.
+
+When independently configured Relay endpoints are active, do not set global
+OTLP header variables. The upstream OTLP builders read those process-global
+headers while each exporter is built, so Relay skips configured endpoints that
+encounter them rather than risk sending one credential to multiple destinations.
+</Warning>
+
 Relay classifies each sanitized event before OTLP signal fan-out:
 
 | Signal | Relay Input | OTLP Destination |
@@ -64,9 +191,13 @@ under `.localhost`, `127.0.0.0/8`, and `::1` are equivalent. Relay does not use
 DNS resolution for this comparison, and query strings remain significant.
 Relay propagation continues the Relay-derived trace across the import boundary
 by default. Use `capture_rootless_propagation_context()` only when a receiver
-must start a new OpenTelemetry trace. Carry W3C `traceparent` and
-`tracestate` alongside Relay propagation when an integration also needs to
-preserve upstream OpenTelemetry sampling or vendor state.
+must start a new Relay-derived OpenTelemetry trace when no W3C parent is
+available. Valid W3C headers are always emitted and take precedence for
+OpenTelemetry parentage. `PropagationContext` JSON also carries
+optional W3C `traceparent` and `tracestate` fields, so an integration transports
+one payload when it must preserve upstream OpenTelemetry sampling or vendor
+state. Relay validates the pair through the W3C propagator; malformed values
+are warned about and ignored while Relay propagation continues.
 
 ## `plugins.toml` Example
 
@@ -135,11 +266,11 @@ for `localhost` and loopback IP addresses such as `127.0.0.1` and `[::1]`.
 Redaction does not disable this requirement. Existing remote plaintext trace
 endpoints must migrate to HTTPS or use a loopback collector.
 
-OTLP/HTTP trace exporters do not follow redirects, even to another HTTPS
-endpoint. This keeps an export from bypassing transport checks or sending its
-payload and credentials to another destination. Use the final collector URL.
-Log and metric HTTP exporters do the same when any header source is configured.
-gRPC does not use HTTP redirects.
+Relay-configured OTLP/HTTP exporters do not follow redirects, even to another
+HTTPS endpoint. This keeps an export from bypassing transport checks or sending
+its payload and credentials to another destination. Use the final collector
+URL. This applies to trace, log, and metric exporters whether or not headers
+are configured. gRPC does not use HTTP redirects.
 
 | Field | Default | Notes |
 |---|---|---|
@@ -420,16 +551,19 @@ This applies to trace, log, and metric endpoints.
 Remote trace endpoints must use HTTPS. When you set any header source
 (`headers`, `header_env`, or `header_file`), remote log and metric endpoints
 must also use HTTPS. HTTP is allowed only for localhost and loopback IP
-addresses. OTLP/HTTP exporters do not follow redirects when headers are set.
+addresses. OTLP/HTTP exporters never follow redirects.
 For example, an OIDC token-file writer must write the complete value `Bearer
 eyJ...` to the file. Relay does not add the authentication
 scheme for you.
 
-Process-global `OTEL_EXPORTER_OTLP_HEADERS`,
+For Relay-configured endpoints, process-global `OTEL_EXPORTER_OTLP_HEADERS`,
 `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, `OTEL_EXPORTER_OTLP_LOGS_HEADERS`, and
 `OTEL_EXPORTER_OTLP_METRICS_HEADERS` are rejected because they cannot be
 isolated between endpoints. Put non-secret values in each endpoint's `headers`
 map and secret variable references in `header_env`.
+
+Those variables are accepted by [automatic OpenTelemetry configuration](#automatic-opentelemetry-configuration),
+where the OTLP Rust exporter parses the header values itself.
 
 `full` and `openinference` endpoints retain the legacy mark and attribute-alias
 controls shown above. `gen_ai` is standards-only: it ignores those controls and
@@ -712,9 +846,9 @@ preset to remove opaque payloads while retaining analytical structure and trace
 parentage. Credential removal and event sanitizers run before projection.
 `enable_full_payloads` controls LLM request-history retention independently.
 
-Arguments and results must be JSON objects under the OpenTelemetry schemas.
-Relay parses serialized JSON objects before projecting them as JSON strings;
-plain text, arrays, scalars, null, and missing values are omitted. Failed tool
+Arguments and results are emitted as canonical JSON strings. Relay parses
+serialized JSON before projection, then preserves every non-null sanitized JSON
+value, including objects, arrays, strings, booleans, and numbers. Failed tool
 calls do not emit a result attribute. Result annotations remain separate and
 are never included in this projection. Tool definitions include only required
 `type` and `name` properties. Known OpenAI Responses built-ins use their native
@@ -974,24 +1108,3 @@ release with `nemo_relay_string_free`. Use diagnostics to monitor rejected
 metric marks, capacity limits, and delivery failures without configuring the
 observability plugin. The plugin continues to include the same conditions in
 its runtime report.
-
-## Migrating from Version 3 to Version 4
-
-Version 4 adds the sibling `opentelemetry.logs` and
-`opentelemetry.metrics` sections. For the complete upgrade path and
-programmatic configuration, see
-[Migrating from Version 3 to Version 4](/configure-plugins/observability/configuration#migrating-from-version-3-to-version-4).
-
-## Version 2 to Version 3
-
-Version 3 replaces the separate version-2 sections:
-
-- Move the old `opentelemetry` fields into one endpoint with `type = "full"`.
-- Move the old `openinference` fields into the same section with
-  `type = "openinference"`.
-- Use `type = "gen_ai"` for standardized GenAI-only output.
-
-Version-2 OTLP section shapes are rejected when `version = 3`; NeMo Relay does
-not silently normalize them. For complete before-and-after configuration and
-binding API changes, refer to
-[Observability Configuration](/configure-plugins/observability/configuration#migrating-from-version-2).

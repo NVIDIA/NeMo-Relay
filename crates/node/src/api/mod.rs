@@ -118,6 +118,50 @@ fn cleanup_node_environment() {
     }
 }
 
+/// Emit a structured operational log record through Relay's configured sinks.
+#[napi]
+pub fn log(
+    level: String,
+    message: String,
+    target: Option<String>,
+    fields: Option<Json>,
+) -> napi::Result<()> {
+    let fields = match fields {
+        None => serde_json::Map::new(),
+        Some(Json::Object(fields)) => fields,
+        Some(_) => return Err(Error::from_reason("log fields must be an object")),
+    };
+    let target = target.unwrap_or_default();
+    let target = if target.is_empty() {
+        "nemo_relay.node".into()
+    } else {
+        format!("nemo_relay.node.{target}")
+    };
+    nemo_relay::logging::emit_str(&level, &target, &message, fields)
+        .map_err(|error| Error::from_reason(error.to_string()))
+}
+
+#[napi]
+pub fn trace(message: String, target: Option<String>, fields: Option<Json>) -> napi::Result<()> {
+    log("trace".into(), message, target, fields)
+}
+#[napi]
+pub fn debug(message: String, target: Option<String>, fields: Option<Json>) -> napi::Result<()> {
+    log("debug".into(), message, target, fields)
+}
+#[napi]
+pub fn info(message: String, target: Option<String>, fields: Option<Json>) -> napi::Result<()> {
+    log("info".into(), message, target, fields)
+}
+#[napi]
+pub fn warn(message: String, target: Option<String>, fields: Option<Json>) -> napi::Result<()> {
+    log("warn".into(), message, target, fields)
+}
+#[napi]
+pub fn error(message: String, target: Option<String>, fields: Option<Json>) -> napi::Result<()> {
+    log("error".into(), message, target, fields)
+}
+
 fn effective_scope_context(
     env: &Env,
 ) -> napi::Result<(
@@ -2130,6 +2174,8 @@ pub struct PropagationContext {
     pub version: u32,
     pub root_uuid: Option<String>,
     pub parent_uuid: String,
+    pub traceparent: Option<String>,
+    pub tracestate: Option<String>,
 }
 
 fn propagation_context_from_napi(
@@ -2149,6 +2195,8 @@ fn propagation_context_from_napi(
         version,
         root_uuid,
         parent_uuid,
+        traceparent: context.traceparent,
+        tracestate: context.tracestate,
     };
     context
         .validate()
@@ -2163,7 +2211,36 @@ fn propagation_context_to_napi(
         version: u32::from(context.version),
         root_uuid: context.root_uuid.map(|uuid| uuid.to_string()),
         parent_uuid: context.parent_uuid.to_string(),
+        traceparent: context.traceparent,
+        tracestate: context.tracestate,
     }
+}
+
+fn callback_propagation_context(
+    env: &Env,
+    parent_uuid: uuid::Uuid,
+) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
+    let mut context = with_effective_scope_stack(env, capture_propagation_context_handle)?
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    context.parent_uuid = parent_uuid;
+    if context.traceparent.is_some() {
+        context.traceparent = Some(
+            context
+                .to_traceparent()
+                .map_err(|error| napi::Error::from_reason(error.to_string()))?,
+        );
+    } else {
+        context.root_uuid = with_effective_scope_stack(env, capture_traceparent_handle)
+            .ok()
+            .and_then(|result| result.ok())
+            .and_then(|traceparent| {
+                traceparent
+                    .get(3..35)
+                    .and_then(|value| uuid::Uuid::parse_str(value).ok())
+            })
+            .or(Some(parent_uuid));
+    }
+    Ok(context)
 }
 
 /// Creates a new isolated scope stack.
@@ -2181,13 +2258,7 @@ pub fn capture_propagation_context(env: Env) -> napi::Result<PropagationContext>
     if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
         let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
             .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
-        return Ok(propagation_context_to_napi(
-            nemo_relay::api::runtime::PropagationContext {
-                version: nemo_relay::api::runtime::PropagationContext::VERSION,
-                root_uuid: Some(parent_uuid),
-                parent_uuid,
-            },
-        ));
+        return callback_propagation_context(&env, parent_uuid).map(propagation_context_to_napi);
     }
     with_effective_scope_stack(&env, capture_propagation_context_handle)?
         .map(propagation_context_to_napi)
@@ -2200,13 +2271,9 @@ pub fn capture_rootless_propagation_context(env: Env) -> napi::Result<Propagatio
     if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
         let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
             .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
-        return Ok(propagation_context_to_napi(
-            nemo_relay::api::runtime::PropagationContext {
-                version: nemo_relay::api::runtime::PropagationContext::VERSION,
-                root_uuid: None,
-                parent_uuid,
-            },
-        ));
+        let mut context = callback_propagation_context(&env, parent_uuid)?;
+        context.root_uuid = None;
+        return Ok(propagation_context_to_napi(context));
     }
     with_effective_scope_stack(&env, capture_rootless_propagation_context_handle)?
         .map(propagation_context_to_napi)
@@ -2227,13 +2294,9 @@ pub fn capture_propagation_context_with_root(
     if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
         let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
             .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
-        return Ok(propagation_context_to_napi(
-            nemo_relay::api::runtime::PropagationContext {
-                version: nemo_relay::api::runtime::PropagationContext::VERSION,
-                root_uuid,
-                parent_uuid,
-            },
-        ));
+        let mut context = callback_propagation_context(&env, parent_uuid)?;
+        context.root_uuid = root_uuid;
+        return Ok(propagation_context_to_napi(context));
     }
     with_effective_scope_stack(&env, || {
         capture_propagation_context_with_root_handle(root_uuid)
@@ -2248,22 +2311,9 @@ pub fn capture_traceparent(env: Env) -> napi::Result<String> {
     if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
         let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
             .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
-        let root_uuid = with_effective_scope_stack(&env, capture_traceparent_handle)
-            .ok()
-            .and_then(|result| result.ok())
-            .and_then(|traceparent| {
-                traceparent
-                    .get(3..35)
-                    .and_then(|value| uuid::Uuid::parse_str(value).ok())
-            })
-            .unwrap_or(parent_uuid);
-        return nemo_relay::api::runtime::PropagationContext {
-            version: nemo_relay::api::runtime::PropagationContext::VERSION,
-            root_uuid: Some(root_uuid),
-            parent_uuid,
-        }
-        .to_traceparent()
-        .map_err(|error| napi::Error::from_reason(error.to_string()));
+        return callback_propagation_context(&env, parent_uuid)?
+            .to_traceparent()
+            .map_err(|error| napi::Error::from_reason(error.to_string()));
     }
     with_effective_scope_stack(&env, capture_traceparent_handle)
         .map_err(|error| napi::Error::from_reason(error.to_string()))?

@@ -161,6 +161,23 @@ fn resolve_managed_worker_config_from_paths(
 /// This intentionally avoids plugin discovery and activation so logging can be initialized before
 /// operational command dispatch. Missing `[logging]` configuration resolves to built-in defaults.
 pub(crate) fn resolve_logging_config(explicit: Option<&Path>) -> Result<LoggingConfig, CliError> {
+    resolve_logging_config_section(explicit, &["logging"])
+}
+
+/// Resolves operational logging for the primary daemon from `[daemon.logging]` only.
+///
+/// Daemon logging shares configuration discovery and precedence with the rest of daemon
+/// configuration, but deliberately never inherits the user-space `[logging]` section.
+pub(crate) fn resolve_daemon_logging_config(
+    explicit: Option<&Path>,
+) -> Result<LoggingConfig, CliError> {
+    resolve_logging_config_section(explicit, &["daemon", "logging"])
+}
+
+fn resolve_logging_config_section(
+    explicit: Option<&Path>,
+    section: &[&str],
+) -> Result<LoggingConfig, CliError> {
     let explicit = explicit.map(Path::to_path_buf);
     let mut merged = toml::Value::Table(toml::map::Map::new());
     for path in config_paths(explicit.as_ref()) {
@@ -177,16 +194,22 @@ pub(crate) fn resolve_logging_config(explicit: Option<&Path>) -> Result<LoggingC
         merge_gateway_config_toml(&mut merged, parsed);
     }
 
-    if merged.get("logging").is_none() {
+    let Some(logging) = toml_value_at_path(&merged, section).cloned() else {
         return Ok(LoggingConfig::default());
-    }
-    let document = toml::to_string(&merged).map_err(|error| {
+    };
+    let mut document = toml::map::Map::new();
+    document.insert("logging".into(), logging);
+    let document = toml::to_string(&toml::Value::Table(document)).map_err(|error| {
         CliError::Config(format!("failed to resolve logging configuration: {error}"))
     })?;
     LoggingConfig::from_toml_document(&document).map_err(|error| match error {
         nemo_relay::error::FlowError::InvalidArgument(message) => CliError::Config(message),
         other => CliError::Flow(other),
     })
+}
+
+fn toml_value_at_path<'a>(value: &'a toml::Value, path: &[&str]) -> Option<&'a toml::Value> {
+    path.iter().try_fold(value, |value, key| value.get(*key))
 }
 
 /// Resolves the shared plugin MCP gateway from system and user layers only.
@@ -1822,7 +1845,8 @@ fn merge_toml(left: &mut toml::Value, right: toml::Value) {
 // supplying a replacement credential must not inherit the credential for the old endpoint.
 fn merge_gateway_config_toml(left: &mut toml::Value, mut right: toml::Value) {
     clear_credentials_for_replaced_upstreams(left, &right);
-    merge_logging_sinks_by_path(left, &mut right);
+    merge_logging_sinks_by_path(left, &mut right, &["logging"]);
+    merge_logging_sinks_by_path(left, &mut right, &["daemon", "logging"]);
     merge_toml(left, right);
 }
 
@@ -1845,15 +1869,13 @@ fn clear_credentials_for_replaced_upstreams(left: &mut toml::Value, right: &toml
     }
 }
 
-fn merge_logging_sinks_by_path(left: &toml::Value, right: &mut toml::Value) {
-    let lower = left
-        .get("logging")
+fn merge_logging_sinks_by_path(left: &toml::Value, right: &mut toml::Value, section: &[&str]) {
+    let lower = toml_value_at_path(left, section)
         .and_then(|logging| logging.get("sinks"))
         .and_then(toml::Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let Some(higher_value) = right
-        .get_mut("logging")
+    let Some(higher_value) = toml_value_at_path_mut(right, section)
         .and_then(toml::Value::as_table_mut)
         .and_then(|logging| logging.get_mut("sinks"))
     else {
@@ -1863,6 +1885,14 @@ fn merge_logging_sinks_by_path(left: &toml::Value, right: &mut toml::Value) {
         return;
     };
     *higher_value = toml::Value::Array(merge_logging_sink_lists(lower, higher));
+}
+
+fn toml_value_at_path_mut<'a>(
+    value: &'a mut toml::Value,
+    path: &[&str],
+) -> Option<&'a mut toml::Value> {
+    path.iter()
+        .try_fold(value, |value, key| value.get_mut(*key))
 }
 
 fn merge_logging_sink_lists(lower: Vec<toml::Value>, higher: Vec<toml::Value>) -> Vec<toml::Value> {

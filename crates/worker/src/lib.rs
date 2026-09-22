@@ -65,7 +65,7 @@ use nemo_relay_worker_proto::v1::{
     HandshakeResponse, HealthRequest, HealthResponse, InvokeRequest, InvokeResponse, JsonEnvelope,
     JsonResult, ListRuntimeRegistrationsRequest, LlmCodecDecodeRequest, LlmCodecDecodeResponse,
     LlmCodecEncodeRequest, LlmCodecKind, LlmNextRequest, LlmRequestInterceptResult,
-    LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
+    LlmStreamNextRequest, LogLevel, LogRequest, PopScopeRequest, PushScopeRequest,
     RegisterConditionalMiddlewareGuardrailRequest, RegisterRequest, RegisterResponse, Registration,
     RegistrationSurface, RuntimeDiagnostic as ProtoRuntimeDiagnostic, ScopeContext,
     ShutdownRequest, StreamChunk,
@@ -77,6 +77,7 @@ use nemo_relay_worker_proto::v1::{
 use nemo_relay_worker_proto::{
     WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
 };
+use serde_json::Map;
 use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -172,6 +173,49 @@ pub struct EmitMarkOptions {
     pub data_schema: Option<DataSchema>,
     /// Telemetry severity for OTLP log projection.
     pub severity: Option<LogSeverity>,
+}
+
+/// Process-log severity for records emitted through the Relay host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginLogLevel {
+    /// An error prevented the plugin from completing expected work.
+    Error,
+    /// The plugin encountered a recoverable condition.
+    Warn,
+    /// Normal plugin lifecycle information.
+    Info,
+    /// Diagnostic information useful while debugging a plugin.
+    Debug,
+    /// Fine-grained diagnostic information.
+    Trace,
+}
+
+/// Emit a formatted trace-level gRPC worker record; await the returned future.
+#[macro_export]
+macro_rules! relay_trace { ($runtime:expr, target: $target:expr, fields: $fields:expr, $($arg:tt)+) => {{ async { let message = format!($($arg)+); $runtime.log($crate::PluginLogLevel::Trace, $target, &message, Some(&$fields)).await } }}; ($runtime:expr, target: $target:expr, $($arg:tt)+) => {{ async { let message = format!($($arg)+); $runtime.log($crate::PluginLogLevel::Trace, $target, &message, None).await } }}; }
+/// Emit a formatted debug-level gRPC worker record; await the returned future.
+#[macro_export]
+macro_rules! relay_debug { ($runtime:expr, target: $target:expr, fields: $fields:expr, $($arg:tt)+) => {{ async { let message = format!($($arg)+); $runtime.log($crate::PluginLogLevel::Debug, $target, &message, Some(&$fields)).await } }}; ($runtime:expr, target: $target:expr, $($arg:tt)+) => {{ async { let message = format!($($arg)+); $runtime.log($crate::PluginLogLevel::Debug, $target, &message, None).await } }}; }
+/// Emit a formatted info-level gRPC worker record; await the returned future.
+#[macro_export]
+macro_rules! relay_info { ($runtime:expr, target: $target:expr, fields: $fields:expr, $($arg:tt)+) => {{ async { let message = format!($($arg)+); $runtime.log($crate::PluginLogLevel::Info, $target, &message, Some(&$fields)).await } }}; ($runtime:expr, target: $target:expr, $($arg:tt)+) => {{ async { let message = format!($($arg)+); $runtime.log($crate::PluginLogLevel::Info, $target, &message, None).await } }}; }
+/// Emit a formatted warn-level gRPC worker record; await the returned future.
+#[macro_export]
+macro_rules! relay_warn { ($runtime:expr, target: $target:expr, fields: $fields:expr, $($arg:tt)+) => {{ async { let message = format!($($arg)+); $runtime.log($crate::PluginLogLevel::Warn, $target, &message, Some(&$fields)).await } }}; ($runtime:expr, target: $target:expr, $($arg:tt)+) => {{ async { let message = format!($($arg)+); $runtime.log($crate::PluginLogLevel::Warn, $target, &message, None).await } }}; }
+/// Emit a formatted error-level gRPC worker record; await the returned future.
+#[macro_export]
+macro_rules! relay_error { ($runtime:expr, target: $target:expr, fields: $fields:expr, $($arg:tt)+) => {{ async { let message = format!($($arg)+); $runtime.log($crate::PluginLogLevel::Error, $target, &message, Some(&$fields)).await } }}; ($runtime:expr, target: $target:expr, $($arg:tt)+) => {{ async { let message = format!($($arg)+); $runtime.log($crate::PluginLogLevel::Error, $target, &message, None).await } }}; }
+
+impl PluginLogLevel {
+    fn wire_value(self) -> i32 {
+        match self {
+            Self::Error => LogLevel::Error as i32,
+            Self::Warn => LogLevel::Warn as i32,
+            Self::Info => LogLevel::Info as i32,
+            Self::Debug => LogLevel::Debug as i32,
+            Self::Trace => LogLevel::Trace as i32,
+        }
+    }
 }
 
 /// Trait implemented by Rust out-of-process worker plugins.
@@ -852,6 +896,87 @@ pub struct PluginRuntime {
 }
 
 impl PluginRuntime {
+    /// Emits one operational log record through the Relay host's configured sinks.
+    ///
+    /// The host authenticates the activation and applies its own log-level filter.
+    /// `target` identifies the plugin subsystem; pass an empty string to use the
+    /// plugin's default target.
+    pub async fn log(
+        &self,
+        level: PluginLogLevel,
+        target: &str,
+        message: &str,
+        fields: Option<&Map<String, Json>>,
+    ) -> Result<()> {
+        let mut client = self.host_client().await?;
+        let response = client
+            .log(Request::new(LogRequest {
+                activation_id: self.activation_id.clone(),
+                auth_token: self.auth_token.clone(),
+                level: level.wire_value(),
+                target: target.into(),
+                message: message.into(),
+                fields: fields.map(json_value).transpose()?,
+            }))
+            .await
+            .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
+            .into_inner();
+        ack_to_result(response.ok, response.error)
+    }
+
+    /// Emits an info-level operational log record through the Relay host.
+    pub async fn trace(
+        &self,
+        target: &str,
+        message: &str,
+        fields: Option<&Map<String, Json>>,
+    ) -> Result<()> {
+        self.log(PluginLogLevel::Trace, target, message, fields)
+            .await
+    }
+    /// Emits a debug-level operational log record through the Relay host.
+    pub async fn debug(
+        &self,
+        target: &str,
+        message: &str,
+        fields: Option<&Map<String, Json>>,
+    ) -> Result<()> {
+        self.log(PluginLogLevel::Debug, target, message, fields)
+            .await
+    }
+    /// Emits an info-level operational log record through the Relay host.
+    pub async fn info(
+        &self,
+        target: &str,
+        message: &str,
+        fields: Option<&Map<String, Json>>,
+    ) -> Result<()> {
+        self.log(PluginLogLevel::Info, target, message, fields)
+            .await
+    }
+
+    /// Emits a warn-level operational log record through the Relay host.
+    pub async fn warn(
+        &self,
+        target: &str,
+        message: &str,
+        fields: Option<&Map<String, Json>>,
+    ) -> Result<()> {
+        self.log(PluginLogLevel::Warn, target, message, fields)
+            .await
+    }
+
+    /// Emits an error-level operational log record through the Relay host.
+    pub async fn error(
+        &self,
+        target: &str,
+        message: &str,
+        fields: Option<&Map<String, Json>>,
+    ) -> Result<()> {
+        self.log(PluginLogLevel::Error, target, message, fields)
+            .await
+    }
+
     /// List global runtime registrations, optionally filtered by kind.
     pub async fn list_runtime_registrations(
         &self,

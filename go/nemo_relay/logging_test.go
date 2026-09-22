@@ -4,6 +4,7 @@
 package nemo_relay
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,6 +41,22 @@ func TestBindingLoggingEnvironment(t *testing.T) {
 			if err := ShutdownLogging(); err != nil {
 				t.Fatalf("logging shutdown failed: %v", err)
 			}
+		} else if helper == "emit" {
+			for ordinal, emit := range []func(string, string, map[string]any) error{
+				Trace, Debug, Info, Warn, Error,
+			} {
+				if err := emit("binding", []string{
+					"trace message", "debug message", "info message", "warn message", "error message",
+				}[ordinal], map[string]any{"ordinal": ordinal}); err != nil {
+					t.Fatalf("emit log record: %v", err)
+				}
+			}
+			if err := Info("", "default target", nil); err != nil {
+				t.Fatalf("emit default-target log record: %v", err)
+			}
+			if err := ShutdownLogging(); err != nil {
+				t.Fatalf("logging shutdown failed: %v", err)
+			}
 		}
 		return
 	}
@@ -48,6 +65,67 @@ func TestBindingLoggingEnvironment(t *testing.T) {
 	t.Run("disables stderr from environment", testLoggingDisabledStderr)
 	t.Run("rejects invalid environment", testLoggingInvalidEnvironment)
 	t.Run("flushes file sink during shutdown", testLoggingFileSinkShutdown)
+	t.Run("emits structured records through every level helper", testBindingLoggingLevels)
+}
+
+func testBindingLoggingLevels(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "logging.toml")
+	logPath := filepath.Join(directory, "operational.jsonl")
+	config := `[logging]
+level = "trace"
+stderr_format = "human"
+flush_interval_millis = 0
+
+[[logging.sinks]]
+path = ` + strconv.Quote(logPath) + `
+level = "trace"
+format = "jsonl"
+queue_capacity = 16
+`
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatalf("write logging config: %v", err)
+	}
+
+	command := exec.Command(os.Args[0], loggingEnvironmentTestRunArg)
+	command.Env = loggingTestEnvironment(
+		loggingHelperEnvironment+"=emit",
+		"NEMO_RELAY_LOG_CONFIG_PATH="+configPath,
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("binding log emission failed: %v\n%s", err, output)
+	}
+	contents, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read operational log: %v", err)
+	}
+	records := map[string]map[string]any{}
+	for _, line := range strings.Split(strings.TrimSpace(string(contents)), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decode JSONL record: %v", err)
+		}
+		if message, ok := record["message"].(string); ok {
+			records[message] = record
+		}
+	}
+	for ordinal, level := range []string{"trace", "debug", "info", "warn", "error"} {
+		record := records[level+" message"]
+		if record["level"] != level {
+			t.Errorf("%s level = %v, want %q", level, record["level"], level)
+		}
+		if record["target"] != "nemo_relay.go.binding" {
+			t.Errorf("%s target = %v", level, record["target"])
+		}
+		fields, ok := record["fields"].(map[string]any)
+		if !ok || fields["ordinal"] != float64(ordinal) {
+			t.Errorf("%s fields = %#v", level, record["fields"])
+		}
+	}
+	if records["default target"]["target"] != "nemo_relay.go" {
+		t.Errorf("default target = %v", records["default target"]["target"])
+	}
 }
 
 func testLoggingDisabledStderr(t *testing.T) {

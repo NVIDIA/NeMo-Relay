@@ -6,6 +6,67 @@
 use super::*;
 
 #[test]
+fn ffi_log_accepts_every_level_and_validates_c_inputs() {
+    let target = cstring("binding");
+    let message = cstring("message");
+    let fields = cstring(r#"{"nested":{"ok":true},"ordinal":1}"#);
+    for level in ["trace", "debug", "info", "warn", "error"] {
+        let level = cstring(level);
+        assert_status!(
+            unsafe {
+                api::nemo_relay_log(
+                    level.as_ptr(),
+                    target.as_ptr(),
+                    message.as_ptr(),
+                    fields.as_ptr(),
+                )
+            },
+            NemoRelayStatus::Ok
+        );
+    }
+
+    assert_status!(
+        unsafe { api::nemo_relay_log(ptr::null(), target.as_ptr(), message.as_ptr(), ptr::null()) },
+        NemoRelayStatus::NullPointer
+    );
+    assert_status!(
+        unsafe {
+            api::nemo_relay_log(
+                cstring("info").as_ptr(),
+                target.as_ptr(),
+                message.as_ptr(),
+                ptr::null(),
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    let non_object = cstring("[]");
+    assert_status!(
+        unsafe {
+            api::nemo_relay_log(
+                cstring("info").as_ptr(),
+                target.as_ptr(),
+                message.as_ptr(),
+                non_object.as_ptr(),
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+    let invalid_level = cstring("verbose");
+    assert_status!(
+        unsafe {
+            api::nemo_relay_log(
+                invalid_level.as_ptr(),
+                target.as_ptr(),
+                message.as_ptr(),
+                ptr::null(),
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+}
+
+#[test]
 fn test_ffi_llm_request_intercept_outcome_json_allocation_and_validation() {
     let headers = cstring(r#"{"x-test":true}"#);
     let content = cstring(r#"{"model":"test"}"#);
@@ -213,7 +274,7 @@ fn test_ffi_observability_plugin_file_sinks() {
                     "kind": "observability",
                     "enabled": true,
                     "config": {
-                        "version": 3,
+                        "version": 4,
                         "atof": {
                             "enabled": true,
                             "sinks": [{
@@ -341,7 +402,7 @@ fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
                     "kind": "observability",
                     "enabled": true,
                     "config": {
-                        "version": 3,
+                        "version": 4,
                         "atif": {
                             "enabled": true,
                             "output_directory": dir_text,

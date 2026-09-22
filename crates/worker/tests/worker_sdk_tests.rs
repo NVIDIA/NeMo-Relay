@@ -22,9 +22,9 @@ use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec}
 use nemo_relay_worker::{
     ANNOTATED_LLM_REQUEST_SCHEMA, DataSchema, EmitMarkOptions, EventCategory, Json, JsonStream,
     LlmNext, LlmRequest, LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement,
-    MetricValueType, PluginContext, PluginRuntime, Result, RuntimeRegistrationKind, ScopeType,
-    ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError, WorkerServerConfig,
-    serve_plugin, serve_plugin_arc, serve_plugin_arc_with_config,
+    MetricValueType, PluginContext, PluginLogLevel, PluginRuntime, Result, RuntimeRegistrationKind,
+    ScopeType, ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError,
+    WorkerServerConfig, serve_plugin, serve_plugin_arc, serve_plugin_arc_with_config,
 };
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
@@ -37,10 +37,10 @@ use nemo_relay_worker_proto::v1::{
     GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, HandshakeRequest, HealthRequest,
     HostAck, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult,
     ListRuntimeRegistrationsRequest, ListRuntimeRegistrationsResponse, LlmInvocation,
-    LlmNextRequest, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse,
-    RegisterConditionalMiddlewareGuardrailRequest, RegisterConditionalMiddlewareGuardrailResponse,
-    RegisterRequest, RegistrationSurface, RuntimeDiagnostic as ProtoRuntimeDiagnostic,
-    ScopeContext, ShutdownRequest, StreamChunk,
+    LlmNextRequest, LlmStreamNextRequest, LogLevel, LogRequest, PopScopeRequest, PushScopeRequest,
+    PushScopeResponse, RegisterConditionalMiddlewareGuardrailRequest,
+    RegisterConditionalMiddlewareGuardrailResponse, RegisterRequest, RegistrationSurface,
+    RuntimeDiagnostic as ProtoRuntimeDiagnostic, ScopeContext, ShutdownRequest, StreamChunk,
     ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
     ToolExecutionResult as ProtoToolExecutionResult, ToolExecutionResultResponse, ToolInvocation,
     ToolNextRequest, ValidateRequest, WorkerError,
@@ -723,6 +723,28 @@ async fn worker_service_invokes_every_registration_surface() {
     assert_json_field(tool_exec.clone(), "tool_call_id", "call-worker-1");
     assert_json_field(tool_exec.clone(), "next", "tool");
     assert_json_field(tool_exec, "phase", "tool_exec");
+    let logs = host.logs();
+    assert_eq!(logs.len(), 6);
+    for (request, level) in logs.iter().take(5).zip([
+        LogLevel::Trace,
+        LogLevel::Debug,
+        LogLevel::Info,
+        LogLevel::Warn,
+        LogLevel::Error,
+    ]) {
+        assert_eq!(request.level, level as i32);
+        assert_eq!(request.target, "plugin.logging");
+    }
+    assert_eq!(logs[0].message, "trace message");
+    assert_eq!(logs[4].message, "error message");
+    assert_eq!(
+        decode_json_value::<Json>(logs[0].fields.as_ref().expect("trace fields")).unwrap(),
+        json!({"nested": {"ok": true}, "ordinal": 0})
+    );
+    assert!(logs[1].fields.is_none());
+    assert_eq!(logs[5].level, LogLevel::Info as i32);
+    assert_eq!(logs[5].target, "");
+    assert_eq!(logs[5].message, "direct message");
     let conditional_middleware = client
         .invoke(Request::new(InvokeRequest {
             activation_id: ACTIVATION_ID.into(),
@@ -2172,6 +2194,16 @@ impl WorkerPlugin for SurfacePlugin {
                         "runtime diagnostics response did not contain the expected entry".into(),
                     ));
                 }
+                let log_fields = serde_json::Map::from_iter([(
+                    "nested".into(),
+                    json!({"ok": true}),
+                ), ("ordinal".into(), json!(0))]);
+                nemo_relay_worker::relay_trace!(runtime, target: "plugin.logging", fields: log_fields, "trace message").await?;
+                nemo_relay_worker::relay_debug!(runtime, target: "plugin.logging", "debug message").await?;
+                nemo_relay_worker::relay_info!(runtime, target: "plugin.logging", "info message").await?;
+                nemo_relay_worker::relay_warn!(runtime, target: "plugin.logging", "warn message").await?;
+                nemo_relay_worker::relay_error!(runtime, target: "plugin.logging", "error message").await?;
+                runtime.log(PluginLogLevel::Info, "", "direct message", None).await?;
                 runtime.emit_mark("tool-exec", None, None).await?;
                 runtime
                     .emit_mark_with_options_and_category(
@@ -2453,6 +2485,7 @@ struct RuntimeRegistrationRequests {
 #[derive(Clone, Default)]
 struct MockHost {
     calls: Arc<Mutex<Vec<String>>>,
+    logs: Arc<Mutex<Vec<LogRequest>>>,
     marks: Arc<Mutex<Vec<EmitMarkRequest>>>,
     failures: Arc<Mutex<MockHostFailures>>,
     runtime_registration_requests: Arc<Mutex<RuntimeRegistrationRequests>>,
@@ -2469,6 +2502,10 @@ impl MockHost {
 
     fn marks(&self) -> Vec<EmitMarkRequest> {
         self.marks.lock().expect("marks lock").clone()
+    }
+
+    fn logs(&self) -> Vec<LogRequest> {
+        self.logs.lock().expect("logs lock").clone()
     }
 
     fn failures(&self) -> MockHostFailures {
@@ -2489,6 +2526,17 @@ impl MockHost {
 
 #[tonic::async_trait]
 impl RelayHostRuntime for MockHost {
+    async fn log(
+        &self,
+        request: Request<LogRequest>,
+    ) -> std::result::Result<Response<HostAck>, Status> {
+        let request = request.into_inner();
+        authorize_host(&request.activation_id, &request.auth_token)?;
+        self.logs.lock().expect("logs lock").push(request.clone());
+        self.record(format!("log:{}:{}", request.target, request.message));
+        Ok(Response::new(host_ack()))
+    }
+
     async fn list_runtime_registrations(
         &self,
         request: Request<ListRuntimeRegistrationsRequest>,

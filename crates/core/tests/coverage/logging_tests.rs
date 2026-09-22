@@ -1545,7 +1545,7 @@ queue_capcity = 32
 }
 
 #[test]
-fn non_string_fields_are_coerced_to_json_strings() {
+fn non_string_fields_preserve_json_types() {
     let _lock = lock_logging_tests();
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("typed-fields.log.jsonl");
@@ -1558,7 +1558,7 @@ fn non_string_fields_are_coerced_to_json_strings() {
         ..default_config()
     };
     let runtime = init_logging(&config).unwrap();
-    // Numeric and boolean fields go through the same stringifying path as everything else.
+    // Structured operational logging preserves native JSON values.
     log::info!(target: "nemo_relay.server", event = "typed_fields", count = 42, ok = true; "coercion");
     runtime.logger.flush();
     let contents = wait_for_log_line(&path, |c| c.contains("typed_fields"));
@@ -1569,9 +1569,8 @@ fn non_string_fields_are_coerced_to_json_strings() {
         .find(|line| line.contains("typed_fields"))
         .expect("typed_fields record should be present");
     let record: Value = serde_json::from_str(line).unwrap();
-    // Operational logging coerces every field value to a string by design.
-    assert_eq!(record["fields"]["count"], Value::String("42".into()));
-    assert_eq!(record["fields"]["ok"], Value::String("true".into()));
+    assert_eq!(record["fields"]["count"], Value::from(42));
+    assert_eq!(record["fields"]["ok"], Value::Bool(true));
 }
 
 #[test]
