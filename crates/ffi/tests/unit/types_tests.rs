@@ -697,6 +697,7 @@ fn test_annotated_event_accessors_and_codec_handles() {
             total_tokens: Some(15),
             cache_read_tokens: None,
             cache_write_tokens: None,
+            uncached_input_tokens: None,
             cost: Some(nemo_relay::codec::response::CostEstimate {
                 total: Some(0.000_01),
                 currency: "USD".into(),

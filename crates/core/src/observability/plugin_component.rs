@@ -1784,6 +1784,12 @@ fn deliver_opentelemetry_event(
         MetricMarkClassification::NotMetric => {
             deliver_opentelemetry_callbacks(trace_callbacks, event);
             deliver_opentelemetry_callbacks(log_callbacks, event);
+            if !metric_callbacks.is_empty()
+                && let Some(measurement) =
+                    super::otel_metrics::gen_ai_stream_time_to_first_chunk_measurement(event)
+            {
+                deliver_opentelemetry_metric_callbacks(metric_callbacks, event, &[measurement]);
+            }
         }
         MetricMarkClassification::Valid(measurements) => {
             deliver_opentelemetry_metric_callbacks(metric_callbacks, event, &measurements);

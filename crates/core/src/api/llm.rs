@@ -3,6 +3,7 @@
 
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Instant;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
@@ -45,7 +46,7 @@ use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_pro
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
-use crate::stream::LlmStreamWrapper;
+use crate::stream::{LlmStreamWrapper, ManagedLlmStreamTelemetry};
 
 pub use nemo_relay_types::api::llm::{
     LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmAttributes, LlmRequest, LlmRequestInterceptOutcome,
@@ -183,6 +184,11 @@ pub struct EndLlmHandleParams<'a> {
     /// Optional normalized response annotation produced by a response codec.
     #[builder(default)]
     pub annotated_response: Option<Arc<AnnotatedLlmResponse>>,
+    /// Elapsed seconds from managed stream execution to its first received
+    /// chunk. Omitted for non-streaming calls and streams that never yield a
+    /// chunk.
+    #[builder(default)]
+    pub time_to_first_chunk: Option<f64>,
     /// Optional timestamp recorded on the emitted end event. When omitted, the
     /// runtime records the current UTC time, or one microsecond after the
     /// handle start time if the current time is not later.
@@ -1949,6 +1955,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
     );
     let execution_name = name.clone();
     let event_uuid = handle.uuid;
+    let stream_started_at = Instant::now();
     let execution = with_active_event_uuid(
         event_uuid,
         scope_llm_optimization_recorder(handle.optimization_recorder.clone(), async move {
@@ -1985,7 +1992,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
                 finalizer,
                 metadata,
                 response_codec,
-                lifecycle_subscribers,
+                ManagedLlmStreamTelemetry::new(lifecycle_subscribers, stream_started_at),
             );
             completion.disarm();
             Ok(LlmJsonStream::from_closeable(wrapper))

@@ -2443,6 +2443,264 @@ fn gen_ai_projection_uses_standard_operation_names_and_span_kinds() {
 }
 
 #[test]
+fn gen_ai_projection_classifies_marked_turn_roots_as_internal_agent_invocations() {
+    let mut turn = make_start_event(
+        Uuid::now_v7(),
+        None,
+        "claude-code-turn",
+        ScopeType::Custom,
+        None,
+    );
+    if let Event::Scope(scope) = &mut turn {
+        scope.base.metadata = Some(json!({
+            "nemo_relay_scope_role": "turn",
+            "conversation_id": "conversation-1"
+        }));
+    }
+
+    assert_eq!(
+        crate::observability::otel_genai::span_name(&turn),
+        "invoke_agent"
+    );
+    assert_eq!(
+        crate::observability::otel_genai::span_kind(&turn),
+        SpanKind::Internal
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(&turn));
+    assert_eq!(attributes["gen_ai.operation.name"], "invoke_agent");
+    assert_eq!(attributes["gen_ai.conversation.id"], "conversation-1");
+    assert!(!attributes.contains_key("gen_ai.agent.name"));
+
+    let mut payload_marked_turn = make_start_event(
+        Uuid::now_v7(),
+        None,
+        "claude-code-turn",
+        ScopeType::Custom,
+        None,
+    );
+    if let Event::Scope(scope) = &mut payload_marked_turn {
+        scope.base.data = Some(json!({"nemo_relay_scope_role": "turn"}));
+    }
+    assert_eq!(
+        crate::observability::otel_genai::span_name(&payload_marked_turn),
+        "claude-code-turn"
+    );
+    assert!(crate::observability::otel_genai::start_attributes(&payload_marked_turn).is_empty());
+
+    let mut named_turn = make_start_event(
+        Uuid::now_v7(),
+        None,
+        "claude-code-turn",
+        ScopeType::Custom,
+        None,
+    );
+    if let Event::Scope(scope) = &mut named_turn {
+        scope.base.metadata = Some(json!({
+            "nemo_relay_scope_role": "turn",
+            "gen_ai.agent.name": "Claude Code",
+            "gen_ai.agent.description": "Coding agent"
+        }));
+    }
+    assert_eq!(
+        crate::observability::otel_genai::span_name(&named_turn),
+        "invoke_agent Claude Code"
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(
+        &named_turn,
+    ));
+    assert_eq!(attributes["gen_ai.agent.name"], "Claude Code");
+    assert_eq!(attributes["gen_ai.agent.description"], "Coding agent");
+}
+
+#[test]
+fn gen_ai_projection_emits_source_backed_registry_attributes() {
+    for (metadata, expected) in [
+        (json!({"model": "ambiguous-model"}), None),
+        (
+            json!({"gen_ai.request.model": "single-configured-model"}),
+            Some("single-configured-model"),
+        ),
+    ] {
+        let mut agent = make_start_event(Uuid::now_v7(), None, "planner", ScopeType::Agent, None);
+        if let Event::Scope(scope) = &mut agent {
+            scope.base.metadata = Some(metadata);
+        }
+        let attributes = attr_map(&crate::observability::otel_genai::start_attributes(&agent));
+        assert_eq!(
+            attributes.get("gen_ai.request.model").map(String::as_str),
+            expected
+        );
+    }
+
+    let mut embedder = make_start_event(Uuid::now_v7(), None, "embed", ScopeType::Embedder, None);
+    if let Event::Scope(scope) = &mut embedder {
+        scope.base.metadata = Some(json!({
+            "dimensions": 1024,
+            "encoding_format": "base64"
+        }));
+    }
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(
+        &embedder,
+    ));
+    assert_eq!(attributes["gen_ai.embeddings.dimension.count"], "1024");
+    assert_eq!(
+        attributes["gen_ai.request.encoding_formats"],
+        "[\"base64\"]"
+    );
+
+    let chat_request: AnnotatedLlmRequest = serde_json::from_value(json!({
+        "model": "gpt-5",
+        "stream": false,
+        "api_specific": {
+            "api": "openai_chat",
+            "modalities": ["audio"],
+            "reasoning_effort": "high"
+        }
+    }))
+    .unwrap();
+    let chat = make_scope_event_with_profile(
+        ScopeCategory::Start,
+        Uuid::now_v7(),
+        None,
+        "openai.chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(Arc::new(chat_request))
+                .build(),
+        ),
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(&chat));
+    assert_eq!(attributes["gen_ai.output.type"], "speech");
+    assert_eq!(attributes["gen_ai.request.reasoning.level"], "high");
+    assert!(!attributes.contains_key("gen_ai.request.stream"));
+
+    let responses_request: AnnotatedLlmRequest = serde_json::from_value(json!({
+        "previous_response_id": "resp-previous",
+        "reasoning": {"effort": "medium"},
+        "api_specific": {"api": "openai_responses"}
+    }))
+    .unwrap();
+    let responses = make_scope_event_with_profile(
+        ScopeCategory::Start,
+        Uuid::now_v7(),
+        None,
+        "openai.responses",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(Arc::new(responses_request))
+                .build(),
+        ),
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(
+        &responses,
+    ));
+    assert_eq!(
+        attributes["gen_ai.request.previous_response.id"],
+        "resp-previous"
+    );
+    assert_eq!(attributes["gen_ai.request.reasoning.level"], "medium");
+}
+
+#[test]
+fn gen_ai_output_type_requires_an_explicit_source_backed_request() {
+    for (api_specific, expected) in [
+        (
+            json!({"api": "openai_chat", "modalities": ["audio"]}),
+            Some("speech"),
+        ),
+        (
+            json!({"api": "openai_chat", "modalities": ["text"]}),
+            Some("text"),
+        ),
+        (
+            json!({"api": "openai_chat", "response_format": {"type": "json_object"}}),
+            Some("json"),
+        ),
+        (
+            json!({"api": "openai_responses", "text": {"format": {"type": "json_schema"}}}),
+            Some("json"),
+        ),
+        (json!({"api": "openai_chat", "modalities": ["image"]}), None),
+        (
+            json!({"api": "openai_chat", "modalities": ["text", "audio"]}),
+            None,
+        ),
+        (
+            json!({"api": "openai_responses", "text": {"verbosity": "low"}}),
+            None,
+        ),
+    ] {
+        let request: AnnotatedLlmRequest = serde_json::from_value(json!({
+            "model": "test-model",
+            "api_specific": api_specific,
+        }))
+        .unwrap();
+        let event = make_scope_event_with_profile(
+            ScopeCategory::Start,
+            Uuid::now_v7(),
+            None,
+            "test.request",
+            ScopeType::Llm,
+            None,
+            Some(
+                CategoryProfile::builder()
+                    .annotated_request(Arc::new(request))
+                    .build(),
+            ),
+        );
+        let attributes = attr_map(&crate::observability::otel_genai::start_attributes(&event));
+        assert_eq!(
+            attributes.get("gen_ai.output.type").map(String::as_str),
+            expected
+        );
+    }
+}
+
+#[test]
+fn gen_ai_projection_emits_provider_reasoning_token_usage() {
+    for (api_specific, expected) in [
+        (
+            json!({
+                "api": "openai_responses",
+                "output_tokens_details": {"reasoning_tokens": 17}
+            }),
+            "17",
+        ),
+        (
+            json!({
+                "api": "gemini_generate_content",
+                "thoughts_tokens": 23
+            }),
+            "23",
+        ),
+    ] {
+        let response: AnnotatedLlmResponse = serde_json::from_value(json!({
+            "api_specific": api_specific
+        }))
+        .unwrap();
+        let event = make_scope_event_with_profile(
+            ScopeCategory::End,
+            Uuid::now_v7(),
+            None,
+            "chat",
+            ScopeType::Llm,
+            None,
+            Some(
+                CategoryProfile::builder()
+                    .annotated_response(Arc::new(response))
+                    .build(),
+            ),
+        );
+        let attributes = attr_map(&crate::observability::otel_genai::end_attributes(&event));
+        assert_eq!(attributes["gen_ai.usage.reasoning.output_tokens"], expected);
+    }
+}
+
+#[test]
 fn gen_ai_projection_emits_only_span_specific_attributes() {
     let common = json!({
         "provider": "openai",
@@ -2466,7 +2724,6 @@ fn gen_ai_projection_emits_only_span_specific_attributes() {
                 "gen_ai.agent.name",
                 "gen_ai.conversation.id",
                 "gen_ai.operation.name",
-                "gen_ai.request.model",
             ]
             .as_slice(),
         ),
@@ -2929,6 +3186,7 @@ fn gen_ai_projection_emits_normalized_response_attributes() {
                         total_tokens: Some(21),
                         cache_read_tokens: Some(5),
                         cache_write_tokens: Some(3),
+                        uncached_input_tokens: None,
                         cost: None,
                     }),
                     ..empty_annotated_response()
@@ -2963,7 +3221,7 @@ fn gen_ai_projection_emits_normalized_response_attributes() {
         Some(&"5".to_string())
     );
     assert_eq!(
-        attributes.get("gen_ai.usage.cache_creation.input_tokens"),
+        attributes.get("gen_ai.usage.cache_write.input_tokens"),
         Some(&"3".to_string())
     );
 }
@@ -3001,7 +3259,7 @@ fn gen_ai_projection_includes_anthropic_cache_tokens_in_input_total() {
         Some(&"17980".to_string())
     );
     assert_eq!(
-        attributes.get("gen_ai.usage.cache_creation.input_tokens"),
+        attributes.get("gen_ai.usage.cache_write.input_tokens"),
         Some(&"9421".to_string())
     );
 }
@@ -3599,6 +3857,29 @@ fn gen_ai_projection_covers_optional_request_controls_and_finish_reasons() {
 }
 
 #[test]
+fn gen_ai_projection_exports_stream_time_to_first_chunk_without_response_decoding() {
+    let event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "openai.chat.completions",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .time_to_first_chunk(0.125)
+                .build(),
+        ),
+    );
+
+    let attributes = attr_map(&crate::observability::otel_genai::end_attributes(&event));
+    assert_eq!(
+        attributes.get("gen_ai.response.time_to_first_chunk"),
+        Some(&"0.125".to_string())
+    );
+}
+
+#[test]
 fn gen_ai_projection_covers_message_variants_and_empty_input() {
     let annotated_request = serde_json::from_value::<AnnotatedLlmRequest>(json!({
         "instructions": "Be concise.",
@@ -4028,6 +4309,105 @@ fn otlp_string_attribute<'a>(attributes: &'a [OtlpKeyValue], key: &str) -> Optio
             Some(any_value::Value::StringValue(value)) => Some(value.as_str()),
             _ => None,
         })
+}
+
+#[test]
+fn exported_logs_join_trace_spans_with_unobserved_local_parents_and_late_marks() {
+    use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_global();
+    for projection in [
+        OpenTelemetryType::Full,
+        OpenTelemetryType::GenAi,
+        OpenTelemetryType::OpenInference,
+    ] {
+        for imported in [false, true] {
+            let traces_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let logs_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let trace_endpoint =
+                format!("http://{}/v1/traces", traces_listener.local_addr().unwrap());
+            let log_endpoint = format!("http://{}/v1/logs", logs_listener.local_addr().unwrap());
+            let (trace_tx, trace_rx) = mpsc::channel();
+            let (log_tx, log_rx) = mpsc::channel();
+            spawn_http_collector(traces_listener, trace_tx);
+            spawn_http_collector(logs_listener, log_tx);
+            let traces = OpenTelemetrySubscriber::new(
+                OpenTelemetryConfig::new(projection, trace_endpoint)
+                    .with_scheduled_delay(Duration::from_secs(60)),
+            )
+            .unwrap();
+            let logs =
+                OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new(log_endpoint)).unwrap();
+            let trace_callback = traces.subscriber();
+            let log_callback = logs.subscriber();
+            let root = Uuid::now_v7();
+            let missing_parent = Uuid::now_v7();
+            let turn = Uuid::now_v7();
+            let tool = Uuid::now_v7();
+            let mut start =
+                make_start_event(turn, Some(missing_parent), "turn", ScopeType::Custom, None);
+            start.set_propagation_root_uuid(Some(root));
+            if imported {
+                start.set_propagation_parent_uuid(Some(missing_parent));
+            }
+            let tool_start =
+                make_start_event(tool, Some(turn), "ordinary-tool", ScopeType::Tool, None);
+            let tool_end = make_end_event(tool, Some(turn), "ordinary-tool", ScopeType::Tool, None);
+            let turn_end =
+                make_end_event(turn, Some(missing_parent), "turn", ScopeType::Custom, None);
+            let events = [
+                start,
+                tool_start,
+                make_mark_event(Some(tool), "nv.agent.tool.start", None),
+                make_mark_event(Some(turn), "plugin.custom.mark", None),
+                tool_end,
+                turn_end,
+                make_mark_event(Some(tool), "late.tool.mark", None),
+                make_mark_event(Some(turn), "late.turn.mark", None),
+            ];
+            for event in &events {
+                trace_callback(event);
+                log_callback(event);
+            }
+            traces.force_flush().unwrap();
+            logs.force_flush().unwrap();
+            let trace_request = trace_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let log_request = log_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let trace_export =
+                ExportTraceServiceRequest::decode(trace_request.body.as_slice()).unwrap();
+            let log_export = ExportLogsServiceRequest::decode(log_request.body.as_slice()).unwrap();
+            let spans: Vec<_> = trace_export
+                .resource_spans
+                .iter()
+                .flat_map(|r| &r.scope_spans)
+                .flat_map(|s| &s.spans)
+                .collect();
+            let records: Vec<_> = log_export
+                .resource_logs
+                .iter()
+                .flat_map(|r| &r.scope_logs)
+                .flat_map(|s| &s.log_records)
+                .collect();
+            assert_eq!(records.len(), 4);
+            let expected_trace = relay_trace_id(if imported { root } else { turn }).to_bytes();
+            for record in records {
+                assert_eq!(
+                    record.trace_id, expected_trace,
+                    "{projection:?}, imported={imported}"
+                );
+                assert!(
+                    spans
+                        .iter()
+                        .any(|span| span.trace_id == record.trace_id
+                            && span.span_id == record.span_id),
+                    "every log must join an exported span: {projection:?}, imported={imported}"
+                );
+            }
+            traces.shutdown().unwrap();
+            logs.shutdown().unwrap();
+        }
+    }
 }
 
 fn assert_telemetry_sdk_resource(attributes: &[OtlpKeyValue]) {
@@ -5251,6 +5631,7 @@ fn assert_otel_catalog_cost_branches() {
                             total_tokens: Some(1_500),
                             cache_read_tokens: Some(200),
                             cache_write_tokens: None,
+                            uncached_input_tokens: None,
                             cost: None,
                         }),
                         ..empty_annotated_response()
@@ -5290,6 +5671,7 @@ fn assert_otel_catalog_cost_branches() {
                             total_tokens: Some(1_500),
                             cache_read_tokens: Some(200),
                             cache_write_tokens: None,
+                            uncached_input_tokens: None,
                             cost: None,
                         }),
                         ..empty_annotated_response()
@@ -5330,6 +5712,7 @@ fn assert_otel_catalog_cost_branches() {
                             total_tokens: Some(1_500),
                             cache_read_tokens: Some(200),
                             cache_write_tokens: Some(10),
+                            uncached_input_tokens: None,
                             cost: None,
                         }),
                         ..empty_annotated_response()

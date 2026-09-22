@@ -1983,7 +1983,7 @@ impl Session {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .root_uuid()
             .to_string();
-        merge_metadata(
+        let mut metadata = merge_metadata(
             merge_metadata(
                 merge_metadata(
                     self.config.metadata.clone().unwrap_or(Value::Null),
@@ -1999,14 +1999,40 @@ impl Session {
                 "plugin_config": self.config.plugin_config,
                 "gateway_mode": self.config.gateway_mode,
             }),
-        )
+        );
+        self.insert_agent_version(&mut metadata);
+        metadata
+    }
+
+    // Version belongs to the executable Relay launched, not to arbitrary hook/request metadata.
+    // A shared gateway or a different harness must not inherit another executable's version.
+    fn insert_agent_version(&self, metadata: &mut Value) {
+        if let Value::Object(metadata) = metadata {
+            metadata.remove("agent_version");
+            if let Some(agent) = &self.config.launched_agent
+                && agent.kind == self.agent_kind
+            {
+                metadata.insert("agent_version".into(), json!(agent.version));
+            }
+        }
+    }
+
+    /// Preserve trusted launched-agent identity on hook-provided scope-end metadata.
+    ///
+    /// Synthetic closes have no hook boundary, so they retain `None` and the
+    /// scope's opening metadata instead.
+    fn trusted_boundary_metadata(&self, metadata: Option<Value>) -> Option<Value> {
+        metadata.map(|mut metadata| {
+            self.insert_agent_version(&mut metadata);
+            metadata
+        })
     }
 
     // Tool hook payloads do not consistently repeat the harness session id.
     // Mirror the stable managed identity onto each tool event so external
     // consumers can correlate it without reconstructing the parent scope tree.
     fn event_identity_metadata(&self, event_metadata: Value) -> Value {
-        merge_metadata(
+        let mut metadata = merge_metadata(
             event_metadata,
             json!({
                 "session_id": self.session_id,
@@ -2015,7 +2041,9 @@ impl Session {
                 "source": "hook",
                 "identity_quality": "native",
             }),
-        )
+        );
+        self.insert_agent_version(&mut metadata);
+        metadata
     }
 
     // LLM requests do not consistently repeat hook metadata, so replace reserved identity
@@ -2037,7 +2065,9 @@ impl Session {
             ("agent_kind".to_string(), json!(self.agent_kind.as_str())),
         ]);
         insert_optional(&mut identity, "conversation_id", conversation_id);
-        merge_metadata(metadata, Value::Object(identity))
+        let mut metadata = merge_metadata(metadata, Value::Object(identity));
+        self.insert_agent_version(&mut metadata);
+        metadata
     }
 
     async fn end_turn(
@@ -2240,6 +2270,7 @@ impl Session {
         let Some(scope) = self.agent_scope.take() else {
             return Ok(None);
         };
+        let boundary_metadata = self.trusted_boundary_metadata(boundary_metadata);
         let subscriber_delivery = pop_scope_with_subscriber_delivery(
             PopScopeParams::builder()
                 .handle_uuid(&scope.uuid)
@@ -2259,6 +2290,7 @@ impl Session {
             return Ok(None);
         };
         self.gateway_request_turn_open = false;
+        let boundary_metadata = self.trusted_boundary_metadata(boundary_metadata);
         let subscriber_delivery = pop_scope_with_subscriber_delivery(
             PopScopeParams::builder()
                 .handle_uuid(&scope.uuid)
@@ -2662,11 +2694,13 @@ impl Session {
         } else {
             self.ensure_turn_started(event_payload.metadata.clone())?;
         }
+        let mut metadata = event_payload.metadata;
+        self.insert_agent_version(&mut metadata);
         emit_mark_event(
             EmitMarkEventParams::builder()
                 .name(name)
                 .data(event_payload.payload)
-                .metadata(event_payload.metadata)
+                .metadata(metadata)
                 .build(),
         )?;
         Ok(())

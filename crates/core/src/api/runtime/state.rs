@@ -803,6 +803,7 @@ impl NemoRelayContextState {
                 CategoryProfile::builder()
                     .model_name_opt(handle.model_name.clone())
                     .annotated_response_opt(params.annotated_response)
+                    .time_to_first_chunk_opt(params.time_to_first_chunk)
                     .build(),
             ),
         ))

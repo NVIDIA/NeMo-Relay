@@ -927,6 +927,138 @@ fn streaming_null_fallback_is_sanitized_before_emission() {
 }
 
 #[test]
+fn managed_stream_records_time_to_first_chunk_on_the_end_event() {
+    let _guard = lock_global_runtime();
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        "stream-time-to-first-chunk",
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::End) {
+                captured.lock().unwrap().push(event.clone());
+            }
+        }),
+    )
+    .unwrap();
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let mut stream = llm_stream_call_execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("openai.chat.completions")
+                .request(request())
+                .func(Arc::new(|_request| {
+                    Box::pin(async {
+                        Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok::<
+                            Json,
+                            FlowError,
+                        >(
+                            json!({"choices": []}),
+                        )])))
+                    })
+                }))
+                .collector(Box::new(|_chunk| Ok(())))
+                .finalizer(Box::new(|| Json::Null))
+                .build(),
+        )
+        .await
+        .unwrap();
+        while let Some(chunk) = stream.next().await {
+            chunk.unwrap();
+        }
+    });
+
+    flush_subscribers().unwrap();
+    let end_events = events.lock().unwrap();
+    assert_eq!(end_events.len(), 1);
+    let value = end_events[0]
+        .time_to_first_chunk()
+        .expect("the first received stream chunk should produce a measurement");
+    assert!(value.is_finite() && value >= 0.0);
+
+    assert!(deregister_subscriber("stream-time-to-first-chunk").unwrap());
+}
+
+#[test]
+fn managed_stream_omits_time_to_first_chunk_without_a_successful_chunk() {
+    let _guard = lock_global_runtime();
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        "stream-without-first-chunk",
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::End) {
+                captured.lock().unwrap().push(event.clone());
+            }
+        }),
+    )
+    .unwrap();
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let mut empty_stream = llm_stream_call_execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("empty-stream")
+                .request(request())
+                .func(Arc::new(|_request| {
+                    Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })
+                }))
+                .collector(Box::new(|_chunk| Ok(())))
+                .finalizer(Box::new(|| Json::Null))
+                .build(),
+        )
+        .await
+        .unwrap();
+        assert!(empty_stream.next().await.is_none());
+
+        let mut error_stream = llm_stream_call_execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("error-stream")
+                .request(request())
+                .func(Arc::new(|_request| {
+                    Box::pin(async {
+                        Ok(LlmJsonStream::new(tokio_stream::iter(vec![Err::<
+                            Json,
+                            FlowError,
+                        >(
+                            FlowError::Internal("first poll failed".into()),
+                        )])))
+                    })
+                }))
+                .collector(Box::new(|_chunk| Ok(())))
+                .finalizer(Box::new(|| Json::Null))
+                .build(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            error_stream
+                .next()
+                .await
+                .expect("terminal error item")
+                .is_err()
+        );
+    });
+
+    flush_subscribers().unwrap();
+    let end_events = events.lock().unwrap();
+    assert_eq!(end_events.len(), 2);
+    assert!(
+        end_events
+            .iter()
+            .all(|event| event.time_to_first_chunk().is_none())
+    );
+
+    assert!(deregister_subscriber("stream-without-first-chunk").unwrap());
+}
+
+#[test]
 fn freshness_culls_annotations_and_repeated_compactions_are_idempotent() {
     let _guard = lock_global_runtime();
     reset_global();

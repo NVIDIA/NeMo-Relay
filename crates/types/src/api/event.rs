@@ -947,6 +947,11 @@ pub struct CategoryProfile {
     #[builder(default)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotated_response: Option<Arc<AnnotatedLlmResponse>>,
+
+    /// Elapsed seconds from managed stream execution to its first received chunk.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_to_first_chunk: Option<f64>,
 }
 
 impl CategoryProfile {
@@ -961,6 +966,7 @@ impl CategoryProfile {
             && option_json_is_none_or_null(&self.tool_result_annotation)
             && self.annotated_request.is_none()
             && self.annotated_response.is_none()
+            && self.time_to_first_chunk.is_none()
             && self.extra.is_empty()
     }
 }
@@ -1416,6 +1422,16 @@ impl Event {
     pub fn annotated_response(&self) -> Option<&Arc<AnnotatedLlmResponse>> {
         self.category_profile()
             .and_then(|profile| profile.annotated_response.as_ref())
+    }
+
+    /// Return the managed stream time to first received chunk, in seconds.
+    ///
+    /// # Returns
+    /// The measured duration on streaming LLM end events, when at least one
+    /// chunk reached the managed stream wrapper.
+    pub fn time_to_first_chunk(&self) -> Option<f64> {
+        self.category_profile()
+            .and_then(|profile| profile.time_to_first_chunk)
     }
 
     /// Return true for scope-start events.

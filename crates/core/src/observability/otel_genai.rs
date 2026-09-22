@@ -10,7 +10,7 @@ use crate::api::scope::ScopeType;
 use crate::codec::request::{
     ApiSpecificRequest, ContentPart, Message, MessageContent, tool_definition_identities,
 };
-use crate::codec::response::{AnnotatedLlmResponse, FinishReason};
+use crate::codec::response::{AnnotatedLlmResponse, ApiSpecificResponse, FinishReason};
 use crate::json::Json;
 use opentelemetry::KeyValue;
 use opentelemetry::trace::SpanKind;
@@ -25,16 +25,12 @@ const OPERATION_INVOKE_AGENT: &str = "invoke_agent";
 const OPERATION_RETRIEVAL: &str = "retrieval";
 const OPERATION_TEXT_COMPLETION: &str = "text_completion";
 
-// OpenTelemetry Rust 0.32 still predates generated constants for these
-// development attributes. Keep the missing keys in one projection-local block
-// until the generated crate exposes them.
-const GEN_AI_PROVIDER_NAME: &str = "gen_ai.provider.name";
-const GEN_AI_INPUT_MESSAGES: &str = "gen_ai.input.messages";
-const GEN_AI_OUTPUT_MESSAGES: &str = "gen_ai.output.messages";
-const GEN_AI_SYSTEM_INSTRUCTIONS: &str = "gen_ai.system_instructions";
+// The pinned OpenTelemetry crate does not yet generate these development
+// attributes. Keep only those keys projection-local until it does.
+const GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID: &str = "gen_ai.request.previous_response.id";
+const GEN_AI_REQUEST_REASONING_LEVEL: &str = "gen_ai.request.reasoning.level";
 const GEN_AI_RETRIEVAL_TOP_K: &str = "gen_ai.retrieval.top_k";
-const GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS: &str = "gen_ai.usage.cache_creation.input_tokens";
-const GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: &str = "gen_ai.usage.cache_read.input_tokens";
+const GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: &str = "gen_ai.usage.cache_write.input_tokens";
 
 fn has_gen_ai_semantics(event: &Event) -> bool {
     matches!(
@@ -46,7 +42,17 @@ fn has_gen_ai_semantics(event: &Event) -> bool {
                 | ScopeType::Embedder
                 | ScopeType::Retriever
         )
-    )
+    ) || is_agent_turn(event)
+}
+
+fn is_agent_turn(event: &Event) -> bool {
+    event.scope_type() == Some(ScopeType::Custom)
+        && event
+            .metadata()
+            .and_then(Json::as_object)
+            .and_then(|metadata| metadata.get("nemo_relay_scope_role"))
+            .and_then(Json::as_str)
+            == Some("turn")
 }
 
 pub(super) fn span_name(event: &Event) -> String {
@@ -56,6 +62,9 @@ pub(super) fn span_name(event: &Event) -> String {
     let operation = operation_name(event);
     let qualifier = match event.scope_type() {
         Some(ScopeType::Agent) => Some(agent_name(event)),
+        Some(ScopeType::Custom) if is_agent_turn(event) => {
+            semantic_string(event, semconv::GEN_AI_AGENT_NAME)
+        }
         Some(ScopeType::Tool) => Some(tool_name(event)),
         Some(ScopeType::Retriever) => data_source_id(event),
         Some(ScopeType::Llm | ScopeType::Embedder) => request_model(event),
@@ -90,6 +99,10 @@ pub(super) fn start_attributes(event: &Event) -> Vec<KeyValue> {
             push_conversation_attribute(&mut attributes, event);
             push_agent_attributes(&mut attributes, event);
         }
+        Some(ScopeType::Custom) if is_agent_turn(event) => {
+            push_conversation_attribute(&mut attributes, event);
+            push_explicit_internal_agent_attributes(&mut attributes, event);
+        }
         Some(ScopeType::Llm) => {
             push_provider_and_server_attributes(&mut attributes, event);
             push_conversation_attribute(&mut attributes, event);
@@ -99,7 +112,11 @@ pub(super) fn start_attributes(event: &Event) -> Vec<KeyValue> {
         Some(ScopeType::Tool) => {
             push_conversation_attribute(&mut attributes, event);
             push_tool_attributes(&mut attributes, event);
-            push_tool_content(&mut attributes, "gen_ai.tool.call.arguments", event.input());
+            push_tool_content(
+                &mut attributes,
+                semconv::GEN_AI_TOOL_CALL_ARGUMENTS,
+                event.input(),
+            );
         }
         Some(ScopeType::Retriever) => {
             push_provider_and_server_attributes(&mut attributes, event);
@@ -107,7 +124,7 @@ pub(super) fn start_attributes(event: &Event) -> Vec<KeyValue> {
         }
         Some(ScopeType::Embedder) => {
             push_provider_and_server_attributes(&mut attributes, event);
-            push_model_attribute(&mut attributes, event);
+            push_embedding_request_attributes(&mut attributes, event);
         }
         _ => {}
     }
@@ -125,7 +142,11 @@ pub(super) fn end_attributes(event: &Event) -> Vec<KeyValue> {
             // the start name with an end-event label.
             push_tool_metadata(&mut attributes, event);
             if !attributes.iter().any(|a| a.key.as_str() == "error.type") {
-                push_tool_content(&mut attributes, "gen_ai.tool.call.result", event.output());
+                push_tool_content(
+                    &mut attributes,
+                    semconv::GEN_AI_TOOL_CALL_RESULT,
+                    event.output(),
+                );
             }
         }
         _ => {}
@@ -133,10 +154,49 @@ pub(super) fn end_attributes(event: &Event) -> Vec<KeyValue> {
     attributes
 }
 
-fn push_embedding_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
-    if let Some(value) = scalar_string(event, &["gen_ai.response.model", "response_model", "model"])
+/// Build the low-cardinality dimensions required by the standard GenAI client
+/// metrics. Returns `None` when Relay cannot determine the required provider.
+pub(super) fn client_metric_attributes(event: &Event) -> Option<Json> {
+    let provider = provider_name(event)?;
+    let mut attributes = Map::new();
+    attributes.insert(
+        semconv::GEN_AI_OPERATION_NAME.to_string(),
+        Json::String(operation_name(event).to_string()),
+    );
+    attributes.insert(
+        semconv::GEN_AI_PROVIDER_NAME.to_string(),
+        Json::String(provider),
+    );
+    if let Some(model) = request_model(event) {
+        attributes.insert(
+            semconv::GEN_AI_REQUEST_MODEL.to_string(),
+            Json::String(model),
+        );
+    }
+    if let Some(model) = event
+        .annotated_response()
+        .and_then(|response| response.model.clone())
     {
-        attributes.push(KeyValue::new("gen_ai.response.model", value));
+        attributes.insert(
+            semconv::GEN_AI_RESPONSE_MODEL.to_string(),
+            Json::String(model),
+        );
+    }
+    if let Some(address) = scalar_string(event, &[semconv::SERVER_ADDRESS, "server_address"]) {
+        attributes.insert(semconv::SERVER_ADDRESS.to_string(), Json::String(address));
+    }
+    if let Some(port) = scalar_i64(event, &[semconv::SERVER_PORT, "server_port"]) {
+        attributes.insert(semconv::SERVER_PORT.to_string(), Json::from(port));
+    }
+    Some(Json::Object(attributes))
+}
+
+fn push_embedding_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
+    if let Some(value) = scalar_string(
+        event,
+        &[semconv::GEN_AI_RESPONSE_MODEL, "response_model", "model"],
+    ) {
+        attributes.push(KeyValue::new(semconv::GEN_AI_RESPONSE_MODEL, value));
     }
     if let Some(value) = scalar_i64(
         event,
@@ -153,6 +213,7 @@ fn push_embedding_response_attributes(attributes: &mut Vec<KeyValue>, event: &Ev
 fn operation_name(event: &Event) -> &'static str {
     match event.scope_type() {
         Some(ScopeType::Agent) => OPERATION_INVOKE_AGENT,
+        Some(ScopeType::Custom) if is_agent_turn(event) => OPERATION_INVOKE_AGENT,
         Some(ScopeType::Tool) => OPERATION_EXECUTE_TOOL,
         Some(ScopeType::Embedder) => OPERATION_EMBEDDINGS,
         Some(ScopeType::Retriever) => OPERATION_RETRIEVAL,
@@ -174,7 +235,7 @@ fn llm_operation_name(event: &Event) -> &'static str {
 
 fn push_provider_and_server_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
     if let Some(provider) = provider_name(event) {
-        attributes.push(KeyValue::new(GEN_AI_PROVIDER_NAME, provider));
+        attributes.push(KeyValue::new(semconv::GEN_AI_PROVIDER_NAME, provider));
     }
     if let Some(address) = scalar_string(event, &[semconv::SERVER_ADDRESS, "server_address"]) {
         attributes.push(KeyValue::new(semconv::SERVER_ADDRESS, address));
@@ -188,27 +249,78 @@ fn push_conversation_attribute(attributes: &mut Vec<KeyValue>, event: &Event) {
     if let Some(conversation_id) = scalar_string(
         event,
         &[
-            "gen_ai.conversation.id",
+            semconv::GEN_AI_CONVERSATION_ID,
             "conversation_id",
             "session_id",
             "thread_id",
         ],
     ) {
-        attributes.push(KeyValue::new("gen_ai.conversation.id", conversation_id));
+        attributes.push(KeyValue::new(
+            semconv::GEN_AI_CONVERSATION_ID,
+            conversation_id,
+        ));
     }
 }
 
 fn push_agent_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
-    attributes.push(KeyValue::new("gen_ai.agent.name", agent_name(event)));
-    if let Some(value) = scalar_string(event, &["gen_ai.agent.description", "agent_description"]) {
-        attributes.push(KeyValue::new("gen_ai.agent.description", value));
+    attributes.push(KeyValue::new(semconv::GEN_AI_AGENT_NAME, agent_name(event)));
+    if let Some(value) = scalar_string(
+        event,
+        &[semconv::GEN_AI_AGENT_DESCRIPTION, "agent_description"],
+    ) {
+        attributes.push(KeyValue::new(semconv::GEN_AI_AGENT_DESCRIPTION, value));
     }
-    push_model_attribute(attributes, event);
+    // Internal agent spans may report a model only when the agent is known to
+    // use a single configured model. Require the instrumentation source to make
+    // that assertion through the canonical key rather than inferring it from a
+    // generic `model` label.
+    if let Some(value) = semantic_string(event, semconv::GEN_AI_REQUEST_MODEL) {
+        attributes.push(KeyValue::new(semconv::GEN_AI_REQUEST_MODEL, value));
+    }
+}
+
+fn push_explicit_internal_agent_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
+    for key in [
+        semconv::GEN_AI_AGENT_NAME,
+        semconv::GEN_AI_AGENT_DESCRIPTION,
+    ] {
+        if let Some(value) = semantic_string(event, key) {
+            attributes.push(KeyValue::new(key, value));
+        }
+    }
 }
 
 fn push_model_attribute(attributes: &mut Vec<KeyValue>, event: &Event) {
     if let Some(model) = request_model(event) {
         attributes.push(KeyValue::new(semconv::GEN_AI_REQUEST_MODEL, model));
+    }
+}
+
+fn push_embedding_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
+    push_model_attribute(attributes, event);
+    if let Some(value) = scalar_i64(
+        event,
+        &[semconv::GEN_AI_EMBEDDINGS_DIMENSION_COUNT, "dimensions"],
+    )
+    .filter(|value| *value > 0)
+    {
+        attributes.push(KeyValue::new(
+            semconv::GEN_AI_EMBEDDINGS_DIMENSION_COUNT,
+            value,
+        ));
+    }
+    if let Some(values) = string_values(
+        event,
+        &[
+            semconv::GEN_AI_REQUEST_ENCODING_FORMATS,
+            "encoding_formats",
+            "encoding_format",
+        ],
+    ) {
+        attributes.push(KeyValue::new(
+            semconv::GEN_AI_REQUEST_ENCODING_FORMATS,
+            string_array(values),
+        ));
     }
 }
 
@@ -227,38 +339,57 @@ fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
     }
     if let Some(params) = request.params.as_ref() {
         if let Some(value) = params.temperature {
-            attributes.push(KeyValue::new("gen_ai.request.temperature", value));
+            attributes.push(KeyValue::new(semconv::GEN_AI_REQUEST_TEMPERATURE, value));
         }
         if request.max_output_tokens.is_none()
             && let Some(value) = params.max_tokens.and_then(to_i64)
         {
-            attributes.push(KeyValue::new("gen_ai.request.max_tokens", value));
+            attributes.push(KeyValue::new(semconv::GEN_AI_REQUEST_MAX_TOKENS, value));
         }
         if let Some(value) = params.top_p {
-            attributes.push(KeyValue::new("gen_ai.request.top_p", value));
+            attributes.push(KeyValue::new(semconv::GEN_AI_REQUEST_TOP_P, value));
         }
         if let Some(value) = params.stop.as_ref() {
             attributes.push(KeyValue::new(
-                "gen_ai.request.stop_sequences",
+                semconv::GEN_AI_REQUEST_STOP_SEQUENCES,
                 string_array(value.iter().cloned()),
             ));
         }
     }
     if let Some(value) = request.max_output_tokens.and_then(to_i64) {
-        attributes.push(KeyValue::new("gen_ai.request.max_tokens", value));
+        attributes.push(KeyValue::new(semconv::GEN_AI_REQUEST_MAX_TOKENS, value));
     }
     if request.stream == Some(true) {
-        attributes.push(KeyValue::new("gen_ai.request.stream", true));
+        attributes.push(KeyValue::new(semconv::GEN_AI_REQUEST_STREAM, true));
+    }
+    if let Some(value) = request
+        .previous_response_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        attributes.push(KeyValue::new(
+            GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID,
+            value.to_string(),
+        ));
+    }
+    if let Some(value) = request_reasoning_level(event, request) {
+        attributes.push(KeyValue::new(GEN_AI_REQUEST_REASONING_LEVEL, value));
+    }
+    if let Some(value) = requested_output_type(event, request.api_specific.as_ref()) {
+        attributes.push(KeyValue::new(semconv::GEN_AI_OUTPUT_TYPE, value));
     }
     if let Some(instructions) = request
         .instructions
         .as_ref()
         .and_then(system_instructions_json)
     {
-        attributes.push(KeyValue::new(GEN_AI_SYSTEM_INSTRUCTIONS, instructions));
+        attributes.push(KeyValue::new(
+            semconv::GEN_AI_SYSTEM_INSTRUCTIONS,
+            instructions,
+        ));
     }
     if let Some(messages) = input_messages_json(&request.messages) {
-        attributes.push(KeyValue::new(GEN_AI_INPUT_MESSAGES, messages));
+        attributes.push(KeyValue::new(semconv::GEN_AI_INPUT_MESSAGES, messages));
     }
     push_api_specific_request_attributes(attributes, request.api_specific.as_ref());
 }
@@ -270,7 +401,7 @@ fn push_api_specific_request_attributes(
     match api_specific {
         Some(ApiSpecificRequest::AnthropicMessages { top_k, .. }) => {
             if let Some(value) = top_k.and_then(to_i64) {
-                attributes.push(KeyValue::new("gen_ai.request.top_k", value));
+                attributes.push(KeyValue::new(semconv::GEN_AI_REQUEST_TOP_K, value));
             }
         }
         Some(ApiSpecificRequest::OpenAIChat {
@@ -281,16 +412,22 @@ fn push_api_specific_request_attributes(
             ..
         }) => {
             if let Some(value) = frequency_penalty {
-                attributes.push(KeyValue::new("gen_ai.request.frequency_penalty", *value));
+                attributes.push(KeyValue::new(
+                    semconv::GEN_AI_REQUEST_FREQUENCY_PENALTY,
+                    *value,
+                ));
             }
             if let Some(value) = n.filter(|value| *value != 1).and_then(to_i64) {
-                attributes.push(KeyValue::new("gen_ai.request.choice.count", value));
+                attributes.push(KeyValue::new(semconv::GEN_AI_REQUEST_CHOICE_COUNT, value));
             }
             if let Some(value) = presence_penalty {
-                attributes.push(KeyValue::new("gen_ai.request.presence_penalty", *value));
+                attributes.push(KeyValue::new(
+                    semconv::GEN_AI_REQUEST_PRESENCE_PENALTY,
+                    *value,
+                ));
             }
             if let Some(value) = seed {
-                attributes.push(KeyValue::new("gen_ai.request.seed", *value));
+                attributes.push(KeyValue::new(semconv::GEN_AI_REQUEST_SEED, *value));
             }
         }
         _ => {}
@@ -298,24 +435,30 @@ fn push_api_specific_request_attributes(
 }
 
 fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
+    if let Some(value) = event.time_to_first_chunk() {
+        attributes.push(KeyValue::new(
+            semconv::GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
+            value,
+        ));
+    }
     let Some(response) = event.normalized_llm_response() else {
         return;
     };
     let response = response.as_ref();
     if let Some(value) = response.id.as_ref() {
-        attributes.push(KeyValue::new("gen_ai.response.id", value.clone()));
+        attributes.push(KeyValue::new(semconv::GEN_AI_RESPONSE_ID, value.clone()));
     }
     if let Some(value) = response.model.as_ref() {
-        attributes.push(KeyValue::new("gen_ai.response.model", value.clone()));
+        attributes.push(KeyValue::new(semconv::GEN_AI_RESPONSE_MODEL, value.clone()));
     }
     if let Some(value) = response.finish_reason.as_ref() {
         attributes.push(KeyValue::new(
-            "gen_ai.response.finish_reasons",
+            semconv::GEN_AI_RESPONSE_FINISH_REASONS,
             string_array([finish_reason(value).to_string()]),
         ));
     }
     if let Some(messages) = output_messages_json(response) {
-        attributes.push(KeyValue::new(GEN_AI_OUTPUT_MESSAGES, messages));
+        attributes.push(KeyValue::new(semconv::GEN_AI_OUTPUT_MESSAGES, messages));
     }
     if let Some(usage) = response.usage.as_ref() {
         // Anthropic reports uncached, cache-read, and cache-creation input
@@ -328,18 +471,104 @@ fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
             ));
         }
         if let Some(value) = usage.completion_tokens.and_then(to_i64) {
-            attributes.push(KeyValue::new("gen_ai.usage.output_tokens", value));
+            attributes.push(KeyValue::new(semconv::GEN_AI_USAGE_OUTPUT_TOKENS, value));
         }
         if let Some(value) = usage.cache_read_tokens.and_then(to_i64) {
-            attributes.push(KeyValue::new(GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, value));
-        }
-        if let Some(value) = usage.cache_write_tokens.and_then(to_i64) {
             attributes.push(KeyValue::new(
-                GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
+                semconv::GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
                 value,
             ));
         }
+        if let Some(value) = usage.cache_write_tokens.and_then(to_i64) {
+            attributes.push(KeyValue::new(GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS, value));
+        }
     }
+    if let Some(value) = reasoning_output_tokens(event, response) {
+        attributes.push(KeyValue::new(
+            semconv::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+            value,
+        ));
+    }
+}
+
+fn request_reasoning_level(
+    event: &Event,
+    request: &crate::codec::request::AnnotatedLlmRequest,
+) -> Option<String> {
+    semantic_string(event, GEN_AI_REQUEST_REASONING_LEVEL).or_else(|| {
+        match request.api_specific.as_ref() {
+            Some(ApiSpecificRequest::OpenAIChat {
+                reasoning_effort, ..
+            }) => reasoning_effort
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned),
+            _ => request
+                .reasoning
+                .as_ref()
+                .and_then(Json::as_object)
+                .and_then(|reasoning| reasoning.get("effort"))
+                .and_then(Json::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned),
+        }
+    })
+}
+
+fn requested_output_type(
+    event: &Event,
+    api_specific: Option<&ApiSpecificRequest>,
+) -> Option<String> {
+    semantic_string(event, semconv::GEN_AI_OUTPUT_TYPE).or_else(|| match api_specific {
+        Some(ApiSpecificRequest::OpenAIChat {
+            modalities,
+            response_format,
+            ..
+        }) => response_format
+            .as_ref()
+            .and_then(json_output_type)
+            .or_else(|| openai_chat_output_type(modalities.as_deref())),
+        Some(ApiSpecificRequest::OpenAIResponses { text, .. }) => text
+            .as_ref()
+            .and_then(Json::as_object)
+            .and_then(|text| text.get("format"))
+            .and_then(json_output_type),
+        _ => None,
+    })
+}
+
+fn json_output_type(format: &Json) -> Option<String> {
+    matches!(
+        format.as_object()?.get("type")?.as_str()?,
+        "json_object" | "json_schema"
+    )
+    .then(|| "json".to_string())
+}
+
+fn openai_chat_output_type(modalities: Option<&[String]>) -> Option<String> {
+    match modalities? {
+        [modality] if modality == "audio" => Some("speech".to_string()),
+        [modality] if modality == "text" => Some("text".to_string()),
+        _ => None,
+    }
+}
+
+fn reasoning_output_tokens(event: &Event, response: &AnnotatedLlmResponse) -> Option<i64> {
+    scalar_i64(event, &[semconv::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS])
+        .filter(|value| *value >= 0)
+        .or_else(|| match response.api_specific.as_ref() {
+            Some(ApiSpecificResponse::OpenAIResponses {
+                output_tokens_details: Some(details),
+                ..
+            }) => details
+                .get("reasoning_tokens")
+                .and_then(Json::as_u64)
+                .and_then(to_i64),
+            Some(ApiSpecificResponse::GeminiGenerateContent {
+                thoughts_tokens, ..
+            }) => thoughts_tokens.and_then(to_i64),
+            _ => None,
+        })
 }
 
 fn gen_ai_input_tokens(event: &Event, response: &AnnotatedLlmResponse) -> Option<i64> {
@@ -576,25 +805,29 @@ fn push_tool_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
 }
 
 fn push_tool_metadata(attributes: &mut Vec<KeyValue>, event: &Event) {
-    if let Some(value) = tool_metadata_string(event, &["gen_ai.tool.type", "tool_type"]) {
-        attributes.push(KeyValue::new("gen_ai.tool.type", value));
+    if let Some(value) = tool_metadata_string(event, &[semconv::GEN_AI_TOOL_TYPE, "tool_type"]) {
+        attributes.push(KeyValue::new(semconv::GEN_AI_TOOL_TYPE, value));
     }
     if let Some(value) = event
         .tool_call_id()
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned)
-        .or_else(|| tool_metadata_string(event, &["gen_ai.tool.call.id", "tool_call_id"]))
+        .or_else(|| tool_metadata_string(event, &[semconv::GEN_AI_TOOL_CALL_ID, "tool_call_id"]))
     {
-        attributes.push(KeyValue::new("gen_ai.tool.call.id", value));
+        attributes.push(KeyValue::new(semconv::GEN_AI_TOOL_CALL_ID, value));
     }
     if let Some(value) = tool_metadata_string(
         event,
-        &["gen_ai.tool.description", "tool_description", "description"],
+        &[
+            semconv::GEN_AI_TOOL_DESCRIPTION,
+            "tool_description",
+            "description",
+        ],
     ) {
-        attributes.push(KeyValue::new("gen_ai.tool.description", value));
+        attributes.push(KeyValue::new(semconv::GEN_AI_TOOL_DESCRIPTION, value));
     }
-    if let Some(value) = tool_metadata_string(event, &["gen_ai.agent.name", "agent_name"]) {
-        attributes.push(KeyValue::new("gen_ai.agent.name", value));
+    if let Some(value) = tool_metadata_string(event, &[semconv::GEN_AI_AGENT_NAME, "agent_name"]) {
+        attributes.push(KeyValue::new(semconv::GEN_AI_AGENT_NAME, value));
     }
 }
 
@@ -637,8 +870,14 @@ fn tool_metadata_with_origin(event: &Event, keys: &[&str]) -> Option<(String, bo
 
 pub(super) fn inferred_tool_attribute_keys(event: &Event) -> std::collections::HashSet<String> {
     [
-        ("gen_ai.tool.type", ["gen_ai.tool.type", "tool_type"]),
-        ("gen_ai.agent.name", ["gen_ai.agent.name", "agent_name"]),
+        (
+            semconv::GEN_AI_TOOL_TYPE,
+            [semconv::GEN_AI_TOOL_TYPE, "tool_type"],
+        ),
+        (
+            semconv::GEN_AI_AGENT_NAME,
+            [semconv::GEN_AI_AGENT_NAME, "agent_name"],
+        ),
     ]
     .into_iter()
     .filter_map(|(key, aliases)| {
@@ -678,7 +917,7 @@ fn push_tool_definitions(attributes: &mut Vec<KeyValue>, event: &Event) {
     // can be large and need not accompany every inference.
     if !definitions.is_empty() {
         attributes.push(KeyValue::new(
-            "gen_ai.tool.definitions",
+            semconv::GEN_AI_TOOL_DEFINITIONS,
             Json::Array(definitions).to_string(),
         ));
     }
@@ -686,7 +925,7 @@ fn push_tool_definitions(attributes: &mut Vec<KeyValue>, event: &Event) {
 
 fn push_retrieval_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
     if let Some(value) = data_source_id(event) {
-        attributes.push(KeyValue::new("gen_ai.data_source.id", value));
+        attributes.push(KeyValue::new(semconv::GEN_AI_DATA_SOURCE_ID, value));
     }
     push_model_attribute(attributes, event);
     if let Some(value) = scalar_i64(event, &[GEN_AI_RETRIEVAL_TOP_K, "top_k"]) {
@@ -718,9 +957,12 @@ fn request_model(event: &Event) -> Option<String> {
 }
 
 fn provider_name(event: &Event) -> Option<String> {
-    scalar_string(event, &[GEN_AI_PROVIDER_NAME, "provider_name", "provider"])
-        .or_else(|| provider_from_event_name(event))
-        .or_else(|| provider_from_normalized_request(event).map(str::to_string))
+    scalar_string(
+        event,
+        &[semconv::GEN_AI_PROVIDER_NAME, "provider_name", "provider"],
+    )
+    .or_else(|| provider_from_event_name(event))
+    .or_else(|| provider_from_normalized_request(event).map(str::to_string))
 }
 
 fn provider_from_event_name(event: &Event) -> Option<String> {
@@ -762,7 +1004,7 @@ fn provider_from_normalized_request(event: &Event) -> Option<&'static str> {
 }
 
 fn agent_name(event: &Event) -> String {
-    scalar_string(event, &["gen_ai.agent.name"]).unwrap_or_else(|| event.name().to_string())
+    scalar_string(event, &[semconv::GEN_AI_AGENT_NAME]).unwrap_or_else(|| event.name().to_string())
 }
 
 fn tool_name(event: &Event) -> String {
@@ -774,7 +1016,7 @@ fn data_source_id(event: &Event) -> Option<String> {
     scalar_string(
         event,
         &[
-            "gen_ai.data_source.id",
+            semconv::GEN_AI_DATA_SOURCE_ID,
             "data_source_id",
             "index_name",
             "collection_name",
@@ -809,6 +1051,33 @@ fn scalar_string(event: &Event, keys: &[&str]) -> Option<String> {
 fn scalar_i64(event: &Event, keys: &[&str]) -> Option<i64> {
     find_scalar(event, keys, |value| {
         value.as_i64().or_else(|| value.as_u64().and_then(to_i64))
+    })
+}
+
+fn semantic_string(event: &Event, key: &str) -> Option<String> {
+    find_scalar(event, &[key], |value| {
+        value
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn string_values(event: &Event, keys: &[&str]) -> Option<Vec<String>> {
+    find_scalar(event, keys, |value| match value {
+        Json::String(value) if !value.trim().is_empty() => Some(vec![value.clone()]),
+        Json::Array(values) => {
+            let values = values
+                .iter()
+                .map(Json::as_str)
+                .collect::<Option<Vec<_>>>()?
+                .into_iter()
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            (!values.is_empty()).then_some(values)
+        }
+        _ => None,
     })
 }
 
