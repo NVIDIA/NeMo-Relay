@@ -1872,12 +1872,17 @@ async fn malformed_permission_hooks_fail_closed_in_each_native_response_shape() 
     assert_eq!(codex.status(), StatusCode::OK);
     let codex: Value =
         serde_json::from_slice(&codex.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    assert_eq!(codex["decision"], "deny");
-    assert!(
-        codex["reason"]
-            .as_str()
-            .is_some_and(|reason| !reason.is_empty())
+    assert_eq!(
+        codex["hookSpecificOutput"]["hookEventName"],
+        "PermissionRequest"
     );
+    assert_eq!(codex["hookSpecificOutput"]["decision"]["behavior"], "deny");
+    assert!(
+        codex["hookSpecificOutput"]["decision"]["message"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty())
+    );
+    assert!(codex.get("decision").is_none());
 
     let claude = runtime
         .handle_hook(

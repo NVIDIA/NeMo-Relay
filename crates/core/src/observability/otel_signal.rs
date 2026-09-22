@@ -10,20 +10,30 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::{
     Resource,
     error::{OTelSdkError, OTelSdkResult},
 };
 use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
+use uuid::Uuid;
 
 use crate::api::event::{
-    Event, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope,
+    Event, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope, ScopeCategory,
     ValidatedMetricMeasurement,
 };
 use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 
 use super::otel::{OpenTelemetryError, Result};
+use super::{MetadataPromotionIssue, promote_event_metadata_attributes};
+
+// Each dynamic pipeline owns a runtime worker and a supervising thread. Keep the
+// per-endpoint log/metric budget conservative; the base provider is not counted.
+pub(super) const MAX_DYNAMIC_SIGNAL_PIPELINES: usize = 16;
+
+// Bound active UUID retention without expiring legitimate long-running scopes.
+pub(super) const MAX_ACTIVE_RESOURCE_SCOPES: usize = 4_096;
 
 const MAX_RUNTIME_DIAGNOSTICS: usize = 32;
 const MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS: usize = 1_024;
@@ -174,6 +184,21 @@ impl SignalRuntimeDiagnostics {
 
 pub(super) fn should_relog_runtime_diagnostic(count: u64) -> bool {
     count.is_power_of_two()
+}
+
+/// Report capacity fallback without including high-cardinality resource keys.
+pub(super) fn record_resource_pipeline_limit(diagnostics: &SignalRuntimeDiagnostics, signal: &str) {
+    let message = format!(
+        "OpenTelemetry {signal} resource pipeline limit of {MAX_DYNAMIC_SIGNAL_PIPELINES} reached; new resources use the configured base resource"
+    );
+    let count = diagnostics.record("otel.resource_metadata_pipeline_limit", message.clone(), 1);
+    if should_relog_runtime_diagnostic(count) {
+        log::warn!(
+            target: "nemo_relay.observability",
+            event = "otel_resource_metadata_pipeline_limit";
+            "{message}"
+        );
+    }
 }
 
 /// Retry a batch-processor control message while the data queue is transiently full.
@@ -589,6 +614,20 @@ pub(super) fn signal_resource(
     service_version: Option<&str>,
     resource_attributes: &HashMap<String, String>,
 ) -> Resource {
+    telemetry_resource(signal_resource_attributes(
+        service_name,
+        service_namespace,
+        service_version,
+        resource_attributes,
+    ))
+}
+
+pub(super) fn signal_resource_attributes(
+    service_name: Option<&str>,
+    service_namespace: Option<&str>,
+    service_version: Option<&str>,
+    resource_attributes: &HashMap<String, String>,
+) -> Vec<KeyValue> {
     let mut attributes = Vec::new();
     if let Some(service_name) = service_name {
         attributes.push(KeyValue::new("service.name", service_name.to_string()));
@@ -604,11 +643,11 @@ pub(super) fn signal_resource(
             .iter()
             .map(|(key, value)| KeyValue::new(key.clone(), value.clone())),
     );
-    telemetry_resource(attributes)
+    attributes
 }
 
 #[cfg(test)]
-mod tests {
+mod automatic_tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;
@@ -647,3 +686,216 @@ mod tests {
         );
     }
 }
+
+pub(super) fn canonical_resource_key(attributes: &[KeyValue]) -> String {
+    let mut entries = attributes
+        .iter()
+        .map(|attribute| format!("{}={:?}", attribute.key.as_str(), attribute.value))
+        .collect::<Vec<_>>();
+    entries.sort();
+    entries.join("\u{1f}")
+}
+
+pub(super) fn promoted_signal_resource_attributes(
+    event: &Event,
+    prefixes: &[String],
+    service_name: Option<&str>,
+    service_namespace: Option<&str>,
+    service_version: Option<&str>,
+    resource_attributes: &HashMap<String, String>,
+    runtime_diagnostics: &SignalRuntimeDiagnostics,
+) -> Option<(String, Vec<KeyValue>)> {
+    if prefixes.is_empty()
+        || event.scope_category() != Some(ScopeCategory::Start)
+        || (event.parent_uuid().is_some() && event.propagation_parent_uuid() == event.parent_uuid())
+    {
+        return None;
+    }
+    let mut attributes = signal_resource_attributes(
+        service_name,
+        service_namespace,
+        service_version,
+        resource_attributes,
+    );
+    let mut protected_keys = attributes
+        .iter()
+        .map(|attribute| attribute.key.as_str().to_string())
+        .collect::<HashSet<_>>();
+    protected_keys.extend(
+        TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS
+            .iter()
+            .map(|key| (*key).to_string()),
+    );
+    let promotion =
+        promote_event_metadata_attributes(&mut attributes, event, prefixes, &protected_keys);
+    record_metadata_promotion_issues(runtime_diagnostics, promotion.issues, "resource_metadata");
+    let key = canonical_resource_key(&attributes);
+    let base_key = canonical_resource_key(&signal_resource_attributes(
+        service_name,
+        service_namespace,
+        service_version,
+        resource_attributes,
+    ));
+    (key != base_key).then_some((key, attributes))
+}
+
+fn record_metadata_promotion_issues(
+    runtime_diagnostics: &SignalRuntimeDiagnostics,
+    mut issues: Vec<MetadataPromotionIssue>,
+    kind: &str,
+) {
+    issues.sort_by(|left, right| left.key.cmp(&right.key));
+    for issue in issues {
+        let diagnostic_code = format!("otel.{kind}_promotion_value_unsupported.{}", issue.key);
+        let diagnostic_count = runtime_diagnostics.record(
+            diagnostic_code,
+            format!(
+                "OpenTelemetry {kind} attribute {:?} was not promoted: {}",
+                issue.key, issue.reason
+            ),
+            1,
+        );
+        if should_relog_runtime_diagnostic(diagnostic_count) {
+            log::warn!(
+                target: "nemo_relay.observability",
+                event = "otel_metadata_promotion_value_unsupported",
+                metadata_key = issue.key.as_str();
+                "OpenTelemetry {kind} attribute was not promoted: {}",
+                issue.reason
+            );
+        }
+    }
+}
+
+struct CompletedResourceRoute<T> {
+    closed_at: DateTime<Utc>,
+    route: T,
+}
+
+/// Tracks the resource selected by a root scope so child scopes and late marks
+/// use the same signal provider.
+pub(super) struct SignalResourceLineage<T> {
+    active: HashMap<Uuid, T>,
+    completed: HashMap<Uuid, CompletedResourceRoute<T>>,
+    completed_expiry_index: BTreeMap<DateTime<Utc>, HashSet<Uuid>>,
+}
+
+impl<T: Clone> SignalResourceLineage<T> {
+    pub(super) fn new() -> Self {
+        Self {
+            active: HashMap::new(),
+            completed: HashMap::new(),
+            completed_expiry_index: BTreeMap::new(),
+        }
+    }
+
+    /// Expire completed routes before lookup and admit new active routes only
+    /// within the budget. Root provider creation runs only for admitted starts
+    /// that do not inherit a route; existing active scopes are never evicted.
+    pub(super) fn process(
+        &mut self,
+        event: &Event,
+        completed_context_ttl: Duration,
+        diagnostics: &SignalRuntimeDiagnostics,
+        root_route: impl FnOnce() -> Option<T>,
+    ) -> Option<T> {
+        self.expire_completed(*event.timestamp(), completed_context_ttl);
+        match event.scope_category() {
+            Some(ScopeCategory::Start) => {
+                if let Some(route) = self.active.get(&event.uuid()) {
+                    return Some(route.clone());
+                }
+                self.remove_completed(event.uuid());
+                if self.active.len() >= MAX_ACTIVE_RESOURCE_SCOPES {
+                    let message = format!(
+                        "OpenTelemetry active resource scope limit of {MAX_ACTIVE_RESOURCE_SCOPES} reached; new scopes use the configured base resource until capacity is available"
+                    );
+                    let count = diagnostics.record(
+                        "otel.resource_metadata_active_scope_limit",
+                        message.clone(),
+                        1,
+                    );
+                    if should_relog_runtime_diagnostic(count) {
+                        log::warn!(
+                            target: "nemo_relay.observability",
+                            event = "otel_resource_metadata_active_scope_limit";
+                            "{message}"
+                        );
+                    }
+                    return None;
+                }
+                let route = self.parent_route(event).or_else(root_route);
+                if let Some(route) = route.clone() {
+                    self.active.insert(event.uuid(), route);
+                }
+                route
+            }
+            Some(ScopeCategory::End) => {
+                let route = self.active.remove(&event.uuid());
+                if let Some(route) = route.clone() {
+                    self.record_completed(event.uuid(), *event.timestamp(), route);
+                }
+                route
+            }
+            None => self.parent_route(event),
+        }
+    }
+
+    fn parent_route(&self, event: &Event) -> Option<T> {
+        let parent_uuid = event.parent_uuid()?;
+        self.active.get(&parent_uuid).cloned().or_else(|| {
+            self.completed
+                .get(&parent_uuid)
+                .map(|context| context.route.clone())
+        })
+    }
+
+    fn remove_completed(&mut self, uuid: Uuid) {
+        if let Some(context) = self.completed.remove(&uuid) {
+            let remove_bucket = self
+                .completed_expiry_index
+                .get_mut(&context.closed_at)
+                .is_some_and(|uuids| {
+                    uuids.remove(&uuid);
+                    uuids.is_empty()
+                });
+            if remove_bucket {
+                self.completed_expiry_index.remove(&context.closed_at);
+            }
+        }
+    }
+
+    fn record_completed(&mut self, uuid: Uuid, closed_at: DateTime<Utc>, route: T) {
+        self.remove_completed(uuid);
+        self.completed
+            .insert(uuid, CompletedResourceRoute { closed_at, route });
+        self.completed_expiry_index
+            .entry(closed_at)
+            .or_default()
+            .insert(uuid);
+    }
+
+    fn expire_completed(&mut self, timestamp: DateTime<Utc>, ttl: Duration) {
+        while let Some((closed_at, _)) = self.completed_expiry_index.first_key_value() {
+            let closed_at = *closed_at;
+            if !timestamp
+                .signed_duration_since(closed_at)
+                .to_std()
+                .is_ok_and(|age| age > ttl)
+            {
+                break;
+            }
+            let uuids = self
+                .completed_expiry_index
+                .remove(&closed_at)
+                .expect("completed resource-route expiry bucket exists");
+            for uuid in uuids {
+                self.completed.remove(&uuid);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/observability/otel_signal_tests.rs"]
+mod tests;

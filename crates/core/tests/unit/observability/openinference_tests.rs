@@ -4052,6 +4052,7 @@ fn llm_end_with_usage_emits_token_count_attributes() {
                         total_tokens: Some(150),
                         cache_read_tokens: Some(25),
                         cache_write_tokens: Some(10),
+                        uncached_input_tokens: None,
                         cost: None,
                     }),
                     optimization_summary: None,
@@ -4120,6 +4121,7 @@ fn llm_end_with_known_model_usage_emits_derived_cost_attribute() {
                         total_tokens: Some(1_500),
                         cache_read_tokens: Some(200),
                         cache_write_tokens: None,
+                        uncached_input_tokens: None,
                         cost: None,
                     }),
                     ..empty_annotated_response()
@@ -5289,6 +5291,7 @@ fn llm_end_with_partial_usage_emits_only_present_fields() {
                         total_tokens: None,
                         cache_read_tokens: None,
                         cache_write_tokens: None,
+                        uncached_input_tokens: None,
                         cost: None,
                     }),
                     optimization_summary: None,
