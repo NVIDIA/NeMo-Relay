@@ -143,6 +143,30 @@ Return the synthetic parent imported with the propagation context.
 
 Attach the synthetic parent captured at event emission.
 
+#### `propagation_traceparent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn propagation_traceparent(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;"}} /></pre>
+
+Return W3C traceparent captured when this event was emitted.
+
+#### `set_propagation_traceparent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn set_propagation_traceparent(&amp;mut self, traceparent: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;)"}} /></pre>
+
+Attach runtime-only W3C traceparent lineage.
+
+#### `propagation_tracestate`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn propagation_tracestate(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;"}} /></pre>
+
+Return W3C tracestate captured when this event was emitted.
+
+#### `set_propagation_tracestate`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn set_propagation_tracestate(&amp;mut self, tracestate: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;)"}} /></pre>
+
+Attach runtime-only W3C tracestate lineage.
+
 #### `uuid`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn uuid(&amp;self) -&gt; <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>"}} /></pre>

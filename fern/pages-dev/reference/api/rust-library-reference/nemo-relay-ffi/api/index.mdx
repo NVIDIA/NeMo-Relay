@@ -145,6 +145,7 @@ Each function clears the thread-local error before executing and returns an [`Ne
 - [nemo_relay_plugin_validate](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-validate): Validate dynamic plugins without loading plugin code or acquiring the host lease.
 - [nemo_relay_plugin_validate_exact](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-validate-exact): Validate only the supplied static plugin configuration.
 - [nemo_relay_pop_scope](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-pop-scope): Pop a scope from the scope stack by its handle.
+- [nemo_relay_propagation_context_normalize_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-propagation-context-normalize-json): Validate and canonicalize propagation-context JSON for transport.
 - [nemo_relay_propagation_context_to_traceparent](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-propagation-context-to-traceparent): Convert a rooted propagation-context JSON value to a W3C `traceparent`.
 - [nemo_relay_push_scope](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-push-scope): Push a new scope onto the scope stack.
 - [nemo_relay_register_conditional_middleware_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-register-conditional-middleware-guardrail): Register a global conditional middleware guardrail.
