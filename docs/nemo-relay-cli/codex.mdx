@@ -160,6 +160,12 @@ If your config explicitly selects another provider, installation switches it to
 the built-in `openai` provider while Relay is installed and restores your
 selection on uninstall.
 
+The built-in `openai` provider currently attempts a WebSocket connection before
+falling back to HTTPS. Because Relay does not support that WebSocket transport,
+starting a Codex session can add several seconds of delay and emit connection
+errors before the first request succeeds over HTTPS. Codex does not currently
+provide a supported setting to disable this attempt for the built-in provider.
+
 The required plugin MCP process is a lightweight lifecycle client. When it
 launches, it starts or reuses a detached Rust
 `nemo-relay --bind 127.0.0.1:47632` sidecar. It completes MCP initialization
