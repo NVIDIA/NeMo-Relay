@@ -872,7 +872,7 @@ class TestLLMInterceptsAsync:
         observed = []
         subscribers.register("py_llm_capture_propagated_w3c", events.append)
 
-        async def execution_intercept(_name, request, next_handler):
+        async def execution_intercept(_name, request, _context, next_handler):
             context = capture_propagation_context()
             rootless = capture_rootless_propagation_context()
             explicit_root = capture_propagation_context_with_root(root_uuid)

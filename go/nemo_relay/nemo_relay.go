@@ -1897,9 +1897,10 @@ func DeregisterLlmRequestIntercept(name string) error {
 }
 
 // RegisterLlmExecutionIntercept registers an execution intercept following
-// the middleware chain pattern. execFn is called with the request parameters
-// and a `next` function. Call `next` to invoke the next intercept or original
-// implementation; skip calling `next` to short-circuit the chain.
+// the middleware chain pattern. execFn is called with the request parameters,
+// codec context, and a `next` function. Call `next` to invoke the next
+// intercept or original implementation; skip calling `next` to short-circuit
+// the chain.
 func RegisterLlmExecutionIntercept(name string, priority int32, execFn LLMExecutionInterceptFunc) error {
 	execID := registerClosure(execFn)
 	cName := C.CString(name)
@@ -1922,9 +1923,9 @@ func DeregisterLlmExecutionIntercept(name string) error {
 
 // RegisterLlmStreamExecutionIntercept registers an execution intercept for
 // streaming LLM calls following the middleware chain pattern. execFn is called
-// with the request parameters and a `next` function. Call `next` to invoke the
-// next intercept or original implementation; skip calling `next` to
-// short-circuit.
+// with the request parameters, codec context, and a `next` function. Call
+// `next` to invoke the next intercept or original implementation; skip calling
+// `next` to short-circuit.
 func RegisterLlmStreamExecutionIntercept(name string, priority int32, execFn LLMExecutionInterceptFunc) error {
 	execID := registerClosure(execFn)
 	cName := C.CString(name)

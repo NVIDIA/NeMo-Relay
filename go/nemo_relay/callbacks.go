@@ -340,9 +340,10 @@ type LLMExecutionFunc func(requestJSON json.RawMessage) (json.RawMessage, error)
 
 // LLMExecutionInterceptFunc is a callback for LLM execution intercepts
 // following the middleware chain pattern. It receives the serialized LLMRequest
-// as JSON and a `next` function. Call `next` to invoke the next intercept in
-// the chain (or the original LLM implementation if this is the innermost
-// intercept). Skip calling `next` to short-circuit the chain entirely.
+// as JSON, the invocation's codec context, and a `next` function. Call `next`
+// to invoke the next intercept in the chain (or the original LLM implementation
+// if this is the innermost intercept). Skip calling `next` to short-circuit the
+// chain entirely.
 type LLMExecutionInterceptFunc func(requestJSON json.RawMessage, context LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error)
 
 // CollectorFunc is a callback invoked with each intercepted chunk during a

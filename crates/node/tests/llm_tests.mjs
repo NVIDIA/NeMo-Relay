@@ -1185,7 +1185,7 @@ describe('LLM intercepts', () => {
     const events = [];
     const observed = [];
     registerSubscriber('node_llm_exec_propagated_w3c', (event) => events.push(event));
-    registerLlmExecutionIntercept('node_llm_exec_propagated_w3c', 10, async (request, next) => {
+    registerLlmExecutionIntercept('node_llm_exec_propagated_w3c', 10, async (request, _context, next) => {
       const context = lib.capturePropagationContext();
       const rootless = lib.captureRootlessPropagationContext();
       observed.push([
