@@ -649,21 +649,34 @@ async fn codex_permission_request_without_tool_call_id_requires_one_matching_act
         }};
     }
 
+    // Codex's documented shapes: PermissionRequest carries an approval `description` that the
+    // matching PreToolUse does not.
     let permission = |session_id, command| {
         json!({
             "session_id": session_id,
             "hook_event_name": "PermissionRequest",
-            "tool_name": "shell",
-            "tool_input": {"cmd": command}
+            "tool_name": "Bash",
+            "tool_input": {"command": command, "description": "needs approval"}
         })
     };
     let pre_tool = |session_id, command| {
         json!({
             "session_id": session_id,
             "hook_event_name": "PreToolUse",
-            "tool_name": "shell",
-            "tool_input": {"cmd": command}
+            "tool_name": "Bash",
+            "tool_input": {"command": command}
         })
+    };
+    let assert_denied = |body: Value| {
+        assert_eq!(body.as_object().map(|object| object.len()), Some(1));
+        let output = &body["hookSpecificOutput"];
+        assert_eq!(output["hookEventName"], json!("PermissionRequest"));
+        assert_eq!(output["decision"]["behavior"], json!("deny"));
+        assert!(
+            output["decision"]["message"]
+                .as_str()
+                .is_some_and(|message| !message.is_empty())
+        );
     };
 
     let single_match = "codex-permission-single-match";
@@ -681,10 +694,7 @@ async fn codex_permission_request_without_tool_call_id_requires_one_matching_act
         json!({})
     );
     assert_eq!(send_codex_hook!(pre_tool(no_match, "pwd")), json!({}));
-    assert_eq!(
-        send_codex_hook!(permission(no_match, "whoami"))["decision"],
-        json!("deny")
-    );
+    assert_denied(send_codex_hook!(permission(no_match, "whoami")));
 
     let ambiguous = "codex-permission-ambiguous";
     assert_eq!(
@@ -693,10 +703,7 @@ async fn codex_permission_request_without_tool_call_id_requires_one_matching_act
     );
     assert_eq!(send_codex_hook!(pre_tool(ambiguous, "pwd")), json!({}));
     assert_eq!(send_codex_hook!(pre_tool(ambiguous, "pwd")), json!({}));
-    assert_eq!(
-        send_codex_hook!(permission(ambiguous, "pwd"))["decision"],
-        json!("deny")
-    );
+    assert_denied(send_codex_hook!(permission(ambiguous, "pwd")));
 
     let session_one = "codex-permission-session-one";
     let session_two = "codex-permission-session-two";
@@ -709,10 +716,25 @@ async fn codex_permission_request_without_tool_call_id_requires_one_matching_act
         json!({})
     );
     assert_eq!(send_codex_hook!(pre_tool(session_two, "pwd")), json!({}));
-    assert_eq!(
-        send_codex_hook!(permission(session_one, "pwd"))["decision"],
-        json!("deny")
-    );
+    assert_denied(send_codex_hook!(permission(session_one, "pwd")));
+
+    // MCP tools forward their real arguments, so a `description` argument must still match.
+    let mcp = "codex-permission-mcp-description";
+    let mcp_tool = |event| {
+        json!({
+            "session_id": mcp,
+            "hook_event_name": event,
+            "tool_name": "mcp__docs__create_page",
+            "tool_input": {"title": "Notes", "description": "page summary"}
+        })
+    };
+    for payload in [
+        json!({"session_id": mcp, "hook_event_name": "SessionStart"}),
+        mcp_tool("PreToolUse"),
+        mcp_tool("PermissionRequest"),
+    ] {
+        assert_eq!(send_codex_hook!(payload), json!({}));
+    }
 }
 
 #[tokio::test]
