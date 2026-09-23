@@ -248,11 +248,7 @@ pub(crate) fn enforce_required_dynamic_plugin_startup(
     explicit_plugin_config: Option<&PathBuf>,
     resolved: &ResolvedConfig,
 ) -> Result<(), CliError> {
-    let (scopes, touched_scope_indices) =
-        load_and_hydrate_scopes_with_updates(explicit_plugin_config, resolved)?;
-    for scope_index in touched_scope_indices {
-        scopes[scope_index].save()?;
-    }
+    let (scopes, _) = load_and_hydrate_scopes_with_updates(explicit_plugin_config, resolved)?;
     let required_failures = collect_records(&scopes, false)
         .into_iter()
         .filter(|entry| entry.record.spec.enabled)
@@ -2101,12 +2097,7 @@ fn load_and_hydrate_scopes(
     explicit_plugin_config: Option<&PathBuf>,
     resolved: &ResolvedConfig,
 ) -> Result<Vec<ScopedRegistry>, CliError> {
-    let (scopes, touched_scope_indices) =
-        load_and_hydrate_scopes_with_updates(explicit_plugin_config, resolved)?;
-    for scope_index in touched_scope_indices {
-        scopes[scope_index].save()?;
-    }
-    Ok(scopes)
+    load_and_hydrate_scopes_with_updates(explicit_plugin_config, resolved).map(|(scopes, _)| scopes)
 }
 
 fn load_and_hydrate_scopes_with_updates(

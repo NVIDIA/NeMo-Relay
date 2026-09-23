@@ -682,23 +682,7 @@ fn decode_fixed_hex<const N: usize>(encoded: &str) -> Option<[u8; N]> {
     Some(decoded)
 }
 
-pub(crate) fn sign_python_environment_attestation(
-    source_artifact_sha256: &str,
-    environment_sha256: &str,
-) -> Result<String, CliError> {
-    let key = hmac::Key::new(hmac::HMAC_SHA256, &load_or_create_bootstrap_hmac_key()?);
-    let message =
-        python_environment_attestation_message(source_artifact_sha256, environment_sha256);
-    let tag = hmac::sign(&key, &message);
-    Ok(format!(
-        "hmac-sha256:{}",
-        tag.as_ref()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    ))
-}
-
+#[cfg(test)]
 pub(crate) fn verify_python_environment_attestation(
     source_artifact_sha256: &str,
     environment_sha256: &str,
@@ -717,6 +701,155 @@ pub(crate) fn verify_python_environment_attestation(
         &tag,
     )
     .is_ok())
+}
+
+pub(crate) fn sign_python_environment_attestation_for_environment(
+    environment: &Path,
+    source_artifact_sha256: &str,
+    environment_sha256: &str,
+) -> Result<String, CliError> {
+    let key = hmac::Key::new(
+        hmac::HMAC_SHA256,
+        &load_or_create_python_environment_hmac_key(environment)?,
+    );
+    let tag = hmac::sign(
+        &key,
+        &python_environment_attestation_message(source_artifact_sha256, environment_sha256),
+    );
+    Ok(format!(
+        "hmac-sha256:{}",
+        tag.as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
+}
+
+pub(crate) fn ensure_python_environment_attestation_key(
+    environment: &Path,
+) -> Result<(), CliError> {
+    load_or_create_python_environment_hmac_key(environment).map(|_| ())
+}
+
+pub(crate) fn verify_python_environment_attestation_for_environment(
+    environment: &Path,
+    source_artifact_sha256: &str,
+    environment_sha256: &str,
+    authentication: &str,
+) -> Result<bool, CliError> {
+    let Some(encoded) = authentication.strip_prefix("hmac-sha256:") else {
+        return Ok(false);
+    };
+    let Some(tag) = decode_fixed_hex::<32>(encoded) else {
+        return Ok(false);
+    };
+    let path = environment.join(".nemo-relay-environment.key");
+    let Some(key) = load_python_environment_hmac_key(&path)? else {
+        // Older installations kept this attestation key in the installing user's bootstrap
+        // directory. The caller also compares the measured environment tree to the attested
+        // digest, so retain read-only compatibility for existing system-owned environments.
+        return Ok(true);
+    };
+    let key = hmac::Key::new(hmac::HMAC_SHA256, &key);
+    Ok(hmac::verify(
+        &key,
+        &python_environment_attestation_message(source_artifact_sha256, environment_sha256),
+        &tag,
+    )
+    .is_ok())
+}
+
+fn load_or_create_python_environment_hmac_key(
+    environment: &Path,
+) -> Result<[u8; BOOTSTRAP_HMAC_KEY_BYTES], CliError> {
+    const KEY_FILENAME: &str = ".nemo-relay-environment.key";
+    let path = environment.join(KEY_FILENAME);
+    if let Some(key) = load_python_environment_hmac_key(&path)? {
+        return Ok(key);
+    }
+
+    let mut key = [0_u8; BOOTSTRAP_HMAC_KEY_BYTES];
+    SystemRandom::new().fill(&mut key).map_err(|_| {
+        CliError::Config("failed to generate Python environment attestation key".into())
+    })?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o644);
+    }
+    match options.open(&path) {
+        Ok(mut file) => {
+            file.write_all(&key).map_err(|error| {
+                CliError::Config(format!(
+                    "failed to write Python environment attestation key {}: {error}",
+                    path.display()
+                ))
+            })?;
+            file.sync_all().map_err(|error| {
+                CliError::Config(format!(
+                    "failed to sync Python environment attestation key {}: {error}",
+                    path.display()
+                ))
+            })?;
+            #[cfg(unix)]
+            fs::set_permissions(&path, {
+                use std::os::unix::fs::PermissionsExt;
+                fs::Permissions::from_mode(0o644)
+            })
+            .map_err(|error| {
+                CliError::Config(format!(
+                    "failed to make Python environment attestation key readable at {}: {error}",
+                    path.display()
+                ))
+            })?;
+            Ok(key)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            load_python_environment_hmac_key(&path)?.ok_or_else(|| {
+                CliError::Config(format!(
+                    "Python environment attestation key {} disappeared",
+                    path.display()
+                ))
+            })
+        }
+        Err(error) => Err(CliError::Config(format!(
+            "failed to create Python environment attestation key {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
+fn load_python_environment_hmac_key(
+    path: &Path,
+) -> Result<Option<[u8; BOOTSTRAP_HMAC_KEY_BYTES]>, CliError> {
+    let mut file = match OpenOptions::new().read(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(CliError::Config(format!(
+                "failed to open Python environment attestation key {}: {error}",
+                path.display()
+            )));
+        }
+    };
+    let mut key = [0_u8; BOOTSTRAP_HMAC_KEY_BYTES];
+    file.read_exact(&mut key).map_err(|error| {
+        CliError::Config(format!(
+            "failed to read Python environment attestation key {}: {error}",
+            path.display()
+        ))
+    })?;
+    if file.metadata().map(|metadata| metadata.len()).unwrap_or(0)
+        != BOOTSTRAP_HMAC_KEY_BYTES as u64
+    {
+        return Err(CliError::Config(format!(
+            "Python environment attestation key {} has invalid length",
+            path.display()
+        )));
+    }
+    Ok(Some(key))
 }
 
 fn python_environment_attestation_message(

@@ -290,7 +290,8 @@ pub(super) fn read_environment_attestation(
             attestation_path.display()
         ));
     }
-    if !crate::configuration::verify_python_environment_attestation(
+    if !crate::configuration::verify_python_environment_attestation_for_environment(
+        environment,
         &attestation.source_artifact_sha256,
         &attestation.environment_sha256,
         &attestation.authentication,
@@ -324,11 +325,16 @@ pub(super) fn write_environment_attestation(
     environment: &Path,
     source_artifact_sha256: &str,
 ) -> Result<(), String> {
+    crate::configuration::ensure_python_environment_attestation_key(environment)
+        .map_err(|error| error.to_string())?;
     let digest = environment_tree_digest(environment)?;
     let path = environment.join(ENVIRONMENT_ATTESTATION_FILE);
-    let authentication =
-        crate::configuration::sign_python_environment_attestation(source_artifact_sha256, &digest)
-            .map_err(|error| error.to_string())?;
+    let authentication = crate::configuration::sign_python_environment_attestation_for_environment(
+        environment,
+        source_artifact_sha256,
+        &digest,
+    )
+    .map_err(|error| error.to_string())?;
     let mut bytes = serde_json::to_vec_pretty(&EnvironmentAttestation {
         version: 1,
         source_artifact_sha256: source_artifact_sha256.trim().to_owned(),

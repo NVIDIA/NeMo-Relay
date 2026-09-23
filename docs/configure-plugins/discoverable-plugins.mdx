@@ -37,6 +37,13 @@ enabled plugins when the gateway starts. Use `plugins list`, `plugins inspect`,
 and `plugins validate` to review current state and diagnostics. Use `disable`
 or `remove` to stop loading a registered plugin.
 
+To share a Python worker across users, register it in the system scope with
+`nemo-relay plugins add --global <manifest>` from an account that can write the
+system configuration directory. Ensure the system `plugins.toml`, lifecycle
+state, managed environment, and manifest are readable and traversable by every
+Relay daemon user, while keeping them writable only by administrators. Startup
+validates the managed environment without writing the shared lifecycle state.
+
 You can also add the reference directly when configuration is provisioned by
 automation:
 
