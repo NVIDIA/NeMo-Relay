@@ -8,7 +8,9 @@ use nemo_relay::api::registry::{
     deregister_tool_conditional_execution_guardrail, register_tool_conditional_execution_guardrail,
 };
 use nemo_relay::api::runtime::EventSubscriberFn;
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber, scope_register_subscriber,
+};
 use nemo_relay::codec::resolve::{
     ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
 };
@@ -1131,6 +1133,7 @@ async fn permission_requests_correlate_guardrails_and_close_rejected_tools() {
     .unwrap();
 
     let manager = SessionManager::new(session_test_config());
+    let scope_local_events = Arc::new(StdMutex::new(Vec::<Event>::new()));
     for (session_id, agent_kind, tool_call_id, permission_tool_call_id) in [
         (
             "claude-permission-denied",
@@ -1166,6 +1169,23 @@ async fn permission_requests_correlate_guardrails_and_close_rejected_tools() {
             )
             .await
             .unwrap();
+
+        if agent_kind == AgentKind::ClaudeCode {
+            let sessions = manager.inner.lock().await;
+            let session = sessions.get(session_id).unwrap();
+            let scope_stack = session.scope_stack.clone();
+            let parent_uuid = session.tools[tool_call_id].handle.parent_uuid.unwrap();
+            drop(sessions);
+            let scope_local = Arc::clone(&scope_local_events);
+            with_scope_stack(scope_stack, || {
+                scope_register_subscriber(
+                    &parent_uuid,
+                    "permission-denied-tool-close",
+                    Arc::new(move |event| scope_local.lock().unwrap().push(event.clone())),
+                )
+            })
+            .unwrap();
+        }
 
         let result = manager
             .authorize_tool_permission(
@@ -1316,6 +1336,13 @@ async fn permission_requests_correlate_guardrails_and_close_rejected_tools() {
         assert_eq!(metadata["otel.status_code"], "ERROR");
         assert_eq!(metadata["status"], "denied");
     }
+    assert!(scope_local_events.lock().unwrap().iter().any(|event| {
+        event.tool_call_id() == Some("claude-call")
+            && event.scope_category() == Some(ScopeCategory::End)
+            && event
+                .metadata()
+                .is_some_and(|metadata| metadata["error.type"] == "guardrail_rejected")
+    }));
 
     let allowed_permission_end = events
         .iter()

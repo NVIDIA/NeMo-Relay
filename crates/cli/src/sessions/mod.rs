@@ -12,6 +12,7 @@ use nemo_relay::api::llm::{LlmAttributes, LlmCallEndParams, LlmHandle, LlmReques
 use nemo_relay::api::llm::{LlmCallParams, llm_call};
 use nemo_relay::api::runtime::{
     ScopeStackHandle, SubscriberDelivery, TASK_SCOPE_STACK, create_scope_stack, task_scope_push,
+    with_scope_stack,
 };
 use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeHandle, ScopeType,
@@ -763,8 +764,15 @@ impl SessionManager {
             .await;
         if matches!(result, Err(FlowError::GuardrailRejected(_))) {
             let mut sessions = self.inner.lock().await;
-            if let Some(session) = sessions.get_mut(&event.session_id) {
-                session.close_permission_denied_tool(&matched_tool_call_id)?;
+            if let Some(session) = sessions.get_mut(&event.session_id)
+                && let Err(error) = session.close_permission_denied_tool(&matched_tool_call_id)
+            {
+                log::warn!(
+                    target: "nemo_relay.session",
+                    event = "permission_denied_tool_close_failed",
+                    error_kind = error.log_kind();
+                    "Failed to close permission-denied tool span"
+                );
             }
         }
         result.map_err(CliError::from)
@@ -1595,17 +1603,19 @@ impl Session {
         let Some(active) = self.tools.remove(tool_call_id) else {
             return Ok(());
         };
-        tool_call_end(
-            ToolCallEndParams::builder()
-                .handle(&active.handle)
-                .execution_result(Value::Null.into())
-                .metadata(json!({
-                    "error.type": "guardrail_rejected",
-                    "otel.status_code": "ERROR",
-                    "status": "denied",
-                }))
-                .build(),
-        )?;
+        with_scope_stack(self.scope_stack.clone(), || {
+            tool_call_end(
+                ToolCallEndParams::builder()
+                    .handle(&active.handle)
+                    .execution_result(Value::Null.into())
+                    .metadata(json!({
+                        "error.type": "guardrail_rejected",
+                        "otel.status_code": "ERROR",
+                        "status": "denied",
+                    }))
+                    .build(),
+            )
+        })?;
         Ok(())
     }
 
