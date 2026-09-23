@@ -9,8 +9,9 @@ license: Apache-2.0
 Require the release tag as input. Do not infer it from the current checkout,
 Git history, or package metadata.
 
-The checker requires Bash, `curl`, `gh`, `jq`, `just`, and `uv`; it does not run
-on Windows. From the repository root, run:
+The checker requires Bash, `curl`, `gh`, `jq`, `just`, and `uv`. Authenticate
+`gh` for `NVIDIA/NeMo-Relay` and verify it with `gh auth status`. The checker
+does not run on Windows. From the repository root, run:
 
 ```bash
 .agents/skills/check-release-deployments/scripts/check_release_deployments.sh <tag>
@@ -25,7 +26,8 @@ verified, package checks are skipped.
 
 - `☑` means the exact package version is deployed.
 - `○` means that exact package version is not deployed.
-- Any other value is the HTTP status returned by the registry.
+- `000` means a lookup or response could not be verified.
+- Other numeric values are HTTP statuses returned by the registry.
 
 The Go row checks the tagged `go.mod` source because Relay does not publish a
 separate Go package-manager artifact.

@@ -43,7 +43,16 @@ test -z "$(git status --porcelain)"
 test "$(git rev-parse HEAD)" = "$(git rev-parse "upstream/$RELEASE_BRANCH")"
 test "$(sed -nE 's/^version = "([^"]+)"$/\\1/p' Cargo.toml | head -1)" = "$VERSION"
 ! git rev-parse --verify --quiet "refs/tags/$VERSION"
-! git ls-remote --exit-code --tags upstream "refs/tags/$VERSION"
+if git ls-remote --exit-code --tags upstream "refs/tags/$VERSION" >/dev/null; then
+  echo "Error: tag already exists on upstream" >&2
+  exit 1
+else
+  tag_lookup_status=$?
+  case "$tag_lookup_status" in
+    2) ;;
+    *) echo "Error: remote tag lookup failed" >&2; exit "$tag_lookup_status" ;;
+  esac
+fi
 ```
 
 After explicit approval, create and push only the verified tag:
