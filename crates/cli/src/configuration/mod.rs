@@ -1574,7 +1574,21 @@ pub(crate) fn user_config_dir() -> Option<PathBuf> {
 
 /// Resolves the platform system config directory shared with the core plugin runtime.
 pub(crate) fn system_config_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(path) = TEST_SYSTEM_CONFIG_DIR.with(|value| value.borrow().clone()) {
+        return path;
+    }
     nemo_relay::plugin::system_config_dir()
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_SYSTEM_CONFIG_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_system_config_dir(path: Option<PathBuf>) -> Option<PathBuf> {
+    TEST_SYSTEM_CONFIG_DIR.with(|value| value.replace(path))
 }
 
 // Applies the typed TOML config model to the resolved runtime config. Missing sections and fields

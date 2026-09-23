@@ -219,6 +219,95 @@ fn extraction_rejects_unsafe_members() {
             .is_err()
     );
     assert!(!temp.path().join("escape").exists());
+    budget
+        .destination(temp.path(), Path::new("bundle/first"), 0)
+        .unwrap();
+    assert!(
+        budget
+            .destination(temp.path(), Path::new("other/second"), 0)
+            .unwrap_err()
+            .to_string()
+            .contains("multiple bundle roots")
+    );
+}
+
+#[test]
+fn extraction_rejects_links_and_special_files() {
+    use std::io::Write;
+
+    let temp = tempfile::tempdir().unwrap();
+    for kind in [tar::EntryType::Symlink, tar::EntryType::Link] {
+        let archive = temp.path().join(format!("link-{}.tar.gz", kind.as_byte()));
+        let encoder = flate2::write::GzEncoder::new(
+            File::create(&archive).unwrap(),
+            flate2::Compression::default(),
+        );
+        let mut builder = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(kind);
+        header.set_size(0);
+        builder
+            .append_link(&mut header, "sample/link", "target")
+            .unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+        assert!(
+            extract_archive(&archive, &temp.path().join("out"))
+                .unwrap_err()
+                .to_string()
+                .contains("links and special files")
+        );
+    }
+
+    let archive = temp.path().join("special.tar.gz");
+    let encoder = flate2::write::GzEncoder::new(
+        File::create(&archive).unwrap(),
+        flate2::Compression::default(),
+    );
+    let mut builder = tar::Builder::new(encoder);
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(tar::EntryType::Block);
+    header.set_size(0);
+    builder
+        .append_data(&mut header, "sample/device", std::io::empty())
+        .unwrap();
+    builder.into_inner().unwrap().finish().unwrap();
+    assert!(
+        extract_archive(&archive, &temp.path().join("out"))
+            .unwrap_err()
+            .to_string()
+            .contains("links and special files")
+    );
+
+    let archive = temp.path().join("link.zip");
+    let mut writer = zip::ZipWriter::new(File::create(&archive).unwrap());
+    writer
+        .add_symlink(
+            "sample/link",
+            "target",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+    writer.finish().unwrap().flush().unwrap();
+    assert!(
+        extract_archive(&archive, &temp.path().join("out"))
+            .unwrap_err()
+            .to_string()
+            .contains("links and special files")
+    );
+}
+
+#[test]
+fn extraction_rejects_member_size_mismatch() {
+    let temp = tempfile::tempdir().unwrap();
+    for (data, expected) in [(b"short".as_slice(), 6), (b"longer".as_slice(), 5)] {
+        let mut reader = std::io::Cursor::new(data);
+        assert!(
+            write_bounded(&mut reader, &temp.path().join("member"), expected)
+                .unwrap_err()
+                .to_string()
+                .contains("archive member size mismatch")
+        );
+    }
 }
 
 #[test]
@@ -281,20 +370,25 @@ struct FakeGh {
     assets: PathBuf,
     tag: String,
     asset: String,
+    release_override: Option<serde_json::Value>,
 }
 
 impl GithubRunner for FakeGh {
     fn run(&self, args: &[&str]) -> Result<Vec<u8>, CliError> {
         match args.get(1).copied() {
-            Some("view") => Ok(serde_json::to_vec(&serde_json::json!({
-                "tagName": self.tag, "isDraft": false,
-                "assets": [
-                    {"name": self.asset},
-                    {"name": format!("{}.sha256", self.asset)},
-                    {"name": format!("{}.json", self.asset)}
-                ]
-            }))
-            .unwrap()),
+            Some("view") => Ok(
+                serde_json::to_vec(&self.release_override.clone().unwrap_or_else(|| {
+                    serde_json::json!({
+                        "tagName": self.tag, "isDraft": false,
+                        "assets": [
+                            {"name": self.asset},
+                            {"name": format!("{}.sha256", self.asset)},
+                            {"name": format!("{}.json", self.asset)}
+                        ]
+                    })
+                }))
+                .unwrap(),
+            ),
             Some("download") => {
                 let dir = args
                     .windows(2)
@@ -311,6 +405,82 @@ impl GithubRunner for FakeGh {
             }
             _ => Err(error("unexpected gh command")),
         }
+    }
+}
+
+#[test]
+fn fake_github_release_rejects_invalid_release_and_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let tag = "sample-0.1.0";
+    let asset = format!("{tag}-{}.zip", platform().unwrap());
+    let archive = temp.path().join(&asset);
+    fs::write(&archive, b"archive bytes").unwrap();
+    let digest = sha256_file(&archive).unwrap();
+    fs::write(
+        temp.path().join(format!("{asset}.sha256")),
+        format!("{digest}  {asset}\n"),
+    )
+    .unwrap();
+    let valid_metadata = serde_json::json!({
+        "name": "sample", "version": "0.1.0", "platform": platform().unwrap(),
+        "sha256": digest, "verified": true
+    });
+    let metadata_path = temp.path().join(format!("{asset}.json"));
+    fs::write(&metadata_path, serde_json::to_vec(&valid_metadata).unwrap()).unwrap();
+    let mut runner = FakeGh {
+        assets: temp.path().to_path_buf(),
+        tag: tag.into(),
+        asset: asset.clone(),
+        release_override: None,
+    };
+    let fetch = |runner: &FakeGh| {
+        let download = tempfile::tempdir().unwrap();
+        GithubRelease {
+            source: GithubSource::parse(&format!("github:NVIDIA/repo@{tag}")).unwrap(),
+            runner,
+        }
+        .fetch(download.path())
+    };
+
+    for release in [
+        serde_json::json!({
+            "tagName": tag, "isDraft": true,
+            "assets": [{"name": asset}]
+        }),
+        serde_json::json!({
+            "tagName": "other-0.1.0", "isDraft": false,
+            "assets": [{"name": asset}]
+        }),
+        serde_json::json!({
+            "tagName": tag, "isDraft": false,
+            "assets": [
+                {"name": asset},
+                {"name": format!("{asset}.sha256")},
+                {"name": format!("{asset}.sha256")},
+                {"name": format!("{asset}.json")}
+            ]
+        }),
+    ] {
+        runner.release_override = Some(release);
+        assert!(fetch(&runner).is_err());
+    }
+    runner.release_override = None;
+
+    for (field, replacement) in [
+        ("platform", serde_json::json!("wrong-platform")),
+        ("sha256", serde_json::json!("wrong-digest")),
+        ("verified", serde_json::json!(false)),
+    ] {
+        let mut metadata = valid_metadata.clone();
+        metadata[field] = replacement;
+        fs::write(&metadata_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+        assert!(
+            fetch(&runner)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("release metadata does not match")
+        );
     }
 }
 
@@ -335,6 +505,7 @@ struct UserConfigEnv {
     _cwd: crate::test_support::CwdTestScope,
     _lock: MutexGuard<'static, ()>,
     previous: Option<OsString>,
+    previous_system: Option<PathBuf>,
 }
 
 impl UserConfigEnv {
@@ -344,6 +515,8 @@ impl UserConfigEnv {
             .lock()
             .unwrap_or_else(|err| err.into_inner());
         let previous = std::env::var_os("XDG_CONFIG_HOME");
+        let previous_system =
+            crate::configuration::set_test_system_config_dir(Some(dir.join("system")));
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", dir);
         }
@@ -351,12 +524,14 @@ impl UserConfigEnv {
             _cwd: cwd,
             _lock: lock,
             previous,
+            previous_system,
         }
     }
 }
 
 impl Drop for UserConfigEnv {
     fn drop(&mut self) {
+        crate::configuration::set_test_system_config_dir(self.previous_system.take());
         unsafe {
             if let Some(previous) = &self.previous {
                 std::env::set_var("XDG_CONFIG_HOME", previous);
@@ -437,6 +612,7 @@ entrypoint = "worker.sh"
         assets: temp.path().to_path_buf(),
         tag: tag.into(),
         asset,
+        release_override: None,
     };
     let server = GatewayOverrides::default();
     install_with_runner(

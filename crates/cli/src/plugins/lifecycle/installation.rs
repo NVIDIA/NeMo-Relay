@@ -511,7 +511,11 @@ pub(crate) fn uninstall(
         }
     }
     remove_managed_environment_for_plugin(&selected.state_path, &id).map_err(error)?;
-    fs::remove_dir_all(&root)?;
+    let removing = root.with_file_name(format!(".removing-{}", uuid::Uuid::now_v7()));
+    fs::rename(&root, &removing)?;
+    if let Err(err) = fs::remove_dir_all(&removing) {
+        super::render::warn_incomplete_uninstall_cleanup(&removing, &err);
+    }
     println!("Uninstalled dynamic plugin {id}");
     Ok(())
 }

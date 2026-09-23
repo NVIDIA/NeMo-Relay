@@ -465,6 +465,11 @@ pub(crate) fn list_scoped(
     requested_scope: crate::plugins::ConfigurationScope,
     server: &GatewayOverrides,
 ) -> Result<(), CliError> {
+    if requested_scope == crate::plugins::ConfigurationScope::Invalid {
+        return Err(CliError::Config(
+            "choose only one of --user or --global".into(),
+        ));
+    }
     let explicit_plugin_config = lifecycle_plugin_config_path(server);
     let (scopes, resolved) = if requested_scope == crate::plugins::ConfigurationScope::Default {
         let resolved = resolve_plugins_config_with_path(
@@ -608,6 +613,11 @@ pub(crate) fn remove_scoped(
     requested_scope: crate::plugins::ConfigurationScope,
     server: &GatewayOverrides,
 ) -> Result<(), CliError> {
+    if requested_scope == crate::plugins::ConfigurationScope::Invalid {
+        return Err(CliError::Config(
+            "choose only one of --user or --global".into(),
+        ));
+    }
     let explicit_plugin_config = lifecycle_plugin_config_path(server);
     let mut scopes = load_scoped_registries_matching(explicit_plugin_config.as_ref(), |scope| {
         scope_matches(scope, requested_scope)

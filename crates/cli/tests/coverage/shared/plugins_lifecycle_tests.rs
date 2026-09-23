@@ -3395,6 +3395,13 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
     assert!(list.contains("acme.guardrail"));
     assert!(list.contains("absent"));
     assert!(list.contains("false"));
+    let mut lines = list.lines();
+    let header = lines.next().unwrap();
+    let row = lines.next().unwrap();
+    assert_eq!(
+        header.find("SOURCE"),
+        row.rfind("  -").map(|index| index + 2)
+    );
     assert!(
         list.lines()
             .any(|line| line.contains("acme.guardrail") && line.contains(" valid "))
@@ -3431,6 +3438,28 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
         inspect_value["load"]["entrypoint"].as_str(),
         Some("plugin.py")
     );
+}
+
+#[test]
+fn scoped_list_and_remove_reject_conflicting_scope_flags() {
+    let server = GatewayOverrides::default();
+    let list_error = list_scoped(
+        PluginsListRequest {
+            all: false,
+            json: false,
+        },
+        ConfigurationScope::Invalid,
+        &server,
+    )
+    .unwrap_err();
+    assert!(list_error.to_string().contains("choose only one"));
+    let remove_error = remove_scoped(
+        PluginsRemoveRequest { id: "test".into() },
+        ConfigurationScope::Invalid,
+        &server,
+    )
+    .unwrap_err();
+    assert!(remove_error.to_string().contains("choose only one"));
 }
 
 #[test]

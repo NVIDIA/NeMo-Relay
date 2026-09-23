@@ -159,6 +159,7 @@ pub(super) fn list_success(
             .iter()
             .map(|entry| {
                 let record = &entry.record;
+                let receipt = receipt_for(entry);
                 ListEntryResponse {
                     id: record.metadata.id.clone(),
                     name: record.metadata.name.clone(),
@@ -187,8 +188,8 @@ pub(super) fn list_success(
                         .get(&record.metadata.id)
                         .map(ResolvedDynamicPluginConfig::host_config_status)
                         .unwrap_or(DynamicPluginHostConfigStatus::Absent),
-                    managed_source: receipt_for(entry).map(|receipt| receipt.source),
-                    managed_tag: receipt_for(entry).map(|receipt| receipt.tag),
+                    managed_source: receipt.as_ref().map(|receipt| receipt.source.clone()),
+                    managed_tag: receipt.map(|receipt| receipt.tag),
                 }
             })
             .collect(),
@@ -217,6 +218,7 @@ pub(super) fn inspect_data(
     host_config: Option<&ResolvedDynamicPluginConfig>,
 ) -> InspectResponse {
     let record = &entry.record;
+    let receipt = receipt_for(entry);
     InspectResponse {
         id: record.metadata.id.clone(),
         name: record.metadata.name.clone(),
@@ -237,8 +239,8 @@ pub(super) fn inspect_data(
             .expect("dynamic plugin metadata serializes to JSON"),
         source: serde_json::to_value(&record.source)
             .expect("dynamic plugin source serializes to JSON"),
-        managed_source: receipt_for(entry).map(|receipt| receipt.source),
-        managed_tag: receipt_for(entry).map(|receipt| receipt.tag),
+        managed_source: receipt.as_ref().map(|receipt| receipt.source.clone()),
+        managed_tag: receipt.map(|receipt| receipt.tag),
         spec: serde_json::to_value(&record.spec).expect("dynamic plugin spec serializes to JSON"),
         status: serde_json::to_value(&record.status)
             .expect("dynamic plugin status serializes to JSON"),
