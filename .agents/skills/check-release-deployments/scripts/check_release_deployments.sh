@@ -21,18 +21,18 @@ deployment_status() { case "$1" in 200) printf '☑' ;; 404) printf '○' ;; *) 
 request_status() {
     local status=''
     sleep 0.1
-    status="$(curl --location --silent --show-error --output /dev/null --write-out '%{http_code}' --user-agent 'Mozilla/5.0' "$1" 2>/dev/null)" || status="${status:-000}"
+    status="$(curl --location --silent --show-error --connect-timeout 5 --max-time 20 --output /dev/null --write-out '%{http_code}' --user-agent 'Mozilla/5.0' "$1" 2>/dev/null)" || status="${status:-000}"
     printf '%s\n' "$status"
 }
 pypi_status() {
     local package="$1" version="$2" response='' body='' status=''
     sleep 0.1
-    response="$(curl --location --silent --show-error --header 'Accept: application/vnd.pypi.simple.v1+json' --write-out $'\n%{http_code}' "https://pypi.org/simple/${package}/" 2>/dev/null)" || { printf '000\n'; return; }
+    response="$(curl --location --silent --show-error --connect-timeout 5 --max-time 20 --header 'Accept: application/vnd.pypi.simple.v1+json' --write-out $'\n%{http_code}' "https://pypi.org/simple/${package}/" 2>/dev/null)" || { printf '000\n'; return; }
     status="${response##*$'\n'}"; body="${response%$'\n'*}"
     if [[ "$status" != 200 ]]; then printf '%s\n' "$status"; return; fi
     jq -e --arg version "$version" '.versions | index($version) != null' >/dev/null <<<"$body" && printf '200\n' || printf '404\n'
 }
-check_cargo=true; check_python=true; check_node=true
+check_cargo=false; check_python=false; check_node=false; check_go=false
 pipeline_status() {
     case "$1" in
         success) printf '☑ success' ;;
@@ -48,12 +48,13 @@ print_job_row() {
     url="$(jq -r '.url' <<<"$job")"
     database_id="$(jq -r '.databaseId' <<<"$job")"
     printf '| `%s` | `%s` | [%s](%s) | %s |\n' "$workflow" "$name" "$database_id" "$url" "$(pipeline_status "$result")"
-    [[ "$result" == success ]] && return
-    case "$name" in
-        'Publish (crates.io)') check_cargo=false ;;
-        'Publish (PyPI)') check_python=false ;;
-        'Publish (npm)') check_node=false ;;
-    esac
+    if [[ "$result" == success ]]; then
+        case "$name" in
+            'Publish (crates.io)') check_cargo=true ;;
+            'Publish (PyPI)') check_python=true ;;
+            'Publish (npm)') check_node=true ;;
+        esac
+    fi
 }
 print_release_jobs() {
     local runs run workflow database_id job job_name go_jobs build_run_id='' docs_run_id='' main_jobs='' docs_jobs='' docs_job_name='Release docs version'
@@ -76,9 +77,10 @@ print_release_jobs() {
 
     if [[ -n "$build_run_id" ]]; then
         main_jobs="$(gh run view "$build_run_id" --repo "$github_repository" --json jobs 2>/dev/null)" || main_jobs=''
-        if [[ -z "$main_jobs" ]]; then
+        if [[ -z "$main_jobs" ]] || ! jq -e '.jobs | length > 0' >/dev/null <<<"$main_jobs"; then
             printf '| `Build pull request` | release jobs | — | 000 |\n'
         else
+            check_go=true
             for job_name in 'CI Pipeline' 'Release Distribution Artifacts' 'Publish (crates.io)' 'Publish (PyPI)' 'Publish (npm)'; do
                 job="$(jq -c --arg name "$job_name" 'first(.jobs[] | select(.name == $name)) // empty' <<<"$main_jobs")"
                 if [[ -z "$job" ]]; then
@@ -139,7 +141,7 @@ done <<<"$node_platforms"
 node_packages+=(nemo-relay-openclaw)
 print_release_jobs
 printf '\n## Package Deployments\n\n| Ecosystem | Package | Version | Status |\n| --- | --- | --- | --- |\n'
-if "$check_cargo"; then while IFS= read -r package; do print_result Cargo "$package" "$tag" "https://crates.io/api/v1/crates/${package}/${tag}"; done <<<"$cargo_packages"; else printf '| Cargo | — | — | skipped: publication job did not succeed |\n'; fi
-print_result Go "$go_package" "$tag" "https://raw.githubusercontent.com/${github_repository}/${tag}/${go_module_path}/go.mod"
-if "$check_python"; then for package in "${python_packages[@]}"; do printf '| Python | `%s` | `%s` | %s |\n' "$package" "$python_version" "$(deployment_status "$(pypi_status "$package" "$python_version")")"; done; else printf '| Python | — | — | skipped: publication job did not succeed |\n'; fi
-if "$check_node"; then for package in "${node_packages[@]}"; do print_result 'Node.js' "$package" "$tag" "https://registry.npmjs.org/${package}/${tag}"; done; else printf '| Node.js | — | — | skipped: publication job did not succeed |\n'; fi
+if "$check_cargo"; then while IFS= read -r package; do print_result Cargo "$package" "$tag" "https://crates.io/api/v1/crates/${package}/${tag}"; done <<<"$cargo_packages"; else printf '| Cargo | — | — | skipped: publication job not verified successful |\n'; fi
+if "$check_go"; then print_result Go "$go_package" "$tag" "https://raw.githubusercontent.com/${github_repository}/${tag}/${go_module_path}/go.mod"; else printf '| Go | — | — | skipped: release jobs unavailable |\n'; fi
+if "$check_python"; then for package in "${python_packages[@]}"; do printf '| Python | `%s` | `%s` | %s |\n' "$package" "$python_version" "$(deployment_status "$(pypi_status "$package" "$python_version")")"; done; else printf '| Python | — | — | skipped: publication job not verified successful |\n'; fi
+if "$check_node"; then for package in "${node_packages[@]}"; do print_result 'Node.js' "$package" "$tag" "https://registry.npmjs.org/${package}/${tag}"; done; else printf '| Node.js | — | — | skipped: publication job not verified successful |\n'; fi
