@@ -1721,6 +1721,10 @@ impl Stream for WorkerForwardedLlmStream {
 }
 
 impl LlmStreamInner for WorkerForwardedLlmStream {
+    fn terminalize(self: Pin<&mut Self>) {
+        self.get_mut().receiver.take();
+    }
+
     fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
         let this = self.get_mut();
         this.receiver.take();
@@ -2132,8 +2136,12 @@ impl WorkerPluginCallback {
                                 "worker stream transport failed: {err}"
                             ))),
                         };
+                        let terminal = result.is_err();
                         if tx.send(result).await.is_err() {
                             guard.cancel("host stopped consuming the worker stream");
+                            break;
+                        }
+                        if terminal {
                             break;
                         }
                     }

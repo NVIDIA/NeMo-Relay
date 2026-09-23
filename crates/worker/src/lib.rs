@@ -2157,26 +2157,36 @@ impl PluginWorker for WorkerService {
                 let Some(item) = item else {
                     return;
                 };
-                let chunk = match item {
-                    Ok(value) => StreamChunk {
-                        item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Value(
-                            match json_envelope(JSON_SCHEMA, &value) {
-                                Ok(value) => value,
-                                Err(err) => {
-                                    let _ =
-                                        task_tx.send(Err(Status::internal(err.to_string()))).await;
-                                    return;
-                                }
-                            },
-                        )),
-                    },
-                    Err(err) => StreamChunk {
-                        item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(
-                            sdk_error_to_worker(err),
-                        )),
-                    },
+                let (chunk, terminal) = match item {
+                    Ok(value) => (
+                        StreamChunk {
+                            item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Value(
+                                match json_envelope(JSON_SCHEMA, &value) {
+                                    Ok(value) => value,
+                                    Err(err) => {
+                                        let _ = task_tx
+                                            .send(Err(Status::internal(err.to_string())))
+                                            .await;
+                                        return;
+                                    }
+                                },
+                            )),
+                        },
+                        false,
+                    ),
+                    Err(err) => (
+                        StreamChunk {
+                            item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(
+                                sdk_error_to_worker(err),
+                            )),
+                        },
+                        true,
+                    ),
                 };
                 if task_tx.send(Ok(chunk)).await.is_err() {
+                    return;
+                }
+                if terminal {
                     return;
                 }
             }

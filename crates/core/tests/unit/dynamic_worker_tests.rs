@@ -1524,7 +1524,12 @@ async fn callback_stream_stops_when_host_receiver_is_dropped() {
                 Box::pin(SignalChunkThenPendingStream {
                     yield_rx,
                     dropped: Some(dropped),
-                    yielded: false,
+                    first_chunk: Some(Ok(StreamChunk {
+                        item: Some(StreamItem::Value(
+                            json_envelope(JSON_SCHEMA, &json!({ "after_receiver_drop": true }))
+                                .expect("test stream chunk should encode"),
+                        )),
+                    })),
                 }) as FakeInvokeStream
             }
         },
@@ -1899,6 +1904,65 @@ async fn closing_worker_stream_waits_for_cancellation_and_codec_cleanup() {
         &fixture.invocation_id,
     );
     assert_worker_stream_cancelled_and_cleaned(&mut fixture).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn terminal_worker_stream_error_releases_resources_while_host_stream_is_retained() {
+    enable_operational_logs();
+    let mut fixture = pending_worker_stream_with_first_chunk(
+        "terminal-stream-error",
+        Ok(StreamChunk {
+            item: Some(StreamItem::Error(test_worker_error())),
+        }),
+    )
+    .await;
+    fixture
+        .yield_tx
+        .take()
+        .expect("yield signal sent once")
+        .send(())
+        .expect("worker stream yield signal should be delivered");
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        fixture.stream.as_mut().expect("host stream").next(),
+    )
+    .await
+    .expect("worker error should arrive promptly")
+    .expect("worker stream should yield its terminal error")
+    .expect_err("worker error should remain an error");
+    assert!(error.to_string().contains("worker.failed"));
+
+    assert_worker_stream_dropped_and_cleaned(&mut fixture).await;
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            fixture
+                .stream
+                .as_mut()
+                .expect("retained host stream")
+                .next(),
+        )
+        .await
+        .expect("host stream should close after its terminal error")
+        .is_none()
+    );
+
+    // Keep the consumer object alive through every cleanup assertion.
+    drop(fixture.stream.take());
+}
+
+#[test]
+fn terminalizing_forwarded_worker_stream_disconnects_its_producer() {
+    let (tx, rx) = mpsc::channel(1);
+    let (_completion_tx, completion_rx) = watch::channel(false);
+    let mut stream = WorkerForwardedLlmStream {
+        receiver: Some(tokio_stream::wrappers::ReceiverStream::new(rx)),
+        completion: completion_rx,
+    };
+
+    Pin::new(&mut stream).terminalize();
+
+    assert!(tx.is_closed());
 }
 
 #[tokio::test]
@@ -3458,6 +3522,22 @@ struct WorkerStreamLifecycleFixture {
 }
 
 async fn pending_worker_stream_with_codec_context(name: &str) -> WorkerStreamLifecycleFixture {
+    pending_worker_stream_with_first_chunk(
+        name,
+        Ok(StreamChunk {
+            item: Some(StreamItem::Value(
+                json_envelope(JSON_SCHEMA, &json!({ "after_receiver_drop": true }))
+                    .expect("test stream chunk should encode"),
+            )),
+        }),
+    )
+    .await
+}
+
+async fn pending_worker_stream_with_first_chunk(
+    name: &str,
+    first_chunk: std::result::Result<StreamChunk, Status>,
+) -> WorkerStreamLifecycleFixture {
     let (context_tx, context_rx) = oneshot::channel();
     let context_tx = Arc::new(Mutex::new(Some(context_tx)));
     let (yield_tx, yield_rx) = oneshot::channel();
@@ -3497,7 +3577,7 @@ async fn pending_worker_stream_with_codec_context(name: &str) -> WorkerStreamLif
                         .take()
                         .expect("stream created once"),
                     dropped: worker_stream_dropped_tx.lock().unwrap().take(),
-                    yielded: false,
+                    first_chunk: Some(first_chunk.clone()),
                 }) as FakeInvokeStream
             }
         },
@@ -3538,6 +3618,10 @@ async fn assert_worker_stream_cancelled_and_cleaned(fixture: &mut WorkerStreamLi
             .expect("cancellation channel remains open");
     assert_eq!(cancellation.invocation_id, fixture.invocation_id);
     assert!(cancellation.reason.contains("stopped consuming"));
+    assert_worker_stream_dropped_and_cleaned(fixture).await;
+}
+
+async fn assert_worker_stream_dropped_and_cleaned(fixture: &mut WorkerStreamLifecycleFixture) {
     tokio::time::timeout(
         std::time::Duration::from_secs(1),
         fixture
@@ -3553,12 +3637,30 @@ async fn assert_worker_stream_cancelled_and_cleaned(fixture: &mut WorkerStreamLi
         &fixture.request_id,
         &fixture.invocation_id,
     );
+    assert!(
+        fixture
+            .callback
+            .host_state
+            .continuations
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .callback
+            .host_state
+            .scope_stacks
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 struct SignalChunkThenPendingStream {
     yield_rx: oneshot::Receiver<()>,
     dropped: Option<oneshot::Sender<()>>,
-    yielded: bool,
+    first_chunk: Option<std::result::Result<StreamChunk, Status>>,
 }
 
 impl tokio_stream::Stream for SignalChunkThenPendingStream {
@@ -3568,18 +3670,12 @@ impl tokio_stream::Stream for SignalChunkThenPendingStream {
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        if self.yielded {
+        if self.first_chunk.is_none() {
             return std::task::Poll::Pending;
         }
         match Pin::new(&mut self.yield_rx).poll(cx) {
             std::task::Poll::Ready(_) => {
-                self.yielded = true;
-                std::task::Poll::Ready(Some(Ok(StreamChunk {
-                    item: Some(StreamItem::Value(
-                        json_envelope(JSON_SCHEMA, &json!({ "after_receiver_drop": true }))
-                            .expect("test stream chunk should encode"),
-                    )),
-                })))
+                std::task::Poll::Ready(Some(self.first_chunk.take().expect("first chunk")))
             }
             std::task::Poll::Pending => std::task::Poll::Pending,
         }

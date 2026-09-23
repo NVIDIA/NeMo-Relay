@@ -1149,7 +1149,7 @@ async fn worker_service_reports_structured_callback_and_payload_errors() {
         "boom",
     );
 
-    let stream_err = client
+    let mut stream_err = client
         .invoke_stream(Request::new(llm_invoke(
             "llm-stream-error",
             RegistrationSurface::LlmStreamExecutionIntercept,
@@ -1159,17 +1159,24 @@ async fn worker_service_reports_structured_callback_and_payload_errors() {
         )))
         .await
         .expect("stream error invoke")
-        .into_inner()
+        .into_inner();
+    let stream_error_chunk = stream_err
         .next()
         .await
         .expect("stream item")
         .expect("stream chunk");
-    match stream_err.item.expect("stream item") {
+    match stream_error_chunk.item.expect("stream item") {
         nemo_relay_worker_proto::v1::stream_chunk::Item::Error(error) => {
             assert!(error.message.contains("stream boom"));
         }
         other => panic!("unexpected stream item: {other:?}"),
     }
+    assert!(
+        tokio::time::timeout(WORKER_TEST_TIMEOUT, stream_err.next())
+            .await
+            .expect("worker stream should terminate after its error")
+            .is_none()
+    );
 
     let stream_surface_err = client
         .invoke_stream(Request::new(tool_invoke(
@@ -2386,9 +2393,10 @@ impl WorkerPlugin for SurfacePlugin {
             },
         );
         ctx.register_llm_stream_execution_intercept("llm-stream-error", 1, |_, _, _, _| async {
-            let stream: JsonStream = Box::pin(tokio_stream::iter(vec![Err(
-                WorkerSdkError::Callback("stream boom".into()),
-            )]));
+            let stream: JsonStream = Box::pin(
+                tokio_stream::once(Err(WorkerSdkError::Callback("stream boom".into())))
+                    .chain(tokio_stream::pending()),
+            );
             Ok(stream)
         });
         ctx.register_llm_stream_execution_intercept(
