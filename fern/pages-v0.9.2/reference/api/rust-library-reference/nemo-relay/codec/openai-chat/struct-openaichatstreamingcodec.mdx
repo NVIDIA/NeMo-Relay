@@ -1,0 +1,61 @@
+---
+title: "Struct OpenAI Chat Streaming Codec"
+sidebar-title: "OpenAIChatStreamingCodec"
+slug: "/reference/api/rust-library-reference/nemo-relay/codec/openai_chat/struct-openaichatstreamingcodec"
+description: "Streaming counterpart to `OpenAIChatCodec`."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct OpenAIChatStreamingCodec { /* private fields */ }
+```
+
+Streaming counterpart to [`OpenAIChatCodec`](/reference/api/rust-library-reference/nemo-relay/codec/openai_chat/struct-openaichatcodec).
+
+Replays the OpenAI Chat Completions SSE chunk sequence into the same JSON shape returned for a non-streaming request (`{id, object, created, model, choices: [{message, finish_reason}], usage}`). Once finalized, the assembled JSON can be fed back through [`OpenAIChatCodec::decode_response`](/reference/api/rust-library-reference/nemo-relay/codec/openai_chat/struct-openaichatcodec) to produce the canonical [`AnnotatedLlmResponse`](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse).
+
+## Strategy
+
+Chat Completions streams untyped SSE chunks of `{choices: [{index, delta: {...}, finish_reason: ...}]}`. Each delta may carry a `role` (typically only on the first chunk), incremental `content` text, or partial `tool_calls` whose `function.arguments` stream as a JSON-encoded string fragment-by-fragment. Top-level fields (`id`, `model`, `created`) are repeated on every chunk; we capture them once. Final-chunk `usage` is preserved when emitted (only sent when `stream_options.include_usage` is set on the request).
+
+The OpenAI `[DONE]` end-of-stream sentinel is dropped by the SSE event decoder before reaching the collector, so this codec never sees it.
+
+Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer closures share access. Each instance is single-use because [`LlmFinalizerFn`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-llmfinalizerfn) consumes the finalize step.
+
+## Implementations
+
+### `impl OpenAIChatStreamingCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-openaichatstreamingcodec\">OpenAIChatStreamingCodec</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new() -&gt; Self"}} /></pre>
+
+Creates a fresh streaming codec with empty accumulator state.
+
+## Trait Implementations
+
+### `impl Default for OpenAIChatStreamingCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-openaichatstreamingcodec\">OpenAIChatStreamingCodec</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>
+
+### `impl StreamingCodec for OpenAIChatStreamingCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../streaming/trait-streamingcodec\">StreamingCodec</a> for <a href=\"struct-openaichatstreamingcodec\">OpenAIChatStreamingCodec</a>"}} /></pre>
+
+#### `collector`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../streaming/trait-streamingcodec\">collector</a>(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-llmcollectorfn\">LlmCollectorFn</a>"}} /></pre>
+
+#### `finalizer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../streaming/trait-streamingcodec\">finalizer</a>(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-llmfinalizerfn\">LlmFinalizerFn</a>"}} /></pre>

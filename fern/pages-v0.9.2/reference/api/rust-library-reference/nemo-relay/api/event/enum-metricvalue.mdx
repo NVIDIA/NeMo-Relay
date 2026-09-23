@@ -1,0 +1,88 @@
+---
+title: "Enum Metric Value"
+sidebar-title: "MetricValue"
+description: "One typed metric value accepted by Relay's metric schema."
+position: 23
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum MetricValue &#123;\n    U64(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>),\n    I64(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i64.html\">i64</a>),\n    F64(<a href=\"struct-finitef64\">FiniteF64</a>),\n&#125;"}} /></pre>
+
+One typed metric value accepted by Relay's metric schema.
+
+## Variants
+
+### `U64(u64)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "U64(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>)"}} /></pre>
+
+Unsigned integer value.
+
+### `I64(i64)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "I64(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i64.html\">i64</a>)"}} /></pre>
+
+Signed integer value.
+
+### `F64(FiniteF64)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "F64(<a href=\"struct-finitef64\">FiniteF64</a>)"}} /></pre>
+
+Finite floating-point value.
+
+## Implementations
+
+### `impl MetricValue`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"enum-metricvalue\">MetricValue</a>"}} /></pre>
+
+#### `value_type`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn value_type(self) -&gt; <a href=\"enum-metricvaluetype\">MetricValueType</a>"}} /></pre>
+
+Return the matching metric wire value type.
+
+## Trait Implementations
+
+### `impl Clone for MetricValue`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-metricvalue\">MetricValue</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-metricvalue\">MetricValue</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for MetricValue`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-metricvalue\">MetricValue</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
+
+### `impl PartialEq for MetricValue`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-metricvalue\">MetricValue</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-metricvalue\">MetricValue</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Copy for MetricValue`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-metricvalue\">MetricValue</a>"}} /></pre>
+
+### `impl StructuralPartialEq for MetricValue`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-metricvalue\">MetricValue</a>"}} /></pre>

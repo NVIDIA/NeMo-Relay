@@ -1,0 +1,113 @@
+---
+title: "OpenInference"
+description: "Export OpenInference-compatible traces through an OpenTelemetry endpoint."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+OpenInference is a fixed projection of the unified OpenTelemetry exporter. It
+is always available and no longer has a separate configuration section,
+subscriber class, or Cargo feature.
+
+## Plugin Configuration
+
+Select `openinference` on an endpoint in the `opentelemetry` section:
+
+```toml
+[components.config]
+version = 4
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
+endpoint = "http://localhost:6006/v1/traces"
+transport = "http_binary"
+service_name = "agent-service"
+instrumentation_scope = "opentelemetry"
+timeout_millis = 3000
+
+[components.config.opentelemetry.endpoints.header_env]
+authorization = "OTEL_AUTHORIZATION"
+
+[components.config.opentelemetry.endpoints.resource_attributes]
+"deployment.environment" = "dev"
+```
+
+The endpoint emits the existing OpenInference scope, tool, LLM, and mark
+projection. It supports the `mark_projection`, `mark_exclude_names`, and
+`attribute_mappings` controls on the typed endpoint, retaining the legacy
+behavior.
+
+Normalized tool results emit one `llm.input_messages` entry per result with
+`message.role = "tool"`, `message.tool_call_id`, and `message.content`.
+Anthropic user messages that contain only `tool_result` blocks expand into
+separate entries so parallel tool results retain their original order and
+correlation IDs.
+
+Set `OTEL_AUTHORIZATION` to the complete authorization header value before
+activation. NeMo Relay snapshots the value when the plugin
+activates. The variable must be set and nonblank. A header name cannot appear
+in both `headers` and `header_env`, including names that differ only by ASCII
+case. The resolved value cannot have surrounding whitespace.
+
+For the complete endpoint field table, multi-endpoint behavior, and version-2
+migration, refer to
+[OpenTelemetry](/configure-plugins/observability/opentelemetry).
+
+## Direct Subscriber
+
+Use `OpenTelemetrySubscriber` with the OpenInference discriminator:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay import OpenTelemetryConfig, OpenTelemetrySubscriber
+
+config = OpenTelemetryConfig(
+    "openinference",
+    "http://localhost:6006/v1/traces",
+)
+config.service_name = "agent-service"
+config.header_env = {"authorization": "OTEL_AUTHORIZATION"}
+subscriber = OpenTelemetrySubscriber(config)
+```
+</Tab>
+<Tab title="Node.js" language="javascript">
+```javascript
+const { OpenTelemetrySubscriber } = require("nemo-relay-node");
+
+const subscriber = new OpenTelemetrySubscriber({
+  type: "openinference",
+  endpoint: "http://localhost:6006/v1/traces",
+  serviceName: "agent-service",
+  headerEnv: { authorization: "OTEL_AUTHORIZATION" },
+});
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::observability::OpenTelemetryType;
+use nemo_relay::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
+
+let config = OpenTelemetryConfig::new(
+    OpenTelemetryType::OpenInference,
+    "http://localhost:6006/v1/traces",
+)
+.with_service_name("agent-service")
+.with_header_env("authorization", "OTEL_AUTHORIZATION");
+let subscriber = OpenTelemetrySubscriber::new(config)?;
+```
+</Tab>
+</Tabs>
+
+Direct OpenInference subscribers use the shared
+[`header_env` construction, validation, and secret-handling behavior](/configure-plugins/observability/opentelemetry#direct-subscribers).
+Set `OTEL_AUTHORIZATION` to the complete, nonblank authorization header value
+before constructing `OpenTelemetrySubscriber`. Subscriber construction fails
+if the environment variable is missing or invalid.
+
+Register the subscriber before instrumented work. During graceful teardown,
+deregister it, flush it, and then shut it down.

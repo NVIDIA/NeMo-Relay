@@ -1,0 +1,88 @@
+---
+title: "Struct Nemo Relay Metric Measurement"
+sidebar-title: "NemoRelayMetricMeasurement"
+description: "C representation of one typed metric SDK recording operation."
+position: 19
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct NemoRelayMetricMeasurement &#123;\n    pub name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    pub kind: <a href=\"type-nemorelaymetrickind\">NemoRelayMetricKind</a>,\n    pub value_type: <a href=\"type-nemorelaymetricvaluetype\">NemoRelayMetricValueType</a>,\n    pub u64_value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>,\n    pub i64_value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i64.html\">i64</a>,\n    pub f64_value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>,\n    pub unit: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    pub description: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    pub attributes_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    pub boundaries: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>,\n    pub boundaries_len: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n&#125;"}} /></pre>
+
+C representation of one typed metric SDK recording operation.
+
+`value_type` selects exactly one of `u64_value`, `i64_value`, or `f64_value`. `unit`, `description`, and `attributes_json` are optional. A null `boundaries` pointer with `boundaries_len == 0` leaves histogram boundaries unspecified. A non-null pointer with zero length requests an explicit empty boundary list. For nonzero lengths, `boundaries` must point to that many doubles.
+
+## Fields
+
+### `name: *const c_char`
+
+Required null-terminated OpenTelemetry instrument name.
+
+### `kind: NemoRelayMetricKind`
+
+Required instrument kind. `NEMO_RELAY_METRIC_KIND_UNSPECIFIED` is invalid.
+
+### `value_type: NemoRelayMetricValueType`
+
+Required numeric value representation. `NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED` is invalid.
+
+### `u64_value: u64`
+
+Unsigned value used when `value_type` is `U64`.
+
+### `i64_value: i64`
+
+Signed value used when `value_type` is `I64`.
+
+### `f64_value: f64`
+
+Double value used when `value_type` is `F64`.
+
+### `unit: *const c_char`
+
+Optional null-terminated ASCII unit.
+
+### `description: *const c_char`
+
+Optional null-terminated description.
+
+### `attributes_json: *const c_char`
+
+Optional null-terminated JSON attributes object.
+
+### `boundaries: *const f64`
+
+Optional histogram boundary array.
+
+### `boundaries_len: usize`
+
+Number of entries in `boundaries`.
+
+## Trait Implementations
+
+### `impl Clone for NemoRelayMetricMeasurement`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-nemorelaymetricmeasurement\">NemoRelayMetricMeasurement</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-nemorelaymetricmeasurement\">NemoRelayMetricMeasurement</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for NemoRelayMetricMeasurement`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-nemorelaymetricmeasurement\">NemoRelayMetricMeasurement</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Copy for NemoRelayMetricMeasurement`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-nemorelaymetricmeasurement\">NemoRelayMetricMeasurement</a>"}} /></pre>
