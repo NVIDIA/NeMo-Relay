@@ -22,6 +22,7 @@ use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use super::*;
@@ -1086,6 +1087,247 @@ async fn permission_requests_require_an_exact_recorded_tool_call() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn permission_requests_correlate_guardrails_and_close_rejected_tools() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-permission-tool-correlation";
+    const DENIED_TOOL: &str = "PermissionDeniedTool";
+    const ALLOWED_TOOL: &str = "PermissionAllowedTool";
+    const SUBSCRIBER: &str = "cli-permission-tool-correlation-capture";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    let _ = deregister_subscriber(SUBSCRIBER);
+
+    let denied_invocations = Arc::new(AtomicUsize::new(0));
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new({
+            let denied_invocations = Arc::clone(&denied_invocations);
+            move |name, _| {
+                let denied_invocations = Arc::clone(&denied_invocations);
+                Box::pin(async move {
+                    if name == DENIED_TOOL
+                        && denied_invocations.fetch_add(1, Ordering::SeqCst) % 2 == 1
+                    {
+                        Ok(Some("blocked by host permission".into()))
+                    } else {
+                        Ok(None)
+                    }
+                })
+            }
+        }),
+    )
+    .unwrap();
+    let _guardrail_cleanup = ToolGuardrailCleanup(GUARDRAIL);
+
+    let captured_events = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&captured_events);
+    register_subscriber(
+        SUBSCRIBER,
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    for (session_id, agent_kind, tool_call_id, permission_tool_call_id) in [
+        (
+            "claude-permission-denied",
+            AgentKind::ClaudeCode,
+            "claude-call",
+            "",
+        ),
+        (
+            "codex-permission-denied",
+            AgentKind::Codex,
+            "codex-call",
+            "codex-call",
+        ),
+    ] {
+        let arguments = json!({"path": "README.md"});
+        manager
+            .apply_authenticated_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: tool_call_id.into(),
+                    tool_name: DENIED_TOOL.into(),
+                    subagent_id: None,
+                    arguments: arguments.clone(),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                })],
+                "client-a",
+            )
+            .await
+            .unwrap();
+
+        let result = manager
+            .authorize_tool_permission(
+                &ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind,
+                    event_name: "PermissionRequest".into(),
+                    tool_call_id: permission_tool_call_id.into(),
+                    tool_name: DENIED_TOOL.into(),
+                    subagent_id: None,
+                    arguments,
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                },
+                "client-a",
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(CliError::Flow(FlowError::GuardrailRejected(_)))
+        ));
+        assert!(
+            manager
+                .inner
+                .lock()
+                .await
+                .get(session_id)
+                .is_some_and(|session| !session.tools.contains_key(tool_call_id)),
+            "a rejected permission must close the active {agent_kind:?} tool"
+        );
+    }
+
+    let allowed_session = "codex-permission-allowed";
+    let allowed_call = "codex-allowed-call";
+    let allowed_arguments = json!({"path": "CONTRIBUTING.md"});
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::ToolStarted(ToolEvent {
+                session_id: allowed_session.into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "PreToolUse".into(),
+                tool_call_id: allowed_call.into(),
+                tool_name: ALLOWED_TOOL.into(),
+                subagent_id: None,
+                arguments: allowed_arguments.clone(),
+                result: Value::Null,
+                status: None,
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+            "client-a",
+        )
+        .await
+        .unwrap();
+    manager
+        .authorize_tool_permission(
+            &ToolEvent {
+                session_id: allowed_session.into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "PermissionRequest".into(),
+                tool_call_id: allowed_call.into(),
+                tool_name: ALLOWED_TOOL.into(),
+                subagent_id: None,
+                arguments: allowed_arguments.clone(),
+                result: Value::Null,
+                status: None,
+                payload: json!({}),
+                metadata: json!({}),
+            },
+            "client-a",
+        )
+        .await
+        .unwrap();
+    assert!(
+        manager
+            .inner
+            .lock()
+            .await
+            .get(allowed_session)
+            .is_some_and(|session| session.tools.contains_key(allowed_call)),
+        "an allowed permission must leave the tool active"
+    );
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::ToolEnded(ToolEvent {
+                session_id: allowed_session.into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "PostToolUse".into(),
+                tool_call_id: allowed_call.into(),
+                tool_name: ALLOWED_TOOL.into(),
+                subagent_id: None,
+                arguments: allowed_arguments,
+                result: json!({"ok": true}),
+                status: Some("success".into()),
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    flush_subscribers().unwrap();
+    deregister_subscriber(SUBSCRIBER).unwrap();
+    let events = captured_events.lock().unwrap();
+    for tool_call_id in ["claude-call", "codex-call", "codex-allowed-call"] {
+        let tool_events = events
+            .iter()
+            .filter(|event| event.tool_call_id() == Some(tool_call_id))
+            .collect::<Vec<_>>();
+        let tool_start = tool_events
+            .iter()
+            .find(|event| event.scope_category() == Some(ScopeCategory::Start))
+            .unwrap();
+        let permission_events = events
+            .iter()
+            .filter(|event| {
+                event.scope_type() == Some(ScopeType::Guardrail)
+                    && event.name() == GUARDRAIL
+                    && event.metadata().is_some_and(|metadata| {
+                        metadata["gen_ai.tool.call.id"] == json!(tool_call_id)
+                    })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(permission_events.len(), 2);
+        assert!(
+            permission_events
+                .iter()
+                .all(|event| event.parent_uuid() == tool_start.parent_uuid()),
+            "permission guardrail events must share the exact tool parent"
+        );
+    }
+
+    for tool_call_id in ["claude-call", "codex-call"] {
+        let denied_end = events
+            .iter()
+            .find(|event| {
+                event.tool_call_id() == Some(tool_call_id)
+                    && event.scope_category() == Some(ScopeCategory::End)
+            })
+            .unwrap();
+        let metadata = denied_end.metadata().unwrap();
+        assert_eq!(metadata["error.type"], "guardrail_rejected");
+        assert_eq!(metadata["otel.status_code"], "ERROR");
+        assert_eq!(metadata["status"], "denied");
+    }
+
+    let allowed_permission_end = events
+        .iter()
+        .find(|event| {
+            event.scope_type() == Some(ScopeType::Guardrail)
+                && event.scope_category() == Some(ScopeCategory::End)
+                && event
+                    .metadata()
+                    .is_some_and(|metadata| metadata["gen_ai.tool.call.id"] == json!(allowed_call))
+        })
+        .unwrap();
+    assert_eq!(allowed_permission_end.data().unwrap()["allowed"], true);
 }
 
 #[test]
