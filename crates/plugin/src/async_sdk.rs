@@ -154,10 +154,10 @@ unsafe impl Send for HostV4 {}
 unsafe impl Sync for HostV4 {}
 
 #[derive(Clone, Copy)]
-struct HostV6(NemoRelayNativeHostApiV6);
+struct HostV7(NemoRelayNativeHostApiV7);
 
-unsafe impl Send for HostV6 {}
-unsafe impl Sync for HostV6 {}
+unsafe impl Send for HostV7 {}
+unsafe impl Sync for HostV7 {}
 
 struct Completion {
     host: HostV4,
@@ -285,7 +285,7 @@ impl CompletionRef {
 
 #[derive(Clone, Copy)]
 struct StreamRef {
-    host: HostV6,
+    host: HostV7,
     raw: *const NemoRelayNativeAsyncStream,
 }
 
@@ -960,7 +960,7 @@ type StreamAdapter =
     dyn Fn(Json, LlmExecutionContext<'static>, LlmStreamNext) -> StreamFuture + Send + Sync;
 
 struct StreamCallbackState {
-    host: HostV6,
+    host: HostV7,
     executor: Arc<NativeExecutor>,
     adapter: Box<StreamAdapter>,
 }
@@ -972,7 +972,7 @@ unsafe extern "C" fn drop_stream_callback(user_data: *mut c_void) {
 }
 
 struct OutputStream {
-    host: HostV6,
+    host: HostV7,
     raw: *const NemoRelayNativeAsyncStream,
 }
 
@@ -981,18 +981,19 @@ unsafe impl Sync for OutputStream {}
 
 impl OutputStream {
     fn cancelled(&self) -> bool {
-        unsafe { (self.host.0.v5.v4.v3.async_stream_is_cancelled)(self.raw) }
+        unsafe { (self.host.0.v6.v5.v4.v3.async_stream_is_cancelled)(self.raw) }
     }
 
     async fn push(&self, value: &Json) -> Result<()> {
-        let value = HostString::from_json(&self.host.0.v5.v4.v3.v1, value)
+        let value = HostString::from_json(&self.host.0.v6.v5.v4.v3.v1, value)
             .ok_or_else(|| "failed to serialize native stream chunk".to_string())?;
         loop {
             if self.cancelled() {
                 return Err("native stream consumer cancelled".into());
             }
-            let status =
-                unsafe { (self.host.0.v5.v4.v3.async_stream_push_json)(self.raw, value.as_ptr()) };
+            let status = unsafe {
+                (self.host.0.v6.v5.v4.v3.async_stream_push_json)(self.raw, value.as_ptr())
+            };
             match status {
                 NemoRelayStatus::Ok => return Ok(()),
                 NemoRelayStatus::Backpressured => {
@@ -1005,19 +1006,20 @@ impl OutputStream {
 
     fn finish(&self) -> Result<()> {
         status_result(
-            unsafe { (self.host.0.v5.v4.v3.async_stream_finish)(self.raw) },
+            unsafe { (self.host.0.v6.v5.v4.v3.async_stream_finish)(self.raw) },
             "finish native stream",
         )
     }
 
     async fn reject(&self, error: &str) {
-        if let Some(error) = HostString::new(&self.host.0.v5.v4.v3.v1, error) {
+        if let Some(error) = HostString::new(&self.host.0.v6.v5.v4.v3.v1, error) {
             loop {
                 if self.cancelled() {
                     break;
                 }
-                let status =
-                    unsafe { (self.host.0.v5.v4.v3.async_stream_reject)(self.raw, error.as_ptr()) };
+                let status = unsafe {
+                    (self.host.0.v6.v5.v4.v3.async_stream_reject)(self.raw, error.as_ptr())
+                };
                 match status {
                     NemoRelayStatus::Backpressured => {
                         tokio::time::sleep(CANCELLATION_POLL_INTERVAL).await;
@@ -1029,9 +1031,9 @@ impl OutputStream {
     }
 
     fn reject_once(&self, error: &str) {
-        if let Some(error) = HostString::new(&self.host.0.v5.v4.v3.v1, error) {
+        if let Some(error) = HostString::new(&self.host.0.v6.v5.v4.v3.v1, error) {
             unsafe {
-                (self.host.0.v5.v4.v3.async_stream_reject)(self.raw, error.as_ptr());
+                (self.host.0.v6.v5.v4.v3.async_stream_reject)(self.raw, error.as_ptr());
             }
         }
     }
@@ -1039,7 +1041,7 @@ impl OutputStream {
 
 impl Drop for OutputStream {
     fn drop(&mut self) {
-        unsafe { (self.host.0.v5.v4.v3.async_stream_release)(self.raw) };
+        unsafe { (self.host.0.v6.v5.v4.v3.async_stream_release)(self.raw) };
     }
 }
 
@@ -1060,11 +1062,11 @@ unsafe extern "C" fn stream_trampoline(
         return NemoRelayNativeAsyncCallbackState::Pending as u32;
     }
     let next = LlmStreamNext(Arc::new(NextInner {
-        host: HostV4(state.host.0.v5.v4),
+        host: HostV4(state.host.0.v6.v5.v4),
         raw: next,
     }));
     let invocation = read_json_value(
-        &state.host.0.v5.v4.v3.v1,
+        &state.host.0.v6.v5.v4.v3.v1,
         invocation_json,
         "stream invocation",
     )
@@ -1080,8 +1082,8 @@ unsafe extern "C" fn stream_trampoline(
                 context,
             )
         });
-    let bindings = ScopePollBinding::capture(state.host.0.v5.v4.v3.v1).and_then(|future| {
-        ScopePollBinding::capture(state.host.0.v5.v4.v3.v1).map(|stream| (future, stream))
+    let bindings = ScopePollBinding::capture(state.host.0.v6.v5.v4.v3.v1).and_then(|future| {
+        ScopePollBinding::capture(state.host.0.v6.v5.v4.v3.v1).map(|stream| (future, stream))
     });
     let future = catch_unwind(AssertUnwindSafe(|| match (invocation, context) {
         (Ok(invocation), Ok(context)) => (state.adapter)(invocation, context, next),
@@ -1092,7 +1094,7 @@ unsafe extern "C" fn stream_trampoline(
     });
     if let Err(error) = state.executor.ensure_started() {
         output.reject_once(&error);
-        set_last_error(&state.host.0.v5.v4.v3.v1, &error);
+        set_last_error(&state.host.0.v6.v5.v4.v3.v1, &error);
         return NemoRelayNativeAsyncCallbackState::Pending as u32;
     }
     let task = async move {
@@ -1154,7 +1156,7 @@ unsafe extern "C" fn stream_trampoline(
         }
     };
     if let Err(error) = state.executor.spawn(task) {
-        set_last_error(&state.host.0.v5.v4.v3.v1, &error);
+        set_last_error(&state.host.0.v6.v5.v4.v3.v1, &error);
     }
     NemoRelayNativeAsyncCallbackState::Pending as u32
 }
@@ -1248,7 +1250,7 @@ fn llm_stream_execution_context_from_native(
         return Err("native LLM stream execution context exposed a response codec".into());
     }
     let request = context.request_codec;
-    let host = &stream.host.0.v5.v4.v3.v1;
+    let host = &stream.host.0.v6.v5.v4.v3.v1;
     let request_codec = stream.execution_request_context(
         execution_codec_identity(host, request.codec_kind, request.codec_id)?,
         !request.codec.is_null(),
@@ -1271,14 +1273,14 @@ impl PluginContext<'_> {
         }))
     }
 
-    fn host_v6(&self) -> Result<HostV6> {
+    fn host_v7(&self) -> Result<HostV7> {
         if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT
-            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV6>()
+            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV7>()
         {
-            return Err("typed LLM execution middleware requires Relay ABI v6".into());
+            return Err("typed LLM execution middleware requires Relay ABI v7".into());
         }
-        Ok(HostV6(unsafe {
-            *(self.host as *const _ as *const NemoRelayNativeHostApiV6)
+        Ok(HostV7(unsafe {
+            *(self.host as *const _ as *const NemoRelayNativeHostApiV7)
         }))
     }
 
@@ -1800,7 +1802,7 @@ impl PluginContext<'_> {
     {
         let callback = Arc::new(callback);
         let state = Box::into_raw(Box::new(StreamCallbackState {
-            host: self.host_v6()?,
+            host: self.host_v7()?,
             executor: Arc::clone(&self.executor),
             adapter: Box::new(move |value, context, next| {
                 let callback = Arc::clone(&callback);

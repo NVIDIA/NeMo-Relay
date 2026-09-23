@@ -56,7 +56,7 @@ artifact solves a concrete operational problem.
 Native Rust plugins suit reusable middleware whose callback latency or throughput is
 important enough to justify platform-specific binaries and full in-process trust. A
 native plugin uses manifest compatibility `compat.native_api = "1"`; the current SDK
-uses C host-table ABI v6. Relay 0.10 rejects v2-v5 compiled callback layouts, so native
+uses C host-table ABI v7. Relay 0.10 rejects v2-v6 compiled callback layouts, so native
 plugins must rebuild for this release even though the authored
 manifest label remains `native_api = "1"`.
 Those are different version axes, as the [Native ABI Reference](/build-plugins/native/native-abi-reference)

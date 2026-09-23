@@ -26,14 +26,14 @@ Three version values answer different questions:
 |---|---|---|
 | Package manifest | `manifest_version = 1` | Shape of the authored `relay-plugin.toml` file. |
 | Manifest native API | `compat.native_api = "1"` | Native plugin package contract accepted by discovery and trust validation. |
-| C host-table ABI | v6 | Function table required by the current `nemo-relay-plugin` SDK. Relay 0.10 rejects v2-v5 callback layouts. |
+| C host-table ABI | v7 | Function table required by the current `nemo-relay-plugin` SDK. Relay 0.10 rejects v2-v6 callback layouts. |
 
 The checked example registers a tool execution intercept, so it declares
 `compat.relay = ">=0.10.0,<1.0"`. Every native plugin built with this SDK must use
-that lower bound because an older Relay cannot load the finalized ABI v6 function table, even
+that lower bound because an older Relay cannot load the ABI v7 function table, even
 when the component itself does not register an LLM execution intercept.
 
-Relay 0.10 finalizes ABI v6 with directional codec context on every LLM
+Relay 0.10 adds ABI v7 with directional codec context on every LLM
 execution callback. Rebuild all native plugins for this release; the authored
 `native_api = "1"` label does not change.
 

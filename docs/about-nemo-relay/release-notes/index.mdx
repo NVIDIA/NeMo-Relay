@@ -44,7 +44,7 @@ interceptors receive request codec access only.
 **Breaking change:** Callback signatures change across Rust, Python, Node.js,
 Go, C, native plugins, and Rust and Python gRPC workers. Python
 language-binding streaming and public C callbacks also gain the logical LLM
-name. Native plugins must rebuild for the finalized internal ABI v6 layout, and affected workers
+name. Native plugins must rebuild for the internal ABI v7 layout, and affected workers
 must regenerate their protobuf bindings and rebuild. Authored compatibility
 labels remain `native_api = "1"` and `grpc-v1`; plugin manifests must use a
 Relay range that begins at 0.10 or otherwise excludes 0.9. Refer to the

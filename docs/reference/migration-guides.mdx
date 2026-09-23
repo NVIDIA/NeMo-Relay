@@ -40,7 +40,7 @@ This is a source and binary compatibility break for execution-intercept users:
 - Rebuild every native plugin against the 0.10 SDK. Native plugins continue to
   declare `compat.native_api = "1"`, but must set `compat.relay` to
   `">=0.10.0,<1.0"` or another range that excludes Relay 0.9. Relay 0.10 uses
-  internal native ABI v6 and rejects v2-v5 compiled layouts.
+  internal native ABI v7 and rejects v2-v6 compiled layouts.
 - Regenerate and rebuild gRPC workers that register an LLM execution intercept.
   The protocol remains `grpc-v1`, but those workers must also exclude Relay 0.9
   in `compat.relay`.
