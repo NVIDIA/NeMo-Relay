@@ -540,7 +540,8 @@ fn digest_environment_entry(
 }
 
 fn is_python_lib64_alias(path: &Path, relative: &Path) -> Result<bool, String> {
-    if relative != Path::new("lib64")
+    if !cfg!(unix)
+        || relative != Path::new("lib64")
         || path
             .parent()
             .is_none_or(|root| !root.join("pyvenv.cfg").is_file())
