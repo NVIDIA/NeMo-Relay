@@ -991,8 +991,22 @@ pub async fn tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
 /// rejection result without starting a tool span. Guardrail scopes are still
 /// emitted for the conditional checks themselves.
 pub async fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
+    tool_conditional_execution_with_event_context(name, args, None, None).await
+}
+
+/// Run the tool conditional-execution guardrail chain with trusted event context.
+///
+/// This is an internal seam for Relay-owned integrations that have already authenticated and
+/// matched an external tool invocation. Public callers should use [`tool_conditional_execution`].
+#[doc(hidden)]
+pub async fn tool_conditional_execution_with_event_context(
+    name: &str,
+    args: &Json,
+    parent_uuid: Option<Uuid>,
+    metadata: Option<Json>,
+) -> Result<()> {
     ensure_runtime_owner()?;
-    let (entries, subscribers, parent_uuid) = {
+    let (entries, subscribers, resolved_parent_uuid) = {
         let scope_stack = current_scope_stack();
         let (scope_locals, scope_subscribers) = {
             let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
@@ -1014,15 +1028,19 @@ pub async fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
             ]);
         let entries = state.tool_conditional_execution_entries(&scope_local_refs);
         let subscribers = state.collect_event_subscribers(&scope_subscribers);
-        (entries, subscribers, resolve_parent_uuid(None))
+        (
+            entries,
+            subscribers,
+            parent_uuid.or_else(|| resolve_parent_uuid(None)),
+        )
     };
     if let Some(error) = NemoRelayContextState::tool_conditional_execution_snapshot_chain(
         name,
         args,
         &entries,
         &subscribers,
-        parent_uuid,
-        None,
+        resolved_parent_uuid,
+        metadata,
     )
     .await?
     {
