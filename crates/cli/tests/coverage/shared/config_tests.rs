@@ -838,22 +838,6 @@ fn write_dynamic_plugin_state(plugins_toml_path: &std::path::Path, plugin_id: &s
     .unwrap();
 }
 
-fn read_dynamic_plugin_state(
-    plugins_toml_path: &std::path::Path,
-) -> nemo_relay::plugin::dynamic::DynamicPluginRecord {
-    let persisted: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(
-            plugins_toml_path
-                .parent()
-                .unwrap()
-                .join(".dynamic-plugins.json"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    serde_json::from_value(persisted["records"][0].clone()).unwrap()
-}
-
 #[test]
 fn session_config_prefers_headers_and_parses_json() {
     let mut headers = HeaderMap::new();
@@ -3564,6 +3548,11 @@ startup = "required"
     )
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+    let state_path = plugins_toml_path
+        .parent()
+        .unwrap()
+        .join(".dynamic-plugins.json");
+    let persisted_state = std::fs::read(&state_path).unwrap();
 
     let args = GatewayOverrides {
         config: Some(config_path),
@@ -3576,32 +3565,7 @@ startup = "required"
     assert!(error.contains("acme.worker"));
     assert!(error.contains("integrity verification"));
 
-    let record = read_dynamic_plugin_state(&plugins_toml_path);
-    assert_eq!(
-        record.status.validation.integrity,
-        DynamicPluginCheckState::Invalid
-    );
-    assert_eq!(
-        record.status.validation.policy_satisfied,
-        DynamicPluginCheckState::Valid
-    );
-    assert_eq!(
-        record.status.startup_class,
-        Some(DynamicPluginStartupClass::Required)
-    );
-    assert_eq!(
-        record.status.attestation_mode,
-        Some(DynamicPluginAttestationMode::IntegrityOnly)
-    );
-    assert!(
-        record
-            .status
-            .last_error
-            .as_ref()
-            .unwrap()
-            .message
-            .contains("integrity verification")
-    );
+    assert_eq!(std::fs::read(&state_path).unwrap(), persisted_state);
 }
 
 #[test]
@@ -3633,6 +3597,11 @@ attestation = "signature_required"
     )
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+    let state_path = plugins_toml_path
+        .parent()
+        .unwrap()
+        .join(".dynamic-plugins.json");
+    let persisted_state = std::fs::read(&state_path).unwrap();
 
     let args = GatewayOverrides {
         config: Some(config_path),
@@ -3645,32 +3614,7 @@ attestation = "signature_required"
     assert!(error.contains("acme.worker"));
     assert!(error.contains("no trusted_public_keys"));
 
-    let record = read_dynamic_plugin_state(&plugins_toml_path);
-    assert_eq!(
-        record.status.validation.authenticity,
-        DynamicPluginCheckState::Invalid
-    );
-    assert_eq!(
-        record.status.validation.policy_satisfied,
-        DynamicPluginCheckState::Valid
-    );
-    assert_eq!(
-        record.status.startup_class,
-        Some(DynamicPluginStartupClass::Required)
-    );
-    assert_eq!(
-        record.status.attestation_mode,
-        Some(DynamicPluginAttestationMode::SignatureRequired)
-    );
-    assert!(
-        record
-            .status
-            .last_error
-            .as_ref()
-            .unwrap()
-            .message
-            .contains("no trusted_public_keys")
-    );
+    assert_eq!(std::fs::read(&state_path).unwrap(), persisted_state);
 }
 
 #[test]
@@ -3706,6 +3650,11 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_wrong_truste
     )
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+    let state_path = plugins_toml_path
+        .parent()
+        .unwrap()
+        .join(".dynamic-plugins.json");
+    let persisted_state = std::fs::read(&state_path).unwrap();
 
     let args = GatewayOverrides {
         config: Some(config_path),
@@ -3718,32 +3667,7 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_wrong_truste
     assert!(error.contains("acme.worker"));
     assert!(error.contains("failed signature verification"));
 
-    let record = read_dynamic_plugin_state(&plugins_toml_path);
-    assert_eq!(
-        record.status.validation.authenticity,
-        DynamicPluginCheckState::Invalid
-    );
-    assert_eq!(
-        record.status.validation.policy_satisfied,
-        DynamicPluginCheckState::Valid
-    );
-    assert_eq!(
-        record.status.startup_class,
-        Some(DynamicPluginStartupClass::Required)
-    );
-    assert_eq!(
-        record.status.attestation_mode,
-        Some(DynamicPluginAttestationMode::SignatureRequired)
-    );
-    assert!(
-        record
-            .status
-            .last_error
-            .as_ref()
-            .unwrap()
-            .message
-            .contains("failed signature verification")
-    );
+    assert_eq!(std::fs::read(&state_path).unwrap(), persisted_state);
 }
 
 #[test]
@@ -3779,6 +3703,11 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_malformed_si
     )
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+    let state_path = plugins_toml_path
+        .parent()
+        .unwrap()
+        .join(".dynamic-plugins.json");
+    let persisted_state = std::fs::read(&state_path).unwrap();
 
     let args = GatewayOverrides {
         config: Some(config_path),
@@ -3790,33 +3719,7 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_malformed_si
     assert!(error.contains("required dynamic plugin startup preflight failed"));
     assert!(error.contains("acme.worker"));
     assert!(error.contains("invalid base64 signature"));
-
-    let record = read_dynamic_plugin_state(&plugins_toml_path);
-    assert_eq!(
-        record.status.validation.authenticity,
-        DynamicPluginCheckState::Invalid
-    );
-    assert_eq!(
-        record.status.validation.policy_satisfied,
-        DynamicPluginCheckState::Valid
-    );
-    assert_eq!(
-        record.status.startup_class,
-        Some(DynamicPluginStartupClass::Required)
-    );
-    assert_eq!(
-        record.status.attestation_mode,
-        Some(DynamicPluginAttestationMode::SignatureIfPresent)
-    );
-    assert!(
-        record
-            .status
-            .last_error
-            .as_ref()
-            .unwrap()
-            .message
-            .contains("invalid base64 signature")
-    );
+    assert_eq!(std::fs::read(&state_path).unwrap(), persisted_state);
 }
 
 #[test]

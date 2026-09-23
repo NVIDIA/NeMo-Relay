@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::fs;
 use std::path::Path;
@@ -248,7 +248,7 @@ pub(crate) fn enforce_required_dynamic_plugin_startup(
     explicit_plugin_config: Option<&PathBuf>,
     resolved: &ResolvedConfig,
 ) -> Result<(), CliError> {
-    let (scopes, _) = load_and_hydrate_scopes_with_updates(explicit_plugin_config, resolved)?;
+    let scopes = load_and_hydrate_scopes(explicit_plugin_config, resolved)?;
     let required_failures = collect_records(&scopes, false)
         .into_iter()
         .filter(|entry| entry.record.spec.enabled)
@@ -2097,23 +2097,15 @@ fn load_and_hydrate_scopes(
     explicit_plugin_config: Option<&PathBuf>,
     resolved: &ResolvedConfig,
 ) -> Result<Vec<ScopedRegistry>, CliError> {
-    load_and_hydrate_scopes_with_updates(explicit_plugin_config, resolved).map(|(scopes, _)| scopes)
-}
-
-fn load_and_hydrate_scopes_with_updates(
-    explicit_plugin_config: Option<&PathBuf>,
-    resolved: &ResolvedConfig,
-) -> Result<(Vec<ScopedRegistry>, Vec<usize>), CliError> {
     let mut scopes = load_scoped_registries(explicit_plugin_config)?;
-    let touched_scope_indices = hydrate_scoped_registries(&mut scopes, resolved)?;
-    Ok((scopes, touched_scope_indices.into_iter().collect()))
+    hydrate_scoped_registries(&mut scopes, resolved)?;
+    Ok(scopes)
 }
 
 fn hydrate_scoped_registries(
     scopes: &mut [ScopedRegistry],
     resolved: &ResolvedConfig,
-) -> Result<BTreeSet<usize>, CliError> {
-    let mut touched_scope_indices = BTreeSet::new();
+) -> Result<(), CliError> {
     for plugin in &resolved.dynamic_plugins {
         let scope_index = scopes
             .iter()
@@ -2125,7 +2117,6 @@ fn hydrate_scoped_registries(
                     plugin.source.display()
                 ))
             })?;
-        touched_scope_indices.insert(scope_index);
         let (manifest, manifest_ref) = load_manifest_for_action("hydrate", &plugin.manifest_ref)?;
         let policy =
             evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
@@ -2174,7 +2165,7 @@ fn hydrate_scoped_registries(
                 .map_err(|error| CliError::Config(error.to_string()))?;
         }
     }
-    Ok(touched_scope_indices)
+    Ok(())
 }
 
 fn validated_record_from_manifest(
