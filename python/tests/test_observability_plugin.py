@@ -32,6 +32,7 @@ from nemo_relay.observability import (
     AtofFileSinkConfig,
     AtofStreamSinkConfig,
     ComponentSpec,
+    ConfigPolicy,
     HttpStorageConfig,
     ObservabilityConfig,
     OpenTelemetryEndpointConfig,
@@ -240,6 +241,43 @@ class TestObservabilityConfigHelpers:
         assert section["logs"] == logs.to_dict()
         assert section["metrics"] == metrics.to_dict()
         assert typing.cast(dict[str, object], section["metrics"])["endpoints"] == [endpoint.to_dict()]
+
+    @pytest.mark.parametrize("signal", ["logs", "metrics"])
+    @pytest.mark.parametrize("prefixes", [None, [], ["deployment.", "nv.client."], ["nv.*"]])
+    def test_signal_resource_promotion_serialization_and_validation(
+        self, signal: str, prefixes: list[str] | None
+    ) -> None:
+        endpoint = OpenTelemetrySignalEndpointConfig(f"http://localhost:4318/v1/{signal}")
+        if prefixes is not None:
+            endpoint = OpenTelemetrySignalEndpointConfig(endpoint.endpoint, promote_resource_metadata_prefixes=prefixes)
+        serialized = endpoint.to_dict()
+        if prefixes:
+            assert serialized["promote_resource_metadata_prefixes"] == prefixes
+        else:
+            assert "promote_resource_metadata_prefixes" not in serialized
+
+        section = OpenTelemetrySectionConfig(enabled=True)
+        if signal == "logs":
+            section.logs = OpenTelemetryLogSectionConfig(enabled=True, endpoints=[endpoint])
+        else:
+            section.metrics = OpenTelemetryMetricSectionConfig(enabled=True, endpoints=[endpoint])
+        report = validate_plugin_config(
+            plugin.PluginConfig(
+                components=[
+                    ComponentSpec(
+                        ObservabilityConfig(opentelemetry=section, policy=ConfigPolicy(unknown_field="error"))
+                    )
+                ]
+            )
+        )
+        if prefixes == ["nv.*"]:
+            assert any(
+                diagnostic.get("component") == f"opentelemetry.{signal}"
+                and diagnostic.get("field") == "endpoints[0].promote_resource_metadata_prefixes"
+                for diagnostic in report["diagnostics"]
+            )
+        else:
+            assert report["diagnostics"] == []
 
     def test_validation_rejects_bad_values(self) -> None:
         report = validate_plugin_config(

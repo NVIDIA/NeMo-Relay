@@ -1914,6 +1914,115 @@ fn python_environment_entry_budget_counts_skipped_cache_entries() {
     assert!(error.contains("2-entry attestation budget"), "{error}");
 }
 
+#[cfg(unix)]
+#[test]
+fn python_environment_byte_budget_counts_internal_directory_alias_once() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let environment_path = temp.path().join("environment");
+    let site_packages = environment_path.join("lib/python3.11/site-packages");
+    std::fs::create_dir_all(&site_packages).unwrap();
+    let payload = b"installed package";
+    let installed = site_packages.join("package.bin");
+    std::fs::write(&installed, payload).unwrap();
+    symlink("lib", environment_path.join("lib64")).unwrap();
+
+    let error = environment::test_environment_tree_digest_with_budget(
+        &environment_path,
+        16,
+        payload.len() as u64,
+    )
+    .expect_err("a non-venv lib64 alias must remain inside the byte budget");
+    assert!(error.contains("byte attestation budget"), "{error}");
+
+    let pyvenv = b"home = /usr/bin\n";
+    std::fs::write(environment_path.join("pyvenv.cfg"), pyvenv).unwrap();
+    let byte_budget = (payload.len() + pyvenv.len()) as u64;
+
+    let original =
+        environment::test_environment_tree_digest_with_budget(&environment_path, 16, byte_budget)
+            .expect("lib64 -> lib must not charge installed files twice");
+
+    let physical_environment = temp.path().join("physical-environment");
+    let physical_site_packages = physical_environment.join("lib/python3.11/site-packages");
+    let physical_lib64_site_packages = physical_environment.join("lib64/python3.11/site-packages");
+    std::fs::create_dir_all(&physical_site_packages).unwrap();
+    std::fs::create_dir_all(&physical_lib64_site_packages).unwrap();
+    std::fs::write(physical_environment.join("pyvenv.cfg"), pyvenv).unwrap();
+    std::fs::write(physical_site_packages.join("package.bin"), payload).unwrap();
+    std::fs::write(physical_lib64_site_packages.join("package.bin"), payload).unwrap();
+    let physical_digest = environment::test_environment_tree_digest_with_budget(
+        &physical_environment,
+        16,
+        byte_budget + payload.len() as u64,
+    )
+    .unwrap();
+    assert_eq!(
+        original, physical_digest,
+        "the venv alias must retain its logical lib64 digest entries"
+    );
+
+    std::fs::write(&installed, b"changed package!").unwrap();
+    let changed =
+        environment::test_environment_tree_digest_with_budget(&environment_path, 16, byte_budget)
+            .unwrap();
+    assert_ne!(original, changed, "aliased content must remain attested");
+
+    symlink("lib", environment_path.join("other-alias")).unwrap();
+    let error =
+        environment::test_environment_tree_digest_with_budget(&environment_path, 32, byte_budget)
+            .expect_err("non-standard aliases must remain inside the byte budget");
+    assert!(error.contains("byte attestation budget"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn python_activation_snapshot_preserves_internal_directory_alias() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let environment_path = temp.path().join("environment");
+    let site_packages = environment_path.join("lib/python3.11/site-packages");
+    std::fs::create_dir_all(&site_packages).unwrap();
+    std::fs::write(environment_path.join("pyvenv.cfg"), b"home = /usr/bin\n").unwrap();
+    std::fs::write(site_packages.join("package.bin"), b"installed package").unwrap();
+    symlink("lib", environment_path.join("lib64")).unwrap();
+    let source_digest = "sha256:fixture-source-artifact";
+    environment::write_environment_attestation(&environment_path, source_digest).unwrap();
+
+    let snapshot_path = temp.path().join("snapshot");
+    copy_snapshot_directory(
+        &environment_path,
+        &snapshot_path,
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+        true,
+        &mut Vec::new(),
+    )
+    .unwrap();
+
+    assert!(
+        std::fs::symlink_metadata(snapshot_path.join("lib64"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::read_link(snapshot_path.join("lib64")).unwrap(),
+        Path::new("lib")
+    );
+    environment::verify_environment_attestation(&snapshot_path, source_digest).unwrap();
+
+    std::fs::write(
+        snapshot_path.join("lib/python3.11/site-packages/package.bin"),
+        b"tampered package",
+    )
+    .unwrap();
+    assert!(environment::verify_environment_attestation(&snapshot_path, source_digest).is_err());
+}
+
 #[test]
 fn python_activation_snapshot_is_attested_copied_and_tamper_evident() {
     let temp = tempfile::tempdir().unwrap();

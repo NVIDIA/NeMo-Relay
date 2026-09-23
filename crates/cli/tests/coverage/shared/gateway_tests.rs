@@ -126,6 +126,7 @@ async fn prepared_gateway_request_consumes_private_client_proof() {
                 crate::provider_auth::SourceCredentialDisposition::ProviderCredential,
             allow_environment_provider_auth: true,
         },
+        "/v1/responses",
     )
     .await
     .unwrap();
@@ -153,6 +154,7 @@ async fn prepared_gateway_request_decodes_zstd_for_observability() {
         &GatewayConfig::default(),
         request,
         environment_authorization(),
+        "/v1/responses",
     )
     .await
     .unwrap();
@@ -188,6 +190,7 @@ async fn prepared_gateway_request_decodes_chained_zstd_for_observability() {
         &GatewayConfig::default(),
         request,
         environment_authorization(),
+        "/v1/responses",
     )
     .await
     .unwrap();
@@ -231,9 +234,14 @@ async fn request_observability_decode_is_bounded_and_encoding_aware() {
         .header(header::CONTENT_ENCODING, "zstd")
         .body(Body::from(compressed))
         .unwrap();
-    let prepared = prepare_gateway_request(&config, request, environment_authorization())
-        .await
-        .unwrap();
+    let prepared = prepare_gateway_request(
+        &config,
+        request,
+        environment_authorization(),
+        "/v1/responses",
+    )
+    .await
+    .unwrap();
     assert!(prepared.request_json.is_null());
 
     let request = Request::builder()
@@ -242,9 +250,14 @@ async fn request_observability_decode_is_bounded_and_encoding_aware() {
         .header(header::CONTENT_ENCODING, "gzip")
         .body(Body::from(r#"{"model":"opaque"}"#))
         .unwrap();
-    let prepared = prepare_gateway_request(&config, request, environment_authorization())
-        .await
-        .unwrap();
+    let prepared = prepare_gateway_request(
+        &config,
+        request,
+        environment_authorization(),
+        "/v1/responses",
+    )
+    .await
+    .unwrap();
     assert!(prepared.request_json.is_null());
 
     let request = Request::builder()
@@ -253,9 +266,14 @@ async fn request_observability_decode_is_bounded_and_encoding_aware() {
         .header(header::CONTENT_ENCODING, "identity")
         .body(Body::from(r#"{"model":"gpt-test"}"#))
         .unwrap();
-    let prepared = prepare_gateway_request(&config, request, environment_authorization())
-        .await
-        .unwrap();
+    let prepared = prepare_gateway_request(
+        &config,
+        request,
+        environment_authorization(),
+        "/v1/responses",
+    )
+    .await
+    .unwrap();
     assert_eq!(
         prepared.request_json,
         json!({
@@ -276,6 +294,7 @@ async fn malformed_encoded_request_remains_a_raw_passthrough() {
         &GatewayConfig::default(),
         request,
         environment_authorization(),
+        "/v1/responses",
     )
     .await
     .unwrap();
@@ -503,6 +522,7 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
 
@@ -552,6 +572,7 @@ fn openai_upstream_url_accepts_origin_or_v1_base() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
 
@@ -586,6 +607,7 @@ fn anthropic_upstream_url_accepts_origin_or_v1_base() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
 
@@ -2309,6 +2331,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
@@ -2348,6 +2371,7 @@ async fn models_rejects_non_get_requests_directly() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
@@ -2753,6 +2777,7 @@ async fn models_refuses_an_unusable_named_upstream() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {

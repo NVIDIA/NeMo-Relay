@@ -239,10 +239,7 @@ impl ManagedRuntime {
                     && let Err(error) = self.authorize_permission(permission).await
                 {
                     operational::hook_completed(&operational, "managed_worker_hook", "denied");
-                    return Ok(json!({
-                        "decision": "deny",
-                        "reason": permission_denial_reason(error),
-                    }));
+                    return Ok(codex::permission_denial(permission_denial_reason(error)));
                 }
                 operational::hook_completed(&operational, "managed_worker_hook", "completed");
                 Ok(outcome.response)

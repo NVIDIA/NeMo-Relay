@@ -124,6 +124,44 @@ describe('observability plugin helpers', () => {
     assert.throws(() => observability.openTelemetrySignalEndpoint({ endpoint: ' ' }), /nonblank/);
   });
 
+  for (const signal of ['logs', 'metrics']) {
+    for (const prefixes of [undefined, [], ['deployment.', 'nv.client.'], ['nv.*']]) {
+      it(`serializes and validates ${signal} resource promotion ${JSON.stringify(prefixes)}`, () => {
+        const endpoint = observability.openTelemetrySignalEndpoint({
+          endpoint: `http://localhost:4318/v1/${signal}`,
+          ...(prefixes === undefined ? {} : { promote_resource_metadata_prefixes: prefixes }),
+        });
+        const serialized = JSON.parse(JSON.stringify(endpoint));
+        assert.deepEqual(serialized.promote_resource_metadata_prefixes, prefixes);
+        const section =
+          signal === 'logs'
+            ? observability.openTelemetryLogConfig({ enabled: true, endpoints: [endpoint] })
+            : observability.openTelemetryMetricConfig({ enabled: true, endpoints: [endpoint] });
+        const report = pluginHost.validate({
+          version: 1,
+          components: [
+            observability.ComponentSpec({
+              version: 4,
+              policy: { unknown_field: 'error' },
+              opentelemetry: observability.openTelemetryConfig({ enabled: true, [signal]: section }),
+            }),
+          ],
+        });
+        if (prefixes?.[0] === 'nv.*') {
+          assert.ok(
+            report.diagnostics.some(
+              (diagnostic) =>
+                diagnostic.component === `opentelemetry.${signal}` &&
+                diagnostic.field === 'endpoints[0].promote_resource_metadata_prefixes',
+            ),
+          );
+        } else {
+          assert.deepEqual(report.diagnostics, []);
+        }
+      });
+    }
+  }
+
   it('initializes a version 4 log and metric configuration without exporting signals', async () => {
     const config = {
       version: 4,

@@ -123,6 +123,7 @@ pub(crate) fn resolve(command: PricingResolveRequest) -> Result<(), CliError> {
         total_tokens: None,
         cache_read_tokens: command.cache_read_tokens,
         cache_write_tokens: command.cache_write_tokens,
+        uncached_input_tokens: None,
         cost: None,
     };
     if usage_has_tokens(&usage) {

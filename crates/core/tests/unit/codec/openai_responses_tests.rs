@@ -293,6 +293,7 @@ fn test_decode_response_usage_mapping() {
     assert_eq!(usage.total_tokens, Some(1261));
     assert_eq!(usage.cache_read_tokens, Some(42));
     assert_eq!(usage.cache_write_tokens, None);
+    assert_eq!(usage.uncached_input_tokens, Some(33));
 }
 
 #[test]

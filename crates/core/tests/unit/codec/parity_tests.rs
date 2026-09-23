@@ -355,19 +355,33 @@ fn test_response_usage_parity() {
         json!({}),
     ));
 
-    let expected = Usage {
+    let openai_expected = Usage {
         prompt_tokens: Some(1000),
         completion_tokens: Some(500),
         total_tokens: Some(1500),
         cache_read_tokens: Some(200),
         cache_write_tokens: None,
+        uncached_input_tokens: Some(800),
         cost: None,
     };
-    assert_eq!(chat.usage, Some(expected.clone()));
+    assert_eq!(chat.usage, Some(openai_expected.clone()));
+    assert_eq!(responses.usage, Some(openai_expected));
+
     // Anthropic supplies no total_tokens on the wire; the codec computes
-    // prompt + completion so the normalized usage still matches the others.
-    assert_eq!(anthropic.usage, Some(expected.clone()));
-    assert_eq!(responses.usage, Some(expected));
+    // prompt + completion. Unlike OpenAI, its input count excludes separately
+    // reported cache reads, so the authoritative uncached count is 1,000.
+    assert_eq!(
+        anthropic.usage,
+        Some(Usage {
+            prompt_tokens: Some(1000),
+            completion_tokens: Some(500),
+            total_tokens: Some(1500),
+            cache_read_tokens: Some(200),
+            cache_write_tokens: None,
+            uncached_input_tokens: Some(1000),
+            cost: None,
+        })
+    );
 }
 
 #[test]
