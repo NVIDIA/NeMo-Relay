@@ -421,8 +421,7 @@ impl EnvironmentDigest {
         self.hasher.update([entry_type]);
         self.hasher.update((path.len() as u64).to_le_bytes());
         self.hasher.update(&path);
-        self.hasher
-            .update((payload.len() as u64).to_le_bytes());
+        self.hasher.update((payload.len() as u64).to_le_bytes());
         self.hasher.update(payload);
     }
 
@@ -495,13 +494,7 @@ fn digest_environment_directory(
     }
     children.sort_by_key(std::fs::DirEntry::file_name);
     for child in children {
-        digest_environment_entry(
-            child,
-            relative_directory,
-            ancestors,
-            digest,
-            charge_bytes,
-        )?;
+        digest_environment_entry(child, relative_directory, ancestors, digest, charge_bytes)?;
     }
     ancestors.pop();
     Ok(())
@@ -527,13 +520,7 @@ fn digest_environment_entry(
         // Linux venvs expose the same installed tree through `lib` and `lib64 -> lib`.
         // Keep hashing the alias for digest compatibility, but charge its bytes through `lib` only.
         let charge_bytes = charge_bytes && !is_python_lib64_alias(&path, &relative)?;
-        return digest_environment_directory(
-            &source,
-            &relative,
-            ancestors,
-            digest,
-            charge_bytes,
-        );
+        return digest_environment_directory(&source, &relative, ancestors, digest, charge_bytes);
     }
     if !metadata.is_file() {
         return Err(format!(
@@ -553,7 +540,11 @@ fn digest_environment_entry(
 }
 
 fn is_python_lib64_alias(path: &Path, relative: &Path) -> Result<bool, String> {
-    if relative != Path::new("lib64") {
+    if relative != Path::new("lib64")
+        || path
+            .parent()
+            .is_none_or(|root| !root.join("pyvenv.cfg").is_file())
+    {
         return Ok(false);
     }
     let metadata = std::fs::symlink_metadata(path)

@@ -1928,29 +1928,51 @@ fn python_environment_byte_budget_counts_internal_directory_alias_once() {
     std::fs::write(&installed, payload).unwrap();
     symlink("lib", environment_path.join("lib64")).unwrap();
 
-    let original = environment::test_environment_tree_digest_with_budget(
+    let error = environment::test_environment_tree_digest_with_budget(
         &environment_path,
         16,
         payload.len() as u64,
     )
-    .expect("lib64 -> lib must not charge installed files twice");
+    .expect_err("a non-venv lib64 alias must remain inside the byte budget");
+    assert!(error.contains("byte attestation budget"), "{error}");
 
-    std::fs::write(&installed, b"changed package!").unwrap();
-    let changed = environment::test_environment_tree_digest_with_budget(
-        &environment_path,
+    let pyvenv = b"home = /usr/bin\n";
+    std::fs::write(environment_path.join("pyvenv.cfg"), pyvenv).unwrap();
+    let byte_budget = (payload.len() + pyvenv.len()) as u64;
+
+    let original =
+        environment::test_environment_tree_digest_with_budget(&environment_path, 16, byte_budget)
+            .expect("lib64 -> lib must not charge installed files twice");
+
+    let physical_environment = temp.path().join("physical-environment");
+    let physical_site_packages = physical_environment.join("lib/python3.11/site-packages");
+    let physical_lib64_site_packages = physical_environment.join("lib64/python3.11/site-packages");
+    std::fs::create_dir_all(&physical_site_packages).unwrap();
+    std::fs::create_dir_all(&physical_lib64_site_packages).unwrap();
+    std::fs::write(physical_environment.join("pyvenv.cfg"), pyvenv).unwrap();
+    std::fs::write(physical_site_packages.join("package.bin"), payload).unwrap();
+    std::fs::write(physical_lib64_site_packages.join("package.bin"), payload).unwrap();
+    let physical_digest = environment::test_environment_tree_digest_with_budget(
+        &physical_environment,
         16,
-        payload.len() as u64,
+        byte_budget + payload.len() as u64,
     )
     .unwrap();
+    assert_eq!(
+        original, physical_digest,
+        "the venv alias must retain its logical lib64 digest entries"
+    );
+
+    std::fs::write(&installed, b"changed package!").unwrap();
+    let changed =
+        environment::test_environment_tree_digest_with_budget(&environment_path, 16, byte_budget)
+            .unwrap();
     assert_ne!(original, changed, "aliased content must remain attested");
 
     symlink("lib", environment_path.join("other-alias")).unwrap();
-    let error = environment::test_environment_tree_digest_with_budget(
-        &environment_path,
-        32,
-        payload.len() as u64,
-    )
-    .expect_err("non-standard aliases must remain inside the byte budget");
+    let error =
+        environment::test_environment_tree_digest_with_budget(&environment_path, 32, byte_budget)
+            .expect_err("non-standard aliases must remain inside the byte budget");
     assert!(error.contains("byte attestation budget"), "{error}");
 }
 
