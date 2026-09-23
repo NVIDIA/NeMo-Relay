@@ -169,7 +169,7 @@ pub(super) fn validate_native_abi_compatibility(
     })?;
     if version_requirement_matches_minor(&requirement, 0, 9) {
         return Err(PluginError::InvalidConfig(format!(
-            "dynamic native plugin '{plugin_kind}' uses native ABI v6 and must declare compat.relay = \">=0.10,<1.0\" or another range that excludes Relay 0.9"
+            "dynamic native plugin '{plugin_kind}' uses native ABI v7 and must declare compat.relay = \">=0.10,<1.0\" or another range that excludes Relay 0.9"
         )));
     }
     Ok(())

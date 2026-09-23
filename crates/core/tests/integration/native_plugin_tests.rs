@@ -974,7 +974,7 @@ fn native_api_one_does_not_admit_a_stale_abi_v2_binary() {
         [load_spec("fixture_native", &manifest_ref)],
         "a native_api=1 manifest must not make an ABI-v2 binary compatible",
     );
-    assert!(error.contains("rejected native ABI 6"), "{error}");
+    assert!(error.contains("rejected native ABI 7"), "{error}");
     assert!(error.contains("rebuild the plugin"), "{error}");
 }
 
@@ -1099,7 +1099,7 @@ async fn native_loader_rejects_manifest_that_admits_pre_zero_eight_relay() {
 }
 
 #[tokio::test]
-async fn native_abi_v6_rejects_manifest_that_admits_relay_zero_nine() {
+async fn native_abi_v7_rejects_manifest_that_admits_relay_zero_nine() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest_text(ManifestOptions {
@@ -1112,10 +1112,10 @@ async fn native_abi_v6_rejects_manifest_that_admits_relay_zero_nine() {
     });
     let error = expect_native_load_error_from_specs(
         [load_spec("fixture_native", &manifest_ref)],
-        "an ABI-v6 native plugin must exclude Relay 0.9",
+        "an ABI-v7 native plugin must exclude Relay 0.9",
     );
     assert!(
-        error.contains("uses native ABI v6") && error.contains("excludes Relay 0.9"),
+        error.contains("uses native ABI v7") && error.contains("excludes Relay 0.9"),
         "{error}"
     );
 }
@@ -1164,18 +1164,19 @@ fn native_loader_rejects_abi_v3_plugins() {
 
     let error = expect_native_load_error_from_specs(
         [load_spec("fixture_native_v3", &manifest_ref)],
-        "ABI-v3 plugins must be rebuilt for ABI v6",
+        "ABI-v3 plugins must be rebuilt for ABI v7",
     );
-    assert!(error.contains("rejected native ABI 6"), "{error}");
+    assert!(error.contains("rejected native ABI 7"), "{error}");
     assert!(error.contains("rebuild the plugin"), "{error}");
 }
 
 #[test]
-fn native_loader_rejects_v2_v4_and_v5_plugins() {
+fn native_loader_rejects_v2_v4_v5_and_v6_plugins() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
     let fixture = build_fixture_plugin();
 
     for (plugin_id, symbol) in [
+        ("fixture_native_v6", "nemo_relay_fixture_native_plugin_v6"),
         ("fixture_native_v5", "nemo_relay_fixture_native_plugin_v5"),
         ("fixture_native_v4", "nemo_relay_fixture_native_plugin_v4"),
         ("fixture_native_v2", "nemo_relay_fixture_native_plugin_v2"),
@@ -1191,9 +1192,9 @@ fn native_loader_rejects_v2_v4_and_v5_plugins() {
 
         let error = expect_native_load_error_from_specs(
             [load_spec(plugin_id, &manifest_ref)],
-            "stale native plugins must be rebuilt for ABI v6",
+            "stale native plugins must be rebuilt for ABI v7",
         );
-        assert!(error.contains("rejected native ABI 6"), "{error}");
+        assert!(error.contains("rejected native ABI 7"), "{error}");
         assert!(error.contains("rebuild the plugin"), "{error}");
     }
 }

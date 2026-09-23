@@ -36,21 +36,21 @@ use nemo_relay_plugin::{
     NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeConditionalMiddlewareCb,
     NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
     NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4,
-    NemoRelayNativeHostApiV5, NemoRelayNativeHostApiV6, NemoRelayNativeLlmAsyncStream,
-    NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
-    NemoRelayNativeLlmExecutionContext, NemoRelayNativeLlmExecutionRequestContext,
-    NemoRelayNativeLlmExecutionResponseContext, NemoRelayNativeLlmRequestCodec,
-    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
-    NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeRequestContext,
-    NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmSanitizeResponseContext,
-    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativeLogLevel,
-    NemoRelayNativePluginContext, NemoRelayNativePluginRuntime, NemoRelayNativePluginV1,
-    NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
-    NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
-    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolExecutionContextCb,
-    NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb, NemoRelayStatus, PendingMarkSpec,
-    PluginContext, PluginRuntime, ScopeType, ToolExecutionInterceptOutcome, ToolExecutionResult,
-    ToolNext,
+    NemoRelayNativeHostApiV5, NemoRelayNativeHostApiV6, NemoRelayNativeHostApiV7,
+    NemoRelayNativeLlmAsyncStream, NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb,
+    NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmExecutionContext,
+    NemoRelayNativeLlmExecutionRequestContext, NemoRelayNativeLlmExecutionResponseContext,
+    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestInterceptCb,
+    NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
+    NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
+    NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
+    NemoRelayNativeLlmStreamV1, NemoRelayNativeLogLevel, NemoRelayNativePluginContext,
+    NemoRelayNativePluginRuntime, NemoRelayNativePluginV1, NemoRelayNativeScopeHandle,
+    NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType,
+    NemoRelayNativeString, NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb,
+    NemoRelayNativeToolExecutionContextCb, NemoRelayNativeToolJsonCb,
+    NemoRelayNativeWithScopeStackCb, NemoRelayStatus, PendingMarkSpec, PluginContext,
+    PluginRuntime, ScopeType, ToolExecutionInterceptOutcome, ToolExecutionResult, ToolNext,
 };
 use serde_json::{Map, json};
 
@@ -488,7 +488,7 @@ static UNAVAILABLE_CONTEXT_GATE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn native_abi_struct_sizes_are_self_describing() {
-    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 6);
+    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 7);
     assert_eq!(
         size_of::<NemoRelayNativeHostApiV1>(),
         test_host().struct_size
@@ -560,10 +560,10 @@ fn assert_native_abi_platform_layout() {
         ),
         600
     );
-    assert_type_layout::<NemoRelayNativeHostApiV6>(8, 648);
+    assert_type_layout::<NemoRelayNativeHostApiV6>(8, 616);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV6, v5), 0);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV6, log), 608);
-    assert_native_abi_v6_execution_layout(8, 648, 616, 624, 632, 640);
+    assert_native_abi_v7_layout(8, 648, 616, 624, 632, 640);
     assert_type_layout::<NemoRelayNativePluginV1>(8, 56);
     assert_eq!(plugin_offsets(), [0, 8, 16, 24, 32, 40, 48]);
     assert_type_layout::<NemoRelayNativeLlmStreamV1>(8, 40);
@@ -624,10 +624,10 @@ fn assert_native_abi_platform_layout() {
         ),
         296
     );
-    assert_type_layout::<NemoRelayNativeHostApiV6>(4, 320);
+    assert_type_layout::<NemoRelayNativeHostApiV6>(4, 304);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV6, v5), 0);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV6, log), 300);
-    assert_native_abi_v6_execution_layout(4, 320, 304, 308, 312, 316);
+    assert_native_abi_v7_layout(4, 320, 304, 308, 312, 316);
     assert_type_layout::<NemoRelayNativePluginV1>(4, 28);
     assert_eq!(plugin_offsets(), [0, 4, 8, 12, 16, 20, 24]);
     assert_type_layout::<NemoRelayNativeLlmStreamV1>(4, 20);
@@ -639,7 +639,7 @@ fn assert_type_layout<T>(expected_alignment: usize, expected_size: usize) {
     assert_eq!(size_of::<T>(), expected_size);
 }
 
-fn assert_native_abi_v6_execution_layout(
+fn assert_native_abi_v7_layout(
     expected_alignment: usize,
     expected_size: usize,
     registration_offset: usize,
@@ -647,28 +647,29 @@ fn assert_native_abi_v6_execution_layout(
     decode_offset: usize,
     encode_offset: usize,
 ) {
-    assert_type_layout::<NemoRelayNativeHostApiV6>(expected_alignment, expected_size);
+    assert_type_layout::<NemoRelayNativeHostApiV7>(expected_alignment, expected_size);
+    assert_eq!(offset_of!(NemoRelayNativeHostApiV7, v6), 0);
     assert_eq!(
         offset_of!(
-            NemoRelayNativeHostApiV6,
+            NemoRelayNativeHostApiV7,
             plugin_context_register_async_llm_execution_intercept
         ),
         registration_offset
     );
     assert_eq!(
-        offset_of!(NemoRelayNativeHostApiV6, async_stream_retain),
+        offset_of!(NemoRelayNativeHostApiV7, async_stream_retain),
         retain_offset
     );
     assert_eq!(
         offset_of!(
-            NemoRelayNativeHostApiV6,
+            NemoRelayNativeHostApiV7,
             async_stream_llm_request_codec_decode
         ),
         decode_offset
     );
     assert_eq!(
         offset_of!(
-            NemoRelayNativeHostApiV6,
+            NemoRelayNativeHostApiV7,
             async_stream_llm_request_codec_encode
         ),
         encode_offset
@@ -730,7 +731,7 @@ fn native_abi_v5_extension_is_append_only() {
 }
 
 #[test]
-fn native_abi_v6_extension_is_append_only() {
+fn native_abi_v6_logging_extension_is_append_only() {
     assert_eq!(offset_of!(NemoRelayNativeHostApiV6, v5), 0);
     assert_eq!(
         offset_of!(NemoRelayNativeHostApiV6, log),
@@ -3013,6 +3014,15 @@ fn test_host_v6() -> NemoRelayNativeHostApiV6 {
     NemoRelayNativeHostApiV6 {
         v5,
         log: capture_plugin_log,
+    }
+}
+
+fn test_host_v7() -> NemoRelayNativeHostApiV7 {
+    let mut v6 = test_host_v6();
+    v6.v5.v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
+    v6.v5.v4.v3.v1.struct_size = size_of::<NemoRelayNativeHostApiV7>();
+    NemoRelayNativeHostApiV7 {
+        v6,
         plugin_context_register_async_llm_execution_intercept: capture_register_async_llm_execution,
         async_stream_retain: capture_async_stream_retain,
         async_stream_llm_request_codec_decode: capture_async_stream_request_decode,
@@ -4382,9 +4392,9 @@ fn typed_subscriber_registration_decodes_events() {
 #[allow(clippy::cognitive_complexity)] // One table-style test deliberately exercises every surface.
 fn typed_async_middleware_registers_and_round_trips_every_surface() {
     let _guard = begin_test();
-    let host = test_host_v6();
-    let host_v4 = &host.v5.v4;
-    let mut ctx = test_context(&host.v5.v4.v3.v1);
+    let host = test_host_v7();
+    let host_v4 = &host.v6.v5.v4;
+    let mut ctx = test_context(&host.v6.v5.v4.v3.v1);
 
     ctx.register_mark_sanitize_guardrail("mark-async", 1, |_event, mut fields| async move {
         tokio::time::sleep(Duration::from_millis(1)).await;
@@ -4789,8 +4799,8 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
 #[test]
 fn typed_async_unary_execution_codecs_expire_after_completion_settles() {
     let _guard = begin_test();
-    let host = test_host_v6();
-    let host_v4 = &host.v5.v4;
+    let host = test_host_v7();
+    let host_v4 = &host.v6.v5.v4;
     let mut ctx = test_context(&host_v4.v3.v1);
     let (context_tx, context_rx) = std::sync::mpsc::sync_channel(1);
     ctx.register_llm_execution_intercept(
@@ -4871,8 +4881,8 @@ fn typed_async_unary_execution_codecs_expire_after_completion_settles() {
 #[test]
 fn typed_async_stream_execution_codec_expires_after_stream_finishes() {
     let _guard = begin_test();
-    let host = test_host_v6();
-    let host_v1 = &host.v5.v4.v3.v1;
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
     let mut ctx = test_context(host_v1);
     let (context_tx, context_rx) = std::sync::mpsc::sync_channel(1);
     ctx.register_llm_stream_execution_intercept(
@@ -5078,8 +5088,8 @@ fn typed_async_llm_sanitize_context_rejects_unknown_builtin_identity() {
 #[test]
 fn typed_async_registration_failure_rolls_back_callback_state() {
     let _guard = begin_test();
-    let host = test_host_v6();
-    let mut ctx = test_context(&host.v5.v4.v3.v1);
+    let host = test_host_v7();
+    let mut ctx = test_context(&host.v6.v5.v4.v3.v1);
     *REGISTRATION_STATUS.lock().unwrap() = NemoRelayStatus::InvalidArg;
 
     let unary_drops = Arc::new(AtomicUsize::new(0));
@@ -5175,8 +5185,8 @@ fn typed_async_callbacks_isolate_errors_panics_and_invalid_input() {
 #[test]
 fn typed_async_continuations_are_concurrent_and_executor_owned() {
     let _guard = begin_test();
-    let host = test_host_v6();
-    let host_v4 = &host.v5.v4;
+    let host = test_host_v7();
+    let host_v4 = &host.v6.v5.v4;
     let mut ctx = test_context(&host_v4.v3.v1);
     ctx.register_tool_execution_intercept("concurrent", 0, |context, next| async move {
         assert_eq!(context.tool_name, "tool");
@@ -5494,8 +5504,8 @@ fn typed_async_executor_drop_inside_tokio_runtime_drains_accepted_tasks() {
 #[test]
 fn typed_async_stream_cancellation_while_polling_releases_output() {
     let _guard = begin_test();
-    let host = test_host_v6();
-    let host_v1 = &host.v5.v4.v3.v1;
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
     let mut ctx = test_context(host_v1);
     let started = Arc::new(AtomicBool::new(false));
     ctx.register_llm_stream_execution_intercept("cancel-poll", 0, {
@@ -5547,8 +5557,8 @@ fn typed_async_stream_cancellation_while_polling_releases_output() {
 #[test]
 fn typed_async_stream_restores_callback_scope_while_polling_returned_stream() {
     let _guard = begin_test();
-    let host = test_host_v6();
-    let host_v1 = &host.v5.v4.v3.v1;
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
     let mut ctx = test_context(host_v1);
     ctx.register_llm_stream_execution_intercept(
         "stream-scope",
@@ -5595,8 +5605,8 @@ fn typed_async_stream_restores_callback_scope_while_polling_returned_stream() {
 #[test]
 fn typed_async_stream_rejects_item_errors_and_releases_output() {
     let _guard = begin_test();
-    let host = test_host_v6();
-    let host_v1 = &host.v5.v4.v3.v1;
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
     let mut ctx = test_context(host_v1);
     ctx.register_llm_stream_execution_intercept(
         "stream-error",
@@ -5647,8 +5657,8 @@ fn typed_async_stream_rejects_item_errors_and_releases_output() {
 #[test]
 fn typed_async_stream_rejects_poll_panics_and_releases_output() {
     let _guard = begin_test();
-    let host = test_host_v6();
-    let host_v1 = &host.v5.v4.v3.v1;
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
     let mut ctx = test_context(host_v1);
     ctx.register_llm_stream_execution_intercept(
         "stream-panic",
@@ -5703,8 +5713,8 @@ fn typed_async_stream_rejects_poll_panics_and_releases_output() {
 #[test]
 fn typed_async_stream_propagates_downstream_pull_errors() {
     let _guard = begin_test();
-    let host = test_host_v6();
-    let host_v1 = &host.v5.v4.v3.v1;
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
     let mut ctx = test_context(host_v1);
     ctx.register_llm_stream_execution_intercept(
         "stream-downstream-error",
@@ -5753,8 +5763,8 @@ fn typed_async_stream_propagates_downstream_pull_errors() {
 #[test]
 fn typed_async_stream_rejects_missing_continuation() {
     let _guard = begin_test();
-    let host = test_host_v6();
-    let host_v1 = &host.v5.v4.v3.v1;
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
     let mut ctx = test_context(host_v1);
     ctx.register_llm_stream_execution_intercept(
         "stream-null-next",
@@ -5885,8 +5895,8 @@ fn raw_event_sanitize_registrations_cover_every_surface() {
 #[test]
 fn raw_callback_registrations_preserve_every_middleware_shape() {
     let _guard = begin_test();
-    let host = test_host_v6();
-    let mut ctx = test_context(&host.v5.v4.v3.v1);
+    let host = test_host_v7();
+    let mut ctx = test_context(&host.v6.v5.v4.v3.v1);
 
     unsafe {
         assert_eq!(
@@ -6028,8 +6038,8 @@ fn raw_callback_registrations_preserve_every_middleware_shape() {
 #[test]
 fn raw_async_callback_registrations_use_the_versioned_extension_tables() {
     let _guard = begin_test();
-    let host = test_host_v6();
-    let mut ctx = test_context(&host.v5.v4.v3.v1);
+    let host = test_host_v7();
+    let mut ctx = test_context(&host.v6.v5.v4.v3.v1);
 
     assert_eq!(
         unsafe {
@@ -6584,8 +6594,8 @@ fn exported_plugin_default_validate_returns_empty_diagnostics() {
 #[test]
 fn exported_plugin_register_installs_callbacks_and_propagates_errors() {
     let _guard = begin_test();
-    let host = test_host_v6();
-    let host_v1 = &host.v5.v4.v3.v1;
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
 
     let mut plugin = NemoRelayNativePluginV1::default();
     assert_eq!(
@@ -6724,8 +6734,8 @@ fn exported_entry_symbol_rejects_prior_host_versions() {
         );
     }
 
-    let host = test_host_v6();
-    let host_v1 = &host.v5.v4.v3.v1;
+    let host = test_host_v7();
+    let host_v1 = &host.v6.v5.v4.v3.v1;
     let mut plugin = NemoRelayNativePluginV1::default();
     assert_eq!(
         unsafe { constructor_counting_entry(host_v1, &mut plugin) },

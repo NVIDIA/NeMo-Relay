@@ -57,7 +57,7 @@ use chrono::{DateTime, Utc};
 use libloading::{Library, Symbol};
 use nemo_relay_plugin::{
     NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
-    NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT,
+    NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT, NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING,
     NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL,
     NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT, NemoRelayNativeAsyncCallbackState,
     NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncLlmExecutionCb,
@@ -67,20 +67,20 @@ use nemo_relay_plugin::{
     NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeConditionalMiddlewareCb,
     NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
     NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4,
-    NemoRelayNativeHostApiV5, NemoRelayNativeHostApiV6, NemoRelayNativeLlmAsyncStream,
-    NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
-    NemoRelayNativeLlmExecutionContext, NemoRelayNativeLlmExecutionRequestContext,
-    NemoRelayNativeLlmExecutionResponseContext, NemoRelayNativeLlmRequestCodec,
-    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
-    NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeRequestContext,
-    NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmSanitizeResponseContext,
-    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativeLogLevel,
-    NemoRelayNativePluginContext, NemoRelayNativePluginEntry, NemoRelayNativePluginRuntime,
-    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
-    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
-    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb,
-    NemoRelayNativeToolExecutionContextCb, NemoRelayNativeToolJsonCb,
-    NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
+    NemoRelayNativeHostApiV5, NemoRelayNativeHostApiV6, NemoRelayNativeHostApiV7,
+    NemoRelayNativeLlmAsyncStream, NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb,
+    NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmExecutionContext,
+    NemoRelayNativeLlmExecutionRequestContext, NemoRelayNativeLlmExecutionResponseContext,
+    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestInterceptCb,
+    NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
+    NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
+    NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
+    NemoRelayNativeLlmStreamV1, NemoRelayNativeLogLevel, NemoRelayNativePluginContext,
+    NemoRelayNativePluginEntry, NemoRelayNativePluginRuntime, NemoRelayNativePluginV1,
+    NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
+    NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
+    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolExecutionContextCb,
+    NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
 };
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
@@ -947,6 +947,18 @@ unsafe extern "C" fn native_llm_response_codec_decode(
 }
 
 fn native_host_api() -> *const NemoRelayNativeHostApiV1 {
+    static HOST_API: OnceLock<NemoRelayNativeHostApiV7> = OnceLock::new();
+    &HOST_API
+        .get_or_init(build_native_host_api_v7)
+        .v6
+        .v5
+        .v4
+        .v3
+        .v1 as *const NemoRelayNativeHostApiV1
+}
+
+#[cfg(test)]
+fn native_host_api_v6() -> *const NemoRelayNativeHostApiV1 {
     static HOST_API: OnceLock<NemoRelayNativeHostApiV6> = OnceLock::new();
     &HOST_API.get_or_init(build_native_host_api_v6).v5.v4.v3.v1 as *const NemoRelayNativeHostApiV1
 }
@@ -1108,11 +1120,20 @@ fn build_native_host_api_v5() -> NemoRelayNativeHostApiV5 {
 
 fn build_native_host_api_v6() -> NemoRelayNativeHostApiV6 {
     let mut v5 = build_native_host_api_v5();
-    v5.v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT;
+    v5.v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING;
     v5.v4.v3.v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV6>();
     NemoRelayNativeHostApiV6 {
         v5,
         log: native_log,
+    }
+}
+
+fn build_native_host_api_v7() -> NemoRelayNativeHostApiV7 {
+    let mut v6 = build_native_host_api_v6();
+    v6.v5.v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT;
+    v6.v5.v4.v3.v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV7>();
+    NemoRelayNativeHostApiV7 {
+        v6,
         plugin_context_register_async_llm_execution_intercept:
             native_plugin_context_register_async_llm_execution_intercept,
         async_stream_retain: native_async_stream_retain,
@@ -4187,7 +4208,7 @@ unsafe extern "C" fn native_plugin_context_register_async_middleware(
             | NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept
     ) {
         set_native_last_error(
-            "LLM execution middleware requires its dedicated ABI-v6 registration function",
+            "LLM execution middleware requires its dedicated ABI-v7 registration function",
         );
         return NemoRelayStatus::InvalidArg;
     }
