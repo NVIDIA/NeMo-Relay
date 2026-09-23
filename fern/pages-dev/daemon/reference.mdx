@@ -41,6 +41,84 @@ The shared `/models` and `/v1/models` GET endpoints return
 `Cache-Control: no-store`, overriding provider cache policy to prevent
 cross-credential catalog reuse. LLM streaming response headers are unchanged.
 
+### Probe Daemon Health
+
+The daemon exposes an unauthenticated process-health probe:
+
+```bash
+curl -f http://127.0.0.1:47632/healthz
+```
+
+`/healthz` returns `200` while the daemon HTTP process is serving requests.
+Its JSON response identifies the service, Relay version, process instance,
+deployment mode (`managed` or `pass_through`), and status, and includes
+`Cache-Control: no-store`. The deployment mode reports the daemon's global
+startup mode; a managed route can still fail open to pass-through later.
+
+These probes do not require a route credential, and they do not report provider,
+worker, plugin, or telemetry health. Complete
+[worker-backed verification](/daemon/operations#verify-worker-backed-operation)
+before accepting a deployment.
+
+### Inspect Worker Status
+
+The daemon exposes its current assigned workers for deployment diagnostics:
+
+```bash
+curl -f http://127.0.0.1:47632/_nemo_relay/v1/workers
+curl -f http://127.0.0.1:47632/_nemo_relay/v1/workers/status
+curl -f http://127.0.0.1:47632/_nemo_relay/v1/workers/<instance_uuid>/status
+```
+
+The first endpoint lists worker instance UUIDs. The second returns one aggregate
+list of worker statuses, and the third returns one worker or `404` if that worker
+is not assigned. Status includes the broker lifecycle state, MCP reference count,
+control availability, and in-flight request count. Pass-through and activating
+routes have no assigned worker and are therefore omitted.
+
+| Endpoint | Result |
+| --- | --- |
+| `GET /_nemo_relay/v1/workers` | Sorted list of assigned worker UUIDs. |
+| `GET /_nemo_relay/v1/workers/status` | Sorted list of all assigned worker status objects. |
+| `GET /_nemo_relay/v1/workers/<instance_uuid>/status` | One assigned worker status object, or `404` with `worker not found`. |
+
+For example, a managed daemon with one ready worker can return:
+
+```json
+{
+  "instance_id": "01a0caf5-7b26-7e82-a808-8f29eaf15db1",
+  "status": "ok",
+  "workers": [
+    {
+      "control_available": true,
+      "in_flight": 0,
+      "reference_count": 1,
+      "state": "ready",
+      "worker_id": "01a0caf5-b33f-7280-a916-7e15bbd574fa"
+    }
+  ]
+}
+```
+
+`state` is the broker's lifecycle state for the worker assignment. It can be
+`ready`, `draining`, or `recovering`. `control_available` is the broker's
+last-known control-channel state. It is not an active process probe. The
+`reference_count` is the number of MCP sessions retaining the route, and
+`in_flight` is the number of requests accepted by the broker and not yet
+released at the instant of the snapshot.
+
+An empty `workers` list means that no route currently has an assigned worker.
+It does not distinguish a new daemon with no harness sessions from activating,
+global pass-through, or transient fail-open routes. Use `/healthz` to inspect
+the global deployment mode and lifecycle logs to diagnose pass-through.
+
+These endpoints do not require authentication. They never include route
+credentials, fingerprints, worker endpoints, session IDs, activation IDs, or
+internal worker credentials. The values are instantaneous broker state, not
+active worker liveness probes, and include `Cache-Control: no-store`. Treat
+worker IDs and activity counts as operational metadata. Restrict access with
+the same interface binding, firewall, and reverse-proxy policy as the daemon.
+
 Worker activation still requires the broker-issued, one-time grant delivered
 through the protected inherited channel. Knowing the daemon address alone
 does not allow a worker to register or replace an existing worker.

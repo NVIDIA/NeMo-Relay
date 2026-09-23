@@ -34,6 +34,16 @@ info-level JSONL logging enabled, expect `configuration_resolved` with
 is ready`). Confirm the MCP handshake in the harness status view. For a reused
 worker, find its earlier ready event and confirm the worker still exists.
 
+Query the daemon's aggregate worker status while the harness remains open:
+
+```bash
+curl -f http://127.0.0.1:47632/_nemo_relay/v1/workers/status
+```
+
+Confirm that the expected worker UUID appears with `state = "ready"` and
+`control_available = true`. Use
+`/_nemo_relay/v1/workers/<instance_uuid>/status` to inspect that worker alone.
+
 </Step>
 
 <Step title="Check Worker Reachability">
@@ -76,6 +86,11 @@ A successful provider response or `daemon_mcp_ready` event **does not prove work
 execution**. Pass-through can also produce both. Do not accept a deployment until
 the worker and expected plugin behavior have been observed.
 </Warning>
+
+An empty worker list also does not prove a failure. Global pass-through,
+transient fail-open, and activation-in-progress routes have no assigned worker
+UUID and are omitted. Compare `/healthz`, worker status, lifecycle events, and an
+observable plugin result before deciding that traffic used a worker.
 
 For a remote deployment, also test a planned daemon restart and a VPN reconnect.
 Verify recovery or start a fresh harness if the old one cannot recover its control session.
@@ -143,6 +158,9 @@ report the number of intervening failures in `suppressed_since_last_emit`.
 | TLS validation fails | Wrong name, expired chain, or untrusted CA | Check the advertised DNS name, certificate dates, and client native trust store. |
 | `401` from a public route | Missing, unknown, or unregistered credential | Load the existing token and start MCP registration before sending requests. |
 | Registered route returns `503` | No live MCP reference or route not ready | Keep the harness MCP process alive; inspect registration and worker logs. |
+| Worker status list is empty | No assigned worker, activation still pending, or route is in pass-through | Check `/healthz` deployment mode and lifecycle events; keep the harness open while verifying. |
+| Worker status returns `404` | The UUID is unknown, drained, replaced, or no longer assigned | Refresh `/_nemo_relay/v1/workers`; correlate the replacement UUID with lifecycle logs. |
+| Worker reports `control_available = false` | Worker control disconnected and may be within recovery grace | Check worker control events and wait up to the documented recovery window before restarting the harness. |
 | MCP is ready but no plugin result appears | Pass-through, wrong plugin setup, or wrong harness provider | Find `worker_ready`, inspect client system configuration, and check effective harness routing. |
 | `worker_launch_failed` | A worker start or activation step failed | Check `failure_reason` first. Then check assigned ports, executable permissions, worker stderr, and daemon-to-client reachability. |
 | Remote worker advertises loopback | Wrong address override or network route | Use a concrete client IPv4 address reachable from the server. |
