@@ -496,6 +496,11 @@ calling NeMo Relay APIs.
   that scope when it is still active.
 - Tool pre-use starts a NeMo Relay tool span. Tool post-use, denial, or failure
   closes it.
+- An authenticated Claude Code or Codex `PermissionRequest` must match the
+  recorded tool identity. Relay adds the canonical `gen_ai.tool.call.id` to
+  the permission guardrail event metadata and uses the matched tool parent. If
+  the permission guardrail rejects an active tool, Relay closes that tool span
+  with `error.type = "guardrail_rejected"`.
 - Generated `UserPromptSubmit` and `Stop` hooks are retained as private
   correlation hints. The adapters
   do the same when a custom or older integration delivers a response or

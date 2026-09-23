@@ -2547,6 +2547,8 @@ fn cli_plugins_list_json_reports_blocked_policy_for_installed_plugin() {
         "stderr was:\n{}",
         String::from_utf8_lossy(&add.stderr)
     );
+    let state_path = config_dir.join(".dynamic-plugins.json");
+    let persisted_state_before_list = std::fs::read(&state_path).unwrap();
 
     std::fs::write(
         config_dir.join("plugins.toml"),
@@ -2586,16 +2588,10 @@ fn cli_plugins_list_json_reports_blocked_policy_for_installed_plugin() {
     assert_eq!(parsed["data"][0]["attestation_mode"], "signature_required");
     assert_eq!(parsed["data"][0]["last_error"]["phase"], "policy");
 
-    let state_path = config_dir.join(".dynamic-plugins.json");
-    let state: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
     assert_eq!(
-        state["records"][0]["status"]["validation"]["policy_satisfied"],
-        "invalid"
-    );
-    assert_eq!(
-        state["records"][0]["status"]["last_error"]["phase"],
-        "policy"
+        std::fs::read(&state_path).unwrap(),
+        persisted_state_before_list,
+        "plugins list should report refreshed status without persisting it"
     );
 }
 
