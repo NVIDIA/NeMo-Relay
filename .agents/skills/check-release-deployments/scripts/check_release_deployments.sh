@@ -21,7 +21,7 @@ deployment_status() { case "$1" in 200) printf '☑' ;; 404) printf '○' ;; *) 
 request_status() {
     local status=''
     sleep 0.1
-    status="$(curl --location --silent --show-error --connect-timeout 5 --max-time 20 --output /dev/null --write-out '%{http_code}' --user-agent 'Mozilla/5.0' "$1" 2>/dev/null)" || status="${status:-000}"
+    status="$(curl --location --silent --show-error --connect-timeout 5 --max-time 20 --output /dev/null --write-out '%{http_code}' --user-agent 'Mozilla/5.0' "$1" 2>/dev/null)" || status=000
     printf '%s\n' "$status"
 }
 pypi_status() {
