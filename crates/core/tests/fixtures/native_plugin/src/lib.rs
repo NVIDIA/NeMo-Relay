@@ -12,12 +12,12 @@ use nemo_relay_plugin::{
     Json, LlmJsonAsyncStream, LlmRequest, LlmRequestInterceptOutcome, MetricKind,
     MetricMeasurement, MetricValueType, NEMO_RELAY_NATIVE_ABI_VERSION,
     NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
-    NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING, NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL,
+    NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL,
     NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT, NativeExecutorConfig, NativePlugin,
     NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncMiddlewareCb,
     NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncStream,
     NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4,
-    NemoRelayNativeHostApiV5, NemoRelayNativeHostApiV6, NemoRelayNativeHostApiV7,
+    NemoRelayNativeHostApiV5, NemoRelayNativeHostApiV6,
     NemoRelayNativeLlmExecutionContext, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
     NemoRelayNativeString, NemoRelayNativeToolNextFn, NemoRelayStatus, PendingMarkSpec,
     PluginContext, PluginRuntime, RuntimeRegistrationKind, ScopeCategory, ScopeType,
@@ -547,23 +547,6 @@ pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v5(
     }
 }
 
-/// Raw ABI-v6 entry used to verify that the immediately stale callback layout is rejected.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v6(
-    host: *const NemoRelayNativeHostApiV1,
-    out: *mut NemoRelayNativePluginV1,
-) -> NemoRelayStatus {
-    unsafe {
-        fixture_compat_entry(
-            host,
-            out,
-            NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING,
-            std::mem::size_of::<NemoRelayNativeHostApiV6>(),
-            b"fixture_native_v6",
-        )
-    }
-}
-
 /// Raw ABI-v4 entry used to verify fallback for plugins built with the previous SDK.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v4(
@@ -962,7 +945,7 @@ unsafe extern "C" fn raw_register_event_sanitize_errors(
 }
 
 struct FixtureAsyncPlugin {
-    host: Option<Box<NemoRelayNativeHostApiV7>>,
+    host: Option<Box<NemoRelayNativeHostApiV6>>,
 }
 
 impl NativePlugin for FixtureAsyncPlugin {
@@ -977,17 +960,17 @@ impl NativePlugin for FixtureAsyncPlugin {
     ) -> nemo_relay_plugin::Result<()> {
         let host = ctx.host_api();
         if host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION
-            || host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV7>()
+            || host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV6>()
         {
-            return Err("fixture async plugin requires ABI v7".into());
+            return Err("fixture async plugin requires ABI v6".into());
         }
         self.host = Some(Box::new(unsafe {
-            *(host as *const _ as *const NemoRelayNativeHostApiV7)
+            *(host as *const _ as *const NemoRelayNativeHostApiV6)
         }));
         let user_data = self
             .host
             .as_deref()
-            .map(|host| (host as *const NemoRelayNativeHostApiV7).cast_mut().cast())
+            .map(|host| (host as *const NemoRelayNativeHostApiV6).cast_mut().cast())
             .expect("fixture async host was initialized");
 
         let registrations: [(

@@ -247,27 +247,27 @@ pub(crate) type ToolExecutionOutcomeNextFn = Arc<
         + Sync,
 >;
 
-/// Per-call codec context for LLM request sanitize guardrails.
+/// Per-call codec identity and capability for an LLM request.
 ///
 /// The context distinguishes no codec, Relay built-ins, runtime-registered
 /// codecs, and active codecs with no stable identity.
 #[derive(Clone, Default)]
-pub struct LlmSanitizeRequestContext {
+pub struct LlmRequestCodecContext {
     /// Identity of the codec active for this payload direction.
     codec: LlmCodecIdentity,
     request_codec: Option<Arc<dyn LlmCodec>>,
 }
 
-impl std::fmt::Debug for LlmSanitizeRequestContext {
+impl std::fmt::Debug for LlmRequestCodecContext {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("LlmSanitizeRequestContext")
+            .debug_struct("LlmRequestCodecContext")
             .field("codec", &self.codec)
             .finish_non_exhaustive()
     }
 }
 
-impl LlmSanitizeRequestContext {
+impl LlmRequestCodecContext {
     /// Construct a context that carries only a codec identity.
     ///
     /// Identity-only contexts do not carry a codec handle, so
@@ -281,7 +281,7 @@ impl LlmSanitizeRequestContext {
         }
     }
 
-    /// Construct request-sanitizer context from the active request codec.
+    /// Construct request codec context from the active request codec.
     #[must_use]
     pub fn for_request_codec(codec: Option<Arc<dyn LlmCodec>>) -> Self {
         let identity = codec
@@ -308,27 +308,27 @@ impl LlmSanitizeRequestContext {
     }
 }
 
-/// Per-call codec context for LLM response sanitize guardrails.
+/// Per-call codec identity and capability for an LLM response.
 ///
 /// The context distinguishes no codec, Relay built-ins, runtime-registered
 /// codecs, and active codecs with no stable identity.
 #[derive(Clone, Default)]
-pub struct LlmSanitizeResponseContext {
+pub struct LlmResponseCodecContext {
     /// Identity of the codec active for this payload direction.
     codec: LlmCodecIdentity,
     response_codec: Option<Arc<dyn LlmResponseCodec>>,
 }
 
-impl std::fmt::Debug for LlmSanitizeResponseContext {
+impl std::fmt::Debug for LlmResponseCodecContext {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("LlmSanitizeResponseContext")
+            .debug_struct("LlmResponseCodecContext")
             .field("codec", &self.codec)
             .finish_non_exhaustive()
     }
 }
 
-impl LlmSanitizeResponseContext {
+impl LlmResponseCodecContext {
     /// Construct a context that carries only a codec identity.
     ///
     /// Identity-only contexts do not carry a codec handle, so
@@ -342,7 +342,7 @@ impl LlmSanitizeResponseContext {
         }
     }
 
-    /// Construct response-sanitizer context from the active response codec.
+    /// Construct response codec context from the active response codec.
     #[must_use]
     pub fn for_response_codec(codec: Option<Arc<dyn LlmResponseCodec>>) -> Self {
         let identity = codec
@@ -368,6 +368,12 @@ impl LlmSanitizeResponseContext {
         self.response_codec.clone()
     }
 }
+
+/// Backward-compatible name for request codec context supplied to sanitizers.
+pub type LlmSanitizeRequestContext = LlmRequestCodecContext;
+
+/// Backward-compatible name for response codec context supplied to sanitizers.
+pub type LlmSanitizeResponseContext = LlmResponseCodecContext;
 
 /// Sanitize an LLM request before the runtime records it.
 ///

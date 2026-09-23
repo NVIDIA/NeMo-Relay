@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::callbacks::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
+use super::callbacks::{LlmRequestCodecContext, LlmResponseCodecContext};
 use crate::api::llm::LlmRequest;
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::AnnotatedLlmResponse;
@@ -110,16 +110,16 @@ impl LlmResponseCodec for RevocableResponseCodec {
 /// after expiry.
 #[derive(Clone, Debug, Default)]
 pub struct LlmExecutionContext {
-    request_codec: LlmSanitizeRequestContext,
-    response_codec: Option<LlmSanitizeResponseContext>,
+    request_codec: LlmRequestCodecContext,
+    response_codec: Option<LlmResponseCodecContext>,
 }
 
 impl LlmExecutionContext {
     /// Construct an execution context from its directional codec contexts.
     #[must_use]
     pub fn new(
-        request_codec: LlmSanitizeRequestContext,
-        response_codec: Option<LlmSanitizeResponseContext>,
+        request_codec: LlmRequestCodecContext,
+        response_codec: Option<LlmResponseCodecContext>,
     ) -> Self {
         Self {
             request_codec,
@@ -133,8 +133,8 @@ impl LlmExecutionContext {
         response_codec: &Option<Arc<dyn LlmResponseCodec>>,
     ) -> Self {
         Self::new(
-            LlmSanitizeRequestContext::for_request_codec(request_codec),
-            Some(LlmSanitizeResponseContext::for_response_codec(
+            LlmRequestCodecContext::for_request_codec(request_codec),
+            Some(LlmResponseCodecContext::for_response_codec(
                 response_codec.clone(),
             )),
         )
@@ -143,7 +143,7 @@ impl LlmExecutionContext {
     /// Construct the context for a streaming managed execution.
     pub(crate) fn for_streaming_codec(request_codec: Option<Arc<dyn LlmCodec>>) -> Self {
         Self::new(
-            LlmSanitizeRequestContext::for_request_codec(request_codec),
+            LlmRequestCodecContext::for_request_codec(request_codec),
             None,
         )
     }
@@ -156,25 +156,25 @@ impl LlmExecutionContext {
     pub(crate) fn lease(&self) -> (Self, LlmExecutionCodecLeaseGuard) {
         let gate = Arc::new(ExecutionCodecGate::new());
         let request_codec = match self.request_codec.resolve_codec() {
-            Some(codec) => LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(
-                RevocableRequestCodec {
+            Some(codec) => {
+                LlmRequestCodecContext::for_request_codec(Some(Arc::new(RevocableRequestCodec {
                     codec,
                     gate: Arc::clone(&gate),
-                },
-            ))),
-            None => LlmSanitizeRequestContext::with_identity(self.request_codec.codec().clone()),
+                })))
+            }
+            None => LlmRequestCodecContext::with_identity(self.request_codec.codec().clone()),
         };
         let response_codec =
             self.response_codec
                 .as_ref()
                 .map(|context| match context.resolve_codec() {
-                    Some(codec) => LlmSanitizeResponseContext::for_response_codec(Some(Arc::new(
+                    Some(codec) => LlmResponseCodecContext::for_response_codec(Some(Arc::new(
                         RevocableResponseCodec {
                             codec,
                             gate: Arc::clone(&gate),
                         },
                     ))),
-                    None => LlmSanitizeResponseContext::with_identity(context.codec().clone()),
+                    None => LlmResponseCodecContext::with_identity(context.codec().clone()),
                 });
 
         (
@@ -185,7 +185,7 @@ impl LlmExecutionContext {
 
     /// Return the request-direction codec identity and revocable capability.
     #[must_use]
-    pub fn request_codec(&self) -> &LlmSanitizeRequestContext {
+    pub fn request_codec(&self) -> &LlmRequestCodecContext {
         &self.request_codec
     }
 
@@ -194,7 +194,7 @@ impl LlmExecutionContext {
     /// Streaming execution returns `None` because Relay does not expose a
     /// completed-response codec for individual stream chunks.
     #[must_use]
-    pub fn response_codec(&self) -> Option<&LlmSanitizeResponseContext> {
+    pub fn response_codec(&self) -> Option<&LlmResponseCodecContext> {
         self.response_codec.as_ref()
     }
 }

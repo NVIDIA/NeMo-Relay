@@ -202,6 +202,12 @@ pub struct NemoRelayLlmSanitizeResponseContext {
     pub codec: *const crate::types::FfiLlmSanitizeResponseCodec,
 }
 
+/// General name for request codec context used by execution intercepts.
+pub type NemoRelayLlmRequestCodecContext = NemoRelayLlmSanitizeRequestContext;
+
+/// General name for response codec context used by execution intercepts.
+pub type NemoRelayLlmResponseCodecContext = NemoRelayLlmSanitizeResponseContext;
+
 /// Directional codec context supplied to an LLM execution intercept.
 ///
 /// `request_codec` is always present. `response_codec` is non-null for unary
@@ -212,9 +218,9 @@ pub struct NemoRelayLlmSanitizeResponseContext {
 #[derive(Debug, Clone, Copy)]
 pub struct NemoRelayLlmExecutionContext {
     /// Active request codec identity and capability.
-    pub request_codec: NemoRelayLlmSanitizeRequestContext,
+    pub request_codec: NemoRelayLlmRequestCodecContext,
     /// Active unary-response codec context, or null for streaming execution.
-    pub response_codec: *const NemoRelayLlmSanitizeResponseContext,
+    pub response_codec: *const NemoRelayLlmResponseCodecContext,
 }
 
 /// LLM request sanitizer. It receives the request first and its codec context
