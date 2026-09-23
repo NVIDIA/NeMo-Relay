@@ -32,7 +32,7 @@ the dynamic-library boundary on the stable C-compatible ABI.
 | `PluginContext` | Installs component-owned subscribers, guardrails, intercepts, continuations, and streams. |
 | `PluginRuntime` | Emits marks and manages Relay-owned scopes and scope stacks through typed host helpers. |
 | `nemo_relay_plugin!` | Exports the one versioned native entry point used by the loader. |
-| Native ABI v7 | Keeps C-compatible host and plugin tables behind the safe Rust interface. ABI v7 adds directional codec context to LLM execution callbacks and intentionally rejects plugins compiled with an older callback layout. |
+| Native ABI v6 | Keeps C-compatible host and plugin tables behind the safe Rust interface. Relay 0.10 finalizes ABI v6 with directional codec context for LLM execution callbacks and requires native plugins to rebuild against that layout. |
 | Typed async middleware | Drives guardrails, sanitizers, and intercepts on a per-component SDK-owned Tokio executor. Subscribers and raw ABI registrations remain synchronous. |
 | Async continuations and streams | `ToolNext`, `LlmNext`, and `LlmStreamNext` support repeated or concurrent downstream calls. Streaming LLM continuations use a pull-based host handle. |
 | Tool results | `ToolNext` returns `ToolExecutionResult`, which keeps an application result and optional annotation together. |
@@ -104,10 +104,10 @@ context-aware tool execution intercept must rebuild and set
 table. Under Relay 0.9, typed async plugins that did not use this registration
 could retain `compat.relay = ">=0.8.0,<1.0"`.
 
-Relay 0.10 advances the internal table to ABI v7 and makes
+Relay 0.10 finalizes the internal ABI v6 table and makes
 `LlmExecutionContext` part of every unary and streaming LLM execution callback.
-Because this changes callback layouts, the 0.10 host rejects every native plugin
-compiled against an older table. Rebuild the plugin with the 0.10 SDK and set
+Because this changes callback layouts, the 0.10 host rejects v2-v5 tables.
+Rebuild every plugin with the finalized 0.10 v6 SDK and set
 `compat.relay = ">=0.10.0,<1.0"`. The authored manifest contract remains
 `compat.native_api = "1"`.
 

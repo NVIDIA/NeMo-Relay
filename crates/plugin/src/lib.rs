@@ -50,14 +50,15 @@ use serde_json::Map;
 
 /// Native plugin ABI version supported by this crate.
 ///
-/// Version 7 makes LLM execution intercept callbacks context-aware.
+/// Version 6 makes LLM execution intercept callbacks context-aware and adds
+/// host-routed operational logging.
 ///
 /// This is an intentional callback-layout break. Native plugins must rebuild
 /// against this Relay release even though their authored `native_api`
 /// compatibility label remains `1`.
-pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 7;
+pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 6;
 /// ABI version that introduced uniform LLM execution codec context.
-pub const NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT: u32 = 7;
+pub const NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT: u32 = 6;
 /// ABI version that introduced host-routed operational logging.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING: u32 = 6;
 /// ABI version that introduced context-aware raw tool execution intercepts.
@@ -96,19 +97,19 @@ unsafe impl Send for LlmSanitizeResponseContext<'_> {}
 /// response codec context, while streaming execution leaves it unavailable
 /// until Relay has a completed-response streaming codec contract.
 pub struct LlmExecutionContext<'a> {
-    request_codec: LlmExecutionRequestContext<'a>,
-    response_codec: Option<LlmExecutionResponseContext<'a>>,
+    request_codec: LlmRequestCodecContext<'a>,
+    response_codec: Option<LlmResponseCodecContext<'a>>,
 }
 
 /// Request codec context for one LLM execution intercept invocation.
-pub struct LlmExecutionRequestContext<'a> {
+pub struct LlmRequestCodecContext<'a> {
     /// Identity of the active request codec.
     pub codec: LlmCodecIdentity,
     resolved: Option<LlmExecutionRequestCodec<'a>>,
 }
 
 /// Response codec context for one unary LLM execution intercept invocation.
-pub struct LlmExecutionResponseContext<'a> {
+pub struct LlmResponseCodecContext<'a> {
     /// Identity of the active response codec.
     pub codec: LlmCodecIdentity,
     resolved: Option<LlmExecutionResponseCodec<'a>>,
@@ -117,16 +118,22 @@ pub struct LlmExecutionResponseContext<'a> {
 impl<'a> LlmExecutionContext<'a> {
     /// Return the active request codec context.
     #[must_use]
-    pub fn request_codec(&self) -> &LlmExecutionRequestContext<'a> {
+    pub fn request_codec(&self) -> &LlmRequestCodecContext<'a> {
         &self.request_codec
     }
 
     /// Return the unary response codec context, or `None` for streaming execution.
     #[must_use]
-    pub fn response_codec(&self) -> Option<&LlmExecutionResponseContext<'a>> {
+    pub fn response_codec(&self) -> Option<&LlmResponseCodecContext<'a>> {
         self.response_codec.as_ref()
     }
 }
+
+/// Previous name for request codec context on typed execution intercepts.
+pub type LlmExecutionRequestContext<'a> = LlmRequestCodecContext<'a>;
+
+/// Previous name for response codec context on typed execution intercepts.
+pub type LlmExecutionResponseContext<'a> = LlmResponseCodecContext<'a>;
 
 /// Status codes returned by stable native ABI functions.
 #[repr(i32)]
@@ -225,7 +232,7 @@ pub struct NemoRelayNativeLlmSanitizeResponseContext {
 /// Request codec context passed to a native LLM execution intercept.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NemoRelayNativeLlmExecutionRequestContext {
+pub struct NemoRelayNativeLlmRequestCodecContext {
     /// Discriminator for the active request codec.
     pub codec_kind: NemoRelayNativeLlmCodecKind,
     /// Optional borrowed built-in or runtime codec identifier.
@@ -237,7 +244,7 @@ pub struct NemoRelayNativeLlmExecutionRequestContext {
 /// Response codec context passed to a native unary LLM execution intercept.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NemoRelayNativeLlmExecutionResponseContext {
+pub struct NemoRelayNativeLlmResponseCodecContext {
     /// Discriminator for the active response codec.
     pub codec_kind: NemoRelayNativeLlmCodecKind,
     /// Optional borrowed built-in or runtime codec identifier.
@@ -246,14 +253,20 @@ pub struct NemoRelayNativeLlmExecutionResponseContext {
     pub codec: *const NemoRelayNativeLlmResponseCodec,
 }
 
+/// Previous native name for request codec context on execution intercepts.
+pub type NemoRelayNativeLlmExecutionRequestContext = NemoRelayNativeLlmRequestCodecContext;
+
+/// Previous native name for response codec context on execution intercepts.
+pub type NemoRelayNativeLlmExecutionResponseContext = NemoRelayNativeLlmResponseCodecContext;
+
 /// Codec context passed to native LLM execution intercept callbacks.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NemoRelayNativeLlmExecutionContext {
     /// Request codec context, always present.
-    pub request_codec: NemoRelayNativeLlmExecutionRequestContext,
+    pub request_codec: NemoRelayNativeLlmRequestCodecContext,
     /// Unary response codec context, or null for streaming execution.
-    pub response_codec: *const NemoRelayNativeLlmExecutionResponseContext,
+    pub response_codec: *const NemoRelayNativeLlmResponseCodecContext,
 }
 
 /// Safe completion-backed request codec facade for typed native plugins.
@@ -355,7 +368,7 @@ enum LlmExecutionRequestCodecOwner {
         completion: *const NemoRelayNativeAsyncCompletion,
     },
     Stream {
-        host: NemoRelayNativeHostApiV7,
+        host: NemoRelayNativeHostApiV6,
         stream: *const NemoRelayNativeAsyncStream,
     },
 }
@@ -378,7 +391,7 @@ impl Drop for LlmExecutionRequestCodec<'_> {
                 (host.v3.async_completion_release)(completion)
             },
             LlmExecutionRequestCodecOwner::Stream { host, stream } => unsafe {
-                (host.v6.v5.v4.v3.async_stream_release)(stream)
+                (host.v5.v4.v3.async_stream_release)(stream)
             },
         }
     }
@@ -401,12 +414,12 @@ impl LlmExecutionRequestCodec<'_> {
                 })
             }
             LlmExecutionRequestCodecOwner::Stream { host, stream } => {
-                native_codec_call(&host.v6.v5.v4.v3.v1, |out| unsafe {
-                    let request = HostString::from_json(&host.v6.v5.v4.v3.v1, request)
+                native_codec_call(&host.v5.v4.v3.v1, |out| unsafe {
+                    let request = HostString::from_json(&host.v5.v4.v3.v1, request)
                         .ok_or_else(|| "failed to serialize LLM request".to_string())?;
                     let status =
                         (host.async_stream_llm_request_codec_decode)(stream, request.as_ptr(), out);
-                    codec_status(&host.v6.v5.v4.v3.v1, status)
+                    codec_status(&host.v5.v4.v3.v1, status)
                 })
             }
         }
@@ -435,10 +448,10 @@ impl LlmExecutionRequestCodec<'_> {
                 })
             }
             LlmExecutionRequestCodecOwner::Stream { host, stream } => {
-                native_codec_call(&host.v6.v5.v4.v3.v1, |out| unsafe {
-                    let annotated = HostString::from_json(&host.v6.v5.v4.v3.v1, annotated)
+                native_codec_call(&host.v5.v4.v3.v1, |out| unsafe {
+                    let annotated = HostString::from_json(&host.v5.v4.v3.v1, annotated)
                         .ok_or_else(|| "failed to serialize annotated request".to_string())?;
-                    let original = HostString::from_json(&host.v6.v5.v4.v3.v1, original)
+                    let original = HostString::from_json(&host.v5.v4.v3.v1, original)
                         .ok_or_else(|| "failed to serialize original request".to_string())?;
                     let status = (host.async_stream_llm_request_codec_encode)(
                         stream,
@@ -446,7 +459,7 @@ impl LlmExecutionRequestCodec<'_> {
                         original.as_ptr(),
                         out,
                     );
-                    codec_status(&host.v6.v5.v4.v3.v1, status)
+                    codec_status(&host.v5.v4.v3.v1, status)
                 })
             }
         }
@@ -487,7 +500,7 @@ impl LlmExecutionResponseCodec<'_> {
     }
 }
 
-impl LlmExecutionRequestContext<'_> {
+impl LlmRequestCodecContext<'_> {
     /// Resolve the active request codec capability.
     #[must_use]
     pub fn resolve_codec(&self) -> Option<&LlmExecutionRequestCodec<'_>> {
@@ -495,7 +508,7 @@ impl LlmExecutionRequestContext<'_> {
     }
 }
 
-impl LlmExecutionResponseContext<'_> {
+impl LlmResponseCodecContext<'_> {
     /// Resolve the active response codec capability.
     #[must_use]
     pub fn resolve_codec(&self) -> Option<&LlmExecutionResponseCodec<'_>> {
@@ -1607,7 +1620,8 @@ pub struct NemoRelayNativeHostApiV5 {
         -> NemoRelayStatus,
 }
 
-/// ABI-v6 host extension for operational logging.
+/// ABI-v6 host extension for operational logging and context-aware LLM
+/// execution intercept callbacks.
 ///
 /// The complete ABI-v5 table is the prefix, preserving layout compatibility.
 #[repr(C)]
@@ -1622,19 +1636,6 @@ pub struct NemoRelayNativeHostApiV6 {
         message: *const NemoRelayNativeString,
         fields_json: *const NemoRelayNativeString,
     ) -> NemoRelayStatus,
-}
-
-/// ABI-v7 host table for context-aware LLM execution intercept callbacks.
-///
-/// The inherited function-pointer table has the same fields as ABI v6, but
-/// its LLM execution callback typedefs include
-/// [`NemoRelayNativeLlmExecutionContext`]. The distinct table version prevents
-/// either side from invoking a callback compiled with the old argument layout.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct NemoRelayNativeHostApiV7 {
-    /// ABI-v6 table compiled with the ABI-v7 callback typedefs.
-    pub v6: NemoRelayNativeHostApiV6,
     /// Registers a completion-based asynchronous LLM execution intercept.
     pub plugin_context_register_async_llm_execution_intercept:
         unsafe extern "C" fn(
@@ -1677,12 +1678,10 @@ unsafe impl Sync for NemoRelayNativeHostApiV4 {}
 // same thread-safe host function table.
 unsafe impl Send for NemoRelayNativeHostApiV5 {}
 unsafe impl Sync for NemoRelayNativeHostApiV5 {}
-// SAFETY: the v6 host table is immutable and its log function is thread-safe.
+// SAFETY: the v6 host table is immutable and contains only thread-safe host
+// functions.
 unsafe impl Send for NemoRelayNativeHostApiV6 {}
 unsafe impl Sync for NemoRelayNativeHostApiV6 {}
-// SAFETY: the v7 table is immutable and contains only thread-safe host functions.
-unsafe impl Send for NemoRelayNativeHostApiV7 {}
-unsafe impl Sync for NemoRelayNativeHostApiV7 {}
 
 // The host API table is immutable after construction. Function pointers and
 // the null-terminated version string pointer are safe to share across threads.
@@ -3178,7 +3177,7 @@ impl<'a> PluginContext<'a> {
     /// `cb`, `user_data`, and `free_fn` must remain valid for every host
     /// callback invocation until the host deregisters the callback or calls
     /// `free_fn`. `free_fn` must match the allocation behind `user_data`.
-    /// Registration consumes that ownership even when ABI v7 is unavailable.
+    /// Registration consumes that ownership even when ABI v6 is unavailable.
     pub unsafe fn register_llm_execution_intercept_raw(
         &mut self,
         name: &str,
@@ -3188,7 +3187,7 @@ impl<'a> PluginContext<'a> {
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
         if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT
-            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV7>()
+            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV6>()
         {
             if let Some(free_fn) = free_fn {
                 unsafe { free_fn(user_data) };
@@ -3208,7 +3207,7 @@ impl<'a> PluginContext<'a> {
     /// `cb`, `user_data`, and `free_fn` must remain valid for every host
     /// callback invocation until the host deregisters the callback or calls
     /// `free_fn`. `free_fn` must match the allocation behind `user_data`.
-    /// Registration consumes that ownership even when ABI v7 is unavailable.
+    /// Registration consumes that ownership even when ABI v6 is unavailable.
     pub unsafe fn register_llm_stream_execution_intercept_raw(
         &mut self,
         name: &str,
@@ -3218,7 +3217,7 @@ impl<'a> PluginContext<'a> {
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
         if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT
-            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV7>()
+            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV6>()
         {
             if let Some(free_fn) = free_fn {
                 unsafe { free_fn(user_data) };
@@ -3306,14 +3305,14 @@ impl<'a> PluginContext<'a> {
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
         if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT
-            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV7>()
+            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV6>()
         {
             if let Some(free_fn) = free_fn {
                 unsafe { free_fn(user_data) };
             }
             return NemoRelayStatus::InvalidArg;
         }
-        let host = unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV7) };
+        let host = unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV6) };
         self.with_name_and_callback(name, user_data, free_fn, |_, name| unsafe {
             (host.plugin_context_register_async_llm_execution_intercept)(
                 self.raw, name, priority, cb, user_data, free_fn,
@@ -3332,7 +3331,7 @@ impl<'a> PluginContext<'a> {
     /// stream owns the callback lifetime. `next` may be invoked
     /// repeatedly or concurrently until that stream settles; Relay then
     /// rejects or cancels unfinished and later calls. This execution-specific
-    /// callback requires native ABI v7 because its callback context and
+    /// callback requires native ABI v6 because its callback context and
     /// stream-scoped request-codec operations are part of that ABI.
     pub unsafe fn register_async_stream_middleware_raw(
         &mut self,
@@ -3343,17 +3342,16 @@ impl<'a> PluginContext<'a> {
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
         if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT
-            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV7>()
+            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV6>()
         {
             if let Some(free_fn) = free_fn {
                 unsafe { free_fn(user_data) };
             }
             return NemoRelayStatus::InvalidArg;
         }
-        let host = unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV7) };
+        let host = unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV6) };
         self.with_name_and_callback(name, user_data, free_fn, |_, name| unsafe {
             (host
-                .v6
                 .v5
                 .v4
                 .v3
@@ -3599,16 +3597,11 @@ enum OwnedHostApi {
     V4(NemoRelayNativeHostApiV4),
     V5(NemoRelayNativeHostApiV5),
     V6(NemoRelayNativeHostApiV6),
-    V7(NemoRelayNativeHostApiV7),
 }
 
 impl OwnedHostApi {
     unsafe fn copy_from(host: &NemoRelayNativeHostApiV1) -> Self {
-        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT
-            && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV7>()
-        {
-            Self::V7(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV7) })
-        } else if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING
+        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING
             && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV6>()
         {
             Self::V6(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV6) })
@@ -3636,7 +3629,6 @@ impl OwnedHostApi {
             Self::V4(host) => &host.v3.v1,
             Self::V5(host) => &host.v4.v3.v1,
             Self::V6(host) => &host.v5.v4.v3.v1,
-            Self::V7(host) => &host.v6.v5.v4.v3.v1,
         }
     }
 }

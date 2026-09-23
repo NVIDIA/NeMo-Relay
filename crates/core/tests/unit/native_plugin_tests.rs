@@ -634,7 +634,6 @@ fn assert_native_digest_edges() {
 
 fn assert_native_host_api_versions() {
     let current = native_host_api();
-    let frozen_v6 = native_host_api_v6();
     let frozen_v5 = native_host_api_v5();
     let frozen_v4 = native_host_api_v4();
     let frozen_v3 = native_host_api_v3();
@@ -642,11 +641,6 @@ fn assert_native_host_api_versions() {
     assert_native_host_api_descriptor(
         current,
         NEMO_RELAY_NATIVE_ABI_VERSION,
-        std::mem::size_of::<NemoRelayNativeHostApiV7>(),
-    );
-    assert_native_host_api_descriptor(
-        frozen_v6,
-        NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING,
         std::mem::size_of::<NemoRelayNativeHostApiV6>(),
     );
     assert_native_host_api_descriptor(
@@ -669,7 +663,6 @@ fn assert_native_host_api_versions() {
         NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
         std::mem::size_of::<NemoRelayNativeHostApiV1>(),
     );
-    assert_native_host_api_v7_layout();
     assert_native_host_api_v6_layout();
     assert_native_host_api_v5_layout();
     assert_native_host_api_v4_layout();
@@ -791,46 +784,30 @@ fn assert_native_host_api_v6_layout() {
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV6>(), 8);
-        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV6>(), 616);
+        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV6>(), 648);
         assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV6, v5), 0);
         assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV6, log), 608);
-    }
-    #[cfg(target_pointer_width = "32")]
-    {
-        assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV6>(), 4);
-        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV6>(), 304);
-        assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV6, v5), 0);
-        assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV6, log), 300);
-    }
-}
-
-fn assert_native_host_api_v7_layout() {
-    #[cfg(target_pointer_width = "64")]
-    {
-        assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV7>(), 8);
-        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV7>(), 648);
-        assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV7, v6), 0);
         assert_eq!(
             std::mem::offset_of!(
-                NemoRelayNativeHostApiV7,
+                NemoRelayNativeHostApiV6,
                 plugin_context_register_async_llm_execution_intercept
             ),
             616
         );
         assert_eq!(
-            std::mem::offset_of!(NemoRelayNativeHostApiV7, async_stream_retain),
+            std::mem::offset_of!(NemoRelayNativeHostApiV6, async_stream_retain),
             624
         );
         assert_eq!(
             std::mem::offset_of!(
-                NemoRelayNativeHostApiV7,
+                NemoRelayNativeHostApiV6,
                 async_stream_llm_request_codec_decode
             ),
             632
         );
         assert_eq!(
             std::mem::offset_of!(
-                NemoRelayNativeHostApiV7,
+                NemoRelayNativeHostApiV6,
                 async_stream_llm_request_codec_encode
             ),
             640
@@ -838,30 +815,31 @@ fn assert_native_host_api_v7_layout() {
     }
     #[cfg(target_pointer_width = "32")]
     {
-        assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV7>(), 4);
-        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV7>(), 320);
-        assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV7, v6), 0);
+        assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV6>(), 4);
+        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV6>(), 320);
+        assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV6, v5), 0);
+        assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV6, log), 300);
         assert_eq!(
             std::mem::offset_of!(
-                NemoRelayNativeHostApiV7,
+                NemoRelayNativeHostApiV6,
                 plugin_context_register_async_llm_execution_intercept
             ),
             304
         );
         assert_eq!(
-            std::mem::offset_of!(NemoRelayNativeHostApiV7, async_stream_retain),
+            std::mem::offset_of!(NemoRelayNativeHostApiV6, async_stream_retain),
             308
         );
         assert_eq!(
             std::mem::offset_of!(
-                NemoRelayNativeHostApiV7,
+                NemoRelayNativeHostApiV6,
                 async_stream_llm_request_codec_decode
             ),
             312
         );
         assert_eq!(
             std::mem::offset_of!(
-                NemoRelayNativeHostApiV7,
+                NemoRelayNativeHostApiV6,
                 async_stream_llm_request_codec_encode
             ),
             316
@@ -1886,7 +1864,7 @@ fn assert_native_json_output_and_host_api() {
     assert_eq!(host_api.abi_version, NEMO_RELAY_NATIVE_ABI_VERSION);
     assert_eq!(
         host_api.struct_size,
-        std::mem::size_of::<NemoRelayNativeHostApiV7>()
+        std::mem::size_of::<NemoRelayNativeHostApiV6>()
     );
 }
 

@@ -72,6 +72,9 @@ from nemo_relay._native import (
     LlmExecutionContext as LlmExecutionContext,
 )
 from nemo_relay._native import (
+    LlmRequestCodecContext as LlmRequestCodecContext,
+)
+from nemo_relay._native import (
     LLMHandle as LLMHandle,
 )
 from nemo_relay._native import (
@@ -91,6 +94,9 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     LlmSanitizeResponseContext as LlmSanitizeResponseContext,
+)
+from nemo_relay._native import (
+    LlmResponseCodecContext as LlmResponseCodecContext,
 )
 from nemo_relay._native import (
     LogSeverity as LogSeverity,

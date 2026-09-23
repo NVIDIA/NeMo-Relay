@@ -14,11 +14,11 @@ pub mod subscriber_dispatcher;
 pub use callbacks::{
     BuiltinLlmCodec, ConditionalMiddlewareGuardrailFn, EventMetadataInjectorFn, EventSanitizeFn,
     EventSubscriberFn, LlmCodecIdentity, LlmCollectorFn, LlmConditionalFn, LlmExecutionFn,
-    LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream, LlmRequestInterceptFn,
-    LlmSanitizeRequestContext, LlmSanitizeRequestFn, LlmSanitizeResponseContext,
-    LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn, LlmStreamInner,
-    ToolConditionalFn, ToolExecutionContext, ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn,
-    ToolSanitizeFn,
+    LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream, LlmRequestCodecContext,
+    LlmRequestInterceptFn, LlmResponseCodecContext, LlmSanitizeRequestContext,
+    LlmSanitizeRequestFn, LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    LlmStreamExecutionNextFn, LlmStreamInner, ToolConditionalFn, ToolExecutionContext,
+    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 #[doc(hidden)]
 pub use continuation_context::MiddlewareContinuationContext;

@@ -295,9 +295,9 @@ impl ToolExecutionContext {
     }
 }
 
-/// Active codec context supplied to an LLM request sanitizer.
+/// Active codec identity and capability for an LLM request.
 #[derive(Clone)]
-pub struct LlmSanitizeRequestContext {
+pub struct LlmRequestCodecContext {
     /// Identity of the active codec.
     pub codec: LlmCodecIdentity,
     runtime: Option<PluginRuntime>,
@@ -305,9 +305,9 @@ pub struct LlmSanitizeRequestContext {
     invocation_id: Option<String>,
 }
 
-/// Active codec context supplied to an LLM response sanitizer.
+/// Active codec identity and capability for an LLM response.
 #[derive(Clone)]
-pub struct LlmSanitizeResponseContext {
+pub struct LlmResponseCodecContext {
     /// Identity of the active codec.
     pub codec: LlmCodecIdentity,
     runtime: Option<PluginRuntime>,
@@ -315,7 +315,7 @@ pub struct LlmSanitizeResponseContext {
     invocation_id: Option<String>,
 }
 
-impl LlmSanitizeRequestContext {
+impl LlmRequestCodecContext {
     /// Resolves the active request codec for this callback.
     #[must_use]
     pub fn resolve_codec(&self) -> Option<WorkerRequestCodec> {
@@ -327,7 +327,7 @@ impl LlmSanitizeRequestContext {
     }
 }
 
-impl LlmSanitizeResponseContext {
+impl LlmResponseCodecContext {
     /// Resolves the active response codec for this callback.
     #[must_use]
     pub fn resolve_codec(&self) -> Option<WorkerResponseCodec> {
@@ -338,6 +338,12 @@ impl LlmSanitizeResponseContext {
         })
     }
 }
+
+/// Backward-compatible name for request codec context supplied to sanitizers.
+pub type LlmSanitizeRequestContext = LlmRequestCodecContext;
+
+/// Backward-compatible name for response codec context supplied to sanitizers.
+pub type LlmSanitizeResponseContext = LlmResponseCodecContext;
 
 /// Invocation-scoped proxy for the active LLM request codec.
 #[derive(Clone)]
@@ -395,8 +401,8 @@ impl WorkerResponseCodec {
 /// not change these identities; codec operations reject incompatible payloads.
 #[derive(Clone)]
 pub struct LlmExecutionContext {
-    request_codec: LlmSanitizeRequestContext,
-    response_codec: Option<LlmSanitizeResponseContext>,
+    request_codec: LlmRequestCodecContext,
+    response_codec: Option<LlmResponseCodecContext>,
 }
 
 impl std::fmt::Debug for LlmExecutionContext {
@@ -415,7 +421,7 @@ impl std::fmt::Debug for LlmExecutionContext {
 impl LlmExecutionContext {
     /// Request codec identity and invocation-scoped operations.
     #[must_use]
-    pub fn request_codec(&self) -> &LlmSanitizeRequestContext {
+    pub fn request_codec(&self) -> &LlmRequestCodecContext {
         &self.request_codec
     }
 
@@ -424,7 +430,7 @@ impl LlmExecutionContext {
     /// Streaming execution returns `None` because Relay response codecs decode
     /// completed provider responses, not individual stream chunks.
     #[must_use]
-    pub fn response_codec(&self) -> Option<&LlmSanitizeResponseContext> {
+    pub fn response_codec(&self) -> Option<&LlmResponseCodecContext> {
         self.response_codec.as_ref()
     }
 }
@@ -2923,12 +2929,12 @@ impl LlmPayload {
         let response_codec = context
             .response
             .as_ref()
-            .map(|response| -> Result<LlmSanitizeResponseContext> {
+            .map(|response| -> Result<LlmResponseCodecContext> {
                 let identity = require_execution_field(
                     response.codec.as_ref(),
                     "response codec identity is missing",
                 )?;
-                Ok(LlmSanitizeResponseContext {
+                Ok(LlmResponseCodecContext {
                     codec: codec_identity_from_proto(Some(identity)),
                     runtime: Some(runtime.clone()),
                     codec_capability_id: response.codec_capability_id.clone(),
@@ -2942,7 +2948,7 @@ impl LlmPayload {
             ));
         }
         Ok(LlmExecutionContext {
-            request_codec: LlmSanitizeRequestContext {
+            request_codec: LlmRequestCodecContext {
                 codec: codec_identity_from_proto(Some(request_identity)),
                 runtime: Some(runtime.clone()),
                 codec_capability_id: request.codec_capability_id.clone(),
