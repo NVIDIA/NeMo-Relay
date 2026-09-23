@@ -344,52 +344,95 @@ pub(super) fn write_environment_attestation(
 pub(super) fn environment_tree_digest(environment: &Path) -> Result<String, String> {
     #[cfg(test)]
     ENVIRONMENT_TREE_DIGEST_CALLS.fetch_add(1, Ordering::Relaxed);
-    environment_tree_digest_with_limit(environment, MAX_ENVIRONMENT_FILES)
+    environment_tree_digest_with_entry_limit(environment, MAX_ENVIRONMENT_FILES)
 }
 
-fn environment_tree_digest_with_limit(
+fn environment_tree_digest_with_entry_limit(
     environment: &Path,
     max_entries: usize,
 ) -> Result<String, String> {
-    environment_tree_digest_with_limits(
+    environment_tree_digest_with_budget(
         environment,
         max_entries,
         crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES,
     )
 }
 
-fn environment_tree_digest_with_limits(
+fn environment_tree_digest_with_budget(
     environment: &Path,
     max_entries: usize,
     max_bytes: u64,
 ) -> Result<String, String> {
-    let mut digest = Sha256::new();
-    let mut budget = EnvironmentDigestBudget {
-        total_bytes: 0,
-        entries: 0,
-        max_entries,
-        max_bytes,
-    };
+    let mut digest = EnvironmentDigest::new(max_entries, max_bytes);
     digest_environment_directory(
         environment,
         Path::new(""),
         &mut Vec::new(),
         &mut digest,
-        &mut budget,
         true,
     )?;
-    Ok(digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    Ok(digest.finalize())
 }
 
-struct EnvironmentDigestBudget {
+struct EnvironmentDigest {
+    hasher: Sha256,
     total_bytes: u64,
     entries: usize,
     max_entries: usize,
     max_bytes: u64,
+}
+
+impl EnvironmentDigest {
+    fn new(max_entries: usize, max_bytes: u64) -> Self {
+        Self {
+            hasher: Sha256::new(),
+            total_bytes: 0,
+            entries: 0,
+            max_entries,
+            max_bytes,
+        }
+    }
+
+    fn charge_entry(&mut self, directory: &Path) -> Result<(), String> {
+        self.entries = self.entries.saturating_add(1);
+        if self.entries > self.max_entries {
+            return Err(format!(
+                "managed Python environment exceeds the {}-entry attestation budget at {}",
+                self.max_entries,
+                directory.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn charge_bytes(&mut self, bytes: usize) -> Result<(), String> {
+        self.total_bytes = self.total_bytes.saturating_add(bytes as u64);
+        if self.total_bytes > self.max_bytes {
+            return Err(format!(
+                "managed Python environment exceeds the {}-byte attestation budget",
+                self.max_bytes
+            ));
+        }
+        Ok(())
+    }
+
+    fn update(&mut self, entry_type: u8, path: &Path, payload: &[u8]) {
+        let path = raw_path_bytes(path);
+        self.hasher.update([entry_type]);
+        self.hasher.update((path.len() as u64).to_le_bytes());
+        self.hasher.update(&path);
+        self.hasher
+            .update((payload.len() as u64).to_le_bytes());
+        self.hasher.update(payload);
+    }
+
+    fn finalize(self) -> String {
+        self.hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -397,16 +440,16 @@ pub(super) fn test_environment_tree_digest_with_entry_limit(
     environment: &Path,
     max_entries: usize,
 ) -> Result<String, String> {
-    environment_tree_digest_with_limit(environment, max_entries)
+    environment_tree_digest_with_entry_limit(environment, max_entries)
 }
 
 #[cfg(all(test, unix))]
-pub(super) fn test_environment_tree_digest_with_limits(
+pub(super) fn test_environment_tree_digest_with_budget(
     environment: &Path,
     max_entries: usize,
     max_bytes: u64,
 ) -> Result<String, String> {
-    environment_tree_digest_with_limits(environment, max_entries, max_bytes)
+    environment_tree_digest_with_budget(environment, max_entries, max_bytes)
 }
 
 #[cfg(test)]
@@ -423,8 +466,7 @@ fn digest_environment_directory(
     directory: &Path,
     relative_directory: &Path,
     ancestors: &mut Vec<PathBuf>,
-    digest: &mut Sha256,
-    budget: &mut EnvironmentDigestBudget,
+    digest: &mut EnvironmentDigest,
     charge_bytes: bool,
 ) -> Result<(), String> {
     if ancestors.len() >= MAX_ENVIRONMENT_DEPTH {
@@ -446,14 +488,7 @@ fn digest_environment_directory(
     for child in std::fs::read_dir(directory)
         .map_err(|error| format!("failed to read {}: {error}", directory.display()))?
     {
-        budget.entries = budget.entries.saturating_add(1);
-        if budget.entries > budget.max_entries {
-            return Err(format!(
-                "managed Python environment exceeds the {}-entry attestation budget at {}",
-                budget.max_entries,
-                directory.display()
-            ));
-        }
+        digest.charge_entry(directory)?;
         children.push(
             child.map_err(|error| format!("failed to read {}: {error}", directory.display()))?,
         );
@@ -465,7 +500,6 @@ fn digest_environment_directory(
             relative_directory,
             ancestors,
             digest,
-            budget,
             charge_bytes,
         )?;
     }
@@ -477,8 +511,7 @@ fn digest_environment_entry(
     child: std::fs::DirEntry,
     relative_directory: &Path,
     ancestors: &mut Vec<PathBuf>,
-    digest: &mut Sha256,
-    budget: &mut EnvironmentDigestBudget,
+    digest: &mut EnvironmentDigest,
     charge_bytes: bool,
 ) -> Result<(), String> {
     let path = child.path();
@@ -490,7 +523,7 @@ fn digest_environment_entry(
     let metadata = std::fs::metadata(&source)
         .map_err(|error| format!("failed to inspect {}: {error}", source.display()))?;
     if metadata.is_dir() {
-        update_tree_digest(digest, b'd', &relative, &[]);
+        digest.update(b'd', &relative, &[]);
         // Linux venvs expose the same installed tree through `lib` and `lib64 -> lib`.
         // Keep hashing the alias for digest compatibility, but charge its bytes through `lib` only.
         let charge_bytes = charge_bytes && !is_python_lib64_alias(&path, &relative)?;
@@ -499,7 +532,6 @@ fn digest_environment_entry(
             &relative,
             ancestors,
             digest,
-            budget,
             charge_bytes,
         );
     }
@@ -514,15 +546,9 @@ fn digest_environment_entry(
         "managed Python environment file",
     )?;
     if charge_bytes {
-        budget.total_bytes = budget.total_bytes.saturating_add(bytes.len() as u64);
-        if budget.total_bytes > budget.max_bytes {
-            return Err(format!(
-                "managed Python environment exceeds the {}-byte attestation budget",
-                budget.max_bytes
-            ));
-        }
+        digest.charge_bytes(bytes.len())?;
     }
-    update_tree_digest(digest, b'f', &relative, &bytes);
+    digest.update(b'f', &relative, &bytes);
     Ok(())
 }
 
@@ -555,15 +581,6 @@ fn resolve_environment_entry(path: &Path) -> Result<PathBuf, String> {
     } else {
         Ok(path.to_path_buf())
     }
-}
-
-fn update_tree_digest(digest: &mut Sha256, entry_type: u8, path: &Path, payload: &[u8]) {
-    let path = raw_path_bytes(path);
-    digest.update([entry_type]);
-    digest.update((path.len() as u64).to_le_bytes());
-    digest.update(&path);
-    digest.update((payload.len() as u64).to_le_bytes());
-    digest.update(payload);
 }
 
 #[cfg(unix)]

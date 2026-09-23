@@ -1928,7 +1928,7 @@ fn python_environment_byte_budget_counts_internal_directory_alias_once() {
     std::fs::write(&installed, payload).unwrap();
     symlink("lib", environment_path.join("lib64")).unwrap();
 
-    let original = environment::test_environment_tree_digest_with_limits(
+    let original = environment::test_environment_tree_digest_with_budget(
         &environment_path,
         16,
         payload.len() as u64,
@@ -1936,7 +1936,7 @@ fn python_environment_byte_budget_counts_internal_directory_alias_once() {
     .expect("lib64 -> lib must not charge installed files twice");
 
     std::fs::write(&installed, b"changed package!").unwrap();
-    let changed = environment::test_environment_tree_digest_with_limits(
+    let changed = environment::test_environment_tree_digest_with_budget(
         &environment_path,
         16,
         payload.len() as u64,
@@ -1945,7 +1945,7 @@ fn python_environment_byte_budget_counts_internal_directory_alias_once() {
     assert_ne!(original, changed, "aliased content must remain attested");
 
     symlink("lib", environment_path.join("other-alias")).unwrap();
-    let error = environment::test_environment_tree_digest_with_limits(
+    let error = environment::test_environment_tree_digest_with_budget(
         &environment_path,
         32,
         payload.len() as u64,
