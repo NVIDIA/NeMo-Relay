@@ -1084,6 +1084,10 @@ inherits the failed descendant's `error.type` and exception type. When no
 structured `FlowError` is available, such as a cancellation or dropped
 execution, the projection emits `_OTHER`. Caller-provided `error.type` and
 `exception.type` metadata take precedence over values derived from `FlowError`.
+An authenticated Claude Code or Codex permission rejection closes the matched
+active tool span with `error.type = "guardrail_rejected"`. The corresponding
+permission guardrail events carry the canonical `gen_ai.tool.call.id` in event
+metadata so subscribers can correlate the decision with that tool call.
 
 `FlowError` is an exhaustive Rust enum. Rust callers upgrading to this release
 must handle the new `CallbackException` variant in exhaustive matches. It maps
