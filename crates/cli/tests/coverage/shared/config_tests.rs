@@ -2807,6 +2807,43 @@ fn bootstrap_hmac_state_reports_invalid_path_and_existing_key_shapes() {
     );
 }
 
+#[test]
+fn python_environment_attestation_key_is_atomically_published_for_concurrent_users() {
+    let environment = tempfile::tempdir().unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let writers = (0..8)
+        .map(|_| {
+            let environment = environment.path().to_path_buf();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                load_or_create_python_environment_hmac_key(&environment).unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    let keys = writers
+        .into_iter()
+        .map(|writer| writer.join().unwrap())
+        .collect::<Vec<_>>();
+    assert!(keys.iter().all(|key| key == &keys[0]));
+
+    let key_path = environment.path().join(".nemo-relay-environment.key");
+    assert_eq!(std::fs::read(&key_path).unwrap().as_slice(), &keys[0]);
+    assert_eq!(
+        std::fs::read_dir(environment.path()).unwrap().count(),
+        1,
+        "temporary attestation key files should be removed after publication"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(key_path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn bounded_identity_reader_reports_missing_unreadable_and_invalid_utf8_inputs() {

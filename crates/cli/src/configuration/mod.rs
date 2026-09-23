@@ -772,40 +772,22 @@ fn load_or_create_python_environment_hmac_key(
     SystemRandom::new().fill(&mut key).map_err(|_| {
         CliError::Config("failed to generate Python environment attestation key".into())
     })?;
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o644);
-    }
-    match options.open(&path) {
-        Ok(mut file) => {
-            file.write_all(&key).map_err(|error| {
-                CliError::Config(format!(
-                    "failed to write Python environment attestation key {}: {error}",
-                    path.display()
-                ))
-            })?;
-            file.sync_all().map_err(|error| {
-                CliError::Config(format!(
-                    "failed to sync Python environment attestation key {}: {error}",
-                    path.display()
-                ))
-            })?;
-            #[cfg(unix)]
-            fs::set_permissions(&path, {
-                use std::os::unix::fs::PermissionsExt;
-                fs::Permissions::from_mode(0o644)
-            })
-            .map_err(|error| {
-                CliError::Config(format!(
-                    "failed to make Python environment attestation key readable at {}: {error}",
-                    path.display()
-                ))
-            })?;
-            Ok(key)
+    let (temporary_path, mut temporary_file) =
+        create_python_environment_hmac_key_temp_file(environment, KEY_FILENAME)?;
+    let publish_result = (|| -> std::io::Result<()> {
+        temporary_file.write_all(&key)?;
+        temporary_file.sync_all()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            temporary_file.set_permissions(fs::Permissions::from_mode(0o644))?;
         }
+        drop(temporary_file);
+        fs::hard_link(&temporary_path, &path)
+    })();
+    let _ = fs::remove_file(&temporary_path);
+    match publish_result {
+        Ok(()) => Ok(key),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             load_python_environment_hmac_key(&path)?.ok_or_else(|| {
                 CliError::Config(format!(
@@ -815,10 +797,48 @@ fn load_or_create_python_environment_hmac_key(
             })
         }
         Err(error) => Err(CliError::Config(format!(
-            "failed to create Python environment attestation key {}: {error}",
+            "failed to publish Python environment attestation key {}: {error}",
             path.display()
         ))),
     }
+}
+
+fn create_python_environment_hmac_key_temp_file(
+    environment: &Path,
+    key_filename: &str,
+) -> Result<(PathBuf, fs::File), CliError> {
+    for _ in 0..10 {
+        let mut suffix = [0_u8; 16];
+        SystemRandom::new().fill(&mut suffix).map_err(|_| {
+            CliError::Config("failed to generate Python environment attestation temp name".into())
+        })?;
+        let suffix = suffix
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let path = environment.join(format!("{key_filename}.{suffix}.tmp"));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(CliError::Config(format!(
+                    "failed to create temporary Python environment attestation key in {}: {error}",
+                    environment.display()
+                )));
+            }
+        }
+    }
+    Err(CliError::Config(format!(
+        "failed to allocate a unique temporary Python environment attestation key in {}",
+        environment.display()
+    )))
 }
 
 fn load_python_environment_hmac_key(
