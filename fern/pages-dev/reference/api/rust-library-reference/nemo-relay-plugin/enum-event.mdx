@@ -324,6 +324,16 @@ Return the runtime-only annotated LLM response.
 
 `Some` annotated response when the event profile includes one.
 
+#### `time_to_first_chunk`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn time_to_first_chunk(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>&gt;"}} /></pre>
+
+Return the managed stream time to first received chunk, in seconds.
+
+##### Returns
+
+The measured duration on streaming LLM end events, when at least one chunk reached the managed stream wrapper.
+
 #### `is_scope_start`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn is_scope_start(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>

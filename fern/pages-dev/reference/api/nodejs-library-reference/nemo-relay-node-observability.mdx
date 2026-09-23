@@ -138,6 +138,8 @@ export interface OpenTelemetrySignalEndpointConfig {
   service_version?: string;
   instrumentation_scope?: string;
   timeout_millis?: number;
+  /** Literal root-scope metadata prefixes promoted to resource attributes. */
+  promote_resource_metadata_prefixes?: string[];
 }
 ```
 
