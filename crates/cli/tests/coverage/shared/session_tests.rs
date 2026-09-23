@@ -1396,10 +1396,12 @@ async fn permission_requests_correlate_guardrails_and_close_rejected_tools() {
 async fn close_all_waits_for_an_in_flight_permission_decision() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     const GUARDRAIL: &str = "cli-permission-close-all-drain";
+    const SUBSCRIBER: &str = "cli-permission-close-all-capture";
     const TOOL: &str = "PermissionCloseAllDrain";
     const SESSION: &str = "permission-close-all-session";
     const TOOL_CALL: &str = "permission-close-all-tool";
     let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    let _ = deregister_subscriber(SUBSCRIBER);
 
     let invocation = Arc::new(AtomicUsize::new(0));
     let (started_tx, started_rx) = tokio::sync::oneshot::channel();
@@ -1433,6 +1435,14 @@ async fn close_all_waits_for_an_in_flight_permission_decision() {
     )
     .unwrap();
     let _guardrail_cleanup = ToolGuardrailCleanup(GUARDRAIL);
+
+    let captured_events = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&captured_events);
+    register_subscriber(
+        SUBSCRIBER,
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
 
     let manager = SessionManager::new(session_test_config());
     let arguments = json!({"path": "README.md"});
@@ -1491,6 +1501,32 @@ async fn close_all_waits_for_an_in_flight_permission_decision() {
             .is_err(),
         "close_all must wait until the permission decision closes the denied tool"
     );
+    let late_request = tokio::time::timeout(
+        Duration::from_millis(100),
+        manager.authorize_tool_permission(
+            &ToolEvent {
+                session_id: SESSION.into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "PermissionRequest".into(),
+                tool_call_id: TOOL_CALL.into(),
+                tool_name: TOOL.into(),
+                subagent_id: None,
+                arguments: json!({"path": "README.md"}),
+                result: Value::Null,
+                status: None,
+                payload: json!({}),
+                metadata: json!({}),
+            },
+            "client-a",
+        ),
+    )
+    .await
+    .expect("a permission request arriving during shutdown must not await the session gate");
+    assert!(matches!(
+        late_request,
+        Err(CliError::InvalidPayload(reason))
+            if reason == "permission request arrived after session shutdown began"
+    ));
 
     release_tx.send(()).unwrap();
     assert!(matches!(
@@ -1499,6 +1535,37 @@ async fn close_all_waits_for_an_in_flight_permission_decision() {
     ));
     closing.await.unwrap().unwrap();
     assert!(manager.inner.lock().await.is_empty());
+
+    flush_subscribers().unwrap();
+    deregister_subscriber(SUBSCRIBER).unwrap();
+    let events = captured_events.lock().unwrap();
+    let tool_start = events
+        .iter()
+        .position(|event| {
+            event.tool_call_id() == Some(TOOL_CALL)
+                && event.scope_category() == Some(ScopeCategory::Start)
+        })
+        .unwrap();
+    let denied_tool_ends = events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| {
+            event.tool_call_id() == Some(TOOL_CALL)
+                && event.scope_category() == Some(ScopeCategory::End)
+                && event
+                    .metadata()
+                    .is_some_and(|metadata| metadata["error.type"] == "guardrail_rejected")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(denied_tool_ends.len(), 1);
+    let containing_scope = events[tool_start].parent_uuid().unwrap();
+    let containing_scope_end = events
+        .iter()
+        .position(|event| {
+            event.uuid() == containing_scope && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert!(denied_tool_ends[0].0 < containing_scope_end);
 }
 
 #[test]

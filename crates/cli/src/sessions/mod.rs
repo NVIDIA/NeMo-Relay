@@ -710,6 +710,11 @@ impl SessionManager {
         owner: &str,
     ) -> Result<(), CliError> {
         let _activity = self.session_activity.begin();
+        if self.session_activity.is_closing() {
+            return Err(CliError::InvalidPayload(
+                "permission request arrived after session shutdown began".into(),
+            ));
+        }
         let owners = self.authenticated_owners.lock().await;
         match owners.get(&event.session_id) {
             Some(existing) if existing == owner => {}
