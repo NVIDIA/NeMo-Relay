@@ -30,7 +30,11 @@ pypi_status() {
     response="$(curl --location --silent --show-error --connect-timeout 5 --max-time 20 --header 'Accept: application/vnd.pypi.simple.v1+json' --write-out $'\n%{http_code}' "https://pypi.org/simple/${package}/" 2>/dev/null)" || { printf '000\n'; return; }
     status="${response##*$'\n'}"; body="${response%$'\n'*}"
     if [[ "$status" != 200 ]]; then printf '%s\n' "$status"; return; fi
-    jq -e --arg version "$version" '.versions | index($version) != null' >/dev/null <<<"$body" && printf '200\n' || printf '404\n'
+    if ! jq -e '.versions | if type == "array" then all(.[]; type == "string") else false end' >/dev/null 2>&1 <<<"$body"; then
+        printf '000\n'
+        return
+    fi
+    if jq -e --arg version "$version" '.versions | index($version) != null' >/dev/null <<<"$body"; then printf '200\n'; else printf '404\n'; fi
 }
 check_cargo=false; check_python=false; check_node=false; check_go=false
 pipeline_status() {
@@ -57,9 +61,19 @@ print_job_row() {
     fi
 }
 print_release_jobs() {
-    local runs run workflow database_id job job_name go_jobs build_run_id='' docs_run_id='' main_jobs='' docs_jobs='' docs_job_name='Release docs version'
+    local runs run workflow database_id job job_name go_jobs tag_response='' tag_status='' tag_lookup_result=0 build_run_id='' docs_run_id='' main_jobs='' docs_jobs='' docs_job_name='Release docs version'
     printf '## GitHub Release Jobs\n\n| Workflow | Job | Job ID | Status |\n| --- | --- | --- | --- |\n'
-    if ! gh api "repos/${github_repository}/git/ref/tags/${tag}" >/dev/null 2>&1; then printf '| all workflows | `tag %s` | — | ○ tag not found |\n' "$tag"; return; fi
+    tag_response="$(gh api --include "repos/${github_repository}/git/ref/tags/${tag}" 2>/dev/null)" || tag_lookup_result=$?
+    IFS= read -r tag_status <<<"$tag_response"
+    if (( tag_lookup_result == 0 )) && [[ "$tag_status" == HTTP/*' 200 '* ]]; then
+        :
+    elif [[ "$tag_status" == HTTP/*' 404 '* ]]; then
+        printf '| all workflows | `tag %s` | — | ○ tag not found |\n' "$tag"
+        return
+    else
+        printf '| all workflows | `tag %s` | — | 000 lookup unavailable |\n' "$tag"
+        return
+    fi
     runs="$(gh run list --repo "$github_repository" --branch "$tag" --event push --limit 100 --json databaseId,workflowName 2>/dev/null)" || { printf '| all workflows | release workflow discovery | — | 000 |\n'; return; }
     if ! jq -e 'length > 0' >/dev/null <<<"$runs"; then printf '| all workflows | release workflow discovery | — | ○ run not found |\n'; return; fi
     for workflow in 'Build pull request' 'Fern Docs'; do
