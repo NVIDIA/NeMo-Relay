@@ -53,6 +53,7 @@ fn full_response() -> AnnotatedLlmResponse {
             total_tokens: Some(30),
             cache_read_tokens: Some(5),
             cache_write_tokens: Some(3),
+            uncached_input_tokens: None,
             cost: None,
         }),
         optimization_summary: None,
@@ -191,6 +192,7 @@ fn test_usage_all_populated_round_trip() {
         total_tokens: Some(150),
         cache_read_tokens: Some(20),
         cache_write_tokens: Some(10),
+        uncached_input_tokens: None,
         cost: None,
     };
     let json_val = serde_json::to_value(&usage).unwrap();
@@ -208,6 +210,7 @@ fn test_default_pricing_resolver_has_no_model_prices() {
         total_tokens: Some(1_500),
         cache_read_tokens: Some(200),
         cache_write_tokens: None,
+        uncached_input_tokens: None,
         cost: None,
     };
 
@@ -238,6 +241,7 @@ fn test_configured_model_pricing_estimates_total_cost() {
         total_tokens: Some(1_500),
         cache_read_tokens: Some(200),
         cache_write_tokens: None,
+        uncached_input_tokens: None,
         cost: None,
     };
 
@@ -547,6 +551,7 @@ fn test_custom_pricing_catalog_supports_future_models_without_code_changes() {
         completion_tokens: Some(2_000),
         cache_read_tokens: Some(3_000),
         cache_write_tokens: Some(4_000),
+        uncached_input_tokens: None,
         ..Usage::default()
     };
 
@@ -584,6 +589,7 @@ fn test_model_pricing_omits_total_when_nonzero_usage_lacks_a_rate() {
         completion_tokens: Some(2_000),
         cache_read_tokens: Some(3_000),
         cache_write_tokens: Some(4_000),
+        uncached_input_tokens: None,
         ..Usage::default()
     };
 
@@ -620,6 +626,7 @@ fn test_model_pricing_omits_total_when_nonzero_cache_read_usage_lacks_a_rate() {
         completion_tokens: Some(2_000),
         cache_read_tokens: Some(3_000),
         cache_write_tokens: Some(4_000),
+        uncached_input_tokens: None,
         ..Usage::default()
     };
 
@@ -1340,6 +1347,7 @@ fn test_pricing_public_helpers_and_provider_inference_cover_edge_branches() {
         completion_tokens: Some(500),
         cache_read_tokens: Some(100),
         cache_write_tokens: Some(10),
+        uncached_input_tokens: None,
         ..Usage::default()
     };
 
@@ -1611,6 +1619,7 @@ fn test_usage_cost_round_trip_preserves_model_pricing_codec_compatibility() {
         total_tokens: Some(1_500),
         cache_read_tokens: Some(200),
         cache_write_tokens: None,
+        uncached_input_tokens: None,
         cost: estimate_cost_with_catalog(
             &catalog,
             "configured-model",
@@ -1620,6 +1629,7 @@ fn test_usage_cost_round_trip_preserves_model_pricing_codec_compatibility() {
                 total_tokens: Some(1_500),
                 cache_read_tokens: Some(200),
                 cache_write_tokens: None,
+                uncached_input_tokens: None,
                 cost: None,
             },
         ),
@@ -1642,6 +1652,7 @@ fn test_usage_cost_round_trip_preserves_provider_reported_codec_compatibility() 
         total_tokens: Some(1_500),
         cache_read_tokens: Some(200),
         cache_write_tokens: None,
+        uncached_input_tokens: None,
         cost: Some(CostEstimate {
             total: Some(0.42),
             currency: "USD".into(),

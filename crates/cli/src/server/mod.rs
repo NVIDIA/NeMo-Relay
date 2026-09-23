@@ -1186,10 +1186,9 @@ async fn codex_hook(
         } else {
             operational::hook_failed(&operational, "hook_server", error.log_kind(), true);
         }
-        return Ok(Json(serde_json::json!({
-            "decision": "deny",
-            "reason": permission_denial_reason(error),
-        })));
+        return Ok(Json(codex::permission_denial(permission_denial_reason(
+            error,
+        ))));
     }
     operational::hook_completed(&operational, "hook_server", "completed");
     Ok(Json(outcome.response))

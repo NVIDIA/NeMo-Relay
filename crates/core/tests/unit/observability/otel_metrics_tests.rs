@@ -5,8 +5,11 @@
 
 use super::*;
 use crate::api::event::{
-    BaseEvent, DataSchema, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MarkEvent,
+    BaseEvent, CategoryProfile, DataSchema, EventCategory, METRIC_DATA_SCHEMA_NAME,
+    METRIC_DATA_SCHEMA_VERSION, MarkEvent, ScopeCategory, ScopeEvent,
 };
+use crate::api::scope::ScopeType;
+use crate::json::Json;
 use crate::logging::{
     FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
 };
@@ -286,6 +289,8 @@ fn metric_config_validates_limits_and_retains_resource_identity() {
             .with_max_instruments(0),
         OpenTelemetryMetricConfig::new("https://collector.example/v1/metrics")
             .with_cardinality_limit(0),
+        OpenTelemetryMetricConfig::new("https://collector.example/v1/metrics")
+            .with_promote_resource_metadata_prefixes(["nv.*"]),
     ] {
         assert!(config.validate().is_err());
     }
@@ -293,12 +298,17 @@ fn metric_config_validates_limits_and_retains_resource_identity() {
     let config = OpenTelemetryMetricConfig::new("https://collector.example/v1/metrics")
         .with_service_namespace("relay")
         .with_service_version("0.8.0")
+        .with_promote_resource_metadata_prefixes(["nv.client.", "nv.env."])
         .with_resource_attribute("deployment.environment", "test");
     assert_eq!(config.service_namespace.as_deref(), Some("relay"));
     assert_eq!(config.service_version.as_deref(), Some("0.8.0"));
     assert_eq!(
         config.resource_attributes.get("deployment.environment"),
         Some(&"test".to_string())
+    );
+    assert_eq!(
+        config.promote_resource_metadata_prefixes,
+        ["nv.client.", "nv.env."]
     );
 }
 
@@ -451,6 +461,44 @@ fn metric_export_failure_logging_is_independent_of_diagnostic_capacity() {
 }
 
 #[test]
+fn metric_measurements_aggregate_across_sessions() {
+    let (mut processor, exporter, provider) = processor();
+    for _ in 0..2 {
+        let mut event = metric_event(
+            METRIC_DATA_SCHEMA_VERSION,
+            json!({"measurements": [{
+                "name": "example.session_tokens",
+                "kind": "counter",
+                "value_type": "u64",
+                "value": 3,
+                "attributes": {"model": "example-model"}
+            }]}),
+        );
+        event.set_propagation_root_uuid(Some(uuid::Uuid::now_v7()));
+        processor.process(&event);
+    }
+    provider.force_flush().unwrap();
+    assert_eq!(processor.rejected_marks, 0);
+    let batches = exporter.get_finished_metrics().unwrap();
+    let metric = batches
+        .iter()
+        .flat_map(|batch| batch.scope_metrics())
+        .flat_map(|scope| scope.metrics())
+        .find(|metric| metric.name() == "example.session_tokens")
+        .unwrap();
+    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+        panic!("counter must export as a u64 sum");
+    };
+    let points = sum.data_points().collect::<Vec<_>>();
+    assert_eq!(points.len(), 1);
+    assert_eq!(points[0].value(), 6);
+    assert_eq!(
+        points[0].attributes().collect::<Vec<_>>(),
+        vec![&KeyValue::new("model", "example-model")]
+    );
+}
+
+#[test]
 fn valid_envelope_records_counter_gauge_and_negative_histogram() {
     let (mut processor, exporter, provider) = processor();
     let mut counter = measurement(
@@ -534,6 +582,99 @@ fn valid_envelope_records_counter_gauge_and_negative_histogram() {
     let point = histogram.data_points().next().unwrap();
     assert_eq!(point.count(), 1);
     assert_eq!(point.sum(), -1.25);
+}
+
+#[test]
+fn metric_measurements_aggregate_across_propagation_roots() {
+    let (mut processor, exporter, provider) = processor();
+    for root_uuid in [uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2)] {
+        let mut counter = measurement(
+            "example.requests",
+            MetricKind::Counter,
+            MetricValueType::U64,
+            json!(1),
+        );
+        counter.attributes = Some(json!({"model": "example-model"}));
+        let mut event = metric_event(
+            METRIC_DATA_SCHEMA_VERSION,
+            serde_json::to_value(MetricEnvelope {
+                measurements: vec![counter],
+            })
+            .unwrap(),
+        );
+        event.set_propagation_root_uuid(Some(root_uuid));
+        processor.process(&event);
+    }
+    provider.force_flush().unwrap();
+
+    let batches = exporter.get_finished_metrics().unwrap();
+    let metric = batches
+        .iter()
+        .flat_map(|batch| batch.scope_metrics())
+        .flat_map(|scope| scope.metrics())
+        .find(|metric| metric.name() == "example.requests")
+        .expect("request counter");
+    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+        panic!("request counter must export as a u64 sum");
+    };
+    let points = sum.data_points().collect::<Vec<_>>();
+    assert_eq!(points.len(), 1);
+    assert_eq!(points[0].value(), 2);
+    assert!(
+        points[0]
+            .attributes()
+            .all(|attribute| attribute.key.as_str() != "nemo_relay.session.instance_id")
+    );
+}
+
+#[test]
+fn records_gen_ai_stream_time_to_first_chunk_as_standard_histogram() {
+    let (mut processor, exporter, provider) = processor();
+    let event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder().name("openai.chat.completions").build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(
+            CategoryProfile::builder()
+                .model_name("gpt-5")
+                .time_to_first_chunk(0.125)
+                .build(),
+        ),
+    ));
+
+    processor.process(&event);
+    provider.force_flush().unwrap();
+
+    let batches = exporter.get_finished_metrics().unwrap();
+    let metric = batches
+        .iter()
+        .flat_map(|batch| batch.scope_metrics())
+        .flat_map(|scope| scope.metrics())
+        .find(|metric| metric.name() == "gen_ai.client.operation.time_to_first_chunk")
+        .expect("GenAI time-to-first-chunk histogram");
+    assert_eq!(metric.unit(), "s");
+    let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = metric.data() else {
+        panic!("time-to-first-chunk must export as an f64 histogram");
+    };
+    let point = histogram.data_points().next().unwrap();
+    assert_eq!(point.count(), 1);
+    assert_eq!(point.sum(), 0.125);
+    assert!(
+        point
+            .attributes()
+            .any(|attribute| { attribute == &KeyValue::new("gen_ai.operation.name", "chat") })
+    );
+    assert!(
+        point
+            .attributes()
+            .any(|attribute| { attribute == &KeyValue::new("gen_ai.provider.name", "openai") })
+    );
+    assert!(
+        point
+            .attributes()
+            .any(|attribute| { attribute == &KeyValue::new("gen_ai.request.model", "gpt-5") })
+    );
 }
 
 #[test]
@@ -913,6 +1054,458 @@ fn direct_http_subscribers_emit_decodable_signal_payloads() {
 }
 
 #[test]
+fn log_and_metric_resources_promote_root_metadata_and_inherit_to_child_marks() {
+    let root_uuid = uuid::Uuid::now_v7();
+    let root_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(root_uuid)
+            .name("agent")
+            .metadata(json!({
+                "nv.client.name": "runtime-client",
+                "nv.client.version": "2.4.0",
+                "nv.env.type": "staging"
+            }))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        ScopeType::Agent.into(),
+        None,
+    ));
+
+    let log_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let log_receiver = capture_one_request(log_listener.try_clone().unwrap());
+    let log_endpoint = format!("http://{}", log_listener.local_addr().unwrap());
+    drop(log_listener);
+    let log_subscriber = OpenTelemetryLogSubscriber::new(
+        OpenTelemetryLogConfig::new(log_endpoint)
+            .with_resource_attribute("nv.client.name", "configured-client")
+            .with_promote_resource_metadata_prefixes(["nv.client.", "nv.env."]),
+    )
+    .unwrap();
+    log_subscriber.subscriber()(&root_start);
+    log_subscriber.subscriber()(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(root_uuid)
+            .name("child.log")
+            .build(),
+        None,
+        None,
+    )));
+    log_subscriber.force_flush().unwrap();
+    let log_request = log_receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    let logs = ExportLogsServiceRequest::decode(log_request.body.as_slice()).unwrap();
+    let log_resource = logs.resource_logs[0].resource.as_ref().unwrap();
+    assert_eq!(
+        otlp_string_attribute(&log_resource.attributes, "nv.client.name"),
+        Some("configured-client")
+    );
+    assert_eq!(
+        otlp_string_attribute(&log_resource.attributes, "nv.client.version"),
+        Some("2.4.0")
+    );
+    assert_eq!(
+        otlp_string_attribute(&log_resource.attributes, "nv.env.type"),
+        Some("staging")
+    );
+
+    let metric_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let metric_receiver = capture_requests(metric_listener.try_clone().unwrap(), 2);
+    let metric_endpoint = format!("http://{}", metric_listener.local_addr().unwrap());
+    drop(metric_listener);
+    let metric_subscriber = OpenTelemetryMetricSubscriber::new(
+        OpenTelemetryMetricConfig::new(metric_endpoint)
+            .with_export_interval(Duration::from_secs(60))
+            .with_resource_attribute("nv.client.name", "configured-client")
+            .with_promote_resource_metadata_prefixes(["nv.client.", "nv.env."]),
+    )
+    .unwrap();
+    metric_subscriber.subscriber()(&root_start);
+    metric_subscriber.subscriber()(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(root_uuid)
+            .name("metric.record")
+            .data(
+                serde_json::to_value(MetricEnvelope {
+                    measurements: vec![measurement(
+                        "example.promoted.resource",
+                        MetricKind::Counter,
+                        MetricValueType::U64,
+                        json!(1),
+                    )],
+                })
+                .unwrap(),
+            )
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    )));
+    let llm_uuid = uuid::Uuid::now_v7();
+    metric_subscriber.subscriber()(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(llm_uuid)
+            .parent_uuid(root_uuid)
+            .name("openai.chat.completions")
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::llm(),
+        None,
+    )));
+    metric_subscriber.subscriber()(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(llm_uuid)
+            .parent_uuid(root_uuid)
+            .name("openai.chat.completions")
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(
+            CategoryProfile::builder()
+                .time_to_first_chunk(0.125)
+                .build(),
+        ),
+    )));
+    metric_subscriber.force_flush().unwrap();
+    let metric_request = metric_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    let metrics = ExportMetricsServiceRequest::decode(metric_request.body.as_slice()).unwrap();
+    let metric_resource = metrics.resource_metrics[0].resource.as_ref().unwrap();
+    assert_eq!(
+        otlp_string_attribute(&metric_resource.attributes, "nv.client.name"),
+        Some("configured-client")
+    );
+    assert_eq!(
+        otlp_string_attribute(&metric_resource.attributes, "nv.client.version"),
+        Some("2.4.0")
+    );
+    assert_eq!(
+        otlp_string_attribute(&metric_resource.attributes, "nv.env.type"),
+        Some("staging")
+    );
+
+    let timing = metrics.resource_metrics[0]
+        .scope_metrics
+        .iter()
+        .flat_map(|scope| &scope.metrics)
+        .find(|metric| metric.name == "gen_ai.client.operation.time_to_first_chunk")
+        .expect("native TTFC must use the promoted resource");
+    let Some(opentelemetry_proto::tonic::metrics::v1::metric::Data::Histogram(histogram)) =
+        &timing.data
+    else {
+        panic!("TTFC must be a histogram");
+    };
+    assert_eq!(histogram.data_points.len(), 1);
+    assert_eq!(histogram.data_points[0].count, 1);
+    assert_eq!(histogram.data_points[0].sum, Some(0.125));
+
+    log_subscriber.shutdown().unwrap();
+    metric_subscriber.shutdown().unwrap();
+    metric_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+}
+
+#[test]
+fn late_logs_and_metrics_use_base_resources_immediately_after_lineage_ttl() {
+    let logs_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let logs_endpoint = format!("http://{}", logs_listener.local_addr().unwrap());
+    let logs_requests = capture_requests(logs_listener, 2);
+    let logs = OpenTelemetryLogSubscriber::new(
+        OpenTelemetryLogConfig::new(logs_endpoint)
+            .with_completed_span_context_ttl(Duration::from_secs(2))
+            .with_scheduled_delay(Duration::from_secs(300))
+            .with_promote_resource_metadata_prefixes(["deployment."]),
+    )
+    .unwrap();
+    let metrics_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let metrics_endpoint = format!("http://{}", metrics_listener.local_addr().unwrap());
+    let metrics_requests = capture_requests(metrics_listener, 4);
+    let metrics = OpenTelemetryMetricSubscriber::new(
+        OpenTelemetryMetricConfig::new(metrics_endpoint)
+            .with_export_interval(Duration::from_secs(300))
+            .with_promote_resource_metadata_prefixes(["deployment."]),
+    )
+    .unwrap();
+    let root = uuid::Uuid::now_v7();
+    let now = chrono::Utc::now();
+    for category in [ScopeCategory::Start, ScopeCategory::End] {
+        let event = Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .uuid(root)
+                .name("root")
+                .timestamp(now)
+                .metadata(json!({"deployment.region": "test"}))
+                .build(),
+            category,
+            Vec::new(),
+            ScopeType::Agent.into(),
+            None,
+        ));
+        logs.subscriber()(&event);
+        metrics.subscriber()(&event);
+    }
+    for offset in [0, 1] {
+        logs.subscriber()(&Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .parent_uuid(root)
+                .name("late.log")
+                .timestamp(now + chrono::Duration::seconds(2 + offset))
+                .build(),
+            None,
+            None,
+        )));
+        metrics.subscriber()(&Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .parent_uuid(root)
+                .name("metric.record")
+                .timestamp(
+                    now + chrono::Duration::seconds(
+                        DEFAULT_COMPLETED_SPAN_CONTEXT_TTL.as_secs() as i64 + offset,
+                    ),
+                )
+                .data(json!({"measurements": [{
+                    "name": "late.counter", "kind": "counter", "value_type": "u64", "value": 1
+                }]}))
+                .data_schema(
+                    DataSchema::builder()
+                        .name(METRIC_DATA_SCHEMA_NAME)
+                        .version(METRIC_DATA_SCHEMA_VERSION)
+                        .build(),
+                )
+                .build(),
+            None,
+            None,
+        )));
+    }
+    logs.force_flush().unwrap();
+    metrics.force_flush().unwrap();
+    let mut log_keys = std::collections::HashSet::new();
+    let mut metric_keys = std::collections::HashSet::new();
+    for _ in 0..2 {
+        let request = logs_requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        let decoded = ExportLogsServiceRequest::decode(request.body.as_slice()).unwrap();
+        for resource in decoded.resource_logs {
+            log_keys.insert(
+                otlp_string_attribute(&resource.resource.unwrap().attributes, "deployment.region")
+                    .map(str::to_string),
+            );
+            assert_eq!(
+                resource
+                    .scope_logs
+                    .iter()
+                    .map(|scope| scope.log_records.len())
+                    .sum::<usize>(),
+                1
+            );
+        }
+        let request = metrics_requests
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        let decoded = ExportMetricsServiceRequest::decode(request.body.as_slice()).unwrap();
+        for resource in decoded.resource_metrics {
+            metric_keys.insert(
+                otlp_string_attribute(&resource.resource.unwrap().attributes, "deployment.region")
+                    .map(str::to_string),
+            );
+            for metric in resource
+                .scope_metrics
+                .iter()
+                .flat_map(|scope| &scope.metrics)
+            {
+                use opentelemetry_proto::tonic::metrics::v1::{
+                    metric::Data, number_data_point::Value,
+                };
+                let Some(Data::Sum(sum)) = &metric.data else {
+                    panic!("expected counter sum")
+                };
+                assert_eq!(sum.data_points.len(), 1);
+                assert_eq!(sum.data_points[0].value, Some(Value::AsInt(1)));
+            }
+        }
+    }
+    let expected = std::collections::HashSet::from([None, Some("test".to_string())]);
+    assert_eq!(log_keys, expected);
+    assert_eq!(metric_keys, expected);
+    logs.shutdown().unwrap();
+    metrics.shutdown().unwrap();
+    for _ in 0..2 {
+        metrics_requests
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+    }
+}
+
+#[test]
+fn resource_pipeline_limit_reuses_existing_keys_and_exports_overflow_on_base() {
+    let logs_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let logs_endpoint = format!("http://{}", logs_listener.local_addr().unwrap());
+    let logs_requests = capture_requests(logs_listener, 3);
+    let logs = OpenTelemetryLogSubscriber::new(
+        OpenTelemetryLogConfig::new(logs_endpoint)
+            .with_scheduled_delay(Duration::from_secs(60))
+            .with_promote_resource_metadata_prefixes(["deployment."]),
+    )
+    .unwrap();
+    let metrics_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let metrics_endpoint = format!("http://{}", metrics_listener.local_addr().unwrap());
+    // Each populated meter exports once on flush and once on shutdown.
+    let metrics_requests = capture_requests(metrics_listener, 6);
+    let metrics = OpenTelemetryMetricSubscriber::new(
+        OpenTelemetryMetricConfig::new(metrics_endpoint)
+            .with_export_interval(Duration::from_secs(60))
+            .with_promote_resource_metadata_prefixes(["deployment."]),
+    )
+    .unwrap();
+    let callbacks = [logs.subscriber(), metrics.subscriber()];
+    let mut marked_scopes = Vec::new();
+    // Fill through the exact limit, reuse key zero at capacity, then reject two
+    // distinct new keys. The last admitted resource must remain usable too.
+    for index in (0..MAX_DYNAMIC_SIGNAL_PIPELINES).chain([
+        0,
+        MAX_DYNAMIC_SIGNAL_PIPELINES,
+        MAX_DYNAMIC_SIGNAL_PIPELINES + 1,
+    ]) {
+        let uuid = uuid::Uuid::now_v7();
+        let start = Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .uuid(uuid)
+                .name("root")
+                .metadata(json!({"deployment.region": index.to_string()}))
+                .build(),
+            ScopeCategory::Start,
+            Vec::new(),
+            ScopeType::Agent.into(),
+            None,
+        ));
+        for callback in &callbacks {
+            callback(&start);
+        }
+        if index >= MAX_DYNAMIC_SIGNAL_PIPELINES - 1 || index == 0 {
+            // Keep only the second scope with key zero to verify reuse.
+            if index == 0 {
+                marked_scopes.retain(|(key, _)| *key != 0);
+            }
+            marked_scopes.push((index, uuid));
+        }
+    }
+    assert_eq!(
+        metrics.inner.dynamic_pipelines.lock().unwrap().len(),
+        MAX_DYNAMIC_SIGNAL_PIPELINES
+    );
+    for diagnostics in [logs.runtime_diagnostics(), metrics.runtime_diagnostics()] {
+        assert_eq!(
+            diagnostics
+                .get("otel.resource_metadata_pipeline_limit")
+                .unwrap()
+                .count,
+            2
+        );
+        assert!(
+            diagnostics
+                .get("otel.resource_metadata_pipeline_build_failed")
+                .is_none()
+        );
+    }
+    for (_, uuid) in marked_scopes {
+        let log = Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .parent_uuid(uuid)
+                .name("limited.log")
+                .build(),
+            None,
+            None,
+        ));
+        logs.subscriber()(&log);
+        let metric = Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .parent_uuid(uuid)
+                .name("metric.record")
+                .data(json!({"measurements": [{
+                    "name": "limited.counter", "kind": "counter", "value_type": "u64", "value": 1
+                }]}))
+                .data_schema(
+                    DataSchema::builder()
+                        .name(METRIC_DATA_SCHEMA_NAME)
+                        .version(METRIC_DATA_SCHEMA_VERSION)
+                        .build(),
+                )
+                .build(),
+            None,
+            None,
+        ));
+        metrics.subscriber()(&metric);
+    }
+    logs.force_flush().unwrap();
+    metrics.force_flush().unwrap();
+    let mut log_counts = HashMap::new();
+    let mut metric_counts = HashMap::new();
+    for _ in 0..3 {
+        let request = logs_requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        let decoded = ExportLogsServiceRequest::decode(request.body.as_slice()).unwrap();
+        for resource in decoded.resource_logs {
+            let key =
+                otlp_string_attribute(&resource.resource.unwrap().attributes, "deployment.region")
+                    .map(str::to_string);
+            let count: usize = resource
+                .scope_logs
+                .iter()
+                .map(|scope| scope.log_records.len())
+                .sum();
+            *log_counts.entry(key).or_insert(0) += count;
+        }
+        let request = metrics_requests
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        let decoded = ExportMetricsServiceRequest::decode(request.body.as_slice()).unwrap();
+        for resource in decoded.resource_metrics {
+            let key =
+                otlp_string_attribute(&resource.resource.unwrap().attributes, "deployment.region")
+                    .map(str::to_string);
+            for metric in resource
+                .scope_metrics
+                .iter()
+                .flat_map(|scope| &scope.metrics)
+            {
+                use opentelemetry_proto::tonic::metrics::v1::{
+                    metric::Data, number_data_point::Value,
+                };
+                let Some(Data::Sum(sum)) = &metric.data else {
+                    panic!("expected counter sum")
+                };
+                for point in &sum.data_points {
+                    let Some(Value::AsInt(count)) = point.value else {
+                        panic!("expected integer counter")
+                    };
+                    *metric_counts.entry(key.clone()).or_insert(0) += count as usize;
+                }
+            }
+        }
+    }
+    let expected = HashMap::from([
+        (None, 2),
+        (Some("0".to_string()), 1),
+        (Some((MAX_DYNAMIC_SIGNAL_PIPELINES - 1).to_string()), 1),
+    ]);
+    assert_eq!(log_counts, expected);
+    assert_eq!(metric_counts, expected);
+    logs.shutdown().unwrap();
+    metrics.shutdown().unwrap();
+    for _ in 0..3 {
+        metrics_requests
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+    }
+}
+
+#[test]
 fn http_log_and_metric_exporters_do_not_follow_redirects_without_headers() {
     for signal in ["logs", "metrics"] {
         let destination = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1193,4 +1786,78 @@ async fn direct_grpc_subscribers_export_both_services_and_metadata() {
     .await
     .unwrap();
     server.abort();
+}
+
+#[test]
+fn resource_log_providers_drain_without_false_delivery_failures() {
+    for flush_first in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let requests = capture_requests(listener, 3);
+        let logs = OpenTelemetryLogSubscriber::new_for_plugin(
+            OpenTelemetryLogConfig::new(endpoint)
+                .with_scheduled_delay(Duration::from_secs(300))
+                .with_promote_resource_metadata_prefixes(["deployment."]),
+            0,
+        )
+        .unwrap();
+        for (resource, count) in [(None, 3), (Some("alpha"), 1), (Some("beta"), 2)] {
+            let root = uuid::Uuid::now_v7();
+            if let Some(resource) = resource {
+                logs.subscriber()(&Event::Scope(ScopeEvent::new(
+                    BaseEvent::builder()
+                        .uuid(root)
+                        .name("root")
+                        .metadata(json!({"deployment.region": resource}))
+                        .build(),
+                    ScopeCategory::Start,
+                    Vec::new(),
+                    ScopeType::Agent.into(),
+                    None,
+                )));
+            }
+            for _ in 0..count {
+                let builder = BaseEvent::builder()
+                    .name("pending.log")
+                    .parent_uuid_opt(resource.map(|_| root));
+                logs.subscriber()(&Event::Mark(MarkEvent::new(builder.build(), None, None)));
+            }
+        }
+        if flush_first {
+            logs.force_flush().unwrap();
+            assert!(
+                logs.runtime_diagnostics()
+                    .get("otel.logs_dropped")
+                    .is_none()
+            );
+        }
+        logs.shutdown().unwrap();
+        assert_eq!(logs.delivery_failure_summary(), None);
+        assert!(
+            logs.runtime_diagnostics()
+                .get("otel.logs_dropped")
+                .is_none()
+        );
+        let mut received = std::collections::HashMap::new();
+        for _ in 0..3 {
+            let request = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+            let decoded = ExportLogsServiceRequest::decode(request.body.as_slice()).unwrap();
+            for resource in decoded.resource_logs {
+                let key = otlp_string_attribute(
+                    &resource.resource.unwrap().attributes,
+                    "deployment.region",
+                )
+                .map(str::to_owned);
+                let count: usize = resource
+                    .scope_logs
+                    .iter()
+                    .map(|scope| scope.log_records.len())
+                    .sum();
+                *received.entry(key).or_insert(0) += count;
+            }
+        }
+        assert_eq!(received.get(&None), Some(&3));
+        assert_eq!(received.get(&Some("alpha".to_string())), Some(&1));
+        assert_eq!(received.get(&Some("beta".to_string())), Some(&2));
+    }
 }

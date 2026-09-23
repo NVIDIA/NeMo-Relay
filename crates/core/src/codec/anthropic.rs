@@ -907,6 +907,7 @@ fn anthropic_usage(
             },
             cache_read_tokens: u.cache_read_input_tokens,
             cache_write_tokens: u.cache_creation_input_tokens,
+            uncached_input_tokens: prompt,
             cost: provider_reported_cost(u.provider_cost, u.cost),
         };
         if usage.cost.is_none() {

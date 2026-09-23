@@ -37,6 +37,70 @@ changes, compatibility updates, and fixed known issues.
 
 No known issues have been recorded for NeMo Relay 0.10 yet.
 
+## Release 0.9.1
+
+NeMo Relay 0.9.1 improves OpenTelemetry coverage and managed Codex routing,
+and fixes response-cache behavior for Anthropic compaction.
+
+### Highlights
+
+- The `gen_ai` OpenTelemetry projection adds authoritative request, response,
+  usage, reasoning, embedding, and tool attributes. Managed streaming requests
+  now report time to first chunk through the trace attribute
+  `gen_ai.response.time_to_first_chunk` and the matching metric histogram.
+  Relay also records the version of a wrapped Claude Code or Codex executable
+  in matching observability metadata.
+- OpenTelemetry log and metric endpoints can now promote selected root-scope
+  metadata into their resource attributes with
+  `promote_resource_metadata_prefixes`. Derived log and metric endpoints
+  inherit the trace endpoint setting. Use only controlled, low-cardinality
+  metadata values; Relay falls back to the configured base resource when its
+  fixed resource-lineage or resource-pipeline limits are reached.
+- GenAI tool spans now include the resolved conversation ID and preserve every
+  non-null sanitized JSON tool argument and successful result.
+- Managed Codex deployments now route ChatGPT OAuth requests to the native
+  ChatGPT Codex backend when no administrator OpenAI credential is configured.
+  When an administrator credential is configured, Relay replaces the inbound
+  OAuth credential before forwarding to that upstream.
+
+### Compatibility and Migration
+
+<Warning title="Upgrade Action Required for Daemon Operators">
+
+The primary `nemo-relay daemon` process now reads TOML logging settings only
+from `[daemon.logging]`. It no longer falls back to `[logging]`.
+
+</Warning>
+
+Move logging settings for the primary daemon service to `[daemon.logging]`.
+Other Relay processes continue to use `[logging]`; CLI and environment logging
+overrides retain their existing precedence. For the required configuration and
+Rust struct-literal updates, and telemetry attribute rename, refer to the
+[Migration Guides](/reference/migration-guides).
+
+### Fixes and Other Changes
+
+- Anthropic Messages requests that use server-side compaction, continue from a
+  compaction block, or send a compaction beta header now bypass the response
+  cache. The live provider response preserves compaction lifecycle and streaming
+  behavior; the bypass mark reports `anthropic_compaction`.
+- Codex permission requests without a tool-call ID are accepted when exactly
+  one active tool in the same session matches the request's name and arguments.
+- OpenTelemetry logs and traces now use the same observed-event root when a
+  scope's local parent was not exported. Relay also avoids adding a unique
+  session UUID metric dimension so equivalent measurements can aggregate.
+- Python development dependency constraints now require patched releases of
+  `anyio` and `soupsieve`.
+
+## Known Issues in 0.9.1
+
+Response-cache replay does not support Anthropic server-side compaction. Relay
+therefore sends affected requests to the live provider instead of caching them.
+For affected request shapes, refer to
+[Response Cache](/configure-plugins/adaptive/response-cache#llm-eligibility-and-limits).
+
+## Release 0.9.0
+
 ## Previous Releases
 
 For previous release notes, release artifacts, and the complete PR-by-PR

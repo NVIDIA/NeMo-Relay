@@ -97,6 +97,15 @@ impl CodingAgent {
         self.descriptor().argument
     }
 
+    /// Canonical runtime identity for sessions belonging to this executable.
+    pub(crate) const fn event_kind(self) -> crate::events::AgentKind {
+        match self {
+            Self::ClaudeCode => crate::events::AgentKind::ClaudeCode,
+            Self::Codex => crate::events::AgentKind::Codex,
+            Self::Pi => crate::events::AgentKind::Pi,
+        }
+    }
+
     /// Canonical spelling accepted by persistent integration commands.
     pub(crate) const fn install_arg(self) -> &'static str {
         self.descriptor().install_argument

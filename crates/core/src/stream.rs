@@ -30,6 +30,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use tokio_stream::Stream;
@@ -83,10 +84,26 @@ pub struct LlmStreamWrapper {
     sanitize_context: LlmSanitizeResponseContext,
     metadata: Option<Json>,
     subscribers: Vec<EventSubscriberFn>,
+    stream_started_at: Instant,
+    first_chunk_elapsed: Option<Duration>,
     chunk_index: u64,
     ended: bool,
     close_result: Option<Result<()>>,
     terminal_result: Option<Result<Json>>,
+}
+
+pub(crate) struct ManagedLlmStreamTelemetry {
+    subscribers: Vec<EventSubscriberFn>,
+    stream_started_at: Instant,
+}
+
+impl ManagedLlmStreamTelemetry {
+    pub(crate) fn new(subscribers: Vec<EventSubscriberFn>, stream_started_at: Instant) -> Self {
+        Self {
+            subscribers,
+            stream_started_at,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -151,7 +168,7 @@ impl LlmStreamWrapper {
             finalizer,
             metadata,
             response_codec,
-            subscribers,
+            ManagedLlmStreamTelemetry::new(subscribers, Instant::now()),
         )
     }
 
@@ -162,8 +179,12 @@ impl LlmStreamWrapper {
         finalizer: Box<dyn FnOnce() -> Json + Send>,
         metadata: Option<Json>,
         response_codec: Option<Arc<dyn LlmResponseCodec>>,
-        subscribers: Vec<EventSubscriberFn>,
+        telemetry: ManagedLlmStreamTelemetry,
     ) -> Self {
+        let ManagedLlmStreamTelemetry {
+            subscribers,
+            stream_started_at,
+        } = telemetry;
         let scope_stack = handle.captured_scope_stack().clone();
         let sanitize_context =
             LlmSanitizeResponseContext::for_response_codec(response_codec.clone());
@@ -177,6 +198,8 @@ impl LlmStreamWrapper {
             sanitize_context,
             metadata,
             subscribers,
+            stream_started_at,
+            first_chunk_elapsed: None,
             chunk_index: 0,
             ended: false,
             close_result: None,
@@ -269,6 +292,9 @@ impl LlmStreamWrapper {
         let subscribers = self.subscribers.clone();
         let response_codec = self.response_codec.clone();
         let sanitize_context = self.sanitize_context.clone();
+        let time_to_first_chunk = self
+            .first_chunk_elapsed
+            .map(|elapsed| elapsed.as_secs_f64());
         let finalize = async move {
             let sanitized = (!sanitizer_snapshot_failed).then(|| {
                 NemoRelayContextState::llm_sanitize_response_snapshot_chain(
@@ -339,6 +365,7 @@ impl LlmStreamWrapper {
                                 .data_opt(data)
                                 .metadata_opt(metadata)
                                 .annotated_response_opt(annotated_response)
+                                .time_to_first_chunk_opt(time_to_first_chunk)
                                 .timestamp(timestamp)
                                 .build(),
                         ),
@@ -451,6 +478,8 @@ impl Stream for LlmStreamWrapper {
         // Poll the inner stream
         match Pin::new(&mut this.inner).poll_next(cx) {
             Poll::Ready(Some(Ok(raw_chunk))) => {
+                this.first_chunk_elapsed
+                    .get_or_insert_with(|| this.stream_started_at.elapsed());
                 let chunk_index = this.chunk_index;
                 this.chunk_index += 1;
                 this.emit_chunk_mark(chunk_index, &raw_chunk);
