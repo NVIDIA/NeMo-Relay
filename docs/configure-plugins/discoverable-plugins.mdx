@@ -60,15 +60,17 @@ environment use the same subdirectory names beside that file. Run the command
 with an account that can write to the system directory. Sign in to GitHub CLI
 as that account, or set a token in its environment.
 
-On Unix, install a global Python worker as `root`. Other users can verify its
-managed Python environment only when `root` owns it.
-
 On Unix, a global install makes the installed bundle and Python environment
 readable by other local users. It sets their directories to mode `755` and
 regular files to `644`, or `755` when a file is executable. It sets
 `/etc/nemo-relay/` to `755`, and sets `plugins.toml` and
 `.dynamic-plugins.json` to `644`. Relay removes the temporary download after
 installation.
+
+The installing account does not need to be `root`. Relay keeps the Python
+environment's verification key with the environment, so other users can verify
+the same install. While the plugin is registered, its bundle and environment
+remain available across Relay runs and user sessions.
 
 When Relay updates global `plugins.toml` or `.dynamic-plugins.json`, it sets
 the file to mode `644`, even if it was private before. Other users also need

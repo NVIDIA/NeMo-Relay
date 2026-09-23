@@ -136,6 +136,7 @@ fn global_python_environment_permissions_leave_symlinks_and_attestation_digest_i
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     let temp = tempfile::tempdir().unwrap();
+    let _config = UserConfigEnv::set(&temp.path().join("installing-user"));
     let system = temp.path().join("system");
     fs::create_dir(&system).unwrap();
     fs::set_permissions(&system, fs::Permissions::from_mode(0o755)).unwrap();
@@ -151,8 +152,6 @@ fn global_python_environment_permissions_leave_symlinks_and_attestation_digest_i
     fs::write(&python, b"executable").unwrap();
     fs::write(&module, b"module").unwrap();
     fs::write(&outside, b"outside").unwrap();
-    let attestation = environment.join(ENVIRONMENT_ATTESTATION_FILE);
-    fs::write(&attestation, b"attestation").unwrap();
     symlink(&outside, environment.join("linked-file")).unwrap();
     for directory in [&parent, &environment, &bin, &lib] {
         fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
@@ -162,6 +161,11 @@ fn global_python_environment_permissions_leave_symlinks_and_attestation_digest_i
         fs::set_permissions(file, fs::Permissions::from_mode(0o600)).unwrap();
     }
 
+    let source_digest = "a".repeat(64);
+    super::super::environment::write_environment_attestation(&environment, &source_digest).unwrap();
+    let attestation = environment.join(ENVIRONMENT_ATTESTATION_FILE);
+    let key = environment.join(".nemo-relay-environment.key");
+    fs::set_permissions(&key, fs::Permissions::from_mode(0o600)).unwrap();
     let digest = super::super::environment::environment_tree_digest(&environment).unwrap();
     make_global_environment_readable(&environment).unwrap();
     assert_eq!(
@@ -181,6 +185,20 @@ fn global_python_environment_permissions_leave_symlinks_and_attestation_digest_i
     assert_eq!(
         fs::metadata(&module).unwrap().permissions().mode() & 0o777,
         0o644
+    );
+    for file in [&attestation, &key] {
+        assert_eq!(
+            fs::metadata(file).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
+    unsafe {
+        std::env::set_var("XDG_CONFIG_HOME", temp.path().join("another-user"));
+    }
+    assert_eq!(
+        super::super::environment::verify_environment_attestation(&environment, &source_digest)
+            .unwrap(),
+        digest
     );
     assert_eq!(
         fs::metadata(&outside).unwrap().permissions().mode() & 0o777,

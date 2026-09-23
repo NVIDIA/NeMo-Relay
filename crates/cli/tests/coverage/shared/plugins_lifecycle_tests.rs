@@ -217,7 +217,7 @@ fn scoped_list_applies_global_policy_without_loading_its_manifest() {
     let (scopes, _) =
         hydrate_selected_scopes(scopes, ConfigurationScope::User, policy_paths, false).unwrap();
     assert_eq!(scopes.len(), 1);
-    assert!(scopes[0].state_path.exists());
+    assert!(!scopes[0].state_path.exists());
     assert_eq!(
         find_record_by_id(&scopes, "acme.user-only")
             .unwrap()
