@@ -2828,6 +2828,126 @@ fn python_environment_attestation_key_is_atomically_published_for_concurrent_use
     }
 }
 
+#[test]
+fn python_environment_attestation_verification_is_key_scoped_and_rejects_malformed_input() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_environment = temp.path().join("first-environment");
+    let second_environment = temp.path().join("second-environment");
+    std::fs::create_dir_all(&first_environment).unwrap();
+    std::fs::create_dir_all(&second_environment).unwrap();
+    let source_digest = "sha256:source-artifact";
+    let environment_digest = "sha256:environment-tree";
+    let authentication = sign_python_environment_attestation_for_environment(
+        &first_environment,
+        source_digest,
+        environment_digest,
+    )
+    .unwrap();
+
+    assert!(
+        verify_python_environment_attestation_for_environment(
+            &first_environment,
+            source_digest,
+            environment_digest,
+            &authentication,
+        )
+        .unwrap()
+    );
+
+    let mut tampered = authentication.clone().into_bytes();
+    let tag_byte = tampered
+        .get_mut("hmac-sha256:".len())
+        .expect("authentication tag byte");
+    *tag_byte = if *tag_byte == b'0' { b'1' } else { b'0' };
+    let tampered = String::from_utf8(tampered).unwrap();
+    assert!(
+        !verify_python_environment_attestation_for_environment(
+            &first_environment,
+            source_digest,
+            environment_digest,
+            &tampered,
+        )
+        .unwrap()
+    );
+
+    ensure_python_environment_attestation_key(&second_environment).unwrap();
+    assert!(
+        !verify_python_environment_attestation_for_environment(
+            &second_environment,
+            source_digest,
+            environment_digest,
+            &authentication,
+        )
+        .unwrap()
+    );
+
+    for malformed in [
+        "missing-prefix",
+        "hmac-sha256:short",
+        "hmac-sha256:zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+    ] {
+        assert!(
+            !verify_python_environment_attestation_for_environment(
+                &first_environment,
+                source_digest,
+                environment_digest,
+                malformed,
+            )
+            .unwrap()
+        );
+    }
+
+    let corrupt_environment = temp.path().join("corrupt-environment");
+    std::fs::create_dir_all(&corrupt_environment).unwrap();
+    std::fs::write(
+        corrupt_environment.join(".nemo-relay-environment.key"),
+        b"short",
+    )
+    .unwrap();
+    let error = load_or_create_python_environment_hmac_key(&corrupt_environment).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Python environment attestation key"),
+        "{error}"
+    );
+}
+
+#[test]
+fn python_environment_attestation_without_environment_key_keeps_legacy_compatibility() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let legacy_environment = temp.path().join("legacy-environment");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&legacy_environment).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let source_digest = "sha256:source-artifact";
+    let environment_digest = "sha256:environment-tree";
+    let legacy_key = BootstrapChallengeKey::load().unwrap();
+    let message = python_environment_attestation_message(source_digest, environment_digest);
+    let authentication = encode_hmac_tag(ring::hmac::sign(&legacy_key.0, &message));
+    assert!(
+        verify_python_environment_attestation(source_digest, environment_digest, &authentication)
+            .unwrap()
+    );
+
+    assert!(
+        verify_python_environment_attestation_for_environment(
+            &legacy_environment,
+            source_digest,
+            environment_digest,
+            &authentication,
+        )
+        .unwrap()
+    );
+    assert!(
+        !legacy_environment
+            .join(".nemo-relay-environment.key")
+            .exists(),
+        "legacy verification should not create an environment key"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn bounded_identity_reader_reports_missing_unreadable_and_invalid_utf8_inputs() {
