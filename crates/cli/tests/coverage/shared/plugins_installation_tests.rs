@@ -347,6 +347,60 @@ fn uninstall_rejects_a_manifest_reference_in_another_scope() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn uninstall_preserves_bundle_when_other_scope_registry_is_unreadable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let _env = UserConfigEnv::set(&temp.path().join("config"));
+    let id = "tests.unreadable_other_scope";
+    let config = config_path(ConfigurationScope::User).unwrap();
+    let root = managed_root(&config).unwrap().join(id_key(id));
+    fs::create_dir_all(&root).unwrap();
+    let receipt = ManagedReceipt {
+        schema_version: 1,
+        plugin_id: id.into(),
+        scope: "user".into(),
+        source: "fixture:sample@0.1.0".into(),
+        tag: "sample-0.1.0".into(),
+        asset: "sample.tar.gz".into(),
+        sha256: "digest".into(),
+        owned_directory: root.display().to_string(),
+    };
+    fs::write(root.join(RECEIPT), serde_json::to_vec(&receipt).unwrap()).unwrap();
+
+    let global_config = global_plugin_config_path();
+    fs::create_dir_all(global_config.parent().unwrap()).unwrap();
+    let global_state = global_config.with_file_name(".dynamic-plugins.json");
+    ScopedRegistry {
+        scope: RegistryScope::Global,
+        plugins_toml_path: global_config,
+        state_path: global_state.clone(),
+        registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+    }
+    .save()
+    .unwrap();
+    fs::set_permissions(&global_state, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let read_result = fs::read(&global_state);
+    if let Err(permission_error) = read_result {
+        assert_eq!(permission_error.kind(), io::ErrorKind::PermissionDenied);
+        let result = uninstall(
+            id.into(),
+            ConfigurationScope::User,
+            &GatewayOverrides::default(),
+        );
+        fs::set_permissions(&global_state, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            matches!(result, Err(CliError::Io(error)) if error.kind() == io::ErrorKind::PermissionDenied)
+        );
+        assert!(root.join(RECEIPT).exists());
+    } else {
+        fs::set_permissions(&global_state, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+}
+
 #[test]
 fn zip_extraction_keeps_one_bundle_root() {
     use std::io::Write;

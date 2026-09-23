@@ -85,9 +85,13 @@ access follows the directory's Windows permissions.
 
 If the bundle has no signature, Relay registers it but cannot enable it under
 the default trust policy. The install command reports an activation error, and
-the plugin stays disabled. To allow an unsigned plugin, add this rule to the
-selected `plugins.toml`. Replace `<plugin-id>` with the ID shown by
-`nemo-relay plugins list`:
+the plugin stays disabled. Python workers are an exception: their package setup
+can run code, so Relay rejects the install before setup if the host does not
+trust the bundle. Set the trust rule first, then retry the install.
+
+To allow an unsigned plugin, add this rule to the selected `plugins.toml`.
+Replace `<plugin-id>` with the ID in `relay-plugin.toml`. Registered plugins
+also show their IDs in `nemo-relay plugins list`:
 
 ```toml
 [plugins.policy.overrides."<plugin-id>"]

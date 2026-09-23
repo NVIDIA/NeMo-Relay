@@ -211,6 +211,29 @@ fn add_with_environment_runner_mode(
             failure.display(&plugin_id).to_string(),
         ));
     }
+    // Creating a Python environment runs package build hooks. A managed install
+    // may register other blocked bundles disabled, but must not run Python code
+    // until the configured host policy trusts this bundle.
+    if allow_blocked_activation
+        && environment::is_python_worker(&manifest)
+        && (!policy.policy_satisfied || !trust.is_satisfied())
+    {
+        let reason = policy
+            .failure()
+            .map(|failure| failure.display(&plugin_id).to_string())
+            .or_else(|| {
+                trust
+                    .failure()
+                    .map(|failure| failure.display(&plugin_id).to_string())
+            })
+            .unwrap_or_else(|| format!("dynamic plugin '{plugin_id}' is blocked by host policy"));
+        return Err(plugin_refused_with_code(
+            COMMAND,
+            Some(plugin_id),
+            "policy_blocked",
+            format!("{reason}; Python environment installation was not started"),
+        ));
+    }
     let environment_ref = provision_python_environment(
         &manifest,
         &manifest_ref,

@@ -470,17 +470,9 @@ pub(crate) fn uninstall(
         scope_matches(registry_scope, scope)
     })?;
     if let Some(other_config) = other_config {
-        // Only declarations in the other scope can activate a plugin. Its
-        // registry may be private (for example, a root-owned 0600 system state
-        // file), so still check declarations when registry state is unreadable.
-        // Other I/O and parse errors still fail closed.
-        let other_scopes = match load_scoped_registries_matching(None, |registry_scope| {
+        let other_scopes = load_scoped_registries_matching(None, |registry_scope| {
             !scope_matches(registry_scope, scope)
-        }) {
-            Ok(scopes) => scopes,
-            Err(CliError::Io(err)) if err.kind() == io::ErrorKind::PermissionDenied => Vec::new(),
-            Err(err) => return Err(err),
-        };
+        })?;
         reject_other_scope_references(&root, &canonical_root, &other_config, &other_scopes)?;
     }
     let selected = scopes

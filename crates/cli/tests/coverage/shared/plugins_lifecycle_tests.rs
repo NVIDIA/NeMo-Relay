@@ -2686,6 +2686,43 @@ fn assert_python_environment_runner_calls(
 }
 
 #[test]
+fn verified_python_install_does_not_run_environment_setup_when_trust_blocks_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("python");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_python_dynamic_manifest(&plugin_dir, "acme.python-blocked");
+    let runner = FakePythonEnvironmentRunner::default();
+
+    let error = add_with_environment_runner_mode(
+        PluginsAddRequest {
+            scope: ConfigurationScope::User,
+            path: plugin_dir,
+        },
+        &GatewayOverrides::default(),
+        &runner,
+        true,
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("Python environment installation was not started")
+    );
+    assert!(runner.calls().is_empty());
+    assert!(
+        find_record_by_id(
+            &load_scoped_registries(None).unwrap(),
+            "acme.python-blocked"
+        )
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[test]
 fn add_rolls_back_python_environment_when_installation_fails() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
