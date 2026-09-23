@@ -2711,6 +2711,13 @@ fn verified_python_install_does_not_run_environment_setup_when_trust_blocks_it()
             .to_string()
             .contains("Python environment installation was not started")
     );
+    assert_eq!(
+        error
+            .as_plugin_lifecycle_error_context()
+            .expect("plugin lifecycle error context")
+            .3,
+        Some("attestation_failed")
+    );
     assert!(runner.calls().is_empty());
     assert!(
         find_record_by_id(

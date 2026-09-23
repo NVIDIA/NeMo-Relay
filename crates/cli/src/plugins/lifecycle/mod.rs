@@ -227,10 +227,15 @@ fn add_with_environment_runner_mode(
                     .map(|failure| failure.display(&plugin_id).to_string())
             })
             .unwrap_or_else(|| format!("dynamic plugin '{plugin_id}' is blocked by host policy"));
+        let code = if policy.policy_satisfied {
+            trust_refusal_code(&trust)
+        } else {
+            "policy_blocked"
+        };
         return Err(plugin_refused_with_code(
             COMMAND,
             Some(plugin_id),
-            "policy_blocked",
+            code,
             format!("{reason}; Python environment installation was not started"),
         ));
     }
