@@ -21,6 +21,7 @@ use crate::configuration::{DynamicPluginHostConfigStatus, ResolvedDynamicPluginC
 use crate::error::{CliError, PluginLifecycleFailureKind};
 use crate::plugins::policy::EvaluatedDynamicPluginHostPolicy;
 
+use super::installation::receipt_for;
 use super::state::ScopedDynamicPluginRecord;
 use super::trust::EvaluatedDynamicPluginTrust;
 use super::{
@@ -76,6 +77,10 @@ pub(super) struct ListEntryResponse {
     attestation_mode: Option<DynamicPluginAttestationMode>,
     last_error: Option<LastErrorResponse>,
     host_config: DynamicPluginHostConfigStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    managed_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    managed_tag: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,6 +104,10 @@ pub(super) struct InspectResponse {
     capabilities: Vec<String>,
     metadata: Value,
     source: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    managed_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    managed_tag: Option<String>,
     spec: Value,
     status: Value,
     environment_state: DynamicPluginCheckState,
@@ -178,6 +187,8 @@ pub(super) fn list_success(
                         .get(&record.metadata.id)
                         .map(ResolvedDynamicPluginConfig::host_config_status)
                         .unwrap_or(DynamicPluginHostConfigStatus::Absent),
+                    managed_source: receipt_for(entry).map(|receipt| receipt.source),
+                    managed_tag: receipt_for(entry).map(|receipt| receipt.tag),
                 }
             })
             .collect(),
@@ -226,6 +237,8 @@ pub(super) fn inspect_data(
             .expect("dynamic plugin metadata serializes to JSON"),
         source: serde_json::to_value(&record.source)
             .expect("dynamic plugin source serializes to JSON"),
+        managed_source: receipt_for(entry).map(|receipt| receipt.source),
+        managed_tag: receipt_for(entry).map(|receipt| receipt.tag),
         spec: serde_json::to_value(&record.spec).expect("dynamic plugin spec serializes to JSON"),
         status: serde_json::to_value(&record.status)
             .expect("dynamic plugin status serializes to JSON"),

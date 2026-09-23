@@ -133,6 +133,152 @@ fn hydration_adds_the_effective_plugin_to_its_own_lifecycle_scope() {
 }
 
 #[test]
+fn unscoped_remove_detects_a_manifest_without_saved_registry_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let id = "acme.layered";
+    let user_dir = temp.path().join("user/plugin");
+    let system_dir = temp.path().join("system/plugin");
+    std::fs::create_dir_all(&user_dir).unwrap();
+    std::fs::create_dir_all(&system_dir).unwrap();
+    let user_manifest = write_dynamic_manifest(&user_dir, id);
+    let system_manifest = write_dynamic_manifest(&system_dir, id);
+    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&user_manifest).unwrap();
+    let mut user_registry = nemo_relay::plugin::dynamic::DynamicPluginRegistry::new();
+    user_registry
+        .add(manifest.into_record(Some(manifest_ref)).unwrap())
+        .unwrap();
+    let system_config = temp.path().join("system/plugins.toml");
+    std::fs::write(
+        &system_config,
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n",
+            system_manifest.display().to_string()
+        ),
+    )
+    .unwrap();
+    let scopes = [
+        ScopedRegistry {
+            scope: RegistryScope::User,
+            plugins_toml_path: temp.path().join("user/plugins.toml"),
+            state_path: temp.path().join("user/.dynamic-plugins.json"),
+            registry: user_registry,
+        },
+        ScopedRegistry {
+            scope: RegistryScope::Global,
+            plugins_toml_path: system_config.clone(),
+            state_path: temp.path().join("system/.dynamic-plugins.json"),
+            registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+        },
+    ];
+    let error = ensure_remove_scope_unambiguous(&scopes, id).unwrap_err();
+    assert!(error.to_string().contains("use --user or --global"));
+    std::fs::remove_file(&system_manifest).unwrap();
+    ensure_remove_scope_unambiguous(&scopes, id).unwrap();
+}
+
+#[test]
+fn scoped_list_applies_global_policy_without_loading_its_manifest() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("user/plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest = write_dynamic_manifest(&plugin_dir, "acme.user-only");
+    let user_config = temp.path().join("user/plugins.toml");
+    let global_config = temp.path().join("global/plugins.toml");
+    std::fs::create_dir_all(global_config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &user_config,
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n",
+            manifest.display().to_string()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &global_config,
+        "[[plugins.dynamic]]\nmanifest = \"missing.toml\"\n\n[plugins.policy.defaults]\nattestation = \"signature_required\"\n",
+    )
+    .unwrap();
+    let policy_paths = vec![user_config.clone(), global_config.clone()];
+    let scopes = [
+        (RegistryScope::User, user_config),
+        (RegistryScope::Global, global_config.clone()),
+    ]
+    .into_iter()
+    .map(|(scope, plugins_toml_path)| ScopedRegistry {
+        scope,
+        state_path: plugins_toml_path
+            .parent()
+            .unwrap()
+            .join(".dynamic-plugins.json"),
+        plugins_toml_path,
+        registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+    })
+    .collect();
+    let (scopes, _) =
+        hydrate_selected_scopes(scopes, ConfigurationScope::User, policy_paths, false).unwrap();
+    assert_eq!(scopes.len(), 1);
+    assert!(scopes[0].state_path.exists());
+    assert_eq!(
+        find_record_by_id(&scopes, "acme.user-only")
+            .unwrap()
+            .unwrap()
+            .record
+            .status
+            .validation
+            .authenticity,
+        DynamicPluginCheckState::Invalid
+    );
+    assert!(
+        !global_config
+            .parent()
+            .unwrap()
+            .join(".dynamic-plugins.json")
+            .exists()
+    );
+}
+
+#[test]
+fn scoped_global_list_reads_without_writing_global_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest = write_dynamic_manifest(&plugin_dir, "acme.global-read");
+    let global_config = temp.path().join("system/plugins.toml");
+    std::fs::create_dir_all(global_config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &global_config,
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n",
+            manifest.display().to_string()
+        ),
+    )
+    .unwrap();
+    let state_path = global_config
+        .parent()
+        .unwrap()
+        .join(".dynamic-plugins.json");
+    let scope = ScopedRegistry {
+        scope: RegistryScope::Global,
+        plugins_toml_path: global_config.clone(),
+        state_path: state_path.clone(),
+        registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+    };
+    let (scopes, _) = hydrate_selected_scopes(
+        vec![scope],
+        ConfigurationScope::Global,
+        vec![global_config],
+        false,
+    )
+    .unwrap();
+    assert!(
+        find_record_by_id(&scopes, "acme.global-read")
+            .unwrap()
+            .is_some()
+    );
+    assert!(!state_path.exists());
+}
+
+#[test]
 fn hydration_replaces_declaration_fields_but_preserves_lifecycle_state() {
     let temp = tempfile::tempdir().unwrap();
     let plugins_toml = temp.path().join("system/plugins.toml");

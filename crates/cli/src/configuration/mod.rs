@@ -1223,6 +1223,54 @@ pub(crate) fn resolve_plugins_config_with_path(
     Ok(resolved)
 }
 
+/// Resolve only the selected plugin configuration files for scoped CLI diagnostics.
+pub(crate) fn resolve_plugin_config_from_paths(
+    paths: impl IntoIterator<Item = PathBuf>,
+) -> Result<ResolvedConfig, CliError> {
+    let plugin_toml = load_plugin_toml_config_from_paths(paths)?;
+    let mut resolved = ResolvedConfig::default();
+    apply_plugin_toml_config(&mut resolved, plugin_toml);
+    Ok(resolved)
+}
+
+/// Read the effective host policy without loading manifests from other scopes.
+pub(crate) fn resolve_dynamic_plugin_policy_from_paths(
+    paths: impl IntoIterator<Item = PathBuf>,
+) -> Result<DynamicPluginHostPolicy, CliError> {
+    let mut policy = DynamicPluginHostPolicy::default();
+    for path in deduplicate_plugin_config_paths(paths) {
+        let Some(raw) = read_config_file(&path, false, "plugin configuration")? else {
+            continue;
+        };
+        let parsed = raw.parse::<toml::Table>().map_err(|error| {
+            CliError::Config(format!(
+                "invalid plugin TOML in {}: {error}",
+                path.display()
+            ))
+        })?;
+        let Some(plugins) = parsed.get("plugins") else {
+            continue;
+        };
+        let plugins = plugins.as_table().ok_or_else(|| {
+            CliError::Config(format!(
+                "invalid plugin TOML in {}: [plugins] must be a table",
+                path.display()
+            ))
+        })?;
+        if let Some(value) = plugins.get("policy") {
+            let file_policy: crate::plugins::policy::FileDynamicPluginHostPolicy =
+                value.clone().try_into().map_err(|error| {
+                    CliError::Config(format!(
+                        "invalid dynamic plugin policy in {}: {error}",
+                        path.display()
+                    ))
+                })?;
+            policy.merge_from(file_policy.into());
+        }
+    }
+    Ok(policy)
+}
+
 /// Resolves transparent `run` configuration and switches the gateway to an ephemeral bind address.
 ///
 /// Explicit run arguments override inherited top-level server flags, which override shared config.

@@ -3,6 +3,8 @@
 
 //! Testable plugin configuration file and validation helpers.
 
+#[cfg(unix)]
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use console::style;
@@ -371,6 +373,21 @@ pub(crate) fn remove_dynamic_plugin_reference(
     plugin_id: &str,
     target_manifest_ref: Option<&str>,
 ) -> Result<bool, CliError> {
+    remove_dynamic_plugin_reference_matching(path, Some(plugin_id), target_manifest_ref)
+}
+
+pub(crate) fn remove_dynamic_plugin_reference_path(
+    path: &Path,
+    manifest_ref: &Path,
+) -> Result<bool, CliError> {
+    remove_dynamic_plugin_reference_matching(path, None, Some(&manifest_ref.to_string_lossy()))
+}
+
+fn remove_dynamic_plugin_reference_matching(
+    path: &Path,
+    plugin_id: Option<&str>,
+    target_manifest_ref: Option<&str>,
+) -> Result<bool, CliError> {
     if !path.exists() {
         return Ok(false);
     }
@@ -413,9 +430,11 @@ pub(crate) fn remove_dynamic_plugin_reference(
             target_manifest_ref
                 .as_ref()
                 .is_some_and(|target_manifest_ref| manifest_ref == target_manifest_ref)
-                || crate::configuration::load_bounded_dynamic_plugin_manifest(manifest_ref)
-                    .map(|(manifest, _)| manifest.plugin.id.trim() == plugin_id)
-                    .unwrap_or(false)
+                || plugin_id.is_some_and(|plugin_id| {
+                    crate::configuration::load_bounded_dynamic_plugin_manifest(manifest_ref)
+                        .map(|(manifest, _)| manifest.plugin.id.trim() == plugin_id)
+                        .unwrap_or(false)
+                })
         });
 
         if !remove {
@@ -437,6 +456,38 @@ pub(crate) fn remove_dynamic_plugin_reference(
     Ok(removed)
 }
 
+pub(crate) fn dynamic_manifest_refs(path: &Path) -> Result<Vec<PathBuf>, CliError> {
+    let root = read_plugin_toml_root(path)?;
+    let Some(plugins) = root.as_table().and_then(|root| root.get("plugins")) else {
+        return Ok(Vec::new());
+    };
+    let plugins = plugins.as_table().ok_or_else(|| {
+        CliError::Config(format!(
+            "invalid plugin TOML in {}: [plugins] must be a table",
+            path.display()
+        ))
+    })?;
+    let Some(dynamic) = plugins.get("dynamic") else {
+        return Ok(Vec::new());
+    };
+    let entries = dynamic.as_array().ok_or_else(|| {
+        CliError::Config(format!(
+            "invalid plugin TOML in {}: plugins.dynamic must be an array of tables",
+            path.display()
+        ))
+    })?;
+    Ok(entries
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .as_table()?
+                .get("manifest")?
+                .as_str()
+                .map(|manifest| resolve_manifest_ref(path, manifest))
+        })
+        .collect())
+}
+
 fn read_plugin_toml_root(path: &Path) -> Result<toml::Value, CliError> {
     if path.exists() {
         let raw = std::fs::read_to_string(path)?;
@@ -456,9 +507,26 @@ fn read_plugin_toml_root(path: &Path) -> Result<toml::Value, CliError> {
 fn write_plugin_toml_root(path: &Path, root: &toml::Value) -> Result<(), CliError> {
     let rendered = toml::to_string_pretty(root)
         .map_err(|error| CliError::Config(format!("could not render plugin TOML: {error}")))?;
+    let global_file = path == global_plugin_config_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    #[cfg(unix)]
+    if global_file {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(rendered.as_bytes())?;
+        file.sync_all()?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644))?;
+        return Ok(());
+    }
+    #[cfg(not(unix))]
+    let _ = global_file;
     std::fs::write(path, rendered)?;
     Ok(())
 }

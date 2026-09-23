@@ -20,6 +20,102 @@ trust.
 
 ## Add and Enable a Plugin
 
+### Install a GitHub Release Bundle
+
+Install the [GitHub CLI](https://cli.github.com/) and sign in with `gh auth login`.
+You can also set `GH_TOKEN` or `GITHUB_TOKEN`. GitHub CLI checks `GH_TOKEN` first,
+then `GITHUB_TOKEN`, then your saved sign-in. Relay does not accept a token as a
+command argument or save it with the plugin.
+
+Replace `<release-tag>` with the exact tag of a published release:
+
+```bash
+nemo-relay plugins install "github:NVIDIA/NeMo-Relay-Plugins@<release-tag>" --user
+nemo-relay plugins list --user
+```
+
+Relay downloads the bundle for your operating system and CPU. It checks the
+archive's `.sha256` checksum and `.json` release metadata. It also checks the
+plugin manifest, supported Relay versions, and the runtime file's digest. If
+the checks pass, Relay registers the plugin and tries to enable it. Enabled
+plugins load when the gateway starts.
+
+Use `--no-enable` to install and register the plugin without enabling it. Only
+exact release tags work. The installer does not choose the latest release,
+install from a source tree, or replace an existing plugin. It does not support
+`--config` or `--plugin-config-path`.
+
+### Choose Where to Install
+
+Without a scope flag, Relay installs the plugin for your user account. It
+stores `plugins.toml` and the bundle in `$XDG_CONFIG_HOME/nemo-relay/` if
+`XDG_CONFIG_HOME` is set, or in `~/.config/nemo-relay/` otherwise. The bundle
+goes in `installed-plugins/`. A Python worker's environment goes in
+`.dynamic-plugin-environments/`.
+
+Use `--global` to install for the system. The configuration file is
+`/etc/nemo-relay/plugins.toml` on Unix or
+`%ProgramData%\nemo-relay\plugins.toml` on Windows. The bundle and any Python
+environment use the same subdirectory names beside that file. Run the command
+with an account that can write to the system directory. Sign in to GitHub CLI
+as that account, or set a token in its environment.
+
+On Unix, a global install makes the installed bundle and Python environment
+readable by other local users. It sets their directories to mode `755` and
+regular files to `644`, or `755` when a file is executable. It sets
+`/etc/nemo-relay/` to `755`, and sets `plugins.toml` and
+`.dynamic-plugins.json` to `644`. Relay removes the temporary download after
+installation.
+
+When Relay updates global `plugins.toml` or `.dynamic-plugins.json`, it sets
+the file to mode `644`, even if it was private before. Other users also need
+access through each parent directory to use the global plugin. Do not put
+secrets in global `plugins.toml`; other local users can read it. Relay does not
+change the targets of symbolic links in the installed bundle or Python
+environment.
+
+The bundle and Python environment permission changes apply to release installs.
+`plugins add --global` keeps the permissions of local plugin files. On Windows,
+access follows the directory's Windows permissions.
+
+### Enable and Manage the Plugin
+
+If the bundle has no signature, Relay registers it but cannot enable it under
+the default trust policy. The install command reports an activation error, and
+the plugin stays disabled. To allow an unsigned plugin, add this rule to the
+selected `plugins.toml`. Replace `<plugin-id>` with the ID shown by
+`nemo-relay plugins list`:
+
+```toml
+[plugins.policy.overrides."<plugin-id>"]
+attestation = "integrity_only"
+```
+
+You can also use `signature_if_present`, which checks a signature when the
+plugin has one. Use either setting only for a source you trust. Then run
+`nemo-relay plugins enable <plugin-id>`. To require a signature, use a signed
+bundle and add its public key to `trusted_public_keys`. Relay never changes
+your trust policy during install.
+
+`nemo-relay plugins list --user` shows user plugins.
+`nemo-relay plugins list --global` shows system plugins. Without either flag,
+`nemo-relay plugins list` shows both. The list shows the source and release tag
+for managed installs. Use `nemo-relay plugins inspect <plugin-id>` for details.
+
+Use these commands to remove a plugin:
+
+- `nemo-relay plugins remove <plugin-id> --user` removes the registration but
+  keeps the bundle. It deletes a managed Python environment, if one exists.
+- `nemo-relay plugins uninstall <plugin-id> --user` removes the registration,
+  bundle, and managed Python environment. You can run it after `remove`. It
+  refuses plugins added from local paths.
+
+Both commands accept `--global` for a system plugin. Without a scope, `remove`
+asks you to choose one if the ID appears in both scopes; `uninstall` uses the
+user scope.
+
+### Register a Local Manifest
+
 Validate the manifest before registering it in user configuration:
 
 ```bash
