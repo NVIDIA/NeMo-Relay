@@ -400,7 +400,7 @@ pub(super) fn test_environment_tree_digest_with_entry_limit(
     environment_tree_digest_with_limit(environment, max_entries)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(super) fn test_environment_tree_digest_with_limits(
     environment: &Path,
     max_entries: usize,
