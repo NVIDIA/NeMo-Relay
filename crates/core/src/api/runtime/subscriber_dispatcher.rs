@@ -5,6 +5,7 @@
 
 use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::registry::{EventMetadataInjector, Guardrail};
+use crate::api::runtime::scope_stack::{active_event_trace_context, active_event_uuid};
 use crate::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, NemoRelayContextState, ScopeStackHandle,
 };
@@ -80,11 +81,23 @@ pub fn publication_context<T: Any + Send + Sync>() -> Option<Arc<T>> {
 }
 
 fn set_event_w3c_context(event: &mut Event, scope_stack: &ScopeStackHandle) {
-    let (traceparent, tracestate) = scope_stack
-        .read()
-        .ok()
-        .map(|stack| stack.event_w3c_headers())
-        .unwrap_or_default();
+    let active_context = (event.parent_uuid() == active_event_uuid())
+        .then(active_event_trace_context)
+        .flatten();
+    let (traceparent, tracestate) = active_context
+        .map(|context| {
+            (
+                Some(context.traceparent().to_owned()),
+                context.tracestate().map(ToOwned::to_owned),
+            )
+        })
+        .unwrap_or_else(|| {
+            scope_stack
+                .read()
+                .ok()
+                .map(|stack| stack.event_w3c_headers(event.parent_uuid()))
+                .unwrap_or_default()
+        });
     event.set_propagation_traceparent(traceparent);
     event.set_propagation_tracestate(tracestate);
 }

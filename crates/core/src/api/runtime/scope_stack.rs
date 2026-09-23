@@ -14,7 +14,7 @@ use std::future::Future;
 use std::sync::{Arc, RwLock};
 
 use opentelemetry::propagation::TextMapPropagator;
-use opentelemetry::trace::{SpanContext, TraceContextExt};
+use opentelemetry::trace::{SpanContext, TraceContextExt, TraceFlags, TraceState};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -55,8 +55,8 @@ pub struct PropagationContext {
     /// Wire-format version. Version 1 is the only currently supported value.
     pub version: u16,
     /// Stable session root when the sending application knows one. When this
-    /// root is omitted, the first local OpenTelemetry span after import starts
-    /// a new trace.
+    /// root and a valid `traceparent` are both absent, the first local
+    /// OpenTelemetry span after import starts a new trace.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_uuid: Option<Uuid>,
     /// Immediate Relay event or scope that caused the boundary crossing.
@@ -67,6 +67,11 @@ pub struct PropagationContext {
     /// Optional W3C tracestate header associated with `traceparent`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracestate: Option<String>,
+}
+
+fn is_usable_relay_identifier(uuid: Uuid) -> bool {
+    let bytes = uuid.as_bytes();
+    !bytes.iter().all(|byte| *byte == 0) && !bytes[8..].iter().all(|byte| *byte == 0)
 }
 
 impl PropagationContext {
@@ -87,18 +92,8 @@ impl PropagationContext {
     pub fn to_traceparent(&self) -> Result<String> {
         self.validate()?;
         let context = self.clone().normalized();
-        if let Some(parent) = w3c_span_context(
-            context.traceparent.as_deref(),
-            context.tracestate.as_deref(),
-        ) {
-            if parent.span_id() == crate::observability::relay_span_id(context.parent_uuid) {
-                return Ok(context
-                    .traceparent
-                    .expect("validated traceparent is present"));
-            }
-            return Ok(w3c_headers_for_parent(parent, context.parent_uuid)
-                .0
-                .expect("W3C propagator always injects a valid traceparent"));
+        if let Some(traceparent) = context.traceparent {
+            return Ok(traceparent);
         }
         let Some(root_uuid) = context.root_uuid else {
             return Err(FlowError::InvalidArgument(
@@ -133,8 +128,7 @@ impl PropagationContext {
             .into_iter()
             .chain(self.root_uuid.map(|uuid| ("root_uuid", uuid)))
         {
-            let bytes = uuid.as_bytes();
-            if bytes.iter().all(|byte| *byte == 0) || bytes[8..].iter().all(|byte| *byte == 0) {
+            if !is_usable_relay_identifier(uuid) {
                 return Err(FlowError::InvalidArgument(format!(
                     "propagation context {name} is not a usable Relay identifier"
                 )));
@@ -197,6 +191,42 @@ pub(crate) fn w3c_span_context(
     tracestate: Option<&str>,
 ) -> Option<SpanContext> {
     normalize_w3c_headers(traceparent, tracestate).2
+}
+
+/// Validated W3C Trace Context retained internally across local stack forks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct W3cTraceContext {
+    traceparent: String,
+    tracestate: Option<String>,
+}
+
+impl W3cTraceContext {
+    pub(crate) fn new(traceparent: impl Into<String>, tracestate: Option<String>) -> Result<Self> {
+        let traceparent = traceparent.into();
+        let (traceparent, tracestate, _) =
+            normalize_w3c_headers(Some(&traceparent), tracestate.as_deref());
+        let Some(traceparent) = traceparent else {
+            return Err(FlowError::InvalidArgument(
+                "invalid W3C trace context".into(),
+            ));
+        };
+        Ok(Self {
+            traceparent,
+            tracestate,
+        })
+    }
+
+    pub(crate) fn traceparent(&self) -> &str {
+        &self.traceparent
+    }
+
+    pub(crate) fn tracestate(&self) -> Option<&str> {
+        self.tracestate.as_deref()
+    }
+
+    pub(crate) fn span_context(&self) -> Option<SpanContext> {
+        w3c_span_context(Some(&self.traceparent), self.tracestate.as_deref())
+    }
 }
 
 impl ScopeStack {
@@ -338,7 +368,10 @@ impl ScopeStack {
                 self.stack
                     .iter()
                     .skip(1)
-                    .find(|scope| scope.scope_type == ScopeType::Agent)
+                    .find(|scope| {
+                        scope.scope_type == ScopeType::Agent
+                            && is_usable_relay_identifier(scope.uuid)
+                    })
                     .map(|scope| scope.uuid)
             })
             .or_else(|| (!self.is_rootless_propagation).then(|| self.root_uuid()))
@@ -349,11 +382,38 @@ impl ScopeStack {
         self.propagated_parent_uuid
     }
 
-    pub(crate) fn event_w3c_headers(&self) -> (Option<String>, Option<String>) {
-        (
-            self.propagated_traceparent.clone(),
-            self.propagated_tracestate.clone(),
-        )
+    /// Return the W3C parent carried by this stack for an emitted event.
+    ///
+    /// Local parents also receive a derived context so a subscriber registered
+    /// after the parent opened can still join the canonical Relay trace.
+    pub(crate) fn event_w3c_headers(
+        &self,
+        parent_uuid: Option<Uuid>,
+    ) -> (Option<String>, Option<String>) {
+        let Some(parent_uuid) = parent_uuid else {
+            return (None, None);
+        };
+        let parent_is_propagated = self.propagated_parent_uuid == Some(parent_uuid);
+        let parent_is_local = self
+            .stack
+            .iter()
+            .skip(1)
+            .any(|scope| scope.uuid == parent_uuid);
+        if parent_is_propagated {
+            if self.propagated_traceparent.is_some() {
+                return (
+                    self.propagated_traceparent.clone(),
+                    self.propagated_tracestate.clone(),
+                );
+            }
+            if self.propagated_root_uuid.is_none() {
+                return (None, None);
+            }
+        }
+        if !parent_is_propagated && !parent_is_local {
+            return (None, None);
+        }
+        self.w3c_headers_for_span(parent_uuid, parent_uuid)
     }
 
     /// Whether `uuid` is the synthetic parent imported from propagation.
@@ -601,7 +661,8 @@ pub fn create_scope_stack_from_propagation(
 ///
 /// Capture the parent before spawning concurrent work, then install the
 /// returned stack with `TASK_SCOPE_STACK.scope(...)`. The fork preserves event
-/// parentage and its Relay root but does not transfer scope-local registrations.
+/// parentage, its Relay root, and the current W3C Trace Context, but does not
+/// transfer scope-local registrations.
 ///
 /// # Examples
 ///
@@ -621,14 +682,35 @@ pub fn fork_scope_stack() -> Result<ScopeStackHandle> {
     create_scope_stack_from_propagation(&context)
 }
 
+fn captured_w3c_headers(
+    stack: &ScopeStack,
+    active_uuid: Option<Uuid>,
+    parent_uuid: Uuid,
+) -> (Option<String>, Option<String>) {
+    if let Some(active_context) = active_event_trace_context() {
+        (
+            Some(active_context.traceparent.clone()),
+            active_context.tracestate.clone(),
+        )
+    } else if active_uuid.is_some() {
+        // A managed callback is an emitted local span even though its UUID is
+        // not stored on the lexical scope stack. Reparent the active trace to
+        // that callback before propagating it.
+        stack.w3c_headers_for_span(parent_uuid, stack.top().uuid)
+    } else {
+        // A synthetic imported parent may have an unrelated W3C span ID.
+        // Preserve that exact remote parent until Relay emits a local span.
+        stack.event_w3c_headers(Some(parent_uuid))
+    }
+}
+
 /// Capture the current causal parent and its Relay root when available.
 ///
 /// Importing the returned context preserves Relay event parentage. A rootless
 /// imported stack remains rootless until a local Agent scope establishes a new
 /// root; otherwise the context continues the originating Relay-derived
-/// observability trace. Use
-/// [`capture_rootless_propagation_context`] when the receiver must start a new
-/// trace instead.
+/// observability trace. Use [`capture_rootless_propagation_context`] when the
+/// receiver must omit the Relay root; a valid W3C parent is still retained.
 pub fn capture_propagation_context() -> Result<PropagationContext> {
     let active_uuid = active_event_uuid();
     let parent_uuid = active_uuid.unwrap_or_else(|| task_scope_top().uuid);
@@ -637,35 +719,9 @@ pub fn capture_propagation_context() -> Result<PropagationContext> {
         .read()
         .map_err(|error| FlowError::Internal(error.to_string()))?;
     let root_uuid = stack_guard.event_propagation_root_uuid();
-    let (traceparent, tracestate) = stack_guard.w3c_headers_for_parent(parent_uuid);
-    Ok(PropagationContext {
-        version: PropagationContext::VERSION,
-        root_uuid,
-        parent_uuid,
-        traceparent,
-        tracestate,
-    })
-}
-
-/// Capture the current causal parent without a root UUID.
-///
-/// Importing the returned context preserves Relay event parentage but starts a
-/// new local OpenTelemetry trace.
-pub fn capture_rootless_propagation_context() -> Result<PropagationContext> {
-    capture_propagation_context_with_root(None)
-}
-
-/// Capture the current causal parent and an application-supplied session root.
-pub fn capture_propagation_context_with_root(
-    root_uuid: Option<Uuid>,
-) -> Result<PropagationContext> {
-    let parent_uuid = ACTIVE_EVENT_UUID
-        .try_with(|uuid| *uuid)
-        .unwrap_or_else(|_| task_scope_top().uuid);
-    let (traceparent, tracestate) = current_scope_stack()
-        .read()
-        .map(|stack| stack.w3c_headers_for_parent(parent_uuid))
-        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    let (traceparent, tracestate) = captured_w3c_headers(&stack_guard, active_uuid, parent_uuid);
+    let traceparent = traceparent
+        .or_else(|| active_uuid.map(|uuid| crate::observability::format_traceparent(uuid, uuid)));
     let context = PropagationContext {
         version: PropagationContext::VERSION,
         root_uuid,
@@ -677,41 +733,147 @@ pub fn capture_propagation_context_with_root(
     Ok(context)
 }
 
-/// Capture the current Relay context as a W3C `traceparent` value.
+/// Capture the current causal parent without a root UUID.
+///
+/// Importing the returned context preserves Relay event parentage and any valid
+/// W3C parent while omitting the Relay root. Without a valid W3C parent, the
+/// first local OpenTelemetry span starts a new trace.
+pub fn capture_rootless_propagation_context() -> Result<PropagationContext> {
+    capture_propagation_context_with_root(None)
+}
+
+/// Capture the current causal parent and an application-supplied session root.
+pub fn capture_propagation_context_with_root(
+    root_uuid: Option<Uuid>,
+) -> Result<PropagationContext> {
+    let mut context = capture_propagation_context()?;
+    context.root_uuid = root_uuid;
+    context.validate()?;
+    Ok(context)
+}
+
+pub(crate) fn capture_w3c_trace_context() -> Result<W3cTraceContext> {
+    let context = capture_propagation_context()?;
+    let Some(traceparent) = context.traceparent else {
+        return Err(FlowError::InvalidArgument(
+            "no emitted Relay scope is available for W3C trace context capture".into(),
+        ));
+    };
+    W3cTraceContext::new(traceparent, context.tracestate).map_err(|_| {
+        FlowError::InvalidArgument(
+            "no emitted Relay scope is available for W3C trace context capture".into(),
+        )
+    })
+}
+
+/// Capture the current canonical W3C `traceparent` value.
 pub fn capture_traceparent() -> Result<String> {
-    let active_uuid = active_event_uuid();
-    let parent_uuid = active_uuid.unwrap_or_else(|| task_scope_top().uuid);
-    let stack = current_scope_stack();
-    let stack_guard = stack
-        .read()
-        .map_err(|error| FlowError::Internal(error.to_string()))?;
-    if let Some(traceparent) = stack_guard.w3c_headers_for_parent(parent_uuid).0 {
-        return Ok(traceparent);
-    }
-    let root_uuid = stack_guard
-        .propagated_root_uuid
-        .or_else(|| stack_guard.scopes().get(1).map(|scope| scope.uuid))
-        .or(active_uuid)
-        .ok_or_else(|| {
-            FlowError::InvalidArgument(
-                "no emitted Relay scope is available for traceparent capture".into(),
-            )
-        })?;
-    Ok(crate::observability::format_traceparent(
-        root_uuid,
-        parent_uuid,
-    ))
+    Ok(capture_w3c_trace_context()?.traceparent)
 }
 
 impl ScopeStack {
-    fn w3c_headers_for_parent(&self, parent_uuid: Uuid) -> (Option<String>, Option<String>) {
-        let Some(parent) = w3c_span_context(
+    fn propagated_span_context(&self, uuid: Uuid) -> Option<SpanContext> {
+        if self.propagated_parent_uuid != Some(uuid) {
+            return None;
+        }
+        if let Some(context) = w3c_span_context(
             self.propagated_traceparent.as_deref(),
             self.propagated_tracestate.as_deref(),
-        ) else {
-            return (None, None);
+        ) {
+            return Some(context);
+        }
+        let root_uuid = self.propagated_root_uuid?;
+        if !is_usable_relay_identifier(root_uuid) || !is_usable_relay_identifier(uuid) {
+            return None;
+        }
+        Some(SpanContext::new(
+            crate::observability::relay_trace_id(root_uuid),
+            crate::observability::relay_span_id(uuid),
+            TraceFlags::SAMPLED,
+            true,
+            TraceState::default(),
+        ))
+    }
+
+    fn local_span_context(&self, uuid: Uuid) -> Option<SpanContext> {
+        self.local_span_context_inner(uuid, self.stack.len(), &mut HashSet::new())
+    }
+
+    fn local_span_context_inner(
+        &self,
+        uuid: Uuid,
+        before_index: usize,
+        visiting: &mut HashSet<Uuid>,
+    ) -> Option<SpanContext> {
+        if !is_usable_relay_identifier(uuid) || !visiting.insert(uuid) {
+            return None;
+        }
+        if let Some(context) = self.propagated_span_context(uuid) {
+            visiting.remove(&uuid);
+            return Some(context);
+        }
+        let (index, scope) = self
+            .stack
+            .iter()
+            .enumerate()
+            .take(before_index)
+            .skip(1)
+            .rev()
+            .find(|(_, scope)| scope.uuid == uuid)?;
+        let parent_context = match scope.parent_uuid {
+            Some(parent_uuid) => self.parent_span_context_inner(parent_uuid, index, visiting),
+            None => index
+                .checked_sub(1)
+                .and_then(|parent_index| self.stack.get(parent_index))
+                .and_then(|parent| self.parent_span_context_inner(parent.uuid, index, visiting)),
         };
-        w3c_headers_for_parent(parent, parent_uuid)
+        let context = match parent_context {
+            Some(parent) => SpanContext::new(
+                parent.trace_id(),
+                crate::observability::relay_span_id(uuid),
+                parent.trace_flags(),
+                false,
+                parent.trace_state().clone(),
+            ),
+            None => SpanContext::new(
+                crate::observability::relay_trace_id(uuid),
+                crate::observability::relay_span_id(uuid),
+                TraceFlags::SAMPLED,
+                false,
+                TraceState::default(),
+            ),
+        };
+        visiting.remove(&uuid);
+        context.is_valid().then_some(context)
+    }
+
+    fn parent_span_context_inner(
+        &self,
+        uuid: Uuid,
+        before_index: usize,
+        visiting: &mut HashSet<Uuid>,
+    ) -> Option<SpanContext> {
+        self.propagated_span_context(uuid)
+            .or_else(|| self.local_span_context_inner(uuid, before_index, visiting))
+    }
+
+    fn w3c_headers_for_span(
+        &self,
+        span_uuid: Uuid,
+        causal_parent_uuid: Uuid,
+    ) -> (Option<String>, Option<String>) {
+        if span_uuid == causal_parent_uuid
+            && self.propagated_parent_uuid == Some(causal_parent_uuid)
+            && self.propagated_traceparent.is_some()
+        {
+            return (
+                self.propagated_traceparent.clone(),
+                self.propagated_tracestate.clone(),
+            );
+        }
+        self.local_span_context(causal_parent_uuid)
+            .map(|parent| w3c_headers_for_parent(parent, span_uuid))
+            .unwrap_or_default()
     }
 }
 
@@ -737,46 +899,34 @@ fn w3c_headers_for_parent(
     )
 }
 
-pub(crate) fn trace_context_for_llm(parent_uuid: Uuid) -> Result<(String, Option<String>)> {
+pub(crate) fn trace_context_for_managed_span(
+    span_uuid: Uuid,
+    causal_parent_uuid: Option<Uuid>,
+) -> Result<W3cTraceContext> {
     let stack = current_scope_stack();
     let stack_guard = stack
         .read()
         .map_err(|error| FlowError::Internal(error.to_string()))?;
-    let root_uuid = stack_guard
-        .propagated_root_uuid
-        .or_else(|| stack_guard.scopes().get(1).map(|scope| scope.uuid))
-        .unwrap_or(parent_uuid);
-    let (traceparent, tracestate) = stack_guard.w3c_headers_for_parent(parent_uuid);
-    Ok((
+    let (traceparent, tracestate) = if causal_parent_uuid == active_event_uuid() {
+        active_event_trace_context()
+            .and_then(|context| context.span_context())
+            .map(|context| w3c_headers_for_parent(context, span_uuid))
+            .unwrap_or_else(|| stack_guard.w3c_headers_for_span(span_uuid, stack_guard.top().uuid))
+    } else {
+        causal_parent_uuid
+            .map(|parent_uuid| stack_guard.w3c_headers_for_span(span_uuid, parent_uuid))
+            .unwrap_or_default()
+    };
+    W3cTraceContext::new(
         traceparent
-            .unwrap_or_else(|| crate::observability::format_traceparent(root_uuid, parent_uuid)),
+            .unwrap_or_else(|| crate::observability::format_traceparent(span_uuid, span_uuid)),
         tracestate,
-    ))
+    )
 }
 
 pub(crate) fn capture_trace_context() -> Result<(String, Option<String>)> {
-    let parent_uuid = active_event_uuid().unwrap_or_else(|| task_scope_top().uuid);
-    let stack = current_scope_stack();
-    let stack_guard = stack
-        .read()
-        .map_err(|error| FlowError::Internal(error.to_string()))?;
-    let (traceparent, tracestate) = stack_guard.w3c_headers_for_parent(parent_uuid);
-    if let Some(traceparent) = traceparent {
-        return Ok((traceparent, tracestate));
-    }
-    let root_uuid = stack_guard
-        .propagated_root_uuid
-        .or_else(|| stack_guard.scopes().get(1).map(|scope| scope.uuid))
-        .or_else(active_event_uuid)
-        .ok_or_else(|| {
-            FlowError::InvalidArgument(
-                "no emitted Relay scope is available for trace context capture".into(),
-            )
-        })?;
-    Ok((
-        crate::observability::format_traceparent(root_uuid, parent_uuid),
-        None,
-    ))
+    let context = capture_w3c_trace_context()?;
+    Ok((context.traceparent, context.tracestate))
 }
 
 tokio::task_local! {
@@ -784,15 +934,37 @@ tokio::task_local! {
     pub static TASK_SCOPE_STACK: ScopeStackHandle;
     /// Managed tool or LLM event currently executing in this task.
     static ACTIVE_EVENT_UUID: Uuid;
+    /// Exact W3C context of the managed event when one was captured at start.
+    static ACTIVE_EVENT_TRACE_CONTEXT: Option<W3cTraceContext>;
 }
 
 /// Run a future with `uuid` as the causally active managed event.
 pub async fn with_active_event_uuid<T>(uuid: Uuid, future: impl Future<Output = T>) -> T {
-    ACTIVE_EVENT_UUID.scope(uuid, future).await
+    with_active_event_trace_context(uuid, None, future).await
+}
+
+pub(crate) async fn with_active_event_trace_context<T>(
+    uuid: Uuid,
+    trace_context: Option<W3cTraceContext>,
+    future: impl Future<Output = T>,
+) -> T {
+    ACTIVE_EVENT_UUID
+        .scope(
+            uuid,
+            ACTIVE_EVENT_TRACE_CONTEXT.scope(trace_context, future),
+        )
+        .await
 }
 
 pub(crate) fn active_event_uuid() -> Option<Uuid> {
     ACTIVE_EVENT_UUID.try_with(|uuid| *uuid).ok()
+}
+
+pub(crate) fn active_event_trace_context() -> Option<W3cTraceContext> {
+    ACTIVE_EVENT_TRACE_CONTEXT
+        .try_with(Clone::clone)
+        .ok()
+        .flatten()
 }
 
 thread_local! {
@@ -1000,4 +1172,31 @@ pub fn task_scope_remove(uuid: &Uuid) -> Result<ScopeHandle> {
     let stack = current_scope_stack();
     let mut guard = stack.write().expect("scope stack lock poisoned");
     guard.remove(uuid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn propagated_w3c_parent_is_not_rewritten_to_a_relay_span_id() {
+        let parent_uuid = Uuid::from_u128(0x018f_13f0_7c1a_7a80_8000_0000_0000_0702);
+        let propagation = PropagationContext {
+            version: PropagationContext::VERSION,
+            root_uuid: Some(Uuid::from_u128(0x018f_13f0_7c1a_7a80_8000_0000_0000_0701)),
+            parent_uuid,
+            traceparent: Some(
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string(),
+            ),
+            tracestate: Some("vendor=value".to_string()),
+        };
+        let traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        let stack = ScopeStack::from_propagation(&propagation).unwrap();
+
+        let (captured_traceparent, captured_tracestate) =
+            stack.w3c_headers_for_span(parent_uuid, parent_uuid);
+
+        assert_eq!(captured_traceparent.as_deref(), Some(traceparent));
+        assert_eq!(captured_tracestate.as_deref(), Some("vendor=value"));
+    }
 }

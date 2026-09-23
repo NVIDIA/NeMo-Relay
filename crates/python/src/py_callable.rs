@@ -493,15 +493,27 @@ fn copy_publication_invocation_with_buffer<'py>(
 
 fn callback_propagation_context() -> FlowResult<PropagationContext> {
     let mut context = capture_propagation_context()?;
-    if context.traceparent.is_some() {
-        context.traceparent = Some(context.to_traceparent()?);
-    } else {
-        context.root_uuid = capture_traceparent()
-            .ok()
-            .and_then(|traceparent| {
-                traceparent
-                    .get(3..35)
-                    .and_then(|trace_id| uuid::Uuid::parse_str(trace_id).ok())
+    let stack = current_scope_stack();
+    let stack = stack
+        .read()
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    let has_propagated_parent = stack
+        .scopes()
+        .iter()
+        .any(|scope| stack.is_propagated_parent(scope.uuid));
+    drop(stack);
+    if !has_propagated_parent {
+        context.root_uuid = context
+            .traceparent
+            .as_deref()
+            .and_then(|traceparent| traceparent.get(3..35))
+            .and_then(|trace_id| uuid::Uuid::parse_str(trace_id).ok())
+            .or_else(|| {
+                capture_traceparent().ok().and_then(|traceparent| {
+                    traceparent
+                        .get(3..35)
+                        .and_then(|trace_id| uuid::Uuid::parse_str(trace_id).ok())
+                })
             })
             .or(Some(context.parent_uuid));
     }

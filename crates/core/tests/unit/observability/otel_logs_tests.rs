@@ -549,6 +549,36 @@ fn log_projection_preserves_imported_w3c_trace_identity_and_sampling_flag() {
 }
 
 #[test]
+fn log_projection_uses_event_w3c_context_for_an_unobserved_local_parent() {
+    let (mut processor, exporter, provider) = processor(LogSeverity::Info);
+    let local_parent = Uuid::now_v7();
+    let local_scope = Uuid::now_v7();
+    let mut child = scope_with_parent(local_scope, Some(local_parent), ScopeCategory::Start);
+    child.set_propagation_traceparent(Some(crate::observability::format_traceparent(
+        local_parent,
+        local_parent,
+    )));
+    processor.process(&child);
+    processor.process(&mark(
+        Some(local_scope),
+        "relay.late-local-parent",
+        None,
+        None,
+        None,
+    ));
+    provider.force_flush().unwrap();
+
+    let logs = exporter.get_emitted_logs().unwrap();
+    let context = logs[0]
+        .record
+        .trace_context()
+        .expect("event-carried W3C context should attach the unobserved local parent");
+    assert_eq!(context.trace_id, relay_trace_id(local_parent));
+    assert_eq!(context.span_id, relay_span_id(local_scope));
+    assert_eq!(context.trace_flags, Some(TraceFlags::SAMPLED));
+}
+
+#[test]
 fn mark_projection_preserves_category_profile_schema_and_json_scalars() {
     let (mut processor, exporter, provider) = processor(LogSeverity::Trace);
     let event = Event::Mark(MarkEvent::new(

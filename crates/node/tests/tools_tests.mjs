@@ -1229,6 +1229,52 @@ describe('Tool intercepts', () => {
     }
   });
 
+  it('synchronous execution callbacks preserve imported W3C trace context', async () => {
+    const rootUuid = '018f13f0-7c1a-7a80-8000-000000000751';
+    const parentUuid = '018f13f0-7c1a-7a80-8000-000000000752';
+    const stack = lib.createScopeStackFromPropagation({
+      version: 1,
+      rootUuid,
+      parentUuid,
+      traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00',
+      tracestate: 'vendor=value',
+    });
+    const events = [];
+    let observed;
+    registerSubscriber('node_tool_sync_propagated_w3c', (event) => events.push(event));
+    try {
+      const result = await lib.withScopeStack(stack, () =>
+        toolCallExecute('sync_propagated_w3c_tool', {}, () => {
+          observed = {
+            context: lib.capturePropagationContext(),
+            traceparent: lib.captureTraceparent(),
+          };
+          return toolResult({ ok: true });
+        }),
+      );
+      assert.deepEqual(result, toolResult({ ok: true }));
+      await flushSubscribers();
+      const start = events.find(
+        (event) =>
+          event.name === 'sync_propagated_w3c_tool' && event.kind === 'scope' && event.scope_category === 'start',
+      );
+      assert.ok(start, 'expected managed tool start event');
+      const expected = `00-4bf92f3577b34da6a3ce929d0e0e4736-${start.uuid.replaceAll('-', '').slice(-16)}-00`;
+      assert.deepEqual(observed, {
+        context: {
+          version: 1,
+          rootUuid,
+          parentUuid: start.uuid,
+          traceparent: expected,
+          tracestate: 'vendor=value',
+        },
+        traceparent: expected,
+      });
+    } finally {
+      deregisterSubscriber('node_tool_sync_propagated_w3c');
+    }
+  });
+
   it('execution settlement expires scope replacements inherited by detached work', async () => {
     const baseline = {
       active: lib.scopeStackActive(),

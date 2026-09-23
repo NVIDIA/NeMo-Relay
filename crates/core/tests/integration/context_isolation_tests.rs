@@ -210,7 +210,7 @@ fn propagation_context_preserves_valid_w3c_headers_and_discards_invalid_ones() {
 }
 
 #[test]
-fn propagation_context_to_traceparent_advances_an_imported_w3c_parent() {
+fn propagation_context_to_traceparent_preserves_an_imported_w3c_parent() {
     let parent_uuid = Uuid::from_u128(0x00112233445566778899aabbccddeeff);
     let context = PropagationContext {
         version: PropagationContext::VERSION,
@@ -222,7 +222,7 @@ fn propagation_context_to_traceparent_advances_an_imported_w3c_parent() {
 
     assert_eq!(
         context.to_traceparent().unwrap(),
-        "00-4bf92f3577b34da6a3ce929d0e0e4736-8899aabbccddeeff-01"
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
     );
 }
 
@@ -262,13 +262,13 @@ fn rootless_w3c_context_still_emits_the_upstream_traceparent() {
 
     assert_eq!(
         capture_traceparent().unwrap(),
-        "00-4bf92f3577b34da6a3ce929d0e0e4736-8899aabbccddeeff-01"
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
     );
     let rootless = capture_rootless_propagation_context().unwrap();
     assert_eq!(rootless.root_uuid, None);
     assert_eq!(
         rootless.traceparent.as_deref(),
-        Some("00-4bf92f3577b34da6a3ce929d0e0e4736-8899aabbccddeeff-01")
+        Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
     );
     assert_eq!(rootless.tracestate.as_deref(), Some("vendor=value"));
 }

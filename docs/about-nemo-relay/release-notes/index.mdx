@@ -33,6 +33,15 @@ For the full release history, including individual pull requests, refer to
 NeMo Relay 0.10 is under development. This page will track its user-visible
 changes, compatibility updates, and fixed known issues.
 
+### Fixes and Other Changes
+
+- Scope-stack forks, managed LLM and tool execution callbacks, and
+  late-registered subscribers now preserve the exact OpenTelemetry parent
+  context, keeping managed LLM `traceparent` headers aligned with exported
+  spans.
+- Invalid Relay identifiers no longer prevent later valid OpenTelemetry events
+  from exporting.
+
 ## Known Issues in 0.10
 
 No known issues have been recorded for NeMo Relay 0.10 yet.

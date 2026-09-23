@@ -8,13 +8,15 @@ use crate::api::event::{
     BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, METRIC_DATA_SCHEMA_NAME,
     METRIC_DATA_SCHEMA_VERSION, MarkEvent, ScopeCategory, ScopeEvent, tool_attributes_to_strings,
 };
+use crate::api::llm::{LlmCallExecuteParams, LlmRequest, llm_call_execute};
 use crate::api::runtime::{
-    NemoRelayContextState, PropagationContext, ThreadScopeStackBinding,
+    NemoRelayContextState, PropagationContext, TASK_SCOPE_STACK, ThreadScopeStackBinding,
     capture_propagation_context, capture_rootless_propagation_context, capture_thread_scope_stack,
-    create_scope_stack_from_propagation, fork_scope_stack, global_context,
-    restore_thread_scope_stack, set_thread_scope_stack,
+    capture_traceparent, create_scope_stack, create_scope_stack_from_propagation, fork_scope_stack,
+    global_context, restore_thread_scope_stack, set_thread_scope_stack, task_scope_push,
+    task_scope_remove,
 };
-use crate::api::scope::ScopeType;
+use crate::api::scope::{ScopeHandle, ScopeType};
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
 use crate::codec::model_pricing::pricing_test_mutex;
@@ -629,6 +631,796 @@ fn make_provider() -> (
         .with_simple_exporter(exporter.clone())
         .build();
     (provider, exporter)
+}
+
+async fn execute_llm_and_capture_trace_context_with_parent(
+    name: &str,
+    parent: Option<ScopeHandle>,
+) -> (String, Option<String>, String) {
+    let captured = Arc::new(Mutex::new(None));
+    let captured_request = captured.clone();
+    llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name(name)
+            .parent_opt(parent)
+            .request(LlmRequest {
+                headers: serde_json::Map::from_iter([(
+                    "tracestate".to_string(),
+                    Json::String("caller=value".to_string()),
+                )]),
+                content: json!({"prompt": "hello"}),
+            })
+            .func(Arc::new(move |request| {
+                let traceparent = request
+                    .headers
+                    .get("traceparent")
+                    .and_then(Json::as_str)
+                    .map(ToOwned::to_owned)
+                    .expect("managed LLM request must contain traceparent");
+                let tracestate = request
+                    .headers
+                    .get("tracestate")
+                    .and_then(Json::as_str)
+                    .map(ToOwned::to_owned);
+                let callback_traceparent = capture_traceparent()
+                    .expect("managed LLM callback must expose its exact traceparent");
+                *captured_request.lock().unwrap() =
+                    Some((traceparent, tracestate, callback_traceparent));
+                Box::pin(async { Ok(json!({"ok": true})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    captured
+        .lock()
+        .unwrap()
+        .take()
+        .expect("managed LLM provider must capture trace context")
+}
+
+async fn execute_llm_and_capture_trace_context(name: &str) -> (String, Option<String>, String) {
+    execute_llm_and_capture_trace_context_with_parent(name, None).await
+}
+
+async fn execute_llm_and_capture_traceparent(name: &str) -> String {
+    execute_llm_and_capture_trace_context(name).await.0
+}
+
+fn finish_trace_subscriber(
+    subscriber: &OpenTelemetrySubscriber,
+    name: &str,
+    exporter: &opentelemetry_sdk::trace::InMemorySpanExporter,
+) -> Vec<opentelemetry_sdk::trace::SpanData> {
+    crate::api::subscriber::flush_subscribers().unwrap();
+    assert!(subscriber.deregister(name).unwrap());
+    subscriber.force_flush().unwrap();
+    exporter.get_finished_spans().unwrap()
+}
+
+fn assert_traceparent_matches_exported_span(
+    traceparent: &str,
+    span: &opentelemetry_sdk::trace::SpanData,
+) {
+    assert_eq!(
+        traceparent,
+        format!(
+            "00-{}-{}-01",
+            span.span_context.trace_id(),
+            span.span_context.span_id()
+        )
+    );
+}
+
+#[test]
+fn managed_llm_traceparent_matches_exported_span_directly() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "direct-llm");
+    let subscriber_name = format!("direct_llm_{}", Uuid::now_v7().simple());
+    subscriber.register(&subscriber_name).unwrap();
+
+    let turn = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("direct-turn")
+            .scope_type(ScopeType::Custom)
+            .build(),
+    )
+    .unwrap();
+    let traceparent = runtime.block_on(execute_llm_and_capture_traceparent("direct-llm"));
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&turn.uuid)
+            .build(),
+    )
+    .unwrap();
+
+    let spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
+    let turn_span = finished_span_named(&spans, "direct-turn");
+    let llm_span = finished_span_named(&spans, "direct-llm");
+    assert_traceparent_matches_exported_span(&traceparent, llm_span);
+    assert_eq!(
+        llm_span.span_context.trace_id(),
+        turn_span.span_context.trace_id()
+    );
+    assert_eq!(llm_span.parent_span_id, turn_span.span_context.span_id());
+}
+
+#[test]
+fn top_level_callback_context_preserves_relay_root_and_exported_trace() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    let stack = create_scope_stack();
+    let relay_root_uuid = stack.read().unwrap().root_uuid();
+    set_thread_scope_stack(stack);
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let (upstream_provider, upstream_exporter) = make_provider();
+    let upstream_subscriber =
+        OpenTelemetrySubscriber::from_tracer_provider(upstream_provider, "top-level-capture");
+    let upstream_name = format!("top_level_capture_{}", Uuid::now_v7().simple());
+    upstream_subscriber.register(&upstream_name).unwrap();
+    let observed = Arc::new(Mutex::new(None));
+    let observed_request = observed.clone();
+
+    runtime
+        .block_on(llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("top-level-capture-llm")
+                .request(LlmRequest {
+                    headers: serde_json::Map::new(),
+                    content: json!({"prompt": "hello"}),
+                })
+                .func(Arc::new(move |request| {
+                    let context = capture_propagation_context().unwrap();
+                    let traceparent = request
+                        .headers
+                        .get("traceparent")
+                        .and_then(Json::as_str)
+                        .expect("managed LLM request must contain traceparent")
+                        .to_owned();
+                    *observed_request.lock().unwrap() = Some((context, traceparent));
+                    Box::pin(async { Ok(json!({"ok": true})) })
+                }))
+                .build(),
+        ))
+        .unwrap();
+
+    let (context, upstream_traceparent) = observed
+        .lock()
+        .unwrap()
+        .take()
+        .expect("provider must capture propagation context");
+    assert_eq!(context.root_uuid, Some(relay_root_uuid));
+    let upstream_spans =
+        finish_trace_subscriber(&upstream_subscriber, &upstream_name, &upstream_exporter);
+    let upstream_span = finished_span_named(&upstream_spans, "top-level-capture-llm");
+    assert_traceparent_matches_exported_span(&upstream_traceparent, upstream_span);
+    assert_eq!(
+        context.traceparent.as_deref(),
+        Some(upstream_traceparent.as_str())
+    );
+
+    let imported = create_scope_stack_from_propagation(&context).unwrap();
+    let (downstream_provider, downstream_exporter) = make_provider();
+    let downstream_subscriber =
+        OpenTelemetrySubscriber::from_tracer_provider(downstream_provider, "captured-child");
+    let downstream_name = format!("captured_child_{}", Uuid::now_v7().simple());
+    downstream_subscriber.register(&downstream_name).unwrap();
+    let downstream_traceparent = runtime.block_on(TASK_SCOPE_STACK.scope(
+        imported,
+        execute_llm_and_capture_traceparent("captured-child-llm"),
+    ));
+
+    let downstream_spans = finish_trace_subscriber(
+        &downstream_subscriber,
+        &downstream_name,
+        &downstream_exporter,
+    );
+    let downstream_span = finished_span_named(&downstream_spans, "captured-child-llm");
+    assert_traceparent_matches_exported_span(&downstream_traceparent, downstream_span);
+    assert_eq!(
+        downstream_span.span_context.trace_id(),
+        upstream_span.span_context.trace_id()
+    );
+    assert_eq!(
+        downstream_span.parent_span_id,
+        upstream_span.span_context.span_id()
+    );
+    assert!(downstream_span.parent_span_is_remote);
+}
+
+#[test]
+fn forked_llm_traceparent_matches_exported_span() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "forked-llm");
+    let subscriber_name = format!("forked_llm_{}", Uuid::now_v7().simple());
+    subscriber.register(&subscriber_name).unwrap();
+
+    let turn = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("forked-turn")
+            .scope_type(ScopeType::Custom)
+            .build(),
+    )
+    .unwrap();
+    let forked = fork_scope_stack().unwrap();
+    let traceparent = runtime.block_on(
+        TASK_SCOPE_STACK.scope(forked, execute_llm_and_capture_traceparent("forked-llm")),
+    );
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&turn.uuid)
+            .build(),
+    )
+    .unwrap();
+
+    let spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
+    let turn_span = finished_span_named(&spans, "forked-turn");
+    let llm_span = finished_span_named(&spans, "forked-llm");
+    assert_traceparent_matches_exported_span(&traceparent, llm_span);
+    assert_eq!(
+        llm_span.span_context.trace_id(),
+        turn_span.span_context.trace_id()
+    );
+    assert_eq!(llm_span.parent_span_id, turn_span.span_context.span_id());
+}
+
+#[test]
+fn nested_agent_fork_llm_traceparent_matches_exported_span() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "agent-fork-llm");
+    let subscriber_name = format!("agent_fork_llm_{}", Uuid::now_v7().simple());
+    subscriber.register(&subscriber_name).unwrap();
+
+    let turn = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("agent-fork-turn")
+            .scope_type(ScopeType::Custom)
+            .build(),
+    )
+    .unwrap();
+    let agent = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("agent-fork-parent")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    let forked = fork_scope_stack().unwrap();
+    let traceparent = runtime.block_on(TASK_SCOPE_STACK.scope(
+        forked,
+        execute_llm_and_capture_traceparent("agent-fork-llm"),
+    ));
+    for handle in [&agent, &turn] {
+        pop_scope(
+            crate::api::scope::PopScopeParams::builder()
+                .handle_uuid(&handle.uuid)
+                .build(),
+        )
+        .unwrap();
+    }
+
+    let spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
+    let turn_span = finished_span_named(&spans, "agent-fork-turn");
+    let agent_span = finished_span_named(&spans, "agent-fork-parent");
+    let llm_span = finished_span_named(&spans, "agent-fork-llm");
+    assert_traceparent_matches_exported_span(&traceparent, llm_span);
+    assert_eq!(
+        llm_span.span_context.trace_id(),
+        turn_span.span_context.trace_id()
+    );
+    assert_eq!(llm_span.parent_span_id, agent_span.span_context.span_id());
+}
+
+#[test]
+fn rooted_import_llm_traceparent_matches_exported_span() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "rooted-import-llm");
+    let subscriber_name = format!("rooted_import_llm_{}", Uuid::now_v7().simple());
+    subscriber.register(&subscriber_name).unwrap();
+    let root_uuid = Uuid::now_v7();
+    let parent_uuid = Uuid::now_v7();
+    let context = PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: Some(root_uuid),
+        parent_uuid,
+        traceparent: Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string()),
+        tracestate: Some("vendor=value".to_string()),
+    };
+    let imported = create_scope_stack_from_propagation(&context).unwrap();
+
+    let (traceparent, tracestate, callback_traceparent) = runtime.block_on(TASK_SCOPE_STACK.scope(
+        imported,
+        execute_llm_and_capture_trace_context("rooted-import-llm"),
+    ));
+
+    let spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
+    let llm_span = finished_span_named(&spans, "rooted-import-llm");
+    assert_traceparent_matches_exported_span(&traceparent, llm_span);
+    assert_eq!(
+        llm_span.span_context.trace_id().to_string(),
+        "4bf92f3577b34da6a3ce929d0e0e4736"
+    );
+    assert_eq!(llm_span.parent_span_id.to_string(), "00f067aa0ba902b7");
+    assert!(llm_span.parent_span_is_remote);
+    assert_eq!(tracestate.as_deref(), Some("vendor=value"));
+    assert_eq!(callback_traceparent, traceparent);
+}
+
+#[test]
+fn imported_w3c_parent_survives_an_additional_fork() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "reforked-import");
+    let subscriber_name = format!("reforked_import_{}", Uuid::now_v7().simple());
+    subscriber.register(&subscriber_name).unwrap();
+    let original_traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    let context = PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: Some(Uuid::now_v7()),
+        parent_uuid: Uuid::now_v7(),
+        traceparent: Some(original_traceparent.to_string()),
+        tracestate: Some("vendor=value".to_string()),
+    };
+    let imported = create_scope_stack_from_propagation(&context).unwrap();
+
+    let (captured_traceparent, outbound_traceparent) =
+        runtime.block_on(TASK_SCOPE_STACK.scope(imported, async {
+            let captured_traceparent = capture_propagation_context()
+                .unwrap()
+                .traceparent
+                .expect("captured propagation context must retain traceparent");
+            let forked = fork_scope_stack().unwrap();
+            let outbound_traceparent = TASK_SCOPE_STACK
+                .scope(
+                    forked,
+                    execute_llm_and_capture_traceparent("reforked-import-llm"),
+                )
+                .await;
+            (captured_traceparent, outbound_traceparent)
+        }));
+
+    assert_eq!(captured_traceparent, original_traceparent);
+    let spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
+    let llm_span = finished_span_named(&spans, "reforked-import-llm");
+    assert_traceparent_matches_exported_span(&outbound_traceparent, llm_span);
+    assert_eq!(
+        llm_span.span_context.trace_id().to_string(),
+        "4bf92f3577b34da6a3ce929d0e0e4736"
+    );
+    assert_eq!(llm_span.parent_span_id.to_string(), "00f067aa0ba902b7");
+    assert!(llm_span.parent_span_is_remote);
+}
+
+#[test]
+fn rootless_import_llm_traceparent_matches_exported_span() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "rootless-import-llm");
+    let subscriber_name = format!("rootless_import_llm_{}", Uuid::now_v7().simple());
+    subscriber.register(&subscriber_name).unwrap();
+
+    let turn = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("rootless-import-turn")
+            .scope_type(ScopeType::Custom)
+            .build(),
+    )
+    .unwrap();
+    let context = capture_rootless_propagation_context().unwrap();
+    assert_eq!(context.root_uuid, None);
+    let imported = create_scope_stack_from_propagation(&context).unwrap();
+    let traceparent = runtime.block_on(TASK_SCOPE_STACK.scope(
+        imported,
+        execute_llm_and_capture_traceparent("rootless-import-llm"),
+    ));
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&turn.uuid)
+            .build(),
+    )
+    .unwrap();
+
+    let spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
+    let turn_span = finished_span_named(&spans, "rootless-import-turn");
+    let llm_span = finished_span_named(&spans, "rootless-import-llm");
+    assert_traceparent_matches_exported_span(&traceparent, llm_span);
+    assert_eq!(
+        llm_span.span_context.trace_id(),
+        turn_span.span_context.trace_id()
+    );
+    assert_eq!(llm_span.parent_span_id, turn_span.span_context.span_id());
+}
+
+#[test]
+fn legacy_rootless_import_starts_its_first_local_scope_as_a_trace_root() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "legacy-rootless");
+    let subscriber_name = format!("legacy_rootless_{}", Uuid::now_v7().simple());
+    subscriber.register(&subscriber_name).unwrap();
+    let propagated_parent = Uuid::now_v7();
+    let context = PropagationContext::from_json(
+        &json!({
+            "version": PropagationContext::VERSION,
+            "parent_uuid": propagated_parent,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let imported = create_scope_stack_from_propagation(&context).unwrap();
+
+    let local_scope = runtime.block_on(TASK_SCOPE_STACK.scope(imported, async {
+        let local_scope = push_scope(
+            crate::api::scope::PushScopeParams::builder()
+                .name("legacy-rootless-local")
+                .scope_type(ScopeType::Custom)
+                .build(),
+        )
+        .unwrap();
+        pop_scope(
+            crate::api::scope::PopScopeParams::builder()
+                .handle_uuid(&local_scope.uuid)
+                .build(),
+        )
+        .unwrap();
+        local_scope
+    }));
+
+    let spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
+    let span = finished_span_named(&spans, "legacy-rootless-local");
+    assert_eq!(
+        span.span_context.trace_id(),
+        relay_trace_id(local_scope.uuid)
+    );
+    assert_eq!(span.parent_span_id, opentelemetry::trace::SpanId::INVALID);
+    assert!(!span.parent_span_is_remote);
+}
+
+#[test]
+fn propagation_context_traceparent_agrees_with_active_trace_capture() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    let stack = create_scope_stack();
+    let relay_root_uuid = stack.read().unwrap().root_uuid();
+    set_thread_scope_stack(stack);
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "capture-agreement");
+    let subscriber_name = format!("capture_agreement_{}", Uuid::now_v7().simple());
+    subscriber.register(&subscriber_name).unwrap();
+
+    let turn = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("capture-agreement-turn")
+            .scope_type(ScopeType::Custom)
+            .build(),
+    )
+    .unwrap();
+    let context = capture_propagation_context().unwrap();
+    let traceparent = capture_traceparent().unwrap();
+    assert_eq!(context.root_uuid, Some(relay_root_uuid));
+    assert_ne!(context.root_uuid, Some(turn.uuid));
+    assert_eq!(context.traceparent.as_deref(), Some(traceparent.as_str()));
+    assert_eq!(context.to_traceparent().unwrap(), traceparent);
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&turn.uuid)
+            .build(),
+    )
+    .unwrap();
+
+    let spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
+    let turn_span = finished_span_named(&spans, "capture-agreement-turn");
+    assert_traceparent_matches_exported_span(&traceparent, turn_span);
+}
+
+#[test]
+fn late_subscriber_llm_traceparent_matches_exported_span() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let turn = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("late-subscriber-turn")
+            .scope_type(ScopeType::Custom)
+            .build(),
+    )
+    .unwrap();
+
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "late-subscriber-llm");
+    let subscriber_name = format!("late_subscriber_llm_{}", Uuid::now_v7().simple());
+    subscriber.register(&subscriber_name).unwrap();
+    let traceparent = runtime.block_on(execute_llm_and_capture_traceparent("late-subscriber-llm"));
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&turn.uuid)
+            .build(),
+    )
+    .unwrap();
+
+    let spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
+    assert!(
+        spans
+            .iter()
+            .all(|span| span.name.as_ref() != "late-subscriber-turn")
+    );
+    let llm_span = finished_span_named(&spans, "late-subscriber-llm");
+    assert_traceparent_matches_exported_span(&traceparent, llm_span);
+    assert_eq!(llm_span.span_context.trace_id(), relay_trace_id(turn.uuid));
+    assert_eq!(llm_span.parent_span_id, relay_span_id(turn.uuid));
+    assert!(llm_span.parent_span_is_remote);
+}
+
+#[test]
+fn subscriber_registered_inside_managed_llm_preserves_parent_context() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let (provider, exporter) = make_provider();
+    let subscriber =
+        OpenTelemetrySubscriber::from_tracer_provider(provider, "callback-late-subscriber");
+    let subscriber_name = format!("callback_late_subscriber_{}", Uuid::now_v7().simple());
+    let subscriber_for_callback = subscriber.clone();
+    let subscriber_name_for_callback = subscriber_name.clone();
+    let captured = Arc::new(Mutex::new(None));
+    let captured_for_callback = Arc::clone(&captured);
+
+    runtime
+        .block_on(llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("unobserved-outer-llm")
+                .request(LlmRequest {
+                    headers: serde_json::Map::new(),
+                    content: json!({"prompt": "outer"}),
+                })
+                .func(Arc::new(move |request| {
+                    let subscriber = subscriber_for_callback.clone();
+                    let subscriber_name = subscriber_name_for_callback.clone();
+                    let captured = Arc::clone(&captured_for_callback);
+                    Box::pin(async move {
+                        let outer_traceparent = request
+                            .headers
+                            .get("traceparent")
+                            .and_then(Json::as_str)
+                            .map(ToOwned::to_owned)
+                            .expect("managed outer LLM request must contain traceparent");
+                        let propagation = capture_propagation_context().unwrap();
+                        assert_eq!(
+                            propagation.traceparent.as_deref(),
+                            Some(outer_traceparent.as_str())
+                        );
+                        let managed_parent = ScopeHandle::builder()
+                            .uuid(propagation.parent_uuid)
+                            .name("unobserved-outer-llm")
+                            .scope_type(ScopeType::Llm)
+                            .build();
+                        subscriber.register(&subscriber_name).unwrap();
+                        let nested_traceparent = execute_llm_and_capture_trace_context_with_parent(
+                            "observed-nested-llm",
+                            Some(managed_parent),
+                        )
+                        .await
+                        .0;
+                        *captured.lock().unwrap() = Some((outer_traceparent, nested_traceparent));
+                        Ok(json!({"ok": true}))
+                    })
+                }))
+                .build(),
+        ))
+        .unwrap();
+
+    let (outer_traceparent, nested_traceparent) = captured
+        .lock()
+        .unwrap()
+        .take()
+        .expect("managed callbacks must capture both traceparents");
+    let spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
+    assert!(
+        spans
+            .iter()
+            .all(|span| span.name.as_ref() != "unobserved-outer-llm")
+    );
+    let nested_span = finished_span_named(&spans, "observed-nested-llm");
+    assert_traceparent_matches_exported_span(&nested_traceparent, nested_span);
+    let outer_context =
+        crate::api::runtime::scope_stack::w3c_span_context(Some(&outer_traceparent), None)
+            .expect("managed outer LLM traceparent must be valid");
+    assert_eq!(
+        nested_span.span_context.trace_id(),
+        outer_context.trace_id()
+    );
+    assert_eq!(nested_span.parent_span_id, outer_context.span_id());
+    assert!(nested_span.parent_span_is_remote);
+}
+
+#[test]
+fn invalid_parent_span_id_does_not_split_llm_or_disable_later_exports() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "invalid-parent");
+    let subscriber_name = format!("invalid_parent_{}", Uuid::now_v7().simple());
+    subscriber.register(&subscriber_name).unwrap();
+
+    let valid_ancestor = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("valid-ancestor")
+            .scope_type(ScopeType::Custom)
+            .build(),
+    )
+    .unwrap();
+    let invalid_parent = ScopeHandle::builder()
+        .uuid(Uuid::from_u128(0x018f_13f0_7c1a_7a80_0000_0000_0000_0000))
+        .name("invalid-span-id-parent")
+        .scope_type(ScopeType::Custom)
+        .build();
+    task_scope_push(invalid_parent.clone());
+    let traceparent = runtime.block_on(execute_llm_and_capture_traceparent("invalid-parent-llm"));
+    let explicit_child = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("explicit-child-skipping-invalid-scope")
+            .scope_type(ScopeType::Function)
+            .parent(&valid_ancestor)
+            .build(),
+    )
+    .unwrap();
+    let nested_traceparent =
+        runtime.block_on(execute_llm_and_capture_traceparent("explicit-child-llm"));
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&explicit_child.uuid)
+            .build(),
+    )
+    .unwrap();
+    let explicit_traceparent = runtime.block_on(execute_llm_and_capture_trace_context_with_parent(
+        "explicit-valid-ancestor-llm",
+        Some(valid_ancestor.clone()),
+    ));
+    let child = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("invalid-parent-child")
+            .scope_type(ScopeType::Function)
+            .build(),
+    )
+    .unwrap();
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&child.uuid)
+            .build(),
+    )
+    .unwrap();
+    task_scope_remove(&invalid_parent.uuid).unwrap();
+    let invalid_agent = ScopeHandle::builder()
+        .uuid(Uuid::from_u128(0x018f_13f0_7c1a_7a81_0000_0000_0000_0000))
+        .name("invalid-span-id-agent")
+        .scope_type(ScopeType::Agent)
+        .build();
+    task_scope_push(invalid_agent.clone());
+    let invalid_agent_traceparent = runtime.block_on(execute_llm_and_capture_trace_context(
+        "invalid-agent-parent-llm",
+    ));
+    task_scope_remove(&invalid_agent.uuid).unwrap();
+    let unpushed_traceparent = runtime.block_on(execute_llm_and_capture_trace_context_with_parent(
+        "unpushed-invalid-parent-llm",
+        Some(invalid_parent),
+    ));
+
+    let later = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("later-valid-scope")
+            .scope_type(ScopeType::Custom)
+            .build(),
+    )
+    .unwrap();
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&later.uuid)
+            .build(),
+    )
+    .unwrap();
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&valid_ancestor.uuid)
+            .build(),
+    )
+    .unwrap();
+
+    let spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
+    let llm_span = finished_span_named(&spans, "invalid-parent-llm");
+    assert_traceparent_matches_exported_span(&traceparent, llm_span);
+    assert_eq!(llm_span.parent_span_id, SpanId::INVALID);
+    assert!(!llm_span.parent_span_is_remote);
+    let ancestor_span = finished_span_named(&spans, "valid-ancestor");
+    let explicit_child_span = finished_span_named(&spans, "explicit-child-skipping-invalid-scope");
+    let nested_span = finished_span_named(&spans, "explicit-child-llm");
+    assert_traceparent_matches_exported_span(&nested_traceparent, nested_span);
+    assert_eq!(
+        explicit_child_span.span_context.trace_id(),
+        ancestor_span.span_context.trace_id()
+    );
+    assert_eq!(
+        nested_span.span_context.trace_id(),
+        ancestor_span.span_context.trace_id()
+    );
+    assert_eq!(
+        nested_span.parent_span_id,
+        explicit_child_span.span_context.span_id()
+    );
+    let explicit_span = finished_span_named(&spans, "explicit-valid-ancestor-llm");
+    assert_traceparent_matches_exported_span(&explicit_traceparent.0, explicit_span);
+    assert_eq!(explicit_traceparent.2, explicit_traceparent.0);
+    assert_eq!(
+        explicit_span.parent_span_id,
+        ancestor_span.span_context.span_id()
+    );
+    assert_eq!(
+        explicit_span.span_context.trace_id(),
+        ancestor_span.span_context.trace_id()
+    );
+    let unpushed_span = finished_span_named(&spans, "unpushed-invalid-parent-llm");
+    assert_traceparent_matches_exported_span(&unpushed_traceparent.0, unpushed_span);
+    assert_eq!(unpushed_traceparent.2, unpushed_traceparent.0);
+    assert_eq!(unpushed_span.parent_span_id, SpanId::INVALID);
+    let invalid_agent_span = finished_span_named(&spans, "invalid-agent-parent-llm");
+    assert_traceparent_matches_exported_span(&invalid_agent_traceparent.0, invalid_agent_span);
+    assert_eq!(invalid_agent_traceparent.2, invalid_agent_traceparent.0);
+    assert_eq!(invalid_agent_span.parent_span_id, SpanId::INVALID);
+    finished_span_named(&spans, "invalid-parent-child");
+    finished_span_named(&spans, "later-valid-scope");
 }
 
 fn attr_map(attributes: &[KeyValue]) -> HashMap<String, String> {

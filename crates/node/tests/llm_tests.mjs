@@ -1085,14 +1085,70 @@ describe('LLM guardrails', () => {
 // ===========================================================================
 
 describe('LLM intercepts', () => {
+  it('pre-event callbacks preserve exact imported W3C trace context', async () => {
+    const rootUuid = '018f13f0-7c1a-7a80-8000-000000000721';
+    const parentUuid = '018f13f0-7c1a-7a80-8000-000000000722';
+    const traceparent = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00';
+    const stack = lib.createScopeStackFromPropagation({
+      version: 1,
+      rootUuid,
+      parentUuid,
+      traceparent,
+      tracestate: 'vendor=value',
+    });
+    const observed = [];
+    const capture = (label) => {
+      const context = lib.capturePropagationContext();
+      observed.push([
+        label,
+        context.parentUuid,
+        context.rootUuid,
+        context.traceparent,
+        context.tracestate,
+        lib.captureTraceparent(),
+      ]);
+    };
+    registerLlmConditionalExecutionGuardrail('node_llm_imported_w3c_conditional', 10, () => {
+      capture('conditional');
+      return null;
+    });
+    registerLlmRequestIntercept('node_llm_imported_w3c_request', 10, false, ({ request, annotated }) => {
+      capture('request');
+      return { request, annotated };
+    });
+    try {
+      await lib.withScopeStack(stack, () =>
+        llmCallExecuteAsync(
+          'node_llm_imported_w3c_pre_event',
+          makeNative(),
+          async () => ({}),
+          null,
+          null,
+          null,
+          null,
+          null,
+        ),
+      );
+    } finally {
+      deregisterLlmRequestIntercept('node_llm_imported_w3c_request');
+      deregisterLlmConditionalExecutionGuardrail('node_llm_imported_w3c_conditional');
+    }
+    assert.deepEqual(observed, [
+      ['conditional', parentUuid, rootUuid, traceparent, 'vendor=value', traceparent],
+      ['request', parentUuid, rootUuid, traceparent, 'vendor=value', traceparent],
+    ]);
+  });
+
   it('execution callbacks preserve the managed propagation parent across await', async () => {
     const events = [];
     const observed = [];
     registerSubscriber('node_llm_exec_propagation_parent', (event) => events.push(event));
     registerLlmExecutionIntercept('node_llm_exec_propagation_parent', 10, async (request, next) => {
-      observed.push(['intercept-before', lib.capturePropagationContext().parentUuid, lib.captureTraceparent()]);
+      const before = lib.capturePropagationContext();
+      observed.push(['intercept-before', before.parentUuid, before.rootUuid, lib.captureTraceparent()]);
       await new Promise((resolve) => setImmediate(resolve));
-      observed.push(['intercept-after', lib.capturePropagationContext().parentUuid, lib.captureTraceparent()]);
+      const after = lib.capturePropagationContext();
+      observed.push(['intercept-after', after.parentUuid, after.rootUuid, lib.captureTraceparent()]);
       return next(request);
     });
     try {
@@ -1100,9 +1156,11 @@ describe('LLM intercepts', () => {
         'propagation_parent_llm',
         makeNative(),
         async () => {
-          observed.push(['provider-before', lib.capturePropagationContext().parentUuid, lib.captureTraceparent()]);
+          const before = lib.capturePropagationContext();
+          observed.push(['provider-before', before.parentUuid, before.rootUuid, lib.captureTraceparent()]);
           await new Promise((resolve) => setImmediate(resolve));
-          observed.push(['provider-after', lib.capturePropagationContext().parentUuid, lib.captureTraceparent()]);
+          const after = lib.capturePropagationContext();
+          observed.push(['provider-after', after.parentUuid, after.rootUuid, lib.captureTraceparent()]);
           return { ok: true };
         },
         null,
@@ -1120,14 +1178,52 @@ describe('LLM intercepts', () => {
       assert.ok(start, 'expected managed LLM start event');
       const traceparent = `00-${start.uuid.replaceAll('-', '')}-${start.uuid.replaceAll('-', '').slice(-16)}-01`;
       assert.deepEqual(observed, [
-        ['intercept-before', start.uuid, traceparent],
-        ['intercept-after', start.uuid, traceparent],
-        ['provider-before', start.uuid, traceparent],
-        ['provider-after', start.uuid, traceparent],
+        ['intercept-before', start.uuid, start.uuid, traceparent],
+        ['intercept-after', start.uuid, start.uuid, traceparent],
+        ['provider-before', start.uuid, start.uuid, traceparent],
+        ['provider-after', start.uuid, start.uuid, traceparent],
       ]);
     } finally {
       deregisterLlmExecutionIntercept('node_llm_exec_propagation_parent');
       deregisterSubscriber('node_llm_exec_propagation_parent');
+    }
+  });
+
+  it('execution callbacks preserve trace context for an explicit nonlocal parent', async () => {
+    const external = pushScope('node_llm_external_parent', ScopeType.Custom, null, null);
+    popScope(external);
+    const current = pushScope('node_llm_current_parent', ScopeType.Custom, null, null);
+    const events = [];
+    let providerTraceparent;
+    let callbackTraceparent;
+    registerSubscriber('node_llm_nonlocal_parent', (event) => events.push(event));
+    try {
+      await llmCallExecuteAsync(
+        'node_llm_nonlocal_parent',
+        makeNative(),
+        async (request) => {
+          providerTraceparent = request.headers.traceparent;
+          callbackTraceparent = lib.captureTraceparent();
+          return { ok: true };
+        },
+        external,
+        null,
+        null,
+        null,
+        null,
+      );
+      await flushSubscribers();
+      const start = events.find(
+        (event) =>
+          event.name === 'node_llm_nonlocal_parent' && event.kind === 'scope' && event.scope_category === 'start',
+      );
+      assert.ok(start, 'expected managed LLM start event');
+      const expected = `00-${start.uuid.replaceAll('-', '')}-${start.uuid.replaceAll('-', '').slice(-16)}-01`;
+      assert.equal(providerTraceparent, expected);
+      assert.equal(callbackTraceparent, providerTraceparent);
+    } finally {
+      deregisterSubscriber('node_llm_nonlocal_parent');
+      popScope(current);
     }
   });
 
@@ -1189,6 +1285,8 @@ describe('LLM intercepts', () => {
       const context = lib.capturePropagationContext();
       const rootless = lib.captureRootlessPropagationContext();
       observed.push([
+        context.parentUuid,
+        context.rootUuid,
         context.traceparent,
         context.tracestate,
         lib.captureTraceparent(),
@@ -1216,10 +1314,118 @@ describe('LLM intercepts', () => {
       );
       assert.ok(start, 'expected managed LLM start event');
       const expected = `00-4bf92f3577b34da6a3ce929d0e0e4736-${start.uuid.replaceAll('-', '').slice(-16)}-00`;
-      assert.deepEqual(observed, [[expected, 'vendor=value', expected, expected, 'vendor=value']]);
+      assert.deepEqual(observed, [
+        [start.uuid, rootUuid, expected, 'vendor=value', expected, expected, 'vendor=value'],
+      ]);
     } finally {
       deregisterLlmExecutionIntercept('node_llm_exec_propagated_w3c');
       deregisterSubscriber('node_llm_exec_propagated_w3c');
+    }
+  });
+
+  it('synchronous execution callbacks preserve imported W3C trace context', async () => {
+    const rootUuid = '018f13f0-7c1a-7a80-8000-000000000741';
+    const parentUuid = '018f13f0-7c1a-7a80-8000-000000000742';
+    const stack = lib.createScopeStackFromPropagation({
+      version: 1,
+      rootUuid,
+      parentUuid,
+      traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00',
+      tracestate: 'vendor=value',
+    });
+    const events = [];
+    let observed;
+    registerSubscriber('node_llm_sync_propagated_w3c', (event) => events.push(event));
+    try {
+      const result = await lib.withScopeStack(stack, () =>
+        llmCallExecute('sync_propagated_w3c_llm', makeNative(), (request) => {
+          observed = {
+            context: lib.capturePropagationContext(),
+            traceparent: lib.captureTraceparent(),
+            headers: request.headers,
+          };
+          return { ok: true };
+        }),
+      );
+      assert.deepEqual(result, { ok: true });
+      await flushSubscribers();
+      const start = events.find(
+        (event) =>
+          event.name === 'sync_propagated_w3c_llm' && event.kind === 'scope' && event.scope_category === 'start',
+      );
+      assert.ok(start, 'expected managed LLM start event');
+      const expected = `00-4bf92f3577b34da6a3ce929d0e0e4736-${start.uuid.replaceAll('-', '').slice(-16)}-00`;
+      assert.deepEqual(observed, {
+        context: {
+          version: 1,
+          rootUuid,
+          parentUuid: start.uuid,
+          traceparent: expected,
+          tracestate: 'vendor=value',
+        },
+        traceparent: expected,
+        headers: { traceparent: expected, tracestate: 'vendor=value' },
+      });
+    } finally {
+      deregisterSubscriber('node_llm_sync_propagated_w3c');
+    }
+  });
+
+  it('withScopeStack replaces and restores managed callback propagation context', async () => {
+    const rootUuid = '018f13f0-7c1a-7a80-8000-000000000731';
+    const parentUuid = '018f13f0-7c1a-7a80-8000-000000000732';
+    const traceparent = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00';
+    const stack = lib.createScopeStackFromPropagation({
+      version: 1,
+      rootUuid,
+      parentUuid,
+      traceparent,
+      tracestate: 'vendor=value',
+    });
+    const events = [];
+    const observed = {};
+    registerSubscriber('node_llm_replace_callback_context', (event) => events.push(event));
+    registerLlmExecutionIntercept('node_llm_replace_callback_context', 10, async (request, next) => {
+      observed.before = lib.capturePropagationContext();
+      observed.replacement = lib.withScopeStack(stack, () => ({
+        context: lib.capturePropagationContext(),
+        traceparent: lib.captureTraceparent(),
+      }));
+      observed.after = lib.capturePropagationContext();
+      return next(request);
+    });
+    try {
+      await llmCallExecuteAsync(
+        'replace_callback_context_llm',
+        makeNative(),
+        async () => ({ ok: true }),
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      await flushSubscribers();
+      const start = events.find(
+        (event) =>
+          event.name === 'replace_callback_context_llm' && event.kind === 'scope' && event.scope_category === 'start',
+      );
+      assert.ok(start, 'expected managed LLM start event');
+      assert.equal(observed.before.parentUuid, start.uuid);
+      assert.deepEqual(observed.replacement, {
+        context: {
+          version: 1,
+          rootUuid,
+          parentUuid,
+          traceparent,
+          tracestate: 'vendor=value',
+        },
+        traceparent,
+      });
+      assert.equal(observed.after.parentUuid, start.uuid);
+    } finally {
+      deregisterLlmExecutionIntercept('node_llm_replace_callback_context');
+      deregisterSubscriber('node_llm_replace_callback_context');
     }
   });
 
@@ -1800,19 +2006,34 @@ describe('LLM intercepts', () => {
     }
   });
 
-  it('default lazy stream preserves the managed parent context', async () => {
+  it('default lazy stream provider preserves imported W3C trace context', async () => {
+    const rootUuid = '018f13f0-7c1a-7a80-8000-000000000761';
+    const parentUuid = '018f13f0-7c1a-7a80-8000-000000000762';
+    const stack = lib.createScopeStackFromPropagation({
+      version: 1,
+      rootUuid,
+      parentUuid,
+      traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00',
+      tracestate: 'vendor=value',
+    });
     const events = [];
+    let observed;
     registerSubscriber('node_default_lazy_stream_context', (event) => events.push(event));
     try {
-      const stream = await llmStreamCallExecute('node_default_lazy_stream_context', makeNative(), (wrapper) => {
-        setImmediate(() => {
-          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, {
-            parentUuid: lib.capturePropagationContext().parentUuid,
+      const stream = await lib.withScopeStack(stack, () =>
+        llmStreamCallExecute('node_default_lazy_stream_context', makeNative(), (wrapper) => {
+          setImmediate(() => {
+            observed = {
+              context: lib.capturePropagationContext(),
+              traceparent: lib.captureTraceparent(),
+              headers: wrapper.__nemo_relay_native.headers,
+            };
+            lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'done' });
+            lib.endStream(wrapper.__nemo_relay_stream_id);
           });
-          lib.endStream(wrapper.__nemo_relay_stream_id);
-        });
-      });
-      const providerContext = await stream.next();
+        }),
+      );
+      assert.deepEqual(await stream.next(), { token: 'done' });
       assert.equal(await stream.next(), null);
       await flushSubscribers();
       const start = events.find(
@@ -1822,7 +2043,18 @@ describe('LLM intercepts', () => {
           event.category === 'llm',
       );
       assert.ok(start, 'expected managed LLM start event');
-      assert.deepEqual(providerContext, { parentUuid: start.uuid });
+      const expected = `00-4bf92f3577b34da6a3ce929d0e0e4736-${start.uuid.replaceAll('-', '').slice(-16)}-00`;
+      assert.deepEqual(observed, {
+        context: {
+          version: 1,
+          rootUuid,
+          parentUuid: start.uuid,
+          traceparent: expected,
+          tracestate: 'vendor=value',
+        },
+        traceparent: expected,
+        headers: { traceparent: expected, tracestate: 'vendor=value' },
+      });
     } finally {
       deregisterSubscriber('node_default_lazy_stream_context');
     }

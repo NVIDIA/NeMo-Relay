@@ -2349,14 +2349,16 @@ impl OtelEventProcessor {
         let Some(parent_uuid) = event.parent_uuid() else {
             return Context::new();
         };
-        if event.propagation_parent_uuid() != Some(parent_uuid) {
-            return Context::new();
-        }
         if let Some(span_context) = w3c_span_context(
             event.propagation_traceparent(),
             event.propagation_tracestate(),
-        ) {
+        ) && (event.propagation_parent_uuid() == Some(parent_uuid)
+            || span_context.span_id() == relay_span_id(parent_uuid))
+        {
             return Context::new().with_remote_span_context(span_context);
+        }
+        if event.propagation_parent_uuid() != Some(parent_uuid) {
+            return Context::new();
         }
         let Some(root_uuid) = event.propagation_root_uuid() else {
             return Context::new();

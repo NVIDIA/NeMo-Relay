@@ -776,55 +776,149 @@ fn js_unknown_from_raw<T: NapiRaw>(env: &Env, value: &T) -> JsUnknown {
     unsafe { JsUnknown::from_raw_unchecked(env.raw(), value.raw()) }
 }
 
-fn json_callback_tsfn(
-    env: &Env,
-    func: &JsFunction,
-) -> napi::Result<ThreadsafeFunction<Json, ErrorStrategy::Fatal>> {
-    let mut tsfn = func
-        .create_threadsafe_function::<Json, Json, _, ErrorStrategy::Fatal>(0, |ctx| {
-            Ok(vec![ctx.value])
-        })?;
-    tsfn.unref(env)?;
-    Ok(tsfn)
-}
-
-struct ScopedStreamCall {
-    request: Json,
+struct ScopedCallbackContext {
     scope_stack: CoreScopeStackHandle,
     publication_buffer: Option<PublicationBuffer>,
     propagation_parent_uuid: String,
+    propagation_context_json: String,
 }
 
-fn scoped_stream_callback_tsfn(
+impl ScopedCallbackContext {
+    fn capture() -> FlowResult<Self> {
+        let propagation_context = capture_propagation_context_handle()?;
+        Ok(Self {
+            scope_stack: current_scope_stack_handle(),
+            publication_buffer: capture_nested_publication_buffer(),
+            propagation_parent_uuid: propagation_context.parent_uuid.to_string(),
+            propagation_context_json: propagation_context.to_json()?,
+        })
+    }
+}
+
+struct ScopedJsonCall {
+    value: Json,
+    context: ScopedCallbackContext,
+}
+
+fn scoped_json_callback_tsfn_from_wrapper(
     env: &Env,
-    func: &JsFunction,
-) -> napi::Result<ThreadsafeFunction<ScopedStreamCall, ErrorStrategy::Fatal>> {
-    let callback = callback_factory::wrap_scoped_stream_callback(env, func)?;
+    callback: JsFunction,
+) -> napi::Result<ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>> {
     let mut tsfn = callback.create_threadsafe_function(
         0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<ScopedStreamCall>| {
-            let request = unsafe {
+        |ctx: napi::threadsafe_function::ThreadSafeCallContext<ScopedJsonCall>| {
+            let value = unsafe {
                 JsUnknown::from_raw_unchecked(
                     ctx.env.raw(),
-                    Json::to_napi_value(ctx.env.raw(), ctx.value.request)?,
+                    Json::to_napi_value(ctx.env.raw(), ctx.value.value)?,
                 )
             };
             let scope_stack = ScopeStack {
-                inner: ctx.value.scope_stack,
-                publication_buffer: ctx.value.publication_buffer,
+                inner: ctx.value.context.scope_stack,
+                publication_buffer: ctx.value.context.publication_buffer,
             }
             .into_instance(ctx.env)?;
             Ok(vec![
-                request,
+                value,
                 unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), scope_stack.raw()) },
                 ctx.env
-                    .create_string(&ctx.value.propagation_parent_uuid)?
+                    .create_string(&ctx.value.context.propagation_parent_uuid)?
+                    .into_unknown(),
+                ctx.env
+                    .create_string(&ctx.value.context.propagation_context_json)?
                     .into_unknown(),
             ])
         },
     )?;
     tsfn.unref(env)?;
     Ok(tsfn)
+}
+
+fn scoped_json_callback_tsfn(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>> {
+    scoped_json_callback_tsfn_from_wrapper(env, callback_factory::wrap_scoped_callback(env, func)?)
+}
+
+fn scoped_stream_callback_tsfn(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>> {
+    scoped_json_callback_tsfn_from_wrapper(
+        env,
+        callback_factory::wrap_scoped_stream_callback(env, func)?,
+    )
+}
+
+fn scoped_tool_execution_fn(
+    func: ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>,
+) -> ToolExecutionNextFn {
+    let func = Arc::new(func);
+    Arc::new(move |args: Json| {
+        let func = func.clone();
+        let context = ScopedCallbackContext::capture();
+        Box::pin(async move {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let status = func.call_with_return_value(
+                ScopedJsonCall {
+                    value: args,
+                    context: context?,
+                },
+                ThreadsafeFunctionCallMode::Blocking,
+                move |value: Option<Json>| {
+                    let _ = tx.send(callback_json(value));
+                    Ok(())
+                },
+            );
+            if status != napi::Status::Ok {
+                return Err(FlowError::Internal(format!(
+                    "failed to queue JS tool execution callback: {status:?}",
+                )));
+            }
+            let result = rx
+                .await
+                .map_err(|error| FlowError::Internal(error.to_string()))?;
+            callable::parse_tool_execution_result(callable::unwrap_middleware_result(
+                result,
+                "JS tool execution callback failed",
+            )?)
+        })
+    })
+}
+
+fn scoped_llm_execution_fn(
+    func: ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>,
+) -> LlmExecutionNextFn {
+    let func = Arc::new(func);
+    Arc::new(move |request: LlmRequest| {
+        let func = func.clone();
+        let context = ScopedCallbackContext::capture();
+        let request = serde_json::to_value(request).unwrap_or(Json::Null);
+        Box::pin(async move {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let status = func.call_with_return_value(
+                ScopedJsonCall {
+                    value: request,
+                    context: context?,
+                },
+                ThreadsafeFunctionCallMode::Blocking,
+                move |value: Option<Json>| {
+                    let _ = tx.send(callback_json(value));
+                    Ok(())
+                },
+            );
+            if status != napi::Status::Ok {
+                return Err(FlowError::Internal(format!(
+                    "failed to queue JS LLM execution callback: {status:?}",
+                )));
+            }
+            let result = rx
+                .await
+                .map_err(|error| FlowError::Internal(error.to_string()))?;
+            callable::unwrap_middleware_result(result, "JS LLM execution callback failed")
+        })
+    })
 }
 
 fn middleware_tool_callback_tsfn(
@@ -2220,19 +2314,30 @@ fn callback_propagation_context(
     env: &Env,
     parent_uuid: uuid::Uuid,
 ) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
-    let mut context = with_effective_scope_stack(env, capture_propagation_context_handle)?
+    let context_json = callback_factory::callback_propagation_context_json(env)?
+        .ok_or_else(|| napi::Error::from_reason("callback propagation context is unavailable"))?;
+    let mut context = nemo_relay::api::runtime::PropagationContext::from_json(&context_json)
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
     context.parent_uuid = parent_uuid;
-    if context.traceparent.is_some() {
-        context.traceparent = Some(
-            context
-                .to_traceparent()
-                .map_err(|error| napi::Error::from_reason(error.to_string()))?,
-        );
-    } else {
-        context.root_uuid = with_effective_scope_stack(env, capture_traceparent_handle)
-            .ok()
-            .and_then(|result| result.ok())
+    let stack = effective_scope_stack(env)?;
+    let stack = stack
+        .read()
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    let has_propagated_parent = stack
+        .scopes()
+        .iter()
+        .any(|scope| stack.is_propagated_parent(scope.uuid));
+    drop(stack);
+    if !has_propagated_parent {
+        context.root_uuid = context
+            .traceparent
+            .as_deref()
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                with_effective_scope_stack(env, capture_traceparent_handle)
+                    .ok()
+                    .and_then(|result| result.ok())
+            })
             .and_then(|traceparent| {
                 traceparent
                     .get(3..35)
@@ -2311,7 +2416,11 @@ pub fn capture_traceparent(env: Env) -> napi::Result<String> {
     if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
         let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
             .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
-        return callback_propagation_context(&env, parent_uuid)?
+        let context = callback_propagation_context(&env, parent_uuid)?;
+        if let Some(traceparent) = context.traceparent.clone() {
+            return Ok(traceparent);
+        }
+        return context
             .to_traceparent()
             .map_err(|error| napi::Error::from_reason(error.to_string()));
     }
@@ -2328,7 +2437,7 @@ pub fn propagation_context_to_json(context: PropagationContext) -> napi::Result<
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
-/// Convert a rooted Relay propagation context to a W3C `traceparent` value.
+/// Convert a Relay propagation context to a W3C `traceparent` value.
 #[napi]
 pub fn propagation_context_to_traceparent(context: PropagationContext) -> napi::Result<String> {
     propagation_context_from_napi(context)?
@@ -2927,8 +3036,7 @@ pub fn tool_call_execute(
         .map(|h| h.inner.clone())
         .unwrap_or_else(|| effective_scope_top(&scope_stack));
     let callback = callable::safe_execution_callback(&env, &func)?;
-    let exec_fn = callable::wrap_js_tool_exec_fn(json_callback_tsfn(&env, &callback)?);
-    let default_fn: ToolExecutionNextFn = std::sync::Arc::new(move |args| exec_fn(args));
+    let default_fn = scoped_tool_execution_fn(scoped_json_callback_tsfn(&env, &callback)?);
 
     env.execute_tokio_future(
         async move {
@@ -3158,8 +3266,7 @@ pub fn llm_call_execute(
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
     let callback = callable::safe_execution_callback(&env, &func)?;
-    let exec_fn = callable::wrap_js_llm_exec_fn(json_callback_tsfn(&env, &callback)?);
-    let default_fn: LlmExecutionNextFn = std::sync::Arc::new(move |req| exec_fn(req));
+    let default_fn = scoped_llm_execution_fn(scoped_json_callback_tsfn(&env, &callback)?);
     let mut codec_references = Vec::new();
     let codec = match (codec_decode.as_ref(), codec_encode.as_ref()) {
         (Some(d), Some(e)) => {
@@ -3377,15 +3484,13 @@ pub fn llm_stream_call_execute(
     // so it knows where to send chunks.
     let func = std::sync::Arc::new(scoped_stream_callback_tsfn(&env, &func)?);
     let default_fn: LlmStreamExecutionNextFn = std::sync::Arc::new(move |req: LlmRequest| {
-        let propagation_parent_uuid = match capture_propagation_context_handle() {
-            Ok(context) => context.parent_uuid.to_string(),
+        let context = match ScopedCallbackContext::capture() {
+            Ok(context) => context,
             Err(error) => return Box::pin(async move { Err(error) }),
         };
         let stream_id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let closed = register_stream_channel(stream_id, tx);
-        let scope_stack = current_scope_stack_handle();
-        let publication_buffer = capture_nested_publication_buffer();
 
         // Serialize the LlmRequest to JSON and wrap with streamId so JS can extract both
         let req_json = serde_json::to_value(&req).unwrap_or(Json::Null);
@@ -3397,11 +3502,9 @@ pub fn llm_stream_call_execute(
         // NonBlocking: queue the call on the JS event loop and return immediately.
         // The JS function starts async iteration and pushes chunks via pushStreamChunk.
         let call_status = func.call(
-            ScopedStreamCall {
-                request: wrapper,
-                scope_stack,
-                publication_buffer,
-                propagation_parent_uuid,
+            ScopedJsonCall {
+                value: wrapper,
+                context,
             },
             ThreadsafeFunctionCallMode::NonBlocking,
         );

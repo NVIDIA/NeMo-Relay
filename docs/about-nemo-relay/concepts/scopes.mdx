@@ -206,8 +206,8 @@ Use this when:
 Fork a scope stack before starting concurrent work when the child should remain
 part of the parent's event tree without sharing its mutable stack. The fork
 preserves the immediate parent but does not transfer scope-local middleware or
-subscribers. The fork also preserves the Relay observability root, so its work
-continues the parent's OpenTelemetry trace.
+subscribers. The fork also preserves the captured OpenTelemetry parent, so its
+work continues the parent's exported trace.
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -278,11 +278,14 @@ before importing it. Relay does not send headers, make IPC connections, or
 trust remote identifiers automatically.
 
 The default `capture_propagation_context()` API preserves Relay event parentage
-and, when a root is available, OpenTelemetry trace continuity. Forking an
-explicit rootless context keeps it rootless until a local Agent scope establishes a new root. Use
-`capture_rootless_propagation_context()` only when the receiver must start a
-new trace. `capture_propagation_context_with_root()` still lets an application
-choose a stable run UUID explicitly.
+and includes the exact active OpenTelemetry context when one is available. When
+no valid W3C parent is available, Relay can reconstruct a Relay-derived trace
+from the root UUID. An explicit rootless context stays rootless until a local
+Agent scope establishes a new root. Use
+`capture_rootless_propagation_context()` only when the receiver must start a new
+Relay-derived trace and no W3C parent is available.
+`capture_propagation_context_with_root()` lets an application choose a stable
+run UUID explicitly.
 
 Relay's JSON context can also carry optional W3C `traceparent` and
 `tracestate` fields. When a receiver imports a valid pair, its first local
