@@ -13,8 +13,8 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::{ConnectInfo, State};
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER};
+use axum::extract::{ConnectInfo, Path as AxumPath, State};
+use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::IntoResponse;
@@ -137,6 +137,7 @@ struct DaemonState {
     identity: MachineIdentity,
     descriptor: crate::daemon::common::protocol::ComponentDescriptor,
     instance_id: String,
+    pass_through: bool,
     public_origin: String,
     config: GatewayConfig,
     upstream: PooledClient,
@@ -169,6 +170,7 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
         identity: load_or_create_daemon_identity()?,
         descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
         instance_id: uuid::Uuid::now_v7().to_string(),
+        pass_through: options.pass_through,
         public_origin,
         config: resolved.gateway,
         upstream: pooled_client().map_err(|error| CliError::Launch(error.to_string()))?,
@@ -256,9 +258,105 @@ fn router(state: Arc<DaemonState>) -> Router {
         )
         .route_layer(from_fn_with_state(peers, limit_challenges));
     Router::new()
+        .route("/healthz", get(healthz))
+        .route("/_nemo_relay/v1/workers", get(worker_ids))
+        .route("/_nemo_relay/v1/workers/status", get(worker_statuses))
+        .route(
+            "/_nemo_relay/v1/workers/{instance_uuid}/status",
+            get(worker_status),
+        )
         .merge(control)
         .fallback(public_proxy)
         .with_state(state)
+}
+
+async fn worker_ids(State(state): State<Arc<DaemonState>>) -> Response<Body> {
+    let workers = state
+        .registry
+        .worker_status_snapshots()
+        .into_iter()
+        .map(|worker| worker.worker_id)
+        .collect::<Vec<_>>();
+    status_json(json!({
+        "status": "ok",
+        "instance_id": state.instance_id,
+        "workers": workers,
+    }))
+}
+
+async fn worker_statuses(State(state): State<Arc<DaemonState>>) -> Response<Body> {
+    let workers = state
+        .registry
+        .worker_status_snapshots()
+        .into_iter()
+        .map(worker_status_json)
+        .collect::<Vec<_>>();
+    status_json(json!({
+        "status": "ok",
+        "instance_id": state.instance_id,
+        "workers": workers,
+    }))
+}
+
+async fn worker_status(
+    State(state): State<Arc<DaemonState>>,
+    AxumPath(instance_uuid): AxumPath<String>,
+) -> Response<Body> {
+    let worker = state
+        .registry
+        .worker_status_snapshots()
+        .into_iter()
+        .find(|worker| worker.worker_id == instance_uuid);
+    match worker {
+        Some(worker) => status_json(json!({
+            "status": "ok",
+            "instance_id": state.instance_id,
+            "worker": worker_status_json(worker),
+        })),
+        None => {
+            let mut response = control_message(StatusCode::NOT_FOUND, "worker not found");
+            response
+                .headers_mut()
+                .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
+        }
+    }
+}
+
+fn worker_status_json(worker: super::registry::WorkerStatusSnapshot) -> serde_json::Value {
+    json!({
+        "worker_id": worker.worker_id,
+        "state": worker.state.as_str(),
+        "reference_count": worker.reference_count,
+        "control_available": worker.control_available,
+        "in_flight": worker.in_flight,
+    })
+}
+
+fn status_json(value: serde_json::Value) -> Response<Body> {
+    let mut response = Json(value).into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+async fn healthz(State(state): State<Arc<DaemonState>>) -> Response<Body> {
+    let mut response = (
+        StatusCode::OK,
+        Json(json!({
+            "status": "ok",
+            "service": "nemo-relay-daemon",
+            "version": env!("CARGO_PKG_VERSION"),
+            "instance_id": state.instance_id,
+            "deployment_mode": if state.pass_through { "pass_through" } else { "managed" },
+        })),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 async fn limit_challenges(

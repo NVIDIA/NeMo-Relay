@@ -119,9 +119,8 @@ fn hydration_adds_the_effective_plugin_to_its_own_lifecycle_scope() {
     };
     allow_unsigned_test_plugins(&mut resolved);
 
-    let touched = hydrate_scoped_registries(&mut scopes, &resolved).unwrap();
+    hydrate_scoped_registries(&mut scopes, &resolved).unwrap();
 
-    assert_eq!(touched, BTreeSet::from([1]));
     assert!(scopes[0].registry.get(plugin_id).is_some());
     let system_record = scopes[1].registry.get(plugin_id).unwrap();
     assert_eq!(
@@ -3577,14 +3576,28 @@ fn explicit_plugin_path_drives_plugin_command_lifecycle_scope() {
     };
 
     list(PluginsListRequest::default(), &server).unwrap();
+    inspect(
+        PluginsInspectRequest {
+            id: "acme.explicit-plugin-path".into(),
+            json: true,
+        },
+        &server,
+    )
+    .unwrap();
 
-    let scopes = load_scoped_registries(Some(&plugin_config_path)).unwrap();
+    let state_path = config_dir.join(".dynamic-plugins.json");
+    assert!(
+        !state_path.exists(),
+        "read-only commands must not create state"
+    );
+    let resolved = resolve_plugins_config_with_path(None, Some(&plugin_config_path)).unwrap();
+    let scopes = load_and_hydrate_scopes(Some(&plugin_config_path), &resolved).unwrap();
     let entry = find_record_by_id(&scopes, "acme.explicit-plugin-path")
         .unwrap()
         .expect("explicit plugin-path record");
     assert_eq!(entry.scope, RegistryScope::Explicit);
     assert_eq!(entry.plugins_toml_path, plugin_config_path);
-    assert_eq!(entry.state_path, config_dir.join(".dynamic-plugins.json"));
+    assert_eq!(entry.state_path, state_path);
 }
 
 #[test]
@@ -3618,6 +3631,10 @@ fn hydrate_bootstraps_registry_records_from_existing_dynamic_plugin_refs() {
     assert_eq!(entry.record.metadata.id, "acme.bootstrap");
     assert!(entry.record.spec.present);
     assert!(!entry.record.spec.enabled);
+    assert!(
+        !config_dir.join(".dynamic-plugins.json").exists(),
+        "read-only hydration must not create shared lifecycle state"
+    );
     let canonical_manifest_path = std::fs::canonicalize(&manifest_path).unwrap();
     assert_eq!(
         entry.record.source.manifest_ref.as_deref(),
@@ -3761,7 +3778,7 @@ fn hydrate_applies_host_policy_status_to_discovered_dynamic_plugins() {
 }
 
 #[test]
-fn hydrate_persists_updated_policy_and_error_state() {
+fn hydrate_reports_updated_policy_without_persisting_lifecycle_state() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
@@ -3779,6 +3796,8 @@ fn hydrate_persists_updated_policy_and_error_state() {
         &GatewayOverrides::default(),
     )
     .unwrap();
+    let state_path = config_dir.join(".dynamic-plugins.json");
+    let persisted_state = std::fs::read(&state_path).unwrap();
 
     std::fs::write(
         config_dir.join("plugins.toml"),
@@ -3795,24 +3814,19 @@ fn hydrate_persists_updated_policy_and_error_state() {
     .unwrap();
 
     let resolved = resolve_plugins_config(None).unwrap();
-    let _ = load_and_hydrate_scopes(None, &resolved).unwrap();
-
-    let state_path = config_dir.join(".dynamic-plugins.json");
-    let state: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
-    let record = &state["records"][0];
+    let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let entry = find_record_by_id(&scopes, "acme.persist-blocked")
+        .unwrap()
+        .expect("in-memory hydrated record");
     assert_eq!(
-        record["metadata"]["id"],
-        serde_json::json!("acme.persist-blocked")
+        entry.record.status.validation.policy_satisfied,
+        DynamicPluginCheckState::Invalid
     );
     assert_eq!(
-        record["status"]["validation"]["policy_satisfied"],
-        serde_json::json!("invalid")
-    );
-    assert_eq!(
-        record["status"]["last_error"]["phase"],
+        serde_json::to_value(&entry.record.status).unwrap()["last_error"]["phase"],
         serde_json::json!("policy")
     );
+    assert_eq!(std::fs::read(&state_path).unwrap(), persisted_state);
 }
 
 #[test]
@@ -4200,6 +4214,14 @@ fn validate_marks_registered_plugins_invalid_when_host_policy_blocks_them() {
         &server,
     )
     .unwrap();
+
+    let persisted_state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(config_dir.join(".dynamic-plugins.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        persisted_state["records"][0]["status"]["validation"]["policy_satisfied"], "invalid",
+        "explicit validate should persist its policy result"
+    );
 
     let resolved = resolve_plugins_config(None).unwrap();
     let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();

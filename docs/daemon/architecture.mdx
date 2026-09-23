@@ -55,6 +55,13 @@ MCP and worker processes each open a persistent WebSocket control session to the
 daemon. The daemon pushes route decisions and drain commands on those sessions.
 Model and hook traffic use separate HTTP connections.
 
+The daemon also exposes read-only HTTP operations for process health and
+last-known worker assignments. `/healthz` describes the daemon process and its
+global deployment mode. `/_nemo_relay/v1/workers`,
+`/_nemo_relay/v1/workers/status`, and the per-worker status path read the
+broker's in-memory state without probing workers. Routes without an assigned
+worker, including pass-through routes, do not appear in worker results.
+
 ## Local Deployment
 
 <div role="region" aria-label="Local deployment diagram" tabIndex={0} style={{ overflowX: "auto" }}>

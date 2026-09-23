@@ -838,22 +838,6 @@ fn write_dynamic_plugin_state(plugins_toml_path: &std::path::Path, plugin_id: &s
     .unwrap();
 }
 
-fn read_dynamic_plugin_state(
-    plugins_toml_path: &std::path::Path,
-) -> nemo_relay::plugin::dynamic::DynamicPluginRecord {
-    let persisted: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(
-            plugins_toml_path
-                .parent()
-                .unwrap()
-                .join(".dynamic-plugins.json"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    serde_json::from_value(persisted["records"][0].clone()).unwrap()
-}
-
 #[test]
 fn session_config_prefers_headers_and_parses_json() {
     let mut headers = HeaderMap::new();
@@ -2807,6 +2791,163 @@ fn bootstrap_hmac_state_reports_invalid_path_and_existing_key_shapes() {
     );
 }
 
+#[test]
+fn python_environment_attestation_key_is_atomically_published_for_concurrent_users() {
+    let environment = tempfile::tempdir().unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let writers = (0..8)
+        .map(|_| {
+            let environment = environment.path().to_path_buf();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                load_or_create_python_environment_hmac_key(&environment).unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    let keys = writers
+        .into_iter()
+        .map(|writer| writer.join().unwrap())
+        .collect::<Vec<_>>();
+    assert!(keys.iter().all(|key| key == &keys[0]));
+
+    let key_path = environment.path().join(".nemo-relay-environment.key");
+    assert_eq!(std::fs::read(&key_path).unwrap().as_slice(), &keys[0]);
+    assert_eq!(
+        std::fs::read_dir(environment.path()).unwrap().count(),
+        1,
+        "temporary attestation key files should be removed after publication"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(key_path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
+}
+
+#[test]
+fn python_environment_attestation_verification_is_key_scoped_and_rejects_malformed_input() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_environment = temp.path().join("first-environment");
+    let second_environment = temp.path().join("second-environment");
+    std::fs::create_dir_all(&first_environment).unwrap();
+    std::fs::create_dir_all(&second_environment).unwrap();
+    let source_digest = "sha256:source-artifact";
+    let environment_digest = "sha256:environment-tree";
+    let authentication = sign_python_environment_attestation_for_environment(
+        &first_environment,
+        source_digest,
+        environment_digest,
+    )
+    .unwrap();
+
+    assert!(
+        verify_python_environment_attestation_for_environment(
+            &first_environment,
+            source_digest,
+            environment_digest,
+            &authentication,
+        )
+        .unwrap()
+    );
+
+    let mut tampered = authentication.clone().into_bytes();
+    let tag_byte = tampered
+        .get_mut("hmac-sha256:".len())
+        .expect("authentication tag byte");
+    *tag_byte = if *tag_byte == b'0' { b'1' } else { b'0' };
+    let tampered = String::from_utf8(tampered).unwrap();
+    assert!(
+        !verify_python_environment_attestation_for_environment(
+            &first_environment,
+            source_digest,
+            environment_digest,
+            &tampered,
+        )
+        .unwrap()
+    );
+
+    ensure_python_environment_attestation_key(&second_environment).unwrap();
+    assert!(
+        !verify_python_environment_attestation_for_environment(
+            &second_environment,
+            source_digest,
+            environment_digest,
+            &authentication,
+        )
+        .unwrap()
+    );
+
+    for malformed in [
+        "missing-prefix",
+        "hmac-sha256:short",
+        "hmac-sha256:zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+    ] {
+        assert!(
+            !verify_python_environment_attestation_for_environment(
+                &first_environment,
+                source_digest,
+                environment_digest,
+                malformed,
+            )
+            .unwrap()
+        );
+    }
+
+    let corrupt_environment = temp.path().join("corrupt-environment");
+    std::fs::create_dir_all(&corrupt_environment).unwrap();
+    std::fs::write(
+        corrupt_environment.join(".nemo-relay-environment.key"),
+        b"short",
+    )
+    .unwrap();
+    let error = load_or_create_python_environment_hmac_key(&corrupt_environment).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Python environment attestation key"),
+        "{error}"
+    );
+}
+
+#[test]
+fn python_environment_attestation_without_environment_key_keeps_legacy_compatibility() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let legacy_environment = temp.path().join("legacy-environment");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&legacy_environment).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let source_digest = "sha256:source-artifact";
+    let environment_digest = "sha256:environment-tree";
+    let legacy_key = BootstrapChallengeKey::load().unwrap();
+    let message = python_environment_attestation_message(source_digest, environment_digest);
+    let authentication = encode_hmac_tag(ring::hmac::sign(&legacy_key.0, &message));
+    assert!(
+        verify_python_environment_attestation(source_digest, environment_digest, &authentication)
+            .unwrap()
+    );
+
+    assert!(
+        verify_python_environment_attestation_for_environment(
+            &legacy_environment,
+            source_digest,
+            environment_digest,
+            &authentication,
+        )
+        .unwrap()
+    );
+    assert!(
+        !legacy_environment
+            .join(".nemo-relay-environment.key")
+            .exists(),
+        "legacy verification should not create an environment key"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn bounded_identity_reader_reports_missing_unreadable_and_invalid_utf8_inputs() {
@@ -3527,6 +3668,11 @@ startup = "required"
     )
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+    let state_path = plugins_toml_path
+        .parent()
+        .unwrap()
+        .join(".dynamic-plugins.json");
+    let persisted_state = std::fs::read(&state_path).unwrap();
 
     let args = GatewayOverrides {
         config: Some(config_path),
@@ -3539,32 +3685,7 @@ startup = "required"
     assert!(error.contains("acme.worker"));
     assert!(error.contains("integrity verification"));
 
-    let record = read_dynamic_plugin_state(&plugins_toml_path);
-    assert_eq!(
-        record.status.validation.integrity,
-        DynamicPluginCheckState::Invalid
-    );
-    assert_eq!(
-        record.status.validation.policy_satisfied,
-        DynamicPluginCheckState::Valid
-    );
-    assert_eq!(
-        record.status.startup_class,
-        Some(DynamicPluginStartupClass::Required)
-    );
-    assert_eq!(
-        record.status.attestation_mode,
-        Some(DynamicPluginAttestationMode::IntegrityOnly)
-    );
-    assert!(
-        record
-            .status
-            .last_error
-            .as_ref()
-            .unwrap()
-            .message
-            .contains("integrity verification")
-    );
+    assert_eq!(std::fs::read(&state_path).unwrap(), persisted_state);
 }
 
 #[test]
@@ -3596,6 +3717,11 @@ attestation = "signature_required"
     )
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+    let state_path = plugins_toml_path
+        .parent()
+        .unwrap()
+        .join(".dynamic-plugins.json");
+    let persisted_state = std::fs::read(&state_path).unwrap();
 
     let args = GatewayOverrides {
         config: Some(config_path),
@@ -3608,32 +3734,7 @@ attestation = "signature_required"
     assert!(error.contains("acme.worker"));
     assert!(error.contains("no trusted_public_keys"));
 
-    let record = read_dynamic_plugin_state(&plugins_toml_path);
-    assert_eq!(
-        record.status.validation.authenticity,
-        DynamicPluginCheckState::Invalid
-    );
-    assert_eq!(
-        record.status.validation.policy_satisfied,
-        DynamicPluginCheckState::Valid
-    );
-    assert_eq!(
-        record.status.startup_class,
-        Some(DynamicPluginStartupClass::Required)
-    );
-    assert_eq!(
-        record.status.attestation_mode,
-        Some(DynamicPluginAttestationMode::SignatureRequired)
-    );
-    assert!(
-        record
-            .status
-            .last_error
-            .as_ref()
-            .unwrap()
-            .message
-            .contains("no trusted_public_keys")
-    );
+    assert_eq!(std::fs::read(&state_path).unwrap(), persisted_state);
 }
 
 #[test]
@@ -3669,6 +3770,11 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_wrong_truste
     )
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+    let state_path = plugins_toml_path
+        .parent()
+        .unwrap()
+        .join(".dynamic-plugins.json");
+    let persisted_state = std::fs::read(&state_path).unwrap();
 
     let args = GatewayOverrides {
         config: Some(config_path),
@@ -3681,32 +3787,7 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_wrong_truste
     assert!(error.contains("acme.worker"));
     assert!(error.contains("failed signature verification"));
 
-    let record = read_dynamic_plugin_state(&plugins_toml_path);
-    assert_eq!(
-        record.status.validation.authenticity,
-        DynamicPluginCheckState::Invalid
-    );
-    assert_eq!(
-        record.status.validation.policy_satisfied,
-        DynamicPluginCheckState::Valid
-    );
-    assert_eq!(
-        record.status.startup_class,
-        Some(DynamicPluginStartupClass::Required)
-    );
-    assert_eq!(
-        record.status.attestation_mode,
-        Some(DynamicPluginAttestationMode::SignatureRequired)
-    );
-    assert!(
-        record
-            .status
-            .last_error
-            .as_ref()
-            .unwrap()
-            .message
-            .contains("failed signature verification")
-    );
+    assert_eq!(std::fs::read(&state_path).unwrap(), persisted_state);
 }
 
 #[test]
@@ -3742,6 +3823,11 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_malformed_si
     )
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+    let state_path = plugins_toml_path
+        .parent()
+        .unwrap()
+        .join(".dynamic-plugins.json");
+    let persisted_state = std::fs::read(&state_path).unwrap();
 
     let args = GatewayOverrides {
         config: Some(config_path),
@@ -3753,33 +3839,7 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_malformed_si
     assert!(error.contains("required dynamic plugin startup preflight failed"));
     assert!(error.contains("acme.worker"));
     assert!(error.contains("invalid base64 signature"));
-
-    let record = read_dynamic_plugin_state(&plugins_toml_path);
-    assert_eq!(
-        record.status.validation.authenticity,
-        DynamicPluginCheckState::Invalid
-    );
-    assert_eq!(
-        record.status.validation.policy_satisfied,
-        DynamicPluginCheckState::Valid
-    );
-    assert_eq!(
-        record.status.startup_class,
-        Some(DynamicPluginStartupClass::Required)
-    );
-    assert_eq!(
-        record.status.attestation_mode,
-        Some(DynamicPluginAttestationMode::SignatureIfPresent)
-    );
-    assert!(
-        record
-            .status
-            .last_error
-            .as_ref()
-            .unwrap()
-            .message
-            .contains("invalid base64 signature")
-    );
+    assert_eq!(std::fs::read(&state_path).unwrap(), persisted_state);
 }
 
 #[test]
