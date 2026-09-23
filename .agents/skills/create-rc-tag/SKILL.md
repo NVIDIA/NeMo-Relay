@@ -30,7 +30,9 @@ user inputs. Validate a supplied number as a positive integer; otherwise derive
 the next number after fetching the release branch and tags.
 
 ```bash
-BASE_VERSION=<major.minor.patch>
+BASE_VERSION=<major.minor[.patch]>
+[[ "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "Error: invalid base version" >&2; exit 1; }
+if [[ "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then BASE_VERSION="$BASE_VERSION.0"; fi
 RELEASE_BRANCH="release/$(printf '%s' "$BASE_VERSION" | cut -d. -f1,2)"
 git ls-remote --exit-code --heads upstream "refs/heads/$RELEASE_BRANCH"
 git fetch upstream "$RELEASE_BRANCH" --tags

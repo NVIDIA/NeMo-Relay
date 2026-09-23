@@ -30,11 +30,19 @@ are user inputs. Validate a supplied number as a positive integer; otherwise
 derive the next number after fetching tags for the selected source branch.
 
 ```bash
-BASE_VERSION=<major.minor.patch>
+BASE_VERSION=<major.minor[.patch]>
+[[ "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "Error: invalid base version" >&2; exit 1; }
+if [[ "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then BASE_VERSION="$BASE_VERSION.0"; fi
 RELEASE_BRANCH="release/$(printf '%s' "$BASE_VERSION" | cut -d. -f1,2)"
 SOURCE_BRANCH="$RELEASE_BRANCH"
-if ! git ls-remote --exit-code --heads upstream "refs/heads/$SOURCE_BRANCH" >/dev/null; then
-  SOURCE_BRANCH=main
+if git ls-remote --exit-code --heads upstream "refs/heads/$SOURCE_BRANCH" >/dev/null; then
+  :
+else
+  lookup_status=$?
+  case "$lookup_status" in
+    2) SOURCE_BRANCH=main ;;
+    *) echo "Error: release branch lookup failed" >&2; exit "$lookup_status" ;;
+  esac
 fi
 git fetch upstream "$SOURCE_BRANCH" --tags
 

@@ -22,9 +22,9 @@ force-update, replace, or delete tags.
 After a successful push, create a GitHub Release only when the user explicitly
 authorizes the draft. Use the prior published stable release returned by GitHub,
 read the release-notes content at the new tag, and use `draft-release-notes`
-evidence only to verify claims. Create the release with
-`gh release create --draft --verify-tag`; do not publish it. Present the draft
-URL for review and remind the user that publishing is a separate action.
+evidence only to verify claims. Prepare `TITLE` and `NOTES_FILE`, then create
+the draft with the command below. Present its URL for review; publishing is a
+separate action.
 
 ## Create and Verify the Tag
 
@@ -58,6 +58,11 @@ For an authorized GitHub Release draft, read the tagged
 `docs/about-nemo-relay/release-notes/index.mdx`, find the previous published
 stable release with `gh api repos/NVIDIA/NeMo-Relay/releases/latest`, and use
 the tagged notes as the source for a concise body. Verify no release already
-exists, then run `gh release create "$VERSION" --draft --verify-tag` with the
-prepared title and notes file. Do not create a team announcement or publish the
-draft unless separately requested.
+exists, then run:
+
+```bash
+gh release create "$VERSION" --repo NVIDIA/NeMo-Relay --title "$TITLE" --notes-file "$NOTES_FILE" --draft --verify-tag
+```
+
+Do not create a team announcement or publish the draft unless separately
+requested.

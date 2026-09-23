@@ -19,8 +19,9 @@ on Windows. From the repository root, run:
 It validates Relay's raw-SemVer tag format, converts the version to PEP 440 for
 PyPI, and checks the published package sets documented in `RELEASING.md`. It
 also verifies that the source-first Go module is present at the tag and reports
-the release-related GitHub Actions jobs. A publication job that does not
-succeed causes only that registry's checks to be skipped.
+the release-related GitHub Actions jobs. Registry checks run only after their
+publication jobs are verified successful. If the tag or release jobs cannot be
+verified, package checks are skipped.
 
 - `☑` means the exact package version is deployed.
 - `○` means that exact package version is not deployed.
