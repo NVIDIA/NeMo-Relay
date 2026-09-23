@@ -1336,13 +1336,48 @@ async fn permission_requests_correlate_guardrails_and_close_rejected_tools() {
         assert_eq!(metadata["otel.status_code"], "ERROR");
         assert_eq!(metadata["status"], "denied");
     }
-    assert!(scope_local_events.lock().unwrap().iter().any(|event| {
-        event.tool_call_id() == Some("claude-call")
-            && event.scope_category() == Some(ScopeCategory::End)
-            && event
-                .metadata()
-                .is_some_and(|metadata| metadata["error.type"] == "guardrail_rejected")
+    let scope_local_events = scope_local_events.lock().unwrap();
+    let scoped_permission_events = scope_local_events
+        .iter()
+        .filter(|event| {
+            event.scope_type() == Some(ScopeType::Guardrail)
+                && event.name() == GUARDRAIL
+                && event
+                    .metadata()
+                    .is_some_and(|metadata| metadata["gen_ai.tool.call.id"] == json!("claude-call"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(scoped_permission_events.len(), 2);
+    assert!(
+        [ScopeCategory::Start, ScopeCategory::End]
+            .into_iter()
+            .all(|category| scoped_permission_events
+                .iter()
+                .any(|event| event.scope_category() == Some(category)))
+    );
+    let scoped_denied_tool_ends = scope_local_events
+        .iter()
+        .filter(|event| {
+            event.tool_call_id() == Some("claude-call")
+                && event.scope_category() == Some(ScopeCategory::End)
+                && event
+                    .metadata()
+                    .is_some_and(|metadata| metadata["error.type"] == "guardrail_rejected")
+        })
+        .count();
+    assert_eq!(scoped_denied_tool_ends, 1);
+    assert!(scope_local_events.iter().all(|event| {
+        !matches!(
+            event.tool_call_id(),
+            Some("codex-call" | "codex-allowed-call")
+        ) && event.metadata().is_none_or(|metadata| {
+            !matches!(
+                metadata["gen_ai.tool.call.id"].as_str(),
+                Some("codex-call" | "codex-allowed-call")
+            )
+        })
     }));
+    drop(scope_local_events);
 
     let allowed_permission_end = events
         .iter()
@@ -1355,6 +1390,115 @@ async fn permission_requests_correlate_guardrails_and_close_rejected_tools() {
         })
         .unwrap();
     assert_eq!(allowed_permission_end.data().unwrap()["allowed"], true);
+}
+
+#[tokio::test]
+async fn close_all_waits_for_an_in_flight_permission_decision() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-permission-close-all-drain";
+    const TOOL: &str = "PermissionCloseAllDrain";
+    const SESSION: &str = "permission-close-all-session";
+    const TOOL_CALL: &str = "permission-close-all-tool";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+
+    let invocation = Arc::new(AtomicUsize::new(0));
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started_tx = Arc::new(StdMutex::new(Some(started_tx)));
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let release_rx = Arc::new(StdMutex::new(Some(release_rx)));
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new({
+            let invocation = Arc::clone(&invocation);
+            move |name, _| {
+                let invocation = Arc::clone(&invocation);
+                let started_tx = Arc::clone(&started_tx);
+                let release_rx = Arc::clone(&release_rx);
+                Box::pin(async move {
+                    if name == TOOL && invocation.fetch_add(1, Ordering::SeqCst) == 1 {
+                        if let Some(started) = started_tx.lock().unwrap().take() {
+                            let _ = started.send(());
+                        }
+                        let release = { release_rx.lock().unwrap().take() };
+                        if let Some(release) = release {
+                            let _ = release.await;
+                        }
+                        return Ok(Some("blocked by host permission".into()));
+                    }
+                    Ok(None)
+                })
+            }
+        }),
+    )
+    .unwrap();
+    let _guardrail_cleanup = ToolGuardrailCleanup(GUARDRAIL);
+
+    let manager = SessionManager::new(session_test_config());
+    let arguments = json!({"path": "README.md"});
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::ToolStarted(ToolEvent {
+                session_id: SESSION.into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "PreToolUse".into(),
+                tool_call_id: TOOL_CALL.into(),
+                tool_name: TOOL.into(),
+                subagent_id: None,
+                arguments: arguments.clone(),
+                result: Value::Null,
+                status: None,
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    let authorizing_manager = manager.clone();
+    let authorizing = tokio::spawn(async move {
+        authorizing_manager
+            .authorize_tool_permission(
+                &ToolEvent {
+                    session_id: SESSION.into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PermissionRequest".into(),
+                    tool_call_id: TOOL_CALL.into(),
+                    tool_name: TOOL.into(),
+                    subagent_id: None,
+                    arguments,
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                },
+                "client-a",
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), started_rx)
+        .await
+        .expect("permission guardrail should start")
+        .unwrap();
+
+    let closing_manager = manager.clone();
+    let mut closing = tokio::spawn(async move { closing_manager.close_all("test_shutdown").await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut closing)
+            .await
+            .is_err(),
+        "close_all must wait until the permission decision closes the denied tool"
+    );
+
+    release_tx.send(()).unwrap();
+    assert!(matches!(
+        authorizing.await.unwrap(),
+        Err(CliError::Flow(FlowError::GuardrailRejected(_)))
+    ));
+    closing.await.unwrap().unwrap();
+    assert!(manager.inner.lock().await.is_empty());
 }
 
 #[test]

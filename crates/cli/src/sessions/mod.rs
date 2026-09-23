@@ -709,6 +709,7 @@ impl SessionManager {
         event: &ToolEvent,
         owner: &str,
     ) -> Result<(), CliError> {
+        let _activity = self.session_activity.begin();
         let owners = self.authenticated_owners.lock().await;
         match owners.get(&event.session_id) {
             Some(existing) if existing == owner => {}
