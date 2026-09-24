@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::fs;
 use std::path::Path;
@@ -20,8 +20,10 @@ use sha2::{Digest, Sha256};
 #[cfg(test)]
 use crate::configuration::resolve_plugins_config;
 use crate::configuration::{
-    ResolvedConfig, ResolvedDynamicPluginConfig, explicit_plugin_config_path,
-    load_bounded_dynamic_plugin_manifest_bytes, resolve_plugins_config_with_path,
+    ResolvedConfig, ResolvedDynamicPluginConfig, diagnostic_plugin_config_paths,
+    explicit_plugin_config_path, load_bounded_dynamic_plugin_manifest_bytes,
+    resolve_dynamic_plugin_policy_from_paths, resolve_plugin_config_from_paths,
+    resolve_plugins_config_with_path,
 };
 use crate::error::{CliError, PluginLifecycleFailureKind};
 use crate::filesystem::bounded::{
@@ -33,7 +35,8 @@ use crate::plugins::policy::{
 use crate::server::GatewayOverrides;
 
 use super::config_io::{
-    append_dynamic_plugin_reference, remove_dynamic_plugin_reference, target_scope,
+    append_dynamic_plugin_reference, dynamic_manifest_refs, remove_dynamic_plugin_reference,
+    target_scope,
 };
 use super::schema::PluginConfigSchema;
 use super::{
@@ -42,6 +45,7 @@ use super::{
 };
 
 mod environment;
+pub(crate) mod installation;
 mod render;
 mod responses;
 mod state;
@@ -50,9 +54,10 @@ mod trust;
 
 use self::environment::{
     ENVIRONMENT_ATTESTATION_FILE, MANAGED_ENVIRONMENTS_DIR, ProcessPythonEnvironmentCommandRunner,
-    PythonEnvironmentCommandRunner, environment_state, provision_python_environment,
-    read_environment_attestation, remove_managed_environment, validate_python_entrypoint_artifact,
-    verify_environment_attestation,
+    PythonEnvironmentCommandRunner, environment_state, environment_tree_digest,
+    make_global_environment_readable, provision_python_environment, read_environment_attestation,
+    remove_managed_environment, remove_managed_environment_for_plugin,
+    validate_python_entrypoint_artifact, verify_environment_attestation,
 };
 use self::render::*;
 pub(crate) use self::render::{render_generic_plugin_json_error, render_plugin_error};
@@ -62,7 +67,8 @@ use self::responses::{
 };
 use self::state::{
     RegistryScope, ScopedDynamicPluginRecord, ScopedRegistry, collect_records, find_record_by_id,
-    find_record_in_source, load_scoped_registries, scoped_paths_for_add,
+    find_record_in_source, load_scoped_registries, load_scoped_registries_matching,
+    scoped_paths_for_add,
 };
 use self::target::PluginTarget;
 use self::trust::{EvaluatedDynamicPluginTrust, evaluate_dynamic_plugin_trust};
@@ -97,18 +103,42 @@ pub(crate) fn add(command: PluginsAddRequest, server: &GatewayOverrides) -> Resu
     add_with_environment_runner(command, server, &ProcessPythonEnvironmentCommandRunner)
 }
 
+pub(super) fn add_verified_install(
+    command: PluginsAddRequest,
+    server: &GatewayOverrides,
+) -> Result<(), CliError> {
+    add_with_environment_runner_mode(
+        command,
+        server,
+        &ProcessPythonEnvironmentCommandRunner,
+        true,
+    )
+}
+
 fn add_with_environment_runner(
     command: PluginsAddRequest,
     server: &GatewayOverrides,
     environment_runner: &impl PythonEnvironmentCommandRunner,
 ) -> Result<(), CliError> {
+    add_with_environment_runner_mode(command, server, environment_runner, false)
+}
+
+fn add_with_environment_runner_mode(
+    command: PluginsAddRequest,
+    server: &GatewayOverrides,
+    environment_runner: &impl PythonEnvironmentCommandRunner,
+    allow_blocked_activation: bool,
+) -> Result<(), CliError> {
     const COMMAND: &str = "plugins add";
 
     let explicit_plugin_config = lifecycle_plugin_config_path(server);
-    let resolved = resolve_plugins_config_with_path(
+    let mut resolved = resolve_plugins_config_with_path(
         server.config.as_ref(),
         server.plugin_config_path.as_ref(),
     )?;
+    if allow_blocked_activation {
+        crate::plugins::policy::apply_secure_runtime_defaults(&mut resolved.dynamic_plugin_policy);
+    }
     let mut scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
     let (manifest, manifest_ref) = load_manifest_for_action("add", &command.path)?;
     let plugin_id = manifest.plugin.id.trim().to_owned();
@@ -138,7 +168,7 @@ fn add_with_environment_runner(
     let scope_index = ensure_scope(&mut scopes, scope, plugins_toml_path.clone(), state_path);
     let policy = evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
     let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
-    if !policy.policy_satisfied {
+    if !policy.policy_satisfied && !allow_blocked_activation {
         return Err(plugin_refused_with_code(
             COMMAND,
             Some(plugin_id.clone()),
@@ -151,12 +181,62 @@ fn add_with_environment_runner(
                 }),
         ));
     }
-    if let Some(failure) = trust.failure() {
+    let integrity = if allow_blocked_activation {
+        let neutral_policy = evaluate_dynamic_plugin_host_policy(
+            &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+            &manifest,
+        );
+        evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &neutral_policy)
+    } else {
+        trust.clone()
+    };
+    if integrity.integrity != DynamicPluginCheckState::Valid {
+        return Err(plugin_refused_with_code(
+            COMMAND,
+            Some(plugin_id.clone()),
+            "integrity_failed",
+            integrity
+                .failure()
+                .map(|failure| failure.display(&plugin_id).to_string())
+                .unwrap_or_else(|| {
+                    format!("dynamic plugin '{plugin_id}' failed integrity verification")
+                }),
+        ));
+    }
+    if let Some(failure) = trust.failure().filter(|_| !allow_blocked_activation) {
         return Err(plugin_refused_with_code(
             COMMAND,
             Some(plugin_id.clone()),
             trust_refusal_code(&trust),
             failure.display(&plugin_id).to_string(),
+        ));
+    }
+    // Creating a Python environment runs package build hooks. A managed install
+    // may register other blocked bundles disabled, but must not run Python code
+    // until the configured host policy trusts this bundle.
+    if allow_blocked_activation
+        && environment::is_python_worker(&manifest)
+        && (!policy.policy_satisfied || !trust.is_satisfied())
+    {
+        let reason = policy
+            .failure()
+            .map(|failure| failure.display(&plugin_id).to_string())
+            .or_else(|| {
+                trust
+                    .failure()
+                    .map(|failure| failure.display(&plugin_id).to_string())
+            })
+            .unwrap_or_else(|| format!("dynamic plugin '{plugin_id}' is blocked by host policy"));
+        let code = if policy.policy_satisfied {
+            trust_refusal_code(&trust)
+        } else {
+            "policy_blocked"
+        };
+        return Err(plugin_refused_with_code(
+            COMMAND,
+            Some(plugin_id),
+            code,
+            format!("{reason}; Python environment installation was not started"),
         ));
     }
     let environment_ref = provision_python_environment(
@@ -173,16 +253,37 @@ fn add_with_environment_runner(
             message,
         )
     })?;
+    if allow_blocked_activation
+        && scope == RegistryScope::Global
+        && let Some(environment) = environment_ref.as_deref()
+        && let Err(message) = make_global_environment_readable(environment)
+    {
+        cleanup_provisioned_environment(
+            &scopes[scope_index].state_path,
+            &plugin_id,
+            environment_ref.as_deref(),
+        );
+        return Err(plugin_failed_with_code(
+            COMMAND,
+            Some(plugin_id),
+            "environment_failed",
+            message,
+        ));
+    }
     let environment_ref_string = environment_ref
         .as_ref()
         .map(|environment| environment.display().to_string());
+    let mut recorded_trust = trust.clone();
+    if allow_blocked_activation && !policy.policy_satisfied {
+        recorded_trust.integrity = integrity.integrity;
+    }
     let record = match validated_record_from_manifest(
         manifest,
         manifest_ref.clone(),
         environment_ref_string,
         &scopes[scope_index].state_path,
         &policy,
-        &trust,
+        &recorded_trust,
     ) {
         Ok(record) => record,
         Err(error) => {
@@ -382,15 +483,47 @@ pub(crate) fn validate(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn list(command: PluginsListRequest, server: &GatewayOverrides) -> Result<(), CliError> {
+    list_scoped(command, crate::plugins::ConfigurationScope::Default, server)
+}
+
+pub(crate) fn list_scoped(
+    command: PluginsListRequest,
+    requested_scope: crate::plugins::ConfigurationScope,
+    server: &GatewayOverrides,
+) -> Result<(), CliError> {
+    if requested_scope == crate::plugins::ConfigurationScope::Invalid {
+        return Err(CliError::Config(
+            "choose only one of --user or --global".into(),
+        ));
+    }
     let explicit_plugin_config = lifecycle_plugin_config_path(server);
-    let resolved = resolve_plugins_config_with_path(
-        server.config.as_ref(),
-        server.plugin_config_path.as_ref(),
-    )?;
+    let (scopes, resolved) = if requested_scope == crate::plugins::ConfigurationScope::Default {
+        let resolved = resolve_plugins_config_with_path(
+            server.config.as_ref(),
+            server.plugin_config_path.as_ref(),
+        )?;
+        let scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
+        (scopes, resolved)
+    } else {
+        hydrate_selected_scopes(
+            load_scoped_registries_matching(explicit_plugin_config.as_ref(), |scope| {
+                scope_matches(scope, requested_scope)
+            })?,
+            requested_scope,
+            diagnostic_plugin_config_paths(
+                server.config.as_ref(),
+                server.plugin_config_path.as_ref(),
+            ),
+            false,
+        )?
+    };
     let host_config_by_id = host_config_by_id(&resolved);
-    let scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
-    let records = collect_records(&scopes, command.all);
+    let records = collect_records(&scopes, command.all)
+        .into_iter()
+        .filter(|entry| scope_matches(entry.scope, requested_scope))
+        .collect::<Vec<_>>();
     if records.is_empty() {
         if command.json {
             print_response_json(&list_success(
@@ -421,6 +554,27 @@ pub(crate) fn list(command: PluginsListRequest, server: &GatewayOverrides) -> Re
         );
     }
     Ok(())
+}
+
+fn hydrate_selected_scopes(
+    mut scopes: Vec<ScopedRegistry>,
+    requested_scope: crate::plugins::ConfigurationScope,
+    effective_policy_paths: Vec<PathBuf>,
+    persist: bool,
+) -> Result<(Vec<ScopedRegistry>, ResolvedConfig), CliError> {
+    scopes.retain(|scope| scope_matches(scope.scope, requested_scope));
+    let mut resolved = resolve_plugin_config_from_paths(
+        scopes.iter().map(|scope| scope.plugins_toml_path.clone()),
+    )?;
+    resolved.dynamic_plugin_policy =
+        resolve_dynamic_plugin_policy_from_paths(effective_policy_paths)?;
+    let touched = hydrate_scoped_registries(&mut scopes, &resolved)?;
+    if persist {
+        for index in touched {
+            scopes[index].save()?;
+        }
+    }
+    Ok((scopes, resolved))
 }
 
 pub(crate) fn inspect(
@@ -474,20 +628,56 @@ pub(crate) fn disable(
     mutate_enabled_state(command.id, server, false)
 }
 
+#[cfg(test)]
 pub(crate) fn remove(
     command: PluginsRemoveRequest,
     server: &GatewayOverrides,
 ) -> Result<(), CliError> {
+    remove_scoped(command, crate::plugins::ConfigurationScope::Default, server)
+}
+
+pub(crate) fn remove_scoped(
+    command: PluginsRemoveRequest,
+    requested_scope: crate::plugins::ConfigurationScope,
+    server: &GatewayOverrides,
+) -> Result<(), CliError> {
+    if requested_scope == crate::plugins::ConfigurationScope::Invalid {
+        return Err(CliError::Config(
+            "choose only one of --user or --global".into(),
+        ));
+    }
     let explicit_plugin_config = lifecycle_plugin_config_path(server);
-    let mut scopes = load_scoped_registries(explicit_plugin_config.as_ref())?;
+    let mut scopes = load_scoped_registries_matching(explicit_plugin_config.as_ref(), |scope| {
+        scope_matches(scope, requested_scope)
+    })?;
+    if requested_scope == crate::plugins::ConfigurationScope::Default {
+        ensure_remove_scope_unambiguous(&scopes, &command.id)?;
+    }
     let resolved = match find_record_by_id(&scopes, &command.id) {
         Ok(Some(_)) => None,
-        Ok(None) | Err(_) => {
-            let resolved = resolve_plugins_config_with_path(
-                server.config.as_ref(),
-                server.plugin_config_path.as_ref(),
-            )?;
-            scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
+        Err(error) => return Err(error),
+        Ok(None) => {
+            let resolved = if requested_scope == crate::plugins::ConfigurationScope::Default {
+                let resolved = resolve_plugins_config_with_path(
+                    server.config.as_ref(),
+                    server.plugin_config_path.as_ref(),
+                )?;
+                scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
+                resolved
+            } else {
+                let (selected_scopes, resolved) = hydrate_selected_scopes(
+                    scopes,
+                    requested_scope,
+                    diagnostic_plugin_config_paths(
+                        server.config.as_ref(),
+                        server.plugin_config_path.as_ref(),
+                    ),
+                    true,
+                )?;
+                scopes = selected_scopes;
+                resolved
+            };
+            find_record_by_id(&scopes, &command.id)?;
             Some(resolved)
         }
     };
@@ -521,6 +711,47 @@ pub(crate) fn remove(
 
     println!("Removed dynamic plugin {}", command.id);
     Ok(())
+}
+
+fn ensure_remove_scope_unambiguous(scopes: &[ScopedRegistry], id: &str) -> Result<(), CliError> {
+    let mut matches = 0;
+    for scope in scopes {
+        let registered = scope
+            .registry
+            .get(id)
+            .is_some_and(|record| !record.is_tombstoned());
+        let declared = if registered {
+            false
+        } else {
+            dynamic_manifest_refs(&scope.plugins_toml_path)?
+                .iter()
+                .any(|manifest_ref| {
+                    crate::configuration::load_bounded_dynamic_plugin_manifest(manifest_ref)
+                        .map(|(manifest, _)| manifest.plugin.id.trim() == id)
+                        .unwrap_or(false)
+                })
+        };
+        if registered || declared {
+            matches += 1;
+        }
+    }
+    if matches > 1 {
+        return Err(CliError::Config(format!(
+            "dynamic plugin '{id}' is configured in multiple lifecycle scopes; use --user or --global"
+        )));
+    }
+    Ok(())
+}
+
+fn scope_matches(actual: RegistryScope, requested: crate::plugins::ConfigurationScope) -> bool {
+    match requested {
+        crate::plugins::ConfigurationScope::Default => true,
+        crate::plugins::ConfigurationScope::User => {
+            matches!(actual, RegistryScope::User | RegistryScope::Explicit)
+        }
+        crate::plugins::ConfigurationScope::Global => actual == RegistryScope::Global,
+        crate::plugins::ConfigurationScope::Invalid => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -880,7 +1111,7 @@ fn snapshot_python_environment(
     })?;
     let source_artifact_sha256 = trusted_source_artifact_sha256(manifest)?;
     let environment = PathBuf::from(environment);
-    verify_environment_attestation(&environment, source_artifact_sha256)
+    let expected_digest = verify_environment_attestation(&environment, source_artifact_sha256)
         .map_err(CliError::Config)?;
     let environment_name = environment.file_name().ok_or_else(|| {
         CliError::Config(format!(
@@ -897,8 +1128,13 @@ fn snapshot_python_environment(
         true,
         &mut Vec::new(),
     )?;
-    verify_environment_attestation(&copied_environment, source_artifact_sha256)
-        .map_err(CliError::Config)?;
+    let copied_digest = environment_tree_digest(&copied_environment).map_err(CliError::Config)?;
+    if copied_digest != expected_digest {
+        return Err(CliError::Config(format!(
+            "managed Python environment snapshot {} changed during copying",
+            copied_environment.display()
+        )));
+    }
     Ok(Some(copied_environment.to_string_lossy().into_owned()))
 }
 
@@ -2025,12 +2261,17 @@ fn mutate_enabled_state(
     };
     let explicit_plugin_config = lifecycle_plugin_config_path(server);
     let (mut scopes, resolved) = if enabled {
-        let resolved = resolve_plugins_config_with_path(
+        let mut resolved = resolve_plugins_config_with_path(
             server.config.as_ref(),
             server.plugin_config_path.as_ref(),
         )?;
         let mut scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
         let entry = find_registered_entry(&scopes, Some(&resolved), command, &plugin_id)?;
+        if installation::receipt_for(&entry).is_some() {
+            crate::plugins::policy::apply_secure_runtime_defaults(
+                &mut resolved.dynamic_plugin_policy,
+            );
+        }
         if entry.record.is_tombstoned() {
             return Err(plugin_refused(
                 command,
@@ -2153,7 +2394,8 @@ fn load_and_hydrate_scopes(
 fn hydrate_scoped_registries(
     scopes: &mut [ScopedRegistry],
     resolved: &ResolvedConfig,
-) -> Result<(), CliError> {
+) -> Result<BTreeSet<usize>, CliError> {
+    let mut touched = BTreeSet::new();
     for plugin in &resolved.dynamic_plugins {
         let scope_index = scopes
             .iter()
@@ -2212,8 +2454,9 @@ fn hydrate_scoped_registries(
                 .add(record)
                 .map_err(|error| CliError::Config(error.to_string()))?;
         }
+        touched.insert(scope_index);
     }
-    Ok(())
+    Ok(touched)
 }
 
 fn validated_record_from_manifest(

@@ -264,6 +264,77 @@ pub(super) fn provision_python_environment(
     Ok(Some(environment))
 }
 
+#[cfg(unix)]
+pub(super) fn make_global_environment_readable(environment: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let parent = environment.parent().ok_or_else(|| {
+        format!(
+            "managed Python environment {} has no parent",
+            environment.display()
+        )
+    })?;
+    for directory in [parent, environment] {
+        if !std::fs::symlink_metadata(directory)
+            .map_err(|error| format!("failed to inspect {}: {error}", directory.display()))?
+            .file_type()
+            .is_dir()
+        {
+            return Err(format!(
+                "managed Python environment directory {} must not be a symbolic link",
+                directory.display()
+            ));
+        }
+    }
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o755))
+        .map_err(|error| format!("failed to set permissions on {}: {error}", parent.display()))?;
+
+    let mut pending = vec![environment.to_path_buf()];
+    let mut entries = 0_usize;
+    while let Some(directory) = pending.pop() {
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).map_err(
+            |error| {
+                format!(
+                    "failed to set permissions on {}: {error}",
+                    directory.display()
+                )
+            },
+        )?;
+        for entry in std::fs::read_dir(&directory)
+            .map_err(|error| format!("failed to read {}: {error}", directory.display()))?
+        {
+            let entry = entry.map_err(|error| error.to_string())?;
+            entries += 1;
+            if entries > MAX_ENVIRONMENT_FILES {
+                return Err(format!(
+                    "managed Python environment exceeds the {MAX_ENVIRONMENT_FILES}-entry permission budget"
+                ));
+            }
+            let path = entry.path();
+            let metadata = std::fs::symlink_metadata(&path)
+                .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+            if metadata.file_type().is_dir() {
+                pending.push(path);
+            } else if metadata.file_type().is_file() {
+                let mode = if metadata.permissions().mode() & 0o111 != 0 {
+                    0o755
+                } else {
+                    0o644
+                };
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).map_err(
+                    |error| format!("failed to set permissions on {}: {error}", path.display()),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub(super) fn make_global_environment_readable(_environment: &Path) -> Result<(), String> {
+    Ok(())
+}
+
 pub(super) fn read_environment_attestation(
     environment: &Path,
     expected_source_artifact_sha256: &str,
@@ -611,6 +682,14 @@ pub(super) fn remove_managed_environment(
         ));
     }
     remove_directory_if_present(&configured, "delete")
+}
+
+pub(super) fn remove_managed_environment_for_plugin(
+    state_path: &Path,
+    plugin_id: &str,
+) -> Result<(), String> {
+    let expected = managed_environment_path(state_path, plugin_id)?;
+    remove_directory_if_present(&expected, "delete")
 }
 
 pub(super) fn environment_state(

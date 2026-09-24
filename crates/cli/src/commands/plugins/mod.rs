@@ -39,11 +39,20 @@ pub(super) fn execute(command: PluginsCommand, server: &ServerArgs) -> Result<Ex
         subcommands::PluginsSubcommand::Add(command) => {
             crate::plugins::lifecycle::add(command.into_runtime(), &server)
         }
+        subcommands::PluginsSubcommand::Install(command) => {
+            crate::plugins::lifecycle::installation::install(
+                command.source,
+                command.scope.into(),
+                command.no_enable,
+                &server,
+            )
+        }
         subcommands::PluginsSubcommand::Validate(command) => {
             crate::plugins::lifecycle::validate(command.into_runtime(), &server)
         }
         subcommands::PluginsSubcommand::List(command) => {
-            crate::plugins::lifecycle::list(command.into_runtime(), &server)
+            let scope = command.scope.clone().into();
+            crate::plugins::lifecycle::list_scoped(command.into_runtime(), scope, &server)
         }
         subcommands::PluginsSubcommand::Inspect(command) => {
             crate::plugins::lifecycle::inspect(command.into_runtime(), &server)
@@ -55,7 +64,15 @@ pub(super) fn execute(command: PluginsCommand, server: &ServerArgs) -> Result<Ex
             crate::plugins::lifecycle::disable(command.into_runtime(), &server)
         }
         subcommands::PluginsSubcommand::Remove(command) => {
-            crate::plugins::lifecycle::remove(command.into_runtime(), &server)
+            let scope = command.scope.clone().into();
+            crate::plugins::lifecycle::remove_scoped(command.into_runtime(), scope, &server)
+        }
+        subcommands::PluginsSubcommand::Uninstall(command) => {
+            crate::plugins::lifecycle::installation::uninstall(
+                command.id,
+                command.scope.into(),
+                &server,
+            )
         }
     };
     match result {
