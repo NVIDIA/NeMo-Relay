@@ -22,6 +22,10 @@ pub(crate) struct RelayTlsIdentity {
 
 impl RelayTlsIdentity {
     pub(crate) fn load_or_create() -> Result<Self, String> {
+        // Gateways share this identity even when they listen on different ports.
+        // Serialize the check and publication so no live server's pin is replaced.
+        let state = crate::bootstrap::state::state_dir()?;
+        let _lock = crate::bootstrap::state::lock_endpoint(&state, IDENTITY_FILE)?;
         let path = identity_path()?;
         if path.exists() {
             return Self::load();
