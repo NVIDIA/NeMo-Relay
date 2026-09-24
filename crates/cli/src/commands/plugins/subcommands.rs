@@ -30,6 +30,8 @@ pub(crate) enum PluginsSubcommand {
     Edit(PluginsEditCommand),
     /// Register a manifest-backed dynamic plugin in `plugins.toml`.
     Add(PluginsAddCommand),
+    /// Install a verified plugin bundle from a release source.
+    Install(PluginsInstallCommand),
     /// Validate a manifest-backed dynamic plugin by path or installed ID.
     Validate(PluginsValidateCommand),
     /// List discovered dynamic plugins from the resolved host config.
@@ -42,6 +44,8 @@ pub(crate) enum PluginsSubcommand {
     Disable(PluginsDisableCommand),
     /// Tombstone a registered dynamic plugin and remove its host discovery reference.
     Remove(PluginsRemoveCommand),
+    /// Unregister and delete a CLI-managed plugin bundle.
+    Uninstall(PluginsUninstallCommand),
 }
 
 impl PluginsSubcommand {
@@ -72,10 +76,10 @@ impl PluginsSubcommand {
         .multiple(false)
 ))]
 pub(crate) struct PluginsScopeArgs {
-    /// Edit the selected low layer: an explicit plugin target, or the XDG user config.
+    /// Select plugins in your user configuration (XDG unless an explicit target applies).
     #[arg(long)]
     pub(crate) user: bool,
-    /// Edit system config (`/etc/nemo-relay` on Unix; `%ProgramData%\nemo-relay` on Windows).
+    /// Select system plugins (`/etc/nemo-relay` on Unix; `%ProgramData%\nemo-relay` on Windows).
     #[arg(long)]
     pub(crate) global: bool,
 }
@@ -96,6 +100,17 @@ pub(crate) struct PluginsAddCommand {
     pub(crate) path: PathBuf,
 }
 
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PluginsInstallCommand {
+    #[command(flatten)]
+    pub(crate) scope: PluginsScopeArgs,
+    /// Release source, for example github:NVIDIA/NeMo-Relay-Plugins@switchyard-plugin-0.2.0.
+    pub(crate) source: String,
+    /// Register the plugin without enabling it.
+    #[arg(long)]
+    pub(crate) no_enable: bool,
+}
+
 /// Args for `nemo-relay plugins validate`.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct PluginsValidateCommand {
@@ -109,6 +124,8 @@ pub(crate) struct PluginsValidateCommand {
 /// Args for `nemo-relay plugins list`.
 #[derive(Debug, Clone, Default, Args)]
 pub(crate) struct PluginsListCommand {
+    #[command(flatten)]
+    pub(crate) scope: PluginsScopeArgs,
     /// Include tombstoned dynamic plugin records in the output.
     #[arg(long)]
     pub(crate) all: bool,
@@ -144,6 +161,16 @@ pub(crate) struct PluginsDisableCommand {
 /// Args for `nemo-relay plugins remove`.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct PluginsRemoveCommand {
+    #[command(flatten)]
+    pub(crate) scope: PluginsScopeArgs,
+    /// Canonical plugin ID.
+    pub(crate) id: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PluginsUninstallCommand {
+    #[command(flatten)]
+    pub(crate) scope: PluginsScopeArgs,
     /// Canonical plugin ID.
     pub(crate) id: String,
 }
