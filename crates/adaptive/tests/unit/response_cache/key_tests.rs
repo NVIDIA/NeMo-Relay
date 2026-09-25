@@ -653,17 +653,12 @@ fn ambiguous_anthropic_protocol_headers_bypass() {
     let mut request = LlmRequest {
         headers: Map::from_iter([
             ("anthropic-version".to_string(), json!("2023-06-01")),
-            ("anthropic-beta".to_string(), json!("compact-2026-01-12")),
+            ("anthropic-beta".to_string(), json!("compact-2026-09-04")),
         ]),
         content: json!({
             "model": "claude-opus-5-5",
             "messages": [{"role": "user", "content": "hello"}],
-            "context_management": {
-                "edits": [{
-                    "type": "compact_20260112",
-                    "pause_after_compaction": true
-                }]
-            }
+            "compaction": {"type": "summarize"}
         }),
     };
     request
@@ -677,10 +672,10 @@ fn ambiguous_anthropic_protocol_headers_bypass() {
 }
 
 #[test]
-fn on_demand_compaction_keeps_protocol_bypass_reason_by_default() {
+fn unsupported_compaction_protocol_keeps_protocol_bypass_reason_by_default() {
     let request = LlmRequest {
         headers: Map::from_iter([
-            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-version".to_string(), json!("2024-01-01")),
             ("anthropic-beta".to_string(), json!("compact-2026-09-04")),
         ]),
         content: json!({

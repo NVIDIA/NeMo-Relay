@@ -32,6 +32,10 @@ fn threshold_block() -> Json {
     json!({"type": "compaction", "content": "summary", "encrypted_content": null})
 }
 
+fn on_demand_block() -> Json {
+    json!({"type": "compaction", "content": "summary", "signature": "signed"})
+}
+
 fn ordinary_response() -> Json {
     json!({
         "id": "msg_ordinary",
@@ -62,15 +66,36 @@ fn threshold_response() -> Json {
     })
 }
 
+fn on_demand_response() -> Json {
+    json!({
+        "id": "msg_on_demand",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5-5",
+        "container": null,
+        "stop_details": null,
+        "diagnostics": null,
+        "service_tier": "standard",
+        "content": [on_demand_block()],
+        "stop_reason": "compaction",
+        "stop_sequence": null,
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "iterations": [{"type": "compaction", "input_tokens": 10, "output_tokens": 5}]
+        }
+    })
+}
+
 #[test]
 fn unknown_null_response_metadata_is_not_cacheable() {
     let context = AnthropicCacheContext {
         version: ANTHROPIC_API_VERSION.to_string(),
-        beta_tokens: vec![THRESHOLD_BETA.to_string()],
-        protocol: AnthropicProtocol::ThresholdV1,
-        operation: AnthropicOperation::PausedThreshold,
+        beta_tokens: vec![ON_DEMAND_BETA.to_string()],
+        protocol: AnthropicProtocol::OnDemandV1,
+        operation: AnthropicOperation::OnDemandSummarize,
     };
-    let mut response = threshold_response();
+    let mut response = on_demand_response();
     response["future_response_field"] = Json::Null;
 
     assert_eq!(classify_aggregate(&response, &context), None);
@@ -114,6 +139,41 @@ fn request_shapes_map_to_distinct_compaction_operations() {
             ),
             AnthropicOperation::ThresholdRecompact,
         ),
+        (
+            request(
+                json!({
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "compaction": {"type": "summarize"}
+                }),
+                ON_DEMAND_BETA,
+            ),
+            AnthropicOperation::OnDemandSummarize,
+        ),
+        (
+            request(
+                json!({
+                    "messages": [
+                        {"role": "assistant", "content": [on_demand_block()]},
+                        {"role": "user", "content": "continue"}
+                    ]
+                }),
+                ON_DEMAND_BETA,
+            ),
+            AnthropicOperation::OnDemandContinuation,
+        ),
+        (
+            request(
+                json!({
+                    "messages": [
+                        {"role": "assistant", "content": [on_demand_block()]},
+                        {"role": "user", "content": "continue"}
+                    ],
+                    "compaction": {"type": "summarize"}
+                }),
+                ON_DEMAND_BETA,
+            ),
+            AnthropicOperation::OnDemandRecompact,
+        ),
     ];
 
     for (request, expected) in cases {
@@ -128,51 +188,67 @@ fn request_shapes_map_to_distinct_compaction_operations() {
 fn response_kind_must_match_the_request_operation() {
     let ordinary = ordinary_response();
     let threshold = threshold_response();
+    let on_demand = on_demand_response();
     let cases = [
         (
             AnthropicOperation::PausedThreshold,
             Some(AnthropicResponseKind::Ordinary),
             Some(AnthropicResponseKind::ThresholdCompaction),
+            None,
         ),
         (
             AnthropicOperation::ThresholdContinuation,
             Some(AnthropicResponseKind::Ordinary),
+            None,
             None,
         ),
         (
             AnthropicOperation::ThresholdRecompact,
             Some(AnthropicResponseKind::Ordinary),
             Some(AnthropicResponseKind::ThresholdCompaction),
+            None,
+        ),
+        (
+            AnthropicOperation::OnDemandSummarize,
+            None,
+            None,
+            Some(AnthropicResponseKind::OnDemandCompaction),
+        ),
+        (
+            AnthropicOperation::OnDemandContinuation,
+            Some(AnthropicResponseKind::Ordinary),
+            None,
+            None,
+        ),
+        (
+            AnthropicOperation::OnDemandRecompact,
+            None,
+            None,
+            Some(AnthropicResponseKind::OnDemandCompaction),
         ),
     ];
 
-    for (operation, ordinary_kind, threshold_kind) in cases {
+    for (operation, ordinary_kind, threshold_kind, on_demand_kind) in cases {
+        let protocol = match operation {
+            AnthropicOperation::OnDemandSummarize
+            | AnthropicOperation::OnDemandContinuation
+            | AnthropicOperation::OnDemandRecompact => AnthropicProtocol::OnDemandV1,
+            _ => AnthropicProtocol::ThresholdV1,
+        };
         let context = AnthropicCacheContext {
             version: ANTHROPIC_API_VERSION.to_string(),
-            beta_tokens: vec![THRESHOLD_BETA.to_string()],
-            protocol: AnthropicProtocol::ThresholdV1,
+            beta_tokens: vec![match protocol {
+                AnthropicProtocol::ThresholdV1 => THRESHOLD_BETA.to_string(),
+                AnthropicProtocol::OnDemandV1 => ON_DEMAND_BETA.to_string(),
+            }],
+            protocol,
             operation,
         };
 
         assert_eq!(classify_aggregate(&ordinary, &context), ordinary_kind);
         assert_eq!(classify_aggregate(&threshold, &context), threshold_kind);
+        assert_eq!(classify_aggregate(&on_demand, &context), on_demand_kind);
     }
-}
-
-#[test]
-fn on_demand_compaction_remains_live() {
-    let request = request(
-        json!({
-            "messages": [{"role": "user", "content": "hello"}],
-            "compaction": {"type": "summarize"}
-        }),
-        "compact-2026-09-04",
-    );
-
-    assert_eq!(
-        cache_context(&request),
-        Err(CacheReason::AnthropicCompaction)
-    );
 }
 
 #[test]
@@ -180,9 +256,9 @@ fn unsupported_anthropic_api_versions_bypass_compaction_caching() {
     let mut request = request(
         json!({
             "messages": [{"role": "user", "content": "hello"}],
-            "context_management": threshold_edit()
+            "compaction": {"type": "summarize"}
         }),
-        THRESHOLD_BETA,
+        ON_DEMAND_BETA,
     );
     request
         .headers

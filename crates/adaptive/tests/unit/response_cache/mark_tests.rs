@@ -128,7 +128,7 @@ fn anthropic_shaped_bodies_price_through_the_catalog() {
             "content": [{
                 "type": "compaction",
                 "content": "summary",
-                "encrypted_content": null
+                "signature": "signed"
             }],
             "stop_reason": "compaction",
             "usage": {
@@ -190,7 +190,7 @@ fn compaction_savings_include_iteration_tokens() {
             "content": [{
                 "type": "compaction",
                 "content": "summary",
-                "encrypted_content": null
+                "signature": "signed"
             }],
             "stop_reason": "compaction",
             "stop_sequence": null,

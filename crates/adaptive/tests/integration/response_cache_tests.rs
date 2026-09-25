@@ -1395,6 +1395,18 @@ fn anthropic_compaction_stream_chunks() -> Vec<Json> {
     ]
 }
 
+fn anthropic_on_demand_compaction_stream_chunks() -> Vec<Json> {
+    vec![
+        json!({"type": "ping"}),
+        json!({"type": "message_start", "message": {"id": "msg_compact", "type": "message", "role": "assistant", "model": "claude-opus-5-5", "content": [], "container": null, "stop_reason": null, "stop_sequence": null, "stop_details": null, "diagnostics": null, "service_tier": "standard", "usage": {"input_tokens": 0, "output_tokens": 0}}}),
+        json!({"type": "content_block_start", "index": 0, "content_block": {"type": "compaction", "content": "summary", "signature": "signed"}}),
+        json!({"type": "ping"}),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({"type": "message_delta", "delta": {"stop_reason": "compaction", "stop_sequence": null, "stop_details": null, "container": null}, "usage": {"input_tokens": 0, "output_tokens": 0, "iterations": [{"type": "compaction", "input_tokens": 10, "output_tokens": 5}]}}),
+        json!({"type": "message_stop"}),
+    ]
+}
+
 fn anthropic_compaction_body() -> Json {
     json!({
         "id": "msg_compact",
@@ -1414,6 +1426,29 @@ fn anthropic_compaction_body() -> Json {
         "usage": {
             "input_tokens": 10,
             "output_tokens": 5,
+            "iterations": [{"type": "compaction", "input_tokens": 10, "output_tokens": 5}]
+        }
+    })
+}
+
+fn anthropic_on_demand_compaction_body() -> Json {
+    json!({
+        "id": "msg_compact",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5-5",
+        "container": null,
+        "stop_details": null,
+        "diagnostics": null,
+        "service_tier": "standard",
+        "content": [{
+            "type": "compaction", "content": "summary", "signature": "signed"
+        }],
+        "stop_reason": "compaction",
+        "stop_sequence": null,
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
             "iterations": [{"type": "compaction", "input_tokens": 10, "output_tokens": 5}]
         }
     })
@@ -2134,13 +2169,16 @@ async fn threshold_compaction_with_a_sparse_index_is_never_stored() {
 }
 
 #[tokio::test]
-async fn on_demand_compaction_remains_live() {
+async fn on_demand_compaction_replays_signed_block_without_delta() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
     activate_cache(compaction_cache_config()).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
-    let provider = counting_stream_provider(Arc::clone(&calls), anthropic_stream_chunks());
+    let provider = counting_stream_provider(
+        Arc::clone(&calls),
+        anthropic_on_demand_compaction_stream_chunks(),
+    );
     let request = || LlmRequest {
         headers: serde_json::Map::from_iter([
             ("anthropic-version".to_string(), json!("2023-06-01")),
@@ -2154,13 +2192,62 @@ async fn on_demand_compaction_remains_live() {
     };
 
     stream_call_named("anthropic.messages", &provider, request()).await;
-    stream_call_named("anthropic.messages", &provider, request()).await;
+    let replayed = stream_call_named("anthropic.messages", &provider, request()).await;
 
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        2,
-        "on-demand compaction must remain live until its protocol is supported"
+        1,
+        "validated on-demand response must hit"
     );
+    assert!(replayed.iter().any(|chunk| {
+        chunk
+            .pointer("/content_block/signature")
+            .and_then(Json::as_str)
+            == Some("signed")
+    }));
+    assert!(!replayed.iter().any(|chunk| {
+        chunk.pointer("/delta/type").and_then(Json::as_str) == Some("compaction_delta")
+    }));
+}
+
+#[tokio::test]
+async fn on_demand_recompaction_replays_the_new_signed_block() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = counting_stream_provider(
+        Arc::clone(&calls),
+        anthropic_on_demand_compaction_stream_chunks(),
+    );
+    let request = || LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-09-04")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [
+                {"role": "assistant", "content": [{
+                    "type": "compaction", "content": "old summary", "signature": "old-signed"
+                }]},
+                {"role": "user", "content": "continue"}
+            ],
+            "compaction": {"type": "summarize"}
+        }),
+    };
+
+    stream_call_named("anthropic.messages", &provider, request()).await;
+    let replayed = stream_call_named("anthropic.messages", &provider, request()).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(replayed.iter().any(|chunk| {
+        chunk
+            .pointer("/content_block/signature")
+            .and_then(Json::as_str)
+            == Some("signed")
+    }));
 }
 
 #[tokio::test]
@@ -2222,6 +2309,38 @@ async fn paused_threshold_ordinary_stream_with_unknown_delta_field_is_never_stor
     stream_call_named("anthropic.messages", &provider, request()).await;
 
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn on_demand_continuation_caches_ordinary_response() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = counting_stream_provider(Arc::clone(&calls), anthropic_stream_chunks());
+    let request = || LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-09-04")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [
+                {"role": "assistant", "content": [{
+                    "type": "compaction", "content": "summary", "signature": "signed",
+                    "cache_control": {"type": "ephemeral"}
+                }]},
+                {"role": "user", "content": "continue"}
+            ]
+        }),
+    };
+
+    stream_call_named("anthropic.messages", &provider, request()).await;
+    let replayed = stream_call_named("anthropic.messages", &provider, request()).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(replayed_text(&replayed), "Hello, world.");
 }
 
 #[tokio::test]
@@ -2379,6 +2498,109 @@ async fn threshold_compaction_cache_entry_is_shared_across_buffered_and_streamin
                 .pointer("/delta/encrypted_content")
                 .is_some_and(Json::is_null)
     }));
+}
+
+#[tokio::test]
+async fn on_demand_compaction_cache_entry_is_shared_across_buffered_and_streaming_calls() {
+    let _guard = TEST_MUTEX.lock().await;
+    let request = || LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-09-04")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "compaction": {"type": "summarize"}
+        }),
+    };
+
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+    let stream_calls = Arc::new(AtomicUsize::new(0));
+    let stream_provider = counting_stream_provider(
+        Arc::clone(&stream_calls),
+        anthropic_on_demand_compaction_stream_chunks(),
+    );
+    stream_call_named("anthropic.messages", &stream_provider, request()).await;
+    let buffered_calls = Arc::new(AtomicUsize::new(0));
+    let buffered_provider = counting_provider(
+        Arc::clone(&buffered_calls),
+        json!({"unexpected": "provider must not run"}),
+    );
+    let buffered = buffered_call_named("anthropic.messages", &buffered_provider, request()).await;
+    assert_eq!(stream_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(buffered_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(buffered, anthropic_on_demand_compaction_body());
+
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+    let buffered_calls = Arc::new(AtomicUsize::new(0));
+    let buffered_provider = counting_provider(
+        Arc::clone(&buffered_calls),
+        anthropic_on_demand_compaction_body(),
+    );
+    buffered_call_named("anthropic.messages", &buffered_provider, request()).await;
+    let stream_calls = Arc::new(AtomicUsize::new(0));
+    let stream_provider = counting_stream_provider(Arc::clone(&stream_calls), vec![]);
+    let replayed = stream_call_named("anthropic.messages", &stream_provider, request()).await;
+    assert_eq!(buffered_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(stream_calls.load(Ordering::SeqCst), 0);
+    assert!(replayed.iter().any(|chunk| {
+        chunk
+            .pointer("/content_block/signature")
+            .and_then(Json::as_str)
+            == Some("signed")
+    }));
+    assert!(!replayed.iter().any(|chunk| {
+        chunk.pointer("/delta/type").and_then(Json::as_str) == Some("compaction_delta")
+    }));
+}
+
+#[tokio::test]
+async fn malformed_buffered_on_demand_response_is_never_stored() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = counting_provider(
+        Arc::clone(&calls),
+        json!({
+            "id": "msg_compact",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [{"type": "compaction", "content": "summary"}],
+            "stop_reason": "compaction",
+            "stop_sequence": null,
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "iterations": [{"type": "compaction", "input_tokens": 10, "output_tokens": 5}]
+            }
+        }),
+    );
+    let request = || LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-09-04")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "compaction": {"type": "summarize"}
+        }),
+    };
+
+    buffered_call_named("anthropic.messages", &provider, request()).await;
+    buffered_call_named("anthropic.messages", &provider, request()).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "an unsigned on-demand block must remain live"
+    );
 }
 
 #[tokio::test]
