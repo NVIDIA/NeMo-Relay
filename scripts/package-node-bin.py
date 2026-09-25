@@ -130,16 +130,25 @@ def parse_args() -> argparse.Namespace:
     """Parse Node package assembly arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--node-dir", type=Path, default=ROOT / "crates" / "node")
-    parser.add_argument("--platform", choices=sorted(PLATFORMS), required=True)
-    parser.add_argument("--version", required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--platform", choices=sorted(PLATFORMS))
+    parser.add_argument("--version")
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--metapackage", action="store_true")
-    return parser.parse_args()
+    parser.add_argument("--print-platforms", action="store_true")
+    args = parser.parse_args()
+    if not args.print_platforms and (args.platform is None or args.version is None or args.output_dir is None):
+        parser.error("--platform, --version, and --output-dir are required when packaging")
+    return args
 
 
 def main() -> None:
     """Build the requested native package and optional metapackage."""
     args = parse_args()
+    if args.print_platforms:
+        for platform in PLATFORMS.values():
+            print(f"{platform.key}\t{platform.package_name}")
+        return
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
     artifacts = [
         build_native_package(args.node_dir, PLATFORMS[args.platform], args.version, args.output_dir),
