@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use axum::http::HeaderMap;
+use nemo_relay::api::event::{CategoryProfile, EventCategory};
 use nemo_relay::api::llm::{LlmAttributes, LlmCallEndParams, LlmHandle, LlmRequest, llm_call_end};
 #[cfg(test)]
 use nemo_relay::api::llm::{LlmCallParams, llm_call};
@@ -755,17 +756,67 @@ impl SessionManager {
                 "gen_ai.tool.call.id": matched.tool_call_id.clone(),
             })
         });
+        let agent_kind_name = session.agent_kind.as_str().to_string();
+        let event_name = event.event_name.clone();
+        let session_id = event.session_id.clone();
+        let tool_call_id = matched.tool_call_id.clone();
+        let permission_mode = event
+            .payload
+            .get("permission_mode")
+            .and_then(Value::as_str)
+            .filter(|mode| !mode.is_empty())
+            .map(ToOwned::to_owned);
+        let mut metadata = match event.metadata.clone() {
+            Value::Object(map) => map,
+            _ => Map::new(),
+        };
+        metadata.insert("session_id".into(), json!(session_id));
         let matched_tool_call_id = matched.tool_call_id.clone();
         drop(sessions);
         let result = TASK_SCOPE_STACK
             .scope(stack, async move {
-                tool_conditional_execution_with_event_context(
+                let authorization = tool_conditional_execution_with_event_context(
                     &name,
                     &arguments,
                     matched.parent_uuid,
                     guardrail_metadata,
                 )
-                .await
+                .await;
+                let policy_outcome = match &authorization {
+                    Ok(()) => "pass",
+                    Err(FlowError::GuardrailRejected(_)) => "reject",
+                    Err(_) => "error",
+                };
+                let mut data = json!({
+                    "agent_kind": agent_kind_name,
+                    "event_name": event_name,
+                    "tool_name": name,
+                    "tool_call_id": tool_call_id,
+                    "decision_source": "nemo_relay",
+                    "policy_outcome": policy_outcome,
+                });
+                if let Some(object) = data.as_object_mut() {
+                    if let Some(permission_mode) = permission_mode {
+                        object.insert("harness_permission_mode".into(), json!(permission_mode));
+                    }
+                    if let Err(error) = &authorization {
+                        object.insert("reason".into(), json!(error.to_string()));
+                    }
+                }
+                let _ = emit_mark_event(
+                    EmitMarkEventParams::builder()
+                        .name("nemo_relay.permission.policy_decision")
+                        .data(data)
+                        .metadata(Value::Object(metadata))
+                        .category(EventCategory::custom())
+                        .category_profile(
+                            CategoryProfile::builder()
+                                .subtype("nemo_relay.permission.policy_decision")
+                                .build(),
+                        )
+                        .build(),
+                );
+                authorization
             })
             .await;
         if matches!(result, Err(FlowError::GuardrailRejected(_))) {
