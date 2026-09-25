@@ -371,7 +371,8 @@ def test_admission_rejects_tampered_hermetic_runtime(tmp_path: Path) -> None:
 def test_payload_builder_forwards_non_secret_version_pins() -> None:
     source = (EXAMPLE_ROOT / "scripts" / "build_hermetic_runtime.py").read_text(encoding="utf-8")
     assert 'f"UV_VERSION={UV_VERSION}"' in source
-    assert 'f"PYTHON_VERSION={PYTHON_VERSION}"' in source
+    assert 'f"PYTHON_VERSION={python_version}"' in source
+    assert 'f"PYTHON_GLOB_VERSION={python_glob_version}"' in source
     assert 'f"RELAY_WHEEL_NAME={relay_wheel.name}"' in source
     assert 'f"nofile={BUILDER_NOFILE_LIMIT}"' in source
     assert 'f"HOST_UID={os.getuid()}"' in source

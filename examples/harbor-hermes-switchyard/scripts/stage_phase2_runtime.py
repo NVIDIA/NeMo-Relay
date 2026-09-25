@@ -13,7 +13,7 @@ import os
 import shutil
 from pathlib import Path
 
-RUNTIME_SUFFIXES = {".py", ".sh", ".toml", ".yaml", ".in"}
+RUNTIME_SUFFIXES = {".py", ".sh", ".toml", ".yaml", ".in", ".json"}
 RUNTIME_TOP_LEVEL = (
     "run_terminal_bench.sh",
     "run_phase2_cohort.sh",

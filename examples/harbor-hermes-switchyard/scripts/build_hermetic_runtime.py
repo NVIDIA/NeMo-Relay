@@ -33,7 +33,7 @@ DEFAULT_HERMES_REPOSITORY = "https://github.com/NousResearch/hermes-agent.git"
 DEFAULT_HERMES_REF = "main"
 DEFAULT_HERMES_COMMIT = "067fa1a25732935d1d2b3c0f2c4c1f078a3bb05f"
 UV_VERSION = "0.11.16"
-PYTHON_VERSION = "3.11.13"
+DEFAULT_PYTHON_VERSION = "3.11.13"
 BUILDER_IMAGE = "python:3.11-bullseye"
 BUILDER_NOFILE_LIMIT = "65535:65535"
 
@@ -108,13 +108,28 @@ def materialize_source(
     shutil.copytree(clone, destination, ignore=shutil.ignore_patterns(".git"))
 
 
+def resolve_python_version(source: Path) -> str:
+    # Hermes pins its interpreter in .python-version (e.g. "3.14"); the
+    # installer resolves that pin dynamically via uv rather than a version
+    # baked into this builder, so read it from the checkout instead of
+    # hardcoding a value that silently drifts out of sync with upstream.
+    version_file = source / ".python-version"
+    if version_file.is_file():
+        pinned = version_file.read_text(encoding="utf-8").strip()
+        if pinned:
+            return pinned
+    return DEFAULT_PYTHON_VERSION
+
+
 def build_payload(
     output: Path,
     *,
     source: Path,
     relay_wheel: Path,
     platform: str,
+    python_version: str,
 ) -> None:
+    python_glob_version = ".".join(python_version.split(".")[:2])
     script = r'''
 set -euo pipefail
 trap 'chown -R "${HOST_UID}:${HOST_GID}" /opt/hermes-runtime || true' EXIT
@@ -126,7 +141,7 @@ cp /usr/local/bin/uv /opt/hermes-runtime/bin/uv
 
 /usr/local/bin/uv python install "${PYTHON_VERSION}" \
   --install-dir /opt/hermes-runtime/python --no-bin --compile-bytecode
-python_bin="$(find /opt/hermes-runtime/python -type f -path '*/bin/python3.11' -print -quit)"
+python_bin="$(find /opt/hermes-runtime/python -type f -path "*/bin/python${PYTHON_GLOB_VERSION}" -print -quit)"
 test -n "$python_bin"
 
 UV_PROJECT_ENVIRONMENT=/opt/hermes-runtime/hermes-agent-src/venv \
@@ -157,7 +172,13 @@ chmod 0755 /opt/hermes-runtime/bin/python /opt/hermes-runtime/bin/hermes \
   'import importlib.metadata as m; assert tuple(map(int, m.version("nemo-relay").split("."))) >= (0, 7, 0)'
 '''
     env = os.environ.copy()
-    env.update({"UV_VERSION": UV_VERSION, "PYTHON_VERSION": PYTHON_VERSION})
+    env.update(
+        {
+            "UV_VERSION": UV_VERSION,
+            "PYTHON_VERSION": python_version,
+            "PYTHON_GLOB_VERSION": python_glob_version,
+        }
+    )
     run(
         [
             "docker",
@@ -170,7 +191,9 @@ chmod 0755 /opt/hermes-runtime/bin/python /opt/hermes-runtime/bin/hermes \
             "--env",
             f"UV_VERSION={UV_VERSION}",
             "--env",
-            f"PYTHON_VERSION={PYTHON_VERSION}",
+            f"PYTHON_VERSION={python_version}",
+            "--env",
+            f"PYTHON_GLOB_VERSION={python_glob_version}",
             "--env",
             f"RELAY_WHEEL_NAME={relay_wheel.name}",
             "--env",
@@ -227,6 +250,7 @@ def main() -> int:
                 repository=args.hermes_repository,
                 commit=args.hermes_commit,
             )
+            python_version = resolve_python_version(source)
             for attempt in range(1, 5):
                 try:
                     build_payload(
@@ -234,6 +258,7 @@ def main() -> int:
                         source=source,
                         relay_wheel=relay_wheel,
                         platform=platform,
+                        python_version=python_version,
                     )
                     break
                 except subprocess.CalledProcessError:
@@ -254,7 +279,7 @@ def main() -> int:
             "relay_wheel_sha256": sha256_file(relay_wheel),
             "relay_architecture": expected_arch,
             "builder_image": BUILDER_IMAGE,
-            "python_version": PYTHON_VERSION,
+            "python_version": python_version,
             "uv_version": UV_VERSION,
         }
         (temporary_output / "payload.json").write_text(
