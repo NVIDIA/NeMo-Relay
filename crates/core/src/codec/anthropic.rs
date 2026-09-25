@@ -108,6 +108,26 @@ struct RawAnthropicIterationUsage {
     cache_creation_input_tokens: Option<u64>,
 }
 
+/// The subset of an Anthropic response needed to decide whether aggregate usage can be priced.
+///
+/// Keep this separate from [`RawAnthropicResponse`]: a malformed token count must not erase a
+/// mixed-model iteration signal before the end-event pricing step sees it.
+#[derive(Deserialize)]
+struct RawAnthropicPricingEligibility {
+    model: Option<String>,
+    usage: Option<RawAnthropicPricingUsage>,
+}
+
+#[derive(Deserialize)]
+struct RawAnthropicPricingUsage {
+    iterations: Option<Vec<RawAnthropicIterationModel>>,
+}
+
+#[derive(Deserialize)]
+struct RawAnthropicIterationModel {
+    model: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
@@ -983,11 +1003,20 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
     }
 
     fn allows_estimated_cost(&self, response: &Json) -> bool {
-        serde_json::from_value::<RawAnthropicResponse>(response.clone()).map_or(true, |raw| {
-            raw.usage.as_ref().is_none_or(|usage| {
-                iteration_models_match_response(usage.iterations.as_deref(), raw.model.as_deref())
-            })
-        })
+        serde_json::from_value::<RawAnthropicPricingEligibility>(response.clone()).is_ok_and(
+            |raw| {
+                raw.usage.as_ref().is_none_or(|usage| {
+                    usage.iterations.as_ref().is_none_or(|iterations| {
+                        iterations.iter().all(|iteration| {
+                            iteration
+                                .model
+                                .as_deref()
+                                .is_none_or(|model| Some(model) == raw.model.as_deref())
+                        })
+                    })
+                })
+            },
+        )
     }
 
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {

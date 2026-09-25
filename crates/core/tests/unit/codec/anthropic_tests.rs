@@ -201,6 +201,22 @@ fn test_decode_response_omits_estimated_cost_for_cross_model_iterations() {
 }
 
 #[test]
+fn anthropic_cost_eligibility_rejects_mixed_models_with_malformed_usage() {
+    let response = json!({
+        "model": "claude-fallback",
+        "usage": {
+            "iterations": [
+                {"model": "claude-primary", "input_tokens": "invalid"},
+                {"model": "claude-fallback", "input_tokens": 412}
+            ]
+        }
+    });
+
+    assert!(serde_json::from_value::<RawAnthropicResponse>(response.clone()).is_err());
+    assert!(!AnthropicMessagesCodec.allows_estimated_cost(&response));
+}
+
+#[test]
 fn test_decode_response_multiple_text_blocks() {
     let codec = AnthropicMessagesCodec;
     let response = json!({

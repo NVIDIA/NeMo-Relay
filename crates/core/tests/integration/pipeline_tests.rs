@@ -1546,13 +1546,14 @@ fn response_codec_preserves_unpriced_cross_model_anthropic_usage() {
         .collect::<Vec<_>>();
     assert_eq!(end_events.len(), 2);
     for event in end_events {
-        assert_eq!(
-            event
-                .annotated_response()
-                .and_then(|response| response.usage.as_ref())
-                .and_then(|usage| usage.cost.as_ref()),
-            None,
-        );
+        let response = event
+            .annotated_response()
+            .expect("end event should contain an annotated response");
+        let usage = response
+            .usage
+            .as_ref()
+            .expect("annotated response should contain usage");
+        assert_eq!(usage.cost.as_ref(), None);
     }
 
     assert!(deregister_subscriber("anthropic_cross_model_response_cost").unwrap());

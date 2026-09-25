@@ -507,13 +507,14 @@ async fn anthropic_stream_finalization_does_not_estimate_cross_model_iteration_c
         .iter()
         .find(|event| is_llm_end(event))
         .expect("stream should emit an LLM end event");
-    assert_eq!(
-        end_event
-            .annotated_response()
-            .and_then(|response| response.usage.as_ref())
-            .and_then(|usage| usage.cost.as_ref()),
-        None,
-    );
+    let response = end_event
+        .annotated_response()
+        .expect("stream end event should contain an annotated response");
+    let usage = response
+        .usage
+        .as_ref()
+        .expect("stream annotated response should contain usage");
+    assert_eq!(usage.cost.as_ref(), None);
 
     assert!(deregister_subscriber("anthropic_cross_model_stream_cost").unwrap());
 }
