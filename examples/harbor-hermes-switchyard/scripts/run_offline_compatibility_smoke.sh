@@ -7,7 +7,7 @@ set -euo pipefail
 example_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 run_root="${1:-}"
 admission_output="${2:-$run_root/artifacts/offline-admission.json}"
-image="${OFFLINE_COMPAT_IMAGE:-python:3.11-bookworm}"
+image="${OFFLINE_COMPAT_IMAGE:-python:3.11-trixie}"
 platform="${OFFLINE_COMPAT_PLATFORM:-linux/amd64}"
 hermes_repository="${HERMES_REPOSITORY:-https://github.com/marcusds/hermes-agent.git}"
 hermes_ref="${HERMES_REF:-chore/relay-0.9}"

@@ -51,6 +51,12 @@ timeout_millis = 5000
 "openinference.project.name" = "@PHOENIX_PROJECT@"
 "evaluation.cohort" = "@EVAL_COHORT@"
 
+# The official switchyard-plugin release is verified by this example via its
+# published SHA-256 checksum (see build_switchyard_plugin.sh), not a Relay
+# trusted-signature chain, so accept it on integrity hash alone.
+[plugins.policy.defaults]
+attestation = "integrity_only"
+
 [[plugins.dynamic]]
 manifest = "/opt/relay-plugins/nvidia.switchyard/relay-plugin.toml"
 
