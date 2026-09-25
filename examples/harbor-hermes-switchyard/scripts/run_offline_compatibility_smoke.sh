@@ -9,7 +9,7 @@ run_root="${1:-}"
 admission_output="${2:-$run_root/artifacts/offline-admission.json}"
 image="${OFFLINE_COMPAT_IMAGE:-python:3.11-bookworm}"
 platform="${OFFLINE_COMPAT_PLATFORM:-linux/amd64}"
-hermes_repository="${HERMES_REPOSITORY:-https://github.com/NousResearch/hermes-agent.git}"
+hermes_repository="${HERMES_REPOSITORY:-https://github.com/marcusds/hermes-agent.git}"
 hermes_ref="${HERMES_REF:-chore/relay-0.9}"
 hermes_commit="${HERMES_COMMIT:-f2e61bcc04c21ba2212737b1d54b6deaeb212d1f}"
 

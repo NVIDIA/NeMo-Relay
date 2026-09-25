@@ -12,7 +12,7 @@ completed run roots without mutating them.
 | Dependency | Input used by this example |
 |---|---|
 | NeMo Relay | Official PyPI release `nemo-relay==0.9.2`, installed by digest as a `manylinux2014_x86_64` wheel. |
-| Hermes | `NousResearch/hermes-agent`, branch `chore/relay-0.9` (commit `f2e61bcc04c21ba2212737b1d54b6deaeb212d1f`), open PR [#115343](https://github.com/NousResearch/hermes-agent/pull/115343) upgrading Hermes's own Relay integration from 0.8 to 0.9. Not yet merged or tagged. |
+| Hermes | `marcusds/hermes-agent` fork, branch `chore/relay-0.9` (commit `f2e61bcc04c21ba2212737b1d54b6deaeb212d1f`), the head branch of open PR [NousResearch/hermes-agent#115343](https://github.com/NousResearch/hermes-agent/pull/115343) upgrading Hermes's own Relay integration from 0.8 to 0.9. The branch is cross-repository (lives on the contributor's fork, not `NousResearch/hermes-agent`), so the clone source points at the fork directly. Not yet merged or tagged. |
 | Switchyard plugin | Official release [`switchyard-plugin-0.3.0`](https://github.com/NVIDIA/NeMo-Relay-Plugins/releases/tag/switchyard-plugin-0.3.0) from `NVIDIA/NeMo-Relay-Plugins`, a prebuilt artifact (no local Rust build) built from `NVIDIA-NeMo/Switchyard` commit `336196f6fbfc97ddc71c1700f6092e564e9f23c2` and validated against `nemo-relay` `0.9.2`. |
 | Harbor | `harbor==0.20.0`, official registry export of `terminal-bench@2.0`. |
 

@@ -25,7 +25,7 @@ from plugin_config_paths import (
 )
 from relay_version import RELAY_REQUIREMENT, wheel_version
 
-HERMES_REPOSITORY = "https://github.com/NousResearch/hermes-agent.git"
+HERMES_REPOSITORY = "https://github.com/marcusds/hermes-agent.git"
 HERMES_REF = "chore/relay-0.9"
 HERMES_COMMIT = "f2e61bcc04c21ba2212737b1d54b6deaeb212d1f"
 SWITCHYARD_REPOSITORY = "https://github.com/NVIDIA-NeMo/Switchyard.git"
