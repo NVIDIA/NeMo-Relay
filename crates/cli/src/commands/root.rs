@@ -139,6 +139,9 @@ pub(crate) enum Command {
     Agents(AgentsCommand),
     /// Print shell completion script (e.g. `nemo-relay completions zsh > ~/.zfunc/_nemo-relay`)
     Completions(CompletionsCommand),
+    /// Internal: prepare a private native home and own its capture connection.
+    #[command(hide = true)]
+    Prepare,
     /// Run an agent deterministically (no wizard; errors if config is missing)
     Run(RunCommand),
     /// Internal: subprocess used by installed hooks to forward events. Not typed by humans.
@@ -165,6 +168,7 @@ impl Command {
             Self::Agents(_) => "agents",
             Self::Completions(_) => "completions",
             Self::Run(_) => "run",
+            Self::Prepare => "prepare",
             Self::HookForward(_) => "hook_forward",
         }
     }

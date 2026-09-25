@@ -7,6 +7,7 @@ mod gateway;
 mod protocol;
 mod session;
 mod transport;
+pub(crate) use transport::spawn_stdin_reader;
 
 use std::net::SocketAddr;
 use std::path::Path;

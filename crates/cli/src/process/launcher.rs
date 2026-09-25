@@ -29,6 +29,9 @@ use crate::server::GatewayOverrides;
 
 use super::{PreparedAgentLaunch, RunOverrides};
 
+mod attachment;
+pub(crate) use attachment::prepare;
+
 const TRANSPARENT_GATEWAY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Runs a child coding-agent command behind an ephemeral local gateway.
@@ -521,14 +524,17 @@ impl PreparedAgentLaunch {
             run.env.push(("PATH".into(), path));
         }
         let proxy_credential = run.proxy_credential.clone();
-        crate::agents::prepare_launch(
+        if let Err(error) = crate::agents::prepare_launch(
             agent,
             &mut run,
             gateway_url,
             resolved,
             &proxy_credential,
             dry_run,
-        )?;
+        ) {
+            run.restore()?;
+            return Err(error);
+        }
         Ok(run)
     }
 

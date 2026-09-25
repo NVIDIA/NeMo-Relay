@@ -741,14 +741,9 @@ fn load_or_create_bootstrap_hmac_key() -> Result<[u8; BOOTSTRAP_HMAC_KEY_BYTES],
 }
 
 fn bootstrap_hmac_key_path() -> Result<PathBuf, CliError> {
-    user_config_dir()
-        .map(|directory| directory.join("bootstrap").join("fingerprint-hmac.key"))
-        .ok_or_else(|| {
-            CliError::Config(
-                "cannot determine the per-user NeMo Relay bootstrap state directory; set HOME or USERPROFILE"
-                    .into(),
-            )
-        })
+    crate::bootstrap::state::state_dir()
+        .map(|directory| directory.join("fingerprint-hmac.key"))
+        .map_err(CliError::Config)
 }
 
 fn load_existing_bootstrap_hmac_key() -> Result<Option<[u8; BOOTSTRAP_HMAC_KEY_BYTES]>, CliError> {
