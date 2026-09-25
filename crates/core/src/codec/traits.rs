@@ -90,6 +90,15 @@ pub trait LlmResponseCodec: Send + Sync {
         LlmCodecIdentity::Opaque
     }
 
+    /// Return whether aggregate response usage can be priced from its response model.
+    ///
+    /// Most providers report usage for one model, so the default permits model-based cost
+    /// enrichment. A provider can opt out when its response combines usage from multiple
+    /// models and no provider-reported cost is available.
+    fn allows_estimated_cost(&self, _response: &Json) -> bool {
+        true
+    }
+
     /// Parse a raw JSON response into normalized structured form.
     ///
     /// Implementations should return `Err` only for genuinely unparseable input.

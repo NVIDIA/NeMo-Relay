@@ -317,7 +317,12 @@ impl LlmStreamWrapper {
                     data.as_ref().and_then(|response| {
                         response_codec.as_ref().and_then(|codec| {
                             let mut decoded = codec.decode_response(response).ok()?;
-                            attach_estimated_cost_for_provider(&mut decoded, Some(&handle.name));
+                            if codec.allows_estimated_cost(response) {
+                                attach_estimated_cost_for_provider(
+                                    &mut decoded,
+                                    Some(&handle.name),
+                                );
+                            }
                             Some(decoded)
                         })
                     })
