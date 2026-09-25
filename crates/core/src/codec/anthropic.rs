@@ -101,6 +101,7 @@ struct RawAnthropicUsage {
 
 #[derive(Deserialize)]
 struct RawAnthropicIterationUsage {
+    model: Option<String>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     cache_read_input_tokens: Option<u64>,
@@ -934,12 +935,32 @@ fn anthropic_usage(
             uncached_input_tokens: prompt,
             cost: provider_reported_cost(u.provider_cost, u.cost),
         };
-        if usage.cost.is_none() {
+        if usage.cost.is_none() && iteration_models_match_response(&u.iterations, model_for_pricing)
+        {
             usage.cost = model_for_pricing.and_then(|model| {
                 estimate_cost_for_provider(model_provider.as_deref(), model, &usage)
             });
         }
         usage
+    })
+}
+
+/// An iteration from another model cannot be priced using the response model's rates.
+///
+/// Anthropic reports fallback attempts alongside the final response in `usage.iterations`, but
+/// each attempt is billed at the model that ran it. Keep the aggregate token counts while leaving
+/// cost unset unless the response model can price every named iteration faithfully.
+fn iteration_models_match_response(
+    iterations: &Option<Vec<RawAnthropicIterationUsage>>,
+    response_model: Option<&str>,
+) -> bool {
+    iterations.as_deref().is_none_or(|values| {
+        values.iter().all(|iteration| {
+            iteration
+                .model
+                .as_deref()
+                .is_none_or(|model| Some(model) == response_model)
+        })
     })
 }
 
