@@ -85,8 +85,12 @@ docker run --rm \
         --commit "'"$hermes_commit"'"
     test "$(git -C /tmp/hermes-agent-src rev-parse HEAD)" = "'"$hermes_commit"'"
     cd /tmp/hermes-agent-src
+    # install.sh no longer stages uv at a fixed $HERMES_HOME/bin/uv; it pins
+    # a version-and-platform-qualified binary under $HERMES_HOME/tools.
+    hermes_uv="$(find /tmp/hermes/tools -mindepth 2 -maxdepth 2 -type f -name uv -print -quit)"
+    test -n "$hermes_uv"
     UV_PROJECT_ENVIRONMENT=/tmp/hermes-agent-src/venv \
-      /tmp/hermes/bin/uv sync --frozen --extra all
+      "$hermes_uv" sync --frozen --extra all
     cd /
     /tmp/hermes-agent-src/venv/bin/python -c \
       "import importlib.metadata as m; assert tuple(map(int, m.version(\"nemo-relay\").split(\".\"))) >= (0, 7, 0)"
@@ -94,7 +98,7 @@ docker run --rm \
     test -n "$relay_wheel"
     expected_wheel_sha="$(python3 -c "import json; print(json.load(open(\"/runtime/provenance.json\"))[\"nemo_relay\"][\"wheel_sha256\"])")"
     test "$(sha256sum "$relay_wheel" | cut -d" " -f1)" = "$expected_wheel_sha"
-    /tmp/hermes/bin/uv pip install \
+    "$hermes_uv" pip install \
       --python /tmp/hermes-agent-src/venv/bin/python \
       --force-reinstall --no-deps "$relay_wheel"
     python3 /example/scripts/fake_openai_upstream.py \

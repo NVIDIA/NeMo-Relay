@@ -662,8 +662,13 @@ class HarborHermesAgent(Hermes):
                 f"--commit {commit}; "
                 f'test "$(git -C {install_dir} rev-parse HEAD)" = {commit}; '
                 f"cd {install_dir}; "
+                # install.sh stages a version-and-platform-qualified uv under
+                # $HERMES_HOME/tools rather than a fixed bin/uv path.
+                'hermes_uv="$(find /tmp/hermes/tools -mindepth 2 -maxdepth 2 '
+                '-type f -name uv -print -quit)"; '
+                'test -n "$hermes_uv"; '
                 f"UV_PROJECT_ENVIRONMENT={install_dir}/venv "
-                "/tmp/hermes/bin/uv sync --frozen --extra all; "
+                '"$hermes_uv" sync --frozen --extra all; '
                 'export PATH="$HOME/.local/bin:$PATH"; '
                 "hermes --version; "
                 f'{install_dir}/venv/bin/python -c "import importlib.metadata as m; '
@@ -685,7 +690,10 @@ class HarborHermesAgent(Hermes):
         await environment.upload_file(self.relay_wheel_path, relay_wheel)
         if self.hermetic_runtime_dir is None:
             relay_install = (
-                "/tmp/hermes/bin/uv pip install "
+                'hermes_uv="$(find /tmp/hermes/tools -mindepth 2 -maxdepth 2 '
+                '-type f -name uv -print -quit)"; '
+                'test -n "$hermes_uv"; '
+                '"$hermes_uv" pip install '
                 "--python /tmp/hermes-agent-src/venv/bin/python "
                 f"--force-reinstall --no-deps {shlex.quote(relay_wheel)}; "
                 "/tmp/hermes-agent-src/venv/bin/python"

@@ -100,7 +100,8 @@ def test_install_verifies_detached_commit_and_relay_release() -> None:
     assert "checkout --detach" in source
     assert "rev-parse HEAD" in source
     assert "/tmp/hermes-install-path/ffmpeg" in source
-    assert "uv sync --frozen --extra all" in source
+    assert '"$hermes_uv" sync --frozen --extra all' in source
+    assert 'find /tmp/hermes/tools -mindepth 2 -maxdepth 2 -type f -name uv' in source
     assert "m.version('nemo-relay').split('.')" in source
 
 
