@@ -4,7 +4,7 @@
 //! Observable header policy and downstream response construction.
 
 use axum::body::Body;
-use axum::http::{HeaderMap, HeaderName, Response, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Response, StatusCode};
 use serde_json::{Map, Value, json};
 
 use crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER;
@@ -13,13 +13,45 @@ use crate::error::CliError;
 pub(super) fn observable_headers(headers: &HeaderMap) -> Map<String, Value> {
     let mut output = Map::new();
     for (name, value) in headers {
+        if name.as_str() == "anthropic-beta" || name.as_str() == "anthropic-version" {
+            continue;
+        }
         if should_record_header(name, headers)
             && let Ok(value) = value.to_str()
         {
             output.insert(name.as_str().to_string(), json!(value));
         }
     }
+    record_anthropic_protocol_headers(headers, &mut output);
     output
+}
+
+/// Keeps the Anthropic protocol identity available to cache policy without changing the
+/// public JSON-shaped request-header representation. Repeated beta lines and a single
+/// comma-delimited line are equivalent to Anthropic, so the observable view joins them in
+/// arrival order. A repeated version remains an array so cache policy can fail closed.
+fn record_anthropic_protocol_headers(headers: &HeaderMap, output: &mut Map<String, Value>) {
+    for name in ["anthropic-beta", "anthropic-version"] {
+        let Ok(header_name) = HeaderName::from_bytes(name.as_bytes()) else {
+            continue;
+        };
+        let values: Vec<_> = headers
+            .get_all(&header_name)
+            .iter()
+            .map(HeaderValue::to_str)
+            .collect();
+        if values.is_empty() || values.iter().any(|value| value.is_err()) {
+            continue;
+        }
+        let values: Vec<_> = values.into_iter().flatten().collect();
+        if name == "anthropic-beta" {
+            output.insert(name.to_string(), json!(values.join(",")));
+        } else if values.len() == 1 {
+            output.insert(name.to_string(), json!(values[0]));
+        } else {
+            output.insert(name.to_string(), json!(values));
+        }
+    }
 }
 
 // Copies upstream response headers except hop-by-hop transport headers that Axum/hyper must manage

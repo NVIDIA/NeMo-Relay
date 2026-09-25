@@ -61,6 +61,13 @@ fn scoped_cache_config() -> ResponseCacheConfig {
     }
 }
 
+fn compaction_cache_config() -> ResponseCacheConfig {
+    ResponseCacheConfig {
+        cache_nondeterministic: true,
+        ..scoped_cache_config()
+    }
+}
+
 fn chat_request_with_token_cap(prompt: &str, token_cap: &str) -> LlmRequest {
     let mut request = chat_request(prompt);
     request
@@ -1363,7 +1370,7 @@ async fn streaming_unrecognized_shape_without_a_codec_runs_live() {
 /// `content: [{type:text, text:"Hello, world."}]`.
 fn anthropic_stream_chunks() -> Vec<Json> {
     vec![
-        json!({"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-haiku-4-5", "content": [], "usage": {"input_tokens": 10, "output_tokens": 0}}}),
+        json!({"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-haiku-4-5", "content": [], "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 10, "output_tokens": 0}}}),
         json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
         json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello, "}}),
         json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "world."}}),
@@ -1373,18 +1380,43 @@ fn anthropic_stream_chunks() -> Vec<Json> {
     ]
 }
 
-/// A native Anthropic compaction stream. Cache replay cannot currently
-/// reproduce its `compaction_delta` lifecycle, so compaction-enabled requests
-/// must always forward this live sequence.
+/// A native Anthropic threshold-compaction stream, including the nullable
+/// metadata observed on current provider Messages streams.
 fn anthropic_compaction_stream_chunks() -> Vec<Json> {
     vec![
-        json!({"type": "message_start", "message": {"id": "msg_compact", "type": "message", "role": "assistant", "model": "claude-haiku-4-5", "content": [], "usage": {"input_tokens": 10, "output_tokens": 0}}}),
+        json!({"type": "message_start", "message": {"id": "msg_compact", "type": "message", "role": "assistant", "model": "claude-opus-5-5", "content": [], "container": null, "stop_reason": null, "stop_sequence": null, "stop_details": null, "diagnostics": null, "service_tier": "standard", "usage": {"input_tokens": 10, "output_tokens": 0}}}),
         json!({"type": "content_block_start", "index": 0, "content_block": {"type": "compaction", "content": null}}),
-        json!({"type": "content_block_delta", "index": 0, "delta": {"type": "compaction_delta", "content": "summary"}}),
+        json!({"type": "content_block_delta", "index": 0, "delta": {
+            "type": "compaction_delta", "content": "summary", "encrypted_content": null
+        }}),
         json!({"type": "content_block_stop", "index": 0}),
-        json!({"type": "message_delta", "delta": {"stop_reason": "compaction"}, "usage": {"input_tokens": 10, "output_tokens": 5}}),
+        json!({"type": "message_delta", "delta": {"stop_reason": "compaction", "stop_sequence": null, "stop_details": null, "container": null}, "usage": {"input_tokens": 10, "output_tokens": 5, "iterations": [{"type": "compaction", "input_tokens": 10, "output_tokens": 5}]}, "context_management": {"applied_edits": []}}),
         json!({"type": "message_stop"}),
     ]
+}
+
+fn anthropic_compaction_body() -> Json {
+    json!({
+        "id": "msg_compact",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5-5",
+        "container": null,
+        "stop_details": null,
+        "diagnostics": null,
+        "service_tier": "standard",
+        "content": [{
+            "type": "compaction", "content": "summary", "encrypted_content": null
+        }],
+        "stop_reason": "compaction",
+        "stop_sequence": null,
+        "context_management": {"applied_edits": []},
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "iterations": [{"type": "compaction", "input_tokens": 10, "output_tokens": 5}]
+        }
+    })
 }
 
 /// Like [`stream_call`], but with a caller-chosen provider name (the value the
@@ -1411,6 +1443,23 @@ async fn stream_call_named(
         collected.push(item.unwrap());
     }
     collected
+}
+
+async fn buffered_call_named(
+    name: &str,
+    provider: &LlmExecutionNextFn,
+    request: LlmRequest,
+) -> Json {
+    llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name(name.to_string())
+            .request(request)
+            .func(provider.clone())
+            .model_name("claude-opus-5-5")
+            .build(),
+    )
+    .await
+    .unwrap()
 }
 
 #[tokio::test]
@@ -1843,9 +1892,11 @@ async fn anthropic_compaction_streams_bypass_lookup_and_storage() {
     let request = || LlmRequest {
         headers: serde_json::Map::new(),
         content: json!({
-            "model": "claude-haiku-4-5",
+            "model": "claude-opus-5-5",
             "messages": [{"role": "user", "content": "hello"}],
-            "context_management": {"edits": [{"type": "compact_20260112"}]},
+            "context_management": {"edits": [{
+                "type": "compact_20260112", "pause_after_compaction": true
+            }]},
             "temperature": 0.0
         }),
     };
@@ -1888,6 +1939,401 @@ async fn anthropic_compaction_streams_bypass_lookup_and_storage() {
     }
 
     deregister_subscriber("response_cache_anthropic_compaction_bypass_capture").unwrap();
+}
+
+#[tokio::test]
+async fn threshold_compaction_stream_replays_after_validated_store() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider =
+        counting_stream_provider(Arc::clone(&calls), anthropic_compaction_stream_chunks());
+    let request = || LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-01-12")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "context_management": {"edits": [{
+                "type": "compact_20260112", "pause_after_compaction": true
+            }]}
+        }),
+    };
+
+    let first = stream_call_named("anthropic.messages", &provider, request()).await;
+    let second = stream_call_named("anthropic.messages", &provider, request()).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "validated compaction must hit"
+    );
+    for stream in [&first, &second] {
+        assert!(stream.iter().any(|chunk| {
+            chunk.pointer("/delta/type").and_then(Json::as_str) == Some("compaction_delta")
+                && chunk
+                    .pointer("/delta/encrypted_content")
+                    .is_some_and(Json::is_null)
+        }));
+        assert!(stream.iter().any(|chunk| {
+            chunk.get("type").and_then(Json::as_str) == Some("message_delta")
+                && chunk.get("context_management") == Some(&json!({"applied_edits": []}))
+        }));
+    }
+}
+
+#[tokio::test]
+async fn malformed_threshold_compaction_stream_is_never_stored() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let malformed = anthropic_compaction_stream_chunks()
+        .into_iter()
+        .filter(|chunk| {
+            chunk.pointer("/delta/type").and_then(Json::as_str) != Some("compaction_delta")
+        })
+        .collect();
+    let provider = counting_stream_provider(Arc::clone(&calls), malformed);
+    let request = || LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-01-12")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "context_management": {"edits": [{
+                "type": "compact_20260112", "pause_after_compaction": true
+            }]}
+        }),
+    };
+
+    stream_call_named("anthropic.messages", &provider, request()).await;
+    stream_call_named("anthropic.messages", &provider, request()).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "a threshold response without its required compaction_delta must remain live"
+    );
+}
+
+#[tokio::test]
+async fn threshold_compaction_with_unknown_response_field_is_never_stored() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut malformed = anthropic_compaction_stream_chunks();
+    // Even a nullable future field is unknown to the replay contract and must
+    // fail closed until Relay knows where and how to reproduce it.
+    malformed[4]["delta"]["future_response_field"] = Json::Null;
+    let provider = counting_stream_provider(Arc::clone(&calls), malformed);
+    let request = || LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-01-12")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "context_management": {"edits": [{
+                "type": "compact_20260112", "pause_after_compaction": true
+            }]}
+        }),
+    };
+
+    stream_call_named("anthropic.messages", &provider, request()).await;
+    stream_call_named("anthropic.messages", &provider, request()).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn threshold_compaction_with_a_sparse_index_is_never_stored() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut malformed = anthropic_compaction_stream_chunks();
+    for chunk in &mut malformed[1..4] {
+        chunk["index"] = json!(1);
+    }
+    let provider = counting_stream_provider(Arc::clone(&calls), malformed);
+    let request = || LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-01-12")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "context_management": {"edits": [{
+                "type": "compact_20260112", "pause_after_compaction": true
+            }]}
+        }),
+    };
+
+    stream_call_named("anthropic.messages", &provider, request()).await;
+    stream_call_named("anthropic.messages", &provider, request()).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn on_demand_compaction_remains_live() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = counting_stream_provider(Arc::clone(&calls), anthropic_stream_chunks());
+    let request = || LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-09-04")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "compaction": {"type": "summarize"}
+        }),
+    };
+
+    stream_call_named("anthropic.messages", &provider, request()).await;
+    stream_call_named("anthropic.messages", &provider, request()).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "on-demand compaction must remain live until its protocol is supported"
+    );
+}
+
+#[tokio::test]
+async fn paused_threshold_below_trigger_caches_ordinary_response() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = counting_stream_provider(Arc::clone(&calls), anthropic_stream_chunks());
+    let request = || LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-01-12")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "context_management": {"edits": [{
+                "type": "compact_20260112", "pause_after_compaction": true,
+                "trigger": {"type": "input_tokens", "value": 50000}
+            }]}
+        }),
+    };
+
+    stream_call_named("anthropic.messages", &provider, request()).await;
+    let replayed = stream_call_named("anthropic.messages", &provider, request()).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(replayed_text(&replayed), "Hello, world.");
+}
+
+#[tokio::test]
+async fn paused_threshold_ordinary_stream_with_unknown_delta_field_is_never_stored() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut malformed = anthropic_stream_chunks();
+    malformed[2]["delta"]["future_response_field"] = json!({"state": "must-replay"});
+    let provider = counting_stream_provider(Arc::clone(&calls), malformed);
+    let request = || LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-01-12")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "context_management": {"edits": [{
+                "type": "compact_20260112", "pause_after_compaction": true,
+                "trigger": {"type": "input_tokens", "value": 50000}
+            }]}
+        }),
+    };
+
+    stream_call_named("anthropic.messages", &provider, request()).await;
+    stream_call_named("anthropic.messages", &provider, request()).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn threshold_continuation_preserves_null_encrypted_content_and_caches_ordinary_response() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = counting_stream_provider(Arc::clone(&calls), anthropic_stream_chunks());
+    let request = || LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-01-12")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [
+                {"role": "assistant", "content": [{
+                    "type": "compaction", "content": "summary", "encrypted_content": null
+                }]},
+                {"role": "user", "content": "continue"}
+            ]
+        }),
+    };
+
+    stream_call_named("anthropic.messages", &provider, request()).await;
+    let replayed = stream_call_named("anthropic.messages", &provider, request()).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(replayed_text(&replayed), "Hello, world.");
+}
+
+#[tokio::test]
+async fn threshold_continuation_without_an_edit_rejects_a_compaction_response() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider =
+        counting_stream_provider(Arc::clone(&calls), anthropic_compaction_stream_chunks());
+    let request = || LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-01-12")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [
+                {"role": "assistant", "content": [{
+                    "type": "compaction", "content": "summary", "encrypted_content": null
+                }]},
+                {"role": "user", "content": "continue"}
+            ]
+        }),
+    };
+
+    stream_call_named("anthropic.messages", &provider, request()).await;
+    stream_call_named("anthropic.messages", &provider, request()).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "a prior block alone does not authorize another threshold compaction"
+    );
+}
+
+#[tokio::test]
+async fn threshold_recompaction_replays_after_validated_store() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider =
+        counting_stream_provider(Arc::clone(&calls), anthropic_compaction_stream_chunks());
+    let request = || LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-01-12")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [
+                {"role": "assistant", "content": [{
+                    "type": "compaction", "content": "summary", "encrypted_content": null
+                }]},
+                {"role": "user", "content": "continue"}
+            ],
+            "context_management": {"edits": [{
+                "type": "compact_20260112", "pause_after_compaction": true
+            }]}
+        }),
+    };
+
+    stream_call_named("anthropic.messages", &provider, request()).await;
+    let replayed = stream_call_named("anthropic.messages", &provider, request()).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(replayed.iter().any(|chunk| {
+        chunk.pointer("/delta/type").and_then(Json::as_str) == Some("compaction_delta")
+    }));
+}
+
+#[tokio::test]
+async fn threshold_compaction_cache_entry_is_shared_across_buffered_and_streaming_calls() {
+    let _guard = TEST_MUTEX.lock().await;
+    let request = || LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-01-12")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "context_management": {"edits": [{
+                "type": "compact_20260112", "pause_after_compaction": true
+            }]}
+        }),
+    };
+
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+    let stream_calls = Arc::new(AtomicUsize::new(0));
+    let stream_provider = counting_stream_provider(
+        Arc::clone(&stream_calls),
+        anthropic_compaction_stream_chunks(),
+    );
+    stream_call_named("anthropic.messages", &stream_provider, request()).await;
+    let buffered_calls = Arc::new(AtomicUsize::new(0));
+    let buffered_provider = counting_provider(
+        Arc::clone(&buffered_calls),
+        json!({"unexpected": "provider must not run"}),
+    );
+    let buffered = buffered_call_named("anthropic.messages", &buffered_provider, request()).await;
+    assert_eq!(stream_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(buffered_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(buffered, anthropic_compaction_body());
+
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+    let buffered_calls = Arc::new(AtomicUsize::new(0));
+    let buffered_provider =
+        counting_provider(Arc::clone(&buffered_calls), anthropic_compaction_body());
+    buffered_call_named("anthropic.messages", &buffered_provider, request()).await;
+    let stream_calls = Arc::new(AtomicUsize::new(0));
+    let stream_provider = counting_stream_provider(Arc::clone(&stream_calls), vec![]);
+    let replayed = stream_call_named("anthropic.messages", &stream_provider, request()).await;
+    assert_eq!(buffered_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(stream_calls.load(Ordering::SeqCst), 0);
+    assert!(replayed.iter().any(|chunk| {
+        chunk.pointer("/delta/type").and_then(Json::as_str) == Some("compaction_delta")
+            && chunk
+                .pointer("/delta/encrypted_content")
+                .is_some_and(Json::is_null)
+    }));
 }
 
 #[tokio::test]

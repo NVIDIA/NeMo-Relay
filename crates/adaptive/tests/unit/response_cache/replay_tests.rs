@@ -18,7 +18,7 @@ fn stream_metadata_fields_do_not_make_a_real_body_lossy() {
             "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 9, "completion_tokens": 3, "total_tokens": 12}});
     assert!(
-        !replay_is_lossy(&real),
+        !replay_is_lossy(&real, None),
         "stream-metadata fields must not disable the streaming replay"
     );
 }
@@ -61,7 +61,7 @@ fn replay_chunks_roundtrip_through_the_codecs() {
     ] {
         let codec = streaming_codec(surface);
         let chunks =
-            synthesize_replay_chunks(&aggregate).expect("aggregate shape must be recognized");
+            synthesize_replay_chunks(&aggregate, None).expect("aggregate shape must be recognized");
         assert!(
             chunks.len() > 1,
             "{codec_name}: a native replay must be a chunk sequence, not one frame"
@@ -111,14 +111,14 @@ fn gemini_replay_uses_a_valid_native_stream_event() {
         "modelVersion": "gemini-2.5-flash",
         "responseId": "resp_1"
     });
-    let chunks = synthesize_replay_chunks(&aggregate).expect("gemini shape");
+    let chunks = synthesize_replay_chunks(&aggregate, None).expect("gemini shape");
     assert_eq!(
         chunks,
         vec![aggregate.clone()],
         "a GenerateContentResponse aggregate is already a native Gemini stream event"
     );
     assert!(
-        !replay_is_lossy(&aggregate),
+        !replay_is_lossy(&aggregate, None),
         "the Gemini streaming codec must reassemble the native replay exactly"
     );
 }
@@ -140,7 +140,7 @@ fn gemini_replay_rejects_multi_candidate_aggregates_as_lossy() {
         ]
     });
     assert!(
-        replay_is_lossy(&aggregate),
+        replay_is_lossy(&aggregate, None),
         "Gemini streaming replay must not serve aggregates with candidates the collector cannot preserve"
     );
 }
@@ -193,7 +193,7 @@ fn chat_replay_streams_tool_calls_as_deltas() {
             "tool_calls": [{"id": "call1", "type": "function",
                 "function": {"name": "f", "arguments": "{\"a\":1}"}}]},
             "finish_reason": "tool_calls"}]});
-    let chunks = synthesize_replay_chunks(&aggregate).expect("chat shape");
+    let chunks = synthesize_replay_chunks(&aggregate, None).expect("chat shape");
     let tool_delta = chunks
         .iter()
         .find(|chunk| chunk.pointer("/choices/0/delta/tool_calls").is_some())
@@ -209,10 +209,10 @@ fn chat_replay_streams_tool_calls_as_deltas() {
 /// aggregate-shaped frame to a strict streaming client.
 #[test]
 fn replay_of_an_unknown_shape_is_lossy_for_the_streaming_tier() {
-    assert!(synthesize_replay_chunks(&json!({"weird": true})).is_none());
-    assert!(synthesize_replay_chunks(&json!("bare string")).is_none());
-    assert!(replay_is_lossy(&json!({"weird": true})));
-    assert!(replay_is_lossy(&json!("bare string")));
+    assert!(synthesize_replay_chunks(&json!({"weird": true}), None).is_none());
+    assert!(synthesize_replay_chunks(&json!("bare string"), None).is_none());
+    assert!(replay_is_lossy(&json!({"weird": true}), None));
+    assert!(replay_is_lossy(&json!("bare string"), None));
 }
 
 #[test]
@@ -241,7 +241,7 @@ fn anthropic_replay_keeps_complete_unknown_blocks_and_stop_sequences() {
         "usage": {"input_tokens": 3, "output_tokens": 2}
     });
 
-    let chunks = synthesize_anthropic_chunks(&aggregate);
+    let chunks = synthesize_anthropic_chunks(&aggregate, None);
     assert_eq!(chunks[1]["type"], json!("content_block_start"));
     assert_eq!(chunks[1]["content_block"], aggregate["content"][0]);
     assert_eq!(chunks[2]["type"], json!("content_block_stop"));
@@ -253,6 +253,45 @@ fn anthropic_replay_keeps_complete_unknown_blocks_and_stop_sequences() {
         message_delta.pointer("/delta/stop_sequence"),
         Some(&json!("<END>"))
     );
+}
+
+#[test]
+fn threshold_compaction_replay_preserves_missing_and_null_encrypted_content() {
+    let aggregate = |encrypted_content: Option<Json>| {
+        let mut block = json!({"type": "compaction", "content": "summary"});
+        if let Some(value) = encrypted_content {
+            block["encrypted_content"] = value;
+        }
+        json!({
+            "id": "msg_compact",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [block],
+            "stop_reason": "compaction",
+            "stop_sequence": null,
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "iterations": [{"type": "compaction", "input_tokens": 10, "output_tokens": 5}]
+            }
+        })
+    };
+
+    for (aggregate, expected) in [
+        (aggregate(None), None),
+        (aggregate(Some(Json::Null)), Some(&Json::Null)),
+    ] {
+        let chunks = synthesize_anthropic_chunks(
+            &aggregate,
+            Some(AnthropicResponseKind::ThresholdCompaction),
+        );
+        let delta = chunks
+            .iter()
+            .find(|chunk| chunk.pointer("/delta/type") == Some(&json!("compaction_delta")))
+            .expect("threshold replay must contain one compaction delta");
+        assert_eq!(delta.pointer("/delta/encrypted_content"), expected);
+    }
 }
 
 #[test]
