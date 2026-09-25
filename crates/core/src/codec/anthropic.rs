@@ -91,9 +91,20 @@ struct RawAnthropicUsage {
     output_tokens: Option<u64>,
     cache_read_input_tokens: Option<u64>,
     cache_creation_input_tokens: Option<u64>,
+    /// Per-sampling usage. Compaction work is reported only here and is not
+    /// included in the response's top-level token counts.
+    iterations: Option<Vec<RawAnthropicIterationUsage>>,
     #[serde(rename = "cost_usd")]
     provider_cost: Option<f64>,
     cost: Option<RawUsageCost>,
+}
+
+#[derive(Deserialize)]
+struct RawAnthropicIterationUsage {
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cache_read_input_tokens: Option<u64>,
+    cache_creation_input_tokens: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -895,18 +906,31 @@ fn anthropic_usage(
 ) -> Option<Usage> {
     let model_provider = infer_model_provider("anthropic", model_for_pricing);
     raw_usage.map(|u| {
-        let prompt = u.input_tokens;
-        let completion = u.output_tokens;
+        let iterations = u.iterations.as_deref().filter(|values| !values.is_empty());
+        let prompt = iterations
+            .and_then(|values| sum_iteration_field(values, |value| value.input_tokens))
+            .or(u.input_tokens);
+        let completion = iterations
+            .and_then(|values| sum_iteration_field(values, |value| value.output_tokens))
+            .or(u.output_tokens);
+        let cache_read_tokens = iterations
+            .and_then(|values| sum_iteration_field(values, |value| value.cache_read_input_tokens))
+            .or(u.cache_read_input_tokens);
+        let cache_write_tokens = iterations
+            .and_then(|values| {
+                sum_iteration_field(values, |value| value.cache_creation_input_tokens)
+            })
+            .or(u.cache_creation_input_tokens);
         let mut usage = Usage {
             prompt_tokens: prompt,
             completion_tokens: completion,
             // Anthropic does not supply total_tokens; compute it.
             total_tokens: match (prompt, completion) {
-                (Some(p), Some(c)) => Some(p + c),
+                (Some(p), Some(c)) => Some(p.saturating_add(c)),
                 _ => None,
             },
-            cache_read_tokens: u.cache_read_input_tokens,
-            cache_write_tokens: u.cache_creation_input_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
             uncached_input_tokens: prompt,
             cost: provider_reported_cost(u.provider_cost, u.cost),
         };
@@ -917,6 +941,16 @@ fn anthropic_usage(
         }
         usage
     })
+}
+
+fn sum_iteration_field(
+    iterations: &[RawAnthropicIterationUsage],
+    field: impl Fn(&RawAnthropicIterationUsage) -> Option<u64>,
+) -> Option<u64> {
+    iterations
+        .iter()
+        .filter_map(field)
+        .reduce(u64::saturating_add)
 }
 
 // ---------------------------------------------------------------------------
@@ -1189,12 +1223,21 @@ struct AnthropicMessagesStreamingState {
     type_: Option<String>,
     role: Option<String>,
     model: Option<String>,
+    /// Provider metadata present in both buffered responses and streaming lifecycle frames.
+    /// Raw JSON preserves explicit `null` versus omission for wire-compatible reassembly.
+    container: Option<Json>,
+    stop_details: Option<Json>,
+    diagnostics: Option<Json>,
+    service_tier: Option<Json>,
     /// Accumulated usage fields. `message_start` establishes input and cache counts, while a
     /// `message_delta` may contain only the fields updated later in the stream.
     usage: Option<Json>,
     stop_reason: Option<String>,
     /// Stored as raw `Json` to preserve `null` (Anthropic's wire shape) versus omitted.
     stop_sequence: Option<Json>,
+    /// Final context-management result. Anthropic emits this on `message_delta`, and callers
+    /// need the same field on the assembled response as they receive from buffered Messages.
+    context_management: Option<Json>,
     /// Indexed by the SSE event's `index` field. `None` slots accommodate sparse indices though
     /// Anthropic emits them in order today.
     blocks: Vec<Option<StreamingBlock>>,
@@ -1244,6 +1287,16 @@ impl AnthropicMessagesStreamingState {
         }
         if let Some(t) = message.get("type").and_then(Json::as_str) {
             self.type_ = Some(t.to_string());
+        }
+        for (field, target) in [
+            ("container", &mut self.container),
+            ("stop_details", &mut self.stop_details),
+            ("diagnostics", &mut self.diagnostics),
+            ("service_tier", &mut self.service_tier),
+        ] {
+            if let Some(value) = message.get(field) {
+                *target = Some(value.clone());
+            }
         }
         if let Some(usage) = message.get("usage") {
             self.observe_usage(usage);
@@ -1326,9 +1379,18 @@ impl AnthropicMessagesStreamingState {
             if let Some(seq) = delta.get("stop_sequence") {
                 self.stop_sequence = Some(seq.clone());
             }
+            if let Some(container) = delta.get("container") {
+                self.container = Some(container.clone());
+            }
+            if let Some(stop_details) = delta.get("stop_details") {
+                self.stop_details = Some(stop_details.clone());
+            }
         }
         if let Some(usage) = event.get("usage") {
             self.observe_usage(usage);
+        }
+        if let Some(context_management) = event.get("context_management") {
+            self.context_management = Some(context_management.clone());
         }
     }
 
@@ -1354,6 +1416,16 @@ impl AnthropicMessagesStreamingState {
         if let Some(model) = self.model {
             output.insert("model".to_string(), Json::String(model));
         }
+        for (field, value) in [
+            ("container", self.container),
+            ("stop_details", self.stop_details),
+            ("diagnostics", self.diagnostics),
+            ("service_tier", self.service_tier),
+        ] {
+            if let Some(value) = value {
+                output.insert(field.to_string(), value);
+            }
+        }
         let content: Vec<Json> = self
             .blocks
             .into_iter()
@@ -1368,6 +1440,9 @@ impl AnthropicMessagesStreamingState {
         }
         if let Some(usage) = self.usage {
             output.insert("usage".to_string(), usage);
+        }
+        if let Some(context_management) = self.context_management {
+            output.insert("context_management".to_string(), context_management);
         }
         Json::Object(output)
     }

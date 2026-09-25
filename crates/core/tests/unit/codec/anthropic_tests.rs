@@ -94,6 +94,54 @@ fn test_decode_full_response() {
 }
 
 #[test]
+fn test_decode_response_usage_prefers_iteration_totals() {
+    let response = json!({
+        "id": "msg_compaction",
+        "model": "claude-opus-5-5",
+        "content": [{
+            "type": "compaction",
+            "content": "summary",
+            "signature": "signed"
+        }],
+        "stop_reason": "compaction",
+        "usage": {
+            "input_tokens": 11,
+            "output_tokens": 7,
+            "cache_read_input_tokens": 3,
+            "cache_creation_input_tokens": 5,
+            "iterations": [
+                {
+                    "type": "compaction",
+                    "input_tokens": 144,
+                    "output_tokens": 276,
+                    "cache_read_input_tokens": 20,
+                    "cache_creation_input_tokens": 30
+                },
+                {
+                    "type": "message",
+                    "input_tokens": 11,
+                    "output_tokens": 7,
+                    "cache_read_input_tokens": 3,
+                    "cache_creation_input_tokens": 5
+                }
+            ]
+        }
+    });
+
+    let usage = AnthropicMessagesCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.prompt_tokens, Some(155));
+    assert_eq!(usage.completion_tokens, Some(283));
+    assert_eq!(usage.total_tokens, Some(438));
+    assert_eq!(usage.cache_read_tokens, Some(23));
+    assert_eq!(usage.cache_write_tokens, Some(35));
+}
+
+#[test]
 fn test_decode_response_multiple_text_blocks() {
     let codec = AnthropicMessagesCodec;
     let response = json!({
@@ -1511,6 +1559,8 @@ fn anthropic_streaming_codec_accumulates_live_compaction_shape() {
                 "type": "message_start", "message": {
                     "id": "msg_compact", "type": "message", "role": "assistant",
                     "model": "claude-sonnet-4-6", "content": [],
+                    "container": null, "stop_details": null, "diagnostics": null,
+                    "service_tier": "standard",
                     "usage": {"input_tokens": 0, "output_tokens": 0}
                 }
             }),
@@ -1522,14 +1572,25 @@ fn anthropic_streaming_codec_accumulates_live_compaction_shape() {
             json!({"type": "content_block_stop", "index": 0}),
             json!({
                 "type": "message_delta",
-                "delta": {"stop_reason": "compaction", "stop_sequence": null},
-                "usage": {"input_tokens": 0, "output_tokens": 0}
+                "delta": {"stop_reason": "compaction", "stop_sequence": null,
+                    "container": null, "stop_details": null},
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+                "context_management": {"applied_edits": []}
             }),
             json!({"type": "message_stop"}),
         ] {
             collector(event).unwrap();
         }
-        assert_eq!(finalizer()["content"][0], expected);
+        let aggregate = finalizer();
+        assert_eq!(aggregate["content"][0], expected);
+        assert!(aggregate["container"].is_null());
+        assert!(aggregate["stop_details"].is_null());
+        assert!(aggregate["diagnostics"].is_null());
+        assert_eq!(aggregate["service_tier"], "standard");
+        assert_eq!(
+            aggregate["context_management"],
+            json!({"applied_edits": []})
+        );
     }
 }
 
