@@ -372,9 +372,9 @@ fi
     --n-tasks 1 \
     --agent harbor_hermes_agent:HarborHermesAgent \
     --model "openai/$hermes_caller_model" \
-    --ak "repository_url=https://github.com/marcusds/hermes-agent.git" \
-    --ak "repository_ref=chore/relay-0.9" \
-    --ak "commit=f2e61bcc04c21ba2212737b1d54b6deaeb212d1f" \
+    --ak "repository_url=https://github.com/NousResearch/hermes-agent.git" \
+    --ak "repository_ref=main" \
+    --ak "commit=067fa1a25732935d1d2b3c0f2c4c1f078a3bb05f" \
     --ak "relay_config_path=$run_root/runtime/plugins.toml" \
     --ak "switchyard_bundle_dir=$run_root/runtime/switchyard-plugin" \
     --ak "relay_wheel_path=$relay_wheel_path" \

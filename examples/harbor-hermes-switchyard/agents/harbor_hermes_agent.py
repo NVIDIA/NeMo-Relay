@@ -29,9 +29,9 @@ from typing_extensions import override
 
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
-_DEFAULT_HERMES_REPOSITORY = "https://github.com/marcusds/hermes-agent.git"
-_DEFAULT_HERMES_REF = "chore/relay-0.9"
-_DEFAULT_HERMES_COMMIT = "f2e61bcc04c21ba2212737b1d54b6deaeb212d1f"
+_DEFAULT_HERMES_REPOSITORY = "https://github.com/NousResearch/hermes-agent.git"
+_DEFAULT_HERMES_REF = "main"
+_DEFAULT_HERMES_COMMIT = "067fa1a25732935d1d2b3c0f2c4c1f078a3bb05f"
 _DEFAULT_SWITCHYARD_COMMIT = "336196f6fbfc97ddc71c1700f6092e564e9f23c2"
 _ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
 _MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}")

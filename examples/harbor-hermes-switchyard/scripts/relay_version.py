@@ -10,8 +10,8 @@ import re
 from pathlib import Path
 from zipfile import ZipFile
 
-RELAY_REQUIREMENT = "nemo-relay>=0.9.0"
-RELAY_MIN_VERSION = "0.9.0"
+RELAY_REQUIREMENT = "nemo-relay>=0.8.3,<0.9"
+RELAY_MIN_VERSION = "0.8.3"
 
 
 def version_tuple(value: str) -> tuple[int, int, int]:

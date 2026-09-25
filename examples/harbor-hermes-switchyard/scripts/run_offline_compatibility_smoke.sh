@@ -9,9 +9,9 @@ run_root="${1:-}"
 admission_output="${2:-$run_root/artifacts/offline-admission.json}"
 image="${OFFLINE_COMPAT_IMAGE:-python:3.11-trixie}"
 platform="${OFFLINE_COMPAT_PLATFORM:-linux/amd64}"
-hermes_repository="${HERMES_REPOSITORY:-https://github.com/marcusds/hermes-agent.git}"
-hermes_ref="${HERMES_REF:-chore/relay-0.9}"
-hermes_commit="${HERMES_COMMIT:-f2e61bcc04c21ba2212737b1d54b6deaeb212d1f}"
+hermes_repository="${HERMES_REPOSITORY:-https://github.com/NousResearch/hermes-agent.git}"
+hermes_ref="${HERMES_REF:-main}"
+hermes_commit="${HERMES_COMMIT:-067fa1a25732935d1d2b3c0f2c4c1f078a3bb05f}"
 
 if [[ -z "$run_root" || "$run_root" != /* ]]; then
   echo "usage: $0 /absolute/prepared-run-root" >&2

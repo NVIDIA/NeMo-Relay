@@ -29,9 +29,9 @@ if str(_SCRIPT_ROOT) not in sys.path:
 from relay_version import wheel_version
 
 SCHEMA_VERSION = "harbor-hermes-switchyard.hermetic-runtime.v1"
-DEFAULT_HERMES_REPOSITORY = "https://github.com/marcusds/hermes-agent.git"
-DEFAULT_HERMES_REF = "chore/relay-0.9"
-DEFAULT_HERMES_COMMIT = "f2e61bcc04c21ba2212737b1d54b6deaeb212d1f"
+DEFAULT_HERMES_REPOSITORY = "https://github.com/NousResearch/hermes-agent.git"
+DEFAULT_HERMES_REF = "main"
+DEFAULT_HERMES_COMMIT = "067fa1a25732935d1d2b3c0f2c4c1f078a3bb05f"
 UV_VERSION = "0.11.16"
 PYTHON_VERSION = "3.11.13"
 BUILDER_IMAGE = "python:3.11-bullseye"
