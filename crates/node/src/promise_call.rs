@@ -99,6 +99,7 @@ struct CallArgs {
     /// Scope stack captured when Relay invokes the middleware.
     scope_stack: Option<ScopeStackHandle>,
     propagation_parent_uuid: String,
+    propagation_context_json: String,
     publication_buffer: Option<PublicationBuffer>,
     stream_result: bool,
     continuation_context: Option<MiddlewareContinuationContext>,
@@ -607,6 +608,10 @@ impl PromiseAwareFn {
                         &ctx.env,
                         Json::String(ctx.value.propagation_parent_uuid),
                     )?;
+                    let propagation_context_json = json_to_unknown(
+                        &ctx.env,
+                        Json::String(ctx.value.propagation_context_json),
+                    )?;
                     let (resolve, reject, stream_push, stream_end) =
                         build_completion_unknowns(&ctx.env, ctx.value.completion)?;
                     let register_abort =
@@ -627,6 +632,7 @@ impl PromiseAwareFn {
                         publication_context_id,
                         scope_stack,
                         propagation_parent_uuid,
+                        propagation_context_json,
                         register_abort,
                         stream_result,
                         stream_push,
@@ -731,7 +737,9 @@ impl PromiseAwareFn {
         let cancellation = CallCancellation::default();
         let mut cancellation_guard = CallCancellationGuard::new(cancellation.clone());
         let continuation_context = MiddlewareContinuationContext::capture();
-        let propagation_parent_uuid = capture_propagation_context()?.parent_uuid.to_string();
+        let propagation_context = capture_propagation_context()?;
+        let propagation_parent_uuid = propagation_context.parent_uuid.to_string();
+        let propagation_context_json = propagation_context.to_json()?;
         let tsfn = self
             .tsfn
             .lock()
@@ -748,6 +756,7 @@ impl PromiseAwareFn {
                 publication_context_id: publication_callback_context_id(),
                 scope_stack: Some(current_scope_stack()),
                 propagation_parent_uuid,
+                propagation_context_json,
                 publication_buffer: capture_nested_publication_buffer(),
                 stream_result: true,
                 continuation_context: Some(continuation_context),
@@ -790,7 +799,9 @@ impl PromiseAwareFn {
         let continuation_context = next
             .as_ref()
             .map(|_| MiddlewareContinuationContext::capture());
-        let propagation_parent_uuid = capture_propagation_context()?.parent_uuid.to_string();
+        let propagation_context = capture_propagation_context()?;
+        let propagation_parent_uuid = propagation_context.parent_uuid.to_string();
+        let propagation_context_json = propagation_context.to_json()?;
         let tsfn = self
             .tsfn
             .lock()
@@ -810,6 +821,7 @@ impl PromiseAwareFn {
                 // sanitizers avoid waiting on their own publication.
                 scope_stack: Some(current_scope_stack()),
                 propagation_parent_uuid,
+                propagation_context_json,
                 publication_buffer: capture_nested_publication_buffer(),
                 stream_result: false,
                 continuation_context,

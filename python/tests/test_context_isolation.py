@@ -168,6 +168,92 @@ async def test_fork_asyncio_context_isolates_siblings_and_preserves_parentage() 
     assert second_result.result == {"name": "second"}
 
 
+async def test_fork_asyncio_context_works_from_implicit_root():
+    parent_stack = nemo_relay.get_scope_stack()
+    child_context = nemo_relay.fork_asyncio_context()
+
+    async def child() -> nemo_relay.ScopeStack:
+        return nemo_relay.get_scope_stack()
+
+    child_stack = await asyncio.create_task(child(), context=child_context)
+    assert child_stack is not parent_stack
+    assert nemo_relay.get_scope_stack() is parent_stack
+
+
+async def test_fork_asyncio_context_preserves_parent_trace_for_llm(subscribed_events):
+    captured_traceparents = []
+
+    async def provider(request):
+        captured_traceparents.append(request.headers["traceparent"])
+        return {"ok": True}
+
+    async def child():
+        return await nemo_relay.llm.execute(
+            "forked-context-llm",
+            nemo_relay.LLMRequest({}, {"prompt": "hello"}),
+            provider,
+        )
+
+    with nemo_relay.scope.scope("forked-llm-turn", nemo_relay.ScopeType.Custom):
+        parent_trace_id = nemo_relay.capture_traceparent().split("-")[1]
+        task = asyncio.create_task(
+            child(),
+            context=nemo_relay.fork_asyncio_context(),
+        )
+        assert await task == {"ok": True}
+
+    await nemo_relay.subscribers.flush_async()
+    start = next(
+        event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent)
+        and event.name == "forked-context-llm"
+        and event.scope_category == "start"
+    )
+    expected = f"00-{parent_trace_id}-{start.uuid.replace('-', '')[-16:]}-01"
+    assert captured_traceparents == [expected]
+
+
+async def test_fork_asyncio_context_inside_managed_callback_preserves_event_parent(subscribed_events):
+    async def child() -> tuple[str, str]:
+        with nemo_relay.scope.scope("callback-fork-child", nemo_relay.ScopeType.Function) as handle:
+            await asyncio.sleep(0)
+            return handle.uuid, nemo_relay.capture_propagation_context().parent_uuid
+
+    async def provider(_request):
+        task = asyncio.create_task(child(), context=nemo_relay.fork_asyncio_context())
+        child_uuid, captured_parent_uuid = await task
+        return {"child_uuid": child_uuid, "captured_parent_uuid": captured_parent_uuid}
+
+    with nemo_relay.scope.scope("callback-fork-outer", nemo_relay.ScopeType.Custom):
+        result = await nemo_relay.llm.execute(
+            "callback-fork-llm",
+            nemo_relay.LLMRequest({}, {"prompt": "hello"}),
+            provider,
+        )
+
+    await nemo_relay.subscribers.flush_async()
+    llm_start = next(
+        event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent)
+        and event.name == "callback-fork-llm"
+        and event.scope_category == "start"
+    )
+    child_start = next(
+        event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent)
+        and event.name == "callback-fork-child"
+        and event.scope_category == "start"
+    )
+    assert child_start.parent_uuid == llm_start.uuid
+    assert result == {
+        "child_uuid": child_start.uuid,
+        "captured_parent_uuid": child_start.uuid,
+    }
+
+
 def test_use_scope_stack_restores_a_previously_bound_native_stack(restore_native_scope_stack) -> None:
     previous = nemo_relay.create_scope_stack()
     replacement = nemo_relay.create_scope_stack()

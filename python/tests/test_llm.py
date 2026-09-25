@@ -637,20 +637,26 @@ class TestLLMInterceptsAsync:
         subscribers.register("py_llm_capture_traceparent", events.append)
 
         async def execution_intercept(_name, request, next_handler):
-            observed.append((capture_propagation_context().parent_uuid, capture_traceparent()))
+            context = capture_propagation_context()
+            observed.append((context.parent_uuid, context.root_uuid, capture_traceparent()))
             return await next_handler(request)
 
         async def provider(_request):
-            observed.append((capture_propagation_context().parent_uuid, capture_traceparent()))
+            context = capture_propagation_context()
+            observed.append((context.parent_uuid, context.root_uuid, capture_traceparent()))
             return {"ok": True}
 
         try:
             intercepts.register_llm_execution("py_llm_capture_traceparent", 10, execution_intercept)
-            assert await llm.execute("py_llm_capture_traceparent", make_request(), provider) == {"ok": True}
+            with scope.scope("py-llm-callback-root", ScopeType.Custom) as turn:
+                assert await llm.execute("py_llm_capture_traceparent", make_request(), provider) == {"ok": True}
             await subscribers.flush_async()
             start = _llm_event(events, "py_llm_capture_traceparent", "start")
-            expected = f"00-{start.uuid.replace('-', '')}-{start.uuid.replace('-', '')[-16:]}-01"
-            assert observed == [(start.uuid, expected), (start.uuid, expected)]
+            expected = f"00-{turn.uuid.replace('-', '')}-{start.uuid.replace('-', '')[-16:]}-01"
+            assert observed == [
+                (start.uuid, turn.uuid, expected),
+                (start.uuid, turn.uuid, expected),
+            ]
         finally:
             intercepts.deregister_llm_execution("py_llm_capture_traceparent")
             subscribers.deregister("py_llm_capture_traceparent")
@@ -683,6 +689,56 @@ class TestLLMInterceptsAsync:
             intercepts.deregister_llm_execution("py_llm_capture_propagated_trace_root")
             subscribers.deregister("py_llm_capture_propagated_trace_root")
 
+    async def test_pre_event_callbacks_preserve_exact_imported_w3c_trace_context(self):
+        root_uuid = "018f13f0-7c1a-7a80-8000-000000000721"
+        parent_uuid = "018f13f0-7c1a-7a80-8000-000000000722"
+        traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
+        stack = create_scope_stack_from_propagation(
+            PropagationContext(
+                parent_uuid,
+                root_uuid,
+                traceparent=traceparent,
+                tracestate="vendor=value",
+            )
+        )
+        observed = []
+
+        def capture(label):
+            context = capture_propagation_context()
+            observed.append(
+                (
+                    label,
+                    context.parent_uuid,
+                    context.root_uuid,
+                    context.traceparent,
+                    context.tracestate,
+                    capture_traceparent(),
+                )
+            )
+
+        def conditional(_request):
+            capture("conditional")
+            return None
+
+        def request_intercept(_name, request, annotated):
+            capture("request")
+            return LLMRequestInterceptOutcome(request, annotated)
+
+        guardrails.register_llm_conditional_execution("py_llm_imported_w3c_conditional", 10, conditional)
+        intercepts.register_llm_request("py_llm_imported_w3c_request", 10, False, request_intercept)
+        try:
+            with use_scope_stack(stack):
+                assert await llm.execute("py_llm_imported_w3c_pre_event", make_request(), lambda _request: {}) == {}
+        finally:
+            intercepts.deregister_llm_request("py_llm_imported_w3c_request")
+            guardrails.deregister_llm_conditional_execution("py_llm_imported_w3c_conditional")
+
+        expected = (parent_uuid, root_uuid, traceparent, "vendor=value", traceparent)
+        assert observed == [
+            ("conditional", *expected),
+            ("request", *expected),
+        ]
+
     async def test_execution_callback_preserves_imported_w3c_trace_context(self) -> None:
         root_uuid = "018f13f0-7c1a-7a80-8000-000000000711"
         parent_uuid = "018f13f0-7c1a-7a80-8000-000000000712"
@@ -704,6 +760,8 @@ class TestLLMInterceptsAsync:
             explicit_root = capture_propagation_context_with_root(root_uuid)
             observed.append(
                 (
+                    context.parent_uuid,
+                    context.root_uuid,
                     context.traceparent,
                     context.tracestate,
                     capture_traceparent(),
@@ -725,11 +783,43 @@ class TestLLMInterceptsAsync:
             start = _llm_event(events, "py_llm_propagated_w3c", "start")
             expected = f"00-4bf92f3577b34da6a3ce929d0e0e4736-{start.uuid.replace('-', '')[-16:]}-00"
             assert observed == [
-                (expected, "vendor=value", expected, expected, "vendor=value", expected, "vendor=value")
+                (
+                    start.uuid,
+                    root_uuid,
+                    expected,
+                    "vendor=value",
+                    expected,
+                    expected,
+                    "vendor=value",
+                    expected,
+                    "vendor=value",
+                )
             ]
         finally:
             intercepts.deregister_llm_execution("py_llm_capture_propagated_w3c")
             subscribers.deregister("py_llm_capture_propagated_w3c")
+
+    async def test_use_scope_stack_inside_callback_overrides_callback_context(self):
+        root_uuid = "018f13f0-7c1a-7a80-8000-000000000711"
+        parent_uuid = "018f13f0-7c1a-7a80-8000-000000000712"
+        stack = create_scope_stack_from_propagation(PropagationContext(parent_uuid, root_uuid))
+        observed = []
+
+        async def provider(_request):
+            before = capture_propagation_context()
+            with use_scope_stack(stack):
+                imported = capture_propagation_context()
+                observed.append((imported.parent_uuid, imported.root_uuid, capture_traceparent()))
+            after = capture_propagation_context()
+            observed.append((before.parent_uuid, after.parent_uuid))
+            return {"ok": True}
+
+        assert await llm.execute("py_llm_use_imported_stack", make_request(), provider) == {"ok": True}
+
+        expected = f"00-{root_uuid.replace('-', '')}-{parent_uuid.replace('-', '')[-16:]}-01"
+        assert observed[0] == (parent_uuid, root_uuid, expected)
+        assert observed[1][0] == observed[1][1]
+        assert observed[1][0] != parent_uuid
 
     async def test_cancelling_execute_cancels_pending_execution_intercept(self) -> None:
         started = asyncio.Event()

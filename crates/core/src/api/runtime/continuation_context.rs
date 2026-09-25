@@ -9,8 +9,9 @@ use crate::api::optimization::{
     LlmOptimizationRecorder, current_llm_optimization_recorder, scope_llm_optimization_recorder,
 };
 use crate::api::runtime::scope_stack::{
-    ScopeStackHandle, TASK_SCOPE_STACK, active_event_uuid, current_context_scope_stack,
-    current_scope_stack, scope_stack_active, snapshot_scope_stack, with_active_event_uuid,
+    ScopeStackHandle, TASK_SCOPE_STACK, W3cTraceContext, active_event_trace_context,
+    active_event_uuid, current_context_scope_stack, current_scope_stack, scope_stack_active,
+    snapshot_scope_stack, with_active_event_trace_context,
 };
 use crate::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, PublicationContext, capture_nested_publication_buffer,
@@ -28,6 +29,7 @@ use crate::error::{FlowError, Result};
 pub struct MiddlewareContinuationContext {
     scope_stack: ScopeStackHandle,
     active_event_uuid: Option<uuid::Uuid>,
+    active_event_trace_context: Option<W3cTraceContext>,
     publication_context: Option<PublicationContext>,
     publication_buffer: Option<PublicationBuffer>,
     optimization_recorder: Option<LlmOptimizationRecorder>,
@@ -41,6 +43,7 @@ impl MiddlewareContinuationContext {
         Self {
             scope_stack: current_scope_stack(),
             active_event_uuid: active_event_uuid(),
+            active_event_trace_context: active_event_trace_context(),
             publication_context: capture_publication_context(),
             publication_buffer: capture_nested_publication_buffer(),
             optimization_recorder: current_llm_optimization_recorder(),
@@ -66,6 +69,7 @@ impl MiddlewareContinuationContext {
         Ok(Self {
             scope_stack: snapshot_scope_stack(scope_stack)?,
             active_event_uuid: self.active_event_uuid,
+            active_event_trace_context: self.active_event_trace_context.clone(),
             publication_context: self.publication_context.clone(),
             publication_buffer: self.publication_buffer.clone(),
             optimization_recorder: self.optimization_recorder.clone(),
@@ -93,7 +97,14 @@ impl MiddlewareContinuationContext {
             with_task_nested_publication_buffer(self.publication_buffer.clone(), published);
         let active = async {
             match self.active_event_uuid {
-                Some(uuid) => with_active_event_uuid(uuid, published).await,
+                Some(uuid) => {
+                    with_active_event_trace_context(
+                        uuid,
+                        self.active_event_trace_context.clone(),
+                        published,
+                    )
+                    .await
+                }
                 None => published.await,
             }
         };

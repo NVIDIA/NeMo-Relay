@@ -566,7 +566,7 @@ def capture_traceparent() -> str:
     """
     get_scope_stack()
     if context := _callback_propagation_context(_propagation_root_var.get() or _propagation_parent_var.get()):
-        return context.to_traceparent()
+        return context.traceparent or context.to_traceparent()
     return _capture_traceparent()
 
 
@@ -621,10 +621,21 @@ def fork_asyncio_context() -> contextvars.Context:
                 )
                 await task
     """
+    get_scope_stack()
+    # Managed callbacks carry their emitted event parent in Python ContextVars
+    # because it is not part of the lexical native stack. No await can
+    # interleave capture and stack creation.
     propagation = capture_propagation_context()
     stack = create_scope_stack_from_propagation(propagation)
     child_context = contextvars.copy_context()
     child_context.run(_scope_stack_var.set, stack)
+    for variable in (
+        _propagation_parent_var,
+        _propagation_root_var,
+        _propagation_traceparent_var,
+        _propagation_tracestate_var,
+    ):
+        child_context.run(variable.set, None)
     return child_context
 
 
@@ -657,6 +668,7 @@ def use_scope_stack(stack: ScopeStack) -> Iterator[ScopeStack]:
         root_uuid = None
         traceparent = None
         tracestate = None
+    parent_token = _propagation_parent_var.set(None)
     root_token = _propagation_root_var.set(root_uuid)
     traceparent_token = _propagation_traceparent_var.set(traceparent)
     tracestate_token = _propagation_tracestate_var.set(tracestate)
@@ -666,6 +678,7 @@ def use_scope_stack(stack: ScopeStack) -> Iterator[ScopeStack]:
         _propagation_tracestate_var.reset(tracestate_token)
         _propagation_traceparent_var.reset(traceparent_token)
         _propagation_root_var.reset(root_token)
+        _propagation_parent_var.reset(parent_token)
         _scope_stack_var.reset(token)
         _restore_thread_scope_stack(previous_native_stack)
 
