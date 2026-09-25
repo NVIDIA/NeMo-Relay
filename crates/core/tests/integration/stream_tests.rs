@@ -18,8 +18,12 @@ use nemo_relay::api::optimization::LlmOptimizationRecorder;
 use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::runtime::{LlmJsonStream, LlmStreamInner, NemoRelayContextState};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
 use nemo_relay::codec::openai_responses::{OpenAIResponsesCodec, OpenAIResponsesStreamingCodec};
 use nemo_relay::codec::optimization::LlmOptimizationContribution;
+use nemo_relay::codec::response::{
+    PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
+};
 use nemo_relay::codec::streaming::StreamingCodec;
 use nemo_relay::error::FlowError;
 use nemo_relay::error::Result;
@@ -30,6 +34,14 @@ use tokio_stream::{Stream, StreamExt};
 
 // Serialize all tests since they share global state
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+struct ResetPricingResolverGuard;
+
+impl Drop for ResetPricingResolverGuard {
+    fn drop(&mut self) {
+        let _ = reset_active_pricing_resolver();
+    }
+}
 
 fn is_llm_end(event: &Event) -> bool {
     event.scope_type() == Some(nemo_relay::api::scope::ScopeType::Llm)
@@ -58,6 +70,25 @@ fn make_optimized_llm_handle(name: &str, producer: &str) -> (LlmHandle, LlmOptim
 
 fn make_stream(items: Vec<Result<Json>>) -> LlmJsonStream {
     LlmJsonStream::new(tokio_stream::iter(items))
+}
+
+fn install_anthropic_fallback_pricing() {
+    let catalog = PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [{
+                "provider": "anthropic",
+                "model_id": "claude-fallback",
+                "pricing_as_of": "2026-09-25",
+                "pricing_source": "test",
+                "rates": {"input_per_million": 1.0, "output_per_million": 2.0},
+                "prompt_cache": {"read_accounting": "included_in_prompt_tokens"}
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
 }
 
 struct CloseTrackingStream {
@@ -412,6 +443,79 @@ async fn test_stream_wrapper_emits_end_event() {
     assert_eq!(captured.last().unwrap().0, "end");
 
     deregister_subscriber("stream_end_test").unwrap();
+}
+
+#[tokio::test]
+async fn anthropic_stream_finalization_does_not_estimate_cross_model_iteration_cost() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    let _pricing_guard = ResetPricingResolverGuard;
+    reset_global();
+    install_anthropic_fallback_pricing();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        "anthropic_cross_model_stream_cost",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let response = json!({
+        "id": "msg_fallback",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-fallback",
+        "content": [{"type": "text", "text": "Hi"}],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 412,
+            "output_tokens": 264,
+            "iterations": [
+                {"type": "message", "model": "claude-primary", "input_tokens": 535, "output_tokens": 0},
+                {"type": "fallback_message", "model": "claude-fallback", "input_tokens": 412, "output_tokens": 264}
+            ]
+        }
+    });
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"messages": []}),
+    };
+    let handle = llm_call(
+        LlmCallParams::builder()
+            .name("anthropic")
+            .request(&request)
+            .attributes(LlmAttributes::STREAMING)
+            .build(),
+    )
+    .unwrap();
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"type": "message_stop"}))]),
+        handle,
+        Box::new(|_| Ok(())),
+        Box::new(move || response),
+        None,
+        None,
+        Some(Arc::new(AnthropicMessagesCodec)),
+    );
+
+    while let Some(item) = wrapper.next().await {
+        item.unwrap();
+    }
+
+    let events = captured_snapshot(&events);
+    let end_event = events
+        .iter()
+        .find(|event| is_llm_end(event))
+        .expect("stream should emit an LLM end event");
+    assert_eq!(
+        end_event
+            .annotated_response()
+            .and_then(|response| response.usage.as_ref())
+            .and_then(|usage| usage.cost.as_ref()),
+        None,
+    );
+
+    assert!(deregister_subscriber("anthropic_cross_model_stream_cost").unwrap());
 }
 
 #[tokio::test]

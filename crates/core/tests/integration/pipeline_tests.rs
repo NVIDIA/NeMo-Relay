@@ -112,6 +112,25 @@ fn install_mock_response_pricing() {
     set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
 }
 
+fn install_anthropic_fallback_pricing() {
+    let catalog = PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [{
+                "provider": "anthropic",
+                "model_id": "claude-fallback",
+                "pricing_as_of": "2026-09-25",
+                "pricing_source": "test",
+                "rates": {"input_per_million": 1.0, "output_per_million": 2.0},
+                "prompt_cache": {"read_accounting": "included_in_prompt_tokens"}
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+}
+
 fn install_routed_response_pricing() {
     let catalog = PricingCatalog::from_json_str(
         &json!({
@@ -1464,6 +1483,79 @@ fn test_manual_llm_responses_receive_estimated_cost() {
     }
 
     deregister_subscriber("manual_response_pricing_sub").unwrap();
+}
+
+#[test]
+fn response_codec_preserves_unpriced_cross_model_anthropic_usage() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    let _pricing_guard = ResetPricingResolverGuard;
+    reset_global();
+    setup_isolated_thread();
+    install_anthropic_fallback_pricing();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        "anthropic_cross_model_response_cost",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let request = make_llm_request(json!({"messages": [{"role": "user", "content": "hello"}]}));
+    let response = json!({
+        "id": "msg_fallback",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-fallback",
+        "content": [{"type": "text", "text": "Hi"}],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 412,
+            "output_tokens": 264,
+            "iterations": [
+                {"type": "message", "model": "claude-primary", "input_tokens": 535, "output_tokens": 0},
+                {"type": "fallback_message", "model": "claude-fallback", "input_tokens": 412, "output_tokens": 264}
+            ]
+        }
+    });
+
+    for supply_annotation in [false, true] {
+        let handle = llm_call(
+            LlmCallParams::builder()
+                .name("anthropic")
+                .request(&request)
+                .build(),
+        )
+        .unwrap();
+        let annotated_response = supply_annotation
+            .then(|| Arc::new(AnthropicMessagesCodec.decode_response(&response).unwrap()));
+        llm_call_end(
+            LlmCallEndParams::builder()
+                .handle(&handle)
+                .response(response.clone())
+                .annotated_response_opt(annotated_response)
+                .response_codec(Arc::new(AnthropicMessagesCodec))
+                .build(),
+        )
+        .unwrap();
+    }
+
+    let end_events = captured_events_snapshot(&events)
+        .into_iter()
+        .filter(|event| is_scope_event(event, ScopeType::Llm, ScopeCategory::End))
+        .collect::<Vec<_>>();
+    assert_eq!(end_events.len(), 2);
+    for event in end_events {
+        assert_eq!(
+            event
+                .annotated_response()
+                .and_then(|response| response.usage.as_ref())
+                .and_then(|usage| usage.cost.as_ref()),
+            None,
+        );
+    }
+
+    assert!(deregister_subscriber("anthropic_cross_model_response_cost").unwrap());
 }
 
 #[tokio::test]

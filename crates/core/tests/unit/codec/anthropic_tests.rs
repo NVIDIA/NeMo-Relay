@@ -1642,13 +1642,41 @@ fn anthropic_streaming_codec_accumulates_live_compaction_shape() {
         }
         let aggregate = finalizer();
         assert_eq!(aggregate["content"][0], expected);
-        assert!(aggregate["container"].is_null());
-        assert!(aggregate["stop_details"].is_null());
-        assert!(aggregate["diagnostics"].is_null());
+        assert_eq!(aggregate.get("container"), Some(&Json::Null));
+        assert_eq!(aggregate.get("stop_details"), Some(&Json::Null));
+        assert_eq!(aggregate.get("diagnostics"), Some(&Json::Null));
         assert_eq!(aggregate["service_tier"], "standard");
         assert_eq!(
             aggregate["context_management"],
             json!({"applied_edits": []})
+        );
+    }
+}
+
+#[test]
+fn anthropic_streaming_codec_omits_unreported_message_metadata() {
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    for event in [
+        json!({
+            "type": "message_start", "message": {
+                "id": "msg_omitted_metadata", "type": "message", "role": "assistant",
+                "model": "claude-sonnet-4-6", "content": [],
+                "usage": {"input_tokens": 0, "output_tokens": 0}
+            }
+        }),
+        json!({"type": "message_stop"}),
+    ] {
+        collector(event).unwrap();
+    }
+
+    let aggregate = finalizer();
+    for field in ["container", "stop_details", "diagnostics"] {
+        assert!(
+            aggregate.get(field).is_none(),
+            "{field} should stay absent when Anthropic omits it"
         );
     }
 }

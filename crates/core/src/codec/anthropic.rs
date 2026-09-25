@@ -935,8 +935,7 @@ fn anthropic_usage(
             uncached_input_tokens: prompt,
             cost: provider_reported_cost(u.provider_cost, u.cost),
         };
-        if usage.cost.is_none() && iteration_models_match_response(&u.iterations, model_for_pricing)
-        {
+        if usage.cost.is_none() && iteration_models_match_response(iterations, model_for_pricing) {
             usage.cost = model_for_pricing.and_then(|model| {
                 estimate_cost_for_provider(model_provider.as_deref(), model, &usage)
             });
@@ -951,10 +950,10 @@ fn anthropic_usage(
 /// each attempt is billed at the model that ran it. Keep the aggregate token counts while leaving
 /// cost unset unless the response model can price every named iteration faithfully.
 fn iteration_models_match_response(
-    iterations: &Option<Vec<RawAnthropicIterationUsage>>,
+    iterations: Option<&[RawAnthropicIterationUsage]>,
     response_model: Option<&str>,
 ) -> bool {
-    iterations.as_deref().is_none_or(|values| {
+    iterations.is_none_or(|values| {
         values.iter().all(|iteration| {
             iteration
                 .model
@@ -981,6 +980,14 @@ fn sum_iteration_field(
 impl LlmResponseCodec for AnthropicMessagesCodec {
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
+    }
+
+    fn allows_estimated_cost(&self, response: &Json) -> bool {
+        serde_json::from_value::<RawAnthropicResponse>(response.clone()).map_or(true, |raw| {
+            raw.usage.as_ref().is_none_or(|usage| {
+                iteration_models_match_response(usage.iterations.as_deref(), raw.model.as_deref())
+            })
+        })
     }
 
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
