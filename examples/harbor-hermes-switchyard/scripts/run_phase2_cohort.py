@@ -35,6 +35,7 @@ from plugin_config_paths import (  # noqa: E402
     plugin_config_identity_sha256,
 )
 from relay_version import wheel_version  # noqa: E402
+from stage_phase2_runtime import RUNTIME_DIRECTORIES, RUNTIME_SUFFIXES  # noqa: E402
 
 SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-cohort.v1"
 PLAN_SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-plan.v1"
@@ -879,11 +880,11 @@ def make_plan(args: argparse.Namespace, tasks: list[Task]) -> dict[str, Any]:
         example_root / "run_phase2_cohort.sh",
         example_root / "supervise_phase2_cohort.sh",
     ]
-    for relative in ("agents", "config", "scripts"):
+    for relative in RUNTIME_DIRECTORIES:
         runtime_sources.extend(
             path
             for path in (example_root / relative).rglob("*")
-            if path.is_file() and path.suffix in {".py", ".sh", ".toml", ".yaml", ".in"}
+            if path.is_file() and path.suffix in RUNTIME_SUFFIXES
         )
     task_definitions = [args.dataset_root / task.name / "task.toml" for task in tasks]
     return {
