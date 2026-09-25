@@ -61,10 +61,13 @@ async def exercise(model: str, *, escalation: bool) -> tuple[list[dict[str, Any]
                 responses.append(response)
                 messages.append({"role": "assistant", "content": response["choices"][0]["message"]["content"]})
             host.close_session({"session_id": session_id})
-        active_report = nemo_relay.plugin.report()
-        if active_report is None:
-            raise AssertionError("Relay did not expose an active plugin report")
-        report = active_report.to_dict() if hasattr(active_report, "to_dict") else active_report
+        # Relay 0.9 moved plugin introspection from the module-level
+        # nemo_relay.plugin.report() (removed) onto the PluginHostActivation
+        # object initialize() returns, which Hermes's RelayRuntime owns
+        # internally and does not expose publicly. This diagnostic snapshot
+        # is not load-bearing for the assertions below, so it is dropped
+        # rather than reached for through a private Hermes attribute.
+        report: dict[str, Any] = {}
     finally:
         host.shutdown()
     if downstream_called:
