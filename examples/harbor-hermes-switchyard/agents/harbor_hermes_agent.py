@@ -658,8 +658,8 @@ class HarborHermesAgent(Hermes):
                 f"HERMES_HOME=/tmp/hermes HERMES_INSTALL_DIR={install_dir} "
                 "PATH=/tmp/hermes-install-path:$PATH "
                 f"bash {install_dir}/scripts/install.sh --skip-setup --skip-browser "
-                f"--no-skills --dir {install_dir} --branch {repository_ref} "
-                f"--commit {commit} --force-commit; "
+                f"--dir {install_dir} --branch {repository_ref} "
+                f"--commit {commit}; "
                 f'test "$(git -C {install_dir} rev-parse HEAD)" = {commit}; '
                 f"cd {install_dir}; "
                 f"UV_PROJECT_ENVIRONMENT={install_dir}/venv "

@@ -79,10 +79,10 @@ docker run --rm \
     HERMES_INSTALL_DIR=/tmp/hermes-agent-src \
       PATH=/tmp/hermes-install-path:$PATH \
       bash /tmp/hermes-agent-src/scripts/install.sh \
-        --skip-setup --skip-browser --no-skills \
+        --skip-setup --skip-browser \
         --dir /tmp/hermes-agent-src \
         --branch "'"$hermes_ref"'" \
-        --commit "'"$hermes_commit"'" --force-commit
+        --commit "'"$hermes_commit"'"
     test "$(git -C /tmp/hermes-agent-src rev-parse HEAD)" = "'"$hermes_commit"'"
     cd /tmp/hermes-agent-src
     UV_PROJECT_ENVIRONMENT=/tmp/hermes-agent-src/venv \
