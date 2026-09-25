@@ -26,10 +26,10 @@ from plugin_config_paths import (
 from relay_version import RELAY_REQUIREMENT, wheel_version
 
 HERMES_REPOSITORY = "https://github.com/NousResearch/hermes-agent.git"
-HERMES_REF = "main"
-HERMES_COMMIT = "48c0c3a873bc5adaf20c632b5b7630a4fac000b4"
+HERMES_REF = "chore/relay-0.9"
+HERMES_COMMIT = "f2e61bcc04c21ba2212737b1d54b6deaeb212d1f"
 SWITCHYARD_REPOSITORY = "https://github.com/NVIDIA-NeMo/Switchyard.git"
-SWITCHYARD_COMMIT = "7a72c0667774244d66a8b631e375c9d6e393bf57"
+SWITCHYARD_COMMIT = "336196f6fbfc97ddc71c1700f6092e564e9f23c2"
 SAFE_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}")
 DIRECT_PROVIDER_BASE_URL = "https://inference-api.nvidia.com/v1"
 

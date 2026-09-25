@@ -39,7 +39,7 @@ from relay_version import wheel_version  # noqa: E402
 SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-cohort.v1"
 PLAN_SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-plan.v1"
 TASK_STATE_SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-task-state.v1"
-EXPECTED_HERMES_COMMIT = "48c0c3a873bc5adaf20c632b5b7630a4fac000b4"
+EXPECTED_HERMES_COMMIT = "f2e61bcc04c21ba2212737b1d54b6deaeb212d1f"
 HERMETIC_RUNTIME_SCHEMA = "harbor-hermes-switchyard.hermetic-runtime.v1"
 SETUP_REUSE_SCHEMA = "harbor-hermes-switchyard.setup-evidence-reuse.v1"
 INFRASTRUCTURE_PATTERNS = (

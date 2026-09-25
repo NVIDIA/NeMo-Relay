@@ -132,8 +132,8 @@ async def validate_local_dataset(
                         model_name="openai/ollama-route-stub",
                         kwargs={
                             "repository_url": "https://github.com/NousResearch/hermes-agent.git",
-                            "repository_ref": "main",
-                            "commit": "48c0c3a873bc5adaf20c632b5b7630a4fac000b4",
+                            "repository_ref": "chore/relay-0.9",
+                            "commit": "f2e61bcc04c21ba2212737b1d54b6deaeb212d1f",
                             "relay_config_path": "/smoke/runtime/plugins.toml",
                             "switchyard_bundle_dir": "/smoke/runtime/switchyard-plugin",
                             "relay_wheel_path": "/smoke/runtime/nemo-relay.whl",

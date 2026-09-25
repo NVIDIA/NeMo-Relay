@@ -4,8 +4,8 @@
 
 set -euo pipefail
 
-switchyard_repository="${SWITCHYARD_REPOSITORY:-https://github.com/NVIDIA-NeMo/Switchyard.git}"
-switchyard_commit="${SWITCHYARD_COMMIT:-7a72c0667774244d66a8b631e375c9d6e393bf57}"
+switchyard_plugin_repository="${SWITCHYARD_PLUGIN_REPOSITORY:-NVIDIA/NeMo-Relay-Plugins}"
+switchyard_plugin_version="${SWITCHYARD_PLUGIN_VERSION:-0.3.0}"
 output_dir="${1:-}"
 
 if [[ -z "$output_dir" ]]; then
@@ -20,121 +20,73 @@ if [[ -e "$output_dir" ]]; then
   echo "refusing to overwrite existing output directory: $output_dir" >&2
   exit 2
 fi
-if [[ ! "$switchyard_commit" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "SWITCHYARD_COMMIT must be a full commit SHA" >&2
-  exit 2
-fi
 
-for dependency in docker git python3; do
+for dependency in gh sha256sum tar python3; do
   command -v "$dependency" >/dev/null || {
     echo "missing required command: $dependency" >&2
     exit 1
   }
 done
-docker info >/dev/null
 
-docker_architecture="$(docker info --format '{{.Architecture}}')"
-case "$docker_architecture" in
-  x86_64|amd64) docker_architecture="x86_64" ;;
-  aarch64|arm64) docker_architecture="aarch64" ;;
+host_architecture="$(uname -m)"
+case "$host_architecture" in
+  x86_64|amd64) host_architecture="x86_64" ;;
+  aarch64|arm64) host_architecture="aarch64" ;;
   *)
-    echo "unsupported Docker architecture: $docker_architecture" >&2
+    echo "unsupported host architecture: $host_architecture" >&2
     exit 2
     ;;
 esac
-target_architecture="${SWITCHYARD_TARGET_ARCHITECTURE:-$docker_architecture}"
-if [[ "$target_architecture" != "x86_64" && "$target_architecture" != "aarch64" ]]; then
-  echo "SWITCHYARD_TARGET_ARCHITECTURE must be x86_64 or aarch64" >&2
-  exit 2
-fi
-if [[ "$docker_architecture" == "aarch64" ]]; then
-  builder_image="${SWITCHYARD_BUILDER_IMAGE:-rust:1.96.1-bullseye@sha256:69e444ec65a82386d041a4a3d15e47a797967b90ae24aa342bd8a3600dd9e244}"
-  builder_platform="linux/arm64"
-  if [[ "$target_architecture" == "x86_64" ]]; then
-    cargo_target="x86_64-unknown-linux-gnu"
-    library_path="/tmp/target/x86_64-unknown-linux-gnu/release/libswitchyard_nemo_relay_plugin.so"
-  else
-    cargo_target=""
-    library_path="/tmp/target/release/libswitchyard_nemo_relay_plugin.so"
-  fi
-else
-  if [[ "$target_architecture" != "x86_64" ]]; then
-    echo "aarch64 cross-builds from an x86_64 Docker host are not supported" >&2
+target_architecture="${SWITCHYARD_TARGET_ARCHITECTURE:-$host_architecture}"
+case "$target_architecture" in
+  x86_64) platform="linux-x86_64" ;;
+  aarch64) platform="linux-arm64" ;;
+  *)
+    echo "SWITCHYARD_TARGET_ARCHITECTURE must be x86_64 or aarch64" >&2
     exit 2
-  fi
-  builder_image="${SWITCHYARD_BUILDER_IMAGE:-rust:1.96.1-bullseye@sha256:65136b30fc6b10112cbae63a868da085a878679a80d562272e485ecaaad3276a}"
-  builder_platform="linux/amd64"
-  cargo_target=""
-  library_path="/tmp/target/release/libswitchyard_nemo_relay_plugin.so"
-fi
+    ;;
+esac
 
-# Stage beside the requested output so source and result use the same
-# Docker-shared filesystem. Colima installations often do not share $TMPDIR or
-# host /private/tmp even though those paths also exist inside the VM.
+release_tag="switchyard-plugin-${switchyard_plugin_version}"
+asset_stem="switchyard-plugin-${switchyard_plugin_version}-${platform}"
+
+# Stage beside the requested output so the download and result use the same
+# filesystem for the final atomic rename.
 output_parent="$(dirname "$output_dir")"
 if [[ ! -d "$output_parent" ]]; then
   echo "output parent must already exist: $output_parent" >&2
   exit 2
 fi
-build_root="$(mktemp -d "$output_parent/.switchyard-relay-plugin.XXXXXX")"
-source_dir="$build_root/source"
+download_dir="$(mktemp -d "$output_parent/.switchyard-plugin-download.XXXXXX")"
 staging_dir="${output_dir}.partial.$$"
 if [[ -e "$staging_dir" ]]; then
   echo "refusing to overwrite existing staging directory: $staging_dir" >&2
   exit 2
 fi
-mkdir -m 0700 "$staging_dir"
 cleanup() {
-  rm -rf "$build_root" "$staging_dir"
+  rm -rf "$download_dir" "$staging_dir"
 }
 trap cleanup EXIT
 
-git clone --filter=blob:none --no-checkout "$switchyard_repository" "$source_dir"
-git -C "$source_dir" fetch --depth 1 origin "$switchyard_commit"
-git -C "$source_dir" checkout --detach "$switchyard_commit"
-actual_commit="$(git -C "$source_dir" rev-parse HEAD)"
-if [[ "$actual_commit" != "$switchyard_commit" ]]; then
-  echo "Switchyard checkout mismatch: expected $switchyard_commit, got $actual_commit" >&2
-  exit 1
-fi
+gh release download "$release_tag" \
+  --repo "$switchyard_plugin_repository" \
+  --pattern "${asset_stem}.tar.gz*" \
+  --dir "$download_dir"
 
-docker run --rm \
-  --platform "$builder_platform" \
-  --env PHASE1_CARGO_TARGET="$cargo_target" \
-  --env PHASE1_LIBRARY_PATH="$library_path" \
-  --volume "$source_dir:/src:ro" \
-  --volume "$staging_dir:/out" \
-  "$builder_image" \
-  bash -lc '
-    set -euo pipefail
-    test -f /src/Cargo.toml
-    export DEBIAN_FRONTEND=noninteractive
-    export PATH="/usr/local/cargo/bin:$PATH"
-    apt-get update
-    apt-get install -y --no-install-recommends ca-certificates clang cmake pkg-config python3
-    if [[ -n "$PHASE1_CARGO_TARGET" ]]; then
-      apt-get install -y --no-install-recommends crossbuild-essential-amd64
-      rustup target add "$PHASE1_CARGO_TARGET"
-      export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc
-      export CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc
-      export CXX_x86_64_unknown_linux_gnu=x86_64-linux-gnu-g++
-      export AR_x86_64_unknown_linux_gnu=x86_64-linux-gnu-ar
-    fi
-    mkdir -p /tmp/switchyard
-    cp -a /src/. /tmp/switchyard/
-    cd /tmp/switchyard
-    export CARGO_TARGET_DIR=/tmp/target
-    cargo_args=(build --locked --release -p switchyard-nemo-relay-plugin)
-    if [[ -n "$PHASE1_CARGO_TARGET" ]]; then
-      cargo_args+=(--target "$PHASE1_CARGO_TARGET")
-    fi
-    cargo "${cargo_args[@]}"
-    python3 crates/switchyard-nemo-relay-plugin/scripts/package_bundle.py \
-      --library "$PHASE1_LIBRARY_PATH" \
-      --output /out
-  '
+archive="$download_dir/${asset_stem}.tar.gz"
+checksum_file="${archive}.sha256"
+manifest_file="${archive}.json"
+for required in "$archive" "$checksum_file" "$manifest_file"; do
+  test -f "$required" || { echo "missing expected release asset: $required" >&2; exit 1; }
+done
+(cd "$download_dir" && sha256sum -c "$(basename "$checksum_file")")
 
-python3 - "$staging_dir" "$switchyard_repository" "$switchyard_commit" "$builder_image" "$builder_platform" "$cargo_target" "$target_architecture" <<'PY'
+mkdir -m 0700 "$staging_dir"
+# The archive contains one top-level directory (e.g. switchyard-plugin/);
+# flatten it so the bundle layout matches what this example's scripts expect.
+tar -xzf "$archive" -C "$staging_dir" --strip-components=1
+
+python3 - "$staging_dir" "$manifest_file" "$switchyard_plugin_repository" "$release_tag" "$target_architecture" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -143,7 +95,7 @@ import sys
 
 
 def plugin_id(path: pathlib.Path) -> str | None:
-    """Read the one manifest field this builder needs without a TOML dependency."""
+    """Read the one manifest field this validator needs without a TOML dependency."""
     section = ""
     section_pattern = re.compile(r"^\[([A-Za-z0-9_.-]+)\]$")
     id_pattern = re.compile(r'^id\s*=\s*"([^"\\]+)"\s*(?:#.*)?$')
@@ -158,8 +110,10 @@ def plugin_id(path: pathlib.Path) -> str | None:
             return match.group(1)
     raise ValueError("bundle manifest does not define plugin.id")
 
+
 output = pathlib.Path(sys.argv[1])
-repository, commit, builder, builder_platform, cargo_target, target_architecture = sys.argv[2:]
+manifest_json_path = pathlib.Path(sys.argv[2])
+plugin_repository, release_tag, target_architecture = sys.argv[3:]
 manifest_path = output / "relay-plugin.toml"
 if not manifest_path.is_file():
     raise SystemExit("bundle did not contain relay-plugin.toml")
@@ -182,6 +136,7 @@ if machine != expected_machine:
         f"native library architecture mismatch: expected {target_architecture}, ELF e_machine={machine}"
     )
 
+
 def digest(path: pathlib.Path) -> str:
     value = hashlib.sha256()
     with path.open("rb") as stream:
@@ -189,13 +144,15 @@ def digest(path: pathlib.Path) -> str:
             value.update(block)
     return value.hexdigest()
 
+
+release_manifest = json.loads(manifest_json_path.read_text(encoding="utf-8"))
 provenance = {
     "schema_version": "harbor-hermes-switchyard.bundle.v1",
-    "repository": repository,
-    "commit": commit,
-    "builder_image": builder,
-    "builder_platform": builder_platform,
-    "cargo_target": cargo_target or f"native-{target_architecture}",
+    "repository": f"https://github.com/{plugin_repository}.git",
+    "release_tag": release_tag,
+    "switchyard_source_repository": "https://github.com/NVIDIA-NeMo/Switchyard.git",
+    "switchyard_source_commit": release_manifest["source_commit"],
+    "relay_tag": release_manifest["relay"]["tag"],
     "target_architecture": target_architecture,
     "plugin_id": "nvidia.switchyard",
     "manifest_sha256": digest(manifest_path),

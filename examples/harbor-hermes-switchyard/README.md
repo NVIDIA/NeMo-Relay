@@ -1,7 +1,7 @@
 # Harbor + Hermes + Switchyard evaluation
 
 This example runs one complete Terminal-Bench 2.0 cohort through Harbor and
-Hermes. Hermes owns an in-process NeMo Relay runtime satisfying `nemo-relay>=0.8.1,<0.9.0`; Relay loads the
+Hermes. Hermes owns an in-process NeMo Relay runtime satisfying `nemo-relay>=0.9.0`; Relay loads the
 Switchyard native plugin, and Switchyard selects and calls the configured
 provider route. The cohort runner operates on one resumable 89-task cohort at
 a time. An optional, separate report workflow can compare or aggregate several
@@ -11,14 +11,16 @@ completed run roots without mutating them.
 
 | Dependency | Input used by this example |
 |---|---|
-| NeMo Relay | Official PyPI release `nemo-relay==0.8.3`, installed by digest as a `manylinux2014_x86_64` wheel. |
-| Hermes | `NousResearch/hermes-agent`, `main` (commit `48c0c3a873bc5adaf20c632b5b7630a4fac000b4`), which merges PR #96633 upgrading Hermes's own Relay integration from 0.7 to 0.8. No tagged release includes this yet. |
-| Switchyard | `NVIDIA-NeMo/Switchyard`, detached commit `7a72c0667774244d66a8b631e375c9d6e393bf57` from `main` (PR #528 merged). |
+| NeMo Relay | Official PyPI release `nemo-relay==0.9.2`, installed by digest as a `manylinux2014_x86_64` wheel. |
+| Hermes | `NousResearch/hermes-agent`, branch `chore/relay-0.9` (commit `f2e61bcc04c21ba2212737b1d54b6deaeb212d1f`), open PR [#115343](https://github.com/NousResearch/hermes-agent/pull/115343) upgrading Hermes's own Relay integration from 0.8 to 0.9. Not yet merged or tagged. |
+| Switchyard plugin | Official release [`switchyard-plugin-0.3.0`](https://github.com/NVIDIA/NeMo-Relay-Plugins/releases/tag/switchyard-plugin-0.3.0) from `NVIDIA/NeMo-Relay-Plugins`, a prebuilt artifact (no local Rust build) built from `NVIDIA-NeMo/Switchyard` commit `336196f6fbfc97ddc71c1700f6092e564e9f23c2` and validated against `nemo-relay` `0.9.2`. |
 | Harbor | `harbor==0.20.0`, official registry export of `terminal-bench@2.0`. |
 
 Every source checkout is detached and verified. The Hermes installer is
 followed by `uv sync --frozen`, then the selected Relay wheel is
-force-installed without dependencies and verified by digest.
+force-installed without dependencies and verified by digest. The Switchyard
+plugin bundle is downloaded as a signed release asset and verified by its
+published SHA-256 checksum rather than built locally.
 
 ## 2. Request and lifecycle ownership
 
@@ -83,7 +85,7 @@ reaching a provider.
   `tmux`;
 - an immutable 89-task Terminal-Bench 2.0 export downloaded from Harbor's
   official registry;
-- a Switchyard plugin bundle and a Relay wheel satisfying `nemo-relay>=0.8.1,<0.9.0`,
+- a Switchyard plugin bundle and a Relay wheel satisfying `nemo-relay>=0.9.0`,
   matching Docker's architecture (`x86_64` or `aarch64`);
 - a Phoenix endpoint accepting OTLP/HTTP OpenInference traces; and
 - provider and registry access for the full cohort. The all-89 admission uses
@@ -118,16 +120,20 @@ python3 -m pip download \
   --platform "manylinux2014_${RELAY_ARCHITECTURE}" \
   --implementation cp --python-version 311 --abi abi3 \
   --dest /absolute/path/to/relay-wheel \
-  "nemo-relay>=0.8.1,<0.9.0"
+  "nemo-relay>=0.9.0"
 ```
 
 This produces a `manylinux2014_${RELAY_ARCHITECTURE}` wheel under
 `/absolute/path/to/relay-wheel/`; reference it as `RELAY_WHEEL` below.
 
-Build the Switchyard native bundle for that same architecture. With no
-`SWITCHYARD_TARGET_ARCHITECTURE` override, the builder detects the Docker
-daemon architecture automatically; the explicit setting below makes the
-chosen input visible in the command:
+Download the official Switchyard plugin bundle for that same architecture.
+This is a prebuilt release asset (`gh release download` under the hood, no
+Rust toolchain or Docker build required) — it requires the `gh` CLI
+authenticated with SSO access to the `NVIDIA` GitHub organization
+(`gh auth refresh --hostname github.com`). With no
+`SWITCHYARD_TARGET_ARCHITECTURE` override, the script detects the host
+architecture automatically; the explicit setting below makes the chosen
+input visible in the command:
 
 ```bash
 SWITCHYARD_TARGET_ARCHITECTURE="$RELAY_ARCHITECTURE" \

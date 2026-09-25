@@ -30,8 +30,8 @@ from relay_version import wheel_version
 
 SCHEMA_VERSION = "harbor-hermes-switchyard.hermetic-runtime.v1"
 DEFAULT_HERMES_REPOSITORY = "https://github.com/NousResearch/hermes-agent.git"
-DEFAULT_HERMES_REF = "main"
-DEFAULT_HERMES_COMMIT = "48c0c3a873bc5adaf20c632b5b7630a4fac000b4"
+DEFAULT_HERMES_REF = "chore/relay-0.9"
+DEFAULT_HERMES_COMMIT = "f2e61bcc04c21ba2212737b1d54b6deaeb212d1f"
 UV_VERSION = "0.11.16"
 PYTHON_VERSION = "3.11.13"
 BUILDER_IMAGE = "python:3.11-bullseye"

@@ -63,7 +63,7 @@ def test_completed_response_is_preserved_after_post_response_failure(tmp_path: P
     log.write_text("normal shutdown\n", encoding="utf-8")
     monkeypatch.setattr(module, "HERMES_SESSION", session)
     monkeypatch.setattr(module, "HERMES_LOG", log)
-    monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "0.8.1")
+    monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "0.9.2")
 
     args = make_args(tmp_path, error_type="InjectedPostResponseFailure")
     module.initialize(args, root)
@@ -89,7 +89,7 @@ def test_no_response_never_creates_a_passed_completion(tmp_path: Path, monkeypat
     log.write_text("agent stopped\n", encoding="utf-8")
     monkeypatch.setattr(module, "HERMES_SESSION", session)
     monkeypatch.setattr(module, "HERMES_LOG", log)
-    monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "0.8.1")
+    monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "0.9.2")
 
     args = make_args(tmp_path)
     module.initialize(args, root)
@@ -109,7 +109,7 @@ def test_empty_session_uses_bounded_quiet_cli_output(tmp_path: Path, monkeypatch
     log.write_text("completed\nanswer\n\nsession_id: cli-session\n", encoding="utf-8")
     monkeypatch.setattr(module, "HERMES_SESSION", session)
     monkeypatch.setattr(module, "HERMES_LOG", log)
-    monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "0.8.1")
+    monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "0.9.2")
 
     args = make_args(tmp_path)
     module.initialize(args, root)
@@ -131,7 +131,7 @@ def test_quiet_cli_output_after_session_marker_is_not_promoted(tmp_path: Path, m
     log.write_text("session_id: cli-session\nlate wrapper error\n", encoding="utf-8")
     monkeypatch.setattr(module, "HERMES_SESSION", session)
     monkeypatch.setattr(module, "HERMES_LOG", log)
-    monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "0.8.1")
+    monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "0.9.2")
 
     args = make_args(tmp_path)
     module.initialize(args, root)
@@ -155,7 +155,7 @@ def test_failed_agent_output_is_not_promoted_to_a_completed_response(tmp_path: P
     )
     monkeypatch.setattr(module, "HERMES_SESSION", session)
     monkeypatch.setattr(module, "HERMES_LOG", log)
-    monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "0.8.1")
+    monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "0.9.2")
 
     args = make_args(tmp_path, error_type="NonZeroAgentExitCodeError")
     module.initialize(args, root)
