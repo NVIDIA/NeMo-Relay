@@ -301,6 +301,21 @@ fn parse_attribute_mappings(
     Ok(mappings)
 }
 
+fn parse_otel_file_sink(
+    output_directory: &str,
+    filename: Option<&str>,
+    format: Option<&str>,
+    mode: Option<&str>,
+) -> napi::Result<nemo_relay::observability::otel::OtlpFileSinkSettings> {
+    nemo_relay::observability::otel::OtlpFileSinkSettings::from_parts(
+        output_directory,
+        filename,
+        format,
+        mode,
+    )
+    .map_err(napi::Error::from_reason)
+}
+
 fn build_otel_config(
     options: OpenTelemetryConfig,
 ) -> napi::Result<nemo_relay::observability::otel::OpenTelemetryConfig> {
@@ -345,9 +360,9 @@ fn build_otel_config(
 
     let mut config = nemo_relay::observability::otel::OpenTelemetryConfig::new(otel_type, endpoint)
         .with_transport(transport)
+        .with_timeout(std::time::Duration::from_millis(timeout_millis.into()))
         .with_service_name(service_name)
         .with_instrumentation_scope(instrumentation_scope)
-        .with_timeout(std::time::Duration::from_millis(timeout_millis.into()))
         .with_completed_span_context_ttl(std::time::Duration::from_millis(
             completed_span_context_ttl_millis,
         ));
@@ -5257,6 +5272,78 @@ pub struct OpenTelemetryConfig {
     pub promote_resource_metadata_prefixes: Option<Vec<String>>,
 }
 
+/// Configuration for a subscriber that writes OTLP to a local file.
+///
+/// Carries no endpoint, transport, headers, or timeout: a file destination has
+/// no use for them.
+#[napi(object)]
+#[derive(Default)]
+pub struct OpenTelemetryFileSinkConfig {
+    /// `"full"`, `"gen_ai"`, or `"openinference"`.
+    #[napi(ts_type = "\"full\" | \"gen_ai\" | \"openinference\"")]
+    pub r#type: String,
+    /// Directory containing the output file.
+    pub output_directory: String,
+    /// Output filename. Defaults to a name derived from `format`.
+    pub filename: Option<String>,
+    /// `"json_lines"` (default) or `"proto"`.
+    #[napi(ts_type = "\"json_lines\" | \"proto\"")]
+    pub format: Option<String>,
+    /// `"overwrite"` (default) or `"append"`.
+    #[napi(ts_type = "\"append\" | \"overwrite\"")]
+    pub mode: Option<String>,
+    /// Extra OpenTelemetry resource attributes as string key/value pairs.
+    pub resource_attributes: Option<Json>,
+    /// `service.name` resource attribute. Defaults to `"unknown_service"`.
+    pub service_name: Option<String>,
+    /// Optional `service.namespace` resource attribute.
+    pub service_namespace: Option<String>,
+    /// Optional `service.version` resource attribute.
+    pub service_version: Option<String>,
+    /// Instrumentation scope name. Defaults to `"opentelemetry"`.
+    pub instrumentation_scope: Option<String>,
+}
+
+fn build_otel_file_sink_config(
+    options: OpenTelemetryFileSinkConfig,
+) -> napi::Result<nemo_relay::observability::otel::OpenTelemetryFileSinkConfig> {
+    let otel_type = parse_otel_type(&options.r#type)?;
+    let directory = options.output_directory.trim();
+    if directory.is_empty() {
+        return Err(napi::Error::from_reason(
+            "outputDirectory must be a nonblank string",
+        ));
+    }
+    let sink = parse_otel_file_sink(
+        directory,
+        options.filename.as_deref(),
+        options.format.as_deref(),
+        options.mode.as_deref(),
+    )?;
+    let mut config =
+        nemo_relay::observability::otel::OpenTelemetryFileSinkConfig::new(otel_type, sink)
+            .with_instrumentation_scope(
+                options
+                    .instrumentation_scope
+                    .unwrap_or_else(|| "opentelemetry".to_string()),
+            );
+    // An omitted service name stays unset so the SDK can detect it from
+    // OTEL_SERVICE_NAME, matching the plugin configuration path.
+    if let Some(service_name) = options.service_name {
+        config = config.with_service_name(service_name);
+    }
+    if let Some(namespace) = options.service_namespace {
+        config = config.with_service_namespace(namespace);
+    }
+    if let Some(version) = options.service_version {
+        config = config.with_service_version(version);
+    }
+    for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
+        config = config.with_resource_attribute(key, value);
+    }
+    Ok(config)
+}
+
 /// OpenTelemetry-backed event subscriber.
 #[napi]
 pub struct OpenTelemetrySubscriber {
@@ -5270,6 +5357,16 @@ impl OpenTelemetrySubscriber {
     pub fn new(config: OpenTelemetryConfig) -> napi::Result<Self> {
         let inner = nemo_relay::observability::otel::OpenTelemetrySubscriber::new(
             build_otel_config(config)?,
+        )
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Create a subscriber that writes OTLP to a local file.
+    #[napi(factory)]
+    pub fn file_sink(config: OpenTelemetryFileSinkConfig) -> napi::Result<Self> {
+        let inner = nemo_relay::observability::otel::OpenTelemetrySubscriber::new_file_sink(
+            build_otel_file_sink_config(config)?,
         )
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner })
