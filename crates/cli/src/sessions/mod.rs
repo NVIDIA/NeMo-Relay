@@ -758,7 +758,6 @@ impl SessionManager {
         });
         let agent_kind_name = session.agent_kind.as_str().to_string();
         let event_name = event.event_name.clone();
-        let session_id = event.session_id.clone();
         let tool_call_id = matched.tool_call_id.clone();
         let permission_mode = event
             .payload
@@ -766,11 +765,7 @@ impl SessionManager {
             .and_then(Value::as_str)
             .filter(|mode| !mode.is_empty())
             .map(ToOwned::to_owned);
-        let mut metadata = match event.metadata.clone() {
-            Value::Object(map) => map,
-            _ => Map::new(),
-        };
-        metadata.insert("session_id".into(), json!(session_id));
+        let metadata = session.event_identity_metadata(event.metadata.clone());
         let matched_tool_call_id = matched.tool_call_id.clone();
         drop(sessions);
         let result = TASK_SCOPE_STACK
@@ -807,7 +802,7 @@ impl SessionManager {
                     EmitMarkEventParams::builder()
                         .name("nemo_relay.permission.policy_decision")
                         .data(data)
-                        .metadata(Value::Object(metadata))
+                        .metadata(metadata)
                         .category(EventCategory::custom())
                         .category_profile(
                             CategoryProfile::builder()

@@ -1718,6 +1718,7 @@ async fn permission_requests_emit_policy_decision_marks() {
             0 => json!({
                 "hook_event_name": "PermissionRequest",
                 "session_id": "spoofed-session",
+                "agent_version": "spoofed-version",
                 "test_context": "preserved",
             }),
             1 => json!({}),
@@ -1775,9 +1776,14 @@ async fn permission_requests_emit_policy_decision_marks() {
         assert_eq!(mark["data"]["tool_call_id"], "call-1");
         assert_eq!(mark["data"]["tool_name"], "PermissionAuditTool");
         assert_eq!(mark["metadata"]["session_id"], session_id);
+        assert_eq!(mark["metadata"]["turn_id"], "0");
+        assert_eq!(mark["metadata"]["harness"], "claude-code");
+        assert_eq!(mark["metadata"]["source"], "hook");
+        assert_eq!(mark["metadata"]["identity_quality"], "native");
         if index == 0 {
             assert_eq!(mark["metadata"]["hook_event_name"], "PermissionRequest");
             assert_eq!(mark["metadata"]["test_context"], "preserved");
+            assert!(mark["metadata"].get("agent_version").is_none());
         }
         assert!(mark["metadata"].get("owner").is_none());
         assert!(!mark.to_string().contains("client-a"));
