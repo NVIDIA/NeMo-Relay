@@ -27,11 +27,11 @@ pub(crate) fn prepare(launch: &mut PreparedAgentLaunch, gateway_url: &str) -> Re
         );
     }
     let hook_root = temp_dir("nemo-relay-codex-hooks")?;
+    launch.temp_dirs.push(hook_root.clone());
     let hook_config = hook_root.join(".nemo-relay-hook-config.json");
     crate::hooks::HookCommandConfig::transparent(CodingAgent::Codex, gateway_url)
         .write(&hook_config)
         .map_err(CliError::Launch)?;
-    launch.temp_dirs.push(hook_root);
     let hook_commands = transparent_hook_forward_commands_with_config(
         &transparent_hook_executable(),
         CodingAgent::Codex,

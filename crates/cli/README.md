@@ -229,3 +229,47 @@ output_directory = "./atif"
 ## Documentation
 
 NeMo Relay Documentation: https://docs.nvidia.com/nemo/relay
+
+### Internal preparation transport
+
+Orchestrators that own native execution may use the hidden `prepare` transport.
+Pass explicit `--config` and `--plugin-config-path` documents and inherit the
+native child's environment and working directory. An absolute private
+`NEMO_RELAY_INVOCATION_STATE_DIR` isolates gateway TLS/HMAC state; the environment
+patch propagates it to hooks and borrowed clients without changing native XDG
+configuration. Send one private JSON line:
+
+```json
+{"version":1,"agent":"codex","argv":["codex","exec","--json","--","task"],"home":"/private/native-home","upstream_url":"http://127.0.0.1:8000/rollout/id/v1"}
+```
+
+`home` must be an existing owner-private resolved directory and equal the
+inherited `CODEX_HOME` or `CLAUDE_CONFIG_DIR`. Relay prepares only that home,
+starts a private authenticated gateway, and returns
+`{"version":1,"environment":{...}}`. Apply this opaque environment patch only to
+the native child. It contains invocation credentials: never persist or log it.
+The request may contain prompts in argv and must also remain private.
+
+Relay does not launch or version-probe the native executable. The caller owns
+native compatibility verification, direct launch, cancellation and process-group
+reaping. The supported command options deliberately exclude routing overrides,
+profiles, hook-disabling modes, additional settings, and pre-existing Codex
+configuration hook groups. Existing plugin hook trust is preserved. Claude tracing requires
+`--bare` to be absent. Unsupported options fail before readiness.
+
+Stop and reap native descendants before closing the controller's stdin. Relay
+then stops its private gateway with the existing bounded drain, restores native
+configuration, removes its temporary hook files, and emits
+`{"version":1,"cleanup":"complete"}`. This acknowledges local toolkit cleanup,
+not native success or hosted delivery. Missing final acknowledgement is
+incomplete. A child that inherits the owner pipe can delay EOF; the caller must
+use its existing parent-death process guard rather than treating EOF as proof of
+native containment. Installed participants borrow the prepared gateway and cannot
+restart it after owner closure.
+
+Candidate check (no native agent, inference, or hosted service):
+
+```sh
+cargo build --locked -p nemo-relay-cli --bin nemo-relay
+python3 crates/cli/tests/prepare_smoke.py target/debug/nemo-relay
+```

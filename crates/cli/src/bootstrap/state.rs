@@ -83,6 +83,16 @@ impl Drop for OwnerGuard {
 }
 
 pub(crate) fn state_dir() -> Result<PathBuf, String> {
+    if let Some(path) = crate::hooks::HookCommandConfig::prepared_state_dir_from_native_home()? {
+        return Ok(path);
+    }
+    if let Some(value) = std::env::var_os("NEMO_RELAY_INVOCATION_STATE_DIR") {
+        let path = PathBuf::from(value);
+        if !path.is_absolute() {
+            return Err("Relay bootstrap state directory must be absolute".into());
+        }
+        return Ok(path);
+    }
     crate::configuration::user_config_dir()
         .map(|path| path.join("bootstrap"))
         .ok_or_else(|| {

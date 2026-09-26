@@ -228,6 +228,7 @@ async fn run_command(
         Command::Uninstall(command) => install::uninstall(command),
         Command::Integrations(command) => integrations::execute(command),
         Command::Run(command) => run::execute(command, server).await,
+        Command::Prepare => crate::process::launcher::prepare(&server.to_runtime()).await,
         Command::Claude(command) => run::easy_path(CodingAgent::ClaudeCode, command, server).await,
         Command::Codex(command) => run::easy_path(CodingAgent::Codex, command, server).await,
         Command::Pi(command) => run::easy_path(CodingAgent::Pi, command, server).await,

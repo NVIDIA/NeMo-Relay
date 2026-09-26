@@ -87,6 +87,7 @@ impl HookForwardCommand {
             } else {
                 crate::hooks::HookFailurePolicy::Default
             },
+            proxy_credential: None,
         }
     }
 }

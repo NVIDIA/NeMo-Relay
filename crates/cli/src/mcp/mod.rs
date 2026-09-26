@@ -7,6 +7,7 @@ mod gateway;
 mod protocol;
 mod session;
 mod transport;
+pub(crate) use transport::spawn_stdin_reader;
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -27,18 +28,23 @@ pub(crate) async fn run(server_args: &GatewayOverrides) -> Result<ExitCode, CliE
         event = "mcp_session_started";
         "MCP session started"
     );
-    if transparent_run_active() {
+    let prepared_gateway = crate::hooks::HookCommandConfig::prepared_gateway_from_native_home()
+        .map_err(CliError::Launch)?;
+    if transparent_run_active() || prepared_gateway.is_some() {
         // An installed plugin can still be enabled inside `nemo-relay run`. In that process the
         // wrapper already owns a healthy dynamic gateway, so this MCP instance authenticates and
         // monitors it instead of launching the fixed persistent sidecar.
-        let gateway_url = std::env::var(crate::configuration::GATEWAY_URL_ENV).map_err(|_| {
-            CliError::Launch(format!(
-                "{} is required when {}=1",
-                crate::configuration::GATEWAY_URL_ENV,
-                crate::configuration::TRANSPARENT_RUN_ENV
-            ))
-            .with_mcp_failure_reason(McpFailureReason::GatewayConfigurationFailed)
-        })?;
+        let gateway_url = prepared_gateway
+            .map(Ok)
+            .unwrap_or_else(|| std::env::var(crate::configuration::GATEWAY_URL_ENV))
+            .map_err(|_| {
+                CliError::Launch(format!(
+                    "{} is required when {}=1",
+                    crate::configuration::GATEWAY_URL_ENV,
+                    crate::configuration::TRANSPARENT_RUN_ENV
+                ))
+                .with_mcp_failure_reason(McpFailureReason::GatewayConfigurationFailed)
+            })?;
         let bootstrap_fingerprint =
             crate::configuration::transparent_gateway_fingerprint(&gateway_url);
         let lease = gateway::GatewayLease::borrow(gateway_url, bootstrap_fingerprint).await?;

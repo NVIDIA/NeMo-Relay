@@ -31,6 +31,7 @@ fn hook_request(agent: CodingAgent) -> HookForwardRequest {
         session_metadata: None,
         gateway_mode: None,
         failure_policy: HookFailurePolicy::Default,
+        proxy_credential: None,
     }
 }
 
@@ -51,6 +52,7 @@ fn private_hook_config_round_trips_and_hydrates_a_hook_request() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("hook.json");
     HookCommandConfig::transparent(CodingAgent::Codex, "http://127.0.0.1:1234")
+        .with_proxy_credential("synthetic-hook-token")
         .write(&path)
         .unwrap();
 
@@ -65,6 +67,10 @@ fn private_hook_config_round_trips_and_hydrates_a_hook_request() {
     assert!(request.transparent_run);
     assert!(request.generation_file.is_none());
     assert!(request.generation_token.is_none());
+    assert_eq!(
+        request.proxy_credential.as_deref(),
+        Some("synthetic-hook-token")
+    );
 }
 
 #[test]
@@ -229,6 +235,61 @@ impl ScopedEnvVar {
         unsafe { std::env::set_var(key, value) };
         Self { key, previous }
     }
+
+    fn remove(key: &'static str) -> Self {
+        let previous = std::env::var_os(key);
+        // SAFETY: The caller holds the process-wide environment mutex through BootstrapConfigHome.
+        unsafe { std::env::remove_var(key) };
+        Self { key, previous }
+    }
+}
+
+#[test]
+fn prepared_native_home_routes_mcp_and_rejects_revoked_or_public_context() {
+    let temp = tempfile::tempdir().unwrap();
+    let _environment = BootstrapConfigHome::enter(&temp.path().join("xdg"));
+    let home = temp.path().join("codex");
+    std::fs::create_dir(&home).unwrap();
+    let home = home.canonicalize().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let _codex_home = ScopedEnvVar::set("CODEX_HOME", home.as_os_str());
+    let _claude_home = ScopedEnvVar::remove("CLAUDE_CONFIG_DIR");
+    let _state_environment = ScopedEnvVar::remove("NEMO_RELAY_INVOCATION_STATE_DIR");
+    let context = home.join(NATIVE_INVOCATION_CONFIG);
+    HookCommandConfig::transparent(CodingAgent::Codex, "http://127.0.0.1:4567")
+        .with_proxy_credential("synthetic-private-token")
+        .with_invocation_state_dir(&home.join("state"))
+        .write(&context)
+        .unwrap();
+    assert_eq!(
+        HookCommandConfig::prepared_gateway_from_native_home().unwrap(),
+        Some("http://127.0.0.1:4567".into())
+    );
+    assert_eq!(
+        crate::bootstrap::state::state_dir().unwrap(),
+        home.join("state")
+    );
+    let _ambient_state = ScopedEnvVar::set(
+        "NEMO_RELAY_INVOCATION_STATE_DIR",
+        temp.path().join("ambient-state").as_os_str(),
+    );
+    assert_eq!(
+        crate::bootstrap::state::state_dir().unwrap(),
+        home.join("state")
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&context, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(HookCommandConfig::prepared_gateway_from_native_home().is_err());
+    }
+    crate::filesystem::atomic_write_private(&context, br#"{"version":1,"revoked":true}"#).unwrap();
+    assert!(HookCommandConfig::prepared_gateway_from_native_home().is_err());
+    assert!(crate::bootstrap::state::state_dir().is_err());
 }
 
 impl Drop for ScopedEnvVar {
@@ -299,6 +360,7 @@ async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
         session_metadata: None,
         gateway_mode: None,
         failure_policy: HookFailurePolicy::FailClosed,
+        proxy_credential: None,
     };
     let gateway = transparent_gateway_spec(&gateway_url).unwrap();
 

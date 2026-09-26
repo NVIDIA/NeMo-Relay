@@ -6,10 +6,10 @@
 use crate::error::{CliError, McpFailureReason};
 
 pub(super) const MAX_MCP_FRAME_BYTES: usize = 1024 * 1024;
-pub(super) type FrameReceiver = tokio::sync::mpsc::Receiver<Result<String, std::io::Error>>;
+pub(crate) type FrameReceiver = tokio::sync::mpsc::Receiver<Result<String, std::io::Error>>;
 
 /// Read stdin on a plain thread so EOF remains dependable across Tokio platforms.
-pub(super) fn spawn_stdin_reader() -> Result<FrameReceiver, CliError> {
+pub(crate) fn spawn_stdin_reader() -> Result<FrameReceiver, CliError> {
     let (sender, receiver) = tokio::sync::mpsc::channel(16);
     std::thread::Builder::new()
         .name("nemo-relay-mcp-stdin".into())

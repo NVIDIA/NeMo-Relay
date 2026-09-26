@@ -55,6 +55,7 @@ pub(crate) fn prepare(
     }
 
     let root = temp_dir("nemo-relay-claude-plugin")?;
+    launch.temp_dirs.push(root.clone());
     std::fs::create_dir_all(root.join(".claude-plugin"))?;
     std::fs::create_dir_all(root.join("hooks"))?;
     std::fs::write(
@@ -99,7 +100,6 @@ pub(crate) fn prepare(
     launch
         .env
         .push(("ANTHROPIC_BASE_URL".into(), gateway_url.to_string()));
-    launch.temp_dirs.push(root);
     record_hook_integrity_risk(launch, hook_integrity_risk);
     Ok(())
 }

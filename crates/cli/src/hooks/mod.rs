@@ -7,12 +7,12 @@ mod config;
 mod delivery;
 mod destination;
 mod encoding;
-#[cfg(test)]
 mod merging;
 mod response;
 mod types;
 
 pub(crate) use config::HookCommandConfig;
+pub(crate) use config::NATIVE_INVOCATION_CONFIG;
 pub(crate) use delivery::hook_forward;
 #[cfg(test)]
 pub(crate) use delivery::send_verified_hook_forward_request;
@@ -34,7 +34,6 @@ pub(crate) use encoding::{
     event_matches_tools, generated_hooks, persistent_hook_forward_commands_for_platform,
     transparent_hook_forward_commands_for_platform,
 };
-#[cfg(test)]
 pub(crate) use merging::merge_hooks;
 #[cfg(test)]
 pub(crate) use response::{handle_hook_forward_status, handle_verified_hook_forward_response};
