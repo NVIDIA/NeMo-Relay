@@ -1782,6 +1782,7 @@ fn codex_mcp_env_vars_include_approved_dynamic_and_config_references_only() {
         "ALL_PROXY",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
+        "CODEX_HOME",
         "NEMO_RELAY_GATEWAY_URL",
         "NEMO_RELAY_TRANSPARENT_RUN",
         "NEMO_RELAY_CUSTOM_SETTING",

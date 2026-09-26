@@ -190,8 +190,9 @@ impl Command {
 
 fn transparent_hook_is_inert(command: &HookForwardCommand) -> bool {
     !command.transparent_run
-        && std::env::var(crate::configuration::TRANSPARENT_RUN_ENV)
+        && (std::env::var(crate::configuration::TRANSPARENT_RUN_ENV)
             .ok()
             .as_deref()
             == Some("1")
+            || crate::hooks::HookCommandConfig::prepared_native_home_present())
 }

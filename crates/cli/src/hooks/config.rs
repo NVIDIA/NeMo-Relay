@@ -15,6 +15,7 @@ use crate::agents::CodingAgent;
 use super::{GatewayMode, HookForwardRequest};
 
 const HOOK_CONFIG_VERSION: u32 = 1;
+pub(crate) const NATIVE_INVOCATION_CONFIG: &str = ".nemo-relay-invocation.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,6 +30,10 @@ pub(crate) struct HookCommandConfig {
     profile: Option<String>,
     session_metadata: Option<String>,
     gateway_mode: Option<GatewayMode>,
+    #[serde(default)]
+    proxy_credential: Option<String>,
+    #[serde(default)]
+    invocation_state_dir: Option<PathBuf>,
 }
 
 impl HookCommandConfig {
@@ -49,6 +54,8 @@ impl HookCommandConfig {
             profile: None,
             session_metadata: None,
             gateway_mode: None,
+            proxy_credential: None,
+            invocation_state_dir: None,
         }
     }
 
@@ -64,6 +71,8 @@ impl HookCommandConfig {
             profile: None,
             session_metadata: None,
             gateway_mode: None,
+            proxy_credential: None,
+            invocation_state_dir: None,
         }
     }
 
@@ -71,6 +80,98 @@ impl HookCommandConfig {
         let bytes = serde_json::to_vec_pretty(self)
             .map_err(|error| format!("failed to serialize hook configuration: {error}"))?;
         crate::filesystem::atomic_write_private(path, &bytes)
+    }
+
+    pub(crate) fn with_proxy_credential(mut self, credential: &str) -> Self {
+        self.proxy_credential = Some(credential.into());
+        self
+    }
+
+    pub(crate) fn with_invocation_state_dir(mut self, path: &Path) -> Self {
+        self.invocation_state_dir = Some(path.to_path_buf());
+        self
+    }
+
+    pub(crate) fn prepared_gateway(&self, agent: CodingAgent) -> Result<&str, String> {
+        if self.agent != agent.as_arg()
+            || !self.transparent_run
+            || self.proxy_credential.as_deref().is_none_or(str::is_empty)
+        {
+            return Err("invalid prepared native invocation".into());
+        }
+        Ok(&self.gateway_url)
+    }
+
+    pub(crate) fn prepared_gateway_from_native_home() -> Result<Option<String>, String> {
+        Self::prepared_config_from_native_home()?
+            .map(|(config, agent)| config.prepared_gateway(agent).map(str::to_owned))
+            .transpose()
+    }
+
+    pub(crate) fn prepared_state_dir_from_native_home() -> Result<Option<PathBuf>, String> {
+        Self::prepared_config_from_native_home()?
+            .map(|(config, agent)| {
+                config.prepared_gateway(agent)?;
+                config
+                    .invocation_state_dir
+                    .ok_or_else(|| "prepared native invocation has no state directory".into())
+            })
+            .transpose()
+    }
+
+    fn prepared_config_from_native_home() -> Result<Option<(Self, CodingAgent)>, String> {
+        let mut prepared = None;
+        for (variable, agent) in [
+            ("CODEX_HOME", CodingAgent::Codex),
+            ("CLAUDE_CONFIG_DIR", CodingAgent::ClaudeCode),
+        ] {
+            let Some(home) = std::env::var_os(variable).map(PathBuf::from) else {
+                continue;
+            };
+            let path = home.join(NATIVE_INVOCATION_CONFIG);
+            match std::fs::symlink_metadata(&path) {
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "cannot inspect prepared native invocation: {error}"
+                    ));
+                }
+            }
+            if !home.is_absolute() || home.canonicalize().ok().as_ref() != Some(&home) {
+                return Err("prepared native home is not an absolute resolved directory".into());
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let metadata =
+                    std::fs::symlink_metadata(&home).map_err(|error| error.to_string())?;
+                if !metadata.is_dir()
+                    || metadata.uid() != unsafe { libc::geteuid() }
+                    || metadata.mode() & 0o077 != 0
+                {
+                    return Err(
+                        "prepared native home must be current-user-owned and owner-only".into(),
+                    );
+                }
+            }
+            let config = Self::load(&path)?;
+            config.prepared_gateway(agent)?;
+            if prepared.replace((config, agent)).is_some() {
+                return Err("multiple prepared native invocations are active".into());
+            }
+        }
+        Ok(prepared)
+    }
+
+    pub(crate) fn prepared_native_home_present() -> bool {
+        ["CODEX_HOME", "CLAUDE_CONFIG_DIR"].iter().any(|variable| {
+            std::env::var_os(variable)
+                .map(PathBuf::from)
+                .is_some_and(|home| {
+                    std::fs::symlink_metadata(home.join(NATIVE_INVOCATION_CONFIG)).is_ok()
+                })
+        })
     }
 
     pub(crate) fn load(path: &Path) -> Result<Self, String> {
@@ -111,6 +212,7 @@ impl HookCommandConfig {
         request.profile = self.profile;
         request.session_metadata = self.session_metadata;
         request.gateway_mode = self.gateway_mode;
+        request.proxy_credential = self.proxy_credential;
         Ok(())
     }
 
@@ -132,6 +234,13 @@ impl HookCommandConfig {
         }
         if self.transparent_run && self.generation_file.is_some() {
             return Err("transparent hook configuration cannot include a generation fence".into());
+        }
+        if self
+            .invocation_state_dir
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute())
+        {
+            return Err("prepared invocation state directory must be absolute".into());
         }
         Ok(())
     }

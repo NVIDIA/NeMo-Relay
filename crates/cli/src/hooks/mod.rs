@@ -12,6 +12,7 @@ mod response;
 mod types;
 
 pub(crate) use config::HookCommandConfig;
+pub(crate) use config::NATIVE_INVOCATION_CONFIG;
 pub(crate) use delivery::hook_forward;
 #[cfg(test)]
 pub(crate) use delivery::send_verified_hook_forward_request;

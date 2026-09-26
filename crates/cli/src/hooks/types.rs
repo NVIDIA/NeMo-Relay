@@ -18,6 +18,7 @@ pub(crate) struct HookForwardRequest {
     pub(crate) session_metadata: Option<String>,
     pub(crate) gateway_mode: Option<GatewayMode>,
     pub(crate) failure_policy: HookFailurePolicy,
+    pub(crate) proxy_credential: Option<String>,
 }
 
 impl HookForwardRequest {

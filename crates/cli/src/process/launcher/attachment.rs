@@ -40,13 +40,21 @@ pub(crate) async fn prepare(inherited: &GatewayOverrides) -> Result<ExitCode, Cl
     let request: Request =
         serde_json::from_str(&line).map_err(|_| invalid("invalid preparation request"))?;
     let agent = request.validate()?;
+    match std::fs::symlink_metadata(request.home.join(crate::hooks::NATIVE_INVOCATION_CONFIG)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => return Err(invalid("native invocation marker already exists")),
+        Err(error) => return Err(error.into()),
+    }
     let path = request.home.join(match agent {
         CodingAgent::Codex => "config.toml",
         _ => "settings.json",
     });
     validate_file(&path)?;
     let snapshot = crate::filesystem::snapshot_optional_file(&path).map_err(CliError::Launch)?;
+    let metadata = std::fs::symlink_metadata(&request.home)?;
     let mut owned = NativeHome {
+        home: request.home.clone(),
+        home_metadata: metadata,
         snapshot: Some(snapshot),
         prepared: None,
     };
@@ -85,7 +93,8 @@ pub(crate) async fn prepare(inherited: &GatewayOverrides) -> Result<ExitCode, Cl
     )?;
     owned.prepared = Some(prepared);
     let prepared = owned.prepared.as_ref().expect("prepared above");
-    materialize(agent, prepared, &path)?;
+    let state_dir = crate::bootstrap::state::state_dir().map_err(CliError::Launch)?;
+    materialize(agent, prepared, &path, &gateway_url, &state_dir)?;
     let mut environment: BTreeMap<_, _> = prepared.env.iter().cloned().collect();
     if let Ok(path) = std::env::var("NEMO_RELAY_INVOCATION_STATE_DIR") {
         environment.insert("NEMO_RELAY_INVOCATION_STATE_DIR".into(), path);
@@ -251,7 +260,10 @@ fn materialize(
     agent: CodingAgent,
     prepared: &PreparedAgentLaunch,
     path: &Path,
+    gateway_url: &str,
+    state_dir: &Path,
 ) -> Result<(), CliError> {
+    let token = prepared.proxy_credential.expose();
     if agent == CodingAgent::Codex {
         let current = std::fs::read_to_string(path).or_else(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
@@ -287,8 +299,29 @@ fn materialize(
                 .map_err(|_| invalid("invalid generated Codex wiring"))?;
             merge_toml(document.as_table_mut(), overlay.as_table());
         }
+        let provider = document
+            .get_mut("model_providers")
+            .and_then(toml_edit::Item::as_table_like_mut)
+            .and_then(|models| models.get_mut("nemo-relay-openai"))
+            .and_then(toml_edit::Item::as_table_like_mut)
+            .ok_or_else(|| invalid("missing prepared Codex model provider"))?;
+        provider.remove("env_http_headers");
+        if provider.get("http_headers").is_none() {
+            provider.insert(
+                "http_headers",
+                toml_edit::Item::Table(toml_edit::Table::new()),
+            );
+        }
+        provider
+            .get_mut("http_headers")
+            .and_then(toml_edit::Item::as_table_like_mut)
+            .ok_or_else(|| invalid("invalid prepared Codex model headers"))?
+            .insert(
+                crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+                toml_edit::value(token),
+            );
         crate::filesystem::atomic_write_private(path, document.to_string().as_bytes())
-            .map_err(CliError::Launch)
+            .map_err(CliError::Launch)?;
     } else {
         let mut settings: Value = match std::fs::read(path) {
             Ok(bytes) => serde_json::from_slice(&bytes)
@@ -318,7 +351,7 @@ fn materialize(
             if key != "ANTHROPIC_BASE_URL" && environment.contains_key(key) {
                 return Err(invalid("Claude settings override the prepared environment"));
             }
-            if key == "ANTHROPIC_BASE_URL" {
+            if key == "ANTHROPIC_BASE_URL" || key == "ANTHROPIC_CUSTOM_HEADERS" {
                 environment.insert(key.clone(), json!(value));
             }
         }
@@ -326,8 +359,24 @@ fn materialize(
             path,
             &serde_json::to_vec(&settings).map_err(|_| invalid("cannot encode Claude settings"))?,
         )
-        .map_err(CliError::Launch)
+        .map_err(CliError::Launch)?;
     }
+    let root = prepared
+        .temp_dirs
+        .first()
+        .ok_or_else(|| invalid("missing prepared native hook configuration"))?;
+    let hook_path = root.join(".nemo-relay-hook-config.json");
+    crate::hooks::HookCommandConfig::load(&hook_path)
+        .map_err(CliError::Launch)?
+        .with_proxy_credential(token)
+        .with_invocation_state_dir(state_dir)
+        .write(&hook_path)
+        .map_err(CliError::Launch)?;
+    crate::hooks::HookCommandConfig::transparent(agent, gateway_url)
+        .with_proxy_credential(token)
+        .with_invocation_state_dir(state_dir)
+        .write(&path.with_file_name(crate::hooks::NATIVE_INVOCATION_CONFIG))
+        .map_err(CliError::Launch)
 }
 
 fn merge_toml(destination: &mut dyn toml_edit::TableLike, source: &dyn toml_edit::TableLike) {
@@ -346,25 +395,63 @@ fn merge_toml(destination: &mut dyn toml_edit::TableLike, source: &dyn toml_edit
 }
 
 struct NativeHome {
+    home: PathBuf,
+    home_metadata: std::fs::Metadata,
     snapshot: Option<crate::filesystem::FileSnapshot>,
     prepared: Option<PreparedAgentLaunch>,
 }
 
 impl NativeHome {
     fn restore(&mut self) -> Result<(), CliError> {
-        let configuration = self
-            .snapshot
-            .take()
-            .map(|snapshot| {
-                crate::filesystem::restore_file_snapshot(&snapshot).map_err(CliError::Launch)
-            })
-            .unwrap_or(Ok(()));
+        let configuration = match std::fs::symlink_metadata(&self.home) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.snapshot.take();
+                Ok(())
+            }
+            Ok(current) if same_private_home(&self.home_metadata, &current) => {
+                let revoked = crate::filesystem::atomic_write_private(
+                    &self.home.join(crate::hooks::NATIVE_INVOCATION_CONFIG),
+                    br#"{"version":1,"revoked":true}"#,
+                )
+                .map_err(CliError::Launch);
+                let restored = self
+                    .snapshot
+                    .take()
+                    .map(|snapshot| {
+                        crate::filesystem::restore_file_snapshot(&snapshot)
+                            .map_err(CliError::Launch)
+                    })
+                    .unwrap_or(Ok(()));
+                revoked.and(restored)
+            }
+            Ok(_) => Err(invalid("native home changed before preparation cleanup")),
+            Err(error) => Err(error.into()),
+        };
         let temporary = self
             .prepared
             .take()
             .map(|prepared| prepared.restore())
             .unwrap_or(Ok(()));
         configuration.and(temporary)
+    }
+}
+
+fn same_private_home(original: &std::fs::Metadata, current: &std::fs::Metadata) -> bool {
+    if !current.is_dir() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        current.uid() == unsafe { libc::geteuid() }
+            && current.mode() & 0o077 == 0
+            && original.dev() == current.dev()
+            && original.ino() == current.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = original;
+        true
     }
 }
 
@@ -391,6 +478,86 @@ fn invalid(message: &str) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attachment_materializes_private_codex_model_and_hook_credentials() {
+        let temporary = tempfile::tempdir().unwrap();
+        let home = temporary.path().join("codex");
+        std::fs::create_dir(&home).unwrap();
+        let config = home.join("config.toml");
+        std::fs::write(&config, "model_provider=\"gym\"\n").unwrap();
+        let hooks = temporary.path().join("hooks");
+        std::fs::create_dir(&hooks).unwrap();
+        crate::hooks::HookCommandConfig::transparent(CodingAgent::Codex, "http://127.0.0.1:4567")
+            .write(&hooks.join(".nemo-relay-hook-config.json"))
+            .unwrap();
+        let prepared = PreparedAgentLaunch {
+            argv: vec![
+                "codex".into(),
+                "--config".into(),
+                "model_provider=\"nemo-relay-openai\"".into(),
+                "--config".into(),
+                "model_providers.nemo-relay-openai={name=\"relay\",base_url=\"http://127.0.0.1:4567\",wire_api=\"responses\",env_http_headers={\"x-nemo-relay-proxy-token\"=\"NEMO_RELAY_PROXY_CREDENTIAL\"}}".into(),
+            ],
+            host_index: 0,
+            env: vec![],
+            temp_dirs: vec![hooks.clone()],
+            notes: vec![],
+            non_tty_warnings: vec![],
+            proxy_credential: crate::provider_auth::TransparentProxyCredential::generate().unwrap(),
+            secret_env_names: vec![],
+        };
+        materialize(
+            CodingAgent::Codex,
+            &prepared,
+            &config,
+            "http://127.0.0.1:4567",
+            &temporary.path().join("state"),
+        )
+        .unwrap();
+        let rendered: toml_edit::DocumentMut =
+            std::fs::read_to_string(&config).unwrap().parse().unwrap();
+        let provider = &rendered["model_providers"]["nemo-relay-openai"];
+        assert!(provider.get("env_http_headers").is_none());
+        assert_eq!(
+            provider["http_headers"][crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER]
+                .as_str(),
+            Some(prepared.proxy_credential.expose())
+        );
+        let hook =
+            crate::hooks::HookCommandConfig::load(&hooks.join(".nemo-relay-hook-config.json"))
+                .unwrap();
+        assert_eq!(
+            hook.prepared_gateway(CodingAgent::Codex).unwrap(),
+            "http://127.0.0.1:4567"
+        );
+        let marker = crate::hooks::HookCommandConfig::load(
+            &home.join(crate::hooks::NATIVE_INVOCATION_CONFIG),
+        )
+        .unwrap();
+        assert_eq!(
+            marker.prepared_gateway(CodingAgent::Codex).unwrap(),
+            "http://127.0.0.1:4567"
+        );
+    }
+
+    #[test]
+    fn attachment_cleanup_does_not_recreate_a_deleted_native_home() {
+        let temporary = tempfile::tempdir().unwrap();
+        let home = temporary.path().join("codex");
+        std::fs::create_dir(&home).unwrap();
+        let config = home.join("config.toml");
+        std::fs::write(&config, "model_provider=\"gym\"\n").unwrap();
+        let mut owned = NativeHome {
+            home: home.clone(),
+            home_metadata: std::fs::symlink_metadata(&home).unwrap(),
+            snapshot: Some(crate::filesystem::snapshot_optional_file(&config).unwrap()),
+            prepared: None,
+        };
+        std::fs::remove_dir_all(&home).unwrap();
+        owned.restore().unwrap();
+        assert!(!home.exists());
+    }
 
     #[test]
     fn attachment_merges_native_plugin_hook_trust() {

@@ -142,7 +142,8 @@ pub(crate) async fn hook_forward(mut command: HookForwardRequest) -> Result<(), 
 }
 
 pub(crate) fn transparent_hook_is_inert(command: &HookForwardRequest) -> bool {
-    transparent_run_active() && !command.transparent_run
+    (transparent_run_active() || super::HookCommandConfig::prepared_native_home_present())
+        && !command.transparent_run
 }
 
 fn persistent_gateway(
@@ -349,7 +350,13 @@ fn attach_internal_hook_credentials(
         Some(&client_token),
     )?;
     if command.transparent_run {
-        let credential = std::env::var(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV)
+        let credential = command
+            .proxy_credential
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(|| {
+                std::env::var(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV)
+            })
             .map_err(|_| {
                 CliError::Launch(
                     "transparent hook forwarding is missing its invocation credential".into(),
