@@ -2971,6 +2971,93 @@ async fn claude_code_hook_returns_continue_shape() {
 }
 
 #[tokio::test]
+async fn gateway_permission_requests_emit_policy_marks() {
+    const SUBSCRIBER: &str = "gateway-permission-audit";
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = deregister_subscriber(SUBSCRIBER);
+    let app = router(test_config());
+    let captured = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let events = Arc::clone(&captured);
+    register_subscriber(
+        SUBSCRIBER,
+        Arc::new(move |event| {
+            if event
+                .metadata()
+                .and_then(|metadata| metadata.get("session_id"))
+                .or_else(|| event.data().and_then(|data| data.get("session_id")))
+                .and_then(Value::as_str)
+                .is_some_and(|session| session.starts_with("gateway-permission-audit"))
+                && matches!(
+                    event.name(),
+                    "hook_mark" | "nemo_relay.permission.policy_decision"
+                )
+            {
+                events.lock().unwrap().push(json!({
+                    "name": event.name(),
+                    "data": event.data(),
+                    "metadata": event.metadata(),
+                }));
+            }
+        }),
+    )
+    .unwrap();
+    let _subscriber_cleanup = SubscriberCleanup(SUBSCRIBER);
+
+    let session_id = "gateway-permission-audit-codex";
+    for event_name in ["PreToolUse", "PermissionRequest"] {
+        let mut payload = json!({
+            "session_id": session_id,
+            "hook_event_name": event_name,
+            "permission_mode": "default",
+            "tool_use_id": "audit-tool-1",
+            "tool_name": "Bash",
+            "tool_input": {"command": "pwd"},
+        });
+        if event_name == "PermissionRequest" {
+            payload.as_object_mut().unwrap().remove("tool_use_id");
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/hooks/codex")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        if event_name == "PermissionRequest" {
+            assert_eq!(body, json!({}));
+        }
+    }
+    flush_subscribers().unwrap();
+    let events = captured.lock().unwrap();
+    let marks: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            event["name"] == "nemo_relay.permission.policy_decision"
+                && event["metadata"]["session_id"] == session_id
+        })
+        .collect();
+    assert_eq!(marks.len(), 1);
+    assert!(marks[0]["data"].get("decision").is_none());
+    assert_eq!(marks[0]["data"]["policy_outcome"], "pass");
+    assert_eq!(marks[0]["data"]["decision_source"], "nemo_relay");
+    assert_eq!(marks[0]["data"]["tool_call_id"], "audit-tool-1");
+    assert_eq!(marks[0]["data"]["harness_permission_mode"], "default");
+    assert!(events.iter().any(|event| {
+        event["name"] == "hook_mark"
+            && event["data"]["session_id"] == session_id
+            && event["data"]["permission_mode"] == "default"
+    }));
+    assert!(deregister_subscriber(SUBSCRIBER).unwrap());
+}
+
+#[tokio::test]
 async fn claude_permission_request_allows_an_exact_active_tool() {
     let app = router(test_config());
     let pre_tool = app
