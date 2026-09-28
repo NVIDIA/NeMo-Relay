@@ -966,6 +966,65 @@ command = "codex --approval-mode never"
 }
 
 #[test]
+fn explicit_toml_config_maps_top_level_resource_metrics_and_preserves_defaults() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let path = temp.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[resource_metrics.polling]
+enabled = true
+interval_millis = 2500
+retained_snapshots = 17
+
+[resource_metrics.file]
+enabled = true
+path = "resource-metrics.jsonl"
+max_file_size_bytes = 2048
+retained_files = 3
+"#,
+    )
+    .unwrap();
+    let command = RunOverrides {
+        agent: None,
+        config: Some(path),
+        openai_base_url: None,
+        anthropic_base_url: None,
+        session_metadata: None,
+        plugin_config_path: None,
+        dry_run: false,
+        print: false,
+        command: vec![],
+    };
+
+    let resolved = resolve_run_config(&command, None).unwrap();
+    assert!(resolved.resource_metrics.polling.enabled);
+    assert_eq!(resolved.resource_metrics.polling.interval_millis, 2500);
+    assert_eq!(resolved.resource_metrics.polling.retained_snapshots, 17);
+    assert!(resolved.resource_metrics.file.enabled);
+    assert_eq!(
+        resolved.resource_metrics.file.path,
+        PathBuf::from("resource-metrics.jsonl")
+    );
+    assert_eq!(resolved.resource_metrics.file.max_file_size_bytes, 2048);
+    assert_eq!(resolved.resource_metrics.file.retained_files, 3);
+
+    let defaults_path = temp.path().join("defaults.toml");
+    std::fs::write(&defaults_path, "[gateway]\n").unwrap();
+    let defaults_command = RunOverrides {
+        config: Some(defaults_path),
+        ..command
+    };
+    let defaults = resolve_run_config(&defaults_command, None).unwrap();
+    assert!(!defaults.resource_metrics.polling.enabled);
+    assert_eq!(defaults.resource_metrics.polling.interval_millis, 5000);
+    assert_eq!(defaults.resource_metrics.polling.retained_snapshots, 120);
+    assert!(!defaults.resource_metrics.file.enabled);
+}
+
+#[test]
 fn stale_hermes_agent_config_is_rejected() {
     let value = toml::from_str::<toml::Value>(
         r#"

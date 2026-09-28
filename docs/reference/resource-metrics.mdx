@@ -1,0 +1,155 @@
+---
+title: "Resource Metrics"
+description: "Collect typed process resource snapshots on demand or through bounded polling."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+NeMo Relay can collect CPU, memory, process, thread, resource-limit, and
+accelerator observations for the process boundary it owns. Rust, Python, and
+Node.js applications can request a fresh snapshot without enabling polling.
+
+Each snapshot identifies its `operating_system` as `linux`, `macos`, `windows`,
+or `unsupported`. Each measurement presents its nullable numerical `value`,
+nullable `unit`, and RFC 3339 `timestamp`. When Relay cannot acquire a complete,
+accurate value, both `value` and `unit` are null. Relay never substitutes zero
+or publishes a partial process-tree subtotal.
+
+The Node.js API returns integer measurements as `number` while they are within
+JavaScript's safe-integer range and as `bigint` above that range. Calculated
+rates and percentages remain `number` values. Rotating JSONL output continues
+to store integer measurements as JSON numeric literals.
+
+Relay preserves the native units returned by each operating system:
+
+| Measurement | Linux | macOS | Windows |
+|---|---|---|---|
+| CPU time | `clock_ticks` | `nanoseconds` | `hundred_nanosecond_intervals` |
+| CPU consumption rate | `clock_ticks_per_second` | `nanoseconds_per_second` | `hundred_nanosecond_intervals_per_second` |
+| CPU and memory pressure | `microseconds` | unavailable | unavailable |
+| Effective CPU limit | `logical_processors` | unavailable | `logical_processors` when a Job Object limit exists |
+| Resident memory | `pages` | `bytes` | `bytes` |
+| Private memory | `kibibytes` | unavailable | `bytes` |
+| Physical footprint | unavailable | `bytes` | unavailable |
+| Virtual memory | `kibibytes` | `bytes` | unavailable |
+| Peak resident memory | `kibibytes` for one process | unavailable | `bytes` for one process |
+| Memory limit and environment accounting | `bytes` for an exclusive cgroup | unavailable | Job Object limit in `bytes`; current accounting unavailable |
+| Process and thread counts | `processes` or `threads` | `processes` or `threads` | `processes` or `threads` |
+| File descriptors and handles | `file_descriptors` | `file_descriptors` | `handles` |
+| Accelerator memory and utilization | `bytes` or `kibibytes`; `percentage` | unavailable through a supported per-process API | `bytes`; `percentage` for NVIDIA NVML |
+
+## Collect a Fresh Snapshot
+
+Fresh acquisition does not update polling history or write the structured
+resource file.
+
+<Tabs>
+
+<Tab title="Python" language="python">
+```python
+from nemo_relay import resource_metrics
+
+snapshot = resource_metrics.collect()
+print(snapshot.resident_memory)
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const { collectResourceMetrics } = require("nemo-relay-node");
+
+const snapshot = collectResourceMetrics();
+console.log(snapshot.residentMemory);
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::api::resource_metrics::collect_resource_metrics;
+
+let snapshot = collect_resource_metrics()?;
+println!("{:?}", snapshot.resident_memory);
+# Ok::<(), nemo_relay::error::FlowError>(())
+```
+</Tab>
+
+</Tabs>
+
+The first snapshot in an acquisition series reports a null
+`cpu_consumption_rate`. A later compatible snapshot derives the native CPU-time units
+consumed per wall-clock second from cumulative CPU time and internal collection
+timing. The sampling interval is not part of the public snapshot.
+
+## Configure Polling and File Output
+
+The `nemo-relay` CLI reads resource metrics from the top-level
+`resource_metrics` section of `config.toml`:
+
+```toml
+[resource_metrics.polling]
+enabled = true
+interval_millis = 5000
+retained_snapshots = 120
+
+[resource_metrics.file]
+enabled = true
+path = "resource-metrics.jsonl"
+max_file_size_bytes = 10485760
+retained_files = 5
+```
+
+Polling performs one acquisition when it starts and then waits the configured
+interval between attempts. Each successful poll replaces the latest snapshot,
+enters bounded history, and appends one complete JSON object to the configured
+JSONL file. A failed poll preserves the previous latest snapshot and history
+and does not stop later polling.
+
+File output requires polling. `retained_snapshots`, `interval_millis`,
+`max_file_size_bytes`, and `retained_files` must be greater than zero when
+their sections are enabled. There is no global `resource_metrics.enabled`
+setting.
+
+Applications can configure the same behavior with
+`ResourceMetricsRuntime::configure()` in Rust,
+`resource_metrics.configure()` in Python, or `configureResourceMetrics()` in
+Node.js. Keep the returned runtime alive for as long as polling should run, and
+close it to join the polling thread and flush the file.
+
+## Read Polling State
+
+`latest` returns the newest successful polling snapshot or no value before the
+first successful poll. `history` returns retained successful snapshots from
+oldest to newest. Fresh acquisitions do not change either result.
+
+| Binding | Fresh | Latest | History |
+|---|---|---|---|
+| Rust | `collect_resource_metrics()` | `latest_resource_metrics()` | `resource_metrics_history()` |
+| Python | `resource_metrics.collect()` | `resource_metrics.latest()` | `resource_metrics.history()` |
+| Node.js | `collectResourceMetrics()` | `latestResourceMetrics()` | `resourceMetricsHistory()` |
+
+## Agent Event Metrics
+
+Before Relay publishes each eligible Agent or semantic agent-turn scope start
+and end event, it performs a fresh acquisition and publishes a correlated
+`nemo.relay.resource_metrics` metric mark. This acquisition is independent of
+polling. The existing ATOF subscriber writes the mark when ATOF is enabled, and
+the existing OpenTelemetry metric subscriber exports its available numerical
+measurements when metric export is enabled.
+
+The complete snapshot, including null unavailable values, remains available through
+the typed APIs, polling history, and structured resource file. Metric marks
+omit unavailable measurements.
+
+For embedded applications, the measured boundary is the process containing
+Relay. A transparent `nemo-relay run` invocation measures only the supervised
+coding-agent process tree that Relay started. Per-process accelerator records
+include only process IDs from that owned boundary. Snapshots and metric marks do
+not contain process names, command arguments, environment variables, or
+credentials.
+
+Linux environment counters are emitted only when the target's cgroup contains
+exactly the owned process tree. Shared cgroup counters are left null. NVIDIA
+NVML is loaded at runtime when installed; an unavailable driver does not affect
+agent execution. Linux DRM client accounting supplies non-NVIDIA values only
+when the driver exposes the corresponding `fdinfo` fields.

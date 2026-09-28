@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use axum::http::HeaderMap;
+use nemo_relay::api::resource_metrics::ResourceMetricsConfig;
 use nemo_relay::logging::LoggingConfig;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -72,6 +73,7 @@ pub(crate) struct ResolvedConfig {
     pub(crate) gateway: GatewayConfig,
     pub(crate) agents: AgentConfigs,
     pub(crate) logging: LoggingConfig,
+    pub(crate) resource_metrics: ResourceMetricsConfig,
     pub(crate) dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
     pub(crate) dynamic_plugin_policy: DynamicPluginHostPolicy,
     pub(crate) bootstrap_fingerprint: Option<String>,

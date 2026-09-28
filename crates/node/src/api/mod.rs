@@ -24,13 +24,22 @@ use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value as Json;
 use tokio_stream::{Stream, StreamExt};
 
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
 use nemo_relay::api::registry as core_registry_api;
+use nemo_relay::api::resource_metrics as core_resource_metrics_api;
+use nemo_relay::api::resource_metrics::{
+    AcceleratorDeviceMetrics, AcceleratorProcessMetrics, ResourceLimitEventCount,
+    ResourceLimitEventKind, ResourceLimitResource, ResourceMeasurement, ResourceMeasurementUnit,
+    ResourceMetricsConfig as CoreResourceMetricsConfig,
+    ResourceMetricsFileConfig as CoreResourceMetricsFileConfig,
+    ResourceMetricsPollingConfig as CoreResourceMetricsPollingConfig,
+    ResourceMetricsSnapshot as CoreResourceMetricsSnapshot, ResourceOperatingSystem,
+};
 use nemo_relay::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
@@ -156,6 +165,376 @@ pub fn info(message: String, target: Option<String>, fields: Option<Json>) -> na
 #[napi]
 pub fn warn(message: String, target: Option<String>, fields: Option<Json>) -> napi::Result<()> {
     log("warn".into(), message, target, fields)
+}
+
+/// Owns configured resource metrics polling and file output until closed.
+#[napi]
+pub struct ResourceMetricsRuntime {
+    runtime: Option<core_resource_metrics_api::ResourceMetricsRuntime>,
+}
+
+#[napi]
+impl ResourceMetricsRuntime {
+    /// Stop polling, flush file output, and release configuration ownership.
+    #[napi]
+    pub fn close(&mut self) {
+        self.runtime.take();
+    }
+}
+
+impl Drop for ResourceMetricsRuntime {
+    fn drop(&mut self) {
+        self.runtime.take();
+    }
+}
+
+/// Acquire a fresh resource metrics snapshot without requiring polling.
+#[napi(ts_return_type = "ResourceMetricsSnapshot")]
+pub fn collect_resource_metrics(env: Env) -> napi::Result<JsUnknown> {
+    let snapshot = core_resource_metrics_api::collect_resource_metrics()
+        .map_err(|error| Error::from_reason(error.to_string()))?;
+    env.to_js_value(&NodeResourceMetricsSnapshot::from(snapshot))
+}
+
+/// Return the latest successful polling snapshot, if one exists.
+#[napi(ts_return_type = "ResourceMetricsSnapshot | null")]
+pub fn latest_resource_metrics(env: Env) -> napi::Result<JsUnknown> {
+    let snapshot = core_resource_metrics_api::latest_resource_metrics()
+        .map_err(|error| Error::from_reason(error.to_string()))?;
+    env.to_js_value(&snapshot.map(NodeResourceMetricsSnapshot::from))
+}
+
+/// Return retained successful polling snapshots from oldest to newest.
+#[napi(ts_return_type = "ResourceMetricsSnapshot[]")]
+pub fn resource_metrics_history(env: Env) -> napi::Result<JsUnknown> {
+    let snapshots = core_resource_metrics_api::resource_metrics_history()
+        .map_err(|error| Error::from_reason(error.to_string()))?;
+    let snapshots = snapshots
+        .into_iter()
+        .map(NodeResourceMetricsSnapshot::from)
+        .collect::<Vec<_>>();
+    env.to_js_value(&snapshots)
+}
+
+/// Configure optional polling and rotating JSONL output.
+#[napi(ts_args_type = "config: ResourceMetricsConfig")]
+pub fn configure_resource_metrics(config: Json) -> napi::Result<ResourceMetricsRuntime> {
+    let config: NodeResourceMetricsConfig = serde_json::from_value(config).map_err(|error| {
+        Error::from_reason(format!("invalid resource metrics configuration: {error}"))
+    })?;
+    let runtime = core_resource_metrics_api::ResourceMetricsRuntime::configure(config.into())
+        .map_err(|error| Error::from_reason(error.to_string()))?;
+    Ok(ResourceMetricsRuntime {
+        runtime: Some(runtime),
+    })
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NodeResourceMetricsConfig {
+    #[serde(default)]
+    polling: NodeResourceMetricsPollingConfig,
+    #[serde(default)]
+    file: NodeResourceMetricsFileConfig,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NodeResourceMetricsPollingConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_resource_metrics_interval_millis")]
+    interval_millis: u64,
+    #[serde(default = "default_resource_metrics_retained_snapshots")]
+    retained_snapshots: usize,
+}
+
+impl Default for NodeResourceMetricsPollingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_millis: default_resource_metrics_interval_millis(),
+            retained_snapshots: default_resource_metrics_retained_snapshots(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NodeResourceMetricsFileConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_resource_metrics_file_path")]
+    path: PathBuf,
+    #[serde(default = "default_resource_metrics_max_file_size_bytes")]
+    max_file_size_bytes: u64,
+    #[serde(default = "default_resource_metrics_retained_files")]
+    retained_files: usize,
+}
+
+impl Default for NodeResourceMetricsFileConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            path: default_resource_metrics_file_path(),
+            max_file_size_bytes: default_resource_metrics_max_file_size_bytes(),
+            retained_files: default_resource_metrics_retained_files(),
+        }
+    }
+}
+
+impl From<NodeResourceMetricsConfig> for CoreResourceMetricsConfig {
+    fn from(config: NodeResourceMetricsConfig) -> Self {
+        Self {
+            polling: CoreResourceMetricsPollingConfig {
+                enabled: config.polling.enabled,
+                interval_millis: config.polling.interval_millis,
+                retained_snapshots: config.polling.retained_snapshots,
+            },
+            file: CoreResourceMetricsFileConfig {
+                enabled: config.file.enabled,
+                path: config.file.path,
+                max_file_size_bytes: config.file.max_file_size_bytes,
+                retained_files: config.file.retained_files,
+            },
+        }
+    }
+}
+
+fn default_resource_metrics_interval_millis() -> u64 {
+    5_000
+}
+
+fn default_resource_metrics_retained_snapshots() -> usize {
+    120
+}
+
+fn default_resource_metrics_file_path() -> PathBuf {
+    PathBuf::from("resource-metrics.jsonl")
+}
+
+fn default_resource_metrics_max_file_size_bytes() -> u64 {
+    10 * 1024 * 1024
+}
+
+fn default_resource_metrics_retained_files() -> usize {
+    5
+}
+
+const JAVASCRIPT_MAX_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum NodeResourceMetricInteger {
+    Number(f64),
+    BigInt(u64),
+}
+
+impl From<u64> for NodeResourceMetricInteger {
+    fn from(value: u64) -> Self {
+        if value <= JAVASCRIPT_MAX_SAFE_INTEGER {
+            Self::Number(value as f64)
+        } else {
+            Self::BigInt(value)
+        }
+    }
+}
+
+#[cfg(test)]
+mod node_resource_metric_integer_tests {
+    use super::{JAVASCRIPT_MAX_SAFE_INTEGER, NodeResourceMetricInteger};
+
+    #[test]
+    fn preserves_integer_values_around_the_javascript_safe_integer_boundary() {
+        let below_boundary = JAVASCRIPT_MAX_SAFE_INTEGER - 1;
+
+        assert_eq!(
+            NodeResourceMetricInteger::from(below_boundary),
+            NodeResourceMetricInteger::Number(below_boundary as f64)
+        );
+        assert_eq!(
+            NodeResourceMetricInteger::from(JAVASCRIPT_MAX_SAFE_INTEGER),
+            NodeResourceMetricInteger::Number(JAVASCRIPT_MAX_SAFE_INTEGER as f64)
+        );
+
+        let above_boundary = JAVASCRIPT_MAX_SAFE_INTEGER + 1;
+        assert_eq!(
+            NodeResourceMetricInteger::from(above_boundary),
+            NodeResourceMetricInteger::BigInt(above_boundary)
+        );
+    }
+}
+
+impl Serialize for NodeResourceMetricInteger {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Number(value) => serializer.serialize_f64(*value),
+            Self::BigInt(value) => serializer.serialize_u64(*value),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct NodeIntegerResourceMeasurement {
+    value: Option<NodeResourceMetricInteger>,
+    unit: Option<ResourceMeasurementUnit>,
+    timestamp: DateTime<Utc>,
+}
+
+impl From<ResourceMeasurement<u64>> for NodeIntegerResourceMeasurement {
+    fn from(measurement: ResourceMeasurement<u64>) -> Self {
+        Self {
+            value: measurement.value.map(NodeResourceMetricInteger::from),
+            unit: measurement.unit,
+            timestamp: measurement.timestamp,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeResourceLimitEventCount {
+    resource: ResourceLimitResource,
+    event: ResourceLimitEventKind,
+    count: NodeIntegerResourceMeasurement,
+}
+
+impl From<ResourceLimitEventCount> for NodeResourceLimitEventCount {
+    fn from(event: ResourceLimitEventCount) -> Self {
+        Self {
+            resource: event.resource,
+            event: event.event,
+            count: event.count.into(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeAcceleratorDeviceMetrics {
+    vendor: nemo_relay::api::resource_metrics::AcceleratorVendor,
+    device_identifier: String,
+    device_index: Option<u32>,
+    memory_used: NodeIntegerResourceMeasurement,
+    compute_utilization: ResourceMeasurement<f64>,
+}
+
+impl From<AcceleratorDeviceMetrics> for NodeAcceleratorDeviceMetrics {
+    fn from(device: AcceleratorDeviceMetrics) -> Self {
+        Self {
+            vendor: device.vendor,
+            device_identifier: device.device_identifier,
+            device_index: device.device_index,
+            memory_used: device.memory_used.into(),
+            compute_utilization: device.compute_utilization,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeAcceleratorProcessMetrics {
+    vendor: nemo_relay::api::resource_metrics::AcceleratorVendor,
+    device_identifier: String,
+    device_index: Option<u32>,
+    process_id: u32,
+    memory_used: NodeIntegerResourceMeasurement,
+    compute_utilization: ResourceMeasurement<f64>,
+}
+
+impl From<AcceleratorProcessMetrics> for NodeAcceleratorProcessMetrics {
+    fn from(process: AcceleratorProcessMetrics) -> Self {
+        Self {
+            vendor: process.vendor,
+            device_identifier: process.device_identifier,
+            device_index: process.device_index,
+            process_id: process.process_id,
+            memory_used: process.memory_used.into(),
+            compute_utilization: process.compute_utilization,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeResourceMetricsSnapshot {
+    operating_system: ResourceOperatingSystem,
+    cpu_user_time: NodeIntegerResourceMeasurement,
+    cpu_system_time: NodeIntegerResourceMeasurement,
+    cpu_total_time: NodeIntegerResourceMeasurement,
+    cpu_consumption_rate: ResourceMeasurement<f64>,
+    cpu_throttled_time: NodeIntegerResourceMeasurement,
+    effective_cpu_limit: ResourceMeasurement<f64>,
+    cpu_some_pressure_stall_time: NodeIntegerResourceMeasurement,
+    cpu_full_pressure_stall_time: NodeIntegerResourceMeasurement,
+    resident_memory: NodeIntegerResourceMeasurement,
+    private_memory: NodeIntegerResourceMeasurement,
+    physical_footprint: NodeIntegerResourceMeasurement,
+    virtual_memory: NodeIntegerResourceMeasurement,
+    peak_resident_memory: NodeIntegerResourceMeasurement,
+    memory_limit: NodeIntegerResourceMeasurement,
+    environment_accounted_memory: NodeIntegerResourceMeasurement,
+    memory_some_pressure_stall_time: NodeIntegerResourceMeasurement,
+    memory_full_pressure_stall_time: NodeIntegerResourceMeasurement,
+    out_of_memory_event_count: NodeIntegerResourceMeasurement,
+    active_process_count: NodeIntegerResourceMeasurement,
+    descendant_process_count: NodeIntegerResourceMeasurement,
+    thread_count: NodeIntegerResourceMeasurement,
+    lifetime_process_creation_count: NodeIntegerResourceMeasurement,
+    open_file_descriptor_count: NodeIntegerResourceMeasurement,
+    windows_handle_count: NodeIntegerResourceMeasurement,
+    resource_limit_events: Vec<NodeResourceLimitEventCount>,
+    accelerator_devices: Vec<NodeAcceleratorDeviceMetrics>,
+    accelerator_processes: Vec<NodeAcceleratorProcessMetrics>,
+}
+
+impl From<CoreResourceMetricsSnapshot> for NodeResourceMetricsSnapshot {
+    fn from(snapshot: CoreResourceMetricsSnapshot) -> Self {
+        Self {
+            operating_system: snapshot.operating_system,
+            cpu_user_time: snapshot.cpu_user_time.into(),
+            cpu_system_time: snapshot.cpu_system_time.into(),
+            cpu_total_time: snapshot.cpu_total_time.into(),
+            cpu_consumption_rate: snapshot.cpu_consumption_rate,
+            cpu_throttled_time: snapshot.cpu_throttled_time.into(),
+            effective_cpu_limit: snapshot.effective_cpu_limit,
+            cpu_some_pressure_stall_time: snapshot.cpu_some_pressure_stall_time.into(),
+            cpu_full_pressure_stall_time: snapshot.cpu_full_pressure_stall_time.into(),
+            resident_memory: snapshot.resident_memory.into(),
+            private_memory: snapshot.private_memory.into(),
+            physical_footprint: snapshot.physical_footprint.into(),
+            virtual_memory: snapshot.virtual_memory.into(),
+            peak_resident_memory: snapshot.peak_resident_memory.into(),
+            memory_limit: snapshot.memory_limit.into(),
+            environment_accounted_memory: snapshot.environment_accounted_memory.into(),
+            memory_some_pressure_stall_time: snapshot.memory_some_pressure_stall_time.into(),
+            memory_full_pressure_stall_time: snapshot.memory_full_pressure_stall_time.into(),
+            out_of_memory_event_count: snapshot.out_of_memory_event_count.into(),
+            active_process_count: snapshot.active_process_count.into(),
+            descendant_process_count: snapshot.descendant_process_count.into(),
+            thread_count: snapshot.thread_count.into(),
+            lifetime_process_creation_count: snapshot.lifetime_process_creation_count.into(),
+            open_file_descriptor_count: snapshot.open_file_descriptor_count.into(),
+            windows_handle_count: snapshot.windows_handle_count.into(),
+            resource_limit_events: snapshot
+                .resource_limit_events
+                .into_iter()
+                .map(NodeResourceLimitEventCount::from)
+                .collect(),
+            accelerator_devices: snapshot
+                .accelerator_devices
+                .into_iter()
+                .map(NodeAcceleratorDeviceMetrics::from)
+                .collect(),
+            accelerator_processes: snapshot
+                .accelerator_processes
+                .into_iter()
+                .map(NodeAcceleratorProcessMetrics::from)
+                .collect(),
+        }
+    }
 }
 #[napi]
 pub fn error(message: String, target: Option<String>, fields: Option<Json>) -> napi::Result<()> {

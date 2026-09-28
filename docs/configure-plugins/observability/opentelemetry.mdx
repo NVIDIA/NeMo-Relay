@@ -153,6 +153,12 @@ reaches no OTLP signal and produces a rate-limited operational diagnostic.
 Other marks retain the existing projection-specific trace behavior and can be
 exported as logs.
 
+Relay's event-triggered resource metric marks use the reserved metric schema,
+so an enabled metric pipeline exports their available numerical measurements.
+Unavailable measurements are omitted rather than recorded as zero. Refer to
+[Resource Metrics](/reference/resource-metrics) for the complete typed
+snapshot contract.
+
 <Note>
 The metric schema is a NeMo Relay routing contract, not an ATOF-wide metric
 semantic. ATOF remains at version `0.1`, treats `data_schema` as opaque, and

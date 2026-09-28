@@ -1942,7 +1942,7 @@ async fn wait_for_health_reports_unready_gateway() {
 #[cfg(unix)]
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
-async fn gateway_failure_terminates_the_agent_and_restores_private_state() {
+async fn resource_metrics_failure_does_not_interrupt_agent_or_gateway_cleanup() {
     let temp = tempfile::tempdir().unwrap();
     let _cwd = crate::test_support::CwdTestScope::locked();
     let wrapper_pid_path = temp.path().join("wrapper.pid");
@@ -1990,7 +1990,18 @@ async fn gateway_failure_terminates_the_agent_and_restores_private_state() {
 
     let error = tokio::time::timeout(
         Duration::from_secs(10),
-        supervise_prepared_run(&prepared, running_server),
+        supervise_prepared_run(
+            &prepared,
+            running_server,
+            nemo_relay::api::resource_metrics::ResourceMetricsConfig {
+                polling: nemo_relay::api::resource_metrics::ResourceMetricsPollingConfig {
+                    enabled: true,
+                    interval_millis: 0,
+                    retained_snapshots: 1,
+                },
+                file: Default::default(),
+            },
+        ),
     )
     .await
     .expect("agent supervision did not finish")

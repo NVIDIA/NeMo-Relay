@@ -1,6 +1,110 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+export type ResourceMeasurementUnit =
+  | 'nanoseconds'
+  | 'microseconds'
+  | 'clock_ticks'
+  | 'hundred_nanosecond_intervals'
+  | 'nanoseconds_per_second'
+  | 'clock_ticks_per_second'
+  | 'hundred_nanosecond_intervals_per_second'
+  | 'bytes'
+  | 'kibibytes'
+  | 'pages'
+  | 'logical_processors'
+  | 'percentage'
+  | 'processes'
+  | 'threads'
+  | 'file_descriptors'
+  | 'handles'
+  | 'events';
+
+export type ResourceOperatingSystem = 'linux' | 'macos' | 'windows' | 'unsupported';
+
+/** Exact integer values use bigint when they exceed JavaScript's safe-integer range. */
+export type ResourceInteger = number | bigint;
+
+export interface ResourceMeasurement<T extends number | bigint> {
+  value: T | null;
+  unit: ResourceMeasurementUnit | null;
+  timestamp: string;
+}
+
+export interface ResourceLimitEventCount {
+  resource: 'cpu' | 'memory' | 'processes';
+  event: 'throttled' | 'high' | 'maximum' | 'out_of_memory' | 'terminated';
+  count: ResourceMeasurement<ResourceInteger>;
+}
+
+export type AcceleratorVendor = 'nvidia' | 'amd' | 'intel' | 'apple' | 'other';
+
+export interface AcceleratorDeviceMetrics {
+  vendor: AcceleratorVendor;
+  deviceIdentifier: string;
+  deviceIndex: number | null;
+  memoryUsed: ResourceMeasurement<ResourceInteger>;
+  computeUtilization: ResourceMeasurement<number>;
+}
+
+export interface AcceleratorProcessMetrics {
+  vendor: AcceleratorVendor;
+  deviceIdentifier: string;
+  deviceIndex: number | null;
+  processId: number;
+  memoryUsed: ResourceMeasurement<ResourceInteger>;
+  computeUtilization: ResourceMeasurement<number>;
+}
+
+export interface ResourceMetricsSnapshot {
+  operatingSystem: ResourceOperatingSystem;
+  cpuUserTime: ResourceMeasurement<ResourceInteger>;
+  cpuSystemTime: ResourceMeasurement<ResourceInteger>;
+  cpuTotalTime: ResourceMeasurement<ResourceInteger>;
+  cpuConsumptionRate: ResourceMeasurement<number>;
+  cpuThrottledTime: ResourceMeasurement<ResourceInteger>;
+  effectiveCpuLimit: ResourceMeasurement<number>;
+  cpuSomePressureStallTime: ResourceMeasurement<ResourceInteger>;
+  cpuFullPressureStallTime: ResourceMeasurement<ResourceInteger>;
+  residentMemory: ResourceMeasurement<ResourceInteger>;
+  privateMemory: ResourceMeasurement<ResourceInteger>;
+  physicalFootprint: ResourceMeasurement<ResourceInteger>;
+  virtualMemory: ResourceMeasurement<ResourceInteger>;
+  peakResidentMemory: ResourceMeasurement<ResourceInteger>;
+  memoryLimit: ResourceMeasurement<ResourceInteger>;
+  environmentAccountedMemory: ResourceMeasurement<ResourceInteger>;
+  memorySomePressureStallTime: ResourceMeasurement<ResourceInteger>;
+  memoryFullPressureStallTime: ResourceMeasurement<ResourceInteger>;
+  outOfMemoryEventCount: ResourceMeasurement<ResourceInteger>;
+  activeProcessCount: ResourceMeasurement<ResourceInteger>;
+  descendantProcessCount: ResourceMeasurement<ResourceInteger>;
+  threadCount: ResourceMeasurement<ResourceInteger>;
+  lifetimeProcessCreationCount: ResourceMeasurement<ResourceInteger>;
+  openFileDescriptorCount: ResourceMeasurement<ResourceInteger>;
+  windowsHandleCount: ResourceMeasurement<ResourceInteger>;
+  resourceLimitEvents: ResourceLimitEventCount[];
+  acceleratorDevices: AcceleratorDeviceMetrics[];
+  acceleratorProcesses: AcceleratorProcessMetrics[];
+}
+
+export interface ResourceMetricsPollingConfig {
+  enabled?: boolean;
+  intervalMillis?: number;
+  retainedSnapshots?: number;
+}
+
+export interface ResourceMetricsFileConfig {
+  enabled?: boolean;
+  path?: string;
+  maxFileSizeBytes?: number;
+  retainedFiles?: number;
+}
+
+export interface ResourceMetricsConfig {
+  polling?: ResourceMetricsPollingConfig;
+  file?: ResourceMetricsFileConfig;
+}
+
 /** Codec identity available while a managed LLM event is sanitized. */
 export type LlmCodecIdentity =
   | { kind: 'none' }

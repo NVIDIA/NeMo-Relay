@@ -17,6 +17,7 @@ use nemo_relay::api::event::DataSchema;
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::LlmAttributes;
 use nemo_relay::api::registry as core_registry_api;
+use nemo_relay::api::resource_metrics as core_resource_metrics_api;
 use nemo_relay::api::runtime::subscriber_dispatcher::{
     capture_nested_publication_buffer, sync_thread_publication_buffer, with_publication_context,
     with_task_nested_publication_buffer, with_task_publication_context,
@@ -75,6 +76,70 @@ fn metric_to_py_err(error: FlowError) -> PyErr {
         }
         other => to_py_err(other),
     }
+}
+
+#[pyclass(name = "ResourceMetricsRuntime")]
+struct PyResourceMetricsRuntime {
+    runtime: Option<core_resource_metrics_api::ResourceMetricsRuntime>,
+}
+
+#[pymethods]
+impl PyResourceMetricsRuntime {
+    fn close(&mut self) {
+        self.runtime.take();
+    }
+
+    fn __enter__(slf: PyRefMut<'_, Self>) -> PyRefMut<'_, Self> {
+        slf
+    }
+
+    fn __exit__(
+        &mut self,
+        _exception_type: Option<&Bound<'_, PyAny>>,
+        _exception: Option<&Bound<'_, PyAny>>,
+        _traceback: Option<&Bound<'_, PyAny>>,
+    ) {
+        self.close();
+    }
+}
+
+#[pyfunction(name = "_collect_resource_metrics")]
+fn py_collect_resource_metrics(py: Python<'_>) -> PyResult<Py<PyAny>> {
+    let snapshot = core_resource_metrics_api::collect_resource_metrics().map_err(to_py_err)?;
+    let value = serde_json::to_value(snapshot)
+        .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+    json_to_py(py, &value)
+}
+
+#[pyfunction(name = "_latest_resource_metrics")]
+fn py_latest_resource_metrics(py: Python<'_>) -> PyResult<Py<PyAny>> {
+    let snapshot = core_resource_metrics_api::latest_resource_metrics().map_err(to_py_err)?;
+    let value = serde_json::to_value(snapshot)
+        .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+    json_to_py(py, &value)
+}
+
+#[pyfunction(name = "_resource_metrics_history")]
+fn py_resource_metrics_history(py: Python<'_>) -> PyResult<Py<PyAny>> {
+    let snapshots = core_resource_metrics_api::resource_metrics_history().map_err(to_py_err)?;
+    let value = serde_json::to_value(snapshots)
+        .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+    json_to_py(py, &value)
+}
+
+#[pyfunction(name = "_configure_resource_metrics")]
+fn py_configure_resource_metrics(config: &Bound<'_, PyAny>) -> PyResult<PyResourceMetricsRuntime> {
+    let config = py_to_json(config)?;
+    let config = serde_json::from_value(config).map_err(|error| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "invalid resource metrics configuration: {error}"
+        ))
+    })?;
+    let runtime = core_resource_metrics_api::ResourceMetricsRuntime::configure(config)
+        .map_err(metric_to_py_err)?;
+    Ok(PyResourceMetricsRuntime {
+        runtime: Some(runtime),
+    })
 }
 
 fn runtime_registration_kind(kind: &str) -> PyResult<core_registry_api::RuntimeRegistrationKind> {
@@ -2327,8 +2392,13 @@ fn scope_deregister_subscriber(scope_uuid: &str, name: &str) -> PyResult<bool> {
 
 /// Register all API functions into the given `PyModule`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyResourceMetricsRuntime>()?;
     m.add_function(wrap_pyfunction!(py_shutdown_default_logging, m)?)?;
     m.add_function(wrap_pyfunction!(log, m)?)?;
+    m.add_function(wrap_pyfunction!(py_collect_resource_metrics, m)?)?;
+    m.add_function(wrap_pyfunction!(py_latest_resource_metrics, m)?)?;
+    m.add_function(wrap_pyfunction!(py_resource_metrics_history, m)?)?;
+    m.add_function(wrap_pyfunction!(py_configure_resource_metrics, m)?)?;
 
     // Scope stack creation / binding / query
     m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;

@@ -36,6 +36,10 @@ pub(super) async fn wait(
 }
 
 impl ProcessTree {
+    pub(super) fn resource_metrics_job_handle(&self) -> isize {
+        self.job.handle as isize
+    }
+
     pub(super) fn restore_terminal(&mut self) -> std::io::Result<()> {
         Ok(())
     }

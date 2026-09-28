@@ -738,6 +738,7 @@ __all__ = [
     "observability",
     "pii_redaction",
     "model_pricing",
+    "resource_metrics",
     # Scope stack isolation
     "ScopeStack",
     "PropagationContext",

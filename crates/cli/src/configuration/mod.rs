@@ -15,6 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use axum::http::{HeaderMap, HeaderValue};
+use nemo_relay::api::resource_metrics::ResourceMetricsConfig;
 use nemo_relay::logging::LoggingConfig;
 use nemo_relay::plugin::dynamic::{
     DYNAMIC_PLUGIN_MANIFEST_FILENAME, DynamicPluginManifest, DynamicPluginManifestLoad,
@@ -60,6 +61,7 @@ struct FileConfig {
     upstream: Option<FileUpstreamConfig>,
     agents: Option<FileAgentsConfig>,
     logging: Option<logging::FileLoggingConfig>,
+    resource_metrics: Option<ResourceMetricsConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1599,6 +1601,9 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
     apply_file_upstream_config(&mut resolved.gateway, config.upstream)?;
     apply_file_agents_config(&mut resolved.agents, config.agents);
     logging::apply_file_logging_config(&mut resolved.logging, config.logging)?;
+    if let Some(resource_metrics) = config.resource_metrics {
+        resolved.resource_metrics = resource_metrics;
+    }
     Ok(())
 }
 

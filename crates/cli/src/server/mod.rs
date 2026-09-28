@@ -20,6 +20,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use nemo_relay::api::resource_metrics::{ResourceMetricsConfig, ResourceMetricsRuntime};
 #[cfg(test)]
 use nemo_relay::plugin::PluginComponentSpec;
 use nemo_relay::plugin::PluginConfig;
@@ -85,6 +86,7 @@ struct BootstrapServeOptions<'a> {
 /// Binds the configured address and activates enabled dynamic plugins before serving.
 pub(crate) async fn serve_with_dynamic(
     config: GatewayConfig,
+    resource_metrics: ResourceMetricsConfig,
     dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
     managed_bootstrap: Option<ManagedBootstrapIdentity>,
     ready_file: Option<&Path>,
@@ -111,6 +113,7 @@ pub(crate) async fn serve_with_dynamic(
     serve_listener_with_dynamic_inner(
         listener,
         config,
+        Some(resource_metrics),
         dynamic_plugins,
         Some(ShutdownMode::ProcessSignal),
         BootstrapServeOptions {
@@ -200,6 +203,7 @@ pub(crate) async fn serve_listener_with_bootstrap(
     serve_listener_with_dynamic_inner(
         listener,
         config,
+        None,
         Vec::new(),
         shutdown.map(ShutdownMode::Receiver),
         BootstrapServeOptions {
@@ -221,6 +225,7 @@ pub(crate) async fn serve_listener_with_dynamic(
     serve_listener_with_dynamic_inner(
         listener,
         config,
+        None,
         dynamic_plugins,
         shutdown.map(ShutdownMode::Receiver),
         BootstrapServeOptions::default(),
@@ -241,6 +246,7 @@ pub(crate) async fn serve_transparent_listener_with_dynamic(
     serve_listener_with_dynamic_inner(
         listener,
         config,
+        None,
         dynamic_plugins,
         shutdown.map(ShutdownMode::Receiver),
         BootstrapServeOptions {
@@ -262,10 +268,14 @@ enum ShutdownMode {
 async fn serve_listener_with_dynamic_inner(
     listener: TcpListener,
     config: GatewayConfig,
+    resource_metrics: Option<ResourceMetricsConfig>,
     dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
     shutdown_mode: Option<ShutdownMode>,
     bootstrap: BootstrapServeOptions<'_>,
 ) -> Result<(), CliError> {
+    let _resource_metrics_runtime = resource_metrics
+        .map(ResourceMetricsRuntime::configure)
+        .transpose()?;
     let BootstrapServeOptions {
         fingerprint: bootstrap_fingerprint,
         identity: managed_bootstrap,

@@ -304,6 +304,9 @@ pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
         (handle, event, subscribers, scope_stack.clone())
     };
     task_scope_push(handle.clone());
+    if is_resource_metrics_agent_scope(&handle) {
+        crate::api::resource_metrics::emit_agent_event_resource_metrics(&handle);
+    }
     let sanitizers = snapshot_event_sanitizers(&event, &emission_scope_stack).unwrap_or_default();
     let _ = subscriber_dispatcher::dispatch_sanitized_event(
         event,
@@ -394,6 +397,9 @@ fn pop_scope_inner(
         );
         (scope, event, subscribers, scope_stack.clone())
     };
+    if is_resource_metrics_agent_scope(&scope) {
+        crate::api::resource_metrics::emit_agent_event_resource_metrics(&scope);
+    }
     // Capture the scope-local chain before removing its owner. The event is
     // published later, but scope cleanup must not change the middleware that
     // was visible when the end event was emitted.
@@ -418,6 +424,18 @@ fn pop_scope_inner(
         );
         Ok(None)
     }
+}
+
+fn is_resource_metrics_agent_scope(scope: &ScopeHandle) -> bool {
+    scope.scope_type == ScopeType::Agent
+        || (scope.scope_type == ScopeType::Custom
+            && scope
+                .metadata
+                .as_ref()
+                .and_then(Json::as_object)
+                .and_then(|metadata| metadata.get("nemo_relay_scope_role"))
+                .and_then(Json::as_str)
+                == Some("turn"))
 }
 
 /// Emit a standalone mark event under the current or provided scope.

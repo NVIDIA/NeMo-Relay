@@ -143,6 +143,7 @@ impl TransparentRun {
         let result = execute_live_run_with_dynamic(
             self.listener,
             self.resolved.gateway,
+            self.resolved.resource_metrics,
             self.dynamic_plugins,
             &self.gateway_url,
             self.prepared,
@@ -178,6 +179,7 @@ impl TransparentRun {
 async fn execute_live_run_with_dynamic(
     listener: TcpListener,
     gateway_config: GatewayConfig,
+    resource_metrics_config: nemo_relay::api::resource_metrics::ResourceMetricsConfig,
     dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
     gateway_url: &str,
     prepared: PreparedAgentLaunch,
@@ -198,12 +200,13 @@ async fn execute_live_run_with_dynamic(
         server_result?;
         return Err(error);
     }
-    supervise_prepared_run(&prepared, running_server).await
+    supervise_prepared_run(&prepared, running_server, resource_metrics_config).await
 }
 
 async fn supervise_prepared_run(
     prepared: &PreparedAgentLaunch,
     mut running_server: RunningGateway,
+    resource_metrics_config: nemo_relay::api::resource_metrics::ResourceMetricsConfig,
 ) -> Result<ExitCode, CliError> {
     let mut child = match prepared.spawn().await {
         Ok(child) => child,
@@ -213,6 +216,35 @@ async fn supervise_prepared_run(
             restore?;
             server_result?;
             return Err(error);
+        }
+    };
+    let child_process_id = child.process_id().ok_or_else(|| {
+        CliError::Launch("spawned coding-agent process did not expose a process ID".into())
+    })?;
+    #[cfg(not(windows))]
+    let resource_metrics_result =
+        nemo_relay::api::resource_metrics::ResourceMetricsRuntime::configure_owned_process_tree(
+            resource_metrics_config,
+            child_process_id,
+        );
+    #[cfg(windows)]
+    let resource_metrics_result = unsafe {
+        nemo_relay::api::resource_metrics::ResourceMetricsRuntime::configure_owned_process_tree_with_job_handle(
+            resource_metrics_config,
+            child_process_id,
+            child.resource_metrics_job_handle(),
+        )
+    };
+    let _resource_metrics_runtime = match resource_metrics_result {
+        Ok(runtime) => Some(runtime),
+        Err(error) => {
+            log::warn!(
+                target: "nemo_relay.resource_metrics",
+                event = "resource_metrics_start_failed",
+                error_kind = "configuration";
+                "Resource metrics did not start and agent supervision will continue: {error}"
+            );
+            None
         }
     };
 

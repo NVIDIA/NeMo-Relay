@@ -26,6 +26,12 @@ Use scope-local registration when behavior must be tied to one request, session,
 For process-wide stderr and file logging, refer to
 [Operational Logging](/reference/operational-logging).
 
+The `nemo-relay` CLI also accepts a top-level `resource_metrics` section for
+optional polling, bounded in-memory history, and rotating JSONL output. Fresh
+typed snapshots remain available without enabling polling. Refer to
+[Resource Metrics](/reference/resource-metrics) for configuration and API
+details.
+
 ## Plugin Setup
 
 Plugins use a structured plugin configuration with:

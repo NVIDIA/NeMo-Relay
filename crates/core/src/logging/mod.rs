@@ -8,7 +8,7 @@
 
 mod config;
 mod format;
-mod rotation;
+pub(crate) mod rotation;
 mod sink;
 
 use std::io::{self, Write};
