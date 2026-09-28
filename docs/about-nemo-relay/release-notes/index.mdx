@@ -28,6 +28,58 @@ Relay](/about-nemo-relay/overview).
 For the full release history, including individual pull requests, refer to
 [GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/releases).
 
+## Release 0.9.3
+
+### Shared Python Worker Plugins
+
+- System-installed Python worker plugins can now validate across daemon users.
+  Their managed environments hold the attestation key, and startup checks
+  shared lifecycle state without rewriting it. Administrators must make the
+  system configuration, manifest, lifecycle state, and managed environment
+  readable by each daemon user. For setup and permissions, refer to
+  [Discoverable Plugins](/configure-plugins/discoverable-plugins).
+
+### Coding-Agent and Observability Updates
+
+- Authenticated Claude Code and Codex permission decisions now carry the
+  matched `gen_ai.tool.call.id` and tool parent. When a guardrail rejects an
+  active tool, Relay closes its span as denied with
+  `error.type = "guardrail_rejected"`. For lifecycle details, refer to
+  [Basic Usage](/nemo-relay-cli/basic-usage#runtime-mapping).
+- Claude Code and Codex hooks for qualified `mcp__<server>__<tool>` calls now
+  add `mcp.method.name = "tools/call"` event metadata. Existing method metadata
+  takes precedence; the new value identifies the requested operation and does
+  not establish that the MCP server received or completed it. For export
+  behavior, refer to [OpenTelemetry](/configure-plugins/observability/opentelemetry).
+
+### Dependency Update
+
+- The optional LangChain NVIDIA integration now requires
+  `langchain-nvidia-ai-endpoints>=1.4.2,<2.0.0`.
+
+## Release 0.9.2
+
+### Managed Daemon Operations
+
+- The daemon now provides `GET /healthz` to report process health and global
+  deployment mode. Separate read-only worker routes list assigned worker IDs
+  and their last-known broker status. A healthy daemon can still have no
+  assigned workers, so use the worker routes and lifecycle events when checking
+  a managed deployment. For response fields and access guidance, refer to the
+  [Daemon Reference](/daemon/reference#probe-daemon-health).
+
+### Coding-Agent and Observability Fixes
+
+- Codex permission checks now ignore the approval description that Codex adds
+  to built-in tool requests when matching them to recorded tool calls. Denials
+  use Codex's expected hook response format instead of producing an invalid
+  permission-request output error. For Codex hook setup, refer to
+  [Codex](/nemo-relay-cli/codex).
+- OpenTelemetry log exporters now account for pending records separately for
+  each resource-specific provider. Successful delivery no longer causes a
+  false `otel.logs_dropped` error during shutdown when resource metadata
+  creates multiple log providers.
+
 ## Release 0.9.1
 
 NeMo Relay 0.9.1 improves OpenTelemetry coverage and managed Codex routing,
