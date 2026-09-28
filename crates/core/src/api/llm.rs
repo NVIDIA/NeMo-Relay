@@ -1313,7 +1313,13 @@ fn resolve_llm_end_annotation(
 ) -> (Option<AnnotatedLlmResponse>, Option<FlowError>) {
     if let Some(annotated_response) = annotated_response {
         let mut annotated_response = (*annotated_response).clone();
-        if behavior.attach_estimated_cost {
+        if behavior.attach_estimated_cost
+            && data.is_none_or(|response| {
+                response_codec
+                    .as_ref()
+                    .is_none_or(|codec| codec.allows_estimated_cost(response))
+            })
+        {
             attach_estimated_cost_for_provider(&mut annotated_response, Some(provider_name));
         }
         return (Some(annotated_response), None);
@@ -1323,7 +1329,7 @@ fn resolve_llm_end_annotation(
     };
     match codec.decode_response(response) {
         Ok(mut decoded) => {
-            if behavior.attach_estimated_cost {
+            if behavior.attach_estimated_cost && codec.allows_estimated_cost(response) {
                 attach_estimated_cost_for_provider(&mut decoded, Some(provider_name));
             }
             (Some(decoded), None)

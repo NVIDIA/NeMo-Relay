@@ -3931,7 +3931,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## langchain-nvidia-ai-endpoints (1.4.1)
+## langchain-nvidia-ai-endpoints (1.4.3)
 
 ### Licenses
 License: `MIT`

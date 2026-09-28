@@ -6,11 +6,15 @@
 use super::*;
 use serde_json::json;
 
+use super::super::model_pricing::pricing_test_mutex;
 use super::super::request::{
     ContentPart, FunctionDefinition, Message, MessageContent, ProviderNativeComponent, ToolChoice,
     ToolChoiceFunction, ToolChoiceFunctionName,
 };
-use super::super::response::{ApiSpecificResponse, FinishReason};
+use super::super::response::{
+    ApiSpecificResponse, FinishReason, PricingCatalog, PricingResolver,
+    reset_active_pricing_resolver, set_active_pricing_resolver,
+};
 
 // -------------------------------------------------------------------
 // Helpers
@@ -20,6 +24,14 @@ fn make_request(content: Json) -> LlmRequest {
     LlmRequest {
         headers: serde_json::Map::new(),
         content,
+    }
+}
+
+struct ResetPricingResolverGuard;
+
+impl Drop for ResetPricingResolverGuard {
+    fn drop(&mut self) {
+        let _ = reset_active_pricing_resolver();
     }
 }
 
@@ -91,6 +103,117 @@ fn test_decode_full_response() {
     assert_eq!(usage.total_tokens, Some(1280));
     assert_eq!(usage.cache_read_tokens, Some(0));
     assert_eq!(usage.cache_write_tokens, Some(512));
+}
+
+#[test]
+fn test_decode_response_usage_prefers_iteration_totals() {
+    let response = json!({
+        "id": "msg_compaction",
+        "model": "claude-opus-5-5",
+        "content": [{
+            "type": "compaction",
+            "content": "summary",
+            "signature": "signed"
+        }],
+        "stop_reason": "compaction",
+        "usage": {
+            "input_tokens": 11,
+            "output_tokens": 7,
+            "cache_read_input_tokens": 3,
+            "cache_creation_input_tokens": 5,
+            "iterations": [
+                {
+                    "type": "compaction",
+                    "input_tokens": 144,
+                    "output_tokens": 276,
+                    "cache_read_input_tokens": 20,
+                    "cache_creation_input_tokens": 30
+                },
+                {
+                    "type": "message",
+                    "input_tokens": 11,
+                    "output_tokens": 7,
+                    "cache_read_input_tokens": 3,
+                    "cache_creation_input_tokens": 5
+                }
+            ]
+        }
+    });
+
+    let usage = AnthropicMessagesCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.prompt_tokens, Some(155));
+    assert_eq!(usage.completion_tokens, Some(283));
+    assert_eq!(usage.total_tokens, Some(438));
+    assert_eq!(usage.cache_read_tokens, Some(23));
+    assert_eq!(usage.cache_write_tokens, Some(35));
+}
+
+#[test]
+fn test_decode_response_omits_estimated_cost_for_cross_model_iterations() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    let catalog = PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [{
+                "provider": "anthropic",
+                "model_id": "claude-fallback",
+                "pricing_as_of": "2026-09-25",
+                "pricing_source": "test",
+                "rates": {"input_per_million": 1.0, "output_per_million": 2.0},
+                "prompt_cache": {"read_accounting": "included_in_prompt_tokens"}
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+
+    let response = json!({
+        "id": "msg_fallback",
+        "model": "claude-fallback",
+        "content": [{"type": "text", "text": "Hi"}],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 412,
+            "output_tokens": 264,
+            "iterations": [
+                {"type": "message", "model": "claude-primary", "input_tokens": 535, "output_tokens": 0},
+                {"type": "fallback_message", "model": "claude-fallback", "input_tokens": 412, "output_tokens": 264}
+            ]
+        }
+    });
+
+    let usage = AnthropicMessagesCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.prompt_tokens, Some(947));
+    assert_eq!(usage.completion_tokens, Some(264));
+    assert_eq!(usage.cost, None);
+}
+
+#[test]
+fn anthropic_cost_eligibility_rejects_mixed_models_with_malformed_usage() {
+    let response = json!({
+        "model": "claude-fallback",
+        "usage": {
+            "iterations": [
+                {"model": "claude-primary", "input_tokens": "invalid"},
+                {"model": "claude-fallback", "input_tokens": 412}
+            ]
+        }
+    });
+
+    assert!(serde_json::from_value::<RawAnthropicResponse>(response.clone()).is_err());
+    assert!(!AnthropicMessagesCodec.allows_estimated_cost(&response));
 }
 
 #[test]
@@ -1511,6 +1634,8 @@ fn anthropic_streaming_codec_accumulates_live_compaction_shape() {
                 "type": "message_start", "message": {
                     "id": "msg_compact", "type": "message", "role": "assistant",
                     "model": "claude-sonnet-4-6", "content": [],
+                    "container": null, "stop_details": null, "diagnostics": null,
+                    "service_tier": "standard",
                     "usage": {"input_tokens": 0, "output_tokens": 0}
                 }
             }),
@@ -1522,14 +1647,53 @@ fn anthropic_streaming_codec_accumulates_live_compaction_shape() {
             json!({"type": "content_block_stop", "index": 0}),
             json!({
                 "type": "message_delta",
-                "delta": {"stop_reason": "compaction", "stop_sequence": null},
-                "usage": {"input_tokens": 0, "output_tokens": 0}
+                "delta": {"stop_reason": "compaction", "stop_sequence": null,
+                    "container": null, "stop_details": null},
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+                "context_management": {"applied_edits": []}
             }),
             json!({"type": "message_stop"}),
         ] {
             collector(event).unwrap();
         }
-        assert_eq!(finalizer()["content"][0], expected);
+        let aggregate = finalizer();
+        assert_eq!(aggregate["content"][0], expected);
+        assert_eq!(aggregate.get("container"), Some(&Json::Null));
+        assert_eq!(aggregate.get("stop_details"), Some(&Json::Null));
+        assert_eq!(aggregate.get("diagnostics"), Some(&Json::Null));
+        assert_eq!(aggregate["service_tier"], "standard");
+        assert_eq!(
+            aggregate["context_management"],
+            json!({"applied_edits": []})
+        );
+    }
+}
+
+#[test]
+fn anthropic_streaming_codec_omits_unreported_message_metadata() {
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    for event in [
+        json!({
+            "type": "message_start", "message": {
+                "id": "msg_omitted_metadata", "type": "message", "role": "assistant",
+                "model": "claude-sonnet-4-6", "content": [],
+                "usage": {"input_tokens": 0, "output_tokens": 0}
+            }
+        }),
+        json!({"type": "message_stop"}),
+    ] {
+        collector(event).unwrap();
+    }
+
+    let aggregate = finalizer();
+    for field in ["container", "stop_details", "diagnostics"] {
+        assert!(
+            aggregate.get(field).is_none(),
+            "{field} should stay absent when Anthropic omits it"
+        );
     }
 }
 
