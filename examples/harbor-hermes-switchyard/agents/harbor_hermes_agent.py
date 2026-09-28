@@ -599,12 +599,14 @@ class HarborHermesAgent(Hermes):
             else:
                 command = (
                     f"test -r {secret_file}; "
-                    f'provider_authorization="$(cat -- {secret_file})"; '
-                    'case "$provider_authorization" in "Bearer "*) ;; *) exit 2 ;; esac; '
-                    'export OPENAI_API_KEY="${provider_authorization#Bearer }"; '
+                    # The mounted secret is the bare provider token (the same
+                    # convention run_terminal_bench.sh writes and the
+                    # switchyard branch above reads); it does not carry a
+                    # "Bearer " prefix.
+                    f'export OPENAI_API_KEY="$(cat -- {secret_file})"; '
                     'export OPENROUTER_API_KEY="$OPENAI_API_KEY"; '
                     'export NVIDIA_API_KEY="$OPENAI_API_KEY"; '
-                    'test -n "$OPENAI_API_KEY"; unset provider_authorization; '
+                    'test -n "$OPENAI_API_KEY"; '
                     f"{command}"
                 )
         return await super().exec_as_agent(
