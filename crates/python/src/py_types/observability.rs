@@ -526,7 +526,18 @@ pub(crate) struct PyOtlpFileSink {
     pub(crate) format: String,
     #[pyo3(get, set)]
     pub(crate) mode: String,
+    #[pyo3(get, set)]
+    pub(crate) completed_span_context_ttl_millis: u64,
+    #[pyo3(get, set)]
+    pub(crate) mark_projection: String,
+    #[pyo3(get, set)]
+    pub(crate) mark_exclude_names: Vec<String>,
+    #[pyo3(get, set)]
+    pub(crate) promote_metadata_prefixes: Vec<String>,
+    #[pyo3(get, set)]
+    pub(crate) promote_resource_metadata_prefixes: Vec<String>,
     pub(crate) resource_attributes: HashMap<String, String>,
+    pub(crate) attribute_mappings: Vec<nemo_relay::observability::OtlpAttributeMapping>,
 }
 
 #[pymethods]
@@ -550,13 +561,51 @@ impl PyOtlpFileSink {
             filename,
             format,
             mode,
+            completed_span_context_ttl_millis: 60_000,
+            mark_projection: "inherit".to_string(),
+            mark_exclude_names: nemo_relay::observability::default_mark_exclude_names(),
+            promote_metadata_prefixes: Vec::new(),
+            promote_resource_metadata_prefixes: Vec::new(),
             resource_attributes: HashMap::new(),
+            attribute_mappings: Vec::new(),
         }
     }
 
     /// Add an OpenTelemetry resource attribute.
     pub(crate) fn set_resource_attribute(&mut self, key: String, value: String) {
         self.resource_attributes.insert(key, value);
+    }
+
+    #[getter]
+    pub(crate) fn attribute_mappings(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(
+            py,
+            &serde_json::to_value(&self.attribute_mappings).unwrap_or_default(),
+        )
+    }
+
+    #[setter]
+    pub(crate) fn set_attribute_mappings(
+        &mut self,
+        attribute_mappings: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        self.attribute_mappings =
+            serde_json::from_value(py_to_json(attribute_mappings)?).map_err(|error| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "attribute_mappings must be a list of mappings: {error}"
+                ))
+            })?;
+        nemo_relay::observability::validate_attribute_mappings(&self.attribute_mappings)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        Ok(())
+    }
+
+    #[getter]
+    pub(crate) fn resource_attributes(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(
+            py,
+            &serde_json::to_value(&self.resource_attributes).unwrap_or_default(),
+        )
     }
 
     pub(crate) fn __repr__(&self) -> String {
@@ -591,7 +640,34 @@ impl PyOtlpFileSink {
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
         }
-        Ok(config)
+        if self.completed_span_context_ttl_millis == 0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "completed_span_context_ttl_millis must be greater than 0",
+            ));
+        }
+        let mark_projection =
+            serde_json::from_value(serde_json::Value::String(self.mark_projection.clone()))
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        nemo_relay::observability::validate_attribute_mappings(&self.attribute_mappings)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        for prefixes in [
+            &self.promote_metadata_prefixes,
+            &self.promote_resource_metadata_prefixes,
+        ] {
+            nemo_relay::observability::validate_metadata_promotion_prefixes(prefixes)
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        }
+        Ok(config
+            .with_completed_span_context_ttl(std::time::Duration::from_millis(
+                self.completed_span_context_ttl_millis,
+            ))
+            .with_mark_projection(mark_projection)
+            .with_mark_exclude_names(self.mark_exclude_names.clone())
+            .with_attribute_mappings(self.attribute_mappings.clone())
+            .with_promote_metadata_prefixes(self.promote_metadata_prefixes.clone())
+            .with_promote_resource_metadata_prefixes(
+                self.promote_resource_metadata_prefixes.clone(),
+            ))
     }
 }
 

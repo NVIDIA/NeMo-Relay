@@ -935,6 +935,54 @@ class TestOpenTelemetryTypes:
         resource = record["resourceSpans"][0]["resource"]["attributes"]
         assert any(entry["key"] == "service.name" for entry in resource)
 
+    def test_file_sink_applies_shared_projection_options(self, tmp_path) -> None:
+        config = OpenTelemetryFileSinkConfig("full", str(tmp_path), "projected.jsonl")
+        config.mark_projection = "event"
+        config.mark_exclude_names = ["llm.chunk"]
+        config.attribute_mappings = [{"key": "nemo_relay.model_name", "alias": "model.alias"}]
+        config.promote_metadata_prefixes = ["nv."]
+        config.promote_resource_metadata_prefixes = ["deployment."]
+        config.completed_span_context_ttl_millis = 30_000
+
+        assert config.mark_projection == "event"
+        assert config.attribute_mappings == [{"key": "nemo_relay.model_name", "alias": "model.alias"}]
+
+        subscriber = OpenTelemetrySubscriber(config)
+        subscriber_name = f"py_otel_file_sink_projection_{uuid4().hex}"
+        subscriber.register(subscriber_name)
+        try:
+            handle = scope.push(
+                "py-projection-agent",
+                ScopeType.Agent,
+                metadata={"nv.tenant": "acme", "deployment.environment": "test"},
+            )
+            scope.pop(handle)
+            subscribers.flush()
+        finally:
+            subscriber.deregister(subscriber_name)
+            subscriber.shutdown()
+
+        # Promotion copies the prefixed metadata onto the span and the resource.
+        record = (tmp_path / "projected.jsonl").read_text()
+        assert "nv.tenant" in record
+        assert "deployment.environment" in record
+
+    @pytest.mark.parametrize(
+        ("field", "value", "expected"),
+        [
+            ("mark_projection", "sideways", "unknown variant"),
+            ("promote_metadata_prefixes", [""], "prefix"),
+            ("promote_resource_metadata_prefixes", [""], "prefix"),
+            ("completed_span_context_ttl_millis", 0, "greater than 0"),
+        ],
+    )
+    def test_file_sink_rejects_invalid_shared_options(self, tmp_path, field: str, value: object, expected: str) -> None:
+        config = OpenTelemetryFileSinkConfig("full", str(tmp_path))
+        setattr(config, field, value)
+
+        with pytest.raises(ValueError, match=expected):
+            OpenTelemetrySubscriber(config)
+
     def test_file_sink_rejects_an_unknown_projection_type(self, tmp_path) -> None:
         config = OpenTelemetryFileSinkConfig("unsupported", str(tmp_path))
 

@@ -3823,6 +3823,55 @@ fn test_ffi_otel_signal_subscribers_apply_all_typed_options() {
 }
 
 #[test]
+fn otel_file_sink_subscriber_create_rejects_invalid_shared_options() {
+    let directory = tempfile::tempdir().unwrap();
+    let output_directory = cstring(&directory.path().display().to_string());
+    let otel_type = cstring("full");
+
+    // The shared projection options reach the same validators the endpoint
+    // entrypoints use, so a malformed value is refused rather than dropped.
+    let bad_projection = cstring("sideways");
+    let bad_mappings = cstring(r#"[{"key":"","alias":"a"}]"#);
+    let bad_prefixes = cstring(r#"[""]"#);
+    let inherit = cstring("inherit");
+    let empty = cstring("[]");
+    let cases: [(&CString, &CString, &CString, &CString, u64); 5] = [
+        (&bad_projection, &empty, &empty, &empty, 60_000),
+        (&inherit, &bad_mappings, &empty, &empty, 60_000),
+        (&inherit, &empty, &bad_prefixes, &empty, 60_000),
+        (&inherit, &empty, &empty, &bad_prefixes, 60_000),
+        (&inherit, &empty, &empty, &empty, 0),
+    ];
+    unsafe {
+        for (projection, mappings, promote, promote_resource, ttl) in cases {
+            let mut rejected = ptr::null_mut();
+            assert_ne!(
+                nemo_relay_otel_subscriber_create_file_sink(
+                    otel_type.as_ptr(),
+                    output_directory.as_ptr(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    projection.as_ptr(),
+                    ptr::null(),
+                    mappings.as_ptr(),
+                    promote.as_ptr(),
+                    promote_resource.as_ptr(),
+                    ttl,
+                    &mut rejected,
+                ),
+                NemoRelayStatus::Ok
+            );
+        }
+    }
+}
+
+#[test]
 fn otel_file_sink_subscriber_create_covers_success_and_rejection() {
     let directory = tempfile::tempdir().unwrap();
     let output_directory = cstring(&directory.path().display().to_string());
@@ -3843,6 +3892,12 @@ fn otel_file_sink_subscriber_create_covers_success_and_rejection() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
                 &mut subscriber,
             ),
             NemoRelayStatus::Ok
@@ -3869,6 +3924,12 @@ fn otel_file_sink_subscriber_create_covers_success_and_rejection() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
                 &mut defaulted,
             ),
             NemoRelayStatus::Ok
@@ -3894,6 +3955,12 @@ fn otel_file_sink_subscriber_create_covers_success_and_rejection() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
                 &mut rejected,
             ),
             NemoRelayStatus::InvalidArg
@@ -3912,6 +3979,12 @@ fn otel_file_sink_subscriber_create_covers_success_and_rejection() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
                 &mut rejected,
             ),
             NemoRelayStatus::InvalidArg
@@ -3945,6 +4018,12 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
                 ptr::null_mut(),
             ),
             NemoRelayStatus::NullPointer
@@ -3963,6 +4042,12 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
                 &mut subscriber,
             ),
             NemoRelayStatus::InvalidArg
@@ -3981,6 +4066,12 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
                 &mut subscriber,
             ),
             NemoRelayStatus::InvalidArg
@@ -3999,6 +4090,12 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
                 &mut subscriber,
             ),
             NemoRelayStatus::InvalidArg
@@ -4018,6 +4115,12 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
                 &mut subscriber,
             ),
             NemoRelayStatus::InvalidArg
@@ -4040,6 +4143,12 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
                     args[1],
                     args[2],
                     args[3],
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    60_000,
                     &mut subscriber,
                 ),
                 NemoRelayStatus::InvalidUtf8
@@ -4061,6 +4170,12 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
                 &mut subscriber,
             ),
             NemoRelayStatus::Ok

@@ -334,29 +334,8 @@ fn build_otel_config(
         .instrumentation_scope
         .unwrap_or_else(|| "opentelemetry".to_string());
     let timeout_millis = options.timeout_millis.unwrap_or(3_000);
-    let completed_span_context_ttl_millis = options
-        .completed_span_context_ttl_millis
-        .map(|ttl| {
-            let (negative, value, lossless) = ttl.get_u64();
-            if negative || !lossless {
-                return Err(napi::Error::from_reason(
-                    "completedSpanContextTtlMillis must be a nonnegative u64 BigInt",
-                ));
-            }
-            if value == 0 {
-                return Err(napi::Error::from_reason(
-                    "completedSpanContextTtlMillis must be greater than 0",
-                ));
-            }
-            Ok(value)
-        })
-        .transpose()?
-        .unwrap_or_else(|| {
-            u64::try_from(
-                nemo_relay::observability::otel::DEFAULT_COMPLETED_SPAN_CONTEXT_TTL.as_millis(),
-            )
-            .expect("the default completed span context TTL fits in u64 milliseconds")
-        });
+    let completed_span_context_ttl_millis =
+        parse_completed_span_context_ttl_millis(options.completed_span_context_ttl_millis)?;
 
     let mut config = nemo_relay::observability::otel::OpenTelemetryConfig::new(otel_type, endpoint)
         .with_transport(transport)
@@ -399,17 +378,9 @@ fn build_otel_config(
     Ok(config)
 }
 
-fn build_otel_log_config(
-    options: OpenTelemetryLogConfig,
-) -> napi::Result<nemo_relay::observability::otel_logs::OpenTelemetryLogConfig> {
-    let endpoint = options.endpoint.trim().to_string();
-    if endpoint.is_empty() {
-        return Err(napi::Error::from_reason(
-            "endpoint must be a nonblank string",
-        ));
-    }
-    let completed_span_context_ttl_millis = options
-        .completed_span_context_ttl_millis
+/// Parses the optional completed-span-context TTL shared by every trace config.
+fn parse_completed_span_context_ttl_millis(value: Option<BigInt>) -> napi::Result<u64> {
+    let parsed = value
         .map(|ttl| {
             let (negative, value, lossless) = ttl.get_u64();
             if negative || !lossless {
@@ -431,6 +402,20 @@ fn build_otel_log_config(
             )
             .expect("the default completed span context TTL fits in u64 milliseconds")
         });
+    Ok(parsed)
+}
+
+fn build_otel_log_config(
+    options: OpenTelemetryLogConfig,
+) -> napi::Result<nemo_relay::observability::otel_logs::OpenTelemetryLogConfig> {
+    let endpoint = options.endpoint.trim().to_string();
+    if endpoint.is_empty() {
+        return Err(napi::Error::from_reason(
+            "endpoint must be a nonblank string",
+        ));
+    }
+    let completed_span_context_ttl_millis =
+        parse_completed_span_context_ttl_millis(options.completed_span_context_ttl_millis)?;
     let mut config = nemo_relay::observability::otel_logs::OpenTelemetryLogConfig::new(endpoint)
         .with_transport(parse_otel_transport(options.transport)?)
         .with_service_name(
@@ -5302,6 +5287,19 @@ pub struct OpenTelemetryFileSinkConfig {
     pub service_version: Option<String>,
     /// Instrumentation scope name. Defaults to `"opentelemetry"`.
     pub instrumentation_scope: Option<String>,
+    /// Completed scope lineage retention in milliseconds as a `bigint`. Defaults to `60000`.
+    pub completed_span_context_ttl_millis: Option<BigInt>,
+    /// Mark projection for full and OpenInference exporters. Defaults to `"inherit"`.
+    #[napi(ts_type = "\"inherit\" | \"event\" | \"tool\"")]
+    pub mark_projection: Option<String>,
+    /// Mark names excluded from full and OpenInference projections.
+    pub mark_exclude_names: Option<Vec<String>>,
+    /// Attribute aliases for full and OpenInference projections.
+    pub attribute_mappings: Option<Json>,
+    /// Literal Event metadata prefixes copied to top-level OTLP attributes.
+    pub promote_metadata_prefixes: Option<Vec<String>>,
+    /// Literal root-scope Event metadata prefixes copied to OTLP resource attributes.
+    pub promote_resource_metadata_prefixes: Option<Vec<String>>,
 }
 
 fn build_otel_file_sink_config(
@@ -5341,6 +5339,23 @@ fn build_otel_file_sink_config(
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
     }
+    config = config
+        .with_completed_span_context_ttl(std::time::Duration::from_millis(
+            parse_completed_span_context_ttl_millis(options.completed_span_context_ttl_millis)?,
+        ))
+        .with_mark_projection(parse_mark_projection(options.mark_projection)?)
+        .with_mark_exclude_names(
+            options
+                .mark_exclude_names
+                .unwrap_or_else(nemo_relay::observability::default_mark_exclude_names),
+        )
+        .with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?)
+        .with_promote_metadata_prefixes(options.promote_metadata_prefixes.unwrap_or_default())
+        .with_promote_resource_metadata_prefixes(
+            options
+                .promote_resource_metadata_prefixes
+                .unwrap_or_default(),
+        );
     Ok(config)
 }
 

@@ -894,6 +894,13 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create(
 /// serialization, and the default when null) or `proto`. `mode` is `overwrite`
 /// (the default when null) or `append`.
 ///
+/// The projection controls match the endpoint entrypoints: `mark_projection` is
+/// `inherit`, `event`, or `tool`; `mark_exclude_names_json`,
+/// `promote_metadata_prefixes_json`, and `promote_resource_metadata_prefixes_json`
+/// are JSON arrays of strings; `attribute_mappings_json` is a JSON array of
+/// `{"key","alias"}` objects; and `completed_span_context_ttl_millis` must be
+/// greater than zero. A null JSON pointer takes the core default.
+///
 /// # Safety
 /// Any non-null C strings must be valid and `out` must be non-null.
 #[allow(clippy::too_many_arguments)]
@@ -909,6 +916,12 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_file_sink(
     service_namespace: *const c_char,
     service_version: *const c_char,
     instrumentation_scope: *const c_char,
+    mark_projection: *const c_char,
+    mark_exclude_names_json: *const c_char,
+    attribute_mappings_json: *const c_char,
+    promote_metadata_prefixes_json: *const c_char,
+    promote_resource_metadata_prefixes_json: *const c_char,
+    completed_span_context_ttl_millis: u64,
     out: *mut *mut FfiOpenTelemetrySubscriber,
 ) -> NemoRelayStatus {
     clear_last_error();
@@ -926,6 +939,12 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_file_sink(
         service_namespace,
         service_version,
         instrumentation_scope,
+        mark_projection,
+        mark_exclude_names_json,
+        attribute_mappings_json,
+        promote_metadata_prefixes_json,
+        promote_resource_metadata_prefixes_json,
+        completed_span_context_ttl_millis,
     ) {
         Ok(subscriber) => subscriber,
         Err(status) => return status,
@@ -950,10 +969,30 @@ fn build_otel_file_sink_subscriber(
     service_namespace: *const c_char,
     service_version: *const c_char,
     instrumentation_scope: *const c_char,
+    mark_projection: *const c_char,
+    mark_exclude_names_json: *const c_char,
+    attribute_mappings_json: *const c_char,
+    promote_metadata_prefixes_json: *const c_char,
+    promote_resource_metadata_prefixes_json: *const c_char,
+    completed_span_context_ttl_millis: u64,
 ) -> Result<OpenTelemetrySubscriber, NemoRelayStatus> {
     let otel_type = parse_otel_type(otel_type)?;
     let settings = parse_ffi_file_sink_settings(output_directory, filename, format, mode)?;
-    let mut config = OpenTelemetryFileSinkConfig::new(otel_type, settings);
+    if completed_span_context_ttl_millis == 0 {
+        set_last_error("completed_span_context_ttl_millis must be greater than 0");
+        return Err(NemoRelayStatus::InvalidArg);
+    }
+    let mut config = OpenTelemetryFileSinkConfig::new(otel_type, settings)
+        .with_mark_projection(parse_mark_projection(mark_projection)?)
+        .with_mark_exclude_names(parse_mark_exclude_names(mark_exclude_names_json)?)
+        .with_attribute_mappings(parse_attribute_mappings(attribute_mappings_json)?)
+        .with_promote_metadata_prefixes(parse_promote_metadata_prefixes(
+            promote_metadata_prefixes_json,
+        )?)
+        .with_promote_resource_metadata_prefixes(parse_promote_metadata_prefixes(
+            promote_resource_metadata_prefixes_json,
+        )?)
+        .with_completed_span_context_ttl(Duration::from_millis(completed_span_context_ttl_millis));
     config = apply_optional_string(
         config,
         service_name,

@@ -1778,6 +1778,13 @@ NemoRelayStatus nemo_relay_otel_subscriber_create(const char *otel_type,
  * serialization, and the default when null) or `proto`. `mode` is `overwrite`
  * (the default when null) or `append`.
  *
+ * The projection controls match the endpoint entrypoints: `mark_projection` is
+ * `inherit`, `event`, or `tool`; `mark_exclude_names_json`,
+ * `promote_metadata_prefixes_json`, and `promote_resource_metadata_prefixes_json`
+ * are JSON arrays of strings; `attribute_mappings_json` is a JSON array of
+ * `{"key","alias"}` objects; and `completed_span_context_ttl_millis` must be
+ * greater than zero. A null JSON pointer takes the core default.
+ *
  * # Safety
  * Any non-null C strings must be valid and `out` must be non-null.
  */
@@ -1791,6 +1798,12 @@ NemoRelayStatus nemo_relay_otel_subscriber_create_file_sink(const char *otel_typ
                                                             const char *service_namespace,
                                                             const char *service_version,
                                                             const char *instrumentation_scope,
+                                                            const char *mark_projection,
+                                                            const char *mark_exclude_names_json,
+                                                            const char *attribute_mappings_json,
+                                                            const char *promote_metadata_prefixes_json,
+                                                            const char *promote_resource_metadata_prefixes_json,
+                                                            uint64_t completed_span_context_ttl_millis,
                                                             struct FfiOpenTelemetrySubscriber **out);
 
 /**

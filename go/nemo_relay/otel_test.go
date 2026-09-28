@@ -677,6 +677,76 @@ func TestOpenTelemetryFileSinkSubscriberOmittedServiceNameReachesTheSdkDefault(t
 	}
 }
 
+// TestOpenTelemetryFileSinkSubscriberAppliesSharedProjectionOptions checks the
+// projection and lineage options reach the core through the FFI, matching what
+// the endpoint config already supports.
+func TestOpenTelemetryFileSinkSubscriberAppliesSharedProjectionOptions(t *testing.T) {
+	dir := t.TempDir()
+	ttl := 30 * time.Second
+	subscriber, err := NewOpenTelemetryFileSinkSubscriber(OpenTelemetryFileSinkConfig{
+		OutputDirectory:                 dir,
+		Filename:                        "projected.jsonl",
+		MarkProjection:                  MarkProjectionEvent,
+		MarkExcludeNames:                []string{"llm.chunk"},
+		AttributeMappings:               []OtlpAttributeMapping{{Key: "nemo_relay.model_name", Alias: "model.alias"}},
+		PromoteMetadataPrefixes:         []string{"nv."},
+		PromoteResourceMetadataPrefixes: []string{"deployment."},
+		CompletedSpanContextTTL:         &ttl,
+	})
+	if err != nil {
+		t.Fatalf("create file sink subscriber: %v", err)
+	}
+	closeFileSink(t, subscriber)
+
+	name := "go_file_sink_projection_" + time.Now().Format(otelTimeFormat)
+	if err := subscriber.Register(name); err != nil {
+		t.Fatalf(otelRegisterFailed, err)
+	}
+	defer func() { _ = subscriber.Deregister(name) }()
+
+	runWithTestScopeStack(t, func() {
+		handle, err := PushScope("go-projection-agent", ScopeTypeAgent,
+			WithMetadata(json.RawMessage(`{"nv.tenant":"acme","deployment.environment":"test"}`)))
+		requireNoError(t, err, "PushScope failed")
+		requireNoError(t, PopScope(handle), "PopScope failed")
+	})
+	requireNoError(t, subscriber.ForceFlush(), "ForceFlush failed")
+
+	contents, err := os.ReadFile(filepath.Join(dir, "projected.jsonl"))
+	if err != nil {
+		t.Fatalf("read the trace file: %v", err)
+	}
+	// Promotion copies the prefixed metadata onto the span and the resource.
+	for _, needle := range []string{"nv.tenant", "deployment.environment"} {
+		if !strings.Contains(string(contents), needle) {
+			t.Errorf("expected %q in the exported record: %s", needle, contents)
+		}
+	}
+}
+
+func TestOpenTelemetryFileSinkSubscriberRejectsInvalidSharedOptions(t *testing.T) {
+	dir := t.TempDir()
+	zero := time.Duration(0)
+	cases := []struct {
+		name   string
+		config OpenTelemetryFileSinkConfig
+	}{
+		{"invalid mark projection", OpenTelemetryFileSinkConfig{OutputDirectory: dir, MarkProjection: "sideways"}},
+		{"blank promotion prefix", OpenTelemetryFileSinkConfig{OutputDirectory: dir, PromoteMetadataPrefixes: []string{""}}},
+		{"blank resource promotion prefix", OpenTelemetryFileSinkConfig{OutputDirectory: dir, PromoteResourceMetadataPrefixes: []string{""}}},
+		{"zero completed span context TTL", OpenTelemetryFileSinkConfig{OutputDirectory: dir, CompletedSpanContextTTL: &zero}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			subscriber, err := NewOpenTelemetryFileSinkSubscriber(tc.config)
+			if err == nil {
+				closeFileSink(t, subscriber)
+				t.Fatalf("expected %s to be rejected", tc.name)
+			}
+		})
+	}
+}
+
 // TestOpenTelemetryFileSinkSubscriberRegisters checks the subscriber reaches the
 // shared registration path rather than only being constructed.
 func TestOpenTelemetryFileSinkSubscriberRegisters(t *testing.T) {

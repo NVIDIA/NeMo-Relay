@@ -1240,6 +1240,11 @@ class OpenTelemetryFileSinkConfig:
     service_namespace: Optional[str]
     service_version: Optional[str]
     instrumentation_scope: str
+    completed_span_context_ttl_millis: int
+    mark_projection: Literal["inherit", "event", "tool"]
+    mark_exclude_names: list[str]
+    promote_metadata_prefixes: list[str]
+    promote_resource_metadata_prefixes: list[str]
 
     def __init__(
         self,
@@ -1253,6 +1258,18 @@ class OpenTelemetryFileSinkConfig:
         ...
     def set_resource_attribute(self, key: str, value: str) -> None:
         """Add an OpenTelemetry resource attribute."""
+        ...
+    @property
+    def resource_attributes(self) -> dict[str, str]:
+        """Return additional OpenTelemetry resource attributes."""
+        ...
+    @property
+    def attribute_mappings(self) -> list[dict[str, str]]:
+        """Return configured full/OpenInference attribute aliases."""
+        ...
+    @attribute_mappings.setter
+    def attribute_mappings(self, value: list[dict[str, str]]) -> None:
+        """Replace configured full/OpenInference attribute aliases."""
         ...
 
 class OpenTelemetrySubscriber:
