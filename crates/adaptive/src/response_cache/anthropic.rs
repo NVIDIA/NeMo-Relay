@@ -660,10 +660,6 @@ fn ordinary_delta_is_replayable(block_kind: Option<&str>, delta: &Json) -> bool 
             has_only_fields(delta, &["type", "text"])
                 && delta.get("text").is_some_and(Json::is_string)
         }
-        (Some("text"), Some("citations_delta")) => {
-            has_only_fields(delta, &["type", "citation"])
-                && delta.get("citation").is_some_and(Json::is_object)
-        }
         (Some("tool_use"), Some("input_json_delta")) => {
             has_only_fields(delta, &["type", "partial_json"])
                 && delta.get("partial_json").is_some_and(Json::is_string)

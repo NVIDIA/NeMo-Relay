@@ -1987,6 +1987,51 @@ async fn threshold_compaction_stream_replays_after_validated_store() {
 }
 
 #[tokio::test]
+async fn threshold_compaction_stream_with_citations_remains_live() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(compaction_cache_config()).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut chunks = anthropic_stream_chunks();
+    chunks.insert(
+        3,
+        json!({"type": "content_block_delta", "index": 0,
+        "delta": {"type": "citations_delta", "citation": {
+            "type": "char_location", "cited_text": "Hello"
+        }}}),
+    );
+    let provider = counting_stream_provider(Arc::clone(&calls), chunks);
+    let request = || LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-01-12")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "context_management": {"edits": [{
+                "type": "compact_20260112", "pause_after_compaction": true
+            }]}
+        }),
+    };
+
+    let first = stream_call_named("anthropic.messages", &provider, request()).await;
+    let second = stream_call_named("anthropic.messages", &provider, request()).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "citation-bearing streams must remain live until replay preserves citation deltas"
+    );
+    for stream in [&first, &second] {
+        assert!(stream.iter().any(|chunk| {
+            chunk.pointer("/delta/type").and_then(Json::as_str) == Some("citations_delta")
+        }));
+    }
+}
+
+#[tokio::test]
 async fn malformed_threshold_compaction_stream_is_never_stored() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
