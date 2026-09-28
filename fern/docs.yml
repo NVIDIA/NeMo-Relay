@@ -136,18 +136,6 @@ products:
     path: ./versions/v0.9.3.yml
     slug: v0.9.3
     availability: stable
-  - display-name: v0.9.2
-    path: ./versions/v0.9.2.yml
-    slug: v0.9.2
-    availability: stable
-  - display-name: v0.9.1
-    path: ./versions/v0.9.1.yml
-    slug: v0.9.1
-    availability: stable
-  - display-name: v0.9.0
-    path: ./versions/v0.9.0.yml
-    slug: v0.9.0
-    availability: stable
   - display-name: v0.8.4
     path: ./versions/v0.8.4.yml
     slug: v0.8.4
