@@ -4,13 +4,16 @@
 """Tests for split Node.js package assembly."""
 
 import importlib.util
+import io
 import json
 import sys
 import tarfile
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from typing import IO
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("package_node_bin", ROOT / "scripts" / "package-node-bin.py")
@@ -30,6 +33,18 @@ def required_member(archive: tarfile.TarFile, name: str) -> IO[bytes]:
 
 class PackageNodeBinTests(unittest.TestCase):
     """Verify Node metapackage and native package assembly."""
+
+    def test_print_platforms_lists_platform_keys_and_package_names(self) -> None:
+        """The platform listing is suitable for package publication checks."""
+        output = io.StringIO()
+        with patch.object(sys, "argv", ["package-node-bin.py", "--print-platforms"]):
+            with redirect_stdout(output):
+                PACKAGE_NODE_BIN.main()
+
+        self.assertEqual(
+            output.getvalue().splitlines(),
+            [f"{platform.key}\t{platform.package_name}" for platform in PACKAGE_NODE_BIN.PLATFORMS.values()],
+        )
 
     def test_builds_metapackage_and_linux_native_package(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
