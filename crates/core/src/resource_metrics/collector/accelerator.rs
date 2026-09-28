@@ -66,7 +66,9 @@ struct NvmlProcessUtilization {
 }
 
 pub(super) fn collect(process_ids: &[u32]) -> AcceleratorSample {
-    let mut sample = collect_nvml(process_ids).unwrap_or_default();
+    let sample = collect_nvml(process_ids).unwrap_or_default();
+    #[cfg(target_os = "linux")]
+    let mut sample = sample;
     #[cfg(target_os = "linux")]
     sample.processes.extend(collect_linux_drm(process_ids));
     sample

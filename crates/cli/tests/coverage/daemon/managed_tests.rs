@@ -31,6 +31,13 @@ fn managed_environment(token: &str) -> EnvScope {
     ])
 }
 
+#[cfg_attr(
+    not(unix),
+    allow(
+        clippy::permissions_set_readonly_false,
+        reason = "This branch is excluded on Unix"
+    )
+)]
 fn make_test_artifact_writable(path: &std::path::Path) {
     let mut permissions = std::fs::metadata(path).unwrap().permissions();
     #[cfg(unix)]

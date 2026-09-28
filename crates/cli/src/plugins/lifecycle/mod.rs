@@ -2096,6 +2096,13 @@ fn collect_snapshot_files(
     Ok(())
 }
 
+#[cfg_attr(
+    windows,
+    allow(
+        clippy::permissions_set_readonly_false,
+        reason = "This function clears the read-only flag only on Windows"
+    )
+)]
 fn make_snapshot_removable(root: &Path) {
     let Ok(entries) = fs::read_dir(root) else {
         return;

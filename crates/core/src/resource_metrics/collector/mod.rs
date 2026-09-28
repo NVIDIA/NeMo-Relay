@@ -37,7 +37,7 @@ pub(crate) struct CollectionTarget {
     pub(crate) start_identity: u64,
     pub(crate) measurement_scope: ResourceMeasurementScope,
     #[cfg(windows)]
-    pub(crate) job_handle: Option<std::sync::Arc<platform::OwnedJobHandle>>,
+    job_handle: Option<std::sync::Arc<platform::OwnedJobHandle>>,
 }
 
 #[derive(Debug, Clone)]

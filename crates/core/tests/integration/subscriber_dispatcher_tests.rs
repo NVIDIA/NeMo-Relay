@@ -253,7 +253,7 @@ fn queued_sanitizer_keeps_the_emission_time_scope_after_pop() {
     let scope = push_scope(
         PushScopeParams::builder()
             .name("emission-scope")
-            .scope_type(ScopeType::Agent)
+            .scope_type(ScopeType::Custom)
             .build(),
     )
     .unwrap();

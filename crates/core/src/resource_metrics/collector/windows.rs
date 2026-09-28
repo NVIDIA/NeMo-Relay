@@ -36,6 +36,7 @@ pub(super) const VIRTUAL_MEMORY_UNIT: ResourceMeasurementUnit = ResourceMeasurem
 pub(super) const PEAK_RESIDENT_MEMORY_UNIT: ResourceMeasurementUnit =
     ResourceMeasurementUnit::Bytes;
 
+#[derive(Debug)]
 pub(super) struct OwnedJobHandle(HANDLE);
 
 // SAFETY: Windows Job Object handles may be queried from any thread and this wrapper only closes

@@ -1286,8 +1286,8 @@ fn visible_generation_lock_matches_with(
         {
             return Ok(false);
         }
-        return read_generation_lock_identity(locked, lock_path)
-            .map(|identity| identity.as_deref() == Some(expected_identity));
+        read_generation_lock_identity(locked, lock_path)
+            .map(|identity| identity.as_deref() == Some(expected_identity))
     }
     #[cfg(not(windows))]
     {

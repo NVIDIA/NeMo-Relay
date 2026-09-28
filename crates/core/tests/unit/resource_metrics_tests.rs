@@ -6,11 +6,12 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use nemo_relay_types::api::event::Event;
+#[cfg(unix)]
+use nemo_relay_types::api::resource_metrics::ResourceMeasurementScope;
 use nemo_relay_types::api::resource_metrics::{
     AcceleratorDeviceMetrics, AcceleratorProcessMetrics, AcceleratorVendor,
     ResourceLimitEventCount, ResourceLimitEventKind, ResourceLimitResource,
-    ResourceMeasurementScope, ResourceMeasurementUnit, ResourceMetricsSnapshot,
-    ResourceOperatingSystem,
+    ResourceMeasurementUnit, ResourceMetricsSnapshot, ResourceOperatingSystem,
 };
 use serde_json::Value;
 
@@ -296,7 +297,7 @@ fn snapshot_serialization_covers_native_scalar_limit_and_accelerator_measurement
     snapshot.accelerator_processes = vec![AcceleratorProcessMetrics {
         vendor: AcceleratorVendor::Nvidia,
         device_identifier: "gpu-test".to_string(),
-        device_index: Some(0),
+        device_index: None,
         process_id: std::process::id(),
         memory_used: ResourceMeasurement::unavailable(later_timestamp),
         compute_utilization: ResourceMeasurement::available(
@@ -346,6 +347,42 @@ fn snapshot_serialization_covers_native_scalar_limit_and_accelerator_measurement
     assert_eq!(process["memory_used"]["value"], Value::Null);
     assert_eq!(process["memory_used"]["unit"], Value::Null);
     assert_eq!(process["compute_utilization"]["value"], 0.25);
+
+    let metric_measurements = super::metric_measurements(&snapshot);
+    nemo_relay_types::api::event::validate_metric_measurements(&metric_measurements)
+        .expect("GPU measurements have valid metric attributes");
+    let device_attributes = metric_measurements
+        .iter()
+        .find(|measurement| {
+            measurement.name == "nemo.relay.resource.accelerator.device.memory_used"
+        })
+        .and_then(|measurement| measurement.attributes.as_ref())
+        .expect("available device memory metric attributes");
+    assert_eq!(
+        device_attributes["nemo_relay.resource.accelerator.device_index"],
+        0
+    );
+    assert!(
+        device_attributes
+            .get("nemo_relay.resource.process_id")
+            .is_none()
+    );
+    let process_attributes = metric_measurements
+        .iter()
+        .find(|measurement| {
+            measurement.name == "nemo.relay.resource.accelerator.process.compute_utilization"
+        })
+        .and_then(|measurement| measurement.attributes.as_ref())
+        .expect("available process utilization metric attributes");
+    assert!(
+        process_attributes
+            .get("nemo_relay.resource.accelerator.device_index")
+            .is_none()
+    );
+    assert_eq!(
+        process_attributes["nemo_relay.resource.process_id"],
+        std::process::id()
+    );
 }
 
 #[test]

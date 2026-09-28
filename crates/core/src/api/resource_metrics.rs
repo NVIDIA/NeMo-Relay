@@ -468,12 +468,17 @@ fn accelerator_attributes(
     device_index: Option<u32>,
     process_id: Option<u32>,
 ) -> Value {
-    json!({
+    let mut attributes = json!({
         "nemo_relay.resource.accelerator.vendor": vendor,
         "nemo_relay.resource.accelerator.device_identifier": device_identifier,
-        "nemo_relay.resource.accelerator.device_index": device_index,
-        "nemo_relay.resource.process_id": process_id,
-    })
+    });
+    if let Some(device_index) = device_index {
+        attributes["nemo_relay.resource.accelerator.device_index"] = json!(device_index);
+    }
+    if let Some(process_id) = process_id {
+        attributes["nemo_relay.resource.process_id"] = json!(process_id);
+    }
+    attributes
 }
 
 fn latest_measurement_timestamp(
