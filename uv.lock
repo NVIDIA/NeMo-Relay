@@ -1524,7 +1524,7 @@ requires-dist = [
     { name = "langchain", marker = "extra == 'langchain'", specifier = ">=1.3.15,<2.0.0" },
     { name = "langchain-anthropic", marker = "extra == 'langchain'", specifier = ">=1.4.8,<2.0.0" },
     { name = "langchain-core", marker = "extra == 'langchain'" },
-    { name = "langchain-nvidia-ai-endpoints", marker = "extra == 'langchain-nvidia'", specifier = ">=1.4.1,<2.0.0" },
+    { name = "langchain-nvidia-ai-endpoints", marker = "extra == 'langchain-nvidia'", specifier = ">=1.4.2,<2.0.0" },
     { name = "langgraph", marker = "extra == 'langchain'", specifier = ">=1.2.9,<2.0.0" },
     { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=1.2.9,<2.0.0" },
     { name = "langgraph-checkpoint", marker = "extra == 'langchain'", specifier = ">=4.1.1" },

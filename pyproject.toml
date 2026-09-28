@@ -98,7 +98,7 @@ deepagents = [
 
 langchain-nvidia = [
     "nemo-relay[langchain]",
-    "langchain-nvidia-ai-endpoints>=1.4.1,<2.0.0",
+    "langchain-nvidia-ai-endpoints>=1.4.2,<2.0.0",
     "aiohttp>=3.14.3",
     "idna>=3.19",
 ]
