@@ -779,19 +779,21 @@ fn js_unknown_from_raw<T: NapiRaw>(env: &Env, value: &T) -> JsUnknown {
 struct ScopedCallbackContext {
     scope_stack: CoreScopeStackHandle,
     publication_buffer: Option<PublicationBuffer>,
-    propagation_parent_uuid: String,
-    propagation_context_json: String,
+    propagation_parent_uuid: Option<String>,
+    propagation_context: Option<nemo_relay::api::runtime::PropagationContext>,
 }
 
 impl ScopedCallbackContext {
-    fn capture() -> FlowResult<Self> {
-        let propagation_context = capture_propagation_context_handle()?;
-        Ok(Self {
+    fn capture() -> Self {
+        let propagation_context = capture_propagation_context_handle().ok();
+        Self {
             scope_stack: current_scope_stack_handle(),
             publication_buffer: capture_nested_publication_buffer(),
-            propagation_parent_uuid: propagation_context.parent_uuid.to_string(),
-            propagation_context_json: propagation_context.to_json()?,
-        })
+            propagation_parent_uuid: propagation_context
+                .as_ref()
+                .map(|context| context.parent_uuid.to_string()),
+            propagation_context,
+        }
     }
 }
 
@@ -821,12 +823,22 @@ fn scoped_json_callback_tsfn_from_wrapper(
             Ok(vec![
                 value,
                 unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), scope_stack.raw()) },
-                ctx.env
-                    .create_string(&ctx.value.context.propagation_parent_uuid)?
-                    .into_unknown(),
-                ctx.env
-                    .create_string(&ctx.value.context.propagation_context_json)?
-                    .into_unknown(),
+                match ctx.value.context.propagation_parent_uuid {
+                    Some(parent_uuid) => ctx.env.create_string(&parent_uuid)?.into_unknown(),
+                    None => ctx.env.get_undefined()?.into_unknown(),
+                },
+                match ctx.value.context.propagation_context {
+                    Some(context) => unsafe {
+                        JsUnknown::from_raw_unchecked(
+                            ctx.env.raw(),
+                            PropagationContext::to_napi_value(
+                                ctx.env.raw(),
+                                propagation_context_to_napi(context),
+                            )?,
+                        )
+                    },
+                    None => ctx.env.get_undefined()?.into_unknown(),
+                },
             ])
         },
     )?;
@@ -863,7 +875,7 @@ fn scoped_tool_execution_fn(
             let status = func.call_with_return_value(
                 ScopedJsonCall {
                     value: args,
-                    context: context?,
+                    context,
                 },
                 ThreadsafeFunctionCallMode::Blocking,
                 move |value: Option<Json>| {
@@ -900,7 +912,7 @@ fn scoped_llm_execution_fn(
             let status = func.call_with_return_value(
                 ScopedJsonCall {
                     value: request,
-                    context: context?,
+                    context,
                 },
                 ThreadsafeFunctionCallMode::Blocking,
                 move |value: Option<Json>| {
@@ -2298,7 +2310,7 @@ fn propagation_context_from_napi(
     Ok(context)
 }
 
-fn propagation_context_to_napi(
+pub(crate) fn propagation_context_to_napi(
     context: nemo_relay::api::runtime::PropagationContext,
 ) -> PropagationContext {
     PropagationContext {
@@ -2314,10 +2326,9 @@ fn callback_propagation_context(
     env: &Env,
     parent_uuid: uuid::Uuid,
 ) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
-    let context_json = callback_factory::callback_propagation_context_json(env)?
+    let context = callback_factory::callback_propagation_context(env)?
         .ok_or_else(|| napi::Error::from_reason("callback propagation context is unavailable"))?;
-    let mut context = nemo_relay::api::runtime::PropagationContext::from_json(&context_json)
-        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    let mut context = propagation_context_from_napi(context)?;
     context.parent_uuid = parent_uuid;
     let stack = effective_scope_stack(env)?;
     let stack = stack
@@ -3484,10 +3495,7 @@ pub fn llm_stream_call_execute(
     // so it knows where to send chunks.
     let func = std::sync::Arc::new(scoped_stream_callback_tsfn(&env, &func)?);
     let default_fn: LlmStreamExecutionNextFn = std::sync::Arc::new(move |req: LlmRequest| {
-        let context = match ScopedCallbackContext::capture() {
-            Ok(context) => context,
-            Err(error) => return Box::pin(async move { Err(error) }),
-        };
+        let context = ScopedCallbackContext::capture();
         let stream_id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let closed = register_stream_channel(stream_id, tx);

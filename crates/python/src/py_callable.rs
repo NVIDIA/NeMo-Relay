@@ -540,27 +540,34 @@ fn copy_middleware_invocation<'py>(
     if let Some(context) = invocation_context.as_ref() {
         let nemo_relay = py.import("nemo_relay")?;
         if let Ok(parent_var) = nemo_relay.getattr("_propagation_parent_var") {
-            let propagation_context = callback_propagation_context()
-                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+            let propagation_context = callback_propagation_context().ok();
             context.call_method1(
                 "run",
                 (
                     parent_var.getattr("set")?,
-                    propagation_context.parent_uuid.to_string(),
+                    propagation_context
+                        .as_ref()
+                        .map(|context| context.parent_uuid.to_string()),
                 ),
             )?;
             for (name, value) in [
                 (
                     "_propagation_root_var",
-                    propagation_context.root_uuid.map(|uuid| uuid.to_string()),
+                    propagation_context
+                        .as_ref()
+                        .and_then(|context| context.root_uuid.map(|uuid| uuid.to_string())),
                 ),
                 (
                     "_propagation_traceparent_var",
-                    propagation_context.traceparent,
+                    propagation_context
+                        .as_ref()
+                        .and_then(|context| context.traceparent.clone()),
                 ),
                 (
                     "_propagation_tracestate_var",
-                    propagation_context.tracestate,
+                    propagation_context
+                        .as_ref()
+                        .and_then(|context| context.tracestate.clone()),
                 ),
             ] {
                 let variable = nemo_relay.getattr(name)?;

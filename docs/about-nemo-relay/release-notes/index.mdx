@@ -39,6 +39,10 @@ changes, compatibility updates, and fixed known issues.
   late-registered subscribers now preserve the exact OpenTelemetry parent
   context, keeping managed LLM `traceparent` headers aligned with exported
   spans.
+- `PropagationContext.to_traceparent()` now returns an imported W3C
+  `traceparent` unchanged, including its original trace and span IDs.
+- OpenTelemetry spans whose parent was not observed by an exporter now join
+  the outer trace instead of starting a separate trace.
 - Invalid Relay identifiers no longer prevent later valid OpenTelemetry events
   from exporting.
 

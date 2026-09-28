@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v15";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v16";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -23,7 +23,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     publicationContextId,
     scopeStack,
     propagationParentUuid,
-    propagationContextJson,
+    propagationContext,
   ) {
     const lifecycle = { expired: false, stores: new Set() };
     const store = {
@@ -32,7 +32,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       publicationContextId,
       scopeStack,
       propagationParentUuid,
-      propagationContextJson,
+      propagationContext,
     };
     lifecycle.stores.add(store);
     return store;
@@ -45,13 +45,13 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       publicationContextId: current.publicationContextId,
       scopeStack,
       propagationParentUuid: undefined,
-      propagationContextJson: undefined,
+      propagationContext: undefined,
     };
     current.lifecycle.stores.add(store);
     if (current.lifecycle.expired) {
       store.scopeStack = null;
       store.propagationParentUuid = undefined;
-      store.propagationContextJson = undefined;
+      store.propagationContext = undefined;
     }
     return store;
   }
@@ -64,7 +64,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     for (const current of store.lifecycle.stores) {
       current.scopeStack = null;
       current.propagationParentUuid = undefined;
-      current.propagationContextJson = undefined;
+      current.propagationContext = undefined;
     }
     store.lifecycle.stores.clear();
   }
@@ -121,7 +121,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     publicationContextId,
     scopeStack,
     propagationParentUuid,
-    propagationContextJson,
+    propagationContext,
     registerAbort,
     streamResult,
     streamPush,
@@ -154,7 +154,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       publicationContextId,
       scopeStack,
       propagationParentUuid,
-      propagationContextJson,
+      propagationContext,
     );
     const settlePublication = () => {
       if (ownsPublicationState) {
@@ -286,7 +286,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         publicationContextId,
         scopeStack,
         propagationParentUuid,
-        propagationContextJson,
+        propagationContext,
         registerAbort,
         streamResult,
         streamPush,
@@ -320,7 +320,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           publicationContextId,
           scopeStack,
           propagationParentUuid,
-          propagationContextJson,
+          propagationContext,
           registerAbort,
           streamResult,
           streamPush,
@@ -334,7 +334,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         arg,
         scopeStack,
         propagationParentUuid,
-        propagationContextJson,
+        propagationContext,
       ) {
         const current = eventSanitizerContext.getStore();
         const token = callbackStore(
@@ -342,7 +342,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           current?.publicationContextId,
           scopeStack,
           propagationParentUuid,
-          propagationContextJson,
+          propagationContext,
         );
         return eventSanitizerContext.run(token, () => fn(arg));
       };
@@ -353,7 +353,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         arg,
         scopeStack,
         propagationParentUuid,
-        propagationContextJson,
+        propagationContext,
       ) {
         const current = eventSanitizerContext.getStore();
         const token = callbackStore(
@@ -361,7 +361,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           current?.publicationContextId,
           scopeStack,
           propagationParentUuid,
-          propagationContextJson,
+          propagationContext,
         );
         try {
           return eventSanitizerContext.run(token, () => fn(arg));
@@ -390,8 +390,8 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       return eventSanitizerContext.getStore()?.propagationParentUuid;
     },
 
-    callbackPropagationContextJson() {
-      return eventSanitizerContext.getStore()?.propagationContextJson;
+    callbackPropagationContext() {
+      return eventSanitizerContext.getStore()?.propagationContext;
     },
 
     withCallbackScopeStack(scopeStack, fn) {
@@ -549,18 +549,19 @@ pub(crate) fn callback_propagation_parent_uuid(env: &Env) -> napi::Result<Option
         .map(Some)
 }
 
-pub(crate) fn callback_propagation_context_json(env: &Env) -> napi::Result<Option<String>> {
+pub(crate) fn callback_propagation_context(
+    env: &Env,
+) -> napi::Result<Option<crate::api::PropagationContext>> {
     let factories = callback_factories(env)?;
-    let callback: JsFunction = factories.get_named_property("callbackPropagationContextJson")?;
+    let callback: JsFunction = factories.get_named_property("callbackPropagationContext")?;
     let value = callback.call::<JsUnknown>(None, &[])?;
     if matches!(value.get_type()?, ValueType::Undefined | ValueType::Null) {
         return Ok(None);
     }
-    value
-        .coerce_to_string()?
-        .into_utf8()?
-        .into_owned()
-        .map(Some)
+    unsafe {
+        <crate::api::PropagationContext as FromNapiValue>::from_napi_value(env.raw(), value.raw())
+            .map(Some)
+    }
 }
 
 pub(crate) fn expire_callback_context(env: &Env) -> napi::Result<()> {

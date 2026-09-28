@@ -880,7 +880,21 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
     );
     let execution_name = name.clone();
     let execution_tool_call_id = handle.tool_call_id.clone();
-    let active_trace_context = trace_context_for_managed_span(handle.uuid, handle.parent_uuid)?;
+    let active_trace_context = match trace_context_for_managed_span(handle.uuid, handle.parent_uuid)
+    {
+        Ok(context) => context,
+        Err(error) => {
+            let end_metadata = metadata_with_otel_error(metadata, &error);
+            let _ = emit_tool_end_without_output(
+                &handle,
+                end_metadata,
+                &lifecycle_subscribers,
+                lifecycle_scope_stack,
+            );
+            completion.disarm();
+            return Err(error);
+        }
+    };
     let execution =
         with_active_event_trace_context(handle.uuid, Some(active_trace_context), async move {
             let execution = {
