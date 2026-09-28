@@ -33,9 +33,10 @@ For the full release history, including individual pull requests, refer to
 ### Shared Python Worker Plugins
 
 - System-installed Python worker plugins can now validate across daemon users.
-  Their managed environments hold the attestation key, and startup checks
-  shared lifecycle state without rewriting it. Administrators must make the
-  system configuration, manifest, lifecycle state, and managed environment
+  Newly provisioned managed environments hold the attestation key; legacy
+  environments may remain valid without an environment-local key. Startup
+  checks shared lifecycle state without rewriting it. Administrators must make
+  the system configuration, manifest, lifecycle state, and managed environment
   readable by each daemon user. For setup and permissions, refer to
   [Discoverable Plugins](/configure-plugins/discoverable-plugins).
 
