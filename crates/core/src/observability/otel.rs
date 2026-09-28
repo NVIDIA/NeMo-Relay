@@ -268,17 +268,50 @@ pub(super) fn validate_trace_endpoint(endpoint: &str) -> Result<()> {
     Ok(())
 }
 
+/// Open mode used when a trace file sink creates its output file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OtlpFileSinkMode {
+    /// Append spans to an existing file or create it if missing.
+    Append,
+    /// Truncate an existing file when the sink is created.
+    #[default]
+    Overwrite,
+}
+
+impl OtlpFileSinkMode {
+    /// Parses the string mode used by the language bindings.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "append" => Some(Self::Append),
+            "overwrite" => Some(Self::Overwrite),
+            _ => None,
+        }
+    }
+
+    /// Returns whether the mode keeps an existing file's contents.
+    pub fn appends(self) -> bool {
+        matches!(self, Self::Append)
+    }
+}
+
 /// A local file destination for exported spans.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OtlpFileSinkSettings {
     /// Directory the output is confined to.
     pub output_directory: PathBuf,
-    /// Full path of the output file, which must live under `output_directory`.
-    pub path: PathBuf,
+    /// Output filename, resolved under `output_directory`.
+    pub filename: String,
     /// On-disk encoding.
     pub format: OtlpFileFormat,
-    /// Whether an existing file is appended to rather than truncated.
-    pub append: bool,
+    /// Open mode used when the file is created.
+    pub mode: OtlpFileSinkMode,
+}
+
+impl OtlpFileSinkSettings {
+    /// Returns the path this sink writes to.
+    pub fn path(&self) -> PathBuf {
+        self.output_directory.join(&self.filename)
+    }
 }
 
 impl OtlpFileSinkSettings {
@@ -308,14 +341,10 @@ impl OtlpFileSinkSettings {
                 ));
             }
         };
-        let append = match mode {
-            None | Some("overwrite") => false,
-            Some("append") => true,
-            Some(other) => {
-                return Err(format!(
-                    "mode must be 'append' or 'overwrite', got {other:?}"
-                ));
-            }
+        let mode = match mode {
+            None => OtlpFileSinkMode::default(),
+            Some(value) => OtlpFileSinkMode::parse(value)
+                .ok_or_else(|| format!("mode must be 'append' or 'overwrite', got {value:?}"))?,
         };
         let filename = match filename {
             Some(filename) => {
@@ -325,12 +354,11 @@ impl OtlpFileSinkSettings {
             }
             None => format!("nemo-relay-otlp.{}", format.extension()),
         };
-        let output_directory = PathBuf::from(output_directory);
         Ok(Self {
-            path: output_directory.join(filename),
-            output_directory,
+            output_directory: PathBuf::from(output_directory),
+            filename,
             format,
-            append,
+            mode,
         })
     }
 }
@@ -633,7 +661,7 @@ impl TraceConfig {
     fn delivery_identity(&self) -> String {
         match self {
             Self::Endpoint(config) => trace_endpoint_log_identity(&config.endpoint),
-            Self::File(config) => config.sink.path.display().to_string(),
+            Self::File(config) => config.sink.path().display().to_string(),
         }
     }
 
@@ -1367,9 +1395,9 @@ fn build_tracer_provider_with_resource(
         TraceConfig::File(file) => provider_with_exporter(
             OtlpFileSpanExporter::new(
                 &file.sink.output_directory,
-                &file.sink.path,
+                &file.sink.path(),
                 file.sink.format,
-                file.sink.append,
+                file.sink.mode.appends(),
             )
             .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?,
             config,

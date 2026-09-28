@@ -58,7 +58,7 @@ use crate::observability::atof::{
 use crate::observability::otel::{
     OpenTelemetryConfig as CoreOpenTelemetryConfig,
     OpenTelemetryFileSinkConfig as CoreOpenTelemetryFileSinkConfig, OpenTelemetrySubscriber,
-    OtlpFileSinkSettings, OtlpTransport, absolute_otlp_file_sink_directory,
+    OtlpFileSinkMode, OtlpFileSinkSettings, OtlpTransport, absolute_otlp_file_sink_directory,
     otlp_file_sink_directory_is_blank, resolve_http_trace_endpoint,
     validate_otlp_file_sink_filename,
 };
@@ -3841,15 +3841,12 @@ fn build_otel_file_config(
             "OpenTelemetry file_sinks[{index}].output_directory must be a nonblank path"
         )));
     }
-    let append = match section.mode.as_str() {
-        "append" => true,
-        "overwrite" => false,
-        other => {
-            return Err(PluginError::InvalidConfig(format!(
-                "OpenTelemetry file_sinks[{index}].mode must be 'append' or 'overwrite', got {other:?}"
-            )));
-        }
-    };
+    let mode = OtlpFileSinkMode::parse(&section.mode).ok_or_else(|| {
+        PluginError::InvalidConfig(format!(
+            "OpenTelemetry file_sinks[{index}].mode must be 'append' or 'overwrite', got {:?}",
+            section.mode
+        ))
+    })?;
     validate_otel_file_sink_batch_config(index, &section).map_err(|(_, error)| error)?;
     let filename = match section.filename {
         Some(filename) => {
@@ -3860,10 +3857,10 @@ fn build_otel_file_config(
     };
 
     let settings = OtlpFileSinkSettings {
-        path: section.output_directory.join(&filename),
         output_directory: section.output_directory,
+        filename,
         format: section.format,
-        append,
+        mode,
     };
     let mut config = CoreOpenTelemetryFileSinkConfig::new(section.otel_type, settings)
         .with_instrumentation_scope(section.instrumentation_scope)

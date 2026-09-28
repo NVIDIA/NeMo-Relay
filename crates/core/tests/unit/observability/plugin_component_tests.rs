@@ -6175,9 +6175,13 @@ fn a_file_sink_config_resolves_its_path_under_the_output_directory() {
     let config = build_otel_file_config(0, file_sink_section(directory.path())).unwrap();
 
     let settings = config.sink();
-    assert_eq!(settings.path, directory.path().join("trace.jsonl"));
+    assert_eq!(settings.path(), directory.path().join("trace.jsonl"));
     assert_eq!(settings.output_directory, directory.path());
-    assert!(!settings.append, "overwrite mode must not append");
+    assert_eq!(
+        settings.mode,
+        crate::observability::otel::OtlpFileSinkMode::Overwrite,
+        "overwrite mode must not append"
+    );
 }
 
 #[test]
@@ -6193,7 +6197,7 @@ fn a_file_sink_without_a_filename_names_the_file_after_its_format() {
         let config = build_otel_file_config(0, section).unwrap();
 
         let settings = config.sink();
-        let path = settings.path.display().to_string();
+        let path = settings.path().display().to_string();
         assert!(
             path.ends_with(extension),
             "unexpected default filename {path}"
@@ -6232,7 +6236,10 @@ fn a_file_sink_accepts_append_mode() {
     let config = build_otel_file_config(0, section).unwrap();
 
     let settings = config.sink();
-    assert!(settings.append);
+    assert_eq!(
+        settings.mode,
+        crate::observability::otel::OtlpFileSinkMode::Append
+    );
 }
 
 #[test]

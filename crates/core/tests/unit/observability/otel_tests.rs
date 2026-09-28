@@ -6413,9 +6413,9 @@ fn delivery_identity_sanitizes_endpoints_and_preserves_file_paths() {
 
     let sink = OtlpFileSinkSettings {
         output_directory: PathBuf::from("/var/log/nemo-relay"),
-        path: PathBuf::from("/var/log/nemo-relay/trace.jsonl"),
+        filename: "trace.jsonl".to_string(),
         format: crate::observability::otel_file::OtlpFileFormat::JsonLines,
-        append: false,
+        mode: crate::observability::otel::OtlpFileSinkMode::Overwrite,
     };
     // A path is not a URL; sanitizing it as one would report
     // "an invalid OTLP endpoint" and hide which destination failed.
@@ -6433,9 +6433,9 @@ fn promoted_root_resources_share_one_file_sink_stream() {
     let path = directory.path().join("trace.jsonl");
     let sink = OtlpFileSinkSettings {
         output_directory: directory.path().to_path_buf(),
-        path: path.clone(),
+        filename: "trace.jsonl".to_string(),
         format: crate::observability::otel_file::OtlpFileFormat::JsonLines,
-        append: false,
+        mode: crate::observability::otel::OtlpFileSinkMode::Overwrite,
     };
 
     let subscriber = OpenTelemetrySubscriber::new_file_sink(

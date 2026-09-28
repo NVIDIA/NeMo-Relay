@@ -648,7 +648,7 @@ fn from_parts_rejects_every_filename_that_is_not_one_plain_component() {
         None,
     )
     .unwrap();
-    assert_eq!(settings.path, Path::new("/tmp/relay/trace.jsonl"));
+    assert_eq!(settings.path(), Path::new("/tmp/relay/trace.jsonl"));
 }
 
 #[test]
@@ -692,9 +692,9 @@ fn file_sink_config(directory: &Path) -> crate::observability::otel::OpenTelemet
         crate::observability::OpenTelemetryType::Full,
         crate::observability::otel::OtlpFileSinkSettings {
             output_directory: directory.to_path_buf(),
-            path: directory.join("trace.jsonl"),
+            filename: "trace.jsonl".to_string(),
             format: OtlpFileFormat::JsonLines,
-            append: false,
+            mode: crate::observability::otel::OtlpFileSinkMode::Overwrite,
         },
     )
 }
@@ -704,9 +704,12 @@ fn a_file_sink_config_keeps_the_sink_it_was_given() {
     let directory = tempfile::tempdir().unwrap();
     let config = file_sink_config(directory.path());
 
-    assert_eq!(config.sink().path, directory.path().join("trace.jsonl"));
+    assert_eq!(config.sink().path(), directory.path().join("trace.jsonl"));
     assert_eq!(config.sink().output_directory, directory.path());
-    assert!(!config.sink().append);
+    assert_eq!(
+        config.sink().mode,
+        crate::observability::otel::OtlpFileSinkMode::Overwrite
+    );
 }
 
 #[test]
