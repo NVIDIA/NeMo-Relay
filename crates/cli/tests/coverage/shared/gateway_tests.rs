@@ -1681,6 +1681,25 @@ fn observable_headers_preserve_ambiguous_anthropic_versions_for_policy_rejection
 }
 
 #[test]
+fn observable_headers_omit_connection_named_anthropic_protocol_headers() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "connection",
+        HeaderValue::from_static("anthropic-beta, anthropic-version"),
+    );
+    headers.insert(
+        "anthropic-beta",
+        HeaderValue::from_static("compact-2026-01-12"),
+    );
+    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+
+    let observed = observable_headers(&headers);
+
+    assert!(!observed.contains_key("anthropic-beta"));
+    assert!(!observed.contains_key("anthropic-version"));
+}
+
+#[test]
 fn strips_chatgpt_plus_jwt_from_openai_route_inbound() {
     // When OPENAI_API_KEY is set the gateway strips JWT-shaped (`Bearer eyJ...`) Authorization
     // from inbound OpenAI-route requests so the auth-injection path substitutes the env key

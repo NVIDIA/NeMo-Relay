@@ -35,6 +35,9 @@ fn record_anthropic_protocol_headers(headers: &HeaderMap, output: &mut Map<Strin
         let Ok(header_name) = HeaderName::from_bytes(name.as_bytes()) else {
             continue;
         };
+        if !should_record_header(&header_name, headers) {
+            continue;
+        }
         let values: Vec<_> = headers
             .get_all(&header_name)
             .iter()

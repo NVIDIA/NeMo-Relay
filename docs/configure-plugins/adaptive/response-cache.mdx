@@ -305,13 +305,16 @@ Only complete, replayable LLM answers are stored:
   Requests require `anthropic-version: 2023-06-01`; other API versions run
   live. Threshold compaction requires the
   `compact-2026-01-12` beta, exactly one `compact_20260112` edit, and
-  `pause_after_compaction = true`. Relay caches an ordinary response when the
-  threshold is not reached or replays the single validated `compaction_delta`
-  when compaction occurs. Default non-paused threshold compaction remains live
-  because one response can mix compaction, text, and tool blocks. Valid
-  threshold continuations can cache an ordinary response and can trigger
-  another cached compaction when they also carry the paused threshold edit.
-  On-demand compaction requests and signed continuations remain live.
+  `pause_after_compaction = true`. When present, a threshold trigger must use
+  `type = "input_tokens"` with a value of at least `50,000`; other triggers
+  run live. Relay caches an ordinary response when the threshold is not reached
+  or replays the single validated `compaction_delta` when compaction occurs.
+  Default non-paused threshold compaction remains live because one response can
+  mix compaction, text, and tool blocks. A threshold continuation with a
+  `type = "compaction"` block, string `content`, and omitted, null, or string
+  `encrypted_content` can cache an ordinary response and can trigger another
+  cached compaction when it also carries the paused threshold edit. On-demand
+  compaction requests remain live.
   Version and ordered beta tokens partition these entries from ordinary
   Messages requests. Extra response-bearing fields, unknown events, sparse or
   out-of-order blocks, and missing, ambiguous, unsupported, or malformed
