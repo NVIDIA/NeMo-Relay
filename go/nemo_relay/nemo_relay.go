@@ -2773,8 +2773,6 @@ func NewOpenTelemetryFileSinkSubscriber(config OpenTelemetryFileSinkConfig) (*Op
 	cResourceAttrsJSON := C.CString(string(resourceAttrsJSON))
 	defer C.free(unsafe.Pointer(cResourceAttrsJSON))
 
-	// An omitted service name is passed as NULL so the core leaves it unset and
-	// the SDK can detect it, matching the plugin configuration path.
 	cServiceName := optionalCString(config.ServiceName)
 	defer C.free(unsafe.Pointer(cServiceName))
 	cServiceNamespace := optionalCString(config.ServiceNamespace)

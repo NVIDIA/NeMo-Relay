@@ -830,7 +830,6 @@ class TestOpenTelemetryTypes:
         payload = (tmp_path / filename).read_bytes()
         assert b"py-file-sink-agent" in payload
         if fmt == "json_lines":
-            # One record per line, decoded without the exporter's own encoder.
             lines = payload.decode().splitlines()
             assert len(lines) == 1
             assert json.loads(lines[0])["resourceSpans"]
@@ -863,7 +862,8 @@ class TestOpenTelemetryTypes:
     def test_file_sink_defaults_name_the_file_after_the_format(self, tmp_path) -> None:
         subscriber = OpenTelemetrySubscriber(OpenTelemetryFileSinkConfig("full", str(tmp_path), format="proto"))
         try:
-            assert (tmp_path / "nemo-relay-otlp.otlp.pb").is_file()
+            defaulted = list(tmp_path.glob("nemo-relay-otlp-*.otlp.pb"))
+            assert len(defaulted) == 1, defaulted
         finally:
             subscriber.shutdown()
 
@@ -905,8 +905,7 @@ class TestOpenTelemetryTypes:
             subscriber.deregister(subscriber_name)
             subscriber.shutdown()
 
-        # Every configured setting has to survive the trip through PyO3 into the
-        # exported resource, not merely be readable back off the config object.
+        # Asserted on the exported resource, not read back off the config object.
         record = json.loads((tmp_path / "full.jsonl").read_text().splitlines()[0])
         resource = record["resourceSpans"][0]["resource"]["attributes"]
         attributes = {entry["key"]: entry["value"]["stringValue"] for entry in resource}
@@ -979,8 +978,7 @@ class TestOpenTelemetryTypes:
         span_keys = {attribute["key"] for span in spans for attribute in span["attributes"]}
         span_names = [span["name"] for span in spans]
 
-        # Each option is asserted through an effect it alone produces, so a
-        # setting that is parsed but never applied fails here.
+        # Asserted per option: a setting parsed but never applied must fail here.
         assert "scope.kind" in span_keys
         assert "nv.tenant" in span_keys
         assert "deployment.environment" in resource_keys

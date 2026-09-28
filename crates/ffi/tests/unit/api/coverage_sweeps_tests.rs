@@ -3934,7 +3934,7 @@ fn otel_file_sink_subscriber_create_covers_success_and_rejection() {
             ),
             NemoRelayStatus::Ok
         );
-        assert!(directory.path().join("nemo-relay-otlp.jsonl").is_file());
+        assert_eq!(defaulted_file_names(directory.path(), "jsonl").len(), 1);
         assert_status!(
             nemo_relay_otel_subscriber_shutdown(defaulted),
             NemoRelayStatus::Ok
@@ -4186,4 +4186,17 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
         );
         types::nemo_relay_otel_subscriber_free(subscriber);
     }
+}
+
+/// Returns the timestamped default output files of the given extension.
+fn defaulted_file_names(directory: &std::path::Path, extension: &str) -> Vec<String> {
+    std::fs::read_dir(directory)
+        .expect("output directory should exist")
+        .filter_map(|entry| {
+            entry
+                .ok()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        })
+        .filter(|name| name.starts_with("nemo-relay-otlp-") && name.ends_with(extension))
+        .collect()
 }

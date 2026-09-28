@@ -133,33 +133,50 @@ fn is_confined_output(root: &Path, path: &Path) -> bool {
     })
 }
 
+/// Identifies an output file for the registry.
+fn writer_key(path: &Path) -> PathBuf {
+    let resolved_parent = path
+        .parent()
+        .and_then(|parent| parent.canonicalize().ok())
+        .or_else(|| path.parent().map(Path::to_path_buf));
+    match (resolved_parent, path.file_name()) {
+        (Some(parent), Some(filename)) => parent.join(filename),
+        _ => std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()),
+    }
+}
+
 fn shared_writer(
     root: &Path,
     path: &Path,
     format: OtlpFileFormat,
     append: bool,
 ) -> Result<Arc<SharedFileWriter>> {
-    // Keyed absolute: two configurations that spell one file differently must
-    // share its handle, not open it twice.
-    let key = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    // Confinement is enforced by `open_private`, which a reused handle never
+    // reaches, so the caller's own root is checked before anything else.
+    if !is_confined_output(root, path) {
+        return Err(OtlpFileExporterError::OpenFile {
+            path: path.to_path_buf(),
+            source: std::io::Error::other(format!(
+                "observability output '{}' is outside configured directory '{}'",
+                path.display(),
+                root.display()
+            )),
+        });
+    }
+    if let Some(parent) = path.parent() {
+        create_private_dir_all(parent).map_err(|source| {
+            OtlpFileExporterError::CreateDirectory {
+                path: parent.to_path_buf(),
+                source,
+            }
+        })?;
+    }
+    let key = writer_key(path);
     let mut registry = OPEN_WRITERS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     registry.retain(|_, writer| writer.strong_count() > 0);
     if let Some(existing) = registry.get(&key).and_then(Weak::upgrade) {
-        // Confinement is enforced by the open below, which a reused handle
-        // skips: without this a sink whose own `output_directory` excludes the
-        // path would still be handed the file another sink opened.
-        if !is_confined_output(root, path) {
-            return Err(OtlpFileExporterError::OpenFile {
-                path: path.to_path_buf(),
-                source: std::io::Error::other(format!(
-                    "observability output '{}' is outside configured directory '{}'",
-                    path.display(),
-                    root.display()
-                )),
-            });
-        }
         // Sharing a handle silently adopts the settings it was opened with, so
         // a caller that asked for something else is told rather than having its
         // records written in the other encoding.
@@ -175,17 +192,6 @@ fn shared_writer(
             }
         }
         return Ok(existing);
-    }
-    // `open_private` confines the output to `root`, but only once it is
-    // reached: create the parent only when it already lies inside `root`, so a
-    // path outside cannot create directories before it is rejected.
-    if let Some(parent) = path.parent().filter(|_| is_confined_output(root, path)) {
-        create_private_dir_all(parent).map_err(|source| {
-            OtlpFileExporterError::CreateDirectory {
-                path: parent.to_path_buf(),
-                source,
-            }
-        })?;
     }
     let file =
         open_private(root, path, append).map_err(|source| OtlpFileExporterError::OpenFile {
@@ -228,8 +234,6 @@ impl OtlpFileSpanExporter {
     fn encode(&self, request: &ExportTraceServiceRequest) -> std::result::Result<Vec<u8>, String> {
         match self.format {
             OtlpFileFormat::JsonLines => {
-                // Compact, never pretty: one record per line, so an embedded
-                // newline would split a record.
                 let mut line = serde_json::to_vec(request)
                     .map_err(|error| format!("failed to serialize OTLP/JSON: {error}"))?;
                 line.push(b'\n');
@@ -250,7 +254,6 @@ impl OtlpFileSpanExporter {
 
 impl SpanExporter for OtlpFileSpanExporter {
     async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
-        // An empty record is indistinguishable from a lost one.
         if batch.is_empty() {
             return Ok(());
         }
@@ -271,10 +274,7 @@ impl SpanExporter for OtlpFileSpanExporter {
         writer
             .write_all(&record)
             .and_then(|()| writer.flush())
-            // `flush` only moves the record into the page cache. The batch is
-            // reported to the SDK as delivered once this returns, so it is
-            // synced to disk first: a host that loses power after an
-            // acknowledged export must not lose the record.
+            // Synced, not just flushed: this export is acknowledged as delivered.
             .and_then(|()| writer.get_ref().sync_data())
             .map_err(|error| write_failure(&self.writer.path, &error))
     }

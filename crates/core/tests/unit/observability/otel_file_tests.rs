@@ -525,6 +525,38 @@ async fn a_reused_handle_is_still_confined_to_the_callers_own_directory() {
     assert!(error.to_string().contains("outside configured directory"));
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn a_symlinked_directory_shares_the_handle_of_the_file_it_resolves_to() {
+    let directory = tempfile::tempdir().unwrap();
+    let real = directory.path().join("real");
+    std::fs::create_dir_all(&real).unwrap();
+    let alias = directory.path().join("alias");
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+
+    let base = OtlpFileSpanExporter::new(
+        &real,
+        &real.join("trace.jsonl"),
+        OtlpFileFormat::JsonLines,
+        false,
+    )
+    .unwrap();
+    base.export(sample_spans(&["base"])).await.unwrap();
+
+    // The alias reaches the same file. Keying the registry lexically would open
+    // it a second time and truncate what the first exporter wrote.
+    let aliased = OtlpFileSpanExporter::new(
+        &alias,
+        &alias.join("trace.jsonl"),
+        OtlpFileFormat::JsonLines,
+        false,
+    )
+    .unwrap();
+    aliased.export(sample_spans(&["aliased"])).await.unwrap();
+
+    assert_eq!(read_json_lines(&real.join("trace.jsonl")).len(), 2);
+}
+
 #[tokio::test]
 async fn a_second_exporter_disagreeing_about_the_encoding_is_rejected() {
     let directory = tempfile::tempdir().unwrap();

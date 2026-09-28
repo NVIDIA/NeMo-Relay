@@ -1260,10 +1260,6 @@ class OpenTelemetryFileSinkConfig:
         """Add an OpenTelemetry resource attribute."""
         ...
     @property
-    def resource_attributes(self) -> dict[str, str]:
-        """Return additional OpenTelemetry resource attributes."""
-        ...
-    @property
     def attribute_mappings(self) -> list[dict[str, str]]:
         """Return configured full/OpenInference attribute aliases."""
         ...

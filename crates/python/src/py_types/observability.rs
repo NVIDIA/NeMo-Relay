@@ -600,14 +600,6 @@ impl PyOtlpFileSink {
         Ok(())
     }
 
-    #[getter]
-    pub(crate) fn resource_attributes(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        json_to_py(
-            py,
-            &serde_json::to_value(&self.resource_attributes).unwrap_or_default(),
-        )
-    }
-
     pub(crate) fn __repr__(&self) -> String {
         format!(
             "<OpenTelemetryFileSinkConfig output_directory={:?} format={:?}>",
@@ -626,8 +618,6 @@ impl PyOtlpFileSink {
             self.to_settings()?,
         )
         .with_instrumentation_scope(self.instrumentation_scope.clone());
-        // The untouched default stays unset so the SDK can detect it from
-        // OTEL_SERVICE_NAME, matching the plugin configuration path.
         if self.service_name != "unknown_service" {
             config = config.with_service_name(self.service_name.clone());
         }

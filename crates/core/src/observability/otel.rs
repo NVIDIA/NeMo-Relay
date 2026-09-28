@@ -287,11 +287,6 @@ impl OtlpFileSinkMode {
             _ => None,
         }
     }
-
-    /// Returns whether the mode keeps an existing file's contents.
-    pub fn appends(self) -> bool {
-        matches!(self, Self::Append)
-    }
 }
 
 /// A local file destination for exported spans.
@@ -352,7 +347,7 @@ impl OtlpFileSinkSettings {
                     .map_err(|message| format!("filename {message}"))?;
                 filename.to_string()
             }
-            None => format!("nemo-relay-otlp.{}", format.extension()),
+            None => default_otlp_file_sink_filename(format),
         };
         Ok(Self {
             output_directory: PathBuf::from(output_directory),
@@ -361,6 +356,18 @@ impl OtlpFileSinkSettings {
             mode,
         })
     }
+}
+
+/// Returns the default output filename for a trace file sink.
+///
+/// Timestamped so a rerun writes beside its predecessor rather than sharing or
+/// truncating it.
+pub fn default_otlp_file_sink_filename(format: OtlpFileFormat) -> String {
+    format!(
+        "nemo-relay-otlp-{}.{}",
+        chrono::Utc::now().format("%Y-%m-%d-%H.%M.%S"),
+        format.extension()
+    )
 }
 
 /// Reports whether an output directory is blank once trimmed.
@@ -1397,7 +1404,7 @@ fn build_tracer_provider_with_resource(
                 &file.sink.output_directory,
                 &file.sink.path(),
                 file.sink.format,
-                file.sink.mode.appends(),
+                matches!(file.sink.mode, OtlpFileSinkMode::Append),
             )
             .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?,
             config,

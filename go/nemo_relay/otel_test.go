@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -415,8 +416,6 @@ func TestObservabilityOpenTelemetryFileSinkConfigSerializes(t *testing.T) {
 	if sink["format"] != "proto" {
 		t.Errorf("unexpected format %v", sink["format"])
 	}
-	// Resource promotion is a supported file-sink setting, so the typed config
-	// has to be able to express it.
 	prefixes, ok := sink["promote_resource_metadata_prefixes"].([]any)
 	if !ok || len(prefixes) != 1 || prefixes[0] != "deployment." {
 		t.Errorf("unexpected promote_resource_metadata_prefixes %v", sink["promote_resource_metadata_prefixes"])
@@ -509,8 +508,9 @@ func TestOpenTelemetryFileSinkSubscriberDefaultsFilenameToFormat(t *testing.T) {
 	}
 	closeFileSink(t, subscriber)
 
-	if _, err := os.Stat(filepath.Join(dir, "nemo-relay-otlp.otlp.pb")); err != nil {
-		t.Fatalf("expected the default proto filename: %v", err)
+	defaulted, err := filepath.Glob(filepath.Join(dir, "nemo-relay-otlp-*.otlp.pb"))
+	if err != nil || len(defaulted) != 1 {
+		t.Fatalf("expected one timestamped proto file, got %v (%v)", defaulted, err)
 	}
 }
 
@@ -757,8 +757,8 @@ func TestOpenTelemetryFileSinkSubscriberAppliesSharedProjectionOptions(t *testin
 		}
 	}
 
-	// Each option is asserted through an effect it alone produces, so a setting
-	// that crosses the FFI but is never applied fails here.
+	// Asserted per option: a setting that crosses the FFI but is never applied
+	// must fail here, not pass on a substring match.
 	if !spanKeys["scope.kind"] {
 		t.Error("AttributeMappings should add the alias")
 	}
@@ -768,7 +768,7 @@ func TestOpenTelemetryFileSinkSubscriberAppliesSharedProjectionOptions(t *testin
 	if !resourceKeys["deployment.environment"] {
 		t.Error("PromoteResourceMetadataPrefixes should copy onto the resource")
 	}
-	if !containsString(spanNames, "mark:kept.mark") {
+	if !slices.Contains(spanNames, "mark:kept.mark") {
 		t.Errorf("MarkProjectionTool should emit a mark span, got %v", spanNames)
 	}
 	for _, spanName := range spanNames {
@@ -821,13 +821,4 @@ func TestOpenTelemetryFileSinkSubscriberRegisters(t *testing.T) {
 	if err := subscriber.Deregister(name); err != nil {
 		t.Fatalf("deregister: %v", err)
 	}
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }

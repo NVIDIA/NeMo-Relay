@@ -59,8 +59,8 @@ use crate::observability::otel::{
     OpenTelemetryConfig as CoreOpenTelemetryConfig,
     OpenTelemetryFileSinkConfig as CoreOpenTelemetryFileSinkConfig, OpenTelemetrySubscriber,
     OtlpFileSinkMode, OtlpFileSinkSettings, OtlpTransport, absolute_otlp_file_sink_directory,
-    otlp_file_sink_directory_is_blank, resolve_http_trace_endpoint,
-    validate_otlp_file_sink_filename,
+    default_otlp_file_sink_filename, otlp_file_sink_directory_is_blank,
+    resolve_http_trace_endpoint, validate_otlp_file_sink_filename,
 };
 use crate::observability::otel_logs::{
     OpenTelemetryLogConfig as CoreOpenTelemetryLogConfig, OpenTelemetryLogSubscriber,
@@ -85,7 +85,6 @@ use crate::plugin::{
     register_builtin_plugin,
 };
 use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
-use chrono::Utc;
 
 /// The plugin kind registered by the core crate.
 pub const OBSERVABILITY_PLUGIN_KIND: &str = "observability";
@@ -5100,9 +5099,6 @@ fn validate_distinct_opentelemetry_file_sinks(
             .filename
             .clone()
             .unwrap_or_else(|| format!("<default>.{}", file_sink.format.extension()));
-        // Compared absolute: `PathBuf` equality is component-wise, so
-        // "./traces" and "traces" would miss each other here and then open the
-        // same file with two independent offsets.
         let path = absolute_otlp_file_sink_directory(&file_sink.output_directory).join(filename);
         if let Some(other_index) = seen.insert(path.clone(), index) {
             return Err(PluginError::InvalidConfig(format!(
@@ -6053,14 +6049,6 @@ fn default_otlp_transport() -> String {
 
 fn default_otlp_file_sink_mode() -> String {
     "overwrite".to_string()
-}
-
-fn default_otlp_file_sink_filename(format: OtlpFileFormat) -> String {
-    format!(
-        "nemo-relay-otlp-{}.{}",
-        Utc::now().format("%Y-%m-%d-%H.%M.%S"),
-        format.extension()
-    )
 }
 
 fn default_otel_service_name() -> String {

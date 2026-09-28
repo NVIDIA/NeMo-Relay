@@ -452,8 +452,7 @@ describe('OpenTelemetrySubscriber.fileSink', () => {
     );
     const spanKeys = spans.flatMap((span) => span.attributes.map((a) => a.key));
 
-    // Each option is asserted through an effect it alone produces, so a
-    // setting that is parsed but never applied fails here.
+    // Asserted per option: a setting parsed but never applied must fail here.
     assert.ok(spanKeys.includes('scope.kind'), 'attributeMappings should add the alias');
     assert.ok(spanKeys.includes('nv.tenant'), 'promoteMetadataPrefixes should copy the metadata');
     assert.ok(

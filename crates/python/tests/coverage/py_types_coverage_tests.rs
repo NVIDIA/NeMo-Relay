@@ -530,7 +530,15 @@ fn test_open_telemetry_file_sink_defaults_name_the_file_after_the_format() {
         );
         let config = pyo3::Py::new(py, config).unwrap();
         let subscriber = PyOpenTelemetrySubscriber::new(config.bind(py).as_any()).unwrap();
-        assert!(directory.path().join("nemo-relay-otlp.otlp.pb").is_file());
+        assert!(
+            std::fs::read_dir(directory.path())
+                .expect("output directory should exist")
+                .filter_map(|entry| entry.ok())
+                .any(|entry| {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    name.starts_with("nemo-relay-otlp-") && name.ends_with("otlp.pb")
+                })
+        );
         subscriber.shutdown(py).unwrap();
     });
 }
