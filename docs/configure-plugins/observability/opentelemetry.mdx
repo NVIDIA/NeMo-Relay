@@ -917,6 +917,20 @@ Explicit start metadata and typed tool-call IDs remain authoritative; later
 inferred values cannot replace them. This provenance is not exported as a GenAI
 attribute.
 
+Claude Code and Codex MCP tool hooks with a qualified
+`mcp__<server>__<tool>` name receive `mcp.method.name = "tools/call"` in event
+metadata, including post-only hooks. Relay preserves existing method metadata
+and does not infer MCP identity for ordinary tools, Pi, or generic gateway events.
+The original qualified tool name remains unchanged. To include the method in
+OTLP span attributes, configure `promote_metadata_prefixes` to include
+`"mcp.method.name"`.
+
+This identifies a requested MCP tool operation, not proof that a request reached
+the server or succeeded. Permission-denied calls retain their denial and error
+metadata. The server segment is a configured alias; Relay does not derive
+`server.address`, `mcp.session.id`, or connection status from it. Hook duration
+measures the harness tool scope, not necessarily MCP transport latency.
+
 ### Error Type Mapping
 
 For managed LLM, tool, and stream failures, NeMo Relay maps structured

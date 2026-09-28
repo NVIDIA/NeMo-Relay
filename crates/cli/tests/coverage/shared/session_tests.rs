@@ -8636,3 +8636,118 @@ async fn an_inline_shell_span_closes_even_when_its_end_never_arrives() {
     drop(captured);
     deregister_subscriber(subscriber_name).unwrap();
 }
+
+#[tokio::test]
+async fn mcp_harness_metadata_reaches_tool_events_and_promoted_spans() {
+    for kind in [AgentKind::ClaudeCode, AgentKind::Codex] {
+        for ending in ["paired", "post-only", "failure", "permission-denied"] {
+            let session_id = format!("mcp-{}-{ending}", kind.as_str());
+            let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+            let events = Arc::clone(&captured);
+            register_filtered_session_subscriber(
+                &session_id,
+                tracked_sessions(&[&session_id]),
+                Arc::new(move |event| events.lock().unwrap().push(event.clone())),
+            );
+            let manager = SessionManager::new(session_test_config());
+            let adapt = match kind {
+                AgentKind::ClaudeCode => crate::agents::shared::adapters::claude_code::adapt,
+                AgentKind::Codex => crate::agents::shared::adapters::codex::adapt,
+                _ => unreachable!(),
+            };
+            let headers = HeaderMap::new();
+            for hook in ["SessionStart", "PreToolUse", "PostToolUse", "SessionEnd"] {
+                if ending == "post-only" && hook == "PreToolUse" {
+                    continue;
+                }
+                if ending == "permission-denied" && hook == "PostToolUse" {
+                    manager
+                        .inner
+                        .lock()
+                        .await
+                        .get_mut(&session_id)
+                        .unwrap()
+                        .close_permission_denied_tool("mcp-call")
+                        .unwrap();
+                    continue;
+                }
+                let hook = if ending == "failure" && hook == "PostToolUse" {
+                    if kind == AgentKind::Codex {
+                        "toolFailed"
+                    } else {
+                        "PostToolUseFailure"
+                    }
+                } else {
+                    hook
+                };
+                let outcome = adapt(
+                    json!({
+                        "session_id": session_id, "hook_event_name": hook,
+                        "tool_name": "mcp__docs__search", "tool_use_id": "mcp-call",
+                        "tool_input": {"query": "example"}, "tool_response": {"ok": true},
+                    }),
+                    &headers,
+                );
+                manager
+                    .apply_events(&headers, outcome.events)
+                    .await
+                    .unwrap();
+            }
+            flush_subscribers().unwrap();
+            deregister_subscriber(&session_id).unwrap();
+            let events = captured.lock().unwrap();
+            let tool_events: Vec<_> = events
+                .iter()
+                .filter(|event| event.tool_call_id() == Some("mcp-call"))
+                .collect();
+            assert_eq!(tool_events.len(), 2, "{session_id}");
+            let end = tool_events
+                .iter()
+                .find(|event| event.scope_category() == Some(ScopeCategory::End))
+                .unwrap();
+            // A denied close has no completion hook, so its method may exist only
+            // on the start. Ordinary completion must expose it to metric subscribers.
+            if ending != "permission-denied" {
+                assert_eq!(end.metadata().unwrap()["mcp.method.name"], "tools/call");
+            } else {
+                assert_eq!(end.metadata().unwrap()["status"], "denied");
+                assert_eq!(end.metadata().unwrap()["error.type"], "guardrail_rejected");
+            }
+            let exporter = InMemorySpanExporterBuilder::new().build();
+            let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+                .with_simple_exporter(exporter.clone())
+                .build();
+            let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type_and_options(
+                provider,
+                "mcp-normalization",
+                OpenTelemetryType::GenAi,
+                nemo_relay::observability::otel::OpenTelemetrySubscriberOptions {
+                    promote_metadata_prefixes: vec!["mcp.method.name".into()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            for event in events.iter() {
+                subscriber.subscriber()(event);
+            }
+            subscriber.force_flush().unwrap();
+            let spans = exporter.get_finished_spans().unwrap();
+            let tool = spans
+                .iter()
+                .find(|span| span.name == "execute_tool mcp__docs__search")
+                .unwrap();
+            let attrs = attr_map(&tool.attributes);
+            assert_eq!(attrs["mcp.method.name"], "tools/call");
+            assert_eq!(attrs["gen_ai.tool.call.id"], "mcp-call");
+            assert!(!attrs.contains_key("server.address"));
+            assert!(!attrs.contains_key("mcp.session.id"));
+            if ending == "permission-denied" {
+                assert!(matches!(
+                    tool.status,
+                    opentelemetry::trace::Status::Error { .. }
+                ));
+            }
+            subscriber.shutdown().unwrap();
+        }
+    }
+}
