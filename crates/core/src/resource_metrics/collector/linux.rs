@@ -258,7 +258,7 @@ fn collect_cgroup_members(directory: &Path, members: &mut BTreeSet<u32>) -> io::
         members.extend(
             processes
                 .split_whitespace()
-                .filter_map(|value| value.parse().ok()),
+                .filter_map(|value| value.parse::<u32>().ok()),
         );
     }
     for entry in fs::read_dir(directory)? {

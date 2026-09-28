@@ -255,7 +255,7 @@ unsafe fn symbol<T: Copy>(library: &Library, name: &[u8]) -> Option<T> {
 }
 
 unsafe fn read_nvml_uuid(query: NvmlDeviceGetUuid, device: NvmlDevice) -> Option<String> {
-    let mut buffer = [0_i8; 96];
+    let mut buffer: [c_char; 96] = [0; 96];
     // SAFETY: `buffer` is writable for its reported length and `device` is a live NVML handle.
     if unsafe { query(device, buffer.as_mut_ptr(), buffer.len() as u32) } != NVML_SUCCESS {
         return None;
