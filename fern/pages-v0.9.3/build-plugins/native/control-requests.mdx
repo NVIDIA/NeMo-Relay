@@ -1,0 +1,175 @@
+---
+title: "Control Requests"
+description: "Block and rewrite tool and LLM requests with explicit native configuration."
+position: 23
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+The example's `requests` group separates blocking policy from request rewriting. Its
+conditional guardrails read `blocked_tools`, `blocked_models`, and `mode`; its request
+intercepts read the configured header, priority, and `break_chain` values. Disabling the
+group installs none of those registrations.
+
+## Register Policy Only When Configured
+
+The tool guardrail receives the managed tool name and real JSON request. Returning
+`Some(reason)` blocks execution; returning `None` continues the pipeline. `observe` mode
+uses the same configuration without blocking, which lets an operator stage a policy.
+
+```rust
+if config.requests.enabled {
+    context.register_tool_conditional_execution_guardrail(
+        "documentation_tool_policy",
+        10,
+        {
+            let mode = config.requests.mode.clone();
+            let blocked = config.requests.blocked_tools.clone();
+            move |name, _args| {
+                let mode = mode.clone();
+                let blocked = blocked.clone();
+                async move {
+                    Ok((mode == "enforce" && blocked.contains(&name))
+                        .then(|| format!(
+                            "tool '{name}' is blocked by documentation policy"
+                        )))
+                }
+            }
+        },
+    )?;
+
+    context.register_tool_request_intercept(
+        "documentation_tool_request",
+        config.requests.priority,
+        config.requests.break_chain,
+        {
+            let tag = config.tag.clone();
+            move |name, request| {
+                let tag = tag.clone();
+                async move { Ok(tag_tool_request(request, &name, &tag)) }
+            }
+        },
+    )?;
+}
+```
+
+`tag_tool_request` returns a new object containing `plugin_tag` and `plugin_tool`; it
+does not mutate host-owned memory. A non-object request is returned unchanged. The
+priority and `break_chain` arguments come directly from the component configuration.
+
+## Conditional Guardrails Block Real Execution
+
+In `observe` mode, the example allows configured names to execute without blocking. In
+`enforce` mode, its tool conditional guardrail rejects a matching
+tool and its LLM conditional guardrail rejects a matching model before the real callback
+runs. Validation rejects any other mode and requires string arrays for both block lists.
+
+This is execution policy, unlike redaction. A rejected call produces the managed error
+path and never invokes the application callback. Tests therefore count callback
+invocations as well as checking the returned error.
+
+## Request Intercepts Rewrite the Real Request
+
+The tool request intercept adds configured policy metadata to the JSON request and
+returns it. The LLM request intercept adds the configured header and returns the full
+[request-intercept outcome](/reference/llm-request-intercept-outcomes), including the
+original annotated request. Preserving the
+annotation matters because a codec can already have normalized the request for later
+middleware.
+
+```rust
+context.register_llm_conditional_execution_guardrail(
+    "documentation_llm_policy",
+    10,
+    {
+        let mode = config.requests.mode.clone();
+        let blocked = config.requests.blocked_models.clone();
+        move |request| {
+            let mode = mode.clone();
+            let blocked = blocked.clone();
+            async move {
+                let model = request.content
+                    .get("model")
+                    .and_then(Json::as_str)
+                    .unwrap_or_default();
+                Ok((mode == "enforce"
+                    && blocked.iter().any(|candidate| candidate == model))
+                    .then(|| format!(
+                        "model '{model}' is blocked by documentation policy"
+                    )))
+            }
+        }
+    },
+)?;
+
+context.register_llm_request_intercept(
+    "documentation_llm_request",
+    config.requests.priority,
+    config.requests.break_chain,
+    {
+        let header_name = config.requests.header_name.clone();
+        let header_value = config.requests.header_value.clone();
+        let emit_pending_marks = config.execution.emit_pending_marks;
+        move |_name, mut request, annotated| {
+            let header_name = header_name.clone();
+            let header_value = header_value.clone();
+            async move {
+                request.headers.insert(
+                    header_name.clone(),
+                    Json::String(header_value),
+                );
+                let mut outcome = LlmRequestInterceptOutcome::new(request, annotated)
+                    .with_optimization_contribution(
+                        LlmOptimizationContribution::new(
+                            "examples.rust_native_policy",
+                            "request_rewrite",
+                        ),
+                    );
+                if emit_pending_marks {
+                    outcome = outcome.with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("example.native.llm_request")
+                            .category(EventCategory::custom())
+                            .data(json!({ "header": header_name }))
+                            .build(),
+                    );
+                }
+                Ok(outcome)
+            }
+        }
+    },
+)?;
+```
+
+The returned outcome keeps `annotated` alongside the rewritten provider request. Relay
+emits the optional mark and records the optimization contribution; neither appears in
+the provider request or provider response seen by the application.
+
+Both request-intercept registrations take `requests.priority` and
+`requests.break_chain`. Priority decides
+where each intercept appears after global and visible scope-local entries are merged. If
+`break_chain` is true, later request intercepts do not run after this one. The example
+does not hide these choices in code constants: they are schema-checked configuration and
+appear in the validation messages.
+
+## Verify Request Policy
+
+Use the following procedure to verify policy, rewriting, ordering, and annotation
+preservation independently:
+
+1. Activate `requests.mode = "enforce"` with one blocked tool, one blocked model,
+   priority 20, and `break_chain = false`.
+2. Call each blocked name and confirm that its real callback count remains zero. Call an
+   allowed name and confirm normal execution.
+3. Inspect the allowed tool request and LLM headers in the real callbacks. They must
+   contain the configured values, proving that request intercepts affect execution.
+4. Register a later test intercept, set `break_chain = true`, and repeat the call. Confirm
+   that the example rewrite runs and the later intercept does not.
+5. Repeat an LLM call with an annotated request and confirm that later request intercepts
+   and the managed start-event path receive the annotation unchanged.
+6. Set `requests.enabled = false`, reactivate, and confirm that blocked names execute and
+   no request is rewritten.
+
+Success means configuration independently controls policy and rewriting, guardrails
+block before side effects, intercept ordering is reproducible, and annotations survive
+the complete request path.

@@ -1,0 +1,332 @@
+---
+title: "Architecture"
+description: ""
+position: 4
+---
+import { MermaidStyles } from "@/components/MermaidStyles";
+
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+This page explains how NeMo Relay connects [scopes](/about-nemo-relay/concepts/scopes),
+[middleware](/about-nemo-relay/concepts/middleware),
+[plugins](/about-nemo-relay/concepts/plugins),
+[events](/about-nemo-relay/concepts/events), and
+[subscribers](/about-nemo-relay/concepts/subscribers).
+
+## Architecture Diagram
+
+This diagram shows how runtime hosts and integrations reach the shared Rust
+runtime. Plugin components install reusable behavior, and subscribers deliver
+event snapshots to in-process consumers or external backends.
+
+<MermaidStyles />
+
+```mermaid
+flowchart TB
+    subgraph AppLayer[Runtime Hosts and Integrations]
+        CLI[NeMo Relay CLI]
+        App[Application Code]
+        Framework[Framework Integration]
+    end
+
+    subgraph BindingLayer[Language Bindings]
+        Bindings[Language Bindings]
+    end
+
+    subgraph PluginLayer[Plugin System and Components]
+        PluginSystem[Plugin System]
+        Components[Adaptive / Observability / Guardrail Components]
+        PluginSystem -->|activates| Components
+    end
+
+    subgraph CoreLayer[Core Runtime]
+        Core[Rust Core Runtime]
+
+        subgraph RuntimeState[Runtime State]
+            Scope[Scope Stack]
+            Registry[Middleware Registries]
+        end
+
+        Events[Event Stream]
+        Dispatcher[Async Subscriber Dispatcher]
+    end
+
+    subgraph ObsLayer[Subscribers and Observability Backends]
+        Subs[Subscribers / Exporters]
+        Backends[Files / OTLP / Other Backends]
+    end
+
+    App -->|uses| Framework
+    App -. direct use .-> Bindings
+    App -->|registers and configures| PluginSystem
+    Framework -->|calls| Bindings
+    CLI -->|hosts| Core
+    CLI -->|loads configuration| PluginSystem
+    Bindings --> Core
+    Components -->|register middleware| Registry
+    Components -->|register subscribers| Subs
+    Core -->|updates| Scope
+    Core -->|resolves| Registry
+    Core -->|emits| Events
+    Events -->|enqueue snapshots| Dispatcher
+    Dispatcher -->|deliver FIFO| Subs
+    Subs -->|export to| Backends
+
+    class AppLayer grey-hint;
+    class BindingLayer grey-hint;
+    class PluginLayer grey-hint;
+    class CoreLayer grey-hint;
+    class ObsLayer grey-hint;
+    class RuntimeState grey-lightest;
+    class CLI purple-lightest;
+    class App purple-lightest;
+    class Framework yellow-lightest;
+    class Bindings green-lightest;
+    class PluginSystem green-light;
+    class Components blue-lightest;
+    class Core green-light;
+    class Scope green-light;
+    class Registry green-light;
+    class Events green-light;
+    class Dispatcher green-light;
+    class Subs green-light;
+    class Backends grey-light;
+```
+
+Adaptive behavior is one plugin component installed through the same lifecycle
+as observability or PII redaction. It is not a separate runtime layer.
+
+## Runtime Model
+
+NeMo Relay combines a small number of runtime pieces into one shared execution
+model:
+
+- The [**scope stack**](/about-nemo-relay/concepts/scopes) answers where work
+  currently belongs.
+- The [**middleware registries**](/about-nemo-relay/concepts/middleware) answer
+  what should happen around that work.
+- The [**plugin system**](/about-nemo-relay/concepts/plugins) installs reusable
+  runtime behavior from configuration.
+- The [**event records**](/about-nemo-relay/concepts/events) preserve what
+  happened and how work was related.
+- The [**async subscriber dispatcher**](/about-nemo-relay/concepts/subscribers#waiting-for-delivery)
+  delivers event snapshots after emission.
+- [**Subscribers and exporters**](/about-nemo-relay/concepts/subscribers#common-subscriber-roles)
+  consume those snapshots.
+
+Every managed tool or LLM call resolves the conditional and intercept middleware
+visible from the active scope before it executes. Payload sanitization and event
+publication are queued observability work: they do not delay the real callback
+or result, and `flush_subscribers` is the explicit delivery barrier. When the
+runtime emits an event, it records the active scope UUID as parentage. The scope
+stack changes as work opens and closes; the parent-linked event records remain
+available to subscribers.
+
+## Main Runtime Pieces
+
+These components are the primary building blocks that make up the runtime model.
+
+### Scope Stack
+
+The active scope stack defines the current context for runtime work.
+It establishes:
+
+- Parent-child relationships between events
+- Scope-local visibility for middleware and subscribers
+- Cleanup boundaries for scope-owned registrations
+- Isolation across concurrent requests or workers
+
+### Middleware Registries
+
+The middleware registries hold the active intercepts and guardrails for tool and
+LLM execution. Request intercepts can rewrite real requests, conditional
+guardrails can reject execution, and sanitize guardrails can change emitted
+observability payloads. Managed helpers read those registries before invoking
+the real callback.
+
+Async middleware callbacks are awaited as part of managed execution. The
+managed call does not advance past that middleware callback until the callback
+returns.
+
+### Plugin System
+
+The plugin system installs reusable runtime components from configuration. A
+plugin can register middleware, subscribers, or related behavior without
+requiring each application call site to repeat the setup.
+
+### Event Emission
+
+The runtime emits structured events for scopes, tools, LLMs, and named marks.
+Those parent-linked records are the canonical history of runtime behavior.
+Native Rust, Python, Node.js, and FFI event-producing APIs enqueue subscriber
+work and return without waiting for subscriber callbacks or exporter work.
+
+### Subscribers and Exporters
+
+Subscribers consume event snapshots through the background dispatcher. Some
+stay in process. Exporter subscribers can write
+[ATOF JSONL](/configure-plugins/observability/atof), project events into
+[ATIF trajectories](/configure-plugins/observability/atif), or emit
+[OpenTelemetry traces](/configure-plugins/observability/opentelemetry).
+Typical destinations include in-process application logic, local files and
+artifact pipelines, OTLP-compatible observability backends, and evaluation or
+visualization tools.
+
+This delivery happens after event submission and is separate from awaited async
+middleware. Use the binding flush API when a test or shutdown path must wait for
+already queued subscriber work. For manually registered exporters, follow the
+exporter's documented teardown order before process exit. The
+[ATOF](/configure-plugins/observability/atof),
+[OpenTelemetry](/configure-plugins/observability/opentelemetry), and
+[OpenInference](/configure-plugins/observability/openinference) exporters
+deregister to stop new deliveries, force-flush queued work, and then shut down.
+The [ATIF](/configure-plugins/observability/atif) export operation drains queued
+subscriber work before taking its snapshot; after export, deregister the
+subscriber and clear the exporter state. Clearing plugin configuration owns
+teardown for plugin-installed exporters.
+
+## Where Runtime State Lives
+
+Runtime state is easiest to understand by separating ownership from process-wide
+registration.
+
+### Scope Ownership
+
+The scope stack defines:
+
+- Where work belongs
+- Which scope-local behavior is visible
+- When scope-local registrations are cleaned up
+- Whether concurrent requests stay isolated
+
+Only scopes are pushed onto the stack. Managed LLM and tool calls emit lifecycle
+records that use the current top scope as `parent_uuid`; they do not become
+stack entries. This example shows an agent scope with a nested function scope
+named `turn-a`.
+
+```mermaid
+flowchart BT
+    Root["BOTTOM: Implicit root<br/>uuid = root-a"]
+    Agent["Agent scope<br/>uuid = agent-a<br/>parent_uuid = root-a"]
+    Turn["TOP: Function scope (turn)<br/>uuid = turn-a<br/>parent_uuid = agent-a"]
+
+    Root -->|"push agent-a"| Agent
+    Agent -->|"push turn-a"| Turn
+
+    class Root grey-light;
+    class Agent,Turn green-light;
+```
+
+With `turn-a` at the top, managed LLM and tool records receive
+`parent_uuid = turn-a`, so they are siblings in the event tree. Popping
+`turn-a` returns `agent-a` to the top and removes registrations owned by the
+turn. A concurrent request uses a separate stack.
+
+### Middleware Ownership
+
+Middleware exists at two levels:
+
+- **global registrations** stay active process-wide until removed
+- **scope-local registrations** are owned by one scope and disappear when that scope closes
+
+That split lets long-lived defaults coexist with request-specific or task-specific behavior.
+
+The following diagram shows how global and scope-local middleware are resolved
+for two concurrent requests.
+
+```mermaid
+flowchart TB
+    Global["Global middleware<br/>process-wide"]
+
+    subgraph RequestA["Request A scope stack"]
+        LocalA["Scope-local middleware<br/>owned by agent-a"]
+        ResolveA["Merge visible entries<br/>and order by priority"]
+        CallA["Managed call A"]
+        CloseA["Close agent-a"]
+        LocalA --> ResolveA --> CallA
+        CloseA -.->|"removes"| LocalA
+    end
+
+    subgraph RequestB["Request B scope stack"]
+        LocalB["Scope-local middleware<br/>owned by agent-b"]
+        ResolveB["Merge visible entries<br/>and order by priority"]
+        CallB["Managed call B"]
+        LocalB --> ResolveB --> CallB
+    end
+
+    Global --> ResolveA
+    Global --> ResolveB
+
+    class Global blue-lightest;
+    class RequestA,RequestB grey-lightest;
+    class LocalA,LocalB green-lightest;
+    class ResolveA,ResolveB green-light;
+    class CallA,CallB yellow-lightest;
+    class CloseA grey-light;
+```
+
+Global entries are visible to both calls. Each scope-local entry is visible
+only through its owning stack and is removed when that scope closes.
+
+## Managed Execution Pipeline
+
+Managed tool and LLM execution follows the same high-level order:
+
+1. Conditional-execution guardrails decide whether work can proceed.
+2. Request intercepts can rewrite the real request.
+3. Sanitize-request guardrails can rewrite the emitted start-event payload.
+4. Execution intercepts wrap or replace the user callback.
+5. The user callback runs.
+6. Sanitize-response guardrails can rewrite the emitted end-event payload.
+
+The following sequence shows where each middleware family runs during a managed
+call.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Caller as Application / Framework
+    participant Runtime as NeMo Relay Runtime
+    participant Conditional as Conditional Guardrails
+    participant Request as Request Intercepts
+    participant Sanitizers as Request / Response Sanitizers
+    participant Execution as Execution Intercepts
+    participant Callback as Real Callback
+    participant Dispatcher as Async Subscriber Dispatcher
+
+    Caller->>Runtime: managed tool or LLM call
+    Runtime->>Conditional: evaluate real request
+    alt rejected
+        Conditional-->>Runtime: rejection
+        Runtime-->>Caller: guardrail error
+    else allowed
+        Conditional-->>Runtime: continue
+        Runtime->>Request: transform real request
+        Request-->>Runtime: intercepted request
+        Runtime->>Sanitizers: sanitize event-only request copy
+        Sanitizers-->>Runtime: start-event payload
+        Runtime->>Dispatcher: enqueue start event
+        Runtime->>Execution: invoke intercept chain
+        alt intercept replaces execution
+            Execution-->>Runtime: replacement result
+        else intercept calls next
+            Execution->>Callback: invoke real callback
+            Callback-->>Execution: real result
+            Execution-->>Runtime: real result
+        end
+        Runtime->>Sanitizers: sanitize event-only response copy
+        Sanitizers-->>Runtime: end-event payload
+        Runtime->>Dispatcher: enqueue end event
+        Runtime-->>Caller: return real result
+    end
+```
+
+Two distinctions matter:
+
+- Intercepts affect the real execution path
+- Sanitize guardrails affect the emitted observability payload
+
+For the expanded request-to-response runtime path, including streaming and
+subscriber handoff, refer to
+[Managed Execution Order](/about-nemo-relay/concepts/middleware#managed-execution-order).

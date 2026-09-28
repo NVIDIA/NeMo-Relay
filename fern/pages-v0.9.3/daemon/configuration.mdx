@@ -1,0 +1,534 @@
+---
+title: "Configuration and Managed Clients"
+description: "Prepare system configuration, credentials, and immutable coding-harness settings."
+position: 3
+---
+
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+The administrator installs shared files. Each user supplies a private route
+credential through the harness's launch environment. Prepare these files before
+starting the service runbook for your platform.
+
+## System Configuration
+
+| File | Linux and macOS | Windows |
+| --- | --- | --- |
+| Runtime configuration | `/etc/nemo-relay/config.toml` | `%ProgramData%\nemo-relay\config.toml` |
+| Plugin manifest | `/etc/nemo-relay/plugins.toml` | `%ProgramData%\nemo-relay\plugins.toml` |
+| Identity state | See the resolution order below. | See the resolution order below. |
+
+Relay resolves identity state in this order on every platform, including Windows:
+
+1. If `XDG_CONFIG_HOME` is set, use `<XDG_CONFIG_HOME>/nemo-relay/daemon`.
+2. Otherwise, if `HOME` is set, use `<HOME>/.config/nemo-relay/daemon`.
+3. Otherwise, if `USERPROFILE` is set, use `<USERPROFILE>/.config/nemo-relay/daemon`.
+
+<Note>
+On Windows, `HOME` takes precedence over `USERPROFILE`. Check the environment of
+the actual daemon or client process before backing up its keys and trust pins.
+The service runbooks set an explicit `XDG_CONFIG_HOME` for the daemon. It does
+not change the managed worker's system configuration path.
+</Note>
+
+Client identities stay with the user and must not be shared or copied into a
+machine image.
+
+For a new deployment, create `config.toml` with these contents:
+
+```toml
+[upstream]
+openai_base_url = "https://api.openai.com/v1"
+anthropic_base_url = "https://api.anthropic.com"
+
+[daemon.logging]
+level = "info"
+stderr_enabled = true
+stderr_format = "jsonl"
+```
+
+Confirm provider URL fields against [Provider Routing](/nemo-relay-cli/basic-usage).
+Use your approved provider URLs when they differ from these defaults. Set the same
+routing on the daemon and clients for consistent pass-through behavior. The
+primary `nemo-relay daemon` process reads only `[daemon.logging]`; `[logging]`
+continues to configure user-space Relay processes such as agent launches. Do not
+store users' provider credentials in this shared file. Info-level logs expose
+readiness events used by the runbooks; Relay's default log level is `error`.
+
+Create `plugins.toml` with the approved configuration from
+[Configure Plugins](/configure-plugins/about). A minimal file with no plugins is:
+
+```toml
+version = 1
+components = []
+```
+
+That minimal file is useful to bring up transport, but does not add observability
+or policy checks. For deployment acceptance, enable an approved exporter or
+policy and check its result. For example, use the
+[ATOF exporter](/configure-plugins/observability/atof) with a collector reachable
+by each client. Do not direct all user workers to one shared writable log file.
+
+On Unix, create `/etc/nemo-relay` as root with mode 0755 and install the two
+configuration files as root with mode 0644. On Windows, create
+`C:\ProgramData\nemo-relay` as an administrator and allow users read access only.
+If the directory is new, set its ACLs before distributing files:
+
+```powershell
+New-Item -ItemType Directory -Force 'C:\ProgramData\nemo-relay' | Out-Null
+icacls 'C:\ProgramData\nemo-relay' /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX'
+```
+
+After saving the examples as local `config.toml` and `plugins.toml` files,
+install them on a new Unix deployment:
+
+```bash
+sudo install -d -m 0755 /etc/nemo-relay
+sudo install -m 0644 config.toml plugins.toml /etc/nemo-relay/
+```
+
+On Windows, copy them after setting the directory ACLs above:
+
+```powershell
+Copy-Item .\config.toml, .\plugins.toml 'C:\ProgramData\nemo-relay\'
+```
+
+For an existing installation, merge approved settings rather than replacing files
+or ACLs blindly. Managed workers ignore personal runtime configuration, plugin
+directories, and lifecycle state. Install required plugin binaries and dependencies
+in the administrator-managed locations referenced by the system manifest.
+
+## Provision Client Credentials
+
+Provision one 32-byte random, base64url-encoded token for each machine-user
+identity. Keep the same token across that identity's harness sessions. Do not
+regenerate it on every login. A token is not a model-provider key and does not
+replace the user's normal provider login.
+
+Your enterprise secret service can provision the token directly. For a small
+deployment, choose the commands for your platform.
+
+<Tabs>
+<Tab title="Linux and macOS">
+
+This example creates a private local bootstrap file once, without
+printing the token. It requires Python 3 and fails if the file already exists:
+
+```bash
+python3 - <<'PYTOKEN'
+import os
+import secrets
+from pathlib import Path
+root = Path.home() / '.config' / 'nemo-relay-bootstrap'
+root.mkdir(mode=0o700, parents=True, exist_ok=True)
+root.chmod(0o700)
+fd = os.open(root / 'client-token', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, 'w') as token_file:
+    token_file.write(secrets.token_urlsafe(32) + '\n')
+PYTOKEN
+export NEMO_RELAY_CLIENT_TOKEN="$(cat "$HOME/.config/nemo-relay-bootstrap/client-token")"
+export ANTHROPIC_CUSTOM_HEADERS="x-nemo-relay-client-token: ${NEMO_RELAY_CLIENT_TOKEN}"
+```
+
+</Tab>
+<Tab title="Windows PowerShell">
+
+Create a protected bootstrap directory as the target user and generate
+the token once. Do not run this block again for an existing credential:
+
+```powershell
+$RelaySecretDir = Join-Path $env:LOCALAPPDATA 'nemo-relay-bootstrap'
+$RelayUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+New-Item -ItemType Directory -Force $RelaySecretDir | Out-Null
+icacls $RelaySecretDir /inheritance:r /grant:r "${RelayUser}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
+$RelayTokenFile = Join-Path $RelaySecretDir 'client-token'
+if (Test-Path $RelayTokenFile) { throw 'A token already exists; reuse it.' }
+$RelayBytes = New-Object byte[] 32
+$RelayRng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$RelayRng.GetBytes($RelayBytes)
+$RelayRng.Dispose()
+$RelayToken = [Convert]::ToBase64String($RelayBytes).TrimEnd('=').Replace('+','-').Replace('/','_')
+[System.IO.File]::WriteAllText($RelayTokenFile, $RelayToken)
+$env:NEMO_RELAY_CLIENT_TOKEN = [System.IO.File]::ReadAllText($RelayTokenFile).Trim()
+$env:ANTHROPIC_CUSTOM_HEADERS = "x-nemo-relay-client-token: $env:NEMO_RELAY_CLIENT_TOKEN"
+```
+
+</Tab>
+</Tabs>
+
+For later launches, run only the environment-loading lines, using the existing
+file. Use an administrator-provided launcher or login-environment mechanism to
+repeat that loading before starting the harness. Relay does not install a login
+agent. Launch desktop applications through that prepared environment; shell
+exports do not update an app that is already running.
+
+The Claude header assignment above assumes no other custom headers are required.
+If your deployment needs other headers, preserve those and ensure there is exactly
+one `x-nemo-relay-client-token` entry with the matching token. Do not put the
+credential in the shared bundle, command-line arguments, service unit, or logs.
+
+## Choose Stable Deployment Paths
+
+| Platform | Local dispatcher executable | Installed bundle |
+| --- | --- | --- |
+| Linux and macOS | `/opt/nvidia/bin/nemo-relay` | `/opt/nvidia/share/nemo-relay-managed-v1` |
+| Windows | `C:/ProgramData/NVIDIA/NeMoRelay/nemo-relay.exe` | `C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay-managed-v1` |
+| Remote Linux client | `/opt/nvidia/bin/nemo-relay-dispatch` | `/opt/nvidia/share/nemo-relay-managed-v1` |
+
+The binary itself can be the stable dispatcher. The remote Linux example uses a
+small administrator-owned wrapper to supply worker network settings. Keep the
+chosen path fixed across binary upgrades. Dispatcher paths must contain no spaces
+or shell metacharacters, including on Windows. Bundle generation checks path shape;
+deployment tooling must enforce ownership and permissions.
+
+On Windows, use forward slashes in `--dispatcher-command`. Generated hooks can
+run in Git Bash, which treats backslashes as escape characters. PowerShell file
+paths elsewhere in these examples can use backslashes.
+
+## Route Authentication
+
+The managed topology has the following processes:
+
+- `nemo-relay daemon` owns the public LLM and hook endpoints and the
+  authoritative route broker.
+- `nemo-relay daemon mcp` registers one MCP client reference for the current
+  machine-user identity. It advertises no MCP tools.
+- `nemo-relay daemon hook` forwards one native hook payload using the managed
+  route credential.
+- `nemo-relay daemon worker` runs the per-machine-user Relay configuration and
+  remains attached to the daemon for its useful lifetime.
+
+All LLM and hook paths remain at the daemon root. Managed settings do not use
+per-user route URLs. Requests use one Relay-specific public credential header:
+
+```text
+x-nemo-relay-client-token: <base64url-encoded-256-bit-credential>
+```
+
+Pi provider registrations also preserve Pi's runtime-selected endpoint in
+`x-nemo-relay-upstream-base-url`. The authenticated daemon consumes that
+routing header and removes it before contacting the provider. It is runtime
+model metadata, not part of the managed settings artifact.
+
+Enterprise bootstrap must provide the credential through this environment
+variable:
+
+```bash
+export NEMO_RELAY_CLIENT_TOKEN='<credential>'
+```
+
+Claude Code reads custom provider headers from its native environment variable,
+so the same bootstrap must derive exactly one header from that credential:
+
+```bash
+export ANTHROPIC_CUSTOM_HEADERS="x-nemo-relay-client-token: ${NEMO_RELAY_CLIENT_TOKEN}"
+```
+
+Do not append another `x-nemo-relay-client-token` entry to an existing custom
+header value. Managed diagnostics reject a missing, duplicate, or mismatched
+credential header.
+
+The same credential identifies MCP registration, Codex and Claude LLM
+requests, Pi provider requests, and managed hook requests. The daemon does
+not require a token file or a token environment variable. During signed MCP
+registration, it binds the credential digest to the user-machine fingerprint.
+An existing binding cannot be reassigned to another fingerprint. The daemon
+stores only credential digests, removes the public header before forwarding
+a request, and preserves the caller's provider authentication.
+
+Enrollment is open to anyone who can reach the daemon and prove possession
+of their machine identity. This proof establishes identity, not organizational
+authorization. Restrict daemon access to trusted users through your network
+or authenticated reverse proxy; do not expose open enrollment to an untrusted
+network. TLS remains required for non-loopback communication.
+
+Challenge requests are limited to 16 per transport-peer IP in a 15-second
+window, before the request body is read. MCP and worker challenges retain
+separate capacity limits. Forwarded IP headers do not override this limit:
+clients behind a reverse proxy share its peer budget. Apply additional
+per-client admission controls at the proxy for larger deployments.
+
+
+## Distribute Immutable Managed Settings
+
+A managed bundle is an administrator-owned deployment artifact, not an output
+of personal `nemo-relay install`. For each agent, platform, and deployment, its
+plugin configuration and settings must remain byte-for-byte identical across
+users and Relay binary releases.
+
+The bundle follows these rules:
+
+- Daemon and provider URLs and hook command text are fixed for the deployment.
+- Artifacts contain no user path, fingerprint, credential, generation ID, or
+  Relay binary version.
+- A stable administrator-owned dispatcher command or path survives Relay
+  upgrades.
+- Refresh validates immutable artifacts and never rewrites them.
+- An incompatible settings change uses a separately named v2 artifact rather
+  than replacing v1 bytes.
+
+Enterprise bootstrap owns credential provisioning and login-environment
+injection. Relay validates `NEMO_RELAY_CLIENT_TOKEN` but does not install an
+operating-system-specific login agent.
+
+Create a bundle once from fixed deployment values. Repeat `--agent` to select
+the artifacts that the administrator distributes:
+
+```bash
+nemo-relay daemon managed-bundle \
+  --output /opt/nvidia/share/nemo-relay-managed-v1 \
+  --daemon-address http://127.0.0.1:47632 \
+  --dispatcher-command /opt/nvidia/bin/nemo-relay \
+  --platform linux \
+  --agent codex \
+  --agent claude \
+  --agent pi
+```
+
+Run bundle generation as an administrator when writing the installed system
+path. For macOS, change `--platform linux` to `--platform macos`. For remote
+Linux, use `--daemon-address https://relay.example.com:8443` and
+`--dispatcher-command /opt/nvidia/bin/nemo-relay-dispatch`.
+
+On Windows, use an elevated PowerShell window:
+
+```powershell
+& 'C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay.exe' daemon managed-bundle `
+  --output 'C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay-managed-v1' `
+  --daemon-address http://127.0.0.1:47632 `
+  --dispatcher-command 'C:/ProgramData/NVIDIA/NeMoRelay/nemo-relay.exe' `
+  --platform windows --agent codex --agent claude --agent pi
+```
+
+The installed bundle must be readable by users and writable only by administrators.
+Store the printed digest in your deployment records and provision it separately
+to clients. Do not add files to the bundle after generation, even a digest file
+or a marketplace manifest; its exact file set is validated.
+
+The destination must be new or already byte-identical. The command never
+rewrites a different v1 bundle and prints only the canonical full-bundle
+SHA-256. Provision that digest separately from the bundle; a digest stored
+inside the same artifact is not a trust root. The dispatcher path is validated
+for the target platform and must be an absolute, stable administrator path
+outside known user and temporary directories.
+
+Validate a distributed bundle and its current environment without modifying
+the bundle:
+
+```bash
+nemo-relay doctor \
+  --managed-bundle /path/to/nemo-relay-managed-v1 \
+  --managed-bundle-sha256 '<separately-provisioned-64-character-sha256>'
+```
+
+Doctor compares the exact file set and bytes with the canonical manifest and
+the separately provisioned digest, then reports missing, unexpected, or
+changed artifacts. This is a managed-only diagnostic: it does not load or fail because
+of personal configuration, plugins, or agent installations.
+
+## Load a Managed Harness
+
+Install only the managed Relay integration for this deployment. Disable or remove
+the personal Relay plugin through its harness before switching. Two Relay MCP
+entries or two sets of Relay hooks can conflict or submit events twice.
+
+The following steps load the generated bytes. They do not make a user's entire
+harness configuration immutable. For organization-wide enforcement, distribute
+these artifacts with the harness's managed policy mechanism and verify its
+effective settings. Keep unrelated settings and existing authentication intact.
+
+### Codex
+
+Codex needs both the generated plugin and the provider configuration. Create an
+administrator-owned local marketplace **beside** the validated bundle. On Linux
+and macOS, use `/opt/nvidia/share/nemo-relay-codex-marketplace-v1`; on Windows, use
+`C:\ProgramData\NVIDIA\NeMoRelay\codex-marketplace-v1`.
+
+Inside that marketplace, create `.agents/plugins/marketplace.json`:
+
+```json
+{
+  "name": "nemo-relay-managed",
+  "interface": { "displayName": "NeMo Relay Managed" },
+  "plugins": [{
+    "name": "nemo-relay-managed-v1",
+    "source": { "source": "local", "path": "./plugins/nemo-relay-managed-v1" },
+    "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+    "category": "Coding"
+  }]
+}
+```
+
+Copy the entire bundle directory `codex/plugin-v1` to the marketplace's
+`plugins/nemo-relay-managed-v1`, including hidden files. On Unix:
+
+```bash
+sudo mkdir -p /opt/nvidia/share/nemo-relay-codex-marketplace-v1/.agents/plugins
+sudo mkdir -p /opt/nvidia/share/nemo-relay-codex-marketplace-v1/plugins/nemo-relay-managed-v1
+sudo cp -R /opt/nvidia/share/nemo-relay-managed-v1/codex/plugin-v1/. \
+  /opt/nvidia/share/nemo-relay-codex-marketplace-v1/plugins/nemo-relay-managed-v1/
+```
+
+On Windows, create the corresponding directories in an elevated PowerShell window:
+
+```powershell
+$RelayMarket = 'C:\ProgramData\NVIDIA\NeMoRelay\codex-marketplace-v1'
+if (Test-Path "$RelayMarket\plugins\nemo-relay-managed-v1") {
+    throw 'The plugin destination already exists; compare it with the validated bundle instead of copying again.'
+}
+New-Item -ItemType Directory -Force "$RelayMarket\.agents\plugins", "$RelayMarket\plugins" | Out-Null
+Copy-Item -Recurse -Force 'C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay-managed-v1\codex\plugin-v1' "$RelayMarket\plugins\nemo-relay-managed-v1"
+```
+
+Run the copy only when creating this marketplace. Keep its files administrator-owned.
+For subsequent deployments, compare the copy with the validated bundle rather than
+merging new files into it. Save the JSON manifest at the path given above.
+
+As the target user, register and enable the plugin:
+
+```bash
+codex plugin marketplace add /opt/nvidia/share/nemo-relay-codex-marketplace-v1
+codex plugin add nemo-relay-managed-v1@nemo-relay-managed
+codex plugin list
+```
+
+On Windows, use the same commands with the quoted Windows marketplace path.
+These commands match the Codex `plugin add` interface; confirm the installed
+harness meets the repository's [minimum version](/reference/support-matrix).
+
+Load `codex/settings-v1/config.toml` from the bundle into the deployed Codex
+configuration. For a fresh user configuration, copy its contents to
+`~/.codex/config.toml` (Windows: `%USERPROFILE%\.codex\config.toml`). If a config
+already exists, back it up and merge the top-level `model_provider` setting and
+the `[model_providers.nemo-relay-managed-v1]` table once. Keep authentication and
+unrelated configuration. Do not append duplicate TOML tables. If `CODEX_HOME` is
+already configured, use that configuration location instead.
+
+Enable hooks in that effective configuration:
+
+```toml
+[features]
+hooks = true
+```
+
+Merge `hooks = true` into an existing `[features]` table when present. Restart
+Codex from the prepared token environment. Open `/mcp` and confirm the Relay MCP
+connection is ready. Review and trust the installed Relay hooks through Codex's
+hook controls; verify exactly one enabled handler for every generated hook event.
+A plugin listing alone does not prove that hooks are trusted or the provider is
+selected. See [Codex configuration](https://developers.openai.com/codex/config-basic/)
+for configuration layers and [Operations](/daemon/operations) for end-to-end checks.
+
+### Claude Code
+
+Launch Claude Code with both generated artifacts. On Linux and macOS:
+
+```bash
+claude --plugin-dir /opt/nvidia/share/nemo-relay-managed-v1/claude-code/plugin-v1 \
+  --settings /opt/nvidia/share/nemo-relay-managed-v1/claude-code/settings-v1/managed-settings.json
+```
+
+On Windows:
+
+```powershell
+claude --plugin-dir 'C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay-managed-v1\claude-code\plugin-v1' `
+  --settings 'C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay-managed-v1\claude-code\settings-v1\managed-settings.json'
+```
+
+Use these arguments in the managed launcher for every session. The filename
+`managed-settings.json` does not itself enforce policy when passed with
+`--settings`; enforced deployments must install it through Claude Code's managed
+settings mechanism. Preserve any existing organization policy when merging its
+`env.ANTHROPIC_BASE_URL` value. The plugin and its MCP/hook files remain unchanged.
+See Claude Code's [plugin loading guide](https://code.claude.com/docs/en/plugins)
+and [settings reference](https://code.claude.com/docs/en/settings).
+
+The launch environment must contain both `NEMO_RELAY_CLIENT_TOKEN` and the matching
+`ANTHROPIC_CUSTOM_HEADERS`. Check `/mcp` after startup and verify that Relay hooks
+are enabled. Managed Claude model routing requires an Anthropic API key or an
+administrator-configured Anthropic-compatible gateway credential. Claude.ai OAuth
+is not supported with `ANTHROPIC_BASE_URL`: Claude Code refreshes that session
+against its native service rather than an Anthropic-compatible gateway. Do not set
+the managed base URL for a Claude.ai OAuth-only deployment; preserve native routing
+until Anthropic provides a supported OAuth gateway contract.
+
+### Pi
+
+Use the [managed Pi extension](#deploy-the-managed-pi-extension) below on Unix.
+On Windows, the equivalent launch command is:
+
+```powershell
+pi --no-extensions -e 'C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay-managed-v1\pi\extension-v1\index.ts'
+```
+
+Always include `--no-extensions` and the exact administrator-owned extension
+path. Verify a model whose provider uses one of the supported HTTP APIs. Pi
+starts the managed MCP process itself; do not register a second Relay MCP process.
+
+### Deploy the Managed Pi Extension
+
+The Pi artifact is a fixed TypeScript extension under
+`pi/extension-v1/index.ts`. Load that exact administrator-installed file while
+disabling discovered extensions; do not copy it into a per-user extension
+directory or rewrite it during upgrades. For example:
+
+```bash
+pi --no-extensions -e /opt/nvidia/share/nemo-relay-managed-v1/pi/extension-v1/index.ts
+```
+
+`--no-extensions` is mandatory for managed launches. Pi still loads the
+explicit `-e` extension, but does not also load user, project, or discovered
+extensions that could alter provider registration, tool arguments, or shell
+policy after Relay has authorized an operation.
+
+The extension starts the fixed dispatcher as
+`daemon mcp --daemon-address <URL>`, waits for MCP initialization before
+registering managed providers, and
+keeps one process-wide broker reference across Pi reload, new, resume, and fork
+transitions. It sends Pi's session, agent, turn, compaction, tool, and custom
+shell events to `/hooks/pi`; policy responses are converted back into Pi's
+native `tool_call` and `user_bash` blocking results. Any selected Pi provider
+whose models use only OpenAI Completions, OpenAI Responses, or Anthropic
+Messages and share one endpoint is registered against the daemon, including
+custom provider names. The registration attaches `x-nemo-relay-client-token`
+and Pi's exact runtime-selected endpoint in
+`x-nemo-relay-upstream-base-url`. No per-user upstream, fingerprint,
+generation, user path, or route value is written into the managed artifact.
+
+### Supported Provider Routes
+
+The managed daemon accepts provider requests for only these API types:
+
+- OpenAI Completions
+- OpenAI Responses
+- Anthropic Messages
+
+The daemon does not have a route for Google's Gemini or Vertex API. Requests to
+those normal Google endpoints do not pass through Relay, so Relay cannot record
+the LLM call or apply LLM request rules to it.
+
+To send Gemini model traffic through the daemon, use a provider or proxy that
+accepts OpenAI Completions, OpenAI Responses, or Anthropic Messages requests,
+then configure the client to use that compatible API. Do not point a Gemini
+endpoint at the daemon's OpenAI or Anthropic routes; the request formats are
+different. Relay's Gemini codec can translate Gemini data in
+[application integrations](/integrate-into-frameworks/provider-codecs), but it
+does not add a managed daemon route.
+
+### Codex Responses Compatibility
+
+Both the personal gateway and managed daemon recognize Codex ChatGPT OAuth on
+OpenAI routes, including the managed provider's `/v1/responses` and `/v1/models`
+requests. When no administrator OpenAI credential is configured, Relay preserves
+the OAuth credential and sends the request to the native ChatGPT Codex backend.
+When `openai_auth_header` or `OPENAI_API_KEY` is configured for the daemon, Relay
+removes the ChatGPT OAuth credential, injects that replacement credential, and
+uses the administrator's configured OpenAI-compatible upstream instead.
+
+The daemon also accepts Codex's ChatGPT-shaped
+`POST /backend-api/codex/responses` path and canonicalizes it to the ordinary
+Responses route. A WebSocket upgrade probe sent with `GET` to that path,
+`/responses`, or `/v1/responses` receives `426 Upgrade Required`, which causes
+clients that support the fallback to use HTTP streaming. An ordinary GET remains
+`405 Method Not Allowed`.

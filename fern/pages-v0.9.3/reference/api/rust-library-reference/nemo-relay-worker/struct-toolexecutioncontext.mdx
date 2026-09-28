@@ -1,0 +1,70 @@
+---
+title: "Struct Tool Execution Context"
+sidebar-title: "ToolExecutionContext"
+description: "Per-call context supplied to a tool execution intercept."
+position: 31
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct ToolExecutionContext { /* private fields */ }
+```
+
+Per-call context supplied to a tool execution intercept.
+
+`tool_call_id` is the provider-issued correlation identifier recorded on the managed tool call, and is `None` when the call did not record one.
+
+## Implementations
+
+### `impl ToolExecutionContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-toolexecutioncontext\">ToolExecutionContext</a>"}} /></pre>
+
+#### `tool_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn tool_name(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+Returns the tool name associated with the execution.
+
+#### `args`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn args(&amp;self) -&gt; &amp;<a href=\"type-json\">Json</a>"}} /></pre>
+
+Returns the JSON argument payload entering this intercept.
+
+#### `into_args`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn into_args(self) -&gt; <a href=\"type-json\">Json</a>"}} /></pre>
+
+Consumes the context and returns its JSON argument payload.
+
+#### `tool_call_id`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn tool_call_id(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;"}} /></pre>
+
+Returns the provider-issued tool-call correlation identifier.
+
+## Trait Implementations
+
+### `impl Clone for ToolExecutionContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-toolexecutioncontext\">ToolExecutionContext</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-toolexecutioncontext\">ToolExecutionContext</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for ToolExecutionContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-toolexecutioncontext\">ToolExecutionContext</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
