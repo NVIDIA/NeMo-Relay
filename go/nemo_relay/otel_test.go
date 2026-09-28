@@ -686,9 +686,9 @@ func TestOpenTelemetryFileSinkSubscriberAppliesSharedProjectionOptions(t *testin
 	subscriber, err := NewOpenTelemetryFileSinkSubscriber(OpenTelemetryFileSinkConfig{
 		OutputDirectory:                 dir,
 		Filename:                        "projected.jsonl",
-		MarkProjection:                  MarkProjectionEvent,
-		MarkExcludeNames:                []string{"llm.chunk"},
-		AttributeMappings:               []OtlpAttributeMapping{{Key: "nemo_relay.model_name", Alias: "model.alias"}},
+		MarkProjection:                  MarkProjectionTool,
+		MarkExcludeNames:                []string{"custom.mark"},
+		AttributeMappings:               []OtlpAttributeMapping{{Key: "nemo_relay.scope_type", Alias: "scope.kind"}},
 		PromoteMetadataPrefixes:         []string{"nv."},
 		PromoteResourceMetadataPrefixes: []string{"deployment."},
 		CompletedSpanContextTTL:         &ttl,
@@ -708,6 +708,8 @@ func TestOpenTelemetryFileSinkSubscriberAppliesSharedProjectionOptions(t *testin
 		handle, err := PushScope("go-projection-agent", ScopeTypeAgent,
 			WithMetadata(json.RawMessage(`{"nv.tenant":"acme","deployment.environment":"test"}`)))
 		requireNoError(t, err, "PushScope failed")
+		requireNoError(t, EmitEvent("custom.mark", WithEventParent(handle)), "EmitEvent failed")
+		requireNoError(t, EmitEvent("kept.mark", WithEventParent(handle)), "EmitEvent failed")
 		requireNoError(t, PopScope(handle), "PopScope failed")
 	})
 	requireNoError(t, subscriber.ForceFlush(), "ForceFlush failed")
@@ -716,10 +718,62 @@ func TestOpenTelemetryFileSinkSubscriberAppliesSharedProjectionOptions(t *testin
 	if err != nil {
 		t.Fatalf("read the trace file: %v", err)
 	}
-	// Promotion copies the prefixed metadata onto the span and the resource.
-	for _, needle := range []string{"nv.tenant", "deployment.environment"} {
-		if !strings.Contains(string(contents), needle) {
-			t.Errorf("expected %q in the exported record: %s", needle, contents)
+	var record struct {
+		ResourceSpans []struct {
+			Resource struct {
+				Attributes []struct {
+					Key string `json:"key"`
+				} `json:"attributes"`
+			} `json:"resource"`
+			ScopeSpans []struct {
+				Spans []struct {
+					Name       string `json:"name"`
+					Attributes []struct {
+						Key string `json:"key"`
+					} `json:"attributes"`
+				} `json:"spans"`
+			} `json:"scopeSpans"`
+		} `json:"resourceSpans"`
+	}
+	line := strings.Split(strings.TrimSpace(string(contents)), "\n")[0]
+	if err := json.Unmarshal([]byte(line), &record); err != nil {
+		t.Fatalf("decode the exported record: %v", err)
+	}
+
+	resourceKeys := map[string]bool{}
+	spanKeys := map[string]bool{}
+	spanNames := []string{}
+	for _, rs := range record.ResourceSpans {
+		for _, attribute := range rs.Resource.Attributes {
+			resourceKeys[attribute.Key] = true
+		}
+		for _, ss := range rs.ScopeSpans {
+			for _, span := range ss.Spans {
+				spanNames = append(spanNames, span.Name)
+				for _, attribute := range span.Attributes {
+					spanKeys[attribute.Key] = true
+				}
+			}
+		}
+	}
+
+	// Each option is asserted through an effect it alone produces, so a setting
+	// that crosses the FFI but is never applied fails here.
+	if !spanKeys["scope.kind"] {
+		t.Error("AttributeMappings should add the alias")
+	}
+	if !spanKeys["nv.tenant"] {
+		t.Error("PromoteMetadataPrefixes should copy the metadata")
+	}
+	if !resourceKeys["deployment.environment"] {
+		t.Error("PromoteResourceMetadataPrefixes should copy onto the resource")
+	}
+	if !containsString(spanNames, "mark:kept.mark") {
+		t.Errorf("MarkProjectionTool should emit a mark span, got %v", spanNames)
+	}
+	for _, spanName := range spanNames {
+		if strings.Contains(spanName, "custom.mark") {
+			t.Errorf("MarkExcludeNames should drop the excluded mark, got %v", spanNames)
 		}
 	}
 }
@@ -767,4 +821,13 @@ func TestOpenTelemetryFileSinkSubscriberRegisters(t *testing.T) {
 	if err := subscriber.Deregister(name); err != nil {
 		t.Fatalf("deregister: %v", err)
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

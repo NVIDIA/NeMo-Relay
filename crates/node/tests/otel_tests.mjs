@@ -417,9 +417,9 @@ describe('OpenTelemetrySubscriber.fileSink', () => {
       type: 'full',
       outputDirectory: directory,
       filename: 'projected.jsonl',
-      markProjection: 'event',
-      markExcludeNames: ['llm.chunk'],
-      attributeMappings: [{ key: 'nemo_relay.model_name', alias: 'model.alias' }],
+      markProjection: 'tool',
+      markExcludeNames: ['custom.mark'],
+      attributeMappings: [{ key: 'nemo_relay.scope_type', alias: 'scope.kind' }],
       promoteMetadataPrefixes: ['nv.'],
       promoteResourceMetadataPrefixes: ['deployment.'],
       completedSpanContextTtlMillis: 30000n,
@@ -432,6 +432,8 @@ describe('OpenTelemetrySubscriber.fileSink', () => {
         'nv.tenant': 'acme',
         'deployment.environment': 'test',
       });
+      event('custom.mark', handle, { a: 1 });
+      event('kept.mark', handle, { b: 2 });
       popScope(handle);
       subscriber.forceFlush();
     } finally {
@@ -439,10 +441,34 @@ describe('OpenTelemetrySubscriber.fileSink', () => {
       subscriber.shutdown();
     }
 
-    // Promotion copies the prefixed metadata onto the span and the resource.
-    const record = readFileSync(join(directory, 'projected.jsonl'), 'utf8');
-    assert.ok(record.includes('nv.tenant'), record);
-    assert.ok(record.includes('deployment.environment'), record);
+    const record = JSON.parse(
+      readFileSync(join(directory, 'projected.jsonl'), 'utf8').trim().split('\n')[0],
+    );
+    const resourceKeys = record.resourceSpans.flatMap((rs) =>
+      rs.resource.attributes.map((attribute) => attribute.key),
+    );
+    const spans = record.resourceSpans.flatMap((rs) =>
+      rs.scopeSpans.flatMap((ss) => ss.spans),
+    );
+    const spanKeys = spans.flatMap((span) => span.attributes.map((a) => a.key));
+
+    // Each option is asserted through an effect it alone produces, so a
+    // setting that is parsed but never applied fails here.
+    assert.ok(spanKeys.includes('scope.kind'), 'attributeMappings should add the alias');
+    assert.ok(spanKeys.includes('nv.tenant'), 'promoteMetadataPrefixes should copy the metadata');
+    assert.ok(
+      resourceKeys.includes('deployment.environment'),
+      'promoteResourceMetadataPrefixes should copy onto the resource',
+    );
+    const spanNames = spans.map((span) => span.name);
+    assert.ok(
+      spanNames.includes('mark:kept.mark'),
+      `markProjection "tool" should emit a mark span: ${spanNames}`,
+    );
+    assert.ok(
+      !spanNames.some((spanName) => spanName.includes('custom.mark')),
+      `markExcludeNames should drop the excluded mark: ${spanNames}`,
+    );
   });
 
   it('rejects invalid shared projection options', () => {

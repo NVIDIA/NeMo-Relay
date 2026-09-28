@@ -937,15 +937,15 @@ class TestOpenTelemetryTypes:
 
     def test_file_sink_applies_shared_projection_options(self, tmp_path) -> None:
         config = OpenTelemetryFileSinkConfig("full", str(tmp_path), "projected.jsonl")
-        config.mark_projection = "event"
-        config.mark_exclude_names = ["llm.chunk"]
-        config.attribute_mappings = [{"key": "nemo_relay.model_name", "alias": "model.alias"}]
+        config.mark_projection = "tool"
+        config.mark_exclude_names = ["custom.mark"]
+        config.attribute_mappings = [{"key": "nemo_relay.scope_type", "alias": "scope.kind"}]
         config.promote_metadata_prefixes = ["nv."]
         config.promote_resource_metadata_prefixes = ["deployment."]
         config.completed_span_context_ttl_millis = 30_000
 
-        assert config.mark_projection == "event"
-        assert config.attribute_mappings == [{"key": "nemo_relay.model_name", "alias": "model.alias"}]
+        assert config.mark_projection == "tool"
+        assert config.attribute_mappings == [{"key": "nemo_relay.scope_type", "alias": "scope.kind"}]
 
         subscriber = OpenTelemetrySubscriber(config)
         subscriber_name = f"py_otel_file_sink_projection_{uuid4().hex}"
@@ -956,16 +956,36 @@ class TestOpenTelemetryTypes:
                 ScopeType.Agent,
                 metadata={"nv.tenant": "acme", "deployment.environment": "test"},
             )
+            scope.event("custom.mark", handle=handle)
+            scope.event("kept.mark", handle=handle)
             scope.pop(handle)
             subscribers.flush()
         finally:
             subscriber.deregister(subscriber_name)
             subscriber.shutdown()
 
-        # Promotion copies the prefixed metadata onto the span and the resource.
-        record = (tmp_path / "projected.jsonl").read_text()
-        assert "nv.tenant" in record
-        assert "deployment.environment" in record
+        record = json.loads((tmp_path / "projected.jsonl").read_text().splitlines()[0])
+        resource_keys = {
+            attribute["key"]
+            for resource_spans in record["resourceSpans"]
+            for attribute in resource_spans["resource"]["attributes"]
+        }
+        spans = [
+            span
+            for resource_spans in record["resourceSpans"]
+            for scope_spans in resource_spans["scopeSpans"]
+            for span in scope_spans["spans"]
+        ]
+        span_keys = {attribute["key"] for span in spans for attribute in span["attributes"]}
+        span_names = [span["name"] for span in spans]
+
+        # Each option is asserted through an effect it alone produces, so a
+        # setting that is parsed but never applied fails here.
+        assert "scope.kind" in span_keys
+        assert "nv.tenant" in span_keys
+        assert "deployment.environment" in resource_keys
+        assert "mark:kept.mark" in span_names, span_names
+        assert not any("custom.mark" in name for name in span_names), span_names
 
     @pytest.mark.parametrize(
         ("field", "value", "expected"),
