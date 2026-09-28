@@ -38,8 +38,6 @@ _MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}")
 _PROVIDER_AUTHORIZATION_FILE = "/run/secrets/switchyard-provider-authorization"
 _HERMETIC_RUNTIME_ROOT = "/opt/hermes-runtime"
 _HERMETIC_RUNTIME_SCHEMA = "harbor-hermes-switchyard.hermetic-runtime.v1"
-_HERMETIC_CA_BUNDLE_RELATIVE = Path("hermes-agent-src/venv/lib/python3.11/site-packages/certifi/cacert.pem")
-_HERMETIC_CA_BUNDLE = f"{_HERMETIC_RUNTIME_ROOT}/{_HERMETIC_CA_BUNDLE_RELATIVE.as_posix()}"
 _HERMETIC_RUNTIME_READY_ATTEMPTS = 6
 _HERMETIC_RUNTIME_READY_DELAY_SECONDS = 2
 
@@ -64,6 +62,15 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _hermetic_ca_bundle_relative(python_version: str) -> Path:
+    # The hermetic venv's site-packages directory is named after Hermes's own
+    # pinned interpreter (build_hermetic_runtime.py resolves this dynamically
+    # from Hermes's .python-version rather than hardcoding it), so this must
+    # track payload.json's recorded python_version rather than a fixed value.
+    major_minor = ".".join(python_version.split(".")[:2])
+    return Path(f"hermes-agent-src/venv/lib/python{major_minor}/site-packages/certifi/cacert.pem")
 
 
 def _load_hermetic_runtime(
@@ -93,12 +100,15 @@ def _load_hermetic_runtime(
     }
     if mismatches:
         raise ValueError(f"hermetic runtime metadata mismatch: {mismatches}")
+    python_version = payload.get("python_version")
+    if not isinstance(python_version, str) or not python_version:
+        raise ValueError("hermetic runtime payload is missing python_version")
     required = (
         path / "bin" / "hermes",
         path / "bin" / "python",
         path / "bin" / "uv",
         path / "hermes-agent-src" / "venv",
-        path / _HERMETIC_CA_BUNDLE_RELATIVE,
+        path / _hermetic_ca_bundle_relative(python_version),
     )
     missing = [str(candidate) for candidate in required if not candidate.exists()]
     if missing:
@@ -484,6 +494,7 @@ class HarborHermesAgent(Hermes):
         self.inject_post_response_failure = inject_post_response_failure
         self.hermetic_runtime_dir: Path | None = None
         self.hermetic_runtime_sha256: str | None = None
+        self.hermetic_ca_bundle: str | None = None
         self._load_provider_authorization = False
         if not self.artifact_root.startswith("/logs/agent/"):
             raise ValueError("artifact_root must be an absolute child of /logs/agent")
@@ -524,7 +535,7 @@ class HarborHermesAgent(Hermes):
         if hermetic_runtime_dir is not None and hermetic_runtime_sha256 is not None:
             runtime_dir = Path(hermetic_runtime_dir).expanduser().resolve()
             runtime_digest = _require_sha256(hermetic_runtime_sha256, "hermetic_runtime_sha256")
-            _load_hermetic_runtime(
+            runtime_payload = _load_hermetic_runtime(
                 runtime_dir,
                 expected_digest=runtime_digest,
                 hermes_commit=self.commit,
@@ -533,6 +544,10 @@ class HarborHermesAgent(Hermes):
             )
             self.hermetic_runtime_dir = runtime_dir
             self.hermetic_runtime_sha256 = runtime_digest
+            self.hermetic_ca_bundle = (
+                f"{_HERMETIC_RUNTIME_ROOT}/"
+                f"{_hermetic_ca_bundle_relative(runtime_payload['python_version']).as_posix()}"
+            )
 
         self._example_root = Path(__file__).resolve().parents[1]
         self._finalizer_path = self._example_root / "scripts" / "finalize_artifacts.py"
@@ -563,7 +578,8 @@ class HarborHermesAgent(Hermes):
                 raise ValueError("direct baseline received an unexpected Hermes model command")
             command = command.replace(harbor_model, provider_model, 1)
         if self.hermetic_runtime_dir is not None:
-            ca_bundle = shlex.quote(_HERMETIC_CA_BUNDLE)
+            assert self.hermetic_ca_bundle is not None
+            ca_bundle = shlex.quote(self.hermetic_ca_bundle)
             command = (
                 f"test -r {ca_bundle}; "
                 f"export SSL_CERT_FILE={ca_bundle}; "
@@ -602,6 +618,7 @@ class HarborHermesAgent(Hermes):
     @override
     async def install(self, environment: BaseEnvironment) -> None:
         if self.hermetic_runtime_dir is not None:
+            assert self.hermetic_ca_bundle is not None
             runtime = shlex.quote(_HERMETIC_RUNTIME_ROOT)
             await self.exec_as_agent(
                 environment,
@@ -611,7 +628,7 @@ class HarborHermesAgent(Hermes):
                     f"test -x {runtime}/bin/hermes; "
                     f"test -x {runtime}/bin/python; "
                     f"test -x {runtime}/bin/uv; "
-                    f"test -r {shlex.quote(_HERMETIC_CA_BUNDLE)}; "
+                    f"test -r {shlex.quote(self.hermetic_ca_bundle)}; "
                     f"{_hermetic_runtime_readiness_command()}"
                     "rm -rf /tmp/hermes-agent-src; "
                     f"ln -s {runtime}/hermes-agent-src /tmp/hermes-agent-src; "

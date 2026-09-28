@@ -53,7 +53,8 @@ def make_payload(root: Path, *, digest: str = "a" * 64) -> dict[str, object]:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("stub", encoding="utf-8")
     (root / "hermes-agent-src" / "venv").mkdir(parents=True)
-    ca_bundle = root / agent_module._HERMETIC_CA_BUNDLE_RELATIVE
+    python_version = "3.14.7"
+    ca_bundle = root / agent_module._hermetic_ca_bundle_relative(python_version)
     ca_bundle.parent.mkdir(parents=True, exist_ok=True)
     ca_bundle.write_text("test CA bundle", encoding="utf-8")
     marker = {
@@ -63,6 +64,7 @@ def make_payload(root: Path, *, digest: str = "a" * 64) -> dict[str, object]:
         "hermes_commit": "b" * 40,
         "relay_wheel_sha256": "c" * 64,
         "relay_architecture": "aarch64",
+        "python_version": python_version,
     }
     (root / "payload.json").write_text(json.dumps(marker), encoding="utf-8")
     return marker
@@ -328,7 +330,7 @@ def test_offline_overrides_keep_classifier_pricing_aliases_distinct(tmp_path: Pa
 
 def test_hermetic_runtime_requires_portable_ca_bundle(tmp_path: Path) -> None:
     marker = make_payload(tmp_path)
-    (tmp_path / agent_module._HERMETIC_CA_BUNDLE_RELATIVE).unlink()
+    (tmp_path / agent_module._hermetic_ca_bundle_relative(str(marker["python_version"]))).unlink()
     with pytest.raises(FileNotFoundError, match="hermetic runtime is incomplete"):
         agent_module._load_hermetic_runtime(
             tmp_path,
