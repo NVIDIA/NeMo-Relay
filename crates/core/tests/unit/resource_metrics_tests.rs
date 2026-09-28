@@ -135,9 +135,9 @@ fn expected_native_units() -> (
     #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     {
         (
-            ResourceMeasurementUnit::Unknown,
-            ResourceMeasurementUnit::Unknown,
-            ResourceMeasurementUnit::Unknown,
+            ResourceMeasurementUnit::Nanoseconds,
+            ResourceMeasurementUnit::NanosecondsPerSecond,
+            ResourceMeasurementUnit::Bytes,
         )
     }
 }

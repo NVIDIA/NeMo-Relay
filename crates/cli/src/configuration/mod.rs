@@ -1602,6 +1602,11 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
     apply_file_agents_config(&mut resolved.agents, config.agents);
     logging::apply_file_logging_config(&mut resolved.logging, config.logging)?;
     if let Some(resource_metrics) = config.resource_metrics {
+        if resource_metrics.polling.enabled && resource_metrics.polling.interval_millis == 0 {
+            return Err(CliError::Config(
+                "resource_metrics.polling.interval_millis must be greater than zero".into(),
+            ));
+        }
         resolved.resource_metrics = resource_metrics;
     }
     Ok(())

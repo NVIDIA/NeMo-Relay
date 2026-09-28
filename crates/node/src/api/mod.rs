@@ -170,21 +170,37 @@ pub fn warn(message: String, target: Option<String>, fields: Option<Json>) -> na
 /// Owns configured resource metrics polling and file output until closed.
 #[napi]
 pub struct ResourceMetricsRuntime {
-    runtime: Option<core_resource_metrics_api::ResourceMetricsRuntime>,
+    runtime: tokio::sync::Mutex<Option<core_resource_metrics_api::ResourceMetricsRuntime>>,
 }
 
 #[napi]
 impl ResourceMetricsRuntime {
-    /// Stop polling, flush file output, and release configuration ownership.
+    /// Stop polling off the Node.js thread and resolve when shutdown is complete.
     #[napi]
-    pub fn close(&mut self) {
-        self.runtime.take();
+    pub async fn close(&self) -> napi::Result<()> {
+        let mut runtime_state = self.runtime.lock().await;
+        if let Some(runtime) = runtime_state.take() {
+            tokio::task::spawn_blocking(move || drop(runtime))
+                .await
+                .map_err(|error| Error::from_reason(error.to_string()))?;
+        }
+        Ok(())
     }
 }
 
 impl Drop for ResourceMetricsRuntime {
     fn drop(&mut self) {
-        self.runtime.take();
+        drop_resource_metrics_runtime(self.runtime.get_mut().take());
+    }
+}
+
+fn drop_resource_metrics_runtime(
+    runtime: Option<core_resource_metrics_api::ResourceMetricsRuntime>,
+) {
+    if let Some(runtime) = runtime {
+        let _ = std::thread::Builder::new()
+            .name("nemo-relay-metrics-shutdown".into())
+            .spawn(move || drop(runtime));
     }
 }
 
@@ -225,7 +241,7 @@ pub fn configure_resource_metrics(config: Json) -> napi::Result<ResourceMetricsR
     let runtime = core_resource_metrics_api::ResourceMetricsRuntime::configure(config.into())
         .map_err(|error| Error::from_reason(error.to_string()))?;
     Ok(ResourceMetricsRuntime {
-        runtime: Some(runtime),
+        runtime: tokio::sync::Mutex::new(Some(runtime)),
     })
 }
 

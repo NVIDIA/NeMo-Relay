@@ -10,9 +10,10 @@ SPDX-License-Identifier: Apache-2.0 */}
 Use the `atof` section to write raw Agent Trajectory Observability Format (ATOF)
 `0.1` events to JSONL files, send them to raw-event collectors, or do both.
 
-When Relay emits an Agent scope start or end event, it first emits a correlated
-resource metric mark. An enabled ATOF subscriber writes that mark through the
-same event path. Refer to [Resource Metrics](/reference/resource-metrics) for
+When Relay emits an eligible Agent scope start or end event and collection
+provides numerical measurements, it also emits a correlated resource metric
+mark. An enabled ATOF subscriber writes that mark only when Relay emits it,
+through the same event path. Refer to [Resource Metrics](/reference/resource-metrics) for
 the measurement and polling contract.
 
 File sinks are useful for local debugging, offline inspection, and preserving

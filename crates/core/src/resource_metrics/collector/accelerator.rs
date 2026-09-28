@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CStr, c_char, c_void};
+use std::sync::OnceLock;
 
 use chrono::Utc;
 use libloading::Library;
@@ -19,7 +20,6 @@ const NVML_VALUE_NOT_AVAILABLE: u64 = u64::MAX;
 
 type NvmlDevice = *mut c_void;
 type NvmlInit = unsafe extern "C" fn() -> i32;
-type NvmlShutdown = unsafe extern "C" fn() -> i32;
 type NvmlDeviceGetCount = unsafe extern "C" fn(*mut u32) -> i32;
 type NvmlDeviceGetHandleByIndex = unsafe extern "C" fn(u32, *mut NvmlDevice) -> i32;
 type NvmlDeviceGetUuid = unsafe extern "C" fn(NvmlDevice, *mut c_char, u32) -> i32;
@@ -74,46 +74,78 @@ pub(super) fn collect(process_ids: &[u32]) -> AcceleratorSample {
     sample
 }
 
-fn collect_nvml(process_ids: &[u32]) -> Option<AcceleratorSample> {
-    let library = load_nvml()?;
-    // SAFETY: Every function pointer is loaded from the live NVML library with its documented ABI.
-    unsafe {
-        let initialize: NvmlInit = symbol(&library, b"nvmlInit_v2\0")?;
-        let shutdown: NvmlShutdown = symbol(&library, b"nvmlShutdown\0")?;
-        if initialize() != NVML_SUCCESS {
-            return None;
-        }
-        let _guard = NvmlShutdownGuard(shutdown);
-        let device_count: NvmlDeviceGetCount = symbol(&library, b"nvmlDeviceGetCount_v2\0")?;
-        let device_by_index: NvmlDeviceGetHandleByIndex =
-            symbol(&library, b"nvmlDeviceGetHandleByIndex_v2\0")?;
-        let device_uuid: NvmlDeviceGetUuid = symbol(&library, b"nvmlDeviceGetUUID\0")?;
-        let device_memory: NvmlDeviceGetMemoryInfo =
-            symbol(&library, b"nvmlDeviceGetMemoryInfo\0")?;
-        let device_utilization: NvmlDeviceGetUtilization =
-            symbol(&library, b"nvmlDeviceGetUtilizationRates\0")?;
-        let compute_processes: Option<NvmlDeviceGetProcesses> =
-            symbol(&library, b"nvmlDeviceGetComputeRunningProcesses_v3\0");
-        let graphics_processes: Option<NvmlDeviceGetProcesses> =
-            symbol(&library, b"nvmlDeviceGetGraphicsRunningProcesses_v3\0");
-        let process_utilization: Option<NvmlDeviceGetProcessUtilization> =
-            symbol(&library, b"nvmlDeviceGetProcessUtilization\0");
+struct NvmlApi {
+    _library: Library,
+    device_count: NvmlDeviceGetCount,
+    device_by_index: NvmlDeviceGetHandleByIndex,
+    device_uuid: NvmlDeviceGetUuid,
+    device_memory: NvmlDeviceGetMemoryInfo,
+    device_utilization: NvmlDeviceGetUtilization,
+    compute_processes: Option<NvmlDeviceGetProcesses>,
+    graphics_processes: Option<NvmlDeviceGetProcesses>,
+    process_utilization: Option<NvmlDeviceGetProcessUtilization>,
+}
 
+static NVML: OnceLock<Option<NvmlApi>> = OnceLock::new();
+
+fn collect_nvml(process_ids: &[u32]) -> Option<AcceleratorSample> {
+    let api = NVML
+        .get_or_init(|| {
+            let library = load_nvml()?;
+            // SAFETY: Every function pointer is loaded from the live NVML library with its documented ABI.
+            unsafe {
+                let initialize: NvmlInit = symbol(&library, b"nvmlInit_v2\0")?;
+                let device_count: NvmlDeviceGetCount =
+                    symbol(&library, b"nvmlDeviceGetCount_v2\0")?;
+                let device_by_index: NvmlDeviceGetHandleByIndex =
+                    symbol(&library, b"nvmlDeviceGetHandleByIndex_v2\0")?;
+                let device_uuid: NvmlDeviceGetUuid = symbol(&library, b"nvmlDeviceGetUUID\0")?;
+                let device_memory: NvmlDeviceGetMemoryInfo =
+                    symbol(&library, b"nvmlDeviceGetMemoryInfo\0")?;
+                let device_utilization: NvmlDeviceGetUtilization =
+                    symbol(&library, b"nvmlDeviceGetUtilizationRates\0")?;
+                let compute_processes: Option<NvmlDeviceGetProcesses> =
+                    symbol(&library, b"nvmlDeviceGetComputeRunningProcesses_v3\0");
+                let graphics_processes: Option<NvmlDeviceGetProcesses> =
+                    symbol(&library, b"nvmlDeviceGetGraphicsRunningProcesses_v3\0");
+                let process_utilization: Option<NvmlDeviceGetProcessUtilization> =
+                    symbol(&library, b"nvmlDeviceGetProcessUtilization\0");
+                if initialize() != NVML_SUCCESS {
+                    return None;
+                }
+                Some(NvmlApi {
+                    _library: library,
+                    device_count,
+                    device_by_index,
+                    device_uuid,
+                    device_memory,
+                    device_utilization,
+                    compute_processes,
+                    graphics_processes,
+                    process_utilization,
+                })
+            }
+        })
+        .as_ref()?;
+
+    // SAFETY: NVML remains initialized for the lifetime of this process and the library is held
+    // alive by the cached API table.
+    unsafe {
         let mut count = 0_u32;
-        if device_count(&mut count) != NVML_SUCCESS {
+        if (api.device_count)(&mut count) != NVML_SUCCESS {
             return None;
         }
         let owned = process_ids.iter().copied().collect::<BTreeSet<_>>();
         let mut result = AcceleratorSample::default();
         for index in 0..count {
             let mut device = std::ptr::null_mut();
-            if device_by_index(index, &mut device) != NVML_SUCCESS || device.is_null() {
+            if (api.device_by_index)(index, &mut device) != NVML_SUCCESS || device.is_null() {
                 continue;
             }
-            let identifier =
-                read_nvml_uuid(device_uuid, device).unwrap_or_else(|| format!("nvidia:{index}"));
+            let identifier = read_nvml_uuid(api.device_uuid, device)
+                .unwrap_or_else(|| format!("nvidia:{index}"));
             let mut memory = NvmlMemory::default();
-            let memory_used = if device_memory(device, &mut memory) == NVML_SUCCESS {
+            let memory_used = if (api.device_memory)(device, &mut memory) == NVML_SUCCESS {
                 ResourceMeasurement::available(
                     Utc::now(),
                     memory.used,
@@ -124,7 +156,7 @@ fn collect_nvml(process_ids: &[u32]) -> Option<AcceleratorSample> {
             };
             let mut utilization = NvmlUtilization::default();
             let compute_utilization =
-                if device_utilization(device, &mut utilization) == NVML_SUCCESS {
+                if (api.device_utilization)(device, &mut utilization) == NVML_SUCCESS {
                     ResourceMeasurement::available(
                         Utc::now(),
                         f64::from(utilization.gpu),
@@ -142,7 +174,7 @@ fn collect_nvml(process_ids: &[u32]) -> Option<AcceleratorSample> {
             });
 
             let mut process_memory = BTreeMap::<u32, Option<u64>>::new();
-            for query in [compute_processes, graphics_processes]
+            for query in [api.compute_processes, api.graphics_processes]
                 .into_iter()
                 .flatten()
             {
@@ -163,7 +195,8 @@ fn collect_nvml(process_ids: &[u32]) -> Option<AcceleratorSample> {
                     }
                 }
             }
-            let process_utilization = process_utilization
+            let process_utilization = api
+                .process_utilization
                 .map(|query| read_nvml_process_utilization(query, device, &owned))
                 .unwrap_or_default();
             let observed_processes = process_memory
@@ -205,17 +238,6 @@ fn collect_nvml(process_ids: &[u32]) -> Option<AcceleratorSample> {
             }
         }
         Some(result)
-    }
-}
-
-struct NvmlShutdownGuard(NvmlShutdown);
-
-impl Drop for NvmlShutdownGuard {
-    fn drop(&mut self) {
-        // SAFETY: NVML was initialized before this guard was created and is shut down once.
-        unsafe {
-            (self.0)();
-        }
     }
 }
 

@@ -1025,6 +1025,24 @@ retained_files = 3
 }
 
 #[test]
+fn resource_metrics_rejects_zero_polling_interval_during_config_resolution() {
+    let value = toml::from_str(
+        r#"
+[resource_metrics.polling]
+enabled = true
+interval_millis = 0
+"#,
+    )
+    .unwrap();
+    let mut resolved = ResolvedConfig::default();
+
+    let error = apply_file_config(&mut resolved, value).unwrap_err();
+
+    assert!(matches!(error, CliError::Config(message)
+        if message == "resource_metrics.polling.interval_millis must be greater than zero"));
+}
+
+#[test]
 fn stale_hermes_agent_config_is_rejected() {
     let value = toml::from_str::<toml::Value>(
         r#"

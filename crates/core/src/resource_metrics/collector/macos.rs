@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use std::ffi::c_void;
 use std::io;
 use std::mem::{MaybeUninit, size_of};
+use std::sync::OnceLock;
 
 use nemo_relay_types::api::resource_metrics::{ResourceMeasurementUnit, ResourceOperatingSystem};
 
@@ -69,6 +70,17 @@ struct ProcTaskInfo {
     thread_count: i32,
     _running_thread_count: i32,
     _priority: i32,
+}
+
+#[repr(C)]
+struct MachTimebaseInfo {
+    numer: u32,
+    denom: u32,
+}
+
+#[link(name = "System")]
+unsafe extern "C" {
+    fn mach_timebase_info(info: *mut MachTimebaseInfo) -> i32;
 }
 
 #[repr(C)]
@@ -157,12 +169,14 @@ pub(super) fn process_sample(process_id: u32) -> io::Result<ProcessSample> {
     Ok(ProcessSample {
         process_id: bsd_info.process_id,
         start_identity: (bsd_info.start_time_seconds << 20) | bsd_info.start_time_microseconds,
-        user_cpu_time: Some(task_info.total_user_nanoseconds),
-        system_cpu_time: Some(task_info.total_system_nanoseconds),
+        user_cpu_time: Some(mach_ticks_to_nanoseconds(task_info.total_user_nanoseconds)),
+        system_cpu_time: Some(mach_ticks_to_nanoseconds(
+            task_info.total_system_nanoseconds,
+        )),
         total_cpu_time: Some(
-            task_info
-                .total_user_nanoseconds
-                .saturating_add(task_info.total_system_nanoseconds),
+            mach_ticks_to_nanoseconds(task_info.total_user_nanoseconds).saturating_add(
+                mach_ticks_to_nanoseconds(task_info.total_system_nanoseconds),
+            ),
         ),
         resident_memory: Some(task_info.resident_size),
         private_memory: None,
@@ -173,6 +187,20 @@ pub(super) fn process_sample(process_id: u32) -> io::Result<ProcessSample> {
         open_file_descriptor_count: Some(u64::from(bsd_info.open_file_count)),
         windows_handle_count: None,
     })
+}
+
+fn mach_ticks_to_nanoseconds(ticks: u64) -> u64 {
+    static TIMEBASE: OnceLock<(u32, u32)> = OnceLock::new();
+    let (numer, denom) = *TIMEBASE.get_or_init(|| {
+        let mut info = MachTimebaseInfo { numer: 1, denom: 1 };
+        // SAFETY: `info` is writable storage for mach_timebase_info.
+        if unsafe { mach_timebase_info(&mut info) } == 0 && info.denom != 0 {
+            (info.numer, info.denom)
+        } else {
+            (1, 1)
+        }
+    });
+    (u128::from(ticks) * u128::from(numer) / u128::from(denom)).min(u128::from(u64::MAX)) as u64
 }
 
 pub(super) fn environment_sample(
@@ -264,8 +292,8 @@ fn child_process_ids(parent_process_id: u32) -> io::Result<Vec<u32>> {
         if written < 0 {
             return Err(io::Error::last_os_error());
         }
-        if written < buffer_size {
-            child_process_ids.truncate(written as usize / size_of::<i32>());
+        if written < child_process_ids.len() as i32 {
+            child_process_ids.truncate(written as usize);
             return Ok(child_process_ids
                 .into_iter()
                 .filter_map(|process_id| u32::try_from(process_id).ok())

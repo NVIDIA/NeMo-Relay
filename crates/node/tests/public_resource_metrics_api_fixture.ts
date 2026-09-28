@@ -92,7 +92,7 @@ if (latestSnapshot !== null) {
   void cpuTime;
 }
 void retainedSnapshots;
-configuredRuntime.close();
+void configuredRuntime.close();
 
 // @ts-expect-error Snapshots have only per-measurement timestamps.
 void freshSnapshot.collectedAt;

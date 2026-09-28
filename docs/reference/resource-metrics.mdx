@@ -130,10 +130,11 @@ oldest to newest. Fresh acquisitions do not change either result.
 
 ## Agent Event Metrics
 
-Before Relay publishes each eligible Agent or semantic agent-turn scope start
-and end event, it performs a fresh acquisition and publishes a correlated
-`nemo.relay.resource_metrics` metric mark. This acquisition is independent of
-polling. The existing ATOF subscriber writes the mark when ATOF is enabled, and
+When resource metrics is configured, Relay performs a fresh acquisition before
+each eligible Agent or semantic agent-turn scope start and end event. It
+publishes a correlated `nemo.relay.resource_metrics` metric mark only when
+collection provides numerical measurements. This acquisition is independent
+of polling. The existing ATOF subscriber writes the mark when ATOF is enabled, and
 the existing OpenTelemetry metric subscriber exports its available numerical
 measurements when metric export is enabled.
 

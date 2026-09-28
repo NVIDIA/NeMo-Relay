@@ -80,6 +80,9 @@ pub(crate) fn emit_agent_event_resource_metrics(parent: &ScopeHandle) {
             return;
         }
     };
+    if !manager.is_active() {
+        return;
+    }
     let snapshot = manager.collect(SamplingSeries::AgentEvent);
     let measurements = metric_measurements(&snapshot);
     if measurements.is_empty() {

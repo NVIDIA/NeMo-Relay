@@ -85,8 +85,10 @@ struct PyResourceMetricsRuntime {
 
 #[pymethods]
 impl PyResourceMetricsRuntime {
-    fn close(&mut self) {
-        self.runtime.take();
+    fn close(&mut self, py: Python<'_>) {
+        if let Some(runtime) = self.runtime.take() {
+            py.detach(move || drop(runtime));
+        }
     }
 
     fn __enter__(slf: PyRefMut<'_, Self>) -> PyRefMut<'_, Self> {
@@ -98,8 +100,9 @@ impl PyResourceMetricsRuntime {
         _exception_type: Option<&Bound<'_, PyAny>>,
         _exception: Option<&Bound<'_, PyAny>>,
         _traceback: Option<&Bound<'_, PyAny>>,
+        py: Python<'_>,
     ) {
-        self.close();
+        self.close(py);
     }
 }
 

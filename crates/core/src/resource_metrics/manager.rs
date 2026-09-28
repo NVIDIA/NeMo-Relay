@@ -95,6 +95,14 @@ impl ResourceMetricsManager {
         Ok(runtime_generation)
     }
 
+    pub(crate) fn is_active(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .active_runtime_generation
+            .is_some()
+    }
+
     fn deactivate(&self, runtime_generation: u64) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.active_runtime_generation == Some(runtime_generation) {

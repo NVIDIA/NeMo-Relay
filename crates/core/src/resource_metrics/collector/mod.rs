@@ -176,6 +176,7 @@ pub(crate) fn collect(target: &CollectionTarget) -> CollectedSnapshot {
         }
     };
     let mut samples = Vec::with_capacity(process_ids.len());
+    let mut expected_process_count = process_ids.len();
     let mut collection_issue = None;
     for process_id in &process_ids {
         let expected_start_identity = if *process_id == target.process_id {
@@ -183,6 +184,10 @@ pub(crate) fn collect(target: &CollectionTarget) -> CollectedSnapshot {
         } else {
             match platform::process_identity(*process_id) {
                 Ok(start_identity) => start_identity,
+                Err(error) if is_process_terminated_error(&error) => {
+                    expected_process_count = expected_process_count.saturating_sub(1);
+                    continue;
+                }
                 Err(error) => {
                     record_collection_issue(&mut collection_issue, reason_for_io_error(&error));
                     continue;
@@ -199,6 +204,9 @@ pub(crate) fn collect(target: &CollectionTarget) -> CollectedSnapshot {
                 CollectionIssue::TargetIdentityChanged,
             ),
             Err(_) if *process_id == target.process_id => return unavailable_snapshot(),
+            Err(error) if is_process_terminated_error(&error) => {
+                expected_process_count = expected_process_count.saturating_sub(1);
+            }
             Err(error) => {
                 record_collection_issue(&mut collection_issue, reason_for_io_error(&error))
             }
@@ -218,17 +226,21 @@ pub(crate) fn collect(target: &CollectionTarget) -> CollectedSnapshot {
         _ => return unavailable_snapshot(),
     }
 
-    let complete = collection_issue.is_none() && samples.len() == process_ids.len();
+    let complete = collection_issue.is_none() && samples.len() == expected_process_count;
     let included = samples.iter().collect::<Vec<_>>();
+    let live_process_ids = samples
+        .iter()
+        .map(|sample| sample.process_id)
+        .collect::<Vec<_>>();
     let active_process_count = included.len() as u64;
     let descendant_process_count = active_process_count.saturating_sub(1);
     let environment = if complete {
-        platform::environment_sample(target, &process_ids).unwrap_or_default()
+        platform::environment_sample(target, &live_process_ids).unwrap_or_default()
     } else {
         EnvironmentSample::default()
     };
     let accelerators = if complete {
-        platform::accelerator_sample(&process_ids)
+        platform::accelerator_sample(&live_process_ids)
     } else {
         AcceleratorSample::default()
     };
@@ -457,5 +469,23 @@ fn reason_for_io_error(error: &io::Error) -> CollectionIssue {
         io::ErrorKind::PermissionDenied => CollectionIssue::PermissionDenied,
         io::ErrorKind::Unsupported => CollectionIssue::Unsupported,
         _ => CollectionIssue::SourceUnavailable,
+    }
+}
+
+fn is_process_terminated_error(error: &io::Error) -> bool {
+    if error.kind() == io::ErrorKind::NotFound {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        error.raw_os_error() == Some(3) // ESRCH
+    }
+    #[cfg(windows)]
+    {
+        error.raw_os_error() == Some(87) // ERROR_INVALID_PARAMETER for an exited PID
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
     }
 }

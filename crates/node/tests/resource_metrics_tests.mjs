@@ -197,7 +197,7 @@ describe('resource metrics API', () => {
         ),
       );
     } finally {
-      runtime.close();
+      await runtime.close();
       await rm(directory, { recursive: true, force: true });
     }
   });

@@ -46,22 +46,60 @@ pub(super) fn process_tree_ids(root_process_id: u32) -> io::Result<Vec<u32>> {
     while next < process_ids.len() {
         let process_id = process_ids[next];
         next += 1;
-        let children_path = format!("/proc/{process_id}/task/{process_id}/children");
-        let children = match fs::read_to_string(children_path) {
-            Ok(children) => children,
+        let tasks = match fs::read_dir(format!("/proc/{process_id}/task")) {
+            Ok(tasks) => tasks,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error),
         };
-        for child in children
-            .split_whitespace()
-            .filter_map(|child| child.parse::<u32>().ok())
-        {
-            if discovered.insert(child) {
-                process_ids.push(child);
+        let mut children_file_missing = false;
+        for task in tasks {
+            let task = task?;
+            let children = match fs::read_to_string(task.path().join("children")) {
+                Ok(children) => children,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    children_file_missing = true;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            enqueue_children(&children, &mut discovered, &mut process_ids);
+        }
+        if children_file_missing {
+            // CONFIG_PROC_CHILDREN is optional. Recover the tree from each live process's PPID
+            // so missing task children files do not silently reduce the tree to its root.
+            for entry in fs::read_dir("/proc")? {
+                let entry = entry?;
+                let Some(candidate) = entry
+                    .file_name()
+                    .to_str()
+                    .and_then(|name| name.parse::<u32>().ok())
+                else {
+                    continue;
+                };
+                let Ok(stat) = fs::read_to_string(entry.path().join("stat")) else {
+                    continue;
+                };
+                if stat_fields(&stat).and_then(|fields| fields.get(1)?.parse::<u32>().ok())
+                    == Some(process_id)
+                    && discovered.insert(candidate)
+                {
+                    process_ids.push(candidate);
+                }
             }
         }
     }
     Ok(process_ids)
+}
+
+fn enqueue_children(children: &str, discovered: &mut BTreeSet<u32>, process_ids: &mut Vec<u32>) {
+    for child in children
+        .split_whitespace()
+        .filter_map(|child| child.parse::<u32>().ok())
+    {
+        if discovered.insert(child) {
+            process_ids.push(child);
+        }
+    }
 }
 
 pub(super) fn process_sample(process_id: u32) -> io::Result<ProcessSample> {

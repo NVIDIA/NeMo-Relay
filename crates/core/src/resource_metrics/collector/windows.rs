@@ -102,17 +102,23 @@ pub(super) fn parent_process_id(process_id: u32) -> io::Result<Option<u32>> {
 pub(super) fn process_tree_ids(root_process_id: u32) -> io::Result<Vec<u32>> {
     let entries = process_entries()?;
     let mut process_ids = vec![root_process_id];
+    let mut discovered = std::collections::BTreeSet::from([root_process_id]);
     let mut next = 0;
     while next < process_ids.len() {
         let parent = process_ids[next];
         next += 1;
-        process_ids.extend(
-            entries
-                .iter()
-                .filter_map(|(process_id, parent_process_id)| {
-                    (*parent_process_id == parent).then_some(*process_id)
-                }),
-        );
+        let parent_identity = process_identity(parent).ok();
+        for (process_id, parent_process_id) in &entries {
+            if *parent_process_id != parent || !discovered.insert(*process_id) {
+                continue;
+            }
+            if let (Some(parent_identity), Ok(child_identity)) =
+                (parent_identity, process_identity(*process_id))
+                && child_identity > parent_identity
+            {
+                process_ids.push(*process_id);
+            }
+        }
     }
     Ok(process_ids)
 }
