@@ -20,18 +20,25 @@ The public API is intentionally small:
 
 ## Structs
 
-- [OpenTelemetryConfig](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-opentelemetryconfig): Configuration for the OpenTelemetry subscriber.
+- [OpenTelemetryConfig](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-opentelemetryconfig): Configuration for an OpenTelemetry subscriber exporting to a collector.
+- [OpenTelemetryFileSinkConfig](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-opentelemetryfilesinkconfig): Configuration for an OpenTelemetry subscriber writing OTLP to a local file.
 - [OpenTelemetrySubscriber](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-opentelemetrysubscriber): OpenTelemetry-backed NeMo Relay subscriber.
 - [OpenTelemetrySubscriberOptions](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-opentelemetrysubscriberoptions): Options for constructing an OpenTelemetry subscriber from an existing tracer provider.
+- [OtlpFileSinkSettings](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-otlpfilesinksettings): A local file destination for exported spans.
 
 ## Enums
 
 - [OpenTelemetryError](/reference/api/rust-library-reference/nemo-relay/observability/otel/enum-opentelemetryerror): Errors produced while configuring or operating the OpenTelemetry subscriber.
+- [OtlpFileSinkMode](/reference/api/rust-library-reference/nemo-relay/observability/otel/enum-otlpfilesinkmode): Open mode used when a trace file sink creates its output file.
 - [OtlpTransport](/reference/api/rust-library-reference/nemo-relay/observability/otel/enum-otlptransport): Supported OTLP trace transports.
 
 ## Constants
 
 - [DEFAULT_COMPLETED_SPAN_CONTEXT_TTL](/reference/api/rust-library-reference/nemo-relay/observability/otel/constant-default-completed-span-context-ttl): Default period for attaching late marks to a completed scope's trace span.
+
+## Functions
+
+- [default_otlp_file_sink_filename](/reference/api/rust-library-reference/nemo-relay/observability/otel/fn-default-otlp-file-sink-filename): Returns the default output filename for a trace file sink.
 
 ## Type Aliases
 

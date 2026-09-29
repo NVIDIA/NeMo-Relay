@@ -125,6 +125,49 @@ export interface OpenTelemetryConfig {
 }
 ```
 
+### `OpenTelemetryFileSinkConfig`
+
+Configuration for a subscriber that writes OTLP to a local file.
+
+Carries no endpoint, transport, headers, or timeout: a file destination has no use for them.
+
+```ts
+export interface OpenTelemetryFileSinkConfig {
+  /** `"full"`, `"gen_ai"`, or `"openinference"`. */
+  type: "full" | "gen_ai" | "openinference"
+  /** Directory containing the output file. */
+  outputDirectory: string
+  /** Output filename. Defaults to a name derived from `format`. */
+  filename?: string
+  /** `"json_lines"` (default) or `"proto"`. */
+  format?: "json_lines" | "proto"
+  /** `"overwrite"` (default) or `"append"`. */
+  mode?: "append" | "overwrite"
+  /** Extra OpenTelemetry resource attributes as string key/value pairs. */
+  resourceAttributes?: Json
+  /** `service.name` resource attribute. Defaults to `"unknown_service"`. */
+  serviceName?: string
+  /** Optional `service.namespace` resource attribute. */
+  serviceNamespace?: string
+  /** Optional `service.version` resource attribute. */
+  serviceVersion?: string
+  /** Instrumentation scope name. Defaults to `"opentelemetry"`. */
+  instrumentationScope?: string
+  /** Completed scope lineage retention in milliseconds as a `bigint`. Defaults to `60000`. */
+  completedSpanContextTtlMillis?: bigint
+  /** Mark projection for full and OpenInference exporters. Defaults to `"inherit"`. */
+  markProjection?: "inherit" | "event" | "tool"
+  /** Mark names excluded from full and OpenInference projections. */
+  markExcludeNames?: Array<string>
+  /** Attribute aliases for full and OpenInference projections. */
+  attributeMappings?: Json
+  /** Literal Event metadata prefixes copied to top-level OTLP attributes. */
+  promoteMetadataPrefixes?: Array<string>
+  /** Literal root-scope Event metadata prefixes copied to OTLP resource attributes. */
+  promoteResourceMetadataPrefixes?: Array<string>
+}
+```
+
 ### `OpenTelemetryLogConfig`
 
 Configuration object for `OpenTelemetryLogSubscriber`.
@@ -500,6 +543,8 @@ OpenTelemetry-backed event subscriber.
 export declare class OpenTelemetrySubscriber {
   /** Create a new OpenTelemetry subscriber from a config object. */
   constructor(config: OpenTelemetryConfig)
+  /** Create a subscriber that writes OTLP to a local file. */
+  static fileSink(config: OpenTelemetryFileSinkConfig): OpenTelemetrySubscriber
   /** Register this subscriber globally with the given name. */
   register(name: string): void
   /** Deregister a subscriber by name. */

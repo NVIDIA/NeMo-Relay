@@ -1,0 +1,28 @@
+---
+title: "Module otel_file"
+sidebar-title: "otel_file"
+slug: "/reference/api/rust-library-reference/nemo-relay/observability/otel_file"
+description: "OTLP file export for NeMo Relay Core."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+OTLP file export for NeMo Relay Core.
+
+[`OtlpFileSpanExporter`](/reference/api/rust-library-reference/nemo-relay/observability/otel_file/struct-otlpfilespanexporter) writes the same `ExportTraceServiceRequest` the network exporters put on the wire to a local file. [`OtlpFileFormat`](/reference/api/rust-library-reference/nemo-relay/observability/otel_file/enum-otlpfileformat) selects between the OpenTelemetry file-exporter specification's JSON lines and the Collector's length-delimited protobuf.
+
+## Structs
+
+- [OtlpFileSpanExporter](/reference/api/rust-library-reference/nemo-relay/observability/otel_file/struct-otlpfilespanexporter): Writes exported spans to a local file as OTLP.
+
+## Enums
+
+- [OtlpFileExporterError](/reference/api/rust-library-reference/nemo-relay/observability/otel_file/enum-otlpfileexportererror): Errors produced while configuring or operating the OTLP file exporter.
+- [OtlpFileFormat](/reference/api/rust-library-reference/nemo-relay/observability/otel_file/enum-otlpfileformat): On-disk encoding used by [`OtlpFileSpanExporter`](/reference/api/rust-library-reference/nemo-relay/observability/otel_file/struct-otlpfilespanexporter).
+
+## Type Aliases
+
+- [Result](/reference/api/rust-library-reference/nemo-relay/observability/otel_file/type-result): Result type for the OTLP file exporter.

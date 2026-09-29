@@ -2,7 +2,7 @@
 title: "Struct Open Telemetry Subscriber"
 sidebar-title: "OpenTelemetrySubscriber"
 description: "OpenTelemetry-backed NeMo Relay subscriber."
-position: 2
+position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -26,6 +26,12 @@ OpenTelemetry-backed NeMo Relay subscriber.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(config: <a href=\"struct-opentelemetryconfig\">OpenTelemetryConfig</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
 Builds a subscriber backed by a new OTLP tracer provider.
+
+#### `new_file_sink`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new_file_sink(config: <a href=\"struct-opentelemetryfilesinkconfig\">OpenTelemetryFileSinkConfig</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+Creates a subscriber writing OTLP to a local file.
 
 #### `from_tracer_provider`
 

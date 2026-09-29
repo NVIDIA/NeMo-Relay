@@ -1,0 +1,73 @@
+---
+title: "Struct Otlp File Span Exporter"
+sidebar-title: "OtlpFileSpanExporter"
+slug: "/reference/api/rust-library-reference/nemo-relay/observability/otel_file/struct-otlpfilespanexporter"
+description: "Writes exported spans to a local file as OTLP."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct OtlpFileSpanExporter { /* private fields */ }
+```
+
+Writes exported spans to a local file as OTLP.
+
+Every export is written, flushed and synced before it returns, so a batch the SDK reports as delivered has reached the disk and a run that dies mid-stream leaves a readable prefix.
+
+## Implementations
+
+### `impl OtlpFileSpanExporter`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-otlpfilespanexporter\">OtlpFileSpanExporter</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(\n    root: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.Path.html\">Path</a>,\n    path: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.Path.html\">Path</a>,\n    format: <a href=\"enum-otlpfileformat\">OtlpFileFormat</a>,\n    append: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+Creates an exporter writing `path` in `format`.
+
+`root` confines the output and the file is owner-only, as for the ATOF and ATIF sinks: a trajectory carries prompt and response content.
+
+#### `path`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn path(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.Path.html\">Path</a>"}} /></pre>
+
+Returns the path this exporter writes to.
+
+## Trait Implementations
+
+### `impl Debug for OtlpFileSpanExporter`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-otlpfilespanexporter\">OtlpFileSpanExporter</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl SpanExporter for OtlpFileSpanExporter`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl SpanExporter for <a href=\"struct-otlpfilespanexporter\">OtlpFileSpanExporter</a>"}} /></pre>
+
+#### `export`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "async fn export(&amp;self, batch: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;SpanData&gt;) -&gt; OTelSdkResult"}} /></pre>
+
+#### `shutdown_with_timeout`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn shutdown_with_timeout(&amp;self, _timeout: <a href=\"https://doc.rust-lang.org/1.96.1/core/time/struct.Duration.html\">Duration</a>) -&gt; OTelSdkResult"}} /></pre>
+
+#### `force_flush`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn force_flush(&amp;self) -&gt; OTelSdkResult"}} /></pre>
+
+#### `set_resource`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn set_resource(&amp;mut self, resource: &amp;Resource)"}} /></pre>
+
+#### `shutdown`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn shutdown(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, OTelSdkError&gt;"}} /></pre>
