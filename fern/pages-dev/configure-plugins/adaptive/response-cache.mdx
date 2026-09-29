@@ -314,7 +314,11 @@ Only complete, replayable LLM answers are stored:
   `type = "compaction"` block, string `content`, and omitted, null, or string
   `encrypted_content` can cache an ordinary response and can trigger another
   cached compaction when it also carries the paused threshold edit. On-demand
-  compaction requests remain live.
+  compaction requires the `compact-2026-09-04` beta and
+  `compaction: {"type": "summarize"}`; Relay replays its single signed block
+  without synthesizing a delta. A valid on-demand continuation has one signed
+  `type = "compaction"` block and can cache an ordinary response or trigger
+  another cached compaction when it also carries a new `summarize` request.
   Version and ordered beta tokens partition these entries from ordinary
   Messages requests. Extra response-bearing fields, unknown events, sparse or
   out-of-order blocks, and missing, ambiguous, unsupported, or malformed
