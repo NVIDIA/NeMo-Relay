@@ -4500,9 +4500,20 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         13,
         |_name, request, context, next| async move {
             assert_eq!(context.request_codec().codec, LlmCodecIdentity::Opaque);
-            assert!(context.request_codec().resolve_codec().is_some());
+            let request_codec = context
+                .request_codec()
+                .resolve_codec()
+                .expect("request codec capability");
+            let annotated = request_codec.decode(&request)?;
+            let request = request_codec.encode(&annotated, &request)?;
             assert!(context.response_codec().is_some());
-            next.call(request).await
+            let response = next.call(request).await?;
+            let response_codec = context
+                .response_codec()
+                .and_then(|codec| codec.resolve_codec())
+                .expect("response codec capability");
+            let _ = response_codec.decode(&response)?;
+            Ok(response)
         },
     )
     .unwrap();
@@ -4511,7 +4522,12 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         14,
         |_name, request, context, next| async move {
             assert_eq!(context.request_codec().codec, LlmCodecIdentity::Opaque);
-            assert!(context.request_codec().resolve_codec().is_some());
+            let request_codec = context
+                .request_codec()
+                .resolve_codec()
+                .expect("request codec capability");
+            let annotated = request_codec.decode(&request)?;
+            let request = request_codec.encode(&annotated, &request)?;
             assert!(context.response_codec().is_none());
             let stream = next.call(request).await?;
             let transformed = stream.map(|item| item.map(|chunk| json!({ "wrapped": chunk })));

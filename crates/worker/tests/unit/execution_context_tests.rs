@@ -126,6 +126,11 @@ fn execution_context_preserves_codec_identities_and_capability_availability() {
         .execution_context(&disconnected_runtime(), "invocation", true)
         .unwrap();
 
+        let debug = format!("{context:?}");
+        assert!(debug.contains("request_codec"));
+        assert!(debug.contains("response_codec"));
+        assert!(!debug.contains("-request"));
+        assert!(!debug.contains("-response"));
         assert_eq!(context.request_codec().codec, expected);
         assert_eq!(context.request_codec().resolve_codec().is_some(), resolves);
         let response = context.response_codec().expect("unary response context");
