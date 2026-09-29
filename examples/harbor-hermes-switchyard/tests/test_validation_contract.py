@@ -311,20 +311,23 @@ def test_harbor_timeout_multipliers_are_validated(tmp_path: Path) -> None:
 def test_atof_reader_extracts_switchyard_selected_targets(tmp_path: Path) -> None:
     module = load_validator()
     path = tmp_path / "trajectory.atof.jsonl"
+    # Real switchyard.routing.decision payloads carry the concrete selected
+    # model (e.g. "selected_model"), not an abstract "strong"/"weak" label —
+    # there is no "selected_target" field.
     events = [
         {"name": "switchyard.routing.requested", "data": {"algorithm": "llm_task_classifier"}},
         {
             "name": "switchyard.routing.decision",
-            "data": {"selected_target": "weak", "routing_tier": "weak"},
+            "data": {"selected_model": "nvidia/zai-org/glm-5.2", "routing_tier": "weak"},
         },
         {
             "name": "switchyard.routing.decision",
-            "data": {"selected_target": "strong", "routing_tier": "strong"},
+            "data": {"selected_model": "openai/openai/gpt-5.6-sol", "routing_tier": "strong"},
         },
         {
             "name": "switchyard.routing.llm_call",
             "data": {
-                "selected_target": "judge",
+                "selected_model": "aws/anthropic/bedrock-claude-sonnet-4-6",
                 "call_role": "judge",
                 "contributes_to_routing_overhead": True,
                 "usage": {"input_tokens": 10, "output_tokens": 2},
@@ -339,8 +342,8 @@ def test_atof_reader_extracts_switchyard_selected_targets(tmp_path: Path) -> Non
         "switchyard.routing.llm_call",
         "switchyard.routing.requested",
     ]
-    assert models == []
-    assert targets == ["strong", "weak"]
+    assert models == ["nvidia/zai-org/glm-5.2", "openai/openai/gpt-5.6-sol"]
+    assert targets == ["nvidia/zai-org/glm-5.2", "openai/openai/gpt-5.6-sol"]
 
 
 def test_atof_reader_extracts_direct_openai_request_model(tmp_path: Path) -> None:
@@ -367,7 +370,7 @@ def test_atof_inspection_extracts_provider_models_and_cache_usage(tmp_path: Path
     events = [
         {
             "name": "switchyard.routing.decision",
-            "data": {"selected_target": "weak"},
+            "data": {"selected_model": "nvidia/zai-org/glm-5.2"},
         },
         {
             "name": "openai.chat_completions",
@@ -384,8 +387,8 @@ def test_atof_inspection_extracts_provider_models_and_cache_usage(tmp_path: Path
     assert evidence == {
         "count": 3,
         "marks": ["switchyard.routing.decision"],
-        "models": ["aws/anthropic/bedrock-claude-sonnet-4-6"],
-        "targets": ["weak"],
+        "models": ["aws/anthropic/bedrock-claude-sonnet-4-6", "nvidia/zai-org/glm-5.2"],
+        "targets": ["nvidia/zai-org/glm-5.2"],
         "decision_count": 1,
         "logical_llm_call_count": 0,
         "auxiliary_logical_llm_call_count": 0,

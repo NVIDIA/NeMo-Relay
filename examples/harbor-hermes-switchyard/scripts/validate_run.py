@@ -405,15 +405,20 @@ def inspect_atof(path: Path) -> dict[str, Any]:
                     # Only decisions select the serving route. Routing-only LLM
                     # accounting marks may select the internal `judge` target,
                     # which is valid overhead but not a completion destination.
+                    # The decision payload records the concrete selected
+                    # model (e.g. "model"/"selected_model"/"target_model"),
+                    # not an abstract "strong"/"weak" label — there is no
+                    # "selected_target" field. Treat that same value as both
+                    # the routed model and the routed target; the caller
+                    # maps it back to a logical strong/weak label using the
+                    # run's own provenance.
                     for container in (payload.get("data"), payload.get("metadata")):
                         if isinstance(container, dict):
                             for key in ("model", "selected_model", "target_model"):
                                 value = container.get(key)
                                 if isinstance(value, str) and value:
                                     models.append(value)
-                            value = container.get("selected_target")
-                            if isinstance(value, str) and value:
-                                targets.append(value)
+                                    targets.append(value)
             profile = payload.get("category_profile")
             response = profile.get("annotated_response") if isinstance(profile, dict) else None
             data = payload.get("data")
@@ -593,22 +598,35 @@ def main() -> int:
                 integration_errors.append("ATOF artifact has no Switchyard routing evidence")
             if not routed_targets:
                 integration_errors.append("ATOF artifact has no selected Switchyard target")
-            unexpected_targets = sorted(set(routed_targets) - {"strong", "weak"})
+            # routed_targets now holds concrete model IDs (see inspect_atof),
+            # not abstract "strong"/"weak" labels — routing.decision marks
+            # never carried a "selected_target" field with those literal
+            # values. Compare against every model this run's provenance
+            # could legitimately route to, including the judge target used
+            # by classifier/escalation configs (a valid routing-accounting
+            # destination, not a completion destination, per the comment
+            # above inspect_atof's decision handling).
+            expected_target_models = {
+                model
+                for model in (
+                    provenance.get("routing", {}).get("strong_model"),
+                    provenance.get("routing", {}).get("weak_model"),
+                    provenance.get("routing", {}).get("judge_model"),
+                )
+                if model
+            }
+            unexpected_targets = sorted(set(routed_targets) - expected_target_models)
             if unexpected_targets:
                 integration_errors.append(f"ATOF artifact selected unexpected targets: {unexpected_targets}")
 
     caller_model = provenance.get("routing", {}).get("hermes_caller_model")
-    target_models = {
-        "strong": provenance.get("routing", {}).get("strong_model"),
-        "weak": provenance.get("routing", {}).get("weak_model"),
-    }
-    routed_models = sorted(
-        {
-            *routed_models,
-            *(target_models[target] for target in routed_targets if target_models.get(target)),
-        }
-    )
-    if provenance.get("routing", {}).get("algorithm") != "direct" and caller_model and caller_model in routed_models:
+    # Hermes's own outer "openai.chat_completions" span legitimately carries
+    # the caller-stub model name (that is literally what --model was passed
+    # as), so it appears in routed_models via that span. That is expected
+    # and not what this check guards against; check whether Switchyard's own
+    # routing.decision ever *selected* the stub as if it were a real target,
+    # using routed_targets rather than the broader routed_models.
+    if provenance.get("routing", {}).get("algorithm") != "direct" and caller_model and caller_model in routed_targets:
         integration_errors.append("Hermes caller stub appeared as a routed provider model")
 
     secret_values: list[bytes] = []
