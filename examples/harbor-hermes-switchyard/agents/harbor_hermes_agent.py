@@ -577,6 +577,21 @@ class HarborHermesAgent(Hermes):
             if harbor_model not in command:
                 raise ValueError("direct baseline received an unexpected Hermes model command")
             command = command.replace(harbor_model, provider_model, 1)
+        if self.routing_mode == "switchyard" and "hermes --yolo chat" in command:
+            # Without --provider custom, Hermes resolves --model against its
+            # own default provider catalog (observed hitting real OpenRouter)
+            # instead of the Relay/Switchyard execution intercept, so the
+            # caller-model stub name (never a real catalog entry) fails with
+            # a raw connection error before Switchyard ever sees the call.
+            # Direct mode needs the identical override for the same reason;
+            # apply it here too rather than only for direct.
+            match = re.search(r"--model openai/(\S+)", command)
+            if match is None:
+                raise ValueError("switchyard routing received an unexpected Hermes model command")
+            caller_model = match.group(1)
+            harbor_model = f"--model openai/{caller_model}"
+            provider_model = f"--model {caller_model} --provider custom"
+            command = command.replace(harbor_model, provider_model, 1)
         if self.hermetic_runtime_dir is not None:
             assert self.hermetic_ca_bundle is not None
             ca_bundle = shlex.quote(self.hermetic_ca_bundle)
