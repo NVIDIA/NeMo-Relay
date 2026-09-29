@@ -1091,17 +1091,19 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_optio
     }
 }
 
-/// Creates one typed OpenTelemetry exporter subscriber with projection and metadata controls.
+/// Creates one typed OpenTelemetry exporter subscriber with projection, metadata,
+/// resource-promotion, and lineage controls.
 ///
-/// `promote_metadata_prefixes_json` is a JSON array of literal metadata prefixes,
-/// such as `["nv."]`. Pass null to disable metadata promotion.
-/// `completed_span_context_ttl_millis` must be greater than zero.
+/// `promote_metadata_prefixes_json` and `promote_resource_metadata_prefixes_json`
+/// are JSON arrays of literal metadata prefixes, such as `["nv."]`. Pass null to
+/// disable that promotion. `completed_span_context_ttl_millis` must be greater
+/// than zero.
 ///
 /// # Safety
 /// Any non-null C strings must be valid and `out` must be non-null.
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_options_v4(
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_options_v5(
     otel_type: *const c_char,
     transport: *const c_char,
     endpoint: *const c_char,
@@ -1117,6 +1119,7 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_optio
     mark_exclude_names_json: *const c_char,
     attribute_mappings_json: *const c_char,
     promote_metadata_prefixes_json: *const c_char,
+    promote_resource_metadata_prefixes_json: *const c_char,
     completed_span_context_ttl_millis: u64,
     out: *mut *mut FfiOpenTelemetrySubscriber,
 ) -> NemoRelayStatus {
@@ -1163,6 +1166,12 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_optio
                 Err(status) => return status,
             },
         )
+        .with_promote_resource_metadata_prefixes(
+            match parse_promote_metadata_prefixes(promote_resource_metadata_prefixes_json) {
+                Ok(value) => value,
+                Err(status) => return status,
+            },
+        )
         .with_completed_span_context_ttl(Duration::from_millis(completed_span_context_ttl_millis));
     let subscriber = match create_otel_subscriber(config) {
         Ok(subscriber) => subscriber,
@@ -1170,6 +1179,59 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_optio
     };
     unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetrySubscriber(subscriber))) };
     NemoRelayStatus::Ok
+}
+
+/// Creates one typed OpenTelemetry exporter subscriber with projection and metadata controls.
+///
+/// This compatibility entrypoint promotes no resource metadata. Use
+/// `nemo_relay_otel_subscriber_create_with_projection_options_v5` for
+/// `promote_resource_metadata_prefixes`.
+///
+/// # Safety
+/// Any non-null C strings must be valid and `out` must be non-null.
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_options_v4(
+    otel_type: *const c_char,
+    transport: *const c_char,
+    endpoint: *const c_char,
+    headers_json: *const c_char,
+    header_env_json: *const c_char,
+    resource_attributes_json: *const c_char,
+    service_name: *const c_char,
+    service_namespace: *const c_char,
+    service_version: *const c_char,
+    instrumentation_scope: *const c_char,
+    timeout_millis: u64,
+    mark_projection: *const c_char,
+    mark_exclude_names_json: *const c_char,
+    attribute_mappings_json: *const c_char,
+    promote_metadata_prefixes_json: *const c_char,
+    completed_span_context_ttl_millis: u64,
+    out: *mut *mut FfiOpenTelemetrySubscriber,
+) -> NemoRelayStatus {
+    unsafe {
+        nemo_relay_otel_subscriber_create_with_projection_options_v5(
+            otel_type,
+            transport,
+            endpoint,
+            headers_json,
+            header_env_json,
+            resource_attributes_json,
+            service_name,
+            service_namespace,
+            service_version,
+            instrumentation_scope,
+            timeout_millis,
+            mark_projection,
+            mark_exclude_names_json,
+            attribute_mappings_json,
+            promote_metadata_prefixes_json,
+            std::ptr::null(),
+            completed_span_context_ttl_millis,
+            out,
+        )
+    }
 }
 
 /// Creates one typed OpenTelemetry exporter subscriber with projection, metadata, and lineage controls.

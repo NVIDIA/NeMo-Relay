@@ -331,6 +331,47 @@ func TestOpenTelemetrySubscriberRejectsInvalidHeaderEnvWithoutSecretValues(t *te
 	}
 }
 
+// TestOpenTelemetrySubscriberPromotesResourceMetadata covers the endpoint path,
+// which the FFI exposes only from the v5 entrypoint.
+func TestOpenTelemetrySubscriberPromotesResourceMetadata(t *testing.T) {
+	requests := make(chan otelRequest, 1)
+	server := NewOtelTestServer(t, requests)
+	defer server.Close()
+
+	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, server.URL+otelTestPath)
+	config.PromoteResourceMetadataPrefixes = []string{"deployment."}
+	subscriber, err := NewOpenTelemetrySubscriber(config)
+	if err != nil {
+		t.Fatalf(newOpenTelemetrySubscriberFailed, err)
+	}
+	defer subscriber.Close()
+
+	name := "go_resource_promotion_" + time.Now().Format(otelTimeFormat)
+	if err := subscriber.Register(name); err != nil {
+		t.Fatalf(otelRegisterFailed, err)
+	}
+	defer func() { _ = subscriber.Deregister(name) }()
+
+	runWithTestScopeStack(t, func() {
+		handle, err := PushScope("go-resource-agent", ScopeTypeAgent,
+			WithMetadata(json.RawMessage(`{"deployment.environment":"test"}`)))
+		requireNoError(t, err, "PushScope failed")
+		requireNoError(t, PopScope(handle), "PopScope failed")
+	})
+	requireNoError(t, subscriber.ForceFlush(), "ForceFlush failed")
+
+	select {
+	case request := <-requests:
+		// Promotion moves the key onto the resource, so it appears once there
+		// instead of on both the start and end scope events.
+		if got := bytes.Count(request.Body, []byte("deployment.environment")); got != 1 {
+			t.Fatalf("expected the attribute promoted onto the resource, got %d occurrences", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for OTLP request")
+	}
+}
+
 func TestOpenTelemetrySubscriberExportsGenAIAgentProjection(t *testing.T) {
 	requests := make(chan otelRequest, 1)
 	server := NewOtelTestServer(t, requests)

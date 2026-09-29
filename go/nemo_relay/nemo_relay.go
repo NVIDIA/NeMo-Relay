@@ -288,6 +288,7 @@ extern int32_t nemo_relay_otel_subscriber_create_with_projection_options(const c
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v2(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, void**);
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v3(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, uint64_t, void**);
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v4(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, uint64_t, void**);
+extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v5(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
 extern int32_t nemo_relay_otel_subscriber_create_file_sink(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
 extern int32_t nemo_relay_otel_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_subscriber_deregister(const char*);
@@ -2460,18 +2461,19 @@ type OpenTelemetryConfig struct {
 	Endpoint  string
 	Headers   map[string]string
 	// HeaderEnv maps outbound header names to environment variables resolved at activation.
-	HeaderEnv               map[string]string
-	ResourceAttributes      map[string]string
-	ServiceName             string
-	ServiceNamespace        string
-	ServiceVersion          string
-	InstrumentationScope    string
-	Timeout                 time.Duration
-	CompletedSpanContextTTL *time.Duration
-	MarkProjection          MarkProjection
-	MarkExcludeNames        []string
-	AttributeMappings       []OtlpAttributeMapping
-	PromoteMetadataPrefixes []string
+	HeaderEnv                       map[string]string
+	ResourceAttributes              map[string]string
+	ServiceName                     string
+	ServiceNamespace                string
+	ServiceVersion                  string
+	InstrumentationScope            string
+	Timeout                         time.Duration
+	CompletedSpanContextTTL         *time.Duration
+	MarkProjection                  MarkProjection
+	MarkExcludeNames                []string
+	AttributeMappings               []OtlpAttributeMapping
+	PromoteMetadataPrefixes         []string
+	PromoteResourceMetadataPrefixes []string
 }
 
 // NewOpenTelemetryConfig returns a typed config for the required endpoint.
@@ -2569,6 +2571,9 @@ func normalizeOpenTelemetryConfig(config OpenTelemetryConfig) (OpenTelemetryConf
 	if config.PromoteMetadataPrefixes == nil {
 		config.PromoteMetadataPrefixes = []string{}
 	}
+	if config.PromoteResourceMetadataPrefixes == nil {
+		config.PromoteResourceMetadataPrefixes = []string{}
+	}
 	return config, nil
 }
 
@@ -2645,9 +2650,15 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	}
 	cPromoteMetadataPrefixesJSON := C.CString(string(promoteMetadataPrefixesJSON))
 	defer C.free(unsafe.Pointer(cPromoteMetadataPrefixesJSON))
+	promoteResourceMetadataPrefixesJSON, err := jsonMarshal(config.PromoteResourceMetadataPrefixes)
+	if err != nil {
+		return nil, err
+	}
+	cPromoteResourceMetadataPrefixesJSON := C.CString(string(promoteResourceMetadataPrefixesJSON))
+	defer C.free(unsafe.Pointer(cPromoteResourceMetadataPrefixesJSON))
 
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_subscriber_create_with_projection_options_v4(
+	status := C.nemo_relay_otel_subscriber_create_with_projection_options_v5(
 		cType,
 		cTransport,
 		cEndpoint,
@@ -2663,6 +2674,7 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 		cMarkExcludeNamesJSON,
 		cAttributeMappingsJSON,
 		cPromoteMetadataPrefixesJSON,
+		cPromoteResourceMetadataPrefixesJSON,
 		C.uint64_t(*config.CompletedSpanContextTTL/time.Millisecond),
 		&ptr,
 	)

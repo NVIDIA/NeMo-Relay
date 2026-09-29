@@ -1686,6 +1686,67 @@ fn test_ffi_otel_projection_options_v3_configures_completed_context_ttl() {
 }
 
 #[test]
+fn test_ffi_otel_projection_options_v5_accepts_and_validates_resource_metadata_prefixes() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+    reset_globals();
+
+    unsafe {
+        let endpoint = c"http://localhost:4318/v1/traces";
+        let mut subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_subscriber_create_with_projection_options_v5(
+                c"full".as_ptr(),
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                c"inherit".as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                c"[\"deployment.\"]".as_ptr(),
+                60_000,
+                &mut subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_otel_subscriber_free(subscriber);
+
+        let mut invalid_subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_subscriber_create_with_projection_options_v5(
+                c"full".as_ptr(),
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                c"inherit".as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                c"[\"\"]".as_ptr(),
+                60_000,
+                &mut invalid_subscriber,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert!(invalid_subscriber.is_null());
+    }
+}
+
+#[test]
 fn test_ffi_otel_projection_options_v4_accepts_header_env_and_keeps_values_secret() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
     reset_globals();
