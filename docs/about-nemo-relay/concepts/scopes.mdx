@@ -281,9 +281,9 @@ The default `capture_propagation_context()` API preserves Relay event parentage
 and includes the exact active OpenTelemetry context when one is available. When
 no valid W3C parent is available, Relay can reconstruct a Relay-derived trace
 from the root UUID. An explicit rootless context stays rootless until a local
-Agent scope establishes a new root. Use
-`capture_rootless_propagation_context()` only when the receiver must start a new
-Relay-derived trace and no W3C parent is available.
+Agent scope establishes a new root. Rootless capture omits W3C context derived
+from the sender's local scope, so importing a locally captured rootless context
+starts a separate OpenTelemetry trace.
 `capture_propagation_context_with_root()` lets an application choose a stable
 run UUID explicitly.
 
@@ -296,9 +296,10 @@ fields are ignored with a runtime warning, without rejecting the Relay context.
 For outbound-only W3C propagation, use `capture_traceparent()` to obtain the
 current Relay traceparent directly, or convert a `PropagationContext`
 with `PropagationContext::to_traceparent` (and the equivalent binding methods).
-When valid W3C context is present, Relay emits its W3C headers even for a
-rootless Relay context; rootless only starts a new Relay-derived OpenTelemetry
-trace when no W3C parent is available. Managed LLM execution automatically replaces both
+When a W3C context was imported upstream, rootless capture preserves that
+context and the receiver continues the upstream trace. To require a new trace
+even then, remove `traceparent` and `tracestate` before importing the context.
+Managed LLM execution automatically replaces both
 runtime-owned `traceparent` and `tracestate` headers on the provider request;
 a standalone request-intercept call adds the same pair only when a real Relay
 trace context exists.

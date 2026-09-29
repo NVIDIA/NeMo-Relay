@@ -515,6 +515,15 @@ def _callback_propagation_context(root_uuid: str | None) -> PropagationContext |
     )
 
 
+def _callback_rootless_propagation_context() -> PropagationContext | None:
+    context = _callback_propagation_context(None)
+    if context is None:
+        return None
+    if _capture_rootless_propagation_context().traceparent is None:
+        return PropagationContext(context.parent_uuid)
+    return context
+
+
 def capture_propagation_context() -> PropagationContext:
     """Capture the current Relay causal parent for application-managed transport.
 
@@ -536,7 +545,7 @@ def capture_rootless_propagation_context() -> PropagationContext:
             session propagation when it is installed in another scope stack.
     """
     get_scope_stack()
-    if context := _callback_propagation_context(None):
+    if context := _callback_rootless_propagation_context():
         return context
     return _capture_rootless_propagation_context()
 
@@ -546,14 +555,16 @@ def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationC
 
     Args:
         root_uuid: Root identity to include in the propagated context. Pass
-            ``None`` to use Relay's current root identity.
+            ``None`` to omit the Relay root and locally derived W3C context.
 
     Returns:
         PropagationContext: Context carrying the current parent and selected
         root identities.
     """
     get_scope_stack()
-    if context := _callback_propagation_context(root_uuid):
+    if context := (
+        _callback_rootless_propagation_context() if root_uuid is None else _callback_propagation_context(root_uuid)
+    ):
         return context
     return _capture_propagation_context_with_root(root_uuid)
 

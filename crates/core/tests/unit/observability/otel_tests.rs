@@ -11,10 +11,10 @@ use crate::api::event::{
 use crate::api::llm::{LlmCallExecuteParams, LlmRequest, llm_call_execute};
 use crate::api::runtime::{
     NemoRelayContextState, PropagationContext, TASK_SCOPE_STACK, ThreadScopeStackBinding,
-    capture_propagation_context, capture_rootless_propagation_context, capture_thread_scope_stack,
-    capture_traceparent, create_scope_stack, create_scope_stack_from_propagation, fork_scope_stack,
-    global_context, restore_thread_scope_stack, set_thread_scope_stack, task_scope_push,
-    task_scope_remove,
+    capture_propagation_context, capture_propagation_context_with_root,
+    capture_rootless_propagation_context, capture_thread_scope_stack, capture_traceparent,
+    create_scope_stack, create_scope_stack_from_propagation, fork_scope_stack, global_context,
+    restore_thread_scope_stack, set_thread_scope_stack, task_scope_push, task_scope_remove,
 };
 use crate::api::scope::{ScopeHandle, ScopeType};
 use crate::api::scope::{event, pop_scope, push_scope};
@@ -1023,48 +1023,65 @@ fn imported_w3c_parent_survives_an_additional_fork() {
 }
 
 #[test]
-fn rootless_import_llm_traceparent_matches_exported_span() {
+fn rootless_capture_from_local_agent_starts_a_separate_trace() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
     reset_global();
     set_thread_scope_stack(create_scope_stack());
     let runtime = test_tokio_runtime();
     let _runtime_guard = runtime.enter();
-    let (provider, exporter) = make_provider();
-    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "rootless-import-llm");
-    let subscriber_name = format!("rootless_import_llm_{}", Uuid::now_v7().simple());
-    subscriber.register(&subscriber_name).unwrap();
+    let (sender_provider, sender_exporter) = make_provider();
+    let sender_subscriber =
+        OpenTelemetrySubscriber::from_tracer_provider(sender_provider, "rootless-sender");
+    let sender_name = format!("rootless_sender_{}", Uuid::now_v7().simple());
+    sender_subscriber.register(&sender_name).unwrap();
 
     let turn = push_scope(
         crate::api::scope::PushScopeParams::builder()
             .name("rootless-import-turn")
-            .scope_type(ScopeType::Custom)
+            .scope_type(ScopeType::Agent)
             .build(),
     )
     .unwrap();
     let context = capture_rootless_propagation_context().unwrap();
     assert_eq!(context.root_uuid, None);
-    let imported = create_scope_stack_from_propagation(&context).unwrap();
-    let traceparent = runtime.block_on(TASK_SCOPE_STACK.scope(
-        imported,
-        execute_llm_and_capture_traceparent("rootless-import-llm"),
-    ));
+    assert_eq!(context.traceparent, None);
+    assert_eq!(context.tracestate, None);
+    assert_eq!(
+        capture_propagation_context_with_root(None).unwrap(),
+        context
+    );
     pop_scope(
         crate::api::scope::PopScopeParams::builder()
             .handle_uuid(&turn.uuid)
             .build(),
     )
     .unwrap();
+    let sender_spans = finish_trace_subscriber(&sender_subscriber, &sender_name, &sender_exporter);
+    let turn_span = finished_span_named(&sender_spans, "rootless-import-turn");
 
-    let spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
-    let turn_span = finished_span_named(&spans, "rootless-import-turn");
-    let llm_span = finished_span_named(&spans, "rootless-import-llm");
+    let (receiver_provider, receiver_exporter) = make_provider();
+    let receiver_subscriber =
+        OpenTelemetrySubscriber::from_tracer_provider(receiver_provider, "rootless-receiver");
+    let receiver_name = format!("rootless_receiver_{}", Uuid::now_v7().simple());
+    receiver_subscriber.register(&receiver_name).unwrap();
+    let imported = create_scope_stack_from_propagation(&context).unwrap();
+    let traceparent = runtime.block_on(TASK_SCOPE_STACK.scope(
+        imported,
+        execute_llm_and_capture_traceparent("rootless-import-llm"),
+    ));
+    let receiver_spans =
+        finish_trace_subscriber(&receiver_subscriber, &receiver_name, &receiver_exporter);
+    let llm_span = finished_span_named(&receiver_spans, "rootless-import-llm");
     assert_traceparent_matches_exported_span(&traceparent, llm_span);
-    assert_eq!(
+    assert_ne!(
         llm_span.span_context.trace_id(),
         turn_span.span_context.trace_id()
     );
-    assert_eq!(llm_span.parent_span_id, turn_span.span_context.span_id());
+    assert_eq!(
+        llm_span.parent_span_id,
+        opentelemetry::trace::SpanId::INVALID
+    );
 }
 
 #[test]

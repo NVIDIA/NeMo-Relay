@@ -638,12 +638,14 @@ class TestLLMInterceptsAsync:
 
         async def execution_intercept(_name, request, next_handler):
             context = capture_propagation_context()
-            observed.append((context.parent_uuid, context.root_uuid, capture_traceparent()))
+            rootless = capture_rootless_propagation_context()
+            observed.append((context.parent_uuid, context.root_uuid, capture_traceparent(), rootless.traceparent))
             return await next_handler(request)
 
         async def provider(_request):
             context = capture_propagation_context()
-            observed.append((context.parent_uuid, context.root_uuid, capture_traceparent()))
+            rootless = capture_rootless_propagation_context()
+            observed.append((context.parent_uuid, context.root_uuid, capture_traceparent(), rootless.traceparent))
             return {"ok": True}
 
         try:
@@ -654,8 +656,8 @@ class TestLLMInterceptsAsync:
             start = _llm_event(events, "py_llm_capture_traceparent", "start")
             expected = f"00-{turn.uuid.replace('-', '')}-{start.uuid.replace('-', '')[-16:]}-01"
             assert observed == [
-                (start.uuid, turn.uuid, expected),
-                (start.uuid, turn.uuid, expected),
+                (start.uuid, turn.uuid, expected, None),
+                (start.uuid, turn.uuid, expected, None),
             ]
         finally:
             intercepts.deregister_llm_execution("py_llm_capture_traceparent")

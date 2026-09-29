@@ -43,6 +43,9 @@ changes, compatibility updates, and fixed known issues.
   `traceparent` unchanged, including its original trace and span IDs.
 - OpenTelemetry spans whose parent was not observed by an exporter now join
   the outer trace instead of starting a separate trace.
+- Rootless propagation from a local Relay scope still starts a separate
+  OpenTelemetry trace. Rootless capture retains a previously imported W3C
+  parent, so remove its W3C fields to force a new trace in that case.
 - Invalid Relay identifiers no longer prevent later valid OpenTelemetry events
   from exporting.
 

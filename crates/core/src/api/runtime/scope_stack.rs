@@ -704,13 +704,32 @@ fn captured_w3c_headers(
     }
 }
 
+fn captured_imported_w3c_headers(
+    stack: &ScopeStack,
+    parent_uuid: Uuid,
+) -> (Option<String>, Option<String>) {
+    if stack.propagated_parent_uuid == Some(parent_uuid) {
+        return (
+            stack.propagated_traceparent.clone(),
+            stack.propagated_tracestate.clone(),
+        );
+    }
+    w3c_span_context(
+        stack.propagated_traceparent.as_deref(),
+        stack.propagated_tracestate.as_deref(),
+    )
+    .map(|parent| w3c_headers_for_parent(parent, parent_uuid))
+    .unwrap_or_default()
+}
+
 /// Capture the current causal parent and its Relay root when available.
 ///
 /// Importing the returned context preserves Relay event parentage. A rootless
 /// imported stack remains rootless until a local Agent scope establishes a new
 /// root; otherwise the context continues the originating Relay-derived
 /// observability trace. Use [`capture_rootless_propagation_context`] when the
-/// receiver must omit the Relay root; a valid W3C parent is still retained.
+/// receiver must omit the Relay root; a previously imported W3C parent is
+/// still retained.
 pub fn capture_propagation_context() -> Result<PropagationContext> {
     let active_uuid = active_event_uuid();
     let parent_uuid = active_uuid.unwrap_or_else(|| task_scope_top().uuid);
@@ -735,19 +754,37 @@ pub fn capture_propagation_context() -> Result<PropagationContext> {
 
 /// Capture the current causal parent without a root UUID.
 ///
-/// Importing the returned context preserves Relay event parentage and any valid
-/// W3C parent while omitting the Relay root. Without a valid W3C parent, the
-/// first local OpenTelemetry span starts a new trace.
+/// Importing the returned context preserves Relay event parentage and any
+/// previously imported W3C parent while omitting the Relay root. A locally
+/// derived W3C parent is omitted, so the receiver starts a separate trace.
 pub fn capture_rootless_propagation_context() -> Result<PropagationContext> {
-    capture_propagation_context_with_root(None)
+    let parent_uuid = active_event_uuid().unwrap_or_else(|| task_scope_top().uuid);
+    let stack = current_scope_stack();
+    let stack_guard = stack
+        .read()
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    let (traceparent, tracestate) = captured_imported_w3c_headers(&stack_guard, parent_uuid);
+    let context = PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: None,
+        parent_uuid,
+        traceparent,
+        tracestate,
+    };
+    context.validate()?;
+    Ok(context)
 }
 
 /// Capture the current causal parent and an application-supplied session root.
+/// Passing `None` has the same behavior as [`capture_rootless_propagation_context`].
 pub fn capture_propagation_context_with_root(
     root_uuid: Option<Uuid>,
 ) -> Result<PropagationContext> {
+    let Some(root_uuid) = root_uuid else {
+        return capture_rootless_propagation_context();
+    };
     let mut context = capture_propagation_context()?;
-    context.root_uuid = root_uuid;
+    context.root_uuid = Some(root_uuid);
     context.validate()?;
     Ok(context)
 }

@@ -59,6 +59,8 @@ def test_propagation_context_capture_and_constructor_validation() -> None:
     assert rootless.version == 1
     assert rootless.root_uuid is None
     assert rootless.parent_uuid == sender.uuid
+    assert rootless.traceparent is None
+    assert rootless.tracestate is None
     assert rooted.version == 1
     assert rooted.root_uuid == root_uuid
     assert rooted.parent_uuid == sender.uuid

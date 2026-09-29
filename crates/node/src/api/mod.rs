@@ -2359,6 +2359,21 @@ fn callback_propagation_context(
     Ok(context)
 }
 
+fn rootless_callback_propagation_context(
+    env: &Env,
+    parent_uuid: uuid::Uuid,
+) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
+    let mut context = callback_propagation_context(env, parent_uuid)?;
+    context.root_uuid = None;
+    let rootless = with_effective_scope_stack(env, capture_rootless_propagation_context_handle)?
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    if rootless.traceparent.is_none() {
+        context.traceparent = None;
+        context.tracestate = None;
+    }
+    Ok(context)
+}
+
 /// Creates a new isolated scope stack.
 #[napi]
 pub fn create_scope_stack() -> ScopeStack {
@@ -2387,9 +2402,8 @@ pub fn capture_rootless_propagation_context(env: Env) -> napi::Result<Propagatio
     if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
         let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
             .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
-        let mut context = callback_propagation_context(&env, parent_uuid)?;
-        context.root_uuid = None;
-        return Ok(propagation_context_to_napi(context));
+        return rootless_callback_propagation_context(&env, parent_uuid)
+            .map(propagation_context_to_napi);
     }
     with_effective_scope_stack(&env, capture_rootless_propagation_context_handle)?
         .map(propagation_context_to_napi)
@@ -2410,7 +2424,11 @@ pub fn capture_propagation_context_with_root(
     if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
         let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
             .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
-        let mut context = callback_propagation_context(&env, parent_uuid)?;
+        let mut context = if root_uuid.is_none() {
+            rootless_callback_propagation_context(&env, parent_uuid)?
+        } else {
+            callback_propagation_context(&env, parent_uuid)?
+        };
         context.root_uuid = root_uuid;
         return Ok(propagation_context_to_napi(context));
     }

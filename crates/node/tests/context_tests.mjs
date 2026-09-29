@@ -103,6 +103,8 @@ describe('Context isolation', () => {
         assert.equal(rooted.parentUuid, handle.uuid);
         assert.equal(rootless.rootUuid, undefined);
         assert.equal(rootless.parentUuid, handle.uuid);
+        assert.equal(rootless.traceparent, undefined);
+        assert.equal(rootless.tracestate, undefined);
       } finally {
         popScope(handle);
       }

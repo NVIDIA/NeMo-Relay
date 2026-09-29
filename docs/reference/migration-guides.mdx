@@ -309,8 +309,8 @@ When you import a context with a root, work continues in the parent's
 OpenTelemetry trace. Without a propagated root, the first local Agent scope
 creates one.
 
-To start a separate trace in the receiver, use the rootless capture API for
-your binding:
+To start a separate trace from a locally created sender scope, use the rootless
+capture API for your binding:
 
 | Binding | Rootless Capture |
 |---|---|
@@ -321,9 +321,14 @@ your binding:
 | C | `nemo_relay_capture_rootless_propagation_context_json` |
 
 A rootless context still links Relay events to their immediate parent.
-The receiver's first local Agent scope creates a new root. Use explicit root
-capture when your application supplies a stable run UUID. Authenticate the
-source of an incoming context before you trust and import it. For details, refer to
+It does not forward a W3C parent derived from the sender's local scope, so the
+receiver starts a separate OpenTelemetry trace. If the sender previously
+imported a W3C parent, rootless capture still forwards that upstream trace;
+remove `traceparent` and `tracestate` from the context when an unconditional
+trace boundary is required. The receiver's first local Agent scope creates a
+new Relay root. Use explicit root capture when your application supplies a
+stable run UUID. Authenticate the source of an incoming context before you
+trust and import it. For details, refer to
 [Scope Concepts](/about-nemo-relay/concepts/scopes).
 
 In ATIF, use `trajectory_id` as the unique ID for each exported trajectory.
