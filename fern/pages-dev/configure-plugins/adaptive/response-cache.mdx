@@ -301,10 +301,26 @@ Only complete, replayable LLM answers are stored:
   stored interaction (`previous_response_id`), or references server-side state
   (`conversation`, `container`). Their answers depend on state the cache key
   cannot see.
-- Anthropic Messages requests that use server-side compaction, carry a prior
-  compaction block, or send a compaction beta header run live. Relay does not
-  cache them because compaction changes continuation and streaming behavior
-  that response-cache replay does not yet preserve.
+- Anthropic Messages compaction is cached only for a closed protocol subset.
+  Requests require `anthropic-version: 2023-06-01`; other API versions run
+  live. Threshold compaction requires the
+  `compact-2026-01-12` beta, exactly one `compact_20260112` edit, and
+  `pause_after_compaction = true`. When present, a threshold trigger must use
+  `type = "input_tokens"` with a value of at least `50,000`; other triggers
+  run live. Relay caches an ordinary response when the threshold is not reached
+  or replays the single validated `compaction_delta` when compaction occurs.
+  Default non-paused threshold compaction remains live because one response can
+  mix compaction, text, and tool blocks. A threshold continuation with a
+  `type = "compaction"` block, string `content`, and omitted, null, or string
+  `encrypted_content` can cache an ordinary response and can trigger another
+  cached compaction when it also carries the paused threshold edit. On-demand
+  compaction requests remain live.
+  Version and ordered beta tokens partition these entries from ordinary
+  Messages requests. Extra response-bearing fields, unknown events, sparse or
+  out-of-order blocks, and missing, ambiguous, unsupported, or malformed
+  compaction traffic run live and are not stored. Compaction requests without
+  an explicit `temperature = 0` remain subject to the normal nondeterministic
+  request policy; enable `cache_nondeterministic` to cache them.
 - Streaming calls are cached too. On a miss the live chunks are forwarded to
   the consumer while being assembled into one aggregate response — the same
   shape a buffered call stores, so buffered and streaming calls share one
