@@ -229,39 +229,39 @@ mod tests {
     use super::*;
     use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
 
-    struct DropProbeCodec;
+    struct LeaseProbeCodec;
 
-    impl LlmCodec for DropProbeCodec {
+    impl LlmCodec for LeaseProbeCodec {
         fn codec_identity(&self) -> LlmCodecIdentity {
             LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
         }
 
         fn decode(&self, _request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
-            unreachable!("the facade must reject access after lease expiry")
+            Ok(AnnotatedLlmRequest::default())
         }
 
         fn encode(
             &self,
             _annotated: &AnnotatedLlmRequest,
-            _original: &LlmRequest,
+            original: &LlmRequest,
         ) -> Result<LlmRequest> {
-            unreachable!("the facade must reject access after lease expiry")
+            Ok(original.clone())
         }
     }
 
-    impl LlmResponseCodec for DropProbeCodec {
+    impl LlmResponseCodec for LeaseProbeCodec {
         fn codec_identity(&self) -> LlmCodecIdentity {
             LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
         }
 
         fn decode_response(&self, _response: &Json) -> Result<AnnotatedLlmResponse> {
-            unreachable!("the facade must reject access after lease expiry")
+            Ok(AnnotatedLlmResponse::default())
         }
     }
 
     #[test]
-    fn retained_facades_do_not_keep_backing_codec_alive_after_lease_expiry() {
-        let backing = Arc::new(DropProbeCodec);
+    fn retained_facades_forward_while_active_and_expire_with_their_lease() {
+        let backing = Arc::new(LeaseProbeCodec);
         let backing_probe = Arc::downgrade(&backing);
         let request_codec: Arc<dyn LlmCodec> = backing.clone();
         let response_codec: Arc<dyn LlmResponseCodec> = backing.clone();
@@ -278,6 +278,19 @@ mod tests {
         drop(leased_context);
         drop(context);
 
+        let request = LlmRequest {
+            headers: serde_json::Map::new(),
+            content: Json::Null,
+        };
+        let annotated = retained_request.decode(&request).unwrap();
+        assert_eq!(
+            retained_request.encode(&annotated, &request).unwrap(),
+            request
+        );
+        assert_eq!(
+            retained_response.decode_response(&Json::Null).unwrap(),
+            AnnotatedLlmResponse::default()
+        );
         assert!(backing_probe.upgrade().is_some());
 
         drop(guard);
@@ -292,10 +305,7 @@ mod tests {
             LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
         );
         assert!(matches!(
-            retained_request.decode(&LlmRequest {
-                headers: serde_json::Map::new(),
-                content: Json::Null,
-            }),
+            retained_request.decode(&request),
             Err(FlowError::InvalidArgument(message))
                 if message == INACTIVE_EXECUTION_CODEC_ERROR
         ));

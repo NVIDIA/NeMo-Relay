@@ -6809,6 +6809,24 @@ fn native_execution_context_is_directional_and_streaming_omits_response_codec() 
         assert!(response.codec_id.is_null());
         assert!(response.codec.is_null());
     });
+
+    let allocation_failure = LlmExecutionContext::new(
+        LlmSanitizeRequestContext::with_identity(LlmCodecIdentity::Runtime("request.v1".into())),
+        Some(LlmSanitizeResponseContext::with_identity(
+            LlmCodecIdentity::Runtime("response.v1".into()),
+        )),
+    );
+    let live_before = native_string_live_allocations();
+    fail_native_string_allocation_after(1);
+    let error = NativeLlmExecutionContextBridge::new(&allocation_failure, None, None)
+        .err()
+        .expect("response codec ID allocation should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("failed to allocate native LLM codec ID")
+    );
+    assert_eq!(native_string_live_allocations(), live_before);
 }
 
 #[test]
