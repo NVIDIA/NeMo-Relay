@@ -20,7 +20,7 @@ former Hermes Relay observability plugin or launch Hermes through the
 - A configured Hermes model provider
 - Permission to install Hermes in your user environment
 
-## Install and Configure Hermes
+## 1. Install
 
 Install Hermes on Linux, macOS, or WSL2:
 
@@ -31,7 +31,7 @@ curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 Complete the setup prompts and confirm that `hermes` can use your model
 provider before continuing.
 
-## Enable Observability
+## 2. Configure
 
 Save the following configuration as `plugins.toml` in the directory where you
 will start Hermes:
@@ -71,7 +71,7 @@ export HERMES_NEMO_RELAY_PLUGINS_TOML="$PWD/plugins.toml"
 ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 
-## Run One Turn
+## 3. Run
 
 From the same directory, run a one-shot turn with the common validation prompt:
 
@@ -82,11 +82,11 @@ hermes chat --oneshot -q "Use one available tool to produce RELAY_QUICKSTART_TOO
 Hermes closes the Relay session before this command exits, allowing queued
 observability records to finish writing.
 
-## Verify the Events
+## 4. Verify
 
 ```bash
-test -s logs/events.jsonl
-tail -n 1 logs/events.jsonl
+test -s logs/events.jsonl &&
+tail -n 1 logs/events.jsonl &&
 printf 'RELAY_QUICKSTART_EVENTS_OK\n'
 ```
 

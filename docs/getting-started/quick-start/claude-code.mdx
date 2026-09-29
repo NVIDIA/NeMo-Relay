@@ -16,12 +16,15 @@ and tool lifecycle to a local ATOF event file.
 - A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
 - Permission to download the NeMo Relay 0.9.1 release
 
+## 1. Install
+
 Install the verified NeMo Relay CLI release:
 
 <Tabs>
 <Tab title="Unix shell">
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.9.1 sh
+export PATH="$HOME/.local/bin:$PATH"
 ```
 </Tab>
 
@@ -33,7 +36,7 @@ irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 </Tab>
 </Tabs>
 
-## Select Claude Code
+## 2. Configure
 
 Save this file as `config.toml` in the directory where you will run the agent:
 
@@ -41,8 +44,6 @@ Save this file as `config.toml` in the directory where you will run the agent:
 [agents.claude]
 command = "claude"
 ```
-
-## Enable Observability
 
 Save this sibling file as `plugins.toml`:
 
@@ -75,7 +76,7 @@ mode = "overwrite"
 ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 
-## Run Claude Code
+## 3. Run
 
 From the directory containing both files, run the common validation prompt:
 
@@ -96,15 +97,15 @@ nemo-relay --config (Join-Path $PWD "config.toml") claude -- "Use one available 
 Relay starts a temporary local gateway and injects Claude Code hooks for this
 run. It does not modify your persistent Claude Code plugin configuration.
 
-## Verify the Events
+## 4. Verify
 
 After the session exits, confirm that Relay wrote the local event stream:
 
 <Tabs>
 <Tab title="Unix shell">
 ```bash
-test -s logs/events.jsonl
-tail -n 1 logs/events.jsonl
+test -s logs/events.jsonl &&
+tail -n 1 logs/events.jsonl &&
 printf 'RELAY_QUICKSTART_EVENTS_OK\n'
 ```
 </Tab>

@@ -16,7 +16,7 @@ event file.
 - `uv`
 - An [NVIDIA API key](https://build.nvidia.com/settings/api-keys)
 
-## Install the Integration
+## 1. Install
 
 Create a project and install the verified NeMo Relay release with the LangChain
 and NVIDIA model provider extras. In an existing `uv` project, skip `uv init`.
@@ -50,7 +50,7 @@ through the NVIDIA model provider. The provider reads `NVIDIA_API_KEY` and
 selects an explicit NVIDIA model. In the LangChain string, the first `nvidia:`
 selects the provider; the remaining `nvidia/...` value is the model ID.
 
-## Enable Observability
+## 2. Configure
 
 Save the following configuration as `plugins.toml` in your project directory:
 
@@ -83,7 +83,7 @@ mode = "overwrite"
 ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 
-## Run One Agent Turn
+## 3. Run
 
 Save this file as `quickstart.py` beside `plugins.toml`:
 
@@ -132,7 +132,18 @@ async def main() -> None:
                     config={"callbacks": [NemoRelayCallbackHandler()]},
                 )
 
-            print(result["messages"][-1].content)
+            tool_outputs = [
+                str(message.content)
+                for message in result["messages"]
+                if getattr(message, "type", None) == "tool"
+            ]
+            if not any("RELAY_QUICKSTART_TOOL_OK" in output for output in tool_outputs):
+                raise RuntimeError("Expected tool result is missing")
+            final_response = str(result["messages"][-1].content)
+            if "RELAY_QUICKSTART_RESPONSE_OK" not in final_response:
+                raise RuntimeError("Expected final response is missing")
+            print(next(output for output in tool_outputs if "RELAY_QUICKSTART_TOOL_OK" in output))
+            print(final_response)
         finally:
             await nemo_relay.subscribers.flush_async()
 
@@ -152,7 +163,7 @@ Run it from the project directory:
 uv run python quickstart.py
 ```
 
-## Verify the Events
+## 4. Verify
 
 The tool result in the transcript should be `RELAY_QUICKSTART_TOOL_OK`, the final
 response should contain `RELAY_QUICKSTART_RESPONSE_OK`, and the program should

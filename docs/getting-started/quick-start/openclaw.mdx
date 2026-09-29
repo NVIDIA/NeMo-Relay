@@ -17,7 +17,7 @@ tool lifecycle to a local ATOF event file.
 - A configured OpenClaw agent and model provider
 - Permission to install plugins and restart the OpenClaw gateway
 
-## Install the Plugin
+## 1. Install
 
 Install and pin the verified NeMo Relay plugin. OpenClaw registers the plugin ID
 and adds it to an existing `plugins.allow` list automatically:
@@ -32,7 +32,7 @@ records that consent for the install.
 The npm package is named `nemo-relay-openclaw`; its OpenClaw plugin ID is
 `nemo-relay`.
 
-## Enable Observability
+## 2. Configure
 
 First, run `openclaw config file` to confirm which configuration file OpenClaw
 will update. Then save the following partial configuration as
@@ -114,7 +114,7 @@ restart automatically; the explicit command is safe when you want to ensure
 the new package is loaded. Ordinary plugin configuration changes use OpenClaw's
 normal configuration reload behavior.
 
-## Run One Turn
+## 3. Run
 
 Use your configured agent ID. A standard single-agent installation normally
 uses `main`:
@@ -124,15 +124,15 @@ openclaw agents list
 openclaw agent --agent main --message "Use one available tool to produce RELAY_QUICKSTART_TOOL_OK. Then include RELAY_QUICKSTART_RESPONSE_OK in your final response."
 ```
 
-## Verify the Events
+## 4. Verify
 
 Inspect the ATOF file in the absolute directory configured above:
 
 <Tabs>
 <Tab title="Unix shell">
 ```bash
-test -s /absolute/path/to/relay-logs/events.jsonl
-tail -n 1 /absolute/path/to/relay-logs/events.jsonl
+test -s /absolute/path/to/relay-logs/events.jsonl &&
+tail -n 1 /absolute/path/to/relay-logs/events.jsonl &&
 printf 'RELAY_QUICKSTART_EVENTS_OK\n'
 ```
 </Tab>

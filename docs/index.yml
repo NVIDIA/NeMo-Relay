@@ -12,20 +12,17 @@ navigation:
       - page: "About"
         path: ./getting-started/about.mdx
         slug: about
-      - page: "Prerequisites"
-        path: ./getting-started/prerequisites.mdx
-        slug: prerequisites
+      - folder: ./getting-started/quick-start
+        title: "Quick Start"
+        slug: quick-start
+        title-source: frontmatter
+        collapsed: open-by-default
       - page: "Installation"
         path: ./getting-started/installation.mdx
         slug: installation
       - page: "Configuration / Setup"
         path: ./getting-started/configuration.mdx
         slug: configuration
-      - folder: ./getting-started/quick-start
-        title: "Quick Start"
-        slug: quick-start
-        title-source: frontmatter
-        collapsed: open-by-default
   - folder: ./nemo-relay-cli
     title: "NVIDIA NeMo Relay CLI"
     slug: nemo-relay-cli

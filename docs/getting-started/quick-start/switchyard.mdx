@@ -22,7 +22,7 @@ version recorded in the published bundle's build metadata. The plugin is a
 native library loaded into the Relay process; use a bundle from a source you
 trust.
 
-## Install Relay and Switchyard
+## 1. Install
 
 Install Relay and download the bundle for your platform. The checksum check
 must succeed before you extract it.
@@ -80,7 +80,7 @@ Expand-Archive $archive -DestinationPath .
 The archive extracts to `switchyard-plugin/`. Keep this directory in place
 while Relay uses the plugin.
 
-## Configure the Route and Observability
+## 2. Configure
 
 Save this file as `config.toml` in `relay-switchyard-quickstart`:
 
@@ -149,7 +149,7 @@ support forwarding each caller's credential to the provider. Protect
 `logs/events.jsonl`; Relay events may contain request or response data even
 with full payload export disabled.
 
-## Enable and Run
+## 3. Run
 
 Set your API key, enable the configured plugin, and validate it:
 
@@ -199,7 +199,7 @@ $response.choices[0].message.content
 </Tab>
 </Tabs>
 
-## Verify the Route
+## 4. Verify
 
 The model response should contain `RELAY_QUICKSTART_RESPONSE_OK`. Confirm the
 ATOF file also contains a Switchyard routing decision:
@@ -207,8 +207,8 @@ ATOF file also contains a Switchyard routing decision:
 <Tabs>
 <Tab title="Unix shell">
 ```bash
-test -s logs/events.jsonl
-grep -q 'switchyard.routing.decision' logs/events.jsonl
+test -s logs/events.jsonl &&
+grep -q 'switchyard.routing.decision' logs/events.jsonl &&
 printf 'RELAY_QUICKSTART_EVENTS_OK\n'
 ```
 </Tab>

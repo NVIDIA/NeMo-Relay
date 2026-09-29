@@ -2,32 +2,15 @@
 title: "Quick Start"
 sidebar-title: "Overview"
 description: "Choose the shortest NeMo Relay path for your agent, framework, or application."
-position: 5
+position: 0
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Choose the host or framework you already use. Each quick start enables the
-built-in observability plugin, runs one representative workflow, and verifies
-local ATOF output. Paths that install a Relay package or plugin pin a published
-release verified for that integration; Hermes uses its native Relay integration.
-
-## What You Will Verify
-
-The agent and framework paths use a common validation contract:
-
-```text
-Use one available tool to produce RELAY_QUICKSTART_TOOL_OK. Then include RELAY_QUICKSTART_RESPONSE_OK in your final response.
-```
-
-- A tool or workflow produces `RELAY_QUICKSTART_TOOL_OK`.
-- The final response contains `RELAY_QUICKSTART_RESPONSE_OK`.
-- Relay writes valid JSONL and the example reports
-  `RELAY_QUICKSTART_EVENTS_OK`.
-
-The direct application paths produce the same markers without calling an
-external model. Each page includes all commands and configuration required for
-its first successful run.
+Choose the runtime or language you already use. Each guide includes four
+actions—install, configure, run, and verify—and enables the built-in
+observability plugin. Versions are pinned to the release verified for each
+path; Hermes uses its native Relay integration.
 
 ## Agent Runtimes
 
@@ -102,9 +85,19 @@ Instrument one Rust scope, tool call, and model call.
 </Card>
 </CardGroup>
 
-## For More Details
+## What You Will Verify
 
-For more details, refer to:
+The agent and framework guides use this prompt:
+
+```text
+Use one available tool to produce RELAY_QUICKSTART_TOOL_OK. Then include RELAY_QUICKSTART_RESPONSE_OK in your final response.
+```
+
+The tool produces `RELAY_QUICKSTART_TOOL_OK`, the final response contains
+`RELAY_QUICKSTART_RESPONSE_OK`, and Relay writes local ATOF events. The direct
+application guides produce the same markers without an external model.
+
+## For More Details
 
 - [Installation](/getting-started/installation)
 - [Observability](/configure-plugins/observability/about)

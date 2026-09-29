@@ -22,6 +22,8 @@ that exact version.
 - npm and a configured model provider
 - A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
 
+## 1. Install
+
 Install the verified pi and NeMo Relay releases:
 
 <Tabs>
@@ -29,6 +31,7 @@ Install the verified pi and NeMo Relay releases:
 ```bash
 npm install --global @earendil-works/pi-coding-agent@0.84.0
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.9.1 sh
+export PATH="$HOME/.local/bin:$PATH"
 ```
 </Tab>
 
@@ -43,8 +46,6 @@ irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 
 Confirm that `pi --version` reports `0.84.0` before continuing.
 
-## Install the pi Extension
-
 pi hooks must originate inside the process, so install the Relay extension once
 and verify that pi can load it:
 
@@ -53,7 +54,7 @@ nemo-relay install pi
 nemo-relay doctor pi
 ```
 
-## Select pi
+## 2. Configure
 
 Save this file as `config.toml` in the directory where you will run the agent:
 
@@ -61,8 +62,6 @@ Save this file as `config.toml` in the directory where you will run the agent:
 [agents.pi]
 command = "pi"
 ```
-
-## Enable Observability
 
 Save this sibling file as `plugins.toml`:
 
@@ -95,7 +94,7 @@ mode = "overwrite"
 ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 
-## Run pi
+## 3. Run
 
 From the directory containing both files, run the common validation prompt:
 
@@ -116,15 +115,15 @@ nemo-relay --config (Join-Path $PWD "config.toml") pi -- -p "Use one available t
 Relay starts a temporary local gateway and loads the installed extension for
 this run.
 
-## Verify the Events
+## 4. Verify
 
 After the task exits, confirm that Relay wrote the local event stream:
 
 <Tabs>
 <Tab title="Unix shell">
 ```bash
-test -s logs/events.jsonl
-tail -n 1 logs/events.jsonl
+test -s logs/events.jsonl &&
+tail -n 1 logs/events.jsonl &&
 printf 'RELAY_QUICKSTART_EVENTS_OK\n'
 ```
 </Tab>
