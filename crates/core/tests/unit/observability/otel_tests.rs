@@ -6423,7 +6423,13 @@ fn delivery_identity_sanitizes_endpoints_and_preserves_file_paths() {
         OpenTelemetryType::Full,
         sink,
     ));
-    assert_eq!(file.delivery_identity(), "/var/log/nemo-relay/trace.jsonl");
+    assert_eq!(
+        file.delivery_identity(),
+        Path::new("/var/log/nemo-relay")
+            .join("trace.jsonl")
+            .display()
+            .to_string()
+    );
 }
 
 #[test]
