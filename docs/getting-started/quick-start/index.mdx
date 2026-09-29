@@ -9,8 +9,8 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Choose the host or framework you already use. Each quick start enables the
 built-in observability plugin, runs one representative workflow, and verifies
-local ATOF output. Paths that install a Relay package or plugin pin the
-published 0.9.1 release; Hermes uses its native Relay integration.
+local ATOF output. Paths that install a Relay package or plugin pin a published
+release verified for that integration; Hermes uses its native Relay integration.
 
 ## What You Will Verify
 
@@ -52,6 +52,16 @@ Install the proof-of-concept extension and observe one pi task.
 
 <Card title="OpenClaw" icon="terminal" href="/getting-started/quick-start/openclaw">
 Install the native plugin and observe one gateway-backed agent turn.
+</Card>
+</CardGroup>
+
+## Routing Plugin
+
+Use this path when Relay should route a model request through Switchyard.
+
+<CardGroup cols={2}>
+<Card title="Switchyard" icon="route" href="/getting-started/quick-start/switchyard">
+Load the released native plugin, route one model request, and verify the routing event.
 </Card>
 </CardGroup>
 

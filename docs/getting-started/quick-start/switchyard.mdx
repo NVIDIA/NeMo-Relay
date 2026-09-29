@@ -1,0 +1,233 @@
+---
+title: "Switchyard Quick Start"
+sidebar-title: "Switchyard"
+description: "Route one model request through the Switchyard plugin and inspect Relay events."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Route one OpenAI-compatible request through Switchyard inside NeMo Relay, then
+confirm the response and routing event in a local ATOF file.
+
+## Prerequisites
+
+- A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
+- [GitHub CLI](https://cli.github.com/) authenticated with access to the
+  [NeMo Relay Plugins releases](https://github.com/NVIDIA/NeMo-Relay-Plugins/releases)
+- An [NVIDIA API key](https://build.nvidia.com/) for the example model
+
+This guide pins Switchyard plugin `0.3.0` and NeMo Relay `0.9.2`, the host
+version recorded in the published bundle's build metadata. The plugin is a
+native library loaded into the Relay process; use a bundle from a source you
+trust.
+
+## Install Relay and Switchyard
+
+Install Relay and download the bundle for your platform. The checksum check
+must succeed before you extract it.
+
+<Tabs>
+<Tab title="Unix shell">
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.9.2 sh
+export PATH="$HOME/.local/bin:$PATH"
+mkdir relay-switchyard-quickstart
+cd relay-switchyard-quickstart
+
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) platform=macos-arm64 ;;
+  Linux-x86_64) platform=linux-x86_64 ;;
+  Linux-aarch64) platform=linux-arm64 ;;
+  *) echo "No Switchyard 0.3.0 bundle for this platform" >&2; exit 1 ;;
+esac
+archive="switchyard-plugin-0.3.0-${platform}.tar.gz"
+gh release download switchyard-plugin-0.3.0 -R NVIDIA/NeMo-Relay-Plugins \
+  --pattern "$archive" --pattern "$archive.sha256"
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum -c "$archive.sha256" && tar -xzf "$archive"
+else
+  shasum -a 256 -c "$archive.sha256" && tar -xzf "$archive"
+fi
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+```powershell
+$env:NEMO_RELAY_VERSION = '0.9.2'
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+New-Item -ItemType Directory relay-switchyard-quickstart | Out-Null
+Set-Location relay-switchyard-quickstart
+
+$arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+if ($arch -eq [System.Runtime.InteropServices.Architecture]::Arm64) {
+  $platform = 'windows-arm64'
+} elseif ($arch -eq [System.Runtime.InteropServices.Architecture]::X64) {
+  $platform = 'windows-x86_64'
+} else {
+  throw 'No Switchyard 0.3.0 bundle for this platform'
+}
+$archive = "switchyard-plugin-0.3.0-$platform.zip"
+gh release download switchyard-plugin-0.3.0 -R NVIDIA/NeMo-Relay-Plugins --pattern $archive --pattern "$archive.sha256"
+$expected = ((Get-Content "$archive.sha256" -Raw) -split '\s+')[0]
+$actual = (Get-FileHash $archive -Algorithm SHA256).Hash
+if ($actual -ne $expected) { throw 'Switchyard bundle checksum mismatch' }
+Expand-Archive $archive -DestinationPath .
+```
+</Tab>
+</Tabs>
+
+The archive extracts to `switchyard-plugin/`. Keep this directory in place
+while Relay uses the plugin.
+
+## Configure the Route and Observability
+
+Save this file as `config.toml` in `relay-switchyard-quickstart`:
+
+```toml
+[upstream]
+openai_base_url = "https://integrate.api.nvidia.com/v1"
+```
+
+Save this sibling file as `plugins.toml`:
+
+```toml
+version = 1
+
+[policy]
+unknown_component = "error"
+unknown_field = "error"
+unsupported_value = "error"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"
+
+[[plugins.dynamic]]
+manifest = "./switchyard-plugin/relay-plugin.toml"
+
+[plugins.dynamic.config]
+priority = 0
+
+[plugins.dynamic.config.switchyard_config]
+schema_version = 1
+
+[plugins.dynamic.config.switchyard_config.llm_clients.nvidia]
+format = "openai_chat"
+base_url = "https://integrate.api.nvidia.com/v1"
+api_key_env = "NVIDIA_API_KEY"
+
+[plugins.dynamic.config.switchyard_config.targets.default]
+id = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+llm_client = "nvidia"
+
+[plugins.dynamic.config.switchyard_config.routes.default]
+id = "switchyard/quickstart"
+type = "passthrough"
+target = "default"
+
+[plugins.policy.overrides."nvidia.switchyard"]
+attestation = "integrity_only"
+```
+
+The policy override trusts the bundle's SHA-256 integrity without requiring a
+signature. The example uses a server-owned API key: the native plugin does not
+support forwarding each caller's credential to the provider. Protect
+`logs/events.jsonl`; Relay events may contain request or response data even
+with full payload export disabled.
+
+## Enable and Run
+
+Set your API key, enable the configured plugin, and validate it:
+
+<Tabs>
+<Tab title="Unix shell">
+```bash
+export NVIDIA_API_KEY="your-api-key"
+nemo-relay --config "$PWD/config.toml" plugins enable nvidia.switchyard
+nemo-relay --config "$PWD/config.toml" plugins validate nvidia.switchyard
+nemo-relay --config "$PWD/config.toml" --bind 127.0.0.1:4040
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+```powershell
+$env:NVIDIA_API_KEY = 'your-api-key'
+$config = Join-Path $PWD 'config.toml'
+nemo-relay --config $config plugins enable nvidia.switchyard
+nemo-relay --config $config plugins validate nvidia.switchyard
+nemo-relay --config $config --bind 127.0.0.1:4040
+```
+</Tab>
+</Tabs>
+
+Leave Relay running. In a second terminal, from the same directory, send one
+request to the route ID `switchyard/quickstart`:
+
+<Tabs>
+<Tab title="Unix shell">
+```bash
+curl -fsS http://127.0.0.1:4040/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"switchyard/quickstart","messages":[{"role":"user","content":"Reply with RELAY_QUICKSTART_RESPONSE_OK."}],"stream":false}'
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+```powershell
+$body = @{
+  model = 'switchyard/quickstart'
+  messages = @(@{ role = 'user'; content = 'Reply with RELAY_QUICKSTART_RESPONSE_OK.' })
+  stream = $false
+} | ConvertTo-Json -Depth 5
+$response = Invoke-RestMethod http://127.0.0.1:4040/v1/chat/completions -Method Post -ContentType 'application/json' -Body $body
+$response.choices[0].message.content
+```
+</Tab>
+</Tabs>
+
+## Verify the Route
+
+The model response should contain `RELAY_QUICKSTART_RESPONSE_OK`. Confirm the
+ATOF file also contains a Switchyard routing decision:
+
+<Tabs>
+<Tab title="Unix shell">
+```bash
+test -s logs/events.jsonl
+grep -q 'switchyard.routing.decision' logs/events.jsonl
+printf 'RELAY_QUICKSTART_EVENTS_OK\n'
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+```powershell
+$eventFile = 'logs/events.jsonl'
+if ((Get-Item $eventFile).Length -eq 0) { throw 'Relay event file is empty' }
+if (-not (Select-String -Path $eventFile -Pattern 'switchyard.routing.decision' -Quiet)) {
+  throw 'No Switchyard routing decision was recorded'
+}
+Write-Output 'RELAY_QUICKSTART_EVENTS_OK'
+```
+</Tab>
+</Tabs>
+
+## For More Details
+
+For more details, refer to:
+
+- [Switchyard plugin setup](https://github.com/NVIDIA-NeMo/Switchyard/tree/v0.3.0/crates/switchyard-nemo-relay-plugin#configure-relay)
+- [NeMo Relay discoverable plugins](/configure-plugins/discoverable-plugins)

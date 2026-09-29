@@ -2,7 +2,7 @@
 title: "LangChain Quick Start"
 sidebar-title: "LangChain"
 description: "Run one LangChain agent with NeMo Relay observability."
-position: 6
+position: 7
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -46,11 +46,9 @@ $env:NVIDIA_API_KEY = "your-api-key"
 
 This example uses
 [`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning/playground)
-through the NVIDIA model provider. As in
-[OpenShell inference routing](https://docs.nvidia.com/openshell/sandboxes/inference-routing),
-the provider reads `NVIDIA_API_KEY` and selects an explicit NVIDIA model. In the
-LangChain string, the first `nvidia:` selects the provider; the remaining
-`nvidia/...` value is the model ID.
+through the NVIDIA model provider. The provider reads `NVIDIA_API_KEY` and
+selects an explicit NVIDIA model. In the LangChain string, the first `nvidia:`
+selects the provider; the remaining `nvidia/...` value is the model ID.
 
 ## Enable Observability
 
