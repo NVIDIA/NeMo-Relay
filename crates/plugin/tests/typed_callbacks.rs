@@ -17,7 +17,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::task::Poll;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use futures::StreamExt;
 use nemo_relay_plugin::{
@@ -424,6 +424,7 @@ static SCOPE_GET_CURRENT_RETURNS_NULL: Mutex<bool> = Mutex::new(false);
 static SCOPE_PUSH_STATUS: Mutex<NemoRelayStatus> = Mutex::new(NemoRelayStatus::Ok);
 static SCOPE_PUSH_RETURNS_NULL: Mutex<bool> = Mutex::new(false);
 static SCOPE_POP_STATUS: Mutex<NemoRelayStatus> = Mutex::new(NemoRelayStatus::Ok);
+static SCOPE_TIMESTAMPS: Mutex<(Option<i64>, Option<i64>)> = Mutex::new((None, None));
 static EMIT_MARK_STATUS: Mutex<NemoRelayStatus> = Mutex::new(NemoRelayStatus::Ok);
 static SCOPE_STACK_CREATE_STATUS: Mutex<NemoRelayStatus> = Mutex::new(NemoRelayStatus::Ok);
 static SCOPE_STACK_CREATE_RETURNS_NULL: Mutex<bool> = Mutex::new(false);
@@ -1406,7 +1407,7 @@ unsafe extern "C" fn capture_scope_push(
     data_json: *const NemoRelayNativeString,
     metadata_json: *const NemoRelayNativeString,
     input_json: *const NemoRelayNativeString,
-    _timestamp_unix_micros: *const i64,
+    timestamp_unix_micros: *const i64,
     out: *mut *mut NemoRelayNativeScopeHandle,
 ) -> NemoRelayStatus {
     if out.is_null() {
@@ -1437,6 +1438,9 @@ unsafe extern "C" fn capture_scope_push(
         "push:{name}:{scope_type:?}:{attributes}:parent={}:data={data}:metadata={metadata}:input={input}",
         !parent.is_null()
     ));
+    if !timestamp_unix_micros.is_null() {
+        SCOPE_TIMESTAMPS.lock().unwrap().0 = Some(unsafe { *timestamp_unix_micros });
+    }
     if *SCOPE_PUSH_RETURNS_NULL.lock().unwrap() {
         unsafe { *out = ptr::null_mut() };
     } else {
@@ -1449,7 +1453,7 @@ unsafe extern "C" fn capture_scope_pop(
     handle: *const NemoRelayNativeScopeHandle,
     output_json: *const NemoRelayNativeString,
     metadata_json: *const NemoRelayNativeString,
-    _timestamp_unix_micros: *const i64,
+    timestamp_unix_micros: *const i64,
 ) -> NemoRelayStatus {
     if handle.is_null() {
         return NemoRelayStatus::NullPointer;
@@ -1471,6 +1475,9 @@ unsafe extern "C" fn capture_scope_pop(
         .lock()
         .unwrap()
         .push(format!("pop:output={output}:metadata={metadata}"));
+    if !timestamp_unix_micros.is_null() {
+        SCOPE_TIMESTAMPS.lock().unwrap().1 = Some(unsafe { *timestamp_unix_micros });
+    }
     NemoRelayStatus::Ok
 }
 
@@ -2930,6 +2937,7 @@ fn reset_state() {
     *SCOPE_PUSH_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
     *SCOPE_PUSH_RETURNS_NULL.lock().unwrap() = false;
     *SCOPE_POP_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
+    *SCOPE_TIMESTAMPS.lock().unwrap() = (None, None);
     *EMIT_MARK_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
     *SCOPE_STACK_CREATE_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
     *SCOPE_STACK_CREATE_RETURNS_NULL.lock().unwrap() = false;
@@ -3291,6 +3299,132 @@ fn plugin_runtime_scope_mark_and_stack_helpers_call_host() {
     assert_eq!(SCOPE_STACK_FREES.load(Ordering::SeqCst), 1);
     assert_eq!(SCOPE_STACK_BINDING_RESTORES.load(Ordering::SeqCst), 1);
     assert_eq!(SCOPE_STACK_BINDING_FREES.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn plugin_runtime_forwards_historical_scope_timestamps() {
+    let _guard = begin_test();
+    let host = test_host();
+    let runtime = PluginRuntime::new(&host);
+    let cases = [
+        (
+            UNIX_EPOCH + Duration::from_micros(1_000_000),
+            UNIX_EPOCH + Duration::from_micros(1_250_000),
+            (Some(1_000_000), Some(1_250_000)),
+        ),
+        (
+            UNIX_EPOCH - Duration::from_micros(1_250_000),
+            UNIX_EPOCH - Duration::from_micros(1_000_000),
+            (Some(-1_250_000), Some(-1_000_000)),
+        ),
+        (
+            UNIX_EPOCH - Duration::from_nanos(1_500),
+            UNIX_EPOCH - Duration::from_nanos(500),
+            (Some(-2), Some(-1)),
+        ),
+    ];
+
+    for (started_at, ended_at, expected) in cases {
+        let mut scope = runtime
+            .scope_at(
+                "historical",
+                ScopeType::Custom,
+                None,
+                None,
+                None,
+                started_at,
+            )
+            .unwrap();
+        scope.close_at(None, None, ended_at).unwrap();
+        assert_eq!(*SCOPE_TIMESTAMPS.lock().unwrap(), expected);
+    }
+}
+
+#[test]
+fn ordinary_scope_helpers_leave_native_timestamps_unset() {
+    let _guard = begin_test();
+    let host = test_host();
+    let runtime = PluginRuntime::new(&host);
+
+    let mut scope = runtime
+        .scope("current-time", ScopeType::Custom, None, None, None)
+        .unwrap();
+    scope.close(None, None).unwrap();
+
+    assert_eq!(*SCOPE_TIMESTAMPS.lock().unwrap(), (None, None));
+}
+
+#[test]
+fn historical_scope_close_retains_ownership_after_failure_and_is_idempotent() {
+    let _guard = begin_test();
+    let host = test_host();
+    let runtime = PluginRuntime::new(&host);
+    let mut scope = runtime
+        .scope_at(
+            "historical",
+            ScopeType::Custom,
+            None,
+            None,
+            None,
+            UNIX_EPOCH + Duration::from_micros(10),
+        )
+        .unwrap();
+
+    *SCOPE_POP_STATUS.lock().unwrap() = NemoRelayStatus::Internal;
+    assert_eq!(
+        scope
+            .close_at(None, None, UNIX_EPOCH + Duration::from_micros(20))
+            .unwrap_err(),
+        "scope_pop failed: Internal"
+    );
+    assert!(scope.handle().is_some());
+
+    *SCOPE_POP_STATUS.lock().unwrap() = NemoRelayStatus::Ok;
+    scope
+        .close_at(None, None, UNIX_EPOCH + Duration::from_micros(30))
+        .unwrap();
+    assert!(scope.handle().is_none());
+    scope
+        .close_at(None, None, UNIX_EPOCH + Duration::from_micros(40))
+        .unwrap();
+
+    assert_eq!(
+        RUNTIME_CALLS
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|call| call.starts_with("pop:"))
+            .count(),
+        1
+    );
+    assert_eq!(*SCOPE_TIMESTAMPS.lock().unwrap(), (Some(10), Some(30)));
+}
+
+#[test]
+fn historical_scope_rejects_timestamps_outside_native_range() {
+    let _guard = begin_test();
+    let host = test_host();
+    let runtime = PluginRuntime::new(&host);
+    let Some(outside_native_range) =
+        UNIX_EPOCH.checked_add(Duration::from_micros(i64::MAX as u64 + 1))
+    else {
+        // Windows FILETIME cannot represent a SystemTime this far after the
+        // epoch, so the public API cannot receive this overflow case there.
+        return;
+    };
+
+    assert_eq!(
+        expect_string_err(runtime.scope_at(
+            "historical",
+            ScopeType::Custom,
+            None,
+            None,
+            None,
+            outside_native_range,
+        )),
+        "scope timestamp exceeds the supported range"
+    );
+    assert!(RUNTIME_CALLS.lock().unwrap().is_empty());
 }
 
 #[test]
