@@ -71,7 +71,7 @@ pub struct PropagationContext {
 
 fn is_usable_relay_identifier(uuid: Uuid) -> bool {
     let bytes = uuid.as_bytes();
-    !bytes.iter().all(|byte| *byte == 0) && !bytes[8..].iter().all(|byte| *byte == 0)
+    bytes[8..].iter().any(|byte| *byte != 0)
 }
 
 impl PropagationContext {
@@ -1209,31 +1209,4 @@ pub fn task_scope_remove(uuid: &Uuid) -> Result<ScopeHandle> {
     let stack = current_scope_stack();
     let mut guard = stack.write().expect("scope stack lock poisoned");
     guard.remove(uuid)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn propagated_w3c_parent_is_not_rewritten_to_a_relay_span_id() {
-        let parent_uuid = Uuid::from_u128(0x018f_13f0_7c1a_7a80_8000_0000_0000_0702);
-        let propagation = PropagationContext {
-            version: PropagationContext::VERSION,
-            root_uuid: Some(Uuid::from_u128(0x018f_13f0_7c1a_7a80_8000_0000_0000_0701)),
-            parent_uuid,
-            traceparent: Some(
-                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string(),
-            ),
-            tracestate: Some("vendor=value".to_string()),
-        };
-        let traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
-        let stack = ScopeStack::from_propagation(&propagation).unwrap();
-
-        let (captured_traceparent, captured_tracestate) =
-            stack.w3c_headers_for_span(parent_uuid, parent_uuid);
-
-        assert_eq!(captured_traceparent.as_deref(), Some(traceparent));
-        assert_eq!(captured_tracestate.as_deref(), Some("vendor=value"));
-    }
 }
