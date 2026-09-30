@@ -1357,3 +1357,104 @@ fn turn_start_and_compaction_rules_stay_inert_for_codex_and_claude() {
         );
     }
 }
+
+#[test]
+fn mcp_tool_hooks_normalize_method_for_supported_harnesses() {
+    for (adapt, failure) in [
+        (
+            claude_code::adapt as fn(Value, &HeaderMap) -> AdapterOutcome,
+            "PostToolUseFailure",
+        ),
+        (codex::adapt, "toolFailed"),
+    ] {
+        for hook in ["PreToolUse", "PostToolUse", failure, "PermissionRequest"] {
+            for name in ["mcp__docs__search", "mcp__plugin_docs_server__read_file"] {
+                let outcome = adapt(
+                    json!({
+                        "session_id": "mcp-session", "hook_event_name": hook,
+                        "tool_name": name, "tool_use_id": "mcp-call", "tool_input": {},
+                    }),
+                    &HeaderMap::new(),
+                );
+                let event = if hook == "PermissionRequest" {
+                    outcome.permission.as_ref().unwrap().as_ref().unwrap()
+                } else {
+                    match &outcome.events[0] {
+                        NormalizedEvent::ToolStarted(event) | NormalizedEvent::ToolEnded(event) => {
+                            event
+                        }
+                        event => panic!("unexpected event: {event:?}"),
+                    }
+                };
+                assert_eq!(event.metadata["mcp.method.name"], "tools/call");
+                assert_eq!(event.tool_name, name);
+                for absent in ["server.address", "mcp.session.id", "mcp.protocol.version"] {
+                    assert!(event.metadata.get(absent).is_none());
+                }
+                if hook == failure {
+                    assert_eq!(event.status.as_deref(), Some("error"));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn mcp_metadata_defaults_preserve_explicit_values_and_reject_ambiguous_names() {
+    for kind in [AgentKind::ClaudeCode, AgentKind::Codex] {
+        for name in [
+            "Bash",
+            "mcp__",
+            "mcp__server",
+            "mcp____tool",
+            "mcp__server__",
+            "mcp__server__ tool",
+            "other_mcp__server__tool",
+        ] {
+            let mut metadata = json!({});
+            apply_mcp_tool_metadata(&mut metadata, kind, name);
+            assert_eq!(metadata, json!({}), "{name}");
+        }
+        for explicit in [json!("custom/method"), json!("[REDACTED]"), Value::Null] {
+            let mut metadata = json!({"mcp.method.name": explicit});
+            let before = metadata.clone();
+            apply_mcp_tool_metadata(&mut metadata, kind, "mcp__docs__search");
+            assert_eq!(metadata, before);
+        }
+    }
+    for kind in [AgentKind::Pi, AgentKind::Gateway] {
+        let mut metadata = json!({});
+        apply_mcp_tool_metadata(&mut metadata, kind, "mcp__docs__search");
+        assert_eq!(metadata, json!({}));
+    }
+}
+
+#[test]
+fn mcp_metadata_is_not_inferred_from_arguments_results_or_non_tool_hooks() {
+    for adapt in [claude_code::adapt, codex::adapt] {
+        let outcome = adapt(
+            json!({
+                "session_id": "mcp-negative", "hook_event_name": "PostToolUse",
+                "tool_name": "Bash", "tool_use_id": "plain-call",
+                "tool_input": {"tool_name": "mcp__docs__search", "mcp.method.name": "tools/call"},
+                "tool_response": {"mcp.method.name": "tools/call"},
+            }),
+            &HeaderMap::new(),
+        );
+        let NormalizedEvent::ToolEnded(event) = &outcome.events[0] else {
+            panic!("expected tool end")
+        };
+        assert!(event.metadata.get("mcp.method.name").is_none());
+        let outcome = adapt(
+            json!({
+                "session_id": "mcp-negative", "hook_event_name": "SessionStart",
+                "tool_name": "mcp__docs__search",
+            }),
+            &HeaderMap::new(),
+        );
+        let NormalizedEvent::AgentStarted(event) = &outcome.events[0] else {
+            panic!("expected session start")
+        };
+        assert!(event.metadata.get("mcp.method.name").is_none());
+    }
+}

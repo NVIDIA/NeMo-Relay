@@ -55,3 +55,36 @@ fn per_user_tls_identity_round_trips_as_server_and_pinned_client_configs() {
     reloaded.server_config().unwrap();
     reloaded.client_config().unwrap();
 }
+
+#[test]
+fn concurrent_first_gateways_keep_the_same_pinned_tls_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let _environment = Environment::set(&[
+        ("XDG_CONFIG_HOME", temp.path().as_os_str()),
+        ("HOME", temp.path().as_os_str()),
+    ]);
+    let start = std::sync::Barrier::new(16);
+    let certificates = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..16)
+            .map(|_| {
+                scope.spawn(|| {
+                    start.wait();
+                    RelayTlsIdentity::load_or_create()
+                        .unwrap()
+                        .record
+                        .certificate_der
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    let pinned = RelayTlsIdentity::load().unwrap().record.certificate_der;
+    assert!(
+        certificates
+            .iter()
+            .all(|certificate| certificate == &pinned)
+    );
+}

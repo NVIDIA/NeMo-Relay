@@ -1770,6 +1770,43 @@ NemoRelayStatus nemo_relay_otel_subscriber_create(const char *otel_type,
                                                   struct FfiOpenTelemetrySubscriber **out);
 
 /**
+ * Creates one typed OpenTelemetry exporter subscriber that writes OTLP to a file.
+ *
+ * `otel_type` must be `full`, `gen_ai`, or `openinference`. `output_directory` is
+ * required. `filename` may be null to use a default name for the format.
+ * `format` is `json_lines` (the OpenTelemetry file-exporter specification's
+ * serialization, and the default when null) or `proto`. `mode` is `overwrite`
+ * (the default when null) or `append`.
+ *
+ * The projection controls match the endpoint entrypoints: `mark_projection` is
+ * `inherit`, `event`, or `tool`; `mark_exclude_names_json`,
+ * `promote_metadata_prefixes_json`, and `promote_resource_metadata_prefixes_json`
+ * are JSON arrays of strings; `attribute_mappings_json` is a JSON array of
+ * `{"key","alias"}` objects; and `completed_span_context_ttl_millis` must be
+ * greater than zero. A null JSON pointer takes the core default.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_subscriber_create_file_sink(const char *otel_type,
+                                                            const char *output_directory,
+                                                            const char *filename,
+                                                            const char *format,
+                                                            const char *mode,
+                                                            const char *resource_attributes_json,
+                                                            const char *service_name,
+                                                            const char *service_namespace,
+                                                            const char *service_version,
+                                                            const char *instrumentation_scope,
+                                                            const char *mark_projection,
+                                                            const char *mark_exclude_names_json,
+                                                            const char *attribute_mappings_json,
+                                                            const char *promote_metadata_prefixes_json,
+                                                            const char *promote_resource_metadata_prefixes_json,
+                                                            uint64_t completed_span_context_ttl_millis,
+                                                            struct FfiOpenTelemetrySubscriber **out);
+
+/**
  * Creates one typed OpenTelemetry exporter subscriber with projection controls.
  *
  * The JSON arrays use `mark_exclude_names: ["llm.chunk"]` and
@@ -1795,11 +1832,42 @@ NemoRelayStatus nemo_relay_otel_subscriber_create_with_projection_options(const 
                                                                           struct FfiOpenTelemetrySubscriber **out);
 
 /**
+ * Creates one typed OpenTelemetry exporter subscriber with projection, metadata,
+ * resource-promotion, and lineage controls.
+ *
+ * `promote_metadata_prefixes_json` and `promote_resource_metadata_prefixes_json`
+ * are JSON arrays of literal metadata prefixes, such as `["nv."]`. Pass null to
+ * disable that promotion. `completed_span_context_ttl_millis` must be greater
+ * than zero.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_subscriber_create_with_projection_options_v5(const char *otel_type,
+                                                                             const char *transport,
+                                                                             const char *endpoint,
+                                                                             const char *headers_json,
+                                                                             const char *header_env_json,
+                                                                             const char *resource_attributes_json,
+                                                                             const char *service_name,
+                                                                             const char *service_namespace,
+                                                                             const char *service_version,
+                                                                             const char *instrumentation_scope,
+                                                                             uint64_t timeout_millis,
+                                                                             const char *mark_projection,
+                                                                             const char *mark_exclude_names_json,
+                                                                             const char *attribute_mappings_json,
+                                                                             const char *promote_metadata_prefixes_json,
+                                                                             const char *promote_resource_metadata_prefixes_json,
+                                                                             uint64_t completed_span_context_ttl_millis,
+                                                                             struct FfiOpenTelemetrySubscriber **out);
+
+/**
  * Creates one typed OpenTelemetry exporter subscriber with projection and metadata controls.
  *
- * `promote_metadata_prefixes_json` is a JSON array of literal metadata prefixes,
- * such as `["nv."]`. Pass null to disable metadata promotion.
- * `completed_span_context_ttl_millis` must be greater than zero.
+ * This compatibility entrypoint promotes no resource metadata. Use
+ * `nemo_relay_otel_subscriber_create_with_projection_options_v5` for
+ * `promote_resource_metadata_prefixes`.
  *
  * # Safety
  * Any non-null C strings must be valid and `out` must be non-null.

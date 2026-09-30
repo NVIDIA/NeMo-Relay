@@ -8,13 +8,15 @@ use crate::api::registry::RuntimeRegistrationKind;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
+use crate::api::runtime::scope_stack::{
+    trace_context_for_managed_span, with_active_event_trace_context,
+};
 use crate::api::runtime::subscriber_dispatcher::{
     PendingPublication, dispatch_sanitized_event, dispatch_transformed_event,
     register_pending_publication,
 };
 use crate::api::runtime::{
     EventSubscriberFn, ScopeStackHandle, ToolExecutionContext, ToolExecutionNextFn,
-    with_active_event_uuid,
 };
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle, metadata_with_log_severity};
@@ -878,28 +880,44 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
     );
     let execution_name = name.clone();
     let execution_tool_call_id = handle.tool_call_id.clone();
-    let execution = with_active_event_uuid(handle.uuid, async move {
-        let execution = {
-            let scope_stack = current_scope_stack();
-            let scope_locals = scope_stack
-                .read()
-                .expect("scope stack lock poisoned")
-                .snapshot_scope_local_registries(|registries| {
-                    &registries.tool_execution_intercepts
-                });
-            let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
-            let context = global_context();
-            let state = context
-                .read()
-                .map_err(|error| FlowError::Internal(error.to_string()))?
-                .registry_snapshot(&[RuntimeRegistrationKind::ToolExecutionIntercept]);
-            let execution_context = ToolExecutionContext::new(execution_name, Json::Null)
-                .with_tool_call_id(execution_tool_call_id);
-            state.tool_build_execution_chain(&execution_context, func, &scope_local_refs)
-        };
-        execution(intercepted_args).await
-    })
-    .await;
+    let active_trace_context = match trace_context_for_managed_span(handle.uuid, handle.parent_uuid)
+    {
+        Ok(context) => context,
+        Err(error) => {
+            let end_metadata = metadata_with_otel_error(metadata, &error);
+            let _ = emit_tool_end_without_output(
+                &handle,
+                end_metadata,
+                &lifecycle_subscribers,
+                lifecycle_scope_stack,
+            );
+            completion.disarm();
+            return Err(error);
+        }
+    };
+    let execution =
+        with_active_event_trace_context(handle.uuid, Some(active_trace_context), async move {
+            let execution = {
+                let scope_stack = current_scope_stack();
+                let scope_locals = scope_stack
+                    .read()
+                    .expect("scope stack lock poisoned")
+                    .snapshot_scope_local_registries(|registries| {
+                        &registries.tool_execution_intercepts
+                    });
+                let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
+                let context = global_context();
+                let state = context
+                    .read()
+                    .map_err(|error| FlowError::Internal(error.to_string()))?
+                    .registry_snapshot(&[RuntimeRegistrationKind::ToolExecutionIntercept]);
+                let execution_context = ToolExecutionContext::new(execution_name, Json::Null)
+                    .with_tool_call_id(execution_tool_call_id);
+                state.tool_build_execution_chain(&execution_context, func, &scope_local_refs)
+            };
+            execution(intercepted_args).await
+        })
+        .await;
     match execution {
         Ok(mut outcome) => {
             let pending_marks = std::mem::take(&mut outcome.pending_marks);

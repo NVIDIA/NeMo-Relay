@@ -26,6 +26,9 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::{Stream, StreamExt};
 
 use crate::config::ResponseCacheConfig;
+use crate::response_cache::anthropic::{
+    AnthropicCacheContext, AnthropicStreamValidator, cache_context, classify_aggregate,
+};
 use crate::response_cache::key::{KeyOutcome, build_cache_key};
 use crate::response_cache::mark::{
     CacheMark, CacheMarkStatus, CacheReason, emit_cache_mark, savings_from,
@@ -43,6 +46,16 @@ type CacheCommit = Pin<Box<dyn Future<Output = ()> + Send>>;
 enum TeeMessage {
     Chunk(FlowResult<Json>),
     Commit(CacheCommit),
+}
+
+/// Values needed to write one completed LLM stream to the response cache.
+struct CacheWriteContext {
+    store: Arc<dyn CacheStore>,
+    config: Arc<ResponseCacheConfig>,
+    key: String,
+    provider: String,
+    model: Option<String>,
+    anthropic_context: Option<AnthropicCacheContext>,
 }
 
 /// Receiver half of the streaming cache tee with upstream cleanup forwarding.
@@ -166,6 +179,8 @@ async fn run_cache(
             return next(request).await;
         }
     };
+    let anthropic_context =
+        cache_context(&request).expect("cache key accepted only a valid Anthropic cache context");
 
     let model = request_model(&request);
 
@@ -177,12 +192,32 @@ async fn run_cache(
                 .key_hash(&key),
         );
         let response = next(request).await?;
-        maybe_store(&store, &config, &key, &provider, model, &response).await;
+        maybe_store(
+            &store,
+            &config,
+            &key,
+            &provider,
+            model,
+            &response,
+            anthropic_context,
+        )
+        .await;
         return Ok(response);
     }
 
     match store.get(&key).await {
         Ok(Some(entry)) => {
+            if anthropic_context
+                .as_ref()
+                .is_some_and(|context| classify_aggregate(&entry.response, context).is_none())
+            {
+                emit_cache_mark(
+                    CacheMark::new(CacheMarkStatus::Miss, backend)
+                        .reason(CacheReason::ReplayLossy)
+                        .key_hash(&key),
+                );
+                return next(request).await;
+            }
             let age_ms = now_unix_ms().saturating_sub(entry.created_unix_ms);
             let (saved_tokens, saved_cost) = savings_from(&entry);
             emit_cache_mark(
@@ -203,7 +238,16 @@ async fn run_cache(
                     .ttl_ms(config.ttl().as_millis() as u64),
             );
             let response = next(request).await?;
-            maybe_store(&store, &config, &key, &provider, model, &response).await;
+            maybe_store(
+                &store,
+                &config,
+                &key,
+                &provider,
+                model,
+                &response,
+                anthropic_context,
+            )
+            .await;
             Ok(response)
         }
         Err(_) => {
@@ -259,6 +303,8 @@ async fn run_cache_stream(
             return next(request).await;
         }
     };
+    let anthropic_context =
+        cache_context(&request).expect("cache key accepted only a valid Anthropic cache context");
 
     let model = request_model(&request);
 
@@ -271,15 +317,38 @@ async fn run_cache_stream(
         );
         let live = next(request).await?;
         return Ok(tee_and_aggregate(
-            live, codec, store, config, key, provider, model,
+            live,
+            codec,
+            CacheWriteContext {
+                store,
+                config,
+                key,
+                provider,
+                model,
+                anthropic_context,
+            },
         ));
     }
 
     match store.get(&key).await {
         Ok(Some(entry)) => {
+            let anthropic_kind = match anthropic_context.as_ref() {
+                Some(context) => match classify_aggregate(&entry.response, context) {
+                    Some(kind) => Some(kind),
+                    None => {
+                        emit_cache_mark(
+                            CacheMark::new(CacheMarkStatus::Miss, backend)
+                                .reason(CacheReason::ReplayLossy)
+                                .key_hash(&key),
+                        );
+                        return next(request).await;
+                    }
+                },
+                None => None,
+            };
             // An unfaithful chunk replay must not be served; the entry still
             // serves buffered callers, so run live without disturbing it.
-            if replay_is_lossy(&entry.response) {
+            if replay_is_lossy(&entry.response, anthropic_kind) {
                 emit_cache_mark(
                     CacheMark::new(CacheMarkStatus::Miss, backend)
                         .reason(CacheReason::ReplayLossy)
@@ -297,7 +366,7 @@ async fn run_cache_stream(
                     .savings(saved_tokens, saved_cost),
             );
             // Replay the stored aggregate as provider-native chunks.
-            Ok(replay_aggregate(entry.response.clone()))
+            Ok(replay_aggregate(entry.response.clone(), anthropic_kind))
         }
         Ok(None) => {
             emit_cache_mark(
@@ -307,7 +376,16 @@ async fn run_cache_stream(
             );
             let live = next(request).await?;
             Ok(tee_and_aggregate(
-                live, codec, store, config, key, provider, model,
+                live,
+                codec,
+                CacheWriteContext {
+                    store,
+                    config,
+                    key,
+                    provider,
+                    model,
+                    anthropic_context,
+                },
             ))
         }
         Err(_) => {
@@ -333,11 +411,7 @@ async fn run_cache_stream(
 fn tee_and_aggregate(
     live: LlmJsonStream,
     codec: Box<dyn StreamingCodec>,
-    store: Arc<dyn CacheStore>,
-    config: Arc<ResponseCacheConfig>,
-    key: String,
-    provider: String,
-    model: Option<String>,
+    write: CacheWriteContext,
 ) -> LlmJsonStream {
     let (tx, rx) = tokio::sync::mpsc::channel::<TeeMessage>(STREAM_TEE_CHANNEL_CAP);
     let (cancel_tx, mut cancel_rx) = watch::channel(false);
@@ -346,6 +420,10 @@ fn tee_and_aggregate(
         let mut collect = codec.collector();
         let mut live = live;
         let mut collector_failed = false;
+        let mut anthropic_validator = write
+            .anthropic_context
+            .as_ref()
+            .map(AnthropicStreamValidator::new);
         let mut completion = StreamCompletion::default();
         let mut reached_eof = false;
         loop {
@@ -365,6 +443,9 @@ fn tee_and_aggregate(
                         || collect(chunk.clone()).is_err()
                     {
                         collector_failed = true;
+                    }
+                    if let Some(validator) = &mut anthropic_validator {
+                        validator.observe(chunk);
                     }
                     completion.observe(chunk);
                 }
@@ -389,9 +470,32 @@ fn tee_and_aggregate(
         if reached_eof && close_result.is_ok() && !collector_failed && completion.is_terminal() {
             let aggregate = codec.finalizer()();
             // Empty = mis-inferred surface; lossy = unfaithful replay.
-            if !aggregate_has_no_content(&aggregate) && !aggregate_replay_lossy(&aggregate) {
+            let anthropic_kind = write
+                .anthropic_context
+                .as_ref()
+                .and_then(|context| classify_aggregate(&aggregate, context));
+            let anthropic_valid = match (&write.anthropic_context, anthropic_kind) {
+                (None, _) => true,
+                (Some(_), Some(kind)) => anthropic_validator
+                    .as_ref()
+                    .is_some_and(|validator| validator.is_valid_for(kind)),
+                (Some(_), None) => false,
+            };
+            if !aggregate_has_no_content(&aggregate)
+                && !aggregate_replay_lossy(&aggregate)
+                && anthropic_valid
+            {
                 let commit: CacheCommit = Box::pin(async move {
-                    maybe_store(&store, &config, &key, &provider, model, &aggregate).await;
+                    maybe_store(
+                        &write.store,
+                        &write.config,
+                        &write.key,
+                        &write.provider,
+                        write.model,
+                        &aggregate,
+                        write.anthropic_context,
+                    )
+                    .await;
                 });
                 let _ = tokio::select! {
                     _ = cancel_rx.changed() => false,
@@ -616,9 +720,16 @@ async fn maybe_store(
     provider: &str,
     model: Option<String>,
     response: &Json,
+    anthropic_context: Option<AnthropicCacheContext>,
 ) {
     // Failed calls are never cached.
     if is_error_response(response) {
+        return;
+    }
+    if anthropic_context
+        .as_ref()
+        .is_some_and(|context| classify_aggregate(response, context).is_none())
+    {
         return;
     }
     let entry = CacheEntry::new(

@@ -11,6 +11,7 @@
 //! cache-key derivation, [`store`] the backends, [`replay`] the streaming
 //! replay, and [`mark`] the observability surface.
 
+pub(crate) mod anthropic;
 pub mod config;
 pub(crate) mod intercept;
 pub(crate) mod key;

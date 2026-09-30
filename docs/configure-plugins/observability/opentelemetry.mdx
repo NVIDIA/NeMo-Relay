@@ -191,13 +191,14 @@ HTTP and HTTPS default ports are realized, repeated and trailing path slashes
 are normalized, and standardized loopback hosts such as `localhost`, names
 under `.localhost`, `127.0.0.0/8`, and `::1` are equivalent. Relay does not use
 DNS resolution for this comparison, and query strings remain significant.
-Log lineage follows the same root selection as traces. When a local parent was
-not observed by the exporters, the observed scope starts a trace using its own
-UUID; a propagation-root UUID alone does not establish an imported parent.
-Marks under that scope, including late marks within the completed-context retention
-window, use its trace identity. An explicit imported parent continues the propagated
-trace. Log-to-span joins require both exporters to observe the corresponding
-scope lifecycle.
+Log lineage follows the same root selection as traces. Relay captures parent
+trace context when it queues an event, so a subscriber registered after a
+local parent starts can still place later children in the parent's trace. When
+neither the parent lifecycle nor captured context is available, the observed
+scope starts a trace using its own UUID; a propagation-root UUID alone does not
+establish an imported parent. Marks under that scope, including late marks
+within the completed-context retention window, use its trace identity. An
+explicit imported parent continues the propagated trace.
 Relay propagation continues the Relay-derived trace across the import boundary
 by default. Use `capture_rootless_propagation_context()` only when a receiver
 must start a new Relay-derived OpenTelemetry trace when no W3C parent is
@@ -304,6 +305,56 @@ are configured. gRPC does not use HTTP redirects.
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
 | `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
 | `promote_resource_metadata_prefixes` | `[]` | Literal prefixes that select root Scope-start metadata to copy to OTLP resource attributes. Each unique effective resource retains an exporter pipeline for the subscriber lifetime. |
+
+## Trace File Sinks
+
+A file sink writes spans to a local file instead of exporting them to a
+collector. File sinks and endpoints can be configured together, and each
+destination receives the same projected spans.
+
+```toml
+[[components.config.opentelemetry.file_sinks]]
+type = "full"
+output_directory = "/var/log/nemo-relay"
+format = "json_lines"
+```
+
+Two formats are available. `json_lines` implements the [OpenTelemetry Protocol
+File Exporter specification](https://opentelemetry.io/docs/specs/otel/protocol/file-exporter/)
+and is the default; use it for interoperability with other OTLP tooling.
+`proto` writes the same records as length-delimited protobuf, matching the
+OpenTelemetry Collector file exporter's `format: proto`; use it when file size
+or parse cost matters.
+
+Each export is flushed before it is reported as delivered, so a run that exits
+between batches still leaves a readable prefix. Output files are created with
+owner-only permissions and confined to `output_directory`, the same as the ATOF
+and ATIF file sinks.
+
+Two file sinks cannot write the same path; the configuration is rejected at
+activation.
+
+| Field | Default | Notes |
+|---|---|---|
+| `type` | `full` | `full`, `gen_ai`, or `openinference`. |
+| `output_directory` | Required | Directory containing the output file. Created if absent. |
+| `filename` | Timestamped | Single path component. Defaults to `nemo-relay-otlp-<timestamp>.jsonl` or `.otlp.pb` for the chosen format. |
+| `format` | `json_lines` | `json_lines` or `proto`. |
+| `mode` | `overwrite` | `append` or `overwrite`. |
+| `service_name` | `unknown_service` | `service.name` resource attribute. |
+| `service_namespace` | Omitted | Optional `service.namespace`. |
+| `service_version` | Omitted | Optional `service.version`. |
+| `instrumentation_scope` | `opentelemetry` | Instrumentation scope name. |
+| `max_queue_size` | Environment or `2048` | Maximum completed spans buffered before this sink drops new spans. |
+| `max_export_batch_size` | Environment or `512` | Maximum spans written in one batch; capped at the effective queue size. |
+| `scheduled_delay_millis` | Environment or `5000` ms | Maximum delay before this sink writes a non-full batch. |
+| `completed_span_context_ttl_millis` | `60000` | Positive duration for retaining completed scopes' trace context for late marks. |
+| `resource_attributes` | `{}` | String-to-string resource attributes. Relay automatically adds `telemetry.sdk.name`, `telemetry.sdk.language`, and `telemetry.sdk.version`; do not configure those reserved keys. |
+| `mark_projection` | `inherit` | Mark representation for `full` and `openinference`: `inherit`, `event`, or `tool`. |
+| `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
+| `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
+| `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
+| `promote_resource_metadata_prefixes` | `[]` | Literal prefixes that select root Scope-start metadata to copy to OTLP resource attributes. Every promoted resource writes to the sink's one file, which carries one `ResourceSpans` entry per resource. |
 
 ## Event Metadata Promotion
 
@@ -1050,6 +1101,20 @@ refine inferred tool type and agent name, including through their aliases.
 Explicit start metadata and typed tool-call IDs remain authoritative; later
 inferred values cannot replace them. This provenance is not exported as a GenAI
 attribute.
+
+Claude Code and Codex MCP tool hooks with a qualified
+`mcp__<server>__<tool>` name receive `mcp.method.name = "tools/call"` in event
+metadata, including post-only hooks. Relay preserves existing method metadata
+and does not infer MCP identity for ordinary tools, Pi, or generic gateway events.
+The original qualified tool name remains unchanged. To include the method in
+OTLP span attributes, configure `promote_metadata_prefixes` to include
+`"mcp.method.name"`.
+
+This identifies a requested MCP tool operation, not proof that a request reached
+the server or succeeded. Permission-denied calls retain their denial and error
+metadata. The server segment is a configured alias; Relay does not derive
+`server.address`, `mcp.session.id`, or connection status from it. Hook duration
+measures the harness tool scope, not necessarily MCP transport latency.
 
 ### Error Type Mapping
 

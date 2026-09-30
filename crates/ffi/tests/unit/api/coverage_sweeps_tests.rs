@@ -3821,3 +3821,382 @@ fn test_ffi_otel_signal_subscribers_apply_all_typed_options() {
         );
     }
 }
+
+#[test]
+fn otel_file_sink_subscriber_create_rejects_invalid_shared_options() {
+    let directory = tempfile::tempdir().unwrap();
+    let output_directory = cstring(&directory.path().display().to_string());
+    let otel_type = cstring("full");
+
+    // The shared projection options reach the same validators the endpoint
+    // entrypoints use, so a malformed value is refused rather than dropped.
+    let bad_projection = cstring("sideways");
+    let bad_mappings = cstring(r#"[{"key":"","alias":"a"}]"#);
+    let bad_prefixes = cstring(r#"[""]"#);
+    let inherit = cstring("inherit");
+    let empty = cstring("[]");
+    let cases: [(&CString, &CString, &CString, &CString, u64); 5] = [
+        (&bad_projection, &empty, &empty, &empty, 60_000),
+        (&inherit, &bad_mappings, &empty, &empty, 60_000),
+        (&inherit, &empty, &bad_prefixes, &empty, 60_000),
+        (&inherit, &empty, &empty, &bad_prefixes, 60_000),
+        (&inherit, &empty, &empty, &empty, 0),
+    ];
+    unsafe {
+        for (projection, mappings, promote, promote_resource, ttl) in cases {
+            let mut rejected = ptr::null_mut();
+            assert_ne!(
+                nemo_relay_otel_subscriber_create_file_sink(
+                    otel_type.as_ptr(),
+                    output_directory.as_ptr(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    projection.as_ptr(),
+                    ptr::null(),
+                    mappings.as_ptr(),
+                    promote.as_ptr(),
+                    promote_resource.as_ptr(),
+                    ttl,
+                    &mut rejected,
+                ),
+                NemoRelayStatus::Ok
+            );
+        }
+    }
+}
+
+#[test]
+fn otel_file_sink_subscriber_create_covers_success_and_rejection() {
+    let directory = tempfile::tempdir().unwrap();
+    let output_directory = cstring(&directory.path().display().to_string());
+    let otel_type = cstring("full");
+
+    unsafe {
+        let filename = cstring("ffi-trace.jsonl");
+        let mut subscriber = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_subscriber_create_file_sink(
+                otel_type.as_ptr(),
+                output_directory.as_ptr(),
+                filename.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                &mut subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert!(directory.path().join("ffi-trace.jsonl").is_file());
+        assert_status!(
+            nemo_relay_otel_subscriber_shutdown(subscriber),
+            NemoRelayStatus::Ok
+        );
+        types::nemo_relay_otel_subscriber_free(subscriber);
+
+        // A null format defaults to the specification's JSON lines, and a null
+        // filename is derived from it.
+        let mut defaulted = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_subscriber_create_file_sink(
+                otel_type.as_ptr(),
+                output_directory.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                &mut defaulted,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(defaulted_file_names(directory.path(), "jsonl").len(), 1);
+        assert_status!(
+            nemo_relay_otel_subscriber_shutdown(defaulted),
+            NemoRelayStatus::Ok
+        );
+        types::nemo_relay_otel_subscriber_free(defaulted);
+
+        let bad_format = cstring("yaml");
+        let mut rejected = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_subscriber_create_file_sink(
+                otel_type.as_ptr(),
+                output_directory.as_ptr(),
+                ptr::null(),
+                bad_format.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                &mut rejected,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+
+        let blank = cstring("");
+        assert_status!(
+            nemo_relay_otel_subscriber_create_file_sink(
+                otel_type.as_ptr(),
+                blank.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                &mut rejected,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+    }
+}
+
+#[test]
+fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
+    let directory = tempfile::tempdir().unwrap();
+    let output_directory = cstring(&directory.path().display().to_string());
+    let otel_type = cstring("full");
+    let invalid_utf8 = [0xffu8, 0];
+    let bad_string = invalid_utf8.as_ptr() as *const c_char;
+
+    // Every argument the entry point parses, refused one at a time. Each arm
+    // returns before the subscriber is built, so `out` stays untouched.
+    unsafe {
+        let mut subscriber = ptr::null_mut();
+
+        // A null `out` is rejected before anything is parsed.
+        assert_status!(
+            nemo_relay_otel_subscriber_create_file_sink(
+                otel_type.as_ptr(),
+                output_directory.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null_mut(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
+
+        let bad_type = cstring("unsupported");
+        assert_status!(
+            nemo_relay_otel_subscriber_create_file_sink(
+                bad_type.as_ptr(),
+                output_directory.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                &mut subscriber,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+
+        let bad_mode = cstring("truncate");
+        assert_status!(
+            nemo_relay_otel_subscriber_create_file_sink(
+                otel_type.as_ptr(),
+                output_directory.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                bad_mode.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                &mut subscriber,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+
+        let nested = cstring("nested/trace.jsonl");
+        assert_status!(
+            nemo_relay_otel_subscriber_create_file_sink(
+                otel_type.as_ptr(),
+                output_directory.as_ptr(),
+                nested.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                &mut subscriber,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+
+        // Resource attributes must be a JSON object of strings.
+        let bad_attributes = cstring(r#"{"env": 1}"#);
+        assert_status!(
+            nemo_relay_otel_subscriber_create_file_sink(
+                otel_type.as_ptr(),
+                output_directory.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                bad_attributes.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                &mut subscriber,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+
+        // Each optional string is decoded, so invalid UTF-8 is refused wherever
+        // it appears.
+        for position in 0..4 {
+            let mut args: [*const c_char; 4] = [ptr::null(); 4];
+            args[position] = bad_string;
+            assert_status!(
+                nemo_relay_otel_subscriber_create_file_sink(
+                    otel_type.as_ptr(),
+                    output_directory.as_ptr(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    args[0],
+                    args[1],
+                    args[2],
+                    args[3],
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    60_000,
+                    &mut subscriber,
+                ),
+                NemoRelayStatus::InvalidUtf8
+            );
+        }
+
+        // Proto format with append mode: the arms the success case misses.
+        let proto = cstring("proto");
+        let append = cstring("append");
+        assert_status!(
+            nemo_relay_otel_subscriber_create_file_sink(
+                otel_type.as_ptr(),
+                output_directory.as_ptr(),
+                ptr::null(),
+                proto.as_ptr(),
+                append.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                &mut subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_subscriber_shutdown(subscriber),
+            NemoRelayStatus::Ok
+        );
+        types::nemo_relay_otel_subscriber_free(subscriber);
+    }
+}
+
+/// Returns the timestamped default output files of the given extension.
+fn defaulted_file_names(directory: &std::path::Path, extension: &str) -> Vec<String> {
+    std::fs::read_dir(directory)
+        .expect("output directory should exist")
+        .filter_map(|entry| {
+            entry
+                .ok()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        })
+        .filter(|name| name.starts_with("nemo-relay-otlp-") && name.ends_with(extension))
+        .collect()
+}

@@ -480,10 +480,20 @@ fn anthropic_compaction_requests_bypass_the_cache() {
         "context_management": {"edits": [{}]}
     }));
     let on_demand = messages_request(json!({"compaction": {"type": "summarize"}}));
+    let on_demand_future_option = messages_request(json!({
+        "compaction": {"type": "summarize", "future_option": true}
+    }));
     let malformed_on_demand = messages_request(json!({"compaction": null}));
     let continuation = request(json!({
         "model": "claude-haiku-4-5",
         "messages": [{"role": "assistant", "content": [{"type": "compaction"}]}],
+        "temperature": 0.0
+    }));
+    let continuation_future_option = request(json!({
+        "model": "claude-haiku-4-5",
+        "messages": [{"role": "assistant", "content": [{
+            "type": "compaction", "content": "summary", "future_option": true
+        }]}],
         "temperature": 0.0
     }));
     let mut beta = messages_request(json!({}));
@@ -504,8 +514,16 @@ fn anthropic_compaction_requests_bypass_the_cache() {
         ("invalid edits", &invalid_edits),
         ("incomplete edit", &incomplete_edit),
         ("on-demand compaction", &on_demand),
+        (
+            "on-demand compaction with a future option",
+            &on_demand_future_option,
+        ),
         ("malformed on-demand compaction", &malformed_on_demand),
         ("compaction continuation", &continuation),
+        (
+            "compaction continuation with a future option",
+            &continuation_future_option,
+        ),
         ("compaction beta", &beta),
     ] {
         assert_eq!(
@@ -514,6 +532,167 @@ fn anthropic_compaction_requests_bypass_the_cache() {
             "{name} must bypass even when the caller uses a logical provider name"
         );
     }
+}
+
+#[test]
+fn supported_anthropic_compaction_protocol_headers_partition_keys() {
+    let config = cache_all_config();
+    let request = |version: &str, beta: &str| LlmRequest {
+        headers: Map::from_iter([
+            ("anthropic-version".to_string(), json!(version)),
+            ("anthropic-beta".to_string(), json!(beta)),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "context_management": {"edits": [{
+                "type": "compact_20260112", "pause_after_compaction": true
+            }]}
+        }),
+    };
+
+    let baseline = request("2023-06-01", "compact-2026-01-12");
+    let different_version = request("2024-01-01", "compact-2026-01-12");
+    let additional_beta = request("2023-06-01", "compact-2026-01-12,other-beta");
+
+    assert_eq!(
+        build_cache_key("anthropic.messages", &different_version, &config),
+        KeyOutcome::Bypass(CacheReason::AnthropicCompaction),
+        "an unvalidated Anthropic API version must run live"
+    );
+    assert_ne!(
+        key_of("anthropic.messages", &baseline, &config),
+        key_of("anthropic.messages", &additional_beta, &config),
+        "additional beta behavior must not reuse an entry created under a different protocol set"
+    );
+}
+
+#[test]
+fn compaction_continuation_keys_preserve_optional_field_presence() {
+    let config = cache_all_config();
+    let request = |block: Json| LlmRequest {
+        headers: Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-01-12")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [
+                {"role": "assistant", "content": [block]},
+                {"role": "user", "content": "continue"}
+            ]
+        }),
+    };
+    let missing = request(json!({
+        "type": "compaction", "content": "summary"
+    }));
+    let explicit_null = request(json!({
+        "type": "compaction", "content": "summary", "encrypted_content": null
+    }));
+    let prompt_cached = request(json!({
+        "type": "compaction", "content": "summary",
+        "cache_control": {"type": "ephemeral"}
+    }));
+
+    let missing_key = key_of("anthropic.messages", &missing, &config);
+    assert_ne!(
+        missing_key,
+        key_of("anthropic.messages", &explicit_null, &config),
+        "missing and explicit-null encrypted content have distinct provider semantics"
+    );
+    assert_ne!(
+        missing_key,
+        key_of("anthropic.messages", &prompt_cached, &config),
+        "a prompt-cache breakpoint changes the provider request"
+    );
+}
+
+#[test]
+fn paused_threshold_controls_are_validated_and_partition_keys() {
+    let config = cache_all_config();
+    let request = |edit: Json| LlmRequest {
+        headers: Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-01-12")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "context_management": {"edits": [edit]}
+        }),
+    };
+    let baseline = request(json!({
+        "type": "compact_20260112", "pause_after_compaction": true
+    }));
+    let custom = request(json!({
+        "type": "compact_20260112", "pause_after_compaction": true,
+        "trigger": {"type": "input_tokens", "value": 50000},
+        "instructions": "Preserve code and decisions."
+    }));
+    let non_paused = request(json!({"type": "compact_20260112"}));
+    let invalid_trigger = request(json!({
+        "type": "compact_20260112", "pause_after_compaction": true,
+        "trigger": {"type": "input_tokens", "value": 49999}
+    }));
+
+    assert_ne!(
+        key_of("anthropic.messages", &baseline, &config),
+        key_of("anthropic.messages", &custom, &config)
+    );
+    for request in [&non_paused, &invalid_trigger] {
+        assert_eq!(
+            build_cache_key("anthropic.messages", request, &config),
+            KeyOutcome::Bypass(CacheReason::AnthropicCompaction)
+        );
+    }
+}
+
+#[test]
+fn ambiguous_anthropic_protocol_headers_bypass() {
+    let config = cache_all_config();
+    let mut request = LlmRequest {
+        headers: Map::from_iter([
+            ("anthropic-version".to_string(), json!("2023-06-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-09-04")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "compaction": {"type": "summarize"}
+        }),
+    };
+    request
+        .headers
+        .insert("Anthropic-Version".to_string(), json!("2024-01-01"));
+
+    assert_eq!(
+        build_cache_key("anthropic.messages", &request, &config),
+        KeyOutcome::Bypass(CacheReason::AnthropicCompaction)
+    );
+}
+
+#[test]
+fn unsupported_compaction_protocol_keeps_protocol_bypass_reason_by_default() {
+    let request = LlmRequest {
+        headers: Map::from_iter([
+            ("anthropic-version".to_string(), json!("2024-01-01")),
+            ("anthropic-beta".to_string(), json!("compact-2026-09-04")),
+        ]),
+        content: json!({
+            "model": "claude-opus-5-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "compaction": {"type": "summarize"}
+        }),
+    };
+
+    assert_eq!(
+        build_cache_key(
+            "anthropic.messages",
+            &request,
+            &ResponseCacheConfig::default()
+        ),
+        KeyOutcome::Bypass(CacheReason::AnthropicCompaction)
+    );
 }
 
 #[test]

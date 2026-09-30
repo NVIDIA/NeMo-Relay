@@ -118,6 +118,41 @@ fn anthropic_shaped_bodies_price_through_the_catalog() {
         (cost - 0.0042).abs() < 1e-12,
         "900 input + 100 output at 3.0/15.0 per million must price at 0.0042, got {cost}"
     );
+
+    let compaction_entry = CacheEntry::new(
+        json!({
+            "id": "msg_compaction",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-cache-price-test",
+            "content": [{
+                "type": "compaction",
+                "content": "summary",
+                "signature": "signed"
+            }],
+            "stop_reason": "compaction",
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "iterations": [{
+                    "type": "compaction",
+                    "input_tokens": 144,
+                    "output_tokens": 276
+                }]
+            }
+        }),
+        Duration::from_secs(60),
+        "sha256:compaction-price".to_string(),
+        Some("claude-cache-price-test".to_string()),
+        Some("anthropic.messages".to_string()),
+    );
+    let (tokens, cost) = savings_from(&compaction_entry);
+    assert_eq!(tokens, Some(420));
+    let cost = cost.expect("compaction iteration usage must produce saved cost");
+    assert!(
+        (cost - 0.004572).abs() < 1e-12,
+        "144 input + 276 output at 3.0/15.0 per million must price at 0.004572, got {cost}"
+    );
 }
 
 #[test]
@@ -142,6 +177,40 @@ fn savings_from_counts_anthropic_input_output_tokens() {
         Some(125),
         "anthropic input+output tokens must be counted for savings"
     );
+}
+
+#[test]
+fn compaction_savings_include_iteration_tokens() {
+    let entry = CacheEntry::new(
+        json!({
+            "id": "msg_compaction",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [{
+                "type": "compaction",
+                "content": "summary",
+                "signature": "signed"
+            }],
+            "stop_reason": "compaction",
+            "stop_sequence": null,
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "iterations": [{
+                    "type": "compaction",
+                    "input_tokens": 144,
+                    "output_tokens": 276
+                }]
+            }
+        }),
+        Duration::from_secs(60),
+        "sha256:compaction".to_string(),
+        Some("claude-opus-5-5".to_string()),
+        Some("anthropic.messages".to_string()),
+    );
+
+    assert_eq!(savings_from(&entry).0, Some(420));
 }
 
 #[test]

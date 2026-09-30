@@ -111,6 +111,9 @@ from nemo_relay._native import (
     OpenTelemetryConfig as OpenTelemetryConfig,
 )
 from nemo_relay._native import (
+    OpenTelemetryFileSinkConfig as OpenTelemetryFileSinkConfig,
+)
+from nemo_relay._native import (
     OpenTelemetryLogConfig as OpenTelemetryLogConfig,
 )
 from nemo_relay._native import (

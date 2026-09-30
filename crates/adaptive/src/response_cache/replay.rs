@@ -8,6 +8,8 @@ use nemo_relay::codec::resolve::{ProviderSurface, detect_response_surface, strea
 use nemo_relay::error::FlowError;
 use serde_json::{Map, Value as Json, json};
 
+use crate::response_cache::anthropic::AnthropicResponseKind;
+
 /// Replays a stored aggregate response as a stream of **provider-native chunks**.
 ///
 /// A strict streaming client parses only its provider's wire chunks (Anthropic
@@ -20,8 +22,12 @@ use serde_json::{Map, Value as Json, json};
 /// is needed at the call sites. An unrecognized shape falls back to a
 /// single-frame replay as a defensive last resort; the [`replay_is_lossy`]
 /// gate normally sends such entries live before reaching this point.
-pub(crate) fn replay_aggregate(response: Json) -> LlmJsonStream {
-    let chunks = synthesize_replay_chunks(&response).unwrap_or_else(|| vec![response]);
+pub(crate) fn replay_aggregate(
+    response: Json,
+    anthropic_kind: Option<AnthropicResponseKind>,
+) -> LlmJsonStream {
+    let chunks =
+        synthesize_replay_chunks(&response, anthropic_kind).unwrap_or_else(|| vec![response]);
     LlmJsonStream::new(tokio_stream::iter(
         chunks.into_iter().map(Ok::<Json, FlowError>),
     ))
@@ -35,13 +41,16 @@ pub(crate) fn replay_aggregate(response: Json) -> LlmJsonStream {
 /// an empty stream. An unrecognized shape has no native chunk synthesis at
 /// all, so it is always lossy — the streaming tier runs live instead of
 /// serving one aggregate-shaped frame (the entry still serves buffered hits).
-pub(crate) fn replay_is_lossy(aggregate: &Json) -> bool {
+pub(crate) fn replay_is_lossy(
+    aggregate: &Json,
+    anthropic_kind: Option<AnthropicResponseKind>,
+) -> bool {
     let Some(surface) = detect_response_surface(aggregate) else {
         return true;
     };
     let codec = streaming_codec(surface);
     let mut collect = codec.collector();
-    for chunk in synthesize_replay_chunks(aggregate).unwrap_or_default() {
+    for chunk in synthesize_replay_chunks(aggregate, anthropic_kind).unwrap_or_default() {
         if collect(chunk).is_err() {
             return true;
         }
@@ -75,9 +84,14 @@ fn strip_stream_metadata(aggregate: &mut Json) {
 
 /// Synthesizes the native chunk sequence for the aggregate's detected surface.
 /// `None` when the shape is not recognized.
-fn synthesize_replay_chunks(aggregate: &Json) -> Option<Vec<Json>> {
+fn synthesize_replay_chunks(
+    aggregate: &Json,
+    anthropic_kind: Option<AnthropicResponseKind>,
+) -> Option<Vec<Json>> {
     Some(match detect_response_surface(aggregate)? {
-        ProviderSurface::AnthropicMessages => synthesize_anthropic_chunks(aggregate),
+        ProviderSurface::AnthropicMessages => {
+            synthesize_anthropic_chunks(aggregate, anthropic_kind)
+        }
         ProviderSurface::OpenAIChat => synthesize_chat_chunks(aggregate),
         ProviderSurface::OpenAIResponses => synthesize_responses_chunks(aggregate),
         // OCI GenAI streaming events are ChatResult-shaped deltas; the OCI
@@ -99,10 +113,21 @@ fn synthesize_replay_chunks(aggregate: &Json) -> Option<Vec<Json>> {
 /// start, as the live API does), then `message_delta` carrying the stored usage
 /// verbatim (the collector replaces usage wholesale, so the reassembled aggregate
 /// round-trips), then `message_stop`.
-fn synthesize_anthropic_chunks(aggregate: &Json) -> Vec<Json> {
+fn synthesize_anthropic_chunks(
+    aggregate: &Json,
+    anthropic_kind: Option<AnthropicResponseKind>,
+) -> Vec<Json> {
     let mut start_message = Map::new();
     start_message.insert("type".to_string(), json!("message"));
-    for key in ["id", "role", "model"] {
+    for key in [
+        "id",
+        "role",
+        "model",
+        "container",
+        "stop_details",
+        "diagnostics",
+        "service_tier",
+    ] {
         if let Some(value) = aggregate.get(key) {
             start_message.insert(key.to_string(), value.clone());
         }
@@ -152,6 +177,30 @@ fn synthesize_anthropic_chunks(aggregate: &Json) -> Vec<Json> {
                 chunks.push(json!({"type": "content_block_delta", "index": index,
                     "delta": {"type": "input_json_delta", "partial_json": partial}}));
             }
+            "compaction" if anthropic_kind == Some(AnthropicResponseKind::ThresholdCompaction) => {
+                let mut skeleton = block.clone();
+                let delta_content = skeleton
+                    .as_object_mut()
+                    .and_then(|map| map.remove("content"));
+                let delta_encrypted_content = skeleton
+                    .as_object_mut()
+                    .and_then(|map| map.remove("encrypted_content"));
+                if let Some(map) = skeleton.as_object_mut() {
+                    map.insert("content".to_string(), Json::Null);
+                }
+                chunks.push(json!({"type": "content_block_start", "index": index,
+                    "content_block": skeleton}));
+                let mut delta = Map::new();
+                delta.insert("type".to_string(), json!("compaction_delta"));
+                if let Some(content) = delta_content {
+                    delta.insert("content".to_string(), content);
+                }
+                if let Some(encrypted_content) = delta_encrypted_content {
+                    delta.insert("encrypted_content".to_string(), encrypted_content);
+                }
+                chunks.push(json!({"type": "content_block_delta", "index": index,
+                    "delta": delta}));
+            }
             // Thinking, server_tool_use, and other block types ship complete at
             // start (the collector keeps the skeleton verbatim).
             _ => {
@@ -169,11 +218,19 @@ fn synthesize_anthropic_chunks(aggregate: &Json) -> Vec<Json> {
     if let Some(sequence) = aggregate.get("stop_sequence") {
         delta.insert("stop_sequence".to_string(), sequence.clone());
     }
+    for key in ["container", "stop_details"] {
+        if let Some(value) = aggregate.get(key) {
+            delta.insert(key.to_string(), value.clone());
+        }
+    }
     let mut message_delta = Map::new();
     message_delta.insert("type".to_string(), json!("message_delta"));
     message_delta.insert("delta".to_string(), Json::Object(delta));
     if let Some(usage) = aggregate.get("usage") {
         message_delta.insert("usage".to_string(), usage.clone());
+    }
+    if let Some(context_management) = aggregate.get("context_management") {
+        message_delta.insert("context_management".to_string(), context_management.clone());
     }
     chunks.push(Json::Object(message_delta));
     chunks.push(json!({"type": "message_stop"}));

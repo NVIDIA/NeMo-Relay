@@ -61,6 +61,74 @@ use tonic::{Request, Response, Status};
 #[cfg(unix)]
 use tower::service_fn;
 
+/// Every runtime registration kind paired with the wire surface it maps to.
+const REGISTRATION_KIND_SURFACES: &[(RuntimeRegistrationKind, RegistrationSurface)] = &[
+    (
+        RuntimeRegistrationKind::Subscriber,
+        RegistrationSurface::Subscriber,
+    ),
+    (
+        RuntimeRegistrationKind::EventMetadataInjector,
+        RegistrationSurface::EventMetadataInjector,
+    ),
+    (
+        RuntimeRegistrationKind::MarkSanitizeGuardrail,
+        RegistrationSurface::MarkSanitizeGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::ScopeSanitizeStartGuardrail,
+        RegistrationSurface::ScopeSanitizeStartGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::ScopeSanitizeEndGuardrail,
+        RegistrationSurface::ScopeSanitizeEndGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::ToolSanitizeRequestGuardrail,
+        RegistrationSurface::ToolSanitizeRequestGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::ToolSanitizeResponseGuardrail,
+        RegistrationSurface::ToolSanitizeResponseGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::ToolConditionalExecutionGuardrail,
+        RegistrationSurface::ToolConditionalExecutionGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::ToolRequestIntercept,
+        RegistrationSurface::ToolRequestIntercept,
+    ),
+    (
+        RuntimeRegistrationKind::ToolExecutionIntercept,
+        RegistrationSurface::ToolExecutionIntercept,
+    ),
+    (
+        RuntimeRegistrationKind::LlmSanitizeRequestGuardrail,
+        RegistrationSurface::LlmSanitizeRequestGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::LlmSanitizeResponseGuardrail,
+        RegistrationSurface::LlmSanitizeResponseGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
+        RegistrationSurface::LlmConditionalExecutionGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::LlmRequestIntercept,
+        RegistrationSurface::LlmRequestIntercept,
+    ),
+    (
+        RuntimeRegistrationKind::LlmExecutionIntercept,
+        RegistrationSurface::LlmExecutionIntercept,
+    ),
+    (
+        RuntimeRegistrationKind::LlmStreamExecutionIntercept,
+        RegistrationSurface::LlmStreamExecutionIntercept,
+    ),
+];
+
 const ACTIVATION_ID: &str = "activation-1";
 const AUTH_TOKEN: &str = "secret-token";
 const PLUGIN_ID: &str = "acme.worker";
@@ -952,16 +1020,20 @@ async fn worker_service_invokes_every_registration_surface() {
 
     let calls = host.calls();
     let runtime_registration_requests = host.runtime_registration_requests();
-    assert_eq!(runtime_registration_requests.list.len(), 1);
     assert_eq!(
-        runtime_registration_requests.list[0].activation_id,
-        ACTIVATION_ID
+        runtime_registration_requests.list.len(),
+        REGISTRATION_KIND_SURFACES.len()
     );
-    assert_eq!(runtime_registration_requests.list[0].auth_token, AUTH_TOKEN);
-    assert_eq!(
-        runtime_registration_requests.list[0].kinds,
-        vec![RegistrationSurface::Subscriber as i32]
-    );
+    for (index, (kind, surface)) in REGISTRATION_KIND_SURFACES.iter().enumerate() {
+        let recorded = &runtime_registration_requests.list[index];
+        assert_eq!(recorded.activation_id, ACTIVATION_ID);
+        assert_eq!(recorded.auth_token, AUTH_TOKEN);
+        assert_eq!(
+            recorded.kinds,
+            vec![*surface as i32],
+            "{kind:?} should map to {surface:?}"
+        );
+    }
     assert_eq!(runtime_registration_requests.register.len(), 1);
     assert_eq!(
         runtime_registration_requests.register[0].activation_id,
@@ -2032,6 +2104,74 @@ impl Drop for FillThenPendingStream {
     }
 }
 
+async fn assert_runtime_registration_surfaces(runtime: &PluginRuntime) -> Result<()> {
+    // One request per kind: batching them would only expose the
+    // resulting set, which two swapped arms leave unchanged.
+    let expected_surfaces = REGISTRATION_KIND_SURFACES
+        .iter()
+        .map(|(_, surface)| *surface as i32)
+        .collect::<BTreeSet<_>>();
+    for (kind, _) in REGISTRATION_KIND_SURFACES {
+        let registrations = runtime
+            .list_runtime_registrations(Some(BTreeSet::from([*kind])))
+            .await?;
+        if registrations.len() != REGISTRATION_KIND_SURFACES.len() {
+            return Err(WorkerSdkError::Callback(format!(
+                "expected one registration per surface, got {}",
+                registrations.len()
+            )));
+        }
+        let mut decoded_surfaces = BTreeSet::new();
+        for registration in &registrations {
+            let surface: i32 = registration
+                .local_name
+                .strip_prefix("surface-")
+                .and_then(|value| value.parse().ok())
+                .ok_or_else(|| {
+                    WorkerSdkError::Callback(format!(
+                        "unexpected registration name {}",
+                        registration.local_name
+                    ))
+                })?;
+            let expected = REGISTRATION_KIND_SURFACES
+                .iter()
+                .find(|(_, candidate)| *candidate as i32 == surface)
+                .map(|(kind, _)| *kind)
+                .ok_or_else(|| WorkerSdkError::Callback(format!("unknown surface {surface}")))?;
+            if registration.kind != expected {
+                return Err(WorkerSdkError::Callback(format!(
+                    "surface {surface} decoded as {:?}, expected {expected:?}",
+                    registration.kind
+                )));
+            }
+            if registration.effective_name != format!("effective-{surface}") {
+                return Err(WorkerSdkError::Callback(format!(
+                    "surface {surface} decoded effective name {}",
+                    registration.effective_name
+                )));
+            }
+            if registration.owner.kind != nemo_relay_worker::RuntimeRegistrationOwnerKind::Plugin
+                || registration.owner.plugin_kind.as_deref() != Some("worker-sdk-tests")
+                || registration.owner.component_ordinal != Some(0)
+            {
+                return Err(WorkerSdkError::Callback(format!(
+                    "registration owner did not round-trip: {:?}",
+                    registration.owner
+                )));
+            }
+            decoded_surfaces.insert(surface);
+        }
+        // Set equality, so a duplicated surface standing in for a
+        // missing one cannot pass the count check.
+        if decoded_surfaces != expected_surfaces {
+            return Err(WorkerSdkError::Callback(format!(
+                "decoded surfaces {decoded_surfaces:?} do not match the table"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 struct SurfacePlugin {
     events: Arc<Mutex<Vec<String>>>,
@@ -2144,16 +2284,7 @@ impl WorkerPlugin for SurfacePlugin {
                 }
                 let tool_call_id = context.tool_call_id().map(str::to_owned);
                 let value = context.into_args();
-                let registrations = runtime
-                    .list_runtime_registrations(Some(BTreeSet::from([
-                        RuntimeRegistrationKind::Subscriber,
-                    ])))
-                    .await?;
-                if !registrations.is_empty() {
-                    return Err(WorkerSdkError::Callback(
-                        "mock runtime registration discovery was not empty".into(),
-                    ));
-                }
+                assert_runtime_registration_surfaces(&runtime).await?;
                 let duplicate_error = runtime
                     .register_conditional_middleware_guardrail(
                         "initial-gate",
@@ -2549,7 +2680,24 @@ impl RelayHostRuntime for MockHost {
             .list
             .push(request);
         Ok(Response::new(ListRuntimeRegistrationsResponse {
-            registrations: Vec::new(),
+            registrations: REGISTRATION_KIND_SURFACES
+                .iter()
+                .map(
+                    |(_, surface)| nemo_relay_worker_proto::v1::RuntimeRegistrationIdentity {
+                        kind: *surface as i32,
+                        // Names the surface that produced the record, so the
+                        // decoded kind is checked against it.
+                        local_name: format!("surface-{}", *surface as i32),
+                        effective_name: format!("effective-{}", *surface as i32),
+                        owner: Some(nemo_relay_worker_proto::v1::RuntimeRegistrationOwner {
+                            kind: nemo_relay_worker_proto::v1::RuntimeRegistrationOwnerKind::Plugin
+                                as i32,
+                            plugin_kind: Some("worker-sdk-tests".into()),
+                            component_ordinal: Some(0),
+                        }),
+                    },
+                )
+                .collect(),
             error: None,
         }))
     }

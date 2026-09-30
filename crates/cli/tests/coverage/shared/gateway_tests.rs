@@ -1641,14 +1641,62 @@ fn observable_headers_omit_secrets_and_transport_headers() {
     );
     headers.insert("connection", HeaderValue::from_static("close"));
     headers.insert("x-request-id", HeaderValue::from_static("req-1"));
+    headers.append(
+        "anthropic-beta",
+        HeaderValue::from_static("compact-2026-01-12"),
+    );
+    headers.append("anthropic-beta", HeaderValue::from_static("other-beta"));
+    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
 
     let observed = observable_headers(&headers);
 
     assert_eq!(observed.get("x-request-id"), Some(&json!("req-1")));
+    assert_eq!(
+        observed.get("anthropic-beta"),
+        Some(&json!("compact-2026-01-12,other-beta"))
+    );
+    assert_eq!(
+        observed.get("anthropic-version"),
+        Some(&json!("2023-06-01"))
+    );
     assert!(!observed.contains_key("authorization"));
     assert!(!observed.contains_key("x-api-key"));
     assert!(!observed.contains_key(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER));
     assert!(!observed.contains_key("connection"));
+}
+
+#[test]
+fn observable_headers_preserve_ambiguous_anthropic_versions_for_policy_rejection() {
+    let mut headers = HeaderMap::new();
+    headers.append("anthropic-version", HeaderValue::from_static("2023-06-01"));
+    headers.append(
+        "anthropic-version",
+        HeaderValue::from_static("future-version"),
+    );
+
+    assert_eq!(
+        observable_headers(&headers).get("anthropic-version"),
+        Some(&json!(["2023-06-01", "future-version"]))
+    );
+}
+
+#[test]
+fn observable_headers_omit_connection_named_anthropic_protocol_headers() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "connection",
+        HeaderValue::from_static("anthropic-beta, anthropic-version"),
+    );
+    headers.insert(
+        "anthropic-beta",
+        HeaderValue::from_static("compact-2026-01-12"),
+    );
+    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+
+    let observed = observable_headers(&headers);
+
+    assert!(!observed.contains_key("anthropic-beta"));
+    assert!(!observed.contains_key("anthropic-version"));
 }
 
 #[test]

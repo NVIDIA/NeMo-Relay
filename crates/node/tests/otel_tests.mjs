@@ -4,6 +4,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { assertOtlpStringAttribute, startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
 
 const require = createRequire(import.meta.url);
@@ -403,6 +406,88 @@ describe('OpenTelemetry log and metric subscribers', () => {
       subscriber.deregister(name);
       subscriber.shutdown();
       await collector.close();
+    }
+  });
+});
+
+describe('OpenTelemetrySubscriber.fileSink', () => {
+  it('applies the shared projection options', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'nemo-relay-node-file-sink-'));
+    const subscriber = OpenTelemetrySubscriber.fileSink({
+      type: 'full',
+      outputDirectory: directory,
+      filename: 'projected.jsonl',
+      markProjection: 'tool',
+      markExcludeNames: ['custom.mark'],
+      attributeMappings: [{ key: 'nemo_relay.scope_type', alias: 'scope.kind' }],
+      promoteMetadataPrefixes: ['nv.'],
+      promoteResourceMetadataPrefixes: ['deployment.'],
+      completedSpanContextTtlMillis: 30000n,
+    });
+
+    const name = uniqueId('node_otel_file_sink');
+    subscriber.register(name);
+    try {
+      const handle = pushScope('node-projection-agent', ScopeType.Agent, null, null, null, {
+        'nv.tenant': 'acme',
+        'deployment.environment': 'test',
+      });
+      event('custom.mark', handle, { a: 1 });
+      event('kept.mark', handle, { b: 2 });
+      popScope(handle);
+      subscriber.forceFlush();
+    } finally {
+      subscriber.deregister(name);
+      subscriber.shutdown();
+    }
+
+    const record = JSON.parse(
+      readFileSync(join(directory, 'projected.jsonl'), 'utf8').trim().split('\n')[0],
+    );
+    const resourceKeys = record.resourceSpans.flatMap((rs) =>
+      rs.resource.attributes.map((attribute) => attribute.key),
+    );
+    const spans = record.resourceSpans.flatMap((rs) =>
+      rs.scopeSpans.flatMap((ss) => ss.spans),
+    );
+    const spanKeys = new Set(spans.flatMap((span) => span.attributes.map((a) => a.key)));
+
+    // Asserted per option: a setting parsed but never applied must fail here.
+    assert.ok(spanKeys.has('scope.kind'), 'attributeMappings should add the alias');
+    assert.ok(spanKeys.has('nv.tenant'), 'promoteMetadataPrefixes should copy the metadata');
+    assert.ok(
+      resourceKeys.includes('deployment.environment'),
+      'promoteResourceMetadataPrefixes should copy onto the resource',
+    );
+    const spanNames = spans.map((span) => span.name);
+    assert.ok(
+      spanNames.includes('mark:kept.mark'),
+      `markProjection "tool" should emit a mark span: ${spanNames}`,
+    );
+    assert.ok(
+      !spanNames.some((spanName) => spanName.includes('custom.mark')),
+      `markExcludeNames should drop the excluded mark: ${spanNames}`,
+    );
+  });
+
+  it('rejects invalid shared projection options', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'nemo-relay-node-file-sink-'));
+    for (const invalid of [
+      { markProjection: 'sideways' },
+      { promoteMetadataPrefixes: [''] },
+      { promoteResourceMetadataPrefixes: [''] },
+      { completedSpanContextTtlMillis: 0n },
+    ]) {
+      assert.throws(
+        () =>
+          OpenTelemetrySubscriber.fileSink({
+            type: 'full',
+            outputDirectory: directory,
+            ...invalid,
+          }),
+        Error,
+        `expected ${Object.keys(invalid)[0]} to be rejected`,
+      );
     }
   });
 });

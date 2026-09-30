@@ -301,6 +301,21 @@ fn parse_attribute_mappings(
     Ok(mappings)
 }
 
+fn parse_otel_file_sink(
+    output_directory: &str,
+    filename: Option<&str>,
+    format: Option<&str>,
+    mode: Option<&str>,
+) -> napi::Result<nemo_relay::observability::otel::OtlpFileSinkSettings> {
+    nemo_relay::observability::otel::OtlpFileSinkSettings::from_parts(
+        output_directory,
+        filename,
+        format,
+        mode,
+    )
+    .map_err(napi::Error::from_reason)
+}
+
 fn build_otel_config(
     options: OpenTelemetryConfig,
 ) -> napi::Result<nemo_relay::observability::otel::OpenTelemetryConfig> {
@@ -319,35 +334,14 @@ fn build_otel_config(
         .instrumentation_scope
         .unwrap_or_else(|| "opentelemetry".to_string());
     let timeout_millis = options.timeout_millis.unwrap_or(3_000);
-    let completed_span_context_ttl_millis = options
-        .completed_span_context_ttl_millis
-        .map(|ttl| {
-            let (negative, value, lossless) = ttl.get_u64();
-            if negative || !lossless {
-                return Err(napi::Error::from_reason(
-                    "completedSpanContextTtlMillis must be a nonnegative u64 BigInt",
-                ));
-            }
-            if value == 0 {
-                return Err(napi::Error::from_reason(
-                    "completedSpanContextTtlMillis must be greater than 0",
-                ));
-            }
-            Ok(value)
-        })
-        .transpose()?
-        .unwrap_or_else(|| {
-            u64::try_from(
-                nemo_relay::observability::otel::DEFAULT_COMPLETED_SPAN_CONTEXT_TTL.as_millis(),
-            )
-            .expect("the default completed span context TTL fits in u64 milliseconds")
-        });
+    let completed_span_context_ttl_millis =
+        parse_completed_span_context_ttl_millis(options.completed_span_context_ttl_millis)?;
 
     let mut config = nemo_relay::observability::otel::OpenTelemetryConfig::new(otel_type, endpoint)
         .with_transport(transport)
+        .with_timeout(std::time::Duration::from_millis(timeout_millis.into()))
         .with_service_name(service_name)
         .with_instrumentation_scope(instrumentation_scope)
-        .with_timeout(std::time::Duration::from_millis(timeout_millis.into()))
         .with_completed_span_context_ttl(std::time::Duration::from_millis(
             completed_span_context_ttl_millis,
         ));
@@ -384,17 +378,9 @@ fn build_otel_config(
     Ok(config)
 }
 
-fn build_otel_log_config(
-    options: OpenTelemetryLogConfig,
-) -> napi::Result<nemo_relay::observability::otel_logs::OpenTelemetryLogConfig> {
-    let endpoint = options.endpoint.trim().to_string();
-    if endpoint.is_empty() {
-        return Err(napi::Error::from_reason(
-            "endpoint must be a nonblank string",
-        ));
-    }
-    let completed_span_context_ttl_millis = options
-        .completed_span_context_ttl_millis
+/// Parses the optional completed-span-context TTL shared by every trace config.
+fn parse_completed_span_context_ttl_millis(value: Option<BigInt>) -> napi::Result<u64> {
+    let parsed = value
         .map(|ttl| {
             let (negative, value, lossless) = ttl.get_u64();
             if negative || !lossless {
@@ -416,6 +402,20 @@ fn build_otel_log_config(
             )
             .expect("the default completed span context TTL fits in u64 milliseconds")
         });
+    Ok(parsed)
+}
+
+fn build_otel_log_config(
+    options: OpenTelemetryLogConfig,
+) -> napi::Result<nemo_relay::observability::otel_logs::OpenTelemetryLogConfig> {
+    let endpoint = options.endpoint.trim().to_string();
+    if endpoint.is_empty() {
+        return Err(napi::Error::from_reason(
+            "endpoint must be a nonblank string",
+        ));
+    }
+    let completed_span_context_ttl_millis =
+        parse_completed_span_context_ttl_millis(options.completed_span_context_ttl_millis)?;
     let mut config = nemo_relay::observability::otel_logs::OpenTelemetryLogConfig::new(endpoint)
         .with_transport(parse_otel_transport(options.transport)?)
         .with_service_name(
@@ -776,55 +776,161 @@ fn js_unknown_from_raw<T: NapiRaw>(env: &Env, value: &T) -> JsUnknown {
     unsafe { JsUnknown::from_raw_unchecked(env.raw(), value.raw()) }
 }
 
-fn json_callback_tsfn(
-    env: &Env,
-    func: &JsFunction,
-) -> napi::Result<ThreadsafeFunction<Json, ErrorStrategy::Fatal>> {
-    let mut tsfn = func
-        .create_threadsafe_function::<Json, Json, _, ErrorStrategy::Fatal>(0, |ctx| {
-            Ok(vec![ctx.value])
-        })?;
-    tsfn.unref(env)?;
-    Ok(tsfn)
-}
-
-struct ScopedStreamCall {
-    request: Json,
+struct ScopedCallbackContext {
     scope_stack: CoreScopeStackHandle,
     publication_buffer: Option<PublicationBuffer>,
-    propagation_parent_uuid: String,
+    propagation_parent_uuid: Option<String>,
+    propagation_context: Option<nemo_relay::api::runtime::PropagationContext>,
 }
 
-fn scoped_stream_callback_tsfn(
+impl ScopedCallbackContext {
+    fn capture() -> Self {
+        let propagation_context = capture_propagation_context_handle().ok();
+        Self {
+            scope_stack: current_scope_stack_handle(),
+            publication_buffer: capture_nested_publication_buffer(),
+            propagation_parent_uuid: propagation_context
+                .as_ref()
+                .map(|context| context.parent_uuid.to_string()),
+            propagation_context,
+        }
+    }
+}
+
+struct ScopedJsonCall {
+    value: Json,
+    context: ScopedCallbackContext,
+}
+
+fn scoped_json_callback_tsfn_from_wrapper(
     env: &Env,
-    func: &JsFunction,
-) -> napi::Result<ThreadsafeFunction<ScopedStreamCall, ErrorStrategy::Fatal>> {
-    let callback = callback_factory::wrap_scoped_stream_callback(env, func)?;
+    callback: JsFunction,
+) -> napi::Result<ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>> {
     let mut tsfn = callback.create_threadsafe_function(
         0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<ScopedStreamCall>| {
-            let request = unsafe {
+        |ctx: napi::threadsafe_function::ThreadSafeCallContext<ScopedJsonCall>| {
+            let value = unsafe {
                 JsUnknown::from_raw_unchecked(
                     ctx.env.raw(),
-                    Json::to_napi_value(ctx.env.raw(), ctx.value.request)?,
+                    Json::to_napi_value(ctx.env.raw(), ctx.value.value)?,
                 )
             };
             let scope_stack = ScopeStack {
-                inner: ctx.value.scope_stack,
-                publication_buffer: ctx.value.publication_buffer,
+                inner: ctx.value.context.scope_stack,
+                publication_buffer: ctx.value.context.publication_buffer,
             }
             .into_instance(ctx.env)?;
             Ok(vec![
-                request,
+                value,
                 unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), scope_stack.raw()) },
-                ctx.env
-                    .create_string(&ctx.value.propagation_parent_uuid)?
-                    .into_unknown(),
+                match ctx.value.context.propagation_parent_uuid {
+                    Some(parent_uuid) => ctx.env.create_string(&parent_uuid)?.into_unknown(),
+                    None => ctx.env.get_undefined()?.into_unknown(),
+                },
+                match ctx.value.context.propagation_context {
+                    Some(context) => unsafe {
+                        JsUnknown::from_raw_unchecked(
+                            ctx.env.raw(),
+                            PropagationContext::to_napi_value(
+                                ctx.env.raw(),
+                                propagation_context_to_napi(context),
+                            )?,
+                        )
+                    },
+                    None => ctx.env.get_undefined()?.into_unknown(),
+                },
             ])
         },
     )?;
     tsfn.unref(env)?;
     Ok(tsfn)
+}
+
+fn scoped_json_callback_tsfn(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>> {
+    scoped_json_callback_tsfn_from_wrapper(env, callback_factory::wrap_scoped_callback(env, func)?)
+}
+
+fn scoped_stream_callback_tsfn(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>> {
+    scoped_json_callback_tsfn_from_wrapper(
+        env,
+        callback_factory::wrap_scoped_stream_callback(env, func)?,
+    )
+}
+
+fn scoped_tool_execution_fn(
+    func: ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>,
+) -> ToolExecutionNextFn {
+    let func = Arc::new(func);
+    Arc::new(move |args: Json| {
+        let func = func.clone();
+        let context = ScopedCallbackContext::capture();
+        Box::pin(async move {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let status = func.call_with_return_value(
+                ScopedJsonCall {
+                    value: args,
+                    context,
+                },
+                ThreadsafeFunctionCallMode::Blocking,
+                move |value: Option<Json>| {
+                    let _ = tx.send(callback_json(value));
+                    Ok(())
+                },
+            );
+            if status != napi::Status::Ok {
+                return Err(FlowError::Internal(format!(
+                    "failed to queue JS tool execution callback: {status:?}",
+                )));
+            }
+            let result = rx
+                .await
+                .map_err(|error| FlowError::Internal(error.to_string()))?;
+            callable::parse_tool_execution_result(callable::unwrap_middleware_result(
+                result,
+                "JS tool execution callback failed",
+            )?)
+        })
+    })
+}
+
+fn scoped_llm_execution_fn(
+    func: ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>,
+) -> LlmExecutionNextFn {
+    let func = Arc::new(func);
+    Arc::new(move |request: LlmRequest| {
+        let func = func.clone();
+        let context = ScopedCallbackContext::capture();
+        let request = serde_json::to_value(request).unwrap_or(Json::Null);
+        Box::pin(async move {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let status = func.call_with_return_value(
+                ScopedJsonCall {
+                    value: request,
+                    context,
+                },
+                ThreadsafeFunctionCallMode::Blocking,
+                move |value: Option<Json>| {
+                    let _ = tx.send(callback_json(value));
+                    Ok(())
+                },
+            );
+            if status != napi::Status::Ok {
+                return Err(FlowError::Internal(format!(
+                    "failed to queue JS LLM execution callback: {status:?}",
+                )));
+            }
+            let result = rx
+                .await
+                .map_err(|error| FlowError::Internal(error.to_string()))?;
+            callable::unwrap_middleware_result(result, "JS LLM execution callback failed")
+        })
+    })
 }
 
 fn middleware_tool_callback_tsfn(
@@ -2204,7 +2310,7 @@ fn propagation_context_from_napi(
     Ok(context)
 }
 
-fn propagation_context_to_napi(
+pub(crate) fn propagation_context_to_napi(
     context: nemo_relay::api::runtime::PropagationContext,
 ) -> PropagationContext {
     PropagationContext {
@@ -2220,25 +2326,50 @@ fn callback_propagation_context(
     env: &Env,
     parent_uuid: uuid::Uuid,
 ) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
-    let mut context = with_effective_scope_stack(env, capture_propagation_context_handle)?
-        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    let context = callback_factory::callback_propagation_context(env)?
+        .ok_or_else(|| napi::Error::from_reason("callback propagation context is unavailable"))?;
+    let mut context = propagation_context_from_napi(context)?;
     context.parent_uuid = parent_uuid;
-    if context.traceparent.is_some() {
-        context.traceparent = Some(
-            context
-                .to_traceparent()
-                .map_err(|error| napi::Error::from_reason(error.to_string()))?,
-        );
-    } else {
-        context.root_uuid = with_effective_scope_stack(env, capture_traceparent_handle)
-            .ok()
-            .and_then(|result| result.ok())
+    let stack = effective_scope_stack(env)?;
+    let stack = stack
+        .read()
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    let has_propagated_parent = stack
+        .scopes()
+        .iter()
+        .any(|scope| stack.is_propagated_parent(scope.uuid));
+    drop(stack);
+    if !has_propagated_parent {
+        context.root_uuid = context
+            .traceparent
+            .as_deref()
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                with_effective_scope_stack(env, capture_traceparent_handle)
+                    .ok()
+                    .and_then(|result| result.ok())
+            })
             .and_then(|traceparent| {
                 traceparent
                     .get(3..35)
                     .and_then(|value| uuid::Uuid::parse_str(value).ok())
             })
             .or(Some(parent_uuid));
+    }
+    Ok(context)
+}
+
+fn rootless_callback_propagation_context(
+    env: &Env,
+    parent_uuid: uuid::Uuid,
+) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
+    let mut context = callback_propagation_context(env, parent_uuid)?;
+    context.root_uuid = None;
+    let rootless = with_effective_scope_stack(env, capture_rootless_propagation_context_handle)?
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    if rootless.traceparent.is_none() {
+        context.traceparent = None;
+        context.tracestate = None;
     }
     Ok(context)
 }
@@ -2271,9 +2402,8 @@ pub fn capture_rootless_propagation_context(env: Env) -> napi::Result<Propagatio
     if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
         let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
             .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
-        let mut context = callback_propagation_context(&env, parent_uuid)?;
-        context.root_uuid = None;
-        return Ok(propagation_context_to_napi(context));
+        return rootless_callback_propagation_context(&env, parent_uuid)
+            .map(propagation_context_to_napi);
     }
     with_effective_scope_stack(&env, capture_rootless_propagation_context_handle)?
         .map(propagation_context_to_napi)
@@ -2294,7 +2424,7 @@ pub fn capture_propagation_context_with_root(
     if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
         let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
             .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
-        let mut context = callback_propagation_context(&env, parent_uuid)?;
+        let mut context = rootless_callback_propagation_context(&env, parent_uuid)?;
         context.root_uuid = root_uuid;
         return Ok(propagation_context_to_napi(context));
     }
@@ -2311,7 +2441,11 @@ pub fn capture_traceparent(env: Env) -> napi::Result<String> {
     if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
         let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
             .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
-        return callback_propagation_context(&env, parent_uuid)?
+        let context = callback_propagation_context(&env, parent_uuid)?;
+        if let Some(traceparent) = context.traceparent.clone() {
+            return Ok(traceparent);
+        }
+        return context
             .to_traceparent()
             .map_err(|error| napi::Error::from_reason(error.to_string()));
     }
@@ -2328,7 +2462,7 @@ pub fn propagation_context_to_json(context: PropagationContext) -> napi::Result<
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
-/// Convert a rooted Relay propagation context to a W3C `traceparent` value.
+/// Convert a Relay propagation context to a W3C `traceparent` value.
 #[napi]
 pub fn propagation_context_to_traceparent(context: PropagationContext) -> napi::Result<String> {
     propagation_context_from_napi(context)?
@@ -2927,8 +3061,7 @@ pub fn tool_call_execute(
         .map(|h| h.inner.clone())
         .unwrap_or_else(|| effective_scope_top(&scope_stack));
     let callback = callable::safe_execution_callback(&env, &func)?;
-    let exec_fn = callable::wrap_js_tool_exec_fn(json_callback_tsfn(&env, &callback)?);
-    let default_fn: ToolExecutionNextFn = std::sync::Arc::new(move |args| exec_fn(args));
+    let default_fn = scoped_tool_execution_fn(scoped_json_callback_tsfn(&env, &callback)?);
 
     env.execute_tokio_future(
         async move {
@@ -3158,8 +3291,7 @@ pub fn llm_call_execute(
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
     let callback = callable::safe_execution_callback(&env, &func)?;
-    let exec_fn = callable::wrap_js_llm_exec_fn(json_callback_tsfn(&env, &callback)?);
-    let default_fn: LlmExecutionNextFn = std::sync::Arc::new(move |req| exec_fn(req));
+    let default_fn = scoped_llm_execution_fn(scoped_json_callback_tsfn(&env, &callback)?);
     let mut codec_references = Vec::new();
     let codec = match (codec_decode.as_ref(), codec_encode.as_ref()) {
         (Some(d), Some(e)) => {
@@ -3377,15 +3509,10 @@ pub fn llm_stream_call_execute(
     // so it knows where to send chunks.
     let func = std::sync::Arc::new(scoped_stream_callback_tsfn(&env, &func)?);
     let default_fn: LlmStreamExecutionNextFn = std::sync::Arc::new(move |req: LlmRequest| {
-        let propagation_parent_uuid = match capture_propagation_context_handle() {
-            Ok(context) => context.parent_uuid.to_string(),
-            Err(error) => return Box::pin(async move { Err(error) }),
-        };
+        let context = ScopedCallbackContext::capture();
         let stream_id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let closed = register_stream_channel(stream_id, tx);
-        let scope_stack = current_scope_stack_handle();
-        let publication_buffer = capture_nested_publication_buffer();
 
         // Serialize the LlmRequest to JSON and wrap with streamId so JS can extract both
         let req_json = serde_json::to_value(&req).unwrap_or(Json::Null);
@@ -3397,11 +3524,9 @@ pub fn llm_stream_call_execute(
         // NonBlocking: queue the call on the JS event loop and return immediately.
         // The JS function starts async iteration and pushes chunks via pushStreamChunk.
         let call_status = func.call(
-            ScopedStreamCall {
-                request: wrapper,
-                scope_stack,
-                publication_buffer,
-                propagation_parent_uuid,
+            ScopedJsonCall {
+                value: wrapper,
+                context,
             },
             ThreadsafeFunctionCallMode::NonBlocking,
         );
@@ -5257,6 +5382,108 @@ pub struct OpenTelemetryConfig {
     pub promote_resource_metadata_prefixes: Option<Vec<String>>,
 }
 
+/// Configuration for a subscriber that writes OTLP to a local file.
+///
+/// Carries no endpoint, transport, headers, or timeout: a file destination has
+/// no use for them.
+#[napi(object)]
+#[derive(Default)]
+pub struct OpenTelemetryFileSinkConfig {
+    /// `"full"`, `"gen_ai"`, or `"openinference"`.
+    #[napi(ts_type = "\"full\" | \"gen_ai\" | \"openinference\"")]
+    pub r#type: String,
+    /// Directory containing the output file.
+    pub output_directory: String,
+    /// Output filename. Defaults to a name derived from `format`.
+    pub filename: Option<String>,
+    /// `"json_lines"` (default) or `"proto"`.
+    #[napi(ts_type = "\"json_lines\" | \"proto\"")]
+    pub format: Option<String>,
+    /// `"overwrite"` (default) or `"append"`.
+    #[napi(ts_type = "\"append\" | \"overwrite\"")]
+    pub mode: Option<String>,
+    /// Extra OpenTelemetry resource attributes as string key/value pairs.
+    pub resource_attributes: Option<Json>,
+    /// `service.name` resource attribute. Defaults to `"unknown_service"`.
+    pub service_name: Option<String>,
+    /// Optional `service.namespace` resource attribute.
+    pub service_namespace: Option<String>,
+    /// Optional `service.version` resource attribute.
+    pub service_version: Option<String>,
+    /// Instrumentation scope name. Defaults to `"opentelemetry"`.
+    pub instrumentation_scope: Option<String>,
+    /// Completed scope lineage retention in milliseconds as a `bigint`. Defaults to `60000`.
+    pub completed_span_context_ttl_millis: Option<BigInt>,
+    /// Mark projection for full and OpenInference exporters. Defaults to `"inherit"`.
+    #[napi(ts_type = "\"inherit\" | \"event\" | \"tool\"")]
+    pub mark_projection: Option<String>,
+    /// Mark names excluded from full and OpenInference projections.
+    pub mark_exclude_names: Option<Vec<String>>,
+    /// Attribute aliases for full and OpenInference projections.
+    pub attribute_mappings: Option<Json>,
+    /// Literal Event metadata prefixes copied to top-level OTLP attributes.
+    pub promote_metadata_prefixes: Option<Vec<String>>,
+    /// Literal root-scope Event metadata prefixes copied to OTLP resource attributes.
+    pub promote_resource_metadata_prefixes: Option<Vec<String>>,
+}
+
+fn build_otel_file_sink_config(
+    options: OpenTelemetryFileSinkConfig,
+) -> napi::Result<nemo_relay::observability::otel::OpenTelemetryFileSinkConfig> {
+    let otel_type = parse_otel_type(&options.r#type)?;
+    let directory = options.output_directory.trim();
+    if directory.is_empty() {
+        return Err(napi::Error::from_reason(
+            "outputDirectory must be a nonblank string",
+        ));
+    }
+    let sink = parse_otel_file_sink(
+        directory,
+        options.filename.as_deref(),
+        options.format.as_deref(),
+        options.mode.as_deref(),
+    )?;
+    let mut config =
+        nemo_relay::observability::otel::OpenTelemetryFileSinkConfig::new(otel_type, sink)
+            .with_instrumentation_scope(
+                options
+                    .instrumentation_scope
+                    .unwrap_or_else(|| "opentelemetry".to_string()),
+            );
+    // An omitted service name stays unset so the SDK can detect it from
+    // OTEL_SERVICE_NAME, matching the plugin configuration path.
+    if let Some(service_name) = options.service_name {
+        config = config.with_service_name(service_name);
+    }
+    if let Some(namespace) = options.service_namespace {
+        config = config.with_service_namespace(namespace);
+    }
+    if let Some(version) = options.service_version {
+        config = config.with_service_version(version);
+    }
+    for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
+        config = config.with_resource_attribute(key, value);
+    }
+    config = config
+        .with_completed_span_context_ttl(std::time::Duration::from_millis(
+            parse_completed_span_context_ttl_millis(options.completed_span_context_ttl_millis)?,
+        ))
+        .with_mark_projection(parse_mark_projection(options.mark_projection)?)
+        .with_mark_exclude_names(
+            options
+                .mark_exclude_names
+                .unwrap_or_else(nemo_relay::observability::default_mark_exclude_names),
+        )
+        .with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?)
+        .with_promote_metadata_prefixes(options.promote_metadata_prefixes.unwrap_or_default())
+        .with_promote_resource_metadata_prefixes(
+            options
+                .promote_resource_metadata_prefixes
+                .unwrap_or_default(),
+        );
+    Ok(config)
+}
+
 /// OpenTelemetry-backed event subscriber.
 #[napi]
 pub struct OpenTelemetrySubscriber {
@@ -5270,6 +5497,16 @@ impl OpenTelemetrySubscriber {
     pub fn new(config: OpenTelemetryConfig) -> napi::Result<Self> {
         let inner = nemo_relay::observability::otel::OpenTelemetrySubscriber::new(
             build_otel_config(config)?,
+        )
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Create a subscriber that writes OTLP to a local file.
+    #[napi(factory)]
+    pub fn file_sink(config: OpenTelemetryFileSinkConfig) -> napi::Result<Self> {
+        let inner = nemo_relay::observability::otel::OpenTelemetrySubscriber::new_file_sink(
+            build_otel_file_sink_config(config)?,
         )
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner })
