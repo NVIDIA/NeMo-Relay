@@ -193,3 +193,20 @@ fn linux_status_io_and_processor_set_parsers_reject_invalid_counts() {
     assert!(super::parse_stat("invalid").is_none());
     assert!(super::parse_stat("123 (short process) S 1").is_none());
 }
+
+#[test]
+fn process_tree_scans_skip_only_expected_exit_races() {
+    use std::io;
+    assert!(super::is_exit_race(&io::Error::from(
+        io::ErrorKind::NotFound
+    )));
+    assert!(super::is_exit_race(&io::Error::from_raw_os_error(
+        rustix::io::Errno::SRCH.raw_os_error(),
+    )));
+    assert!(!super::is_exit_race(&io::Error::from(
+        io::ErrorKind::PermissionDenied
+    )));
+    assert!(!super::is_exit_race(&io::Error::from(
+        io::ErrorKind::InvalidData
+    )));
+}

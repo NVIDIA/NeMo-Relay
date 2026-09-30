@@ -234,8 +234,45 @@ fn cli_process_tree_metrics_enabled(config: &GatewayConfig) -> bool {
 
 async fn supervise_prepared_run(
     prepared: &PreparedAgentLaunch,
+    running_server: RunningGateway,
+    target_resource_metrics: bool,
+) -> Result<ExitCode, CliError> {
+    supervise_prepared_run_with_target(prepared, running_server, target_resource_metrics, |child| {
+        let child_process_id = child.process_id().ok_or_else(|| {
+            CliError::Launch("spawned coding-agent process did not expose a process ID".into())
+        })?;
+        #[cfg(not(windows))]
+        let result =
+            nemo_relay::api::resource_metrics::target_resource_metrics_to_owned_process_tree(
+                child_process_id,
+            );
+        #[cfg(windows)]
+        // SAFETY: The supervised child owns this live job. The API duplicates it here.
+        let result = unsafe {
+            nemo_relay::api::resource_metrics::target_resource_metrics_to_owned_process_tree(
+                child_process_id,
+                child.resource_metrics_job_handle(),
+            )
+        };
+        result.map_err(|error| {
+            CliError::Launch(format!(
+                "resource metrics could not target the launched agent process tree: {error}"
+            ))
+        })
+    })
+    .await
+}
+
+async fn supervise_prepared_run_with_target(
+    prepared: &PreparedAgentLaunch,
     mut running_server: RunningGateway,
     target_resource_metrics: bool,
+    select_target: impl FnOnce(
+        &super::SupervisedChild,
+    ) -> Result<
+        Option<nemo_relay::api::resource_metrics::ResourceMetricsTargetGuard>,
+        CliError,
+    >,
 ) -> Result<ExitCode, CliError> {
     let mut child = match prepared.spawn().await {
         Ok(child) => child,
@@ -248,39 +285,16 @@ async fn supervise_prepared_run(
         }
     };
     let _resource_metrics_target = if target_resource_metrics {
-        let Some(child_process_id) = child.process_id() else {
-            let child_result = child.terminate().await;
-            let restore = prepared.restore();
-            let server_result = running_server.stop().await;
-            restore?;
-            child_result?;
-            server_result?;
-            return Err(CliError::Launch(
-                "spawned coding-agent process did not expose a process ID".into(),
-            ));
-        };
-        #[cfg(not(windows))]
-        let target_result =
-            nemo_relay::api::resource_metrics::target_resource_metrics_to_owned_process_tree(
-                child_process_id,
-            );
-        #[cfg(windows)]
-        let target_result = unsafe {
-            nemo_relay::api::resource_metrics::target_resource_metrics_to_owned_process_tree(
-                child_process_id,
-                child.resource_metrics_job_handle(),
-            )
-        };
-        match target_result {
+        match select_target(&child) {
             Ok(target) => target,
             Err(error) => {
-                log::warn!(
-                    target: "nemo_relay.agent",
-                    event = "resource_metrics_target_failed",
-                    error_kind = "target";
-                    "Resource metrics could not target the launched agent process tree: {error}"
-                );
-                None
+                let child_result = child.terminate().await;
+                let restore = prepared.restore();
+                let server_result = running_server.stop().await;
+                restore?;
+                child_result?;
+                server_result?;
+                return Err(error);
             }
         }
     } else {

@@ -55,11 +55,15 @@ pub(super) fn process_tree_ids(root_process_id: u32) -> io::Result<Vec<u32>> {
         next += 1;
         let tasks = match fs::read_dir(format!("/proc/{process_id}/task")) {
             Ok(tasks) => tasks,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) if is_exit_race(&error) => continue,
             Err(error) => return Err(error),
         };
         for task in tasks {
-            let task = task?;
+            let task = match task {
+                Ok(task) => task,
+                Err(error) if is_exit_race(&error) => continue,
+                Err(error) => return Err(error),
+            };
             let Some(thread_id) = task
                 .file_name()
                 .to_str()
@@ -70,7 +74,7 @@ pub(super) fn process_tree_ids(root_process_id: u32) -> io::Result<Vec<u32>> {
             let children_path = format!("/proc/{process_id}/task/{thread_id}/children");
             let children = match fs::read_to_string(children_path) {
                 Ok(children) => children,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) if is_exit_race(&error) => continue,
                 Err(error) => return Err(error),
             };
             for child in children
@@ -84,6 +88,11 @@ pub(super) fn process_tree_ids(root_process_id: u32) -> io::Result<Vec<u32>> {
         }
     }
     Ok(process_ids)
+}
+
+fn is_exit_race(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::NotFound
+        || error.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error())
 }
 
 pub(super) fn all_process_ids() -> io::Result<Vec<u32>> {

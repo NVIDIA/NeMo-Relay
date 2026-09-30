@@ -294,8 +294,10 @@ func CollectResourceMetrics(ctx context.Context) (ResourceMetricsSnapshot, error
 		return ResourceMetricsSnapshot{}, fmt.Errorf("resource metrics FFI returned a null collection")
 	}
 	defer C.nemo_relay_resource_metrics_collect_free(collection)
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
+	delay := time.Millisecond
+	const maxDelay = 50 * time.Millisecond
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
 	for {
 		if err := ctx.Err(); err != nil {
 			return ResourceMetricsSnapshot{}, err
@@ -324,7 +326,9 @@ func CollectResourceMetrics(ctx context.Context) (ResourceMetricsSnapshot, error
 		select {
 		case <-ctx.Done():
 			return ResourceMetricsSnapshot{}, ctx.Err()
-		case <-ticker.C:
+		case <-timer.C:
 		}
+		delay = min(delay*2, maxDelay)
+		timer.Reset(delay)
 	}
 }

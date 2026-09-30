@@ -4,6 +4,7 @@
 //! Fresh and managed system resource metric observation.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock, Weak};
 
 use nemo_relay_types::api::event::{MetricKind, MetricMeasurement, MetricValueType};
@@ -41,6 +42,7 @@ type AgentScopeRegistry = HashMap<Uuid, Weak<RwLock<ScopeStack>>>;
 
 static AGENT_SCOPES: LazyLock<Mutex<AgentScopeRegistry>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+static AGENT_SCOPE_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 
 /// Acquire a fresh snapshot without requiring managed polling.
 ///
@@ -93,7 +95,13 @@ pub(crate) fn register_agent_scope(scope: ScopeHandle, stack: ScopeStackHandle) 
     let mut scopes = AGENT_SCOPES
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    scopes.retain(|_, stack| stack.strong_count() > 0);
+    // Bound abandoned entries even without polling, without scanning on every push.
+    if AGENT_SCOPE_REGISTRATIONS
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(64)
+    {
+        scopes.retain(|_, stack| stack.strong_count() > 0);
+    }
     scopes.insert(scope.uuid, Arc::downgrade(&stack));
 }
 

@@ -426,7 +426,9 @@ fn registering_agent_scope_prunes_abandoned_stacks_without_polling() {
     scopes.insert(uuid::Uuid::nil(), abandoned);
     drop(scopes);
 
-    super::register_agent_scope(active_scope.clone(), active_stack.clone());
+    for _ in 0..64 {
+        super::register_agent_scope(active_scope.clone(), active_stack.clone());
+    }
     let mut scopes = super::AGENT_SCOPES
         .lock()
         .unwrap_or_else(|error| error.into_inner());
