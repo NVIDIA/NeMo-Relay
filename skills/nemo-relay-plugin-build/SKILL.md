@@ -155,25 +155,18 @@ is needed.
 
 ## Native Version Compatibility
 
-Choose the native callback model from the target Relay version:
+Choose the native callback model from the target Relay version; do not present
+the 0.8 SDK as source-compatible with 0.7:
 
 - **Relay 0.7:** Keep typed Rust middleware callbacks synchronous. Use the raw
   native ABI v3 completion-based registration path only when asynchronous work
   is required, and constrain the manifest to `compat.relay = ">=0.7,<0.8"`.
 - **Relay 0.8:** Return futures through the typed Rust SDK and constrain
-  the manifest to `compat.relay = ">=0.8.0,<0.10"`. The SDK runs typed middleware
+  the manifest to `compat.relay = ">=0.8.0,<1.0"`. The SDK runs typed middleware
   on an SDK-owned Tokio executor; subscribers and raw synchronous ABI
   registrations remain synchronous. Do not block executor workers. Scope context
   does not automatically propagate to tasks created with `tokio::spawn`, and
   teardown must stop new callbacks and drain accepted work before unload.
-- **Relay 0.9:** Use the 0.9 SDK and constrain the manifest to
-  `compat.relay = ">=0.9.0,<0.10"`. Context-aware tool execution callbacks and
-  host-routed plugin logging are not available in earlier native layouts.
-- **Relay 0.10:** Rebuild every native plugin with the ABI v7 SDK and constrain
-  the manifest to `compat.relay = ">=0.10.0,<1.0"`. LLM execution callbacks
-  receive request codec context; non-streaming callbacks also receive
-  completed-response codec context. The authored `compat.native_api = "1"`
-  value does not change.
 
 The 0.8 typed SDK lets native components configure its executor with a positive
 `executor.worker_threads` value. When their manifest exposes a
@@ -198,7 +191,8 @@ this skill.
   diagnostic.
 - Do not treat native process isolation as a security boundary, or claim that a
   worker is sandboxed.
-- Do not mix callback layouts from different Relay releases.
+- Do not apply the 0.8 typed-async callback contract to Relay 0.7, or the 0.7
+  raw completion contract to typed 0.8 middleware.
 - Do not block the 0.8 SDK-owned executor.
 
 ## Validation Checklist
@@ -217,7 +211,9 @@ this skill.
       JSON Schema and declare `config_schema` in `relay-plugin.toml`.
 - [ ] Dynamic manifests validate their lane-specific kind, load contract,
       SemVer compatibility, integrity, and disabled-record behavior.
-- [ ] Native callback APIs and `compat.relay` match the target Relay release.
+- [ ] Native callback APIs and compatibility constraints match the target Relay
+      version: synchronous typed callbacks and raw ABI v3 completion work for
+      0.7; typed async SDK middleware and executor configuration for 0.8.
 - [ ] Async native paths cover cancellation, settlement, and drain-before-
       unload behavior.
 
