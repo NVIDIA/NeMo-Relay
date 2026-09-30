@@ -1939,6 +1939,30 @@ async fn wait_for_health_reports_unready_gateway() {
     assert!(error.contains("gateway did not become ready"), "{error}");
 }
 
+#[test]
+fn only_explicit_cli_process_tree_metrics_need_an_owned_target() {
+    let mut gateway = GatewayConfig {
+        plugin_config: Some(json!({
+            "version": 1,
+            "components": [{
+                "kind": "resource_metrics",
+                "enabled": true,
+                "config": {"measurement_scope": "process_tree"}
+            }]
+        })),
+        ..GatewayConfig::default()
+    };
+    assert!(cli_process_tree_metrics_enabled(&gateway));
+
+    gateway.plugin_config.as_mut().unwrap()["components"][0]["config"] = json!({});
+    assert!(!cli_process_tree_metrics_enabled(&gateway));
+
+    gateway.plugin_config.as_mut().unwrap()["components"][0]["config"] =
+        json!({"measurement_scope": "process_tree"});
+    gateway.plugin_config.as_mut().unwrap()["components"][0]["enabled"] = json!(false);
+    assert!(!cli_process_tree_metrics_enabled(&gateway));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
@@ -1990,7 +2014,7 @@ async fn gateway_failure_terminates_the_agent_and_restores_private_state() {
 
     let error = tokio::time::timeout(
         Duration::from_secs(10),
-        supervise_prepared_run(&prepared, running_server),
+        supervise_prepared_run(&prepared, running_server, false),
     )
     .await
     .expect("agent supervision did not finish")

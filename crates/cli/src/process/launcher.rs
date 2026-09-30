@@ -182,6 +182,19 @@ async fn execute_live_run_with_dynamic(
     gateway_url: &str,
     prepared: PreparedAgentLaunch,
 ) -> Result<ExitCode, CliError> {
+    let target_resource_metrics = cli_process_tree_metrics_enabled(&gateway_config);
+    let _resource_metrics_launch = if target_resource_metrics {
+        Some(
+            nemo_relay::api::resource_metrics::prepare_cli_resource_metrics_process_tree()
+                .map_err(|error| {
+                    CliError::Launch(format!(
+                        "failed to prepare resource metrics process-tree target: {error}"
+                    ))
+                })?,
+        )
+    } else {
+        None
+    };
     let bootstrap_fingerprint = crate::configuration::transparent_gateway_fingerprint(gateway_url);
     let proxy_credential = prepared.proxy_credential.clone();
     let running_server = RunningGateway::start(
@@ -198,12 +211,31 @@ async fn execute_live_run_with_dynamic(
         server_result?;
         return Err(error);
     }
-    supervise_prepared_run(&prepared, running_server).await
+    supervise_prepared_run(&prepared, running_server, target_resource_metrics).await
+}
+
+fn cli_process_tree_metrics_enabled(config: &GatewayConfig) -> bool {
+    config
+        .plugin_config
+        .as_ref()
+        .and_then(|config| serde_json::from_value::<PluginConfig>(config.clone()).ok())
+        .is_some_and(|config| {
+            config.components.iter().any(|component| {
+                component.enabled
+                    && component.kind == "resource_metrics"
+                    && component
+                        .config
+                        .get("measurement_scope")
+                        .and_then(|value| value.as_str())
+                        == Some("process_tree")
+            })
+        })
 }
 
 async fn supervise_prepared_run(
     prepared: &PreparedAgentLaunch,
     mut running_server: RunningGateway,
+    target_resource_metrics: bool,
 ) -> Result<ExitCode, CliError> {
     let mut child = match prepared.spawn().await {
         Ok(child) => child,
@@ -214,6 +246,45 @@ async fn supervise_prepared_run(
             server_result?;
             return Err(error);
         }
+    };
+    let _resource_metrics_target = if target_resource_metrics {
+        let Some(child_process_id) = child.process_id() else {
+            let child_result = child.terminate().await;
+            let restore = prepared.restore();
+            let server_result = running_server.stop().await;
+            restore?;
+            child_result?;
+            server_result?;
+            return Err(CliError::Launch(
+                "spawned coding-agent process did not expose a process ID".into(),
+            ));
+        };
+        #[cfg(not(windows))]
+        let target_result =
+            nemo_relay::api::resource_metrics::target_resource_metrics_to_owned_process_tree(
+                child_process_id,
+            );
+        #[cfg(windows)]
+        let target_result = unsafe {
+            nemo_relay::api::resource_metrics::target_resource_metrics_to_owned_process_tree(
+                child_process_id,
+                child.resource_metrics_job_handle(),
+            )
+        };
+        match target_result {
+            Ok(target) => target,
+            Err(error) => {
+                log::warn!(
+                    target: "nemo_relay.agent",
+                    event = "resource_metrics_target_failed",
+                    error_kind = "target";
+                    "Resource metrics could not target the launched agent process tree: {error}"
+                );
+                None
+            }
+        }
+    } else {
+        None
     };
 
     tokio::select! {

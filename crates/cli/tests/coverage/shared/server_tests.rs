@@ -28,8 +28,8 @@ use nemo_relay::api::registry::{
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::plugin::dynamic::DynamicPluginKind;
 use nemo_relay::plugin::{
-    ConfigDiagnostic, Plugin, PluginRegistration, PluginRegistrationContext, deregister_plugin,
-    ensure_builtin_plugins_registered, register_plugin,
+    ConfigDiagnostic, Plugin, PluginConfig, PluginRegistration, PluginRegistrationContext,
+    deregister_plugin, ensure_builtin_plugins_registered, register_plugin,
 };
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1662,6 +1662,39 @@ async fn serve_listener_exits_after_codex_stop_without_session_end() {
         .unwrap();
     result.unwrap();
 }
+#[test]
+fn cli_resource_metrics_defaults_to_global_and_honors_explicit_scope() {
+    let mut config: PluginConfig = serde_json::from_value(json!({
+        "components": [{"kind": "resource_metrics", "config": {}}]
+    }))
+    .unwrap();
+    super::apply_cli_resource_metrics_scope_default(&mut config);
+    assert_eq!(config.components[0].config["measurement_scope"], "global");
+
+    let mut config: PluginConfig = serde_json::from_value(json!({
+        "components": [{
+            "kind": "resource_metrics",
+            "config": {"measurement_scope": "runtime_default"}
+        }]
+    }))
+    .unwrap();
+    super::apply_cli_resource_metrics_scope_default(&mut config);
+    assert_eq!(config.components[0].config["measurement_scope"], "global");
+
+    let mut config: PluginConfig = serde_json::from_value(json!({
+        "components": [{
+            "kind": "resource_metrics",
+            "config": {"measurement_scope": "process_tree"}
+        }]
+    }))
+    .unwrap();
+    super::apply_cli_resource_metrics_scope_default(&mut config);
+    assert_eq!(
+        config.components[0].config["measurement_scope"],
+        "process_tree"
+    );
+}
+
 #[tokio::test]
 async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;

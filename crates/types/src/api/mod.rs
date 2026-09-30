@@ -9,6 +9,8 @@ pub mod event;
 pub mod llm;
 /// Runtime-registration discovery DTOs.
 pub mod registry;
+/// Structured system resource metric snapshots.
+pub mod resource_metrics;
 /// Scope DTOs and attributes.
 pub mod scope;
 /// Tool DTOs and attributes.

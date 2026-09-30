@@ -65,6 +65,7 @@ pub mod observability;
 pub mod plugin;
 pub mod plugins;
 mod registry;
+mod resource_metrics;
 #[doc(hidden)]
 pub mod shared_runtime;
 pub mod stream;

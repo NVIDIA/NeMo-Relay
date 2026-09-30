@@ -1078,11 +1078,12 @@ async fn activate_server_plugins(
     if config.is_none() && dynamic_plugins.is_empty() {
         return Ok(None);
     }
-    let plugin_config: PluginConfig = config
+    let mut plugin_config: PluginConfig = config
         .map(serde_json::from_value)
         .transpose()
         .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?
         .unwrap_or_default();
+    apply_cli_resource_metrics_scope_default(&mut plugin_config);
     if let Some(error) = register_and_validate_plugin_components(&plugin_config)
         .into_iter()
         .next()
@@ -1141,6 +1142,24 @@ async fn activate_server_plugins(
         host,
         _snapshots: snapshots,
     }))
+}
+
+fn apply_cli_resource_metrics_scope_default(config: &mut PluginConfig) {
+    for component in &mut config.components {
+        if component.kind != "resource_metrics" {
+            continue;
+        }
+        let uses_runtime_default = match component.config.get("measurement_scope") {
+            None => true,
+            Some(Value::String(scope)) => scope == "runtime_default",
+            Some(_) => false,
+        };
+        if uses_runtime_default {
+            component
+                .config
+                .insert("measurement_scope".into(), Value::String("global".into()));
+        }
+    }
 }
 
 pub(crate) async fn initialize_plugin_host(

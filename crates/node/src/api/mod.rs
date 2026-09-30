@@ -9,7 +9,7 @@
 //! All functions are annotated with `#[napi]` and their doc comments appear
 //! in the generated `index.d.ts` TypeScript definitions.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -24,13 +24,22 @@ use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value as Json;
 use tokio_stream::{Stream, StreamExt};
 
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
 use nemo_relay::api::registry as core_registry_api;
+use nemo_relay::api::resource_metrics as core_resource_metrics_api;
+use nemo_relay::api::resource_metrics::{
+    AcceleratorDeviceMetrics, AcceleratorProcessMetrics, CpuMetrics, DiskMetrics,
+    FilesystemCapacityMetrics, GpuMetrics, MemoryMetrics, NetworkInterfaceMetrics, NetworkMetrics,
+    NetworkTrafficMetrics, ProcessMetrics, ProcessSamplingMetadata as CoreProcessSamplingMetadata,
+    ResourceLimitEventCount, ResourceLimitEventKind, ResourceLimitResource, ResourceMeasurement,
+    ResourceMeasurementScope, ResourceMeasurementUnit, ResourceMetricValue,
+    ResourceMetricsSnapshot as CoreResourceMetricsSnapshot, ResourceOperatingSystem,
+};
 use nemo_relay::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
@@ -156,6 +165,409 @@ pub fn info(message: String, target: Option<String>, fields: Option<Json>) -> na
 #[napi]
 pub fn warn(message: String, target: Option<String>, fields: Option<Json>) -> napi::Result<()> {
     log("warn".into(), message, target, fields)
+}
+
+/// Acquire a fresh resource metrics snapshot without requiring polling.
+/// Collection runs outside the JavaScript event loop.
+#[napi(ts_return_type = "Promise<ResourceMetricsSnapshot>")]
+pub fn collect_resource_metrics(env: Env) -> napi::Result<JsObject> {
+    env.execute_tokio_future(
+        async {
+            core_resource_metrics_api::collect()
+                .await
+                .map_err(|error| Error::from_reason(error.to_string()))
+        },
+        |env, snapshot| env.to_js_value(&NodeResourceMetricsSnapshot::from(snapshot)),
+    )
+}
+
+const JAVASCRIPT_MAX_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum NodeResourceMetricInteger {
+    Number(f64),
+    BigInt(u64),
+}
+
+impl From<u64> for NodeResourceMetricInteger {
+    fn from(value: u64) -> Self {
+        if value <= JAVASCRIPT_MAX_SAFE_INTEGER {
+            Self::Number(value as f64)
+        } else {
+            Self::BigInt(value)
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/rust/api/resource_metric_integer_tests.rs"]
+mod node_resource_metric_integer_tests;
+
+impl Serialize for NodeResourceMetricInteger {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Number(value) => serializer.serialize_f64(*value),
+            Self::BigInt(value) => serializer.serialize_u64(*value),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct NodeIntegerResourceMeasurement {
+    value: NodeResourceMetricInteger,
+    unit: ResourceMeasurementUnit,
+}
+
+impl From<ResourceMeasurement<ResourceMetricValue>> for NodeIntegerResourceMeasurement {
+    fn from(measurement: ResourceMeasurement<ResourceMetricValue>) -> Self {
+        Self {
+            value: match measurement.value {
+                ResourceMetricValue::Integer(value) => NodeResourceMetricInteger::from(value),
+                ResourceMetricValue::Decimal(value) => NodeResourceMetricInteger::Number(value),
+            },
+            unit: measurement.unit,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeResourceLimitEventCount {
+    resource: ResourceLimitResource,
+    event: ResourceLimitEventKind,
+    count: Option<NodeIntegerResourceMeasurement>,
+}
+
+impl From<ResourceLimitEventCount> for NodeResourceLimitEventCount {
+    fn from(event: ResourceLimitEventCount) -> Self {
+        Self {
+            resource: event.resource,
+            event: event.event,
+            count: event.count.map(Into::into),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeAcceleratorDeviceMetrics {
+    vendor: nemo_relay::api::resource_metrics::AcceleratorVendor,
+    device_identifier: String,
+    device_index: Option<u32>,
+    memory_used: Option<NodeIntegerResourceMeasurement>,
+    compute_utilization: Option<ResourceMeasurement<f64>>,
+}
+
+impl From<AcceleratorDeviceMetrics> for NodeAcceleratorDeviceMetrics {
+    fn from(device: AcceleratorDeviceMetrics) -> Self {
+        Self {
+            vendor: device.vendor,
+            device_identifier: device.device_identifier,
+            device_index: device.device_index,
+            memory_used: device.memory_used.map(Into::into),
+            compute_utilization: device.compute_utilization,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeAcceleratorProcessMetrics {
+    vendor: nemo_relay::api::resource_metrics::AcceleratorVendor,
+    device_identifier: String,
+    device_index: Option<u32>,
+    process_id: u32,
+    memory_used: Option<NodeIntegerResourceMeasurement>,
+    compute_utilization: Option<ResourceMeasurement<f64>>,
+}
+
+impl From<AcceleratorProcessMetrics> for NodeAcceleratorProcessMetrics {
+    fn from(process: AcceleratorProcessMetrics) -> Self {
+        Self {
+            vendor: process.vendor,
+            device_identifier: process.device_identifier,
+            device_index: process.device_index,
+            process_id: process.process_id,
+            memory_used: process.memory_used.map(Into::into),
+            compute_utilization: process.compute_utilization,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeFilesystemCapacityMetrics {
+    path: String,
+    total_capacity: Option<NodeIntegerResourceMeasurement>,
+    available_capacity: Option<NodeIntegerResourceMeasurement>,
+    free_capacity: Option<NodeIntegerResourceMeasurement>,
+}
+
+impl From<FilesystemCapacityMetrics> for NodeFilesystemCapacityMetrics {
+    fn from(filesystem: FilesystemCapacityMetrics) -> Self {
+        Self {
+            path: filesystem.path,
+            total_capacity: filesystem.total_capacity.map(Into::into),
+            available_capacity: filesystem.available_capacity.map(Into::into),
+            free_capacity: filesystem.free_capacity.map(Into::into),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeCpuMetrics {
+    user_time: Option<NodeIntegerResourceMeasurement>,
+    system_time: Option<NodeIntegerResourceMeasurement>,
+    total_time: Option<NodeIntegerResourceMeasurement>,
+    consumption_rate: Option<ResourceMeasurement<f64>>,
+    throttled_time: Option<NodeIntegerResourceMeasurement>,
+    effective_limit: Option<ResourceMeasurement<f64>>,
+    some_pressure_stall_time: Option<NodeIntegerResourceMeasurement>,
+    full_pressure_stall_time: Option<NodeIntegerResourceMeasurement>,
+    limit_events: Vec<NodeResourceLimitEventCount>,
+}
+
+impl From<CpuMetrics> for NodeCpuMetrics {
+    fn from(cpu: CpuMetrics) -> Self {
+        Self {
+            user_time: cpu.user_time.map(Into::into),
+            system_time: cpu.system_time.map(Into::into),
+            total_time: cpu.total_time.map(Into::into),
+            consumption_rate: cpu.consumption_rate,
+            throttled_time: cpu.throttled_time.map(Into::into),
+            effective_limit: cpu.effective_limit,
+            some_pressure_stall_time: cpu.some_pressure_stall_time.map(Into::into),
+            full_pressure_stall_time: cpu.full_pressure_stall_time.map(Into::into),
+            limit_events: cpu.limit_events.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeMemoryMetrics {
+    system_used: Option<NodeIntegerResourceMeasurement>,
+    system_total: Option<NodeIntegerResourceMeasurement>,
+    system_available: Option<NodeIntegerResourceMeasurement>,
+    resident: Option<NodeIntegerResourceMeasurement>,
+    private: Option<NodeIntegerResourceMeasurement>,
+    physical_footprint: Option<NodeIntegerResourceMeasurement>,
+    virtual_memory: Option<NodeIntegerResourceMeasurement>,
+    peak_resident: Option<NodeIntegerResourceMeasurement>,
+    limit: Option<NodeIntegerResourceMeasurement>,
+    environment_accounted: Option<NodeIntegerResourceMeasurement>,
+    some_pressure_stall_time: Option<NodeIntegerResourceMeasurement>,
+    full_pressure_stall_time: Option<NodeIntegerResourceMeasurement>,
+    out_of_memory_event_count: Option<NodeIntegerResourceMeasurement>,
+    limit_events: Vec<NodeResourceLimitEventCount>,
+}
+
+impl From<MemoryMetrics> for NodeMemoryMetrics {
+    fn from(memory: MemoryMetrics) -> Self {
+        Self {
+            system_used: memory.system_used.map(Into::into),
+            system_total: memory.system_total.map(Into::into),
+            system_available: memory.system_available.map(Into::into),
+            resident: memory.resident.map(Into::into),
+            private: memory.private.map(Into::into),
+            physical_footprint: memory.physical_footprint.map(Into::into),
+            virtual_memory: memory.virtual_memory.map(Into::into),
+            peak_resident: memory.peak_resident.map(Into::into),
+            limit: memory.limit.map(Into::into),
+            environment_accounted: memory.environment_accounted.map(Into::into),
+            some_pressure_stall_time: memory.some_pressure_stall_time.map(Into::into),
+            full_pressure_stall_time: memory.full_pressure_stall_time.map(Into::into),
+            out_of_memory_event_count: memory.out_of_memory_event_count.map(Into::into),
+            limit_events: memory.limit_events.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeProcessMetrics {
+    active_count: Option<NodeIntegerResourceMeasurement>,
+    descendant_count: Option<NodeIntegerResourceMeasurement>,
+    thread_count: Option<NodeIntegerResourceMeasurement>,
+    lifetime_creation_count: Option<NodeIntegerResourceMeasurement>,
+    open_file_descriptor_count: Option<NodeIntegerResourceMeasurement>,
+    windows_handle_count: Option<NodeIntegerResourceMeasurement>,
+    limit_events: Vec<NodeResourceLimitEventCount>,
+}
+
+impl From<ProcessMetrics> for NodeProcessMetrics {
+    fn from(process: ProcessMetrics) -> Self {
+        Self {
+            active_count: process.active_count.map(Into::into),
+            descendant_count: process.descendant_count.map(Into::into),
+            thread_count: process.thread_count.map(Into::into),
+            lifetime_creation_count: process.lifetime_creation_count.map(Into::into),
+            open_file_descriptor_count: process.open_file_descriptor_count.map(Into::into),
+            windows_handle_count: process.windows_handle_count.map(Into::into),
+            limit_events: process.limit_events.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeDiskMetrics {
+    read_data: Option<NodeIntegerResourceMeasurement>,
+    write_data: Option<NodeIntegerResourceMeasurement>,
+    read_throughput: Option<ResourceMeasurement<f64>>,
+    write_throughput: Option<ResourceMeasurement<f64>>,
+    read_operations: Option<NodeIntegerResourceMeasurement>,
+    write_operations: Option<NodeIntegerResourceMeasurement>,
+    filesystems: Vec<NodeFilesystemCapacityMetrics>,
+}
+
+impl From<DiskMetrics> for NodeDiskMetrics {
+    fn from(disk: DiskMetrics) -> Self {
+        Self {
+            read_data: disk.read_data.map(Into::into),
+            write_data: disk.write_data.map(Into::into),
+            read_throughput: disk.read_throughput,
+            write_throughput: disk.write_throughput,
+            read_operations: disk.read_operations.map(Into::into),
+            write_operations: disk.write_operations.map(Into::into),
+            filesystems: disk.filesystems.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeGpuMetrics {
+    device_metrics: Option<Vec<NodeAcceleratorDeviceMetrics>>,
+    process_metrics: Option<Vec<NodeAcceleratorProcessMetrics>>,
+}
+
+impl From<GpuMetrics> for NodeGpuMetrics {
+    fn from(gpu: GpuMetrics) -> Self {
+        Self {
+            device_metrics: gpu
+                .device_metrics
+                .map(|devices| devices.into_iter().map(Into::into).collect()),
+            process_metrics: gpu
+                .process_metrics
+                .map(|processes| processes.into_iter().map(Into::into).collect()),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeNetworkTrafficMetrics {
+    received_data: Option<NodeIntegerResourceMeasurement>,
+    transmitted_data: Option<NodeIntegerResourceMeasurement>,
+    receive_throughput: Option<ResourceMeasurement<f64>>,
+    transmit_throughput: Option<ResourceMeasurement<f64>>,
+    received_packets: Option<NodeIntegerResourceMeasurement>,
+    transmitted_packets: Option<NodeIntegerResourceMeasurement>,
+    receive_errors: Option<NodeIntegerResourceMeasurement>,
+    transmit_errors: Option<NodeIntegerResourceMeasurement>,
+}
+impl From<NetworkTrafficMetrics> for NodeNetworkTrafficMetrics {
+    fn from(traffic: NetworkTrafficMetrics) -> Self {
+        Self {
+            received_data: traffic.received_data.map(Into::into),
+            transmitted_data: traffic.transmitted_data.map(Into::into),
+            receive_throughput: traffic.receive_throughput,
+            transmit_throughput: traffic.transmit_throughput,
+            received_packets: traffic.received_packets.map(Into::into),
+            transmitted_packets: traffic.transmitted_packets.map(Into::into),
+            receive_errors: traffic.receive_errors.map(Into::into),
+            transmit_errors: traffic.transmit_errors.map(Into::into),
+        }
+    }
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeNetworkInterfaceMetrics {
+    name: String,
+    traffic: NodeNetworkTrafficMetrics,
+}
+impl From<NetworkInterfaceMetrics> for NodeNetworkInterfaceMetrics {
+    fn from(interface: NetworkInterfaceMetrics) -> Self {
+        Self {
+            name: interface.name,
+            traffic: interface.traffic.into(),
+        }
+    }
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeNetworkMetrics {
+    measurement_scope: ResourceMeasurementScope,
+    system: NodeNetworkTrafficMetrics,
+    interfaces: Vec<NodeNetworkInterfaceMetrics>,
+}
+impl From<NetworkMetrics> for NodeNetworkMetrics {
+    fn from(network: NetworkMetrics) -> Self {
+        Self {
+            measurement_scope: network.measurement_scope,
+            system: network.system.into(),
+            interfaces: network.interfaces.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeProcessSamplingMetadata {
+    visible_processes: NodeResourceMetricInteger,
+    sampled_processes: NodeResourceMetricInteger,
+    field_sampled_processes: BTreeMap<String, NodeResourceMetricInteger>,
+}
+
+impl From<CoreProcessSamplingMetadata> for NodeProcessSamplingMetadata {
+    fn from(metadata: CoreProcessSamplingMetadata) -> Self {
+        Self {
+            visible_processes: metadata.visible_processes.into(),
+            sampled_processes: metadata.sampled_processes.into(),
+            field_sampled_processes: metadata
+                .field_sampled_processes
+                .into_iter()
+                .map(|(field, count)| (field, count.into()))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeResourceMetricsSnapshot {
+    timestamp: DateTime<Utc>,
+    operating_system: ResourceOperatingSystem,
+    measurement_scope: ResourceMeasurementScope,
+    process_sampling: Option<NodeProcessSamplingMetadata>,
+    cpu: Option<NodeCpuMetrics>,
+    memory: Option<NodeMemoryMetrics>,
+    process: Option<NodeProcessMetrics>,
+    disk: Option<NodeDiskMetrics>,
+    gpu: Option<NodeGpuMetrics>,
+    network: Option<NodeNetworkMetrics>,
+}
+
+impl From<CoreResourceMetricsSnapshot> for NodeResourceMetricsSnapshot {
+    fn from(snapshot: CoreResourceMetricsSnapshot) -> Self {
+        Self {
+            timestamp: snapshot.timestamp,
+            operating_system: snapshot.operating_system,
+            measurement_scope: snapshot.measurement_scope,
+            process_sampling: snapshot.process_sampling.map(Into::into),
+            cpu: snapshot.cpu.map(Into::into),
+            memory: snapshot.memory.map(Into::into),
+            process: snapshot.process.map(Into::into),
+            disk: snapshot.disk.map(Into::into),
+            gpu: snapshot.gpu.map(Into::into),
+            network: snapshot.network.map(Into::into),
+        }
+    }
 }
 #[napi]
 pub fn error(message: String, target: Option<String>, fields: Option<Json>) -> napi::Result<()> {
@@ -1908,18 +2320,8 @@ fn node_conditional_middleware_guardrail(
 }
 
 #[cfg(test)]
-mod conditional_gate_tests {
-    use super::*;
-
-    #[test]
-    fn conditional_gate_result_wait_is_bounded() {
-        let (_tx, rx) = std::sync::mpsc::sync_channel(1);
-        let error = recv_conditional_gate_result(rx, std::time::Duration::from_millis(1))
-            .expect_err("an unresponsive callback must time out");
-
-        assert!(error.reason.contains("conditional gate callback timed out"));
-    }
-}
+#[path = "../../tests/rust/api/conditional_gate_tests.rs"]
+mod conditional_gate_tests;
 
 fn node_event_sanitize_fn(env: &Env, func: &JsFunction) -> napi::Result<EventSanitizeFn> {
     // The registry and queued snapshots own the only callback references.
@@ -6247,80 +6649,8 @@ impl DynamicPluginCloseState {
 }
 
 #[cfg(test)]
-mod dynamic_plugin_close_state_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn close_result_is_published_before_a_retry_can_reset_completion() {
-        let activation = CorePluginHostActivation::initialize_exact(PluginConfig::default())
-            .await
-            .expect("empty plugin host must initialize");
-        let state = Arc::new(DynamicPluginCloseState::new(activation));
-        let activation = {
-            let mut status = state
-                .status
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let activation = match &mut *status {
-                DynamicPluginCloseStatus::Active(activation) => {
-                    activation.take().expect("activation must be owned")
-                }
-                DynamicPluginCloseStatus::Closing | DynamicPluginCloseStatus::Closed => {
-                    panic!("new activation must be active")
-                }
-            };
-            *status = DynamicPluginCloseStatus::Closing;
-            activation
-        };
-
-        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
-        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
-        let finish_state = Arc::clone(&state);
-        let finish = std::thread::spawn(move || {
-            finish_state.finish_with_hook(
-                Some(activation),
-                Err("first close failed".into()),
-                || {
-                    entered_tx.send(()).expect("test must observe publication");
-                    release_rx.recv().expect("test must release publication");
-                },
-            );
-        });
-
-        entered_rx
-            .recv()
-            .expect("finish must reach completion publication");
-        assert!(matches!(
-            state.status.try_lock(),
-            Err(std::sync::TryLockError::WouldBlock)
-        ));
-        release_tx
-            .send(())
-            .expect("finish thread must still be waiting");
-        finish.join().expect("finish thread must not panic");
-
-        let mut activation = {
-            let mut status = state
-                .status
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let activation = match &mut *status {
-                DynamicPluginCloseStatus::Active(activation) => activation
-                    .take()
-                    .expect("failed close must remain retryable"),
-                DynamicPluginCloseStatus::Closing | DynamicPluginCloseStatus::Closed => {
-                    panic!("failed close must restore the active state")
-                }
-            };
-            state.completion.send_replace(None);
-            *status = DynamicPluginCloseStatus::Closing;
-            activation
-        };
-        assert!(state.completion.borrow().is_none());
-
-        activation.close().expect("retry cleanup must succeed");
-    }
-}
+#[path = "../../tests/rust/api/dynamic_plugin_close_state_tests.rs"]
+mod dynamic_plugin_close_state_tests;
 
 #[napi]
 impl PluginHostActivation {

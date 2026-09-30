@@ -7,6 +7,7 @@ use crate::api::event::{
     MetricMeasurement,
 };
 use crate::api::runtime::global_context;
+use crate::api::runtime::scope_stack::ScopeStackHandle;
 use crate::api::runtime::scope_stack::snapshot_scope_stack;
 use crate::api::runtime::subscriber_dispatcher::{self, SubscriberDelivery};
 use crate::api::runtime::{
@@ -304,6 +305,9 @@ pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
         (handle, event, subscribers, scope_stack.clone())
     };
     task_scope_push(handle.clone());
+    if handle.scope_type == ScopeType::Agent {
+        crate::api::resource_metrics::register_agent_scope(handle.clone(), current_scope_stack());
+    }
     let sanitizers = snapshot_event_sanitizers(&event, &emission_scope_stack).unwrap_or_default();
     let _ = subscriber_dispatcher::dispatch_sanitized_event(
         event,
@@ -401,6 +405,9 @@ fn pop_scope_inner(
     let publication_scope_stack = snapshot_scope_stack(&emission_scope_stack)?;
     let removed = task_scope_remove(params.handle_uuid)?;
     debug_assert_eq!(removed.uuid, scope.uuid);
+    if scope.scope_type == ScopeType::Agent {
+        crate::api::resource_metrics::unregister_agent_scope(&scope.uuid);
+    }
     if track_delivery {
         subscriber_dispatcher::dispatch_sanitized_event_with_delivery(
             event,
@@ -533,6 +540,73 @@ pub fn metric(params: EmitMetricEventParams<'_>) -> Result<()> {
             .timestamp_opt(params.timestamp)
             .build(),
     )
+}
+
+/// Emit a metric mark using the target scope's captured stack context.
+///
+/// Polling runs outside the caller's task and must still use the target
+/// Agent's local subscriber and sanitizer chain.
+/// Returns `false` if the target scope closed before the mark could be queued.
+pub(crate) fn metric_on_scope_stack(
+    name: &str,
+    measurements: Vec<MetricMeasurement>,
+    parent: &ScopeHandle,
+    timestamp: DateTime<Utc>,
+    scope_stack: ScopeStackHandle,
+) -> Result<bool> {
+    ensure_runtime_owner()?;
+    let target_scope_stack = {
+        let guard = scope_stack
+            .read()
+            .map_err(|error| scope_stack_lock_error(error, "metric"))?;
+        let Some(snapshot) = guard.snapshot_through_scope(&parent.uuid) else {
+            return Ok(false);
+        };
+        std::sync::Arc::new(std::sync::RwLock::new(snapshot))
+    };
+    let envelope = MetricEnvelope { measurements };
+    envelope
+        .validate()
+        .map_err(|error| FlowError::InvalidArgument(error.to_string()))?;
+    let data = serde_json::to_value(envelope).map_err(|error| {
+        FlowError::InvalidArgument(format!("metric envelope could not be serialized: {error}"))
+    })?;
+    let subscribers = {
+        let guard = target_scope_stack
+            .read()
+            .map_err(|error| scope_stack_lock_error(error, "metric"))?;
+        snapshot_event_subscribers(guard.collect_scope_local_subscribers())?
+    };
+    let event = {
+        let context = global_context();
+        let state = context
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        state.create_event(MarkEvent::new(
+            BaseEvent::builder()
+                .name(name)
+                .parent_uuid(parent.uuid)
+                .timestamp(timestamp)
+                .data(data)
+                .data_schema(
+                    DataSchema::builder()
+                        .name(METRIC_DATA_SCHEMA_NAME)
+                        .version(METRIC_DATA_SCHEMA_VERSION)
+                        .build(),
+                )
+                .build(),
+            None,
+            None,
+        ))
+    };
+    let sanitizers = snapshot_event_sanitizers(&event, &target_scope_stack).unwrap_or_default();
+    let _ = subscriber_dispatcher::dispatch_sanitized_event(
+        event,
+        sanitizers,
+        &subscribers,
+        target_scope_stack,
+    );
+    Ok(true)
 }
 
 #[cfg(test)]

@@ -1164,6 +1164,7 @@ pub fn ensure_builtin_plugins_registered() -> Result<()> {
             crate::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND,
             crate::plugins::nemo_guardrails::component::NEMO_GUARDRAILS_PLUGIN_KIND,
             crate::plugins::model_pricing::PRICING_PLUGIN_KIND,
+            crate::plugins::resource_metrics::RESOURCE_METRICS_PLUGIN_KIND,
         ]
         .iter()
         .all(|kind| {
@@ -1181,7 +1182,8 @@ pub fn ensure_builtin_plugins_registered() -> Result<()> {
     // a corrected ownership conflict can be retried without restarting Relay.
     crate::observability::plugin_component::register_observability_component()?;
     crate::plugins::nemo_guardrails::component::register_nemo_guardrails_component()?;
-    crate::plugins::model_pricing::register_pricing_component()
+    crate::plugins::model_pricing::register_pricing_component()?;
+    crate::plugins::resource_metrics::register_resource_metrics_component()
 }
 
 /// Removes a previously registered plugin.

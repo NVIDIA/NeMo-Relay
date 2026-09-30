@@ -3020,19 +3020,8 @@ pub(super) fn to_system_time(timestamp: DateTime<Utc>) -> SystemTime {
 }
 
 #[cfg(test)]
-mod automatic_configuration_tests {
-    use super::*;
-
-    #[test]
-    fn automatic_trace_configuration_uses_gen_ai_projection() {
-        assert_eq!(
-            OpenTelemetryConfig::from_automatic_configuration()
-                .shared
-                .otel_type,
-            OpenTelemetryType::GenAi
-        );
-    }
-}
+#[path = "../../tests/unit/observability/otel_automatic_configuration_tests.rs"]
+mod automatic_configuration_tests;
 
 #[cfg(test)]
 #[path = "../../tests/unit/observability/otel_tests.rs"]
