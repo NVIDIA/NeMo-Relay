@@ -752,6 +752,106 @@ fn managed_llm_traceparent_matches_exported_span_directly() {
 }
 
 #[test]
+fn explicit_capture_root_controls_receiver_trace_from_local_senders() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let root = Uuid::now_v7();
+    let mut contexts = Vec::new();
+    for _ in 0..2 {
+        set_thread_scope_stack(create_scope_stack());
+        let sender = push_scope(
+            crate::api::scope::PushScopeParams::builder()
+                .name("explicit-root-sender")
+                .scope_type(ScopeType::Agent)
+                .build(),
+        )
+        .unwrap();
+        contexts.push(capture_propagation_context_with_root(Some(root)).unwrap());
+        pop_scope(
+            crate::api::scope::PopScopeParams::builder()
+                .handle_uuid(&sender.uuid)
+                .build(),
+        )
+        .unwrap();
+    }
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "explicit-root");
+    let subscriber_name = format!("explicit_root_{}", Uuid::now_v7().simple());
+    subscriber.register(&subscriber_name).unwrap();
+    for context in &contexts {
+        let receiver = create_scope_stack_from_propagation(context).unwrap();
+        runtime.block_on(TASK_SCOPE_STACK.scope(
+            receiver,
+            execute_llm_and_capture_traceparent("explicit-root-receiver"),
+        ));
+    }
+    let spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
+    assert_eq!(spans.len(), 2);
+    for span in &spans {
+        assert_eq!(span.span_context.trace_id(), relay_trace_id(root));
+    }
+    for context in contexts {
+        assert_eq!(context.root_uuid, Some(root));
+        assert_eq!(context.traceparent, None);
+        assert_eq!(context.tracestate, None);
+    }
+}
+
+#[test]
+fn explicit_popped_parent_traceparent_matches_exported_span() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "popped-parent");
+    let subscriber_name = format!("popped_parent_{}", Uuid::now_v7().simple());
+    subscriber.register(&subscriber_name).unwrap();
+    let agent = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("popped-parent-agent")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    let parent = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("popped-parent")
+            .scope_type(ScopeType::Function)
+            .build(),
+    )
+    .unwrap();
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&parent.uuid)
+            .build(),
+    )
+    .unwrap();
+    let (header, _, callback_header) =
+        runtime.block_on(execute_llm_and_capture_trace_context_with_parent(
+            "popped-parent-llm",
+            Some(parent.clone()),
+        ));
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&agent.uuid)
+            .build(),
+    )
+    .unwrap();
+    let spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
+    let llm = finished_span_named(&spans, "popped-parent-llm");
+    assert_traceparent_matches_exported_span(&header, llm);
+    assert_eq!(callback_header, header);
+    assert_eq!(llm.parent_span_id, relay_span_id(parent.uuid));
+    assert_eq!(llm.span_context.trace_id(), relay_trace_id(agent.uuid));
+}
+
+#[test]
 fn top_level_callback_context_preserves_relay_root_and_exported_trace() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());

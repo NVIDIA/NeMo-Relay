@@ -64,6 +64,9 @@ def test_propagation_context_capture_and_constructor_validation() -> None:
     assert rooted.version == 1
     assert rooted.root_uuid == root_uuid
     assert rooted.parent_uuid == sender.uuid
+    assert rooted.traceparent is None
+    assert rooted.tracestate is None
+    assert rooted.to_traceparent().split("-")[1] == root_uuid.replace("-", "")
 
     with pytest.raises(ValueError, match="invalid character"):
         nemo_relay.PropagationContext("not-a-uuid")

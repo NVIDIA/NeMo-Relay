@@ -46,12 +46,20 @@ changes, compatibility updates, and fixed known issues.
 - Rootless propagation from a local Relay scope still starts a separate
   OpenTelemetry trace. Rootless capture retains a previously imported W3C
   parent, so remove its W3C fields to force a new trace in that case.
+- Explicit-root capture continues to use the supplied root for the receiver's
+  trace unless the sender imported a W3C parent, which retains precedence.
+- Managed calls with a popped parent reuse the current stack's trace instead
+  of injecting a new trace ID derived from the managed call.
 - Invalid Relay identifiers no longer prevent later valid OpenTelemetry events
   from exporting.
 
 ## Known Issues in 0.10
 
-No known issues have been recorded for NeMo Relay 0.10 yet.
+An off-stack parent handle does not retain its historical W3C context. If it
+belongs to a different trace than the current stack, managed-call headers can
+differ from an exporter's retained parent context. Capture and import the
+parent's propagation context before leaving that trace instead of reusing only
+the handle.
 
 ## Release 0.9.1
 

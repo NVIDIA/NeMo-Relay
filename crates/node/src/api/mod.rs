@@ -2424,11 +2424,7 @@ pub fn capture_propagation_context_with_root(
     if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
         let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
             .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
-        let mut context = if root_uuid.is_none() {
-            rootless_callback_propagation_context(&env, parent_uuid)?
-        } else {
-            callback_propagation_context(&env, parent_uuid)?
-        };
+        let mut context = rootless_callback_propagation_context(&env, parent_uuid)?;
         context.root_uuid = root_uuid;
         return Ok(propagation_context_to_napi(context));
     }

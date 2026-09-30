@@ -1142,9 +1142,15 @@ describe('LLM intercepts', () => {
   it('execution callbacks preserve the managed propagation parent across await', async () => {
     const events = [];
     const observed = [];
+    const explicitRoot = '018f13f0-7c1a-7a80-8000-000000000799';
     registerSubscriber('node_llm_exec_propagation_parent', (event) => events.push(event));
     registerLlmExecutionIntercept('node_llm_exec_propagation_parent', 10, async (request, next) => {
       const before = lib.capturePropagationContext();
+      const rooted = lib.capturePropagationContextWithRoot(explicitRoot);
+      assert.equal(rooted.rootUuid, explicitRoot);
+      assert.equal(rooted.parentUuid, before.parentUuid);
+      assert.equal(rooted.traceparent, undefined);
+      assert.equal(rooted.tracestate, undefined);
       observed.push([
         'intercept-before',
         before.parentUuid,
@@ -1213,10 +1219,10 @@ describe('LLM intercepts', () => {
     }
   });
 
-  it('execution callbacks preserve trace context for an explicit nonlocal parent', async () => {
+  it('execution callbacks preserve trace context for a popped parent in the current trace', async () => {
+    const current = pushScope('node_llm_current_parent', ScopeType.Custom, null, null);
     const external = pushScope('node_llm_external_parent', ScopeType.Custom, null, null);
     popScope(external);
-    const current = pushScope('node_llm_current_parent', ScopeType.Custom, null, null);
     const events = [];
     let providerTraceparent;
     let callbackTraceparent;
@@ -1242,7 +1248,8 @@ describe('LLM intercepts', () => {
           event.name === 'node_llm_nonlocal_parent' && event.kind === 'scope' && event.scope_category === 'start',
       );
       assert.ok(start, 'expected managed LLM start event');
-      const expected = `00-${start.uuid.replaceAll('-', '')}-${start.uuid.replaceAll('-', '').slice(-16)}-01`;
+      assert.equal(start.parent_uuid, external.uuid);
+      const expected = `00-${current.uuid.replaceAll('-', '')}-${start.uuid.replaceAll('-', '').slice(-16)}-01`;
       assert.equal(providerTraceparent, expected);
       assert.equal(callbackTraceparent, providerTraceparent);
     } finally {
@@ -1308,6 +1315,11 @@ describe('LLM intercepts', () => {
     registerLlmExecutionIntercept('node_llm_exec_propagated_w3c', 10, async (request, next) => {
       const context = lib.capturePropagationContext();
       const rootless = lib.captureRootlessPropagationContext();
+      const explicitRoot = '018f13f0-7c1a-7a80-8000-000000000799';
+      const rooted = lib.capturePropagationContextWithRoot(explicitRoot);
+      assert.equal(rooted.rootUuid, explicitRoot);
+      assert.equal(rooted.traceparent, context.traceparent);
+      assert.equal(rooted.tracestate, context.tracestate);
       observed.push([
         context.parentUuid,
         context.rootUuid,

@@ -638,6 +638,12 @@ class TestLLMInterceptsAsync:
 
         async def execution_intercept(_name, request, next_handler):
             context = capture_propagation_context()
+            explicit_root = "018f13f0-7c1a-7a80-8000-000000000799"
+            rooted = capture_propagation_context_with_root(explicit_root)
+            assert rooted.root_uuid == explicit_root
+            assert rooted.parent_uuid == context.parent_uuid
+            assert rooted.traceparent is None
+            assert rooted.tracestate is None
             rootless = capture_rootless_propagation_context()
             observed.append((context.parent_uuid, context.root_uuid, capture_traceparent(), rootless.traceparent))
             return await next_handler(request)

@@ -394,11 +394,6 @@ impl ScopeStack {
             return (None, None);
         };
         let parent_is_propagated = self.propagated_parent_uuid == Some(parent_uuid);
-        let parent_is_local = self
-            .stack
-            .iter()
-            .skip(1)
-            .any(|scope| scope.uuid == parent_uuid);
         if parent_is_propagated {
             if self.propagated_traceparent.is_some() {
                 return (
@@ -409,9 +404,6 @@ impl ScopeStack {
             if self.propagated_root_uuid.is_none() {
                 return (None, None);
             }
-        }
-        if !parent_is_propagated && !parent_is_local {
-            return (None, None);
         }
         self.w3c_headers_for_span(parent_uuid, parent_uuid)
     }
@@ -776,6 +768,8 @@ pub fn capture_rootless_propagation_context() -> Result<PropagationContext> {
 }
 
 /// Capture the current causal parent and an application-supplied session root.
+/// Without an imported W3C parent, the supplied root determines the receiver's
+/// trace. An imported W3C parent retains precedence over the Relay root.
 /// Passing `None` has the same behavior as [`capture_rootless_propagation_context`].
 pub fn capture_propagation_context_with_root(
     root_uuid: Option<Uuid>,
@@ -783,7 +777,7 @@ pub fn capture_propagation_context_with_root(
     let Some(root_uuid) = root_uuid else {
         return capture_rootless_propagation_context();
     };
-    let mut context = capture_propagation_context()?;
+    let mut context = capture_rootless_propagation_context()?;
     context.root_uuid = Some(root_uuid);
     context.validate()?;
     Ok(context)
@@ -909,6 +903,18 @@ impl ScopeStack {
             );
         }
         self.local_span_context(causal_parent_uuid)
+            .or_else(|| {
+                // Explicit handles may refer to completed scopes. Preserve the
+                // stack's trace fallback when the parent is no longer present;
+                // the handle's UUID alone cannot recover a different trace.
+                if is_usable_relay_identifier(causal_parent_uuid)
+                    && self.find(&causal_parent_uuid).is_none()
+                {
+                    self.local_span_context(self.top().uuid)
+                } else {
+                    None
+                }
+            })
             .map(|parent| w3c_headers_for_parent(parent, span_uuid))
             .unwrap_or_default()
     }

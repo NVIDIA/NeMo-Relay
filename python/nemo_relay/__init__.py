@@ -556,16 +556,18 @@ def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationC
     Args:
         root_uuid: Root identity to include in the propagated context. Pass
             ``None`` to omit the Relay root and locally derived W3C context.
+            An explicit root determines the receiver's trace unless an
+            imported W3C parent is present.
 
     Returns:
         PropagationContext: Context carrying the current parent and selected
         root identities.
     """
     get_scope_stack()
-    if context := (
-        _callback_rootless_propagation_context() if root_uuid is None else _callback_propagation_context(root_uuid)
-    ):
-        return context
+    if context := _callback_rootless_propagation_context():
+        return PropagationContext(
+            context.parent_uuid, root_uuid, traceparent=context.traceparent, tracestate=context.tracestate
+        )
     return _capture_propagation_context_with_root(root_uuid)
 
 

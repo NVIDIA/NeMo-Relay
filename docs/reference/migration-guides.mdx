@@ -327,7 +327,12 @@ imported a W3C parent, rootless capture still forwards that upstream trace;
 remove `traceparent` and `tracestate` from the context when an unconditional
 trace boundary is required. The receiver's first local Agent scope creates a
 new Relay root. Use explicit root capture when your application supplies a
-stable run UUID. Authenticate the source of an incoming context before you
+stable run UUID. That UUID determines the receiver's trace unless the sender
+imported a W3C parent, which retains precedence over the supplied root.
+An explicit parent handle that is no longer on the stack uses the current
+stack's trace as a fallback. To continue a different trace, capture and import
+its propagation context rather than passing only the old scope handle.
+Authenticate the source of an incoming context before you
 trust and import it. For details, refer to
 [Scope Concepts](/about-nemo-relay/concepts/scopes).
 
