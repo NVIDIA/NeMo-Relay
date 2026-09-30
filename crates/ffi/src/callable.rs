@@ -177,8 +177,9 @@ pub enum NemoRelayLlmSanitizeCodecKind {
     Opaque = 3,
 }
 
-/// Codec identity supplied to an LLM sanitizer. `codec_id` is null for
-/// `None` and `Opaque`, and is valid only for the duration of the callback.
+/// Request codec context shared by LLM sanitizer and execution callbacks.
+/// `codec_id` is null for `None` and `Opaque`, and is valid only for the
+/// duration of the callback.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NemoRelayLlmSanitizeRequestContext {
@@ -190,7 +191,7 @@ pub struct NemoRelayLlmSanitizeRequestContext {
     pub codec: *const crate::types::FfiLlmSanitizeRequestCodec,
 }
 
-/// Directional codec context supplied to an LLM response sanitizer.
+/// Response codec context shared by LLM sanitizer and execution callbacks.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NemoRelayLlmSanitizeResponseContext {
@@ -202,12 +203,6 @@ pub struct NemoRelayLlmSanitizeResponseContext {
     pub codec: *const crate::types::FfiLlmSanitizeResponseCodec,
 }
 
-/// General name for request codec context used by execution intercepts.
-pub type NemoRelayLlmRequestCodecContext = NemoRelayLlmSanitizeRequestContext;
-
-/// General name for response codec context used by execution intercepts.
-pub type NemoRelayLlmResponseCodecContext = NemoRelayLlmSanitizeResponseContext;
-
 /// Directional codec context supplied to an LLM execution intercept.
 ///
 /// `request_codec` is always present. `response_codec` is non-null for unary
@@ -218,9 +213,9 @@ pub type NemoRelayLlmResponseCodecContext = NemoRelayLlmSanitizeResponseContext;
 #[derive(Debug, Clone, Copy)]
 pub struct NemoRelayLlmExecutionContext {
     /// Active request codec identity and capability.
-    pub request_codec: NemoRelayLlmRequestCodecContext,
+    pub request_codec: NemoRelayLlmSanitizeRequestContext,
     /// Active unary-response codec context, or null for streaming execution.
-    pub response_codec: *const NemoRelayLlmResponseCodecContext,
+    pub response_codec: *const NemoRelayLlmSanitizeResponseContext,
 }
 
 /// LLM request sanitizer. It receives the request first and its codec context

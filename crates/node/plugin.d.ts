@@ -29,9 +29,7 @@ export type {
   LlmOptimizationModelTransition,
   LlmOptimizationTokenImpact,
   LlmOptimizationTokens,
-  LlmRequestCodecContext,
   LlmRequestInterceptOutcome,
-  LlmResponseCodecContext,
   LlmSanitizeRequestContext,
   LlmSanitizeResponseContext,
 } from './index';

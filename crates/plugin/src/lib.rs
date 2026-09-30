@@ -128,12 +128,6 @@ impl<'a> LlmExecutionContext<'a> {
     }
 }
 
-/// Previous name for request codec context on typed execution intercepts.
-pub type LlmExecutionRequestContext<'a> = LlmRequestCodecContext<'a>;
-
-/// Previous name for response codec context on typed execution intercepts.
-pub type LlmExecutionResponseContext<'a> = LlmResponseCodecContext<'a>;
-
 /// Status codes returned by stable native ABI functions.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -251,12 +245,6 @@ pub struct NemoRelayNativeLlmResponseCodecContext {
     /// Borrowed response codec capability, or null when no codec is active.
     pub codec: *const NemoRelayNativeLlmResponseCodec,
 }
-
-/// Previous native name for request codec context on execution intercepts.
-pub type NemoRelayNativeLlmExecutionRequestContext = NemoRelayNativeLlmRequestCodecContext;
-
-/// Previous native name for response codec context on execution intercepts.
-pub type NemoRelayNativeLlmExecutionResponseContext = NemoRelayNativeLlmResponseCodecContext;
 
 /// Codec context passed to native LLM execution intercept callbacks.
 #[repr(C)]

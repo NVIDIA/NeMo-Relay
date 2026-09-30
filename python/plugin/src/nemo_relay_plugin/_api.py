@@ -192,7 +192,7 @@ class RuntimeDiagnostics:
 
 @dataclass(frozen=True)
 class LlmSanitizeRequestContext:
-    """Structured per-call context provided to an LLM request sanitizer."""
+    """Request codec context shared by sanitizer and execution callbacks."""
 
     codec: LlmCodecIdentity
     _runtime: "PluginRuntime | None" = field(default=None, repr=False, compare=False)
@@ -210,7 +210,7 @@ class LlmSanitizeRequestContext:
 
 @dataclass(frozen=True)
 class LlmSanitizeResponseContext:
-    """Structured per-call context provided to an LLM response sanitizer."""
+    """Response codec context shared by sanitizer and execution callbacks."""
 
     codec: LlmCodecIdentity
     _runtime: "PluginRuntime | None" = field(default=None, repr=False, compare=False)
@@ -224,13 +224,6 @@ class LlmSanitizeResponseContext:
         if self._invocation_id is None:
             return None
         return WorkerResponseCodec(self._runtime, self._capability_id, self._invocation_id)
-
-
-# General names for contexts that are also supplied to execution interceptors.
-# The original class objects remain canonical at runtime for compatibility with
-# repr, pickling, and code that inspects ``__name__``.
-LlmRequestCodecContext = LlmSanitizeRequestContext
-LlmResponseCodecContext = LlmSanitizeResponseContext
 
 
 @dataclass(frozen=True)
@@ -274,8 +267,8 @@ class LlmExecutionContext:
     not select a new codec; incompatible codec operations fail.
     """
 
-    request_codec: LlmRequestCodecContext
-    response_codec: LlmResponseCodecContext | None
+    request_codec: LlmSanitizeRequestContext
+    response_codec: LlmSanitizeResponseContext | None
 
 
 def _llm_codec_identity(invocation: pb.LlmInvocation) -> LlmCodecIdentity:
@@ -318,7 +311,7 @@ def _llm_execution_context(
         raise WorkerSdkError("malformed LLM execution codec context: request codec identity is missing")
 
     request_id = context.request.codec_capability_id if context.request.HasField("codec_capability_id") else None
-    request_context = LlmRequestCodecContext(
+    request_context = LlmSanitizeRequestContext(
         codec=_codec_identity(
             context.request.codec.kind,
             context.request.codec.id if context.request.codec.HasField("id") else None,
@@ -327,12 +320,12 @@ def _llm_execution_context(
         _capability_id=request_id,
         _invocation_id=invocation_id,
     )
-    response_context: LlmResponseCodecContext | None = None
+    response_context: LlmSanitizeResponseContext | None = None
     if context.HasField("response"):
         if not context.response.HasField("codec"):
             raise WorkerSdkError("malformed LLM execution codec context: response codec identity is missing")
         response_id = context.response.codec_capability_id if context.response.HasField("codec_capability_id") else None
-        response_context = LlmResponseCodecContext(
+        response_context = LlmSanitizeResponseContext(
             codec=_codec_identity(
                 context.response.codec.kind,
                 context.response.codec.id if context.response.codec.HasField("id") else None,

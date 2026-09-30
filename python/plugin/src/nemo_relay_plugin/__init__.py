@@ -27,10 +27,10 @@ Public data types:
     EventSanitizeFields: Mutable event observability fields.
     LlmRequest: A Relay LLM request represented as a JSON object.
     LlmCodecIdentity: Typed discriminator for the active LLM codec.
-    LlmRequestCodecContext: Request-direction codec identity and operations.
-    LlmResponseCodecContext: Response-direction codec identity and operations.
-    LlmSanitizeRequestContext: Per-call context supplied to an LLM request sanitizer.
-    LlmSanitizeResponseContext: Per-call context supplied to an LLM response sanitizer.
+    LlmSanitizeRequestContext: Request codec context shared by sanitizer and
+        execution callbacks.
+    LlmSanitizeResponseContext: Response codec context shared by sanitizer and
+        execution callbacks.
     LlmExecutionContext: Invocation-scoped codec context supplied to an LLM
         execution intercept.
     WorkerRequestCodec: Invocation-scoped async proxy for an active request codec.
@@ -117,9 +117,7 @@ from ._api import (
     LlmOptimizationTokens,
     LlmRequest,
     LlmRequestCallback,
-    LlmRequestCodecContext,
     LlmRequestInterceptOutcome,
-    LlmResponseCodecContext,
     LlmSanitizeRequestCallback,
     LlmSanitizeRequestContext,
     LlmSanitizeResponseCallback,
@@ -173,8 +171,6 @@ __all__ = [
     "LlmCodecIdentity",
     "LlmExecutionCallback",
     "LlmExecutionContext",
-    "LlmRequestCodecContext",
-    "LlmResponseCodecContext",
     "LogSeverity",
     "MetricKind",
     "MetricMeasurement",

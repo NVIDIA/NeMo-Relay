@@ -57,7 +57,7 @@ impl PyLlmCodecIdentity {
     }
 }
 
-/// Structured per-call context delivered to LLM request sanitizer callbacks.
+/// Per-call request codec context shared by sanitizer and execution callbacks.
 #[pyclass(name = "LlmSanitizeRequestContext", frozen)]
 pub struct PyLlmSanitizeRequestContext {
     pub(crate) inner: LlmSanitizeRequestContext,
@@ -81,7 +81,7 @@ impl PyLlmSanitizeRequestContext {
     }
 }
 
-/// Structured per-call context delivered to LLM response sanitizer callbacks.
+/// Per-call response codec context shared by sanitizer and execution callbacks.
 #[pyclass(name = "LlmSanitizeResponseContext", frozen)]
 pub struct PyLlmSanitizeResponseContext {
     pub(crate) inner: LlmSanitizeResponseContext,

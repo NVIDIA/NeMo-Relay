@@ -11,32 +11,26 @@ export type LlmCodecIdentity =
   | { kind: 'runtime'; id: string }
   | { kind: 'opaque' };
 
-/** Codec context available while an LLM request is sanitized. */
+/** Request codec context shared by sanitizer and execution callbacks. */
 export interface LlmSanitizeRequestContext {
   codec: LlmCodecIdentity;
   /** Resolve the active codec for this callback. Do not retain the result after the callback returns. */
   resolveCodec(): import('./typed').LlmCodec | null;
 }
 
-/** Codec context available while an LLM response is sanitized. */
+/** Response codec context shared by sanitizer and execution callbacks. */
 export interface LlmSanitizeResponseContext {
   codec: LlmCodecIdentity;
   /** Resolve the active codec for this callback. Do not retain the result after the callback returns. */
   resolveCodec(): import('./typed').LlmResponseCodec | null;
 }
 
-/** General name for request codec context used outside sanitizer callbacks. */
-export type LlmRequestCodecContext = LlmSanitizeRequestContext;
-
-/** General name for response codec context used outside sanitizer callbacks. */
-export type LlmResponseCodecContext = LlmSanitizeResponseContext;
-
 /** Codec capabilities for one managed LLM execution intercept invocation. */
 export interface LlmExecutionContext {
   /** Request codec identity plus optional decode and encode capability. */
-  requestCodec: LlmRequestCodecContext;
+  requestCodec: LlmSanitizeRequestContext;
   /** Unary response codec identity plus optional decode capability; `null` for streaming execution. */
-  responseCodec: LlmResponseCodecContext | null;
+  responseCodec: LlmSanitizeResponseContext | null;
 }
 
 /** Schema tag attached to an opaque optimization contribution payload. */

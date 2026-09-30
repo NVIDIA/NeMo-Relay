@@ -299,8 +299,9 @@ typedef char *(*NemoRelayCodecEncodeFn)(void *user_data,
                                         const struct FfiLLMRequest *original_request);
 
 /**
- * Codec identity supplied to an LLM sanitizer. `codec_id` is null for
- * `None` and `Opaque`, and is valid only for the duration of the callback.
+ * Request codec context shared by LLM sanitizer and execution callbacks.
+ * `codec_id` is null for `None` and `Opaque`, and is valid only for the
+ * duration of the callback.
  */
 typedef struct NemoRelayLlmSanitizeRequestContext {
   /**
@@ -328,7 +329,7 @@ typedef struct FfiLLMRequest *(*NemoRelayLlmSanitizeRequestCb)(void *user_data,
                                                                struct NemoRelayLlmSanitizeRequestContext context);
 
 /**
- * Directional codec context supplied to an LLM response sanitizer.
+ * Response codec context shared by LLM sanitizer and execution callbacks.
  */
 typedef struct NemoRelayLlmSanitizeResponseContext {
   /**
@@ -382,16 +383,6 @@ typedef NemoRelayStatus (*NemoRelayLlmRequestInterceptCb)(void *user_data,
                                                           char **out_outcome_json);
 
 /**
- * General name for request codec context used by execution intercepts.
- */
-typedef struct NemoRelayLlmSanitizeRequestContext NemoRelayLlmRequestCodecContext;
-
-/**
- * General name for response codec context used by execution intercepts.
- */
-typedef struct NemoRelayLlmSanitizeResponseContext NemoRelayLlmResponseCodecContext;
-
-/**
  * Directional codec context supplied to an LLM execution intercept.
  *
  * `request_codec` is always present. `response_codec` is non-null for unary
@@ -403,11 +394,11 @@ typedef struct NemoRelayLlmExecutionContext {
   /**
    * Active request codec identity and capability.
    */
-  NemoRelayLlmRequestCodecContext request_codec;
+  struct NemoRelayLlmSanitizeRequestContext request_codec;
   /**
    * Active unary-response codec context, or null for streaming execution.
    */
-  const NemoRelayLlmResponseCodecContext *response_codec;
+  const struct NemoRelayLlmSanitizeResponseContext *response_codec;
 } NemoRelayLlmExecutionContext;
 
 /**

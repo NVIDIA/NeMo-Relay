@@ -233,7 +233,8 @@ type LLMCodec struct {
 	CodecID   *string
 }
 
-// LLMSanitizeRequestContext provides request codec context for one sanitizer call.
+// LLMSanitizeRequestContext provides request codec context to sanitizer and
+// execution callbacks.
 type LLMSanitizeRequestContext struct {
 	Codec    LLMCodec
 	resolved *LLMRequestSanitizeCodec
@@ -244,26 +245,19 @@ func (context LLMSanitizeRequestContext) ResolveCodec() *LLMRequestSanitizeCodec
 	return context.resolved
 }
 
-// LLMSanitizeResponseContext provides response codec context for one sanitizer call.
+// LLMSanitizeResponseContext provides response codec context to sanitizer and
+// execution callbacks.
 type LLMSanitizeResponseContext struct {
 	Codec    LLMCodec
 	resolved *LLMResponseSanitizeCodec
 }
 
-// LLMRequestCodecContext is the general name for request codec context used by
-// execution intercepts. The sanitizer-specific name remains source-compatible.
-type LLMRequestCodecContext = LLMSanitizeRequestContext
-
-// LLMResponseCodecContext is the general name for response codec context used
-// by execution intercepts. The sanitizer-specific name remains source-compatible.
-type LLMResponseCodecContext = LLMSanitizeResponseContext
-
 // LLMExecutionContext provides invocation-scoped codec access to an LLM
 // execution intercept. RequestCodec is always present. ResponseCodec is
 // available for unary execution and nil for streaming execution.
 type LLMExecutionContext struct {
-	RequestCodec  LLMRequestCodecContext
-	ResponseCodec *LLMResponseCodecContext
+	RequestCodec  LLMSanitizeRequestContext
+	ResponseCodec *LLMSanitizeResponseContext
 }
 
 // ResolveCodec returns the active callback-scoped response codec, if any.
