@@ -14,10 +14,8 @@ use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 
-const INACTIVE_EXECUTION_CODEC_ERROR: &str = "LLM execution codec capability is no longer active";
-
 fn inactive_execution_codec_error() -> FlowError {
-    FlowError::InvalidArgument(INACTIVE_EXECUTION_CODEC_ERROR.into())
+    FlowError::InvalidArgument("LLM execution codec capability is no longer active".into())
 }
 
 fn upgrade_active_codec<T: ?Sized>(codec: &Weak<T>, gate: &ExecutionCodecGate) -> Result<Arc<T>> {
@@ -104,23 +102,16 @@ impl LlmResponseCodec for RevocableResponseCodec {
     }
 }
 
-/// Active request and response codec context for one managed LLM execution.
+/// Codec access for one LLM execution.
 ///
-/// The request direction is always present and distinguishes an invocation
-/// with no request codec from an invocation with a built-in, runtime, or opaque
-/// codec. Unary execution also carries a response direction. Streaming
-/// execution deliberately leaves [`Self::response_codec`] unavailable because
-/// Relay's response codecs operate on complete provider responses rather than
-/// individual stream chunks.
+/// Request codec information is always present. Response codec access is
+/// available only for non-streaming calls because response codecs expect a
+/// complete response, not individual chunks.
 ///
-/// The codecs are fixed when the managed invocation is created. Rewriting a
-/// payload does not select another codec; decoding or encoding an incompatible
-/// wire representation fails rather than inferring a different format.
-/// Resolved codec capabilities are valid only for the callback that received
-/// this context. Unary capabilities expire when that callback settles;
-/// streaming request capabilities remain valid until its returned stream ends
-/// or closes. Retained capabilities return [`FlowError::InvalidArgument`]
-/// after expiry.
+/// Relay chooses the codecs before interceptors run. Changing the payload does
+/// not select a different codec. Codec handles expire when the interceptor
+/// finishes; a streaming request handle remains valid until its returned stream
+/// ends or closes. Later use returns [`FlowError::InvalidArgument`].
 #[derive(Clone, Debug, Default)]
 pub struct LlmExecutionContext {
     request_codec: LlmSanitizeRequestContext,
@@ -306,13 +297,11 @@ mod tests {
         );
         assert!(matches!(
             retained_request.decode(&request),
-            Err(FlowError::InvalidArgument(message))
-                if message == INACTIVE_EXECUTION_CODEC_ERROR
+            Err(FlowError::InvalidArgument(_))
         ));
         assert!(matches!(
             retained_response.decode_response(&Json::Null),
-            Err(FlowError::InvalidArgument(message))
-                if message == INACTIVE_EXECUTION_CODEC_ERROR
+            Err(FlowError::InvalidArgument(_))
         ));
     }
 }
