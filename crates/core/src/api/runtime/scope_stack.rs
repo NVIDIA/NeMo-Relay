@@ -851,12 +851,26 @@ impl ScopeStack {
             .skip(1)
             .rev()
             .find(|(_, scope)| scope.uuid == uuid)?;
-        let parent_context = match scope.parent_uuid {
-            Some(parent_uuid) => self.parent_span_context_inner(parent_uuid, index, visiting),
-            None => index
+        let stack_parent_context = |visiting: &mut HashSet<Uuid>| {
+            index
                 .checked_sub(1)
                 .and_then(|parent_index| self.stack.get(parent_index))
-                .and_then(|parent| self.parent_span_context_inner(parent.uuid, index, visiting)),
+                .and_then(|parent| self.parent_span_context_inner(parent.uuid, index, visiting))
+        };
+        let parent_context = match scope.parent_uuid {
+            Some(parent_uuid) => self
+                .parent_span_context_inner(parent_uuid, index, visiting)
+                .or_else(|| {
+                    // A stacked scope can also name a completed parent. Use
+                    // the scope below it, not itself, to recover the trace.
+                    if is_usable_relay_identifier(parent_uuid) && self.find(&parent_uuid).is_none()
+                    {
+                        stack_parent_context(visiting)
+                    } else {
+                        None
+                    }
+                }),
+            None => stack_parent_context(visiting),
         };
         let context = match parent_context {
             Some(parent) => SpanContext::new(

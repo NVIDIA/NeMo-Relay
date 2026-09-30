@@ -852,6 +852,86 @@ fn explicit_popped_parent_traceparent_matches_exported_span() {
 }
 
 #[test]
+fn stacked_child_of_popped_parent_preserves_trace_for_early_and_late_exporters() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "popped-ancestor");
+    let subscriber_name = format!("popped_ancestor_{}", Uuid::now_v7().simple());
+    subscriber.register(&subscriber_name).unwrap();
+    let agent = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("popped-ancestor-agent")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    let parent = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("popped-ancestor-parent")
+            .scope_type(ScopeType::Function)
+            .build(),
+    )
+    .unwrap();
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&parent.uuid)
+            .build(),
+    )
+    .unwrap();
+
+    let (late_provider, late_exporter) = make_provider();
+    let late_subscriber =
+        OpenTelemetrySubscriber::from_tracer_provider(late_provider, "late-popped-ancestor");
+    let late_name = format!("late_popped_ancestor_{}", Uuid::now_v7().simple());
+    late_subscriber.register(&late_name).unwrap();
+    let child = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("popped-ancestor-child")
+            .scope_type(ScopeType::Function)
+            .parent(&parent)
+            .build(),
+    )
+    .unwrap();
+    let child_header = capture_traceparent().unwrap();
+    let (header, _, callback_header) = runtime.block_on(
+        execute_llm_and_capture_trace_context_with_parent("popped-ancestor-llm", None),
+    );
+    for handle in [&child, &agent] {
+        pop_scope(
+            crate::api::scope::PopScopeParams::builder()
+                .handle_uuid(&handle.uuid)
+                .build(),
+        )
+        .unwrap();
+    }
+    let early_spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
+    let late_spans = finish_trace_subscriber(&late_subscriber, &late_name, &late_exporter);
+    assert!(
+        late_spans
+            .iter()
+            .all(|span| span.name != "popped-ancestor-parent")
+    );
+    for spans in [&early_spans, &late_spans] {
+        let child_span = finished_span_named(spans, "popped-ancestor-child");
+        let llm_span = finished_span_named(spans, "popped-ancestor-llm");
+        assert_traceparent_matches_exported_span(&child_header, child_span);
+        assert_traceparent_matches_exported_span(&header, llm_span);
+        assert_eq!(
+            child_span.span_context.trace_id(),
+            relay_trace_id(agent.uuid)
+        );
+        assert_eq!(child_span.parent_span_id, relay_span_id(parent.uuid));
+        assert_eq!(llm_span.parent_span_id, relay_span_id(child.uuid));
+    }
+    assert_eq!(callback_header, header);
+}
+
+#[test]
 fn top_level_callback_context_preserves_relay_root_and_exported_trace() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());

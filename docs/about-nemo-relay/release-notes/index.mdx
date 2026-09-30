@@ -48,8 +48,8 @@ changes, compatibility updates, and fixed known issues.
   parent, so remove its W3C fields to force a new trace in that case.
 - Explicit-root capture continues to use the supplied root for the receiver's
   trace unless the sender imported a W3C parent, which retains precedence.
-- Managed calls with a popped parent reuse the current stack's trace instead
-  of injecting a new trace ID derived from the managed call.
+- Scopes and managed calls with a popped parent reuse the current stack's
+  trace instead of deriving a new trace ID from the scope or managed call.
 - Invalid Relay identifiers no longer prevent later valid OpenTelemetry events
   from exporting.
 
