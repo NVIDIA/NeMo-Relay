@@ -210,8 +210,12 @@ fn drm_device_files_normalize_amd_and_intel_memory_and_apply_selectors() {
         ("card2", "0x1002", "invalid", "101"),
         ("card3", "0x10de", "4096", "25"),
     ] {
-        let device = root.path().join(card).join("device");
+        // sysfs card/device entries resolve to distinct PCI device directories.
+        let device = root.path().join(format!("0000:0{}:00.0", &card[4..]));
         fs::create_dir_all(&device).unwrap();
+        let card_path = root.path().join(card);
+        fs::create_dir_all(&card_path).unwrap();
+        std::os::unix::fs::symlink(&device, card_path.join("device")).unwrap();
         for (name, value) in [
             ("vendor", vendor),
             ("mem_info_vram_used", memory),
