@@ -414,6 +414,8 @@ fn load_one_native_plugin(
                     library_path.display()
                 ))
             })?;
+        // ABI v7 changes native LLM execution callback layouts. Do not negotiate
+        // v2-v6: plugins compiled against those tables must rebuild before loading.
         let status = entry(native_host_api(), &mut plugin);
         if status != NemoRelayStatus::Ok {
             drop_native_plugin_descriptor(&mut plugin);
@@ -583,7 +585,12 @@ struct OwnedNativeString {
 }
 
 impl OwnedNativeString {
-    fn new(ptr: *mut NemoRelayNativeString) -> FlowResult<Self> {
+    /// Take ownership of a string allocated by the Relay native-string API.
+    ///
+    /// # Safety
+    /// A non-null `ptr` must identify a live, uniquely owned allocation from
+    /// `native_string_new` that has not already been freed.
+    unsafe fn from_raw(ptr: *mut NemoRelayNativeString) -> FlowResult<Self> {
         Ok(Self {
             ptr: NonNull::new(ptr).ok_or_else(|| {
                 FlowError::Internal("native string allocation returned null".into())
@@ -621,11 +628,18 @@ impl<'a> NativeLlmExecutionContextBridge<'a> {
     ) -> FlowResult<Self> {
         let (request_kind, request_id) =
             native_llm_codec_identity(context.request_codec().codec())?;
-        let request_id = request_id.map(OwnedNativeString::new).transpose()?;
+        let request_id = request_id
+            // SAFETY: `native_llm_codec_identity` returns a fresh host-owned string.
+            .map(|ptr| unsafe { OwnedNativeString::from_raw(ptr) })
+            .transpose()?;
 
         let (response_kind, response_id) = if let Some(response) = context.response_codec() {
             let (kind, id) = native_llm_codec_identity(response.codec())?;
-            (Some(kind), id.map(OwnedNativeString::new).transpose()?)
+            let id = id
+                // SAFETY: `native_llm_codec_identity` returns a fresh host-owned string.
+                .map(|ptr| unsafe { OwnedNativeString::from_raw(ptr) })
+                .transpose()?;
+            (Some(kind), id)
         } else {
             (None, None)
         };

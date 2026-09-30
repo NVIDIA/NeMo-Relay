@@ -139,20 +139,20 @@ impl LlmExecutionContext {
     }
 
     /// Construct the context for a non-streaming managed execution.
-    pub(crate) fn for_unary_codecs(
+    pub(crate) fn for_non_streaming(
         request_codec: Option<Arc<dyn LlmCodec>>,
-        response_codec: &Option<Arc<dyn LlmResponseCodec>>,
+        response_codec: Option<Arc<dyn LlmResponseCodec>>,
     ) -> Self {
         Self::new(
             LlmSanitizeRequestContext::for_request_codec(request_codec),
             Some(LlmSanitizeResponseContext::for_response_codec(
-                response_codec.clone(),
+                response_codec,
             )),
         )
     }
 
     /// Construct the context for a streaming managed execution.
-    pub(crate) fn for_streaming_codec(request_codec: Option<Arc<dyn LlmCodec>>) -> Self {
+    pub(crate) fn for_streaming(request_codec: Option<Arc<dyn LlmCodec>>) -> Self {
         Self::new(
             LlmSanitizeRequestContext::for_request_codec(request_codec),
             None,

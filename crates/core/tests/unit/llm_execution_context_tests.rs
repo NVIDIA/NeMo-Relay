@@ -48,7 +48,7 @@ fn retained_codecs_work_while_active_and_expire_with_their_lease() {
     let backing_probe = Arc::downgrade(&backing);
     let request_codec: Arc<dyn LlmCodec> = backing.clone();
     let response_codec: Arc<dyn LlmResponseCodec> = backing.clone();
-    let context = LlmExecutionContext::for_unary_codecs(Some(request_codec), &Some(response_codec));
+    let context = LlmExecutionContext::for_non_streaming(Some(request_codec), Some(response_codec));
     drop(backing);
 
     let (leased_context, guard) = context.lease();
@@ -103,7 +103,7 @@ fn estimated_cost_defaults_to_false_after_expiry() {
     let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(LeaseProbeCodec {
         allows_estimated_cost: true,
     });
-    let context = LlmExecutionContext::for_unary_codecs(None, &Some(response_codec));
+    let context = LlmExecutionContext::for_non_streaming(None, Some(response_codec));
     let (leased_context, guard) = context.lease();
     let retained = leased_context
         .response_codec()

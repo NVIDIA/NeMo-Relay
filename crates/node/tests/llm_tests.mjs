@@ -1421,15 +1421,19 @@ describe('LLM intercepts', () => {
     const events = [];
     const observed = {};
     registerSubscriber('node_llm_replace_callback_context', (event) => events.push(event));
-    registerLlmExecutionIntercept('node_llm_replace_callback_context', 10, async (request, next) => {
-      observed.before = lib.capturePropagationContext();
-      observed.replacement = lib.withScopeStack(stack, () => ({
-        context: lib.capturePropagationContext(),
-        traceparent: lib.captureTraceparent(),
-      }));
-      observed.after = lib.capturePropagationContext();
-      return next(request);
-    });
+    registerLlmExecutionIntercept(
+      'node_llm_replace_callback_context',
+      10,
+      async (request, _context, next) => {
+        observed.before = lib.capturePropagationContext();
+        observed.replacement = lib.withScopeStack(stack, () => ({
+          context: lib.capturePropagationContext(),
+          traceparent: lib.captureTraceparent(),
+        }));
+        observed.after = lib.capturePropagationContext();
+        return next(request);
+      },
+    );
     try {
       await llmCallExecuteAsync(
         'replace_callback_context_llm',
