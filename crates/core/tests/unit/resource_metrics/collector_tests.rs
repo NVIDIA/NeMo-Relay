@@ -191,3 +191,46 @@ fn global_cpu_sampler_requires_a_baseline_and_a_minimum_interval() {
     assert!(measurement.value.is_finite());
     assert!(measurement.value >= 0.0);
 }
+
+#[test]
+fn filesystem_capacity_failure_preserves_the_path_and_other_available_categories() {
+    let directory = tempfile::tempdir().unwrap();
+    let missing = directory.path().join("missing");
+    let mut config = crate::plugins::resource_metrics::config::ResourceMetricsConfig::default();
+    config.gpu.enabled = false;
+    config.disk.filesystem_paths = vec![missing.clone()];
+    let target =
+        super::current_process_target(super::ResourceMeasurementScope::ApplicationProcess).unwrap();
+    let collected = super::collect(&target, &config);
+    assert!(collected.successful);
+    assert!(collected.snapshot.cpu.unwrap().total_time.is_some());
+    let filesystem = collected.snapshot.disk.unwrap().filesystems.pop().unwrap();
+    assert_eq!(filesystem.path, missing.to_string_lossy());
+    assert!(filesystem.total_capacity.is_none());
+    assert!(filesystem.available_capacity.is_none());
+    assert!(filesystem.free_capacity.is_none());
+}
+
+#[test]
+fn collector_maps_source_errors_and_rejects_unowned_or_missing_targets() {
+    use std::io::{Error, ErrorKind};
+    for (kind, issue) in [
+        (
+            ErrorKind::NotFound,
+            super::CollectionIssue::TargetTerminated,
+        ),
+        (
+            ErrorKind::PermissionDenied,
+            super::CollectionIssue::PermissionDenied,
+        ),
+        (ErrorKind::Unsupported, super::CollectionIssue::Unsupported),
+        (ErrorKind::Other, super::CollectionIssue::SourceUnavailable),
+    ] {
+        assert_eq!(super::reason_for_io_error(&Error::from(kind)), issue);
+    }
+    assert!(super::owned_process_tree_target(std::process::id()).is_err());
+    assert!(super::owned_process_tree_target(u32::MAX).is_err());
+    assert!(
+        super::count_measurement(1, false, super::ResourceMeasurementUnit::Processes).is_none()
+    );
+}

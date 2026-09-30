@@ -230,3 +230,22 @@ func TestResourceMetricsWaitPropagatesBackendAndDecodingErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestResourceMetricsCollectionRejectsStartupErrorsAndNullFFIOutputs(t *testing.T) {
+	startupError := errors.New("collection startup failed")
+	_, err := collectResourceMetrics(context.Background(), func() (*resourceMetricsCollection, error) {
+		return nil, startupError
+	})
+	if !errors.Is(err, startupError) {
+		t.Fatalf("startup error: %v", err)
+	}
+	_, err = collectResourceMetrics(context.Background(), func() (*resourceMetricsCollection, error) {
+		return nil, nil
+	})
+	if err == nil {
+		t.Fatal("accepted a null collection from FFI")
+	}
+	if data, err := resourceMetricsJSON(nil); err == nil || data != nil {
+		t.Fatalf("accepted a null snapshot from FFI: data=%s error=%v", data, err)
+	}
+}

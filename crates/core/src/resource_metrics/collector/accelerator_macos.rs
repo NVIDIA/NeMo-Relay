@@ -28,7 +28,19 @@ pub(super) fn collect(
     let Some(device_output) = ioreg(&["-r", "-c", "IOAccelerator", "-w0", "-l", "-d1"]) else {
         return AcceleratorSample::default();
     };
-    let all_devices = macos_devices(&device_output);
+    collect_from_registry(process_ids, config, state, &device_output, || {
+        ioreg(&["-r", "-c", "AGXDeviceUserClient", "-w0", "-l", "-d1"])
+    })
+}
+
+fn collect_from_registry(
+    process_ids: &[u32],
+    config: &ResourceMetricsGpuConfig,
+    state: &mut SamplingState,
+    device_output: &str,
+    process_output: impl FnOnce() -> Option<String>,
+) -> AcceleratorSample {
+    let all_devices = macos_devices(device_output);
     let selected_devices = all_devices
         .iter()
         .filter(|device| {
@@ -48,7 +60,19 @@ pub(super) fn collect(
                 .iter()
                 .map(|device| (device.device_identifier.clone(), device.device_index))
                 .collect::<Vec<_>>();
-            apple_processes(process_ids, &selected, state)
+            if selected.len() != 1 {
+                None
+            } else {
+                process_output().and_then(|output| {
+                    apple_processes_from_registry(
+                        &output,
+                        process_ids,
+                        &selected,
+                        state,
+                        Instant::now(),
+                    )
+                })
+            }
         } else {
             None
         }
@@ -124,18 +148,6 @@ fn macos_devices(output: &str) -> Vec<AcceleratorDeviceMetrics> {
         });
     }
     devices
-}
-
-fn apple_processes(
-    process_ids: &[u32],
-    devices: &[(String, Option<u32>)],
-    state: &mut SamplingState,
-) -> Option<Vec<AcceleratorProcessMetrics>> {
-    if devices.len() != 1 {
-        return None;
-    }
-    let output = ioreg(&["-r", "-c", "AGXDeviceUserClient", "-w0", "-l", "-d1"])?;
-    apple_processes_from_registry(&output, process_ids, devices, state, Instant::now())
 }
 
 fn apple_processes_from_registry(

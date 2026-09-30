@@ -134,3 +134,22 @@ fn descriptor_count_reports_open_files_and_grows_the_query_buffer() {
         assert!(sample.open_file_descriptor_count.is_none());
     }
 }
+
+#[test]
+fn libproc_queries_reject_out_of_range_and_nonexistent_process_ids() {
+    for query in [
+        super::process_resource_usage(u32::MAX).map(|_| ()),
+        super::open_file_descriptor_count(u32::MAX).map(|_| ()),
+        super::child_process_ids(u32::MAX).map(|_| ()),
+        super::process_identity(u32::MAX).map(|_| ()),
+    ] {
+        assert_eq!(query.unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+    }
+    let absent = i32::MAX as u32;
+    assert!(super::process_resource_usage(absent).is_err());
+    assert!(super::open_file_descriptor_count(absent).is_err());
+    assert_eq!(
+        super::process_identity(absent).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+}

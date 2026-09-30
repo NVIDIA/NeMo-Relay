@@ -96,3 +96,83 @@ fn apple_process_rates_use_owned_clients_and_reset_and_remove_baselines() {
             .is_empty()
     );
 }
+
+#[test]
+fn registry_collection_respects_device_selectors_and_disabled_groups() {
+    let output = "+-o AGXAccelerator <class AGXAccelerator, id 0x1, registered>\n\"In use system memory\"=4096\n";
+    for selector in ["macos:0x1", "0", "missing"] {
+        for (device_metrics, process_metrics) in
+            [(true, true), (false, true), (true, false), (false, false)]
+        {
+            let config = ResourceMetricsGpuConfig {
+                devices: vec![selector.into()],
+                device_metrics,
+                process_metrics,
+                ..Default::default()
+            };
+            let mut calls = 0;
+            let result = collect_from_registry(
+                &[42],
+                &config,
+                &mut SamplingState::default(),
+                output,
+                || {
+                    calls += 1;
+                    Some(client(1, 42, 100))
+                },
+            );
+            assert_eq!(result.devices.is_some(), device_metrics);
+            if let Some(devices) = result.devices {
+                assert_eq!(devices.len(), usize::from(selector != "missing"));
+            }
+            assert_eq!(
+                result.processes.is_some(),
+                process_metrics && selector != "missing"
+            );
+            assert_eq!(calls, usize::from(process_metrics && selector != "missing"));
+        }
+    }
+    let multiple =
+        format!("{output}+-o AMDRadeonAccelerator <class AMDAccelerator, id 0x2, registered>\n");
+    let result = collect_from_registry(
+        &[42],
+        &ResourceMetricsGpuConfig::default(),
+        &mut SamplingState::default(),
+        &multiple,
+        || panic!("ambiguous process attribution must not query user clients"),
+    );
+    assert!(result.processes.is_none());
+    assert_eq!(result.devices.unwrap().len(), 1);
+    let result = collect_from_registry(
+        &[42],
+        &ResourceMetricsGpuConfig::default(),
+        &mut SamplingState::default(),
+        output,
+        || None,
+    );
+    assert!(result.processes.is_none());
+    assert_eq!(result.devices.unwrap().len(), 1);
+}
+
+#[test]
+fn registry_clients_skip_missing_or_overflowing_times_and_merge_unavailable_rates() {
+    let devices = [("macos:0x1".into(), Some(0))];
+    let mut state = SamplingState::default();
+    let now = Instant::now();
+    apple_processes_from_registry(&client(1, 42, 100), &[42], &devices, &mut state, now).unwrap();
+    let output = client(2, 42, 10)
+        + &client(1, 42, 200)
+        + "+-o AGXDeviceUserClient <id 0x3, registered>\n\"IOUserClientCreator\"=\"pid 42, client\"\n"
+        + "+-o AGXDeviceUserClient <id 0x4, registered>\n\"IOUserClientCreator\"=\"pid 42, client\"\n\"accumulatedGPUTime\"=18446744073709551615\n\"accumulatedGPUTime\"=1\n";
+    let result = apple_processes_from_registry(
+        &output,
+        &[42],
+        &devices,
+        &mut state,
+        now + Duration::from_nanos(200),
+    )
+    .unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].compute_utilization.as_ref().unwrap().value, 50.0);
+    assert_eq!(state.client_baselines.len(), 2);
+}

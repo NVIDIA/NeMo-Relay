@@ -611,3 +611,172 @@ fn manager_rejects_foreign_process_ownership_and_duplicate_activation() {
     );
     manager.deactivate(generation);
 }
+
+#[test]
+fn collection_finishing_after_target_change_keeps_only_fresh_global_network_data() {
+    for series in [SamplingSeries::OnDemand, SamplingSeries::Polling] {
+        let manager = ResourceMetricsManager::new().unwrap();
+        let target = current_process_target(ResourceMeasurementScope::ProcessTree).unwrap();
+        let config = ResourceMetricsConfig {
+            measurement_scope: ResourceMetricsMeasurementScope::ProcessTree,
+            ..Default::default()
+        };
+        let runtime = manager.activate(target.clone(), config.clone()).unwrap();
+        let old_generation = manager.state.lock().unwrap().target_generation;
+        manager.target_owned_process_tree(target).unwrap();
+        let mut stale = snapshot_fixture::full_snapshot();
+        stale.network = None;
+        let finished = manager
+            .finish_collection(
+                collector::CollectedSnapshot {
+                    snapshot: stale,
+                    process_sampled_instant: Instant::now(),
+                    successful: true,
+                    process_cpu_samples: Vec::new(),
+                    process_io_samples: Vec::new(),
+                },
+                &config,
+                old_generation,
+                series,
+            )
+            .unwrap();
+        assert!(finished.cpu.unwrap().total_time.is_none());
+        assert!(finished.process_sampling.is_none());
+        assert_eq!(
+            finished.network.unwrap().measurement_scope,
+            ResourceMeasurementScope::Global
+        );
+        let state = manager.state.lock().unwrap();
+        assert!(state.on_demand_baseline.is_none());
+        assert!(state.polling_baseline.is_none());
+        assert_eq!(
+            state.on_demand_network_sampler.is_some(),
+            matches!(series, SamplingSeries::OnDemand)
+        );
+        assert_eq!(
+            state.polling_network_sampler.is_some(),
+            matches!(series, SamplingSeries::Polling)
+        );
+        drop(state);
+        manager.deactivate(runtime);
+    }
+}
+
+#[test]
+fn collection_finishing_after_deactivation_does_not_restart_any_sampler() {
+    let manager = ResourceMetricsManager::new().unwrap();
+    let config = ResourceMetricsConfig::default();
+    let runtime = manager
+        .activate(
+            current_process_target(ResourceMeasurementScope::ProcessTree).unwrap(),
+            config.clone(),
+        )
+        .unwrap();
+    manager.deactivate(runtime);
+    let mut stale = snapshot_fixture::full_snapshot();
+    stale.network = None;
+    let finished = manager
+        .finish_collection(
+            collector::CollectedSnapshot {
+                snapshot: stale,
+                process_sampled_instant: Instant::now(),
+                successful: true,
+                process_cpu_samples: Vec::new(),
+                process_io_samples: Vec::new(),
+            },
+            &config,
+            runtime,
+            SamplingSeries::OnDemand,
+        )
+        .unwrap();
+    assert!(finished.network.is_none());
+    assert!(finished.cpu.unwrap().total_time.is_none());
+    let state = manager.state.lock().unwrap();
+    assert!(state.on_demand_network_sampler.is_none());
+    assert!(state.on_demand_baseline.is_none());
+}
+
+#[test]
+fn cpu_rates_clear_missing_samples_and_reject_overflow_without_rewinding_baselines() {
+    let now = Instant::now();
+    let sample = |id, time| ProcessCpuSample {
+        process_id: id,
+        start_identity: 1,
+        total_cpu_time_millis: time,
+    };
+    let mut baseline = None;
+    derive_cpu_rate(&mut snapshot(1), now, &[sample(1, 1)], &mut baseline, 1);
+    let mut disabled = snapshot(0);
+    disabled.cpu = None;
+    derive_cpu_rate(&mut disabled, now, &[], &mut baseline, 1);
+    assert!(baseline.is_none());
+    derive_cpu_rate(&mut snapshot(1), now, &[sample(1, 1)], &mut baseline, 1);
+    let mut missing = snapshot(0);
+    missing.cpu.as_mut().unwrap().total_time = None;
+    derive_cpu_rate(&mut missing, now, &[], &mut baseline, 1);
+    assert!(baseline.is_none());
+    derive_cpu_rate(&mut snapshot(0), now, &[sample(1, 0)], &mut baseline, 1);
+    let mut overflow = snapshot(u64::MAX);
+    derive_cpu_rate(
+        &mut overflow,
+        now + Duration::from_secs(1),
+        &[sample(1, u64::MAX), sample(2, 1)],
+        &mut baseline,
+        1,
+    );
+    assert!(overflow.cpu.unwrap().consumption_rate.is_none());
+    let mut reset = snapshot(0);
+    derive_cpu_rate(
+        &mut reset,
+        now + Duration::from_secs(2),
+        &[sample(1, 0)],
+        &mut baseline,
+        1,
+    );
+    assert!(reset.cpu.unwrap().consumption_rate.is_none());
+    let mut direct = snapshot(1);
+    direct.cpu.as_mut().unwrap().consumption_rate = Some(ResourceMeasurement::new(
+        2.0,
+        ResourceMeasurementUnit::LogicalProcessors,
+    ));
+    derive_cpu_rate(
+        &mut direct,
+        now + Duration::from_secs(3),
+        &[sample(1, 1)],
+        &mut baseline,
+        1,
+    );
+    assert_eq!(direct.cpu.unwrap().consumption_rate.unwrap().value, 2.0);
+}
+
+#[test]
+fn scope_names_cpu_units_and_network_validation_match_the_public_contract() {
+    use crate::plugins::resource_metrics::config::{CpuUnit, UtilizationUnit};
+    for (scope, name) in [
+        (ResourceMetricsMeasurementScope::Global, "global"),
+        (
+            ResourceMetricsMeasurementScope::ApplicationProcess,
+            "application_process",
+        ),
+        (ResourceMetricsMeasurementScope::ProcessTree, "process_tree"),
+    ] {
+        assert_eq!(scope.as_str(), name);
+    }
+    assert_eq!(
+        ResourceMeasurementUnit::from(CpuUnit::Millicores),
+        ResourceMeasurementUnit::Millicores
+    );
+    assert_eq!(
+        ResourceMeasurementUnit::from(UtilizationUnit::Percentage),
+        ResourceMeasurementUnit::Percentage
+    );
+    let mut config = ResourceMetricsConfig::default();
+    config.network.interfaces = vec![" \t".into()];
+    assert!(
+        config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("blank names")
+    );
+}

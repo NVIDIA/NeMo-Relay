@@ -99,3 +99,7 @@ impl Plugin for ResourceMetricsPlugin {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/resource_metrics/plugin_tests.rs"]
+mod tests;

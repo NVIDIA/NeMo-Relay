@@ -54,3 +54,27 @@ fn network_scope_is_global_in_every_process_mode() {
     assert!(missing.interfaces.is_empty());
     assert!(missing.system.received_data.is_none());
 }
+
+#[test]
+fn network_rates_reject_zero_and_reversed_intervals() {
+    let now = Instant::now();
+    let previous = Counters {
+        received: 1,
+        transmitted: 0,
+        received_packets: 0,
+        transmitted_packets: 0,
+        receive_errors: 0,
+        transmit_errors: 0,
+        sampled_at: now,
+    };
+    assert!(rate(2, Some(previous), |sample| sample.received, now).is_none());
+    assert!(
+        rate(
+            2,
+            Some(previous),
+            |sample| sample.received,
+            now - std::time::Duration::from_secs(1)
+        )
+        .is_none()
+    );
+}

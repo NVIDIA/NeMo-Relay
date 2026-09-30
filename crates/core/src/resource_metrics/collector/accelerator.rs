@@ -98,7 +98,9 @@ pub(super) fn collect(
     config: &ResourceMetricsGpuConfig,
     sampling_state: &mut SamplingState,
 ) -> AcceleratorSample {
-    let mut sample = collect_nvml(process_ids, config, sampling_state).unwrap_or_default();
+    let sample = collect_nvml(process_ids, config, sampling_state).unwrap_or_default();
+    #[cfg(target_os = "linux")]
+    let mut sample = sample;
     #[cfg(target_os = "linux")]
     if config.device_metrics {
         sample
@@ -113,6 +115,13 @@ pub(super) fn collect(
             .get_or_insert_with(Vec::new)
             .extend(collect_linux_drm(process_ids, sampling_state));
     }
+    select_measurement_groups(sample, config)
+}
+
+fn select_measurement_groups(
+    mut sample: AcceleratorSample,
+    config: &ResourceMetricsGpuConfig,
+) -> AcceleratorSample {
     if !config.device_metrics {
         sample.devices = None;
     }
@@ -411,34 +420,37 @@ fn load_nvml_session() -> Option<NvmlSession> {
     names.into_iter().find_map(|name| {
         // SAFETY: Symbols are used only while the returned library remains alive.
         let library = unsafe { Library::new(name).ok()? };
-        // SAFETY: Each symbol is loaded with its documented NVML ABI.
-        unsafe {
-            let initialize: unsafe extern "C" fn() -> i32 = symbol(&library, b"nvmlInit_v2\0")?;
-            let device_count = symbol(&library, b"nvmlDeviceGetCount_v2\0")?;
-            let device_by_index = symbol(&library, b"nvmlDeviceGetHandleByIndex_v2\0")?;
-            let device_uuid = symbol(&library, b"nvmlDeviceGetUUID\0")?;
-            let device_memory = symbol(&library, b"nvmlDeviceGetMemoryInfo\0")?;
-            let device_utilization = symbol(&library, b"nvmlDeviceGetUtilizationRates\0")?;
-            let compute_processes = symbol(&library, b"nvmlDeviceGetComputeRunningProcesses_v3\0");
-            let graphics_processes =
-                symbol(&library, b"nvmlDeviceGetGraphicsRunningProcesses_v3\0");
-            let process_utilization = symbol(&library, b"nvmlDeviceGetProcessUtilization\0");
-            if initialize() != NVML_SUCCESS {
-                return None;
-            }
-            Some(NvmlSession {
-                device_count,
-                device_by_index,
-                device_uuid,
-                device_memory,
-                device_utilization,
-                compute_processes,
-                graphics_processes,
-                process_utilization,
-                _library: library,
-            })
-        }
+        load_nvml_session_from_library(library)
     })
+}
+
+fn load_nvml_session_from_library(library: Library) -> Option<NvmlSession> {
+    // SAFETY: Each symbol is loaded with its documented NVML ABI.
+    unsafe {
+        let initialize: unsafe extern "C" fn() -> i32 = symbol(&library, b"nvmlInit_v2\0")?;
+        let device_count = symbol(&library, b"nvmlDeviceGetCount_v2\0")?;
+        let device_by_index = symbol(&library, b"nvmlDeviceGetHandleByIndex_v2\0")?;
+        let device_uuid = symbol(&library, b"nvmlDeviceGetUUID\0")?;
+        let device_memory = symbol(&library, b"nvmlDeviceGetMemoryInfo\0")?;
+        let device_utilization = symbol(&library, b"nvmlDeviceGetUtilizationRates\0")?;
+        let compute_processes = symbol(&library, b"nvmlDeviceGetComputeRunningProcesses_v3\0");
+        let graphics_processes = symbol(&library, b"nvmlDeviceGetGraphicsRunningProcesses_v3\0");
+        let process_utilization = symbol(&library, b"nvmlDeviceGetProcessUtilization\0");
+        if initialize() != NVML_SUCCESS {
+            return None;
+        }
+        Some(NvmlSession {
+            device_count,
+            device_by_index,
+            device_uuid,
+            device_memory,
+            device_utilization,
+            compute_processes,
+            graphics_processes,
+            process_utilization,
+            _library: library,
+        })
+    }
 }
 
 unsafe fn symbol<T: Copy>(library: &Library, name: &[u8]) -> Option<T> {

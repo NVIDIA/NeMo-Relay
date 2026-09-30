@@ -210,3 +210,31 @@ fn process_tree_scans_skip_only_expected_exit_races() {
         io::ErrorKind::InvalidData
     )));
 }
+
+#[test]
+fn cpu_limits_reject_invalid_quotas_and_keep_available_quota_without_cpuset() {
+    let directory = tempfile::tempdir().unwrap();
+    for invalid in [
+        "1000 0",
+        "1000 -1",
+        "1000 NaN",
+        "1000 inf",
+        "-1 100000",
+        "inf 100000",
+    ] {
+        fs::write(directory.path().join("cpu.max"), invalid).unwrap();
+        assert!(
+            super::effective_cpu_limit(directory.path(), directory.path()).is_none(),
+            "{invalid}"
+        );
+    }
+    fs::write(directory.path().join("cpu.max"), "50000 100000").unwrap();
+    assert_eq!(
+        super::effective_cpu_limit(directory.path(), directory.path())
+            .unwrap()
+            .value,
+        0.5
+    );
+    fs::write(directory.path().join("cpu.max"), "max 100000").unwrap();
+    assert!(super::effective_cpu_limit(directory.path(), directory.path()).is_none());
+}

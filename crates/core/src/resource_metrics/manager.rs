@@ -255,17 +255,27 @@ impl ResourceMetricsManager {
                 sampling_state,
             )
         };
-        let mut collected = collector::collect_with_state(
+        let collected = collector::collect_with_state(
             &target,
             &config,
             &mut sampling_state
                 .lock()
                 .unwrap_or_else(|error| error.into_inner()),
         );
+        self.finish_collection(collected, &config, target_generation, series)
+    }
+
+    fn finish_collection(
+        &self,
+        mut collected: collector::CollectedSnapshot,
+        config: &ResourceMetricsConfig,
+        target_generation: u64,
+        series: SamplingSeries,
+    ) -> Result<ResourceMetricsSnapshot> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.target_generation != target_generation {
             let mut snapshot = invalidated_snapshot(collected.snapshot);
-            if state.config.as_ref() == Some(&config) && config.network.enabled {
+            if state.config.as_ref() == Some(config) && config.network.enabled {
                 let sampler = match series {
                     SamplingSeries::OnDemand => &mut state.on_demand_network_sampler,
                     SamplingSeries::Polling => &mut state.polling_network_sampler,

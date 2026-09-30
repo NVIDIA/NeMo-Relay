@@ -901,3 +901,103 @@ fn cli_launch_guards_select_the_owned_tree_and_restore_the_application_target() 
     );
     test_close_plugin_host().unwrap();
 }
+
+#[test]
+fn metric_projection_omits_nonfinite_values_and_integers_outside_the_exporter_range() {
+    use nemo_relay_types::api::resource_metrics::{ResourceMeasurement, ResourceMetricValue};
+    let mut snapshot = crate::resource_metrics::snapshot_fixture::full_snapshot();
+    snapshot.cpu.as_mut().unwrap().consumption_rate = Some(ResourceMeasurement::new(
+        f64::NAN,
+        ResourceMeasurementUnit::LogicalProcessors,
+    ));
+    snapshot.cpu.as_mut().unwrap().total_time = Some(ResourceMeasurement::new(
+        u64::MAX,
+        ResourceMeasurementUnit::Milliseconds,
+    ));
+    snapshot.memory.as_mut().unwrap().resident = Some(ResourceMeasurement::new(
+        ResourceMetricValue::Decimal(f64::INFINITY),
+        ResourceMeasurementUnit::Kibibytes,
+    ));
+    let metrics = super::metric_measurements(&snapshot);
+    for excluded in [
+        "nemo.relay.resource.cpu.consumption_rate",
+        "nemo.relay.resource.cpu.total_time",
+        "nemo.relay.resource.memory.resident",
+    ] {
+        assert!(!metrics.iter().any(|metric| metric.name == excluded));
+    }
+    assert!(!metrics.is_empty());
+}
+
+#[test]
+fn failed_agent_delivery_does_not_leak_the_sample_to_the_runtime_root() {
+    let _runtime_lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    flush_subscribers().unwrap();
+    crate::shared_runtime::reset_runtime_owner_for_tests();
+    *global_context().write().unwrap() = NemoRelayContextState::new();
+    super::AGENT_SCOPES.lock().unwrap().clear();
+    let stack = create_scope_stack();
+    set_thread_scope_stack(stack.clone());
+    push_scope(
+        PushScopeParams::builder()
+            .name("unavailable-agent-context")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    let observed = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let events = Arc::clone(&observed);
+    register_subscriber(
+        "resource-metrics-failed-agent-test",
+        Arc::new(move |event| events.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    flush_subscribers().unwrap();
+    observed.lock().unwrap().clear();
+    let poisoned = Arc::clone(&stack);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _guard = poisoned.write().unwrap();
+        panic!("simulate an unavailable Agent context");
+    }));
+    assert!(result.is_err());
+    super::emit_resource_metrics_snapshot(
+        &crate::resource_metrics::snapshot_fixture::full_snapshot(),
+        &create_scope_stack(),
+    );
+    flush_subscribers().unwrap();
+    assert!(observed.lock().unwrap().is_empty());
+    super::AGENT_SCOPES.lock().unwrap().clear();
+    deregister_subscriber("resource-metrics-failed-agent-test").unwrap();
+    set_thread_scope_stack(create_scope_stack());
+}
+
+#[test]
+fn resource_metric_delivery_cleans_closed_registry_entries_and_handles_unavailable_root_context() {
+    let _runtime_lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    flush_subscribers().unwrap();
+    crate::shared_runtime::reset_runtime_owner_for_tests();
+    *global_context().write().unwrap() = NemoRelayContextState::new();
+    let stack = create_scope_stack();
+    super::AGENT_SCOPES
+        .lock()
+        .unwrap()
+        .insert(uuid::Uuid::nil(), Arc::downgrade(&stack));
+    let poisoned = Arc::clone(&stack);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = poisoned.write().unwrap();
+            panic!("simulate an unavailable root context");
+        }))
+        .is_err()
+    );
+    super::emit_resource_metrics_snapshot(
+        &crate::resource_metrics::snapshot_fixture::full_snapshot(),
+        &stack,
+    );
+    assert!(super::AGENT_SCOPES.lock().unwrap().is_empty());
+    set_thread_scope_stack(create_scope_stack());
+}

@@ -275,18 +275,27 @@ type ProcessSamplingMetadata struct {
 // and target. Context cancellation stops waiting; an OS query already running
 // on a worker may finish afterward. Polling does not need to be enabled.
 func CollectResourceMetrics(ctx context.Context) (ResourceMetricsSnapshot, error) {
+	return collectResourceMetrics(ctx, startResourceMetricsCollection)
+}
+
+type resourceMetricsCollection = C.FfiResourceMetricsCollection
+
+func startResourceMetricsCollection() (*resourceMetricsCollection, error) {
+	var collection *resourceMetricsCollection
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	err := checkStatus(C.nemo_relay_resource_metrics_collect_start(&collection))
+	return collection, err
+}
+
+func collectResourceMetrics(ctx context.Context, start func() (*resourceMetricsCollection, error)) (ResourceMetricsSnapshot, error) {
 	if ctx == nil {
 		return ResourceMetricsSnapshot{}, fmt.Errorf("resource metrics context must not be nil")
 	}
 	if err := ctx.Err(); err != nil {
 		return ResourceMetricsSnapshot{}, err
 	}
-	var collection *C.FfiResourceMetricsCollection
-	err := func() error {
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
-		return checkStatus(C.nemo_relay_resource_metrics_collect_start(&collection))
-	}()
+	collection, err := start()
 	if err != nil {
 		return ResourceMetricsSnapshot{}, err
 	}
@@ -305,12 +314,17 @@ func CollectResourceMetrics(ctx context.Context) (ResourceMetricsSnapshot, error
 		if err != nil || !bool(done) {
 			return false, nil, err
 		}
-		if out == nil {
-			return false, nil, fmt.Errorf("resource metrics FFI returned a null snapshot")
-		}
 		defer C.nemo_relay_string_free(out)
-		return true, []byte(C.GoString(out)), nil
+		encoded, err := resourceMetricsJSON(out)
+		return true, encoded, err
 	})
+}
+
+func resourceMetricsJSON(out *C.char) ([]byte, error) {
+	if out == nil {
+		return nil, fmt.Errorf("resource metrics FFI returned a null snapshot")
+	}
+	return []byte(C.GoString(out)), nil
 }
 
 func waitForResourceMetrics(ctx context.Context, poll func() (bool, []byte, error)) (ResourceMetricsSnapshot, error) {

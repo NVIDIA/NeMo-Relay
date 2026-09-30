@@ -85,11 +85,22 @@ fn owned_job_collection_reads_limits_processes_and_normalized_counters() {
         parent_process_id(fixture.child.id()).unwrap(),
         Some(std::process::id())
     );
-    assert!(
-        process_tree_ids(fixture.child.id())
-            .unwrap()
-            .contains(&fixture.child.id())
-    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let descendants = loop {
+        let tree = process_tree_ids(fixture.child.id()).unwrap();
+        if tree.len() > 1 {
+            break tree;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "cmd should launch its ping child"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    assert!(descendants.contains(&fixture.child.id()));
+    for pid in descendants.iter().filter(|pid| **pid != fixture.child.id()) {
+        assert_eq!(parent_process_id(*pid).unwrap(), Some(fixture.child.id()));
+    }
     let config = ResourceMetricsConfig::default();
     let environment = environment_sample(&target, &members, &config).unwrap();
     let memory = environment.memory_limit.unwrap();
@@ -116,4 +127,93 @@ fn owned_job_collection_reads_limits_processes_and_normalized_counters() {
         ))
         .is_err()
     );
+}
+
+#[test]
+fn windows_queries_reject_invalid_process_handles_and_missing_paths() {
+    let invalid = INVALID_HANDLE_VALUE;
+    assert!(process_times(invalid).is_err());
+    assert!(process_io_counters(invalid).is_err());
+    assert!(process_memory(invalid).is_err());
+    assert!(process_handle_count(invalid).is_err());
+    assert!(
+        query_job_information::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>(
+            invalid,
+            JobObjectExtendedLimitInformation,
+        )
+        .is_err()
+    );
+    assert!(open_process(u32::MAX, PROCESS_QUERY_LIMITED_INFORMATION).is_err());
+    let directory = tempfile::tempdir().unwrap();
+    assert!(filesystem_capacity(&directory.path().join("missing")).is_err());
+}
+
+#[test]
+fn job_cpu_limits_distinguish_default_weight_based_and_min_max_control() {
+    use windows_sys::Win32::System::JobObjects::{
+        JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE, JOB_OBJECT_CPU_RATE_CONTROL_WEIGHT_BASED,
+    };
+    let job = OwnedJobHandle(unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) });
+    assert!(!job.0.is_null());
+    let target = CollectionTarget {
+        process_id: std::process::id(),
+        start_identity: process_identity(std::process::id()).unwrap(),
+        measurement_scope:
+            nemo_relay_types::api::resource_metrics::ResourceMeasurementScope::ProcessTree,
+        job_handle: Some(std::sync::Arc::new(job)),
+    };
+    let handle = target.job_handle.as_ref().unwrap().0;
+    let config = ResourceMetricsConfig::default();
+    assert!(
+        environment_sample(&target, &[], &config)
+            .unwrap()
+            .effective_cpu_limit
+            .is_none()
+    );
+    for flags in [
+        JOB_OBJECT_CPU_RATE_CONTROL_WEIGHT_BASED,
+        JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE,
+    ] {
+        let disabled = JOBOBJECT_CPU_RATE_CONTROL_INFORMATION::default();
+        let mut cpu = JOBOBJECT_CPU_RATE_CONTROL_INFORMATION {
+            ControlFlags: JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | flags,
+            ..Default::default()
+        };
+        if flags == JOB_OBJECT_CPU_RATE_CONTROL_WEIGHT_BASED {
+            cpu.Anonymous.Weight = 5;
+        } else {
+            cpu.Anonymous.Anonymous.MinRate = 1;
+            cpu.Anonymous.Anonymous.MaxRate = 5000;
+        }
+        // SAFETY: the fixture owns the live job and supplies correctly sized control structures.
+        unsafe {
+            assert_ne!(
+                SetInformationJobObject(
+                    handle,
+                    JobObjectCpuRateControlInformation,
+                    std::ptr::from_ref(&disabled).cast(),
+                    size_of::<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>() as u32
+                ),
+                0
+            );
+            assert_ne!(
+                SetInformationJobObject(
+                    handle,
+                    JobObjectCpuRateControlInformation,
+                    std::ptr::from_ref(&cpu).cast(),
+                    size_of::<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>() as u32
+                ),
+                0
+            );
+        }
+        let environment = environment_sample(&target, &[], &config).unwrap();
+        if flags == JOB_OBJECT_CPU_RATE_CONTROL_WEIGHT_BASED {
+            assert!(environment.effective_cpu_limit.is_none());
+        } else {
+            let limit = environment.effective_cpu_limit.unwrap();
+            let processors = unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) };
+            assert_eq!(limit.value, f64::from(processors) / 2.0);
+            assert_eq!(limit.unit, ResourceMeasurementUnit::LogicalProcessors);
+        }
+    }
 }
