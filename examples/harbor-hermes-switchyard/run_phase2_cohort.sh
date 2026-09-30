@@ -40,6 +40,7 @@ sample_count="${TBENCH_SAMPLE_COUNT:-89}"
 # keeps the conservative default.
 canary_task="${TBENCH_CANARY_TASK-adaptive-rejection-sampler}"
 concurrency="${TBENCH_CONCURRENCY:-4}"
+agent_timeout_multiplier="${AGENT_TIMEOUT_MULTIPLIER:-3}"
 setup_concurrency="${TBENCH_SETUP_CONCURRENCY:-2}"
 setup_batch_size="${TBENCH_SETUP_BATCH_SIZE:-89}"
 setup_max_infra_attempts="${TBENCH_SETUP_MAX_INFRA_ATTEMPTS:-4}"
@@ -112,6 +113,7 @@ exec "$python_bin" "$example_root/scripts/run_phase2_cohort.py" \
   --sample-count "$sample_count" \
   --canary-task "$canary_task" \
   --concurrency "$concurrency" \
+  --agent-timeout-multiplier "$agent_timeout_multiplier" \
   --setup-concurrency "$setup_concurrency" \
   --setup-batch-size "$setup_batch_size" \
   --setup-max-infra-attempts "$setup_max_infra_attempts" \

@@ -1208,7 +1208,7 @@ class CohortRunner:
                 "PLUGIN_CONFIG_TEMPLATE": str(self.args.plugin_config_template),
                 "HARBOR_BIN": str(self.args.harbor_bin),
                 "EVAL_PYTHON": str(self.args.python_bin),
-                "AGENT_TIMEOUT_MULTIPLIER": "3",
+                "AGENT_TIMEOUT_MULTIPLIER": str(self.args.agent_timeout_multiplier),
                 "AGENT_SETUP_TIMEOUT_MULTIPLIER": "6",
                 "ENVIRONMENT_BUILD_TIMEOUT_MULTIPLIER": "6",
                 "HERMETIC_RUNTIME_DIR": str(self.args.hermetic_runtime),
@@ -1382,6 +1382,7 @@ def parse_args() -> argparse.Namespace:
         help="task to run alone before the cohort; pass an empty value to disable the canary",
     )
     parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument("--agent-timeout-multiplier", type=int, default=3)
     parser.add_argument("--setup-concurrency", type=int, default=2)
     parser.add_argument("--setup-batch-size", type=int, default=89)
     parser.add_argument("--setup-max-infra-attempts", type=int, default=4)
