@@ -1,6 +1,6 @@
 ---
 title: "Wrap Execution"
-description: "Use native tool, non-streaming LLM, and streaming continuations correctly."
+description: "Use native tool, unary LLM, and streaming continuations correctly."
 position: 24
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 [Execution intercepts](/about-nemo-relay/concepts/middleware) receive the real request
 and a continuation representing the rest
-of the call path. The example's `execution` group registers a tool wrapper, a non-streaming LLM
+of the call path. The example's `execution` group registers a tool wrapper, a unary LLM
 wrapper, and an LLM stream wrapper at the configured priority.
 
 ## Tool and Unary Results
@@ -20,7 +20,7 @@ example's pending mark. The
 conversion preserves both the application `result` and any opaque `annotation`. Relay
 owns the pending mark: it is emitted in the managed lifecycle and does not appear in the
 application-visible result.
-The non-streaming LLM wrapper has a deliberately smaller contract and returns provider-response
+The unary LLM wrapper has a deliberately smaller contract and returns provider-response
 JSON. LLM pending marks, annotations, and optimization contributions belong to the
 request-intercept outcome shown in [Control Requests](/build-plugins/native/control-requests),
 not the execution result.
@@ -56,7 +56,7 @@ reads `tool_result.result["answer"]`. Relay separately emits
 callback returns an outcome instead of returning a plain JSON value.
 
 The continuation is reusable. A deliberate configuration or request flag in the example
-can invoke non-streaming `next` twice concurrently, await both responses, and select one. This
+can invoke unary `next` twice concurrently, await both responses, and select one. This
 demonstrates the API while preserving the cost of repetition. A repeated tool can perform
 its side effect twice, and a repeated model call can incur provider cost twice. Production
 plugins need an idempotency
@@ -137,15 +137,15 @@ or cancellation.
 
 ## Verify Execution Behavior
 
-Use the following procedure to verify non-streaming, repeated, and streaming continuation
+Use the following procedure to verify unary, repeated, and streaming continuation
 behavior:
 
 1. Activate the example with `execution.enabled = true`, priority 30, and
    `emit_pending_marks = true`.
-2. Execute a tool and a non-streaming model call. Confirm each downstream callback runs once,
+2. Execute a tool and a unary model call. Confirm each downstream callback runs once,
    the application receives only its expected result, and an additional pending mark is
    emitted under the managed call scope.
-3. Enable the example's repeated-continuation input and confirm two downstream non-streaming
+3. Enable the example's repeated-continuation input and confirm two downstream unary
    invocations can overlap. Verify the selected result and accounting explicitly.
 4. Consume a three-chunk LLM stream one item at a time. Confirm the first transformed
    chunk arrives before the downstream stream completes.
@@ -154,6 +154,6 @@ behavior:
 6. Clear the component and repeat the calls to prove that no wrapper or pending mark
    remains registered.
 
-Success means non-streaming and stream continuations preserve scope, errors, and cancellation,
+Success means unary and stream continuations preserve scope, errors, and cancellation,
 while Relay-owned tool marks and LLM request accounting remain separate from
 application results.

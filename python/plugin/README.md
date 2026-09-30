@@ -38,7 +38,7 @@ The following rows describe the plugin authoring surfaces available through this
 
 | Surface | Role |
 |---|---|
-| `WorkerPlugin` and `PluginContext` | Define validation and install all 17 worker-owned subscriber and middleware registrations. |
+| `WorkerPlugin` and `PluginContext` | Define validation and install all 16 worker-owned subscriber and middleware registrations. |
 | `serve_plugin` | Starts an AsyncIO gRPC server from the Relay-managed environment and authenticated local activation endpoints. |
 | Typed runtime helpers | Share JSON, event, scope, middleware, continuation, and diagnostic contracts with the Relay host. |
 | Canonical tool results | Preserve application results and opaque annotations across tool callbacks and continuations. |
@@ -176,7 +176,7 @@ an application-level RPC admission limit.
 
 ## Invocation Cancellation
 
-Relay assigns every non-streaming and streaming callback an invocation ID. The host
+Relay assigns every unary and streaming callback an invocation ID. The host
 sends `CancelInvocation` when its managed caller is cancelled, its worker RPC
 times out, or it stops consuming a worker-backed stream. The SDK cancels the
 matching `asyncio.Task` and reports a structured `worker.cancelled` result.

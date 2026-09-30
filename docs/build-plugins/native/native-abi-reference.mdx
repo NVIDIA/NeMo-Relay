@@ -50,7 +50,7 @@ function signatures and field order are defined by the public
 | Table Level | Operations |
 |---|---|
 | Frozen v1/v2 prefix | Version and struct-size negotiation; host version; string allocation, access, and release; thread-local error reporting; callback-scoped LLM request decode and encode plus response decode; subscriber, five tool, six LLM, and three event-sanitizer registrations; current scope, scope push and pop, mark emission, isolated stack creation and release, thread-stack set, capture, and restore, captured-binding release, active-stack inspection, and scoped binding. |
-| Frozen v3 extension | Completion resolve, reject, cancellation inspection, and release; one-shot completion-coupled continuation invocation; continuation release; generic async middleware registration; bounded output-stream push, finish, reject, cancellation inspection, and release; downstream stream invocation; stream-middleware registration; and repeated or concurrent non-streaming continuation invocation with independent result callbacks. |
+| Frozen v3 extension | Completion resolve, reject, cancellation inspection, and release; one-shot completion-coupled continuation invocation; continuation release; generic async middleware registration; bounded output-stream push, finish, reject, cancellation inspection, and release; downstream stream invocation; stream-middleware registration; and repeated or concurrent unary continuation invocation with independent result callbacks. |
 | Frozen v4 extension | Completion-scoped LLM request decode and encode plus response decode; pull-based downstream LLM stream open, pull, cancel, and release; completion retain for typed codec facades; output-stream backpressure inspection; extended mark emission; runtime diagnostics; activation-owned runtime capability creation, retain, and release; global runtime-registration discovery; owned conditional middleware guardrail registration and deregistration; and activation-owned and runtime-discovered callback gate registration. The callback registration slots are appended after the original constant-reason slots. |
 | v5 extension | Context-carrying tool execution intercept registration. The callback receives one JSON object containing `tool_name`, `args`, and `tool_call_id`. |
 | v6 extension | Host-routed operational logging with structured fields. |
@@ -171,7 +171,7 @@ the callback. Return `Pending` only after retaining it. A retained completion mu
 exactly once and then be released. Release every async `next` reference after its last
 use.
 
-`async_next_invoke_result` supports repeated or concurrent non-streaming continuation calls with
+`async_next_invoke_result` supports repeated or concurrent unary continuation calls with
 independent result callbacks. The older completion-coupled `async_next_invoke` is
 one-shot because the continuation result settles the middleware completion. Settle the
 owner only after every started continuation call has finished. When the owner settles or

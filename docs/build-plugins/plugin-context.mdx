@@ -30,7 +30,7 @@ language-binding, native typed, and worker plugins.
 | LLM | Response sanitizer | Sanitize response observability with the structured LLM context and its codec handle. |
 | LLM | Conditional guardrail | Allow or block real model execution from the provider request. The current callback contract does not receive a separate model name or annotation argument. |
 | LLM | Request intercept | Return the complete request-intercept outcome, preserving or deliberately replacing annotations. |
-| LLM | Execution intercept | Wrap non-streaming execution through a continuation and return provider-response JSON. |
+| LLM | Execution intercept | Wrap unary execution through a continuation and return provider-response JSON. |
 | LLM | Stream execution intercept | Transform response chunks while preserving order, cancellation, and error behavior. Native and worker SDKs expose a lazy stream; the Node.js language binding currently supplies the downstream chunks as an array. |
 
 Sanitize guardrails change emitted observability payloads only. They do not rewrite the

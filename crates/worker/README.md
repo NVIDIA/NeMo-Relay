@@ -38,7 +38,7 @@ decode incomplete chunks. The wire protocol remains `grpc-v1`.
 | Surface | Role |
 |---|---|
 | `WorkerPlugin` | Defines plugin identity, validation, registration, and multiple-component behavior in the worker process. |
-| `PluginContext` | Installs typed handlers for all 17 supported registration surfaces. |
+| `PluginContext` | Installs typed handlers for all 16 supported registration surfaces. |
 | `PluginRuntime` and continuations | Emit marks, manage scopes, and call the remaining tool or LLM execution chain through the authenticated host service. |
 | `LlmExecutionContext` | Reports the selected request and completed-response codecs and provides codec operations while the callback is active. |
 | Canonical tool results | Preserve application results and opaque annotations across tool callbacks and continuations. |
